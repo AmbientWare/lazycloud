@@ -1,1 +1,101 @@
-# cloud_machines
+# Cloud Machines
+
+A Python-based application for managing cloud machines, built with FastAPI and using TimescaleDB for data storage.
+
+## Project Overview
+
+This project provides a CLI and API interface for managing cloud machines. It uses:
+- FastAPI for the web API
+- TimescaleDB (PostgreSQL) for data storage
+- Poetry for dependency management
+- Docker for containerization
+
+## Prerequisites
+
+- Python 3.11 or higher
+- Poetry
+- Docker and Docker Compose
+
+## Setup
+
+### 1. Install Poetry
+
+If you don't have Poetry installed, you can install it using:
+
+```bash
+curl -sSL https://install.python-poetry.org | python3 -
+```
+
+### 2. Environment Setup
+
+1. Copy the example environment file:
+```bash
+cp .env.example .env
+```
+
+2. Edit the `.env` file and fill in the required values:
+- `FLY_API_TOKEN`: Your Fly.io API token
+- `FLY_ORG_NAME`: Your Fly.io organization name
+- `DATABASE_URL`: The database connection URL (default is set for local development)
+
+### 3. Install Dependencies
+
+Install the project dependencies using Poetry:
+
+```bash
+poetry install
+```
+
+### 4. Docker Setup
+
+1. Create the required network:
+```bash
+docker network create machines
+```
+
+2. Build and start the services:
+```bash
+docker compose up --build
+```
+
+This will start:
+- The API service on port 8000
+- A TimescaleDB instance on port 5432
+
+## Development
+
+### Running the API Locally
+
+To run the API in development mode:
+
+```bash
+poetry run python main.py --debug
+```
+
+The API will be available at `http://localhost:8000`.
+
+### Using the CLI
+
+The project includes a CLI tool. You can run it (and see how to use) using:
+
+```bash
+poetry run machines
+```
+
+## API Documentation
+
+Once the API is running, you can access the interactive API documentation at:
+- Swagger UI: `http://localhost:8000/docs`
+- ReDoc: `http://localhost:8000/redoc`
+
+## Database Migrations
+
+Database migrations are handled using Alembic. To create and apply migrations:
+
+```bash
+# Create a new revision with the migration script
+./scripts/db_revision.sh -m your_revision_name
+
+# Apply migrations
+poetry run alembic upgrade head
+```

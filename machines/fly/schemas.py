@@ -1,0 +1,87 @@
+from enum import Enum
+from dataclasses import dataclass
+from pydantic import BaseModel
+
+
+@dataclass
+class AppConfig:
+    name: str
+    user_id: str
+    public_key: str
+
+    def __post_init__(self):
+        self.network = f"{self.name}-network"
+
+
+class FlyCommandError(Exception):
+    """Raised when a Fly.io command fails."""
+
+    pass
+
+
+class FlyRegion(Enum):
+    AMS = "ams"  # Amsterdam, Netherlands
+    CDG = "cdg"  # Paris, France
+    DEN = "den"  # Denver, Colorado (US)
+    DFW = "dfw"  # Dallas, Texas (US)
+    FRA = "fra"  # Frankfurt, Germany
+    HKG = "hkg"  # Hong Kong, Hong Kong
+    IAD = "iad"  # Ashburn, Virginia (US)
+    LAX = "lax"  # Los Angeles, California (US)
+    LHR = "lhr"  # London, United Kingdom
+    NRT = "nrt"  # Tokyo, Japan
+    ORD = "ord"  # Chicago, Illinois (US)
+    SCL = "scl"  # Santiago, Chile
+    SEA = "sea"  # Seattle, Washington (US)
+    SIN = "sin"  # Singapore, Singapore
+    SJC = "sjc"  # San Jose, California (US)
+    SYD = "syd"  # Sydney, Australia
+
+
+class ImageTypes(Enum):
+    UBUNTU_22_04 = "ubuntu_22_04"
+
+
+class CheckStatus(Enum):
+    PASSING = "passing"
+    FAILING = "failing"
+    UNKNOWN = "unknown"
+
+
+class FlyMachineConfig(BaseModel):
+    name: str
+    region: FlyRegion = FlyRegion.LAX
+    cpu_kind: str = "shared"
+    cpu: int = 1
+    memory: int = 1024
+    image_type: ImageTypes = ImageTypes.UBUNTU_22_04
+    initial_volume_size: int | None = 10
+
+
+RESOURCE_MAP = {
+    "shared": {
+        1: {"name": "shared-cpu-1x", "memory_options": [256, 512, 1024, 2048]},  # in MB
+        2: {
+            "name": "shared-cpu-2x",
+            "memory_options": [512, 1024, 2048, 4096],  # in MB
+        },
+        4: {
+            "name": "shared-cpu-4x",
+            "memory_options": [1024, 2048, 4096, 8192],  # in MB
+        },
+        8: {
+            "name": "shared-cpu-8x",
+            "memory_options": [2048, 4096, 8192, 16384],  # in MB
+        },
+    },
+    "performance": {
+        1: {"name": "performance-1x", "memory_options": [2048, 4096, 8192]},  # in MB
+        2: {"name": "performance-2x", "memory_options": [4096, 8192, 16384]},  # in MB
+        4: {"name": "performance-4x", "memory_options": [8192, 16384, 32768]},  # in MB
+        8: {"name": "performance-8x", "memory_options": [16384, 32768, 65536]},  # in MB
+        16: {
+            "name": "performance-16x",
+            "memory_options": [32768, 65536, 131072],  # in MB
+        },
+    },
+}
