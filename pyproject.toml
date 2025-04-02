@@ -1,0 +1,30 @@
+[tool.poetry]
+name = "machines"
+version = "0.1.0"
+description = ""
+authors = ["Connor McLean <c.mclean165@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+docker = "^7.1.0"
+dotenv = "^0.9.9"
+fastapi = "^0.115.12"
+uvicorn = "^0.34.0"
+nest-asyncio = "^1.6.0"
+sqlalchemy = "^2.0.40"
+asyncpg = "^0.30.0"
+alembic = "^1.15.2"
+psycopg2-binary = "^2.9.10"
+click = "^8.1.8"
+httpx = "^0.28.1"
+tabulate = "^0.9.0"
+tenacity = "^9.0.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.scripts]
+machines = "cli:machine"
