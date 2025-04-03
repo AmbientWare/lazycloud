@@ -2,20 +2,15 @@ import subprocess
 from pathlib import Path
 import os
 import json
-import sys
-import asyncio
 
 from machines.config import app_config
 from machines.fly.schemas import (
     AppConfig,
     CheckStatus,
-    FlyCommandError,
     FlyMachineConfig,
     RESOURCE_MAP,
 )
-
-NUM_CPU = os.cpu_count()
-NUM_WORKERS = NUM_CPU // 2 if NUM_CPU else 1
+from machines.fly.utils import run_async_command
 
 
 class FlyAppManager:
@@ -33,104 +28,6 @@ class FlyAppManager:
         """Get the name of the Fly.io application."""
         return f"{name}-{user_id}"
 
-    async def _run_command(
-        self, command: list[str], check: bool = True, print_output: bool = True
-    ) -> subprocess.CompletedProcess:
-        """Run a Fly.io command and handle errors asynchronously.
-
-        Args:
-            command: The command to run
-            check: Whether to raise an exception if the command fails
-            print_output: Whether to print the output in real-time
-        """
-
-        token_list = ["-t", app_config.FLY_API_TOKEN]
-
-        if print_output:
-            print(f"Running command: {' '.join(command)}")
-        try:
-            process = subprocess.Popen(
-                command + token_list,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1,
-                universal_newlines=True,
-            )
-
-            if not process.stdout or not process.stderr:
-                raise RuntimeError("Failed to create process pipes")
-
-            if print_output:
-                # Stream output in real-time
-                output_lines = []
-                error_lines = []
-                while True:
-                    output = process.stdout.readline()
-                    error = process.stderr.readline()
-
-                    if output:
-                        output_lines.append(output.strip())
-                        print(output.strip())
-                    if error:
-                        error_lines.append(error.strip())
-                        print(error.strip(), file=sys.stderr)
-
-                    if process.poll() is not None:
-                        # Read any remaining output
-                        remaining_output, remaining_error = process.communicate()
-                        if remaining_output:
-                            output_lines.extend(remaining_output.strip().split("\n"))
-                            print(remaining_output.strip())
-                        if remaining_error:
-                            error_lines.extend(remaining_error.strip().split("\n"))
-                            print(remaining_error.strip(), file=sys.stderr)
-                        break
-
-                return_code = process.returncode
-                if check and return_code != 0:
-                    error_msg = (
-                        "\n".join(output_lines)
-                        if output_lines
-                        else "\n".join(error_lines) if error_lines else "Unknown error"
-                    )
-                    raise subprocess.CalledProcessError(
-                        return_code,
-                        command,
-                        "\n".join(output_lines),
-                        "\n".join(error_lines),
-                    )
-
-                return subprocess.CompletedProcess(
-                    command,
-                    return_code,
-                    "\n".join(output_lines),
-                    "\n".join(error_lines),
-                )
-            else:
-                # For non-print mode, just use communicate() to get complete output
-                stdout, stderr = process.communicate()
-                return_code = process.returncode
-
-                if check and return_code != 0:
-                    raise subprocess.CalledProcessError(
-                        return_code, command, stdout, stderr
-                    )
-
-                return subprocess.CompletedProcess(command, return_code, stdout, stderr)
-
-        except subprocess.CalledProcessError as e:
-            # Check both stdout and stderr for error messages
-            error_msg = (
-                e.stdout.strip()
-                if e.stdout
-                else e.stderr.strip() if e.stderr else "Unknown error"
-            )
-            # Extract just the actual error message, removing redundant wrapping
-            if "failed to extend volume:" in error_msg:
-                error_msg = error_msg.split("failed to extend volume:", 1)[1].strip()
-            raise FlyCommandError(error_msg) from e
-
     async def _add_authorized_keys(self, config: AppConfig) -> None:
         """Add SSH authorized keys to the application."""
         pub_key = config.public_key.strip()
@@ -139,7 +36,7 @@ class FlyAppManager:
 
         print(f"Adding secrets to app {config.name}")
         try:
-            await self._run_command(
+            await run_async_command(
                 [
                     "fly",
                     "secrets",
@@ -160,7 +57,7 @@ class FlyAppManager:
         print(f"Creating app {config.name}")
         # Create the app
         try:
-            await self._run_command(
+            await run_async_command(
                 [
                     "fly",
                     "apps",
@@ -180,7 +77,7 @@ class FlyAppManager:
 
         try:
             # Allocate IPv4 address
-            await self._run_command(
+            await run_async_command(
                 [
                     "flyctl",
                     "ips",
@@ -205,7 +102,7 @@ class FlyAppManager:
     async def delete_app(self, name: str, user_id: str) -> None:
         """Delete a Fly.io application."""
         print(f"Deleting app {name}")
-        await self._run_command(
+        await run_async_command(
             ["fly", "apps", "destroy", await self._get_app_name(name, user_id), "--yes"]
         )
 
@@ -219,9 +116,14 @@ class FlyAppManager:
 
         fly_toml_path = self.base_dir / "app_files" / "fly.toml"
         # TODO: dynamically choose the dockerfile based on the image type
-        dockerfile_path = self.base_dir / "docker_files" / "Dockerfile.ubuntu"
+        dockerfile_path = (
+            self.base_dir
+            / "docker_files"
+            / machine_config.image_type.value
+            / f"Dockerfile"
+        )
 
-        await self._run_command(
+        await run_async_command(
             [
                 "fly",
                 "deploy",
@@ -232,6 +134,8 @@ class FlyAppManager:
                 str(fly_toml_path),
                 "--dockerfile",
                 str(dockerfile_path),
+                "--build-arg",
+                f"USER={user_id}",
                 "--primary-region",
                 machine_config.region.value,
                 "--vm-cpu-kind",
@@ -271,7 +175,7 @@ class FlyAppManager:
                 f"Must be one of {', '.join(valid_memory_gb)}GB"
             )
 
-        await self._run_command(
+        await run_async_command(
             [
                 "fly",
                 "scale",
@@ -290,7 +194,7 @@ class FlyAppManager:
 
         try:
             # get the volume id
-            response = await self._run_command(
+            response = await run_async_command(
                 [
                     "fly",
                     "volume",
@@ -315,7 +219,7 @@ class FlyAppManager:
             raise e
 
         try:
-            await self._run_command(
+            await run_async_command(
                 [
                     "fly",
                     "volume",
@@ -334,7 +238,7 @@ class FlyAppManager:
     async def get_check_status(self, name: str, user_id: str) -> CheckStatus:
         """Get the status of the check for the application."""
         app_name = await self._get_app_name(name, user_id)
-        response = await self._run_command(
+        response = await run_async_command(
             [
                 "fly",
                 "machines",

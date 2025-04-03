@@ -14,7 +14,7 @@ from cli.tokens import tokens  # Import the tokens group
 
 
 @machine.command()
-@click.option("--name", help="Name of the machine")
+@click.argument("name")
 @click.option("--public-key", help="Path to SSH public key file")
 @click.option("--region", help="Region to deploy the machine")
 @click.option("--cpu-kind", help="CPU kind")
@@ -22,7 +22,7 @@ from cli.tokens import tokens  # Import the tokens group
 @click.option("--memory", type=float, help="Memory in GB")
 @click.option("--volume-size", type=int, help="Volume size in GB")
 def create(
-    name: Optional[str],
+    name: str,
     public_key: Optional[str],
     region: Optional[str],
     cpu_kind: Optional[str],
@@ -87,8 +87,17 @@ def create(
         )
         if should_add_to_ssh_config:
             # add to ssh config
-            alias = api.get_machine_alias(name)
-            add_to_ssh_config(name, alias, public_key)
+            alias, port = api.get_machine_alias(name)
+            if alias is None or port is None:
+                click.echo(
+                    "Error getting machine alias. Please try again by running `machines connect add <machine-name>`.",
+                    err=True,
+                )
+                return
+
+            user_id = api.get_user_id()
+            add_to_ssh_config(name, alias, port, user_id)
+
     except Exception as e:
         click.echo(f"Error creating machine: {e}", err=True)
 
@@ -181,7 +190,7 @@ def connect_machine(machine_name: str, ssh_key: Optional[str]):
     """Connect to a machine"""
     try:
         api = MachineAPI()
-        alias = api.get_machine_alias(machine_name)
+        alias, port = api.get_machine_alias(machine_name)
         if alias:
             if not ssh_key:
                 ssh_key = get_default_key_path().replace(
@@ -189,13 +198,21 @@ def connect_machine(machine_name: str, ssh_key: Optional[str]):
                 )  # Remove .pub extension to get private key
 
             click.echo(f"Connecting to machine {machine_name}...")
+            api = MachineAPI()
+            user_id = api.get_user_id()
             ssh_command = [
                 "ssh",
                 "-i",
                 ssh_key,
-                f"root@{alias}",
+                f"{user_id}@{alias}",
+                "-p",
+                str(port),
                 "-o",
                 "StrictHostKeyChecking=no",
+                "-o",
+                "ForwardAgent=yes",
+                "-o",
+                "ConnectTimeout=30",
             ]
             subprocess.run(ssh_command)
         else:
@@ -203,6 +220,28 @@ def connect_machine(machine_name: str, ssh_key: Optional[str]):
 
     except Exception as e:
         click.echo(f"Error connecting to machine: {e}", err=True)
+
+
+@machine.command(name="ssh-add")
+@click.argument("machine-name")
+def ssh_add(machine_name: str):
+    """Add a machine to SSH config"""
+    try:
+        api = MachineAPI()
+        alias, port = api.get_machine_alias(machine_name)
+        if alias is None or port is None:
+            click.echo(
+                "Error getting machine alias. Please make sure the machine exists.",
+                err=True,
+            )
+            return
+
+        user_id = api.get_user_id()
+        add_to_ssh_config(machine_name, alias, port, user_id)
+        click.echo(f"Successfully added machine {machine_name} to SSH config")
+
+    except Exception as e:
+        click.echo(f"Error adding machine to SSH config: {e}", err=True)
 
 
 # Add the tokens group to the main CLI

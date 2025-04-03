@@ -78,7 +78,7 @@ def make_table_view(
     return tabulate(table_data, headers=filtered_headers, tablefmt=tablefmt)
 
 
-def add_to_ssh_config(machine_name: str, alias: str, public_key: str) -> None:
+def add_to_ssh_config(machine_name: str, alias: str, port: int, user_id: str) -> None:
     """Add a machine to the SSH config"""
     # verify ssh config file
     ssh_config_file = config.ssh_config_path
@@ -87,14 +87,18 @@ def add_to_ssh_config(machine_name: str, alias: str, public_key: str) -> None:
         with open(ssh_config_file, "w") as f:
             f.write("")
 
+    # delete any existing machine from the ssh config
+    remove_from_ssh_config(machine_name)
+
     if os.path.exists(ssh_config_file):
         with open(ssh_config_file, "a") as f:
             f.write(f"Host {machine_name}\n")
             f.write(f"    HostName {alias}\n")
-            f.write(f"    User root\n")
-            f.write(f"    IdentityFile {public_key}\n")
+            f.write(f"    User {user_id}\n")
+            f.write(f"    Port {port}\n")
             f.write(f"    StrictHostKeyChecking no\n")
             f.write(f"    ForwardAgent yes\n")
+            f.write(f"    ConnectTimeout 30\n")
 
 
 def remove_from_ssh_config(machine_name: str) -> None:

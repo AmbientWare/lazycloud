@@ -11,6 +11,8 @@ from contextlib import asynccontextmanager
 # import app routers
 from machines.api.v1.machines import machines_router
 from machines.api.v1.health import health_router
+from machines.api.v1.users import users_router
+
 from machines.api.middleware import setup_middleware
 from machines.database.crud import create_tables
 
@@ -47,6 +49,7 @@ setup_middleware(app)
 # create the main routes that will have the api version prefix
 versionsed_routes = APIRouter(prefix=app_config.API_VERSION)
 versionsed_routes.include_router(machines_router)
+versionsed_routes.include_router(users_router)
 app.include_router(versionsed_routes)
 
 # include non versioned routes that are not part of the main api

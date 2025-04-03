@@ -32,7 +32,7 @@ RUN cp /etc/ssh/sshd_config /etc/ssh/sshd_config-original \
 # Create initial volume directory
 RUN mkdir -p /volume/root
 
-ADD ./fly/docker_files/entrypoint.sh /entrypoint.sh
+ADD ./fly/docker_files/ubuntu/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 EXPOSE 2222

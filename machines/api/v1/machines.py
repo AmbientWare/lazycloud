@@ -33,10 +33,15 @@ async def get_machines(
     return machines
 
 
+class MachineAliasResponse(BaseModel):
+    alias: str
+    port: int
+
+
 @machines_router.get("/alias/{machine_name}")
 async def get_machines_alias(
     machine_name: str, user_id: str | None = Depends(get_user_id)
-) -> str:
+) -> MachineAliasResponse:
     """Get a list of machines"""
     # make sure the machine exists
     machine = await db.machines.afind_one(
@@ -47,7 +52,7 @@ async def get_machines_alias(
 
     alias = f"{machine.name}-{machine.user_id}.fly.dev"
 
-    return alias
+    return MachineAliasResponse(alias=alias, port=10022)
 
 
 class CreateMachineRequest(BaseModel):

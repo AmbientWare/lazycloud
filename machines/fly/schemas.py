@@ -39,7 +39,7 @@ class FlyRegion(Enum):
 
 
 class ImageTypes(Enum):
-    UBUNTU_22_04 = "ubuntu_22_04"
+    UBUNTU_22_04 = "ubuntu"
 
 
 class CheckStatus(Enum):
@@ -60,28 +60,16 @@ class FlyMachineConfig(BaseModel):
 
 RESOURCE_MAP = {
     "shared": {
-        1: {"name": "shared-cpu-1x", "memory_options": [256, 512, 1024, 2048]},  # in MB
-        2: {
-            "name": "shared-cpu-2x",
-            "memory_options": [512, 1024, 2048, 4096],  # in MB
-        },
-        4: {
-            "name": "shared-cpu-4x",
-            "memory_options": [1024, 2048, 4096, 8192],  # in MB
-        },
-        8: {
-            "name": "shared-cpu-8x",
-            "memory_options": [2048, 4096, 8192, 16384],  # in MB
-        },
+        1: {"name": "shared-cpu-1x", "memory_options": [256, 512, 1024, 2048]},
+        2: {"name": "shared-cpu-2x", "memory_options": [512, 1024, 2048, 4096]},
+        4: {"name": "shared-cpu-4x", "memory_options": [1024, 2048, 4096, 8192]},
+        8: {"name": "shared-cpu-8x", "memory_options": [2048, 4096, 8192, 16384]},
     },
     "performance": {
-        1: {"name": "performance-1x", "memory_options": [2048, 4096, 8192]},  # in MB
-        2: {"name": "performance-2x", "memory_options": [4096, 8192, 16384]},  # in MB
-        4: {"name": "performance-4x", "memory_options": [8192, 16384, 32768]},  # in MB
-        8: {"name": "performance-8x", "memory_options": [16384, 32768, 65536]},  # in MB
-        16: {
-            "name": "performance-16x",
-            "memory_options": [32768, 65536, 131072],  # in MB
-        },
+        1: {"name": "performance-1x", "memory_options": [2048, 4096, 8192]},
+        2: {"name": "performance-2x", "memory_options": [4096, 8192, 16384]},
+        4: {"name": "performance-4x", "memory_options": [8192, 16384, 32768]},
+        8: {"name": "performance-8x", "memory_options": [16384, 32768, 65536]},
+        16: {"name": "performance-16x", "memory_options": [32768, 65536, 131072]},
     },
 }
