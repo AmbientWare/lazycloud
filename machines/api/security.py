@@ -1,4 +1,4 @@
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 
@@ -8,7 +8,6 @@ from machines.database.utils import token_is_expired
 from machines.config import app_config, ENVIRONMENT
 
 security = HTTPBearer()
-
 
 class UserData(BaseModel):
     user_id: str

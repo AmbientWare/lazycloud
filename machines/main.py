@@ -1,12 +1,17 @@
 import dotenv
 
-# we load the environment variables from the .env file first so we can use them in the app
+# we load the environment variables from the .env file first so we can use them in rest of the app
 dotenv.load_dotenv()
 
 import argparse
 import uvicorn
 from fastapi import FastAPI, APIRouter
 from contextlib import asynccontextmanager
+from slowapi.middleware import SlowAPIMiddleware
+from slowapi.errors import RateLimitExceeded
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi import Limiter
 
 # import app routers
 from machines.api.v1.machines import machines_router
@@ -14,8 +19,8 @@ from machines.api.v1.health import health_router
 from machines.api.v1.users import users_router
 from machines.api.v1.tokens import tokens_router
 
+# import other modules
 from machines.database.crud import create_tables, update_admin_tokens
-
 from machines.config import app_config
 
 
@@ -37,6 +42,16 @@ app = FastAPI(
     redoc_url="/redoc",
     lifespan=lifespan,
 )
+
+# Add rate limiting middleware, use redis to store the rate limit data
+limiter = Limiter(
+    key_func=get_remote_address,
+    default_limits=[app_config.RATE_LIMIT],
+    storage_uri=app_config.REDIS_URL,
+)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore
+app.add_middleware(SlowAPIMiddleware)
 
 # Configure Swagger UI
 app.swagger_ui_init_oauth = {
