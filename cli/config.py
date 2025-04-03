@@ -29,76 +29,76 @@ class CLIConfig(BaseModel):
         validation_alias="MACHINES_DEFAULT_SSH_KEY_PATH",
     )
 
-    # Private attributes for token management
-    _tokens: Dict[str, str] = PrivateAttr(default_factory=dict)
-    _active_token: Optional[str] = PrivateAttr(default=None)
+    # Private attributes for api key management
+    _api_keys: Dict[str, str] = PrivateAttr(default_factory=dict)
+    _active_api_key: Optional[str] = PrivateAttr(default=None)
 
     def __init__(self, **data):
         super().__init__(**data)
-        self._load_tokens()
+        self._load_api_keys()
 
-    def _load_tokens(self):
-        """Load tokens from the config file"""
+    def _load_api_keys(self):
+        """Load api keys from the config file"""
         config_path = Path.home() / ".machines"
         if config_path.exists():
             with open(config_path) as f:
                 for line in f:
-                    if line.startswith("TOKEN_"):
+                    if line.startswith("API_KEY_"):
                         key, value = line.strip().split("=", 1)
-                        token_name = key.replace("TOKEN_", "").lower()
-                        self._tokens[token_name] = value
-                    elif line.startswith("ACTIVE_TOKEN="):
-                        self._active_token = line.strip().split("=", 1)[1]
+                        api_key_name = key.replace("API_KEY_", "").lower()
+                        self._api_keys[api_key_name] = value
+                    elif line.startswith("ACTIVE_API_KEY="):
+                        self._active_api_key = line.strip().split("=", 1)[1]
 
-    def _save_tokens(self):
-        """Save tokens to the config file"""
+    def _save_api_keys(self):
+        """Save api keys to the config file"""
         config_path = Path.home() / ".machines"
         with open(config_path, "w") as f:
-            for token_name, value in self._tokens.items():
-                f.write(f"TOKEN_{token_name.upper()}={value}\n")
-            if self._active_token:
-                f.write(f"ACTIVE_TOKEN={self._active_token}\n")
+            for api_key_name, value in self._api_keys.items():
+                f.write(f"API_KEY_{api_key_name.upper()}={value}\n")
+            if self._active_api_key:
+                f.write(f"ACTIVE_API_KEY={self._active_api_key}\n")
 
     @property
-    def active_token(self) -> Optional[str]:
-        """Get the currently active token"""
-        return self._active_token
+    def active_api_key(self) -> Optional[str]:
+        """Get the currently active api key"""
+        return self._active_api_key
 
-    @active_token.setter
-    def active_token(self, value: Optional[str]):
-        """Set the active token"""
-        if value is not None and value not in self._tokens:
-            raise ValueError(f"Token {value} does not exist")
-        self._active_token = value
-        self._save_tokens()
+    @active_api_key.setter
+    def active_api_key(self, value: Optional[str]):
+        """Set the active api key"""
+        if value is not None and value not in self._api_keys:
+            raise ValueError(f"Api key {value} does not exist")
+        self._active_api_key = value
+        self._save_api_keys()
 
-    def add_token(self, name: str, value: str):
-        """Add a new token"""
-        self._tokens[name.lower()] = value
-        if not self._active_token:
-            self._active_token = name.lower()
-        self._save_tokens()
+    def add_api_key(self, name: str, value: str):
+        """Add a new api key"""
+        self._api_keys[name.lower()] = value
+        if not self._active_api_key:
+            self._active_api_key = name.lower()
+        self._save_api_keys()
 
-    def remove_token(self, name: str):
-        """Remove a token"""
+    def remove_api_key(self, name: str):
+        """Remove an api key"""
         name = name.lower()
-        if name not in self._tokens:
-            raise ValueError(f"Token {name} does not exist")
+        if name not in self._api_keys:
+            raise ValueError(f"Api key {name} does not exist")
 
-        del self._tokens[name]
-        if self._active_token == name:
-            self._active_token = next(iter(self._tokens.keys()), None)
-        self._save_tokens()
+        del self._api_keys[name]
+        if self._active_api_key == name:
+            self._active_api_key = next(iter(self._api_keys.keys()), None)
+        self._save_api_keys()
 
-    def get_token(self, name: Optional[str] = None) -> Optional[str]:
-        """Get a token value by name. If no name is provided, returns the active token."""
+    def get_api_key(self, name: Optional[str] = None) -> Optional[str]:
+        """Get an api key value by name. If no name is provided, returns the active api key."""
         if name is None:
-            return self._tokens.get(self._active_token) if self._active_token else None
-        return self._tokens.get(name.lower())
+            return self._api_keys.get(self._active_api_key) if self._active_api_key else None
+        return self._api_keys.get(name.lower())
 
-    def list_tokens(self) -> Dict[str, str]:
-        """List all tokens"""
-        return self._tokens.copy()
+    def list_api_keys(self) -> Dict[str, str]:
+        """List all api keys"""
+        return self._api_keys.copy()
 
     @property
     def api_url(self) -> str:

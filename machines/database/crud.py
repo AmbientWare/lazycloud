@@ -1,13 +1,12 @@
 from machines.database.session import session_manager
 from machines.database.base import Base
 from machines.config import app_config
-from machines.database.utils import generate_token_expires_at, token_is_expired
-from machines.database.tokens import (
-    TokenService,
-    TokenPydantic,
-    TokenRole,
-    TokenExpirationMinutes,
-    TokenExpirationDays,
+from machines.database.utils import generate_api_key_expires_at, api_key_is_expired
+from machines.database.api_keys import (
+    ApiKeyService,
+    ApiKeyPydantic,
+    ApiKeyRole,
+    ApiKeyExpirationDays,
 )
 from datetime import datetime, timezone, timedelta
 
@@ -17,51 +16,56 @@ async def create_tables():
         await conn.run_sync(Base.metadata.create_all)
 
 
-async def update_admin_tokens():
-    token_service = TokenService()
+async def update_admin_api_keys():
+    api_key_service = ApiKeyService()
 
-    # check if the admin token exists
-    admin_tokens = await token_service.afind(filters={"user_id": "admin"})
-    token_exists = False
-    if admin_tokens and len(admin_tokens) > 0:
-        # delete tokens if they are expired
-        for token in admin_tokens:
-            if token.id and token.updated_at and token.token != app_config.ADMIN_TOKEN:
-                if token_is_expired(token.expires_at):
-                    print(f"Deleting expired admin token: {token.token}")
-                    await token_service.adelete(token.id)
+    # check if the admin api key exists
+    admin_api_keys = await api_key_service.afind(filters={"user_id": "admin"})
+    api_key_exists = False
+    if admin_api_keys and len(admin_api_keys) > 0:
+        # delete api keys if they are expired
+        for api_key in admin_api_keys:
+            if (
+                api_key.id
+                and api_key.updated_at
+                and api_key.value != app_config.ADMIN_API_KEY
+            ):
+                if api_key_is_expired(api_key.expires_at):
+                    print(f"Deleting expired admin api key: {api_key.value}")
+                    await api_key_service.adelete(api_key.id)
                     continue
 
-                elif token.updated_at > datetime.now(timezone.utc) - timedelta(
+                elif api_key.updated_at > datetime.now(timezone.utc) - timedelta(
                     minutes=30
                 ):
-                    # if the token is not expired, set it to expire in 30 min.
-                    # this gives time to refresh the token on the frontend
-                    # if the token was updated in the last 30 minutes, we don't need to update it
-                    token.expires_at = generate_token_expires_at(
-                        TokenExpirationMinutes.THIRTY_MINUTES
+                    # if the api key is not expired, set it to expire in 30 min.
+                    # this gives time to refresh the api key on the frontend
+                    # if the api key was updated in the last 30 minutes, we don't need to update it
+                    api_key.expires_at = generate_api_key_expires_at(
+                        ApiKeyExpirationDays.THIRTY_DAYS
                     )
                     print(
-                        f"Updating admin token: {token.token} to expire in 30 minutes"
+                        f"Updating admin api key: {api_key.value} to expire in 30 days"
                     )
-                    await token_service.aupdate(token)
+                    await api_key_service.aupdate(api_key)
 
             else:
-                token_exists = True
+                api_key_exists = True
 
-    if token_exists:
-        print("Admin token already exists. Skipping replacement...")
+    if api_key_exists:
+        print("Admin api key already exists. Skipping replacement...")
         return
 
-    token = TokenPydantic(
+    api_key = ApiKeyPydantic(
+        name="admin-api-key",
         user_id="admin",
-        token=app_config.ADMIN_TOKEN,
-        expires_at=generate_token_expires_at(
-            TokenExpirationDays.THREE_HUNDRED_SIXTY_FIVE_DAYS
+        value=app_config.ADMIN_API_KEY,
+        expires_at=generate_api_key_expires_at(
+            ApiKeyExpirationDays.THREE_HUNDRED_SIXTY_FIVE_DAYS
         ),
-        role=TokenRole.ADMIN,
+        role=ApiKeyRole.ADMIN,
     )
 
-    new_token = await token_service.acreate(token)
-    if new_token and new_token.id:
-        print(f"New admin token created: {new_token.token}")
+    new_api_key = await api_key_service.acreate(api_key)
+    if new_api_key and new_api_key.id:
+        print(f"New admin api key created: {new_api_key.value}")

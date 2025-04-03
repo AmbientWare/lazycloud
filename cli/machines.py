@@ -10,7 +10,7 @@ from cli.utils import (
     remove_from_ssh_config,
 )
 from cli.api import MachineAPI
-from cli.tokens import tokens
+from cli.api_keys import api_keys
 
 
 @machine.command()
@@ -244,5 +244,5 @@ def ssh_add(machine_name: str):
         click.echo(f"Error adding machine to SSH config: {e}", err=True)
 
 
-# Add the tokens group to the main CLI
-machine.add_command(tokens)
+# Add the api keys group to the main CLI
+machine.add_command(api_keys)

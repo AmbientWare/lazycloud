@@ -17,10 +17,10 @@ from slowapi import Limiter
 from machines.api.v1.machines import machines_router
 from machines.api.v1.health import health_router
 from machines.api.v1.users import users_router
-from machines.api.v1.tokens import tokens_router
+from machines.api.v1.api_keys import api_keys_router
 
 # import other modules
-from machines.database.crud import create_tables, update_admin_tokens
+from machines.database.crud import create_tables, update_admin_api_keys
 from machines.config import app_config
 
 
@@ -28,7 +28,7 @@ from machines.config import app_config
 async def lifespan(app: FastAPI):
     """Handle startup and shutdown events"""
     await create_tables()
-    await update_admin_tokens()
+    await update_admin_api_keys()
     yield
 
 
@@ -63,7 +63,7 @@ app.swagger_ui_init_oauth = {
 versionsed_routes = APIRouter(prefix=app_config.API_VERSION)
 versionsed_routes.include_router(machines_router)
 versionsed_routes.include_router(users_router)
-versionsed_routes.include_router(tokens_router)
+versionsed_routes.include_router(api_keys_router)
 app.include_router(versionsed_routes)
 
 # include non versioned routes that are not part of the main api
