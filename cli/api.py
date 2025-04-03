@@ -1,5 +1,5 @@
 import httpx
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from pathlib import Path
 import threading
 import time
@@ -10,7 +10,8 @@ from cli.config import config
 class MachineAPI:
     def __init__(self, timeout: float = 300.0):
         self.timeout = timeout
-        self.base_url = f"{config.api_url}/machines"
+        self.machine_url = f"{config.api_url}/machines"
+        self.user_url = f"{config.api_url}/users"
 
     def _get_client(self) -> httpx.Client:
         """Get an HTTP client with authentication"""
@@ -64,11 +65,17 @@ class MachineAPI:
                 response = client.request(method, url, json=json)
                 response.raise_for_status()
                 return response.json() if response.content else None
+
             except httpx.RequestError as e:
                 raise Exception(str(e))
+
             except httpx.HTTPStatusError as e:
                 error_data = e.response.json()
                 raise Exception(error_data["detail"])
+
+    def get_user_id(self) -> str:
+        """Get the user ID"""
+        return self._make_request("GET", f"{self.user_url}/id")
 
     def create_machine(
         self,
@@ -99,7 +106,7 @@ class MachineAPI:
             request_data["volume_size"] = str(volume_size)
 
         def _create():
-            return self._make_request("POST", self.base_url, json=request_data)
+            return self._make_request("POST", self.machine_url, json=request_data)
 
         return self._run_with_spinner("Creating machine...", _create)
 
@@ -124,7 +131,7 @@ class MachineAPI:
 
         def _scale():
             return self._make_request(
-                "PUT", f"{self.base_url}/{machine_name}", json=request_data
+                "PUT", f"{self.machine_url}/{machine_name}", json=request_data
             )
 
         return self._run_with_spinner("Scaling machine...", _scale)
@@ -135,7 +142,7 @@ class MachineAPI:
         def _extend():
             return self._make_request(
                 "POST",
-                f"{self.base_url}/{machine_name}/volumes?volume_size={volume_size}",
+                f"{self.machine_url}/{machine_name}/volumes?volume_size={volume_size}",
             )
 
         return self._run_with_spinner("Extending volume...", _extend)
@@ -144,13 +151,13 @@ class MachineAPI:
         """Destroy a machine"""
 
         def _destroy():
-            return self._make_request("DELETE", f"{self.base_url}/{machine_name}")
+            return self._make_request("DELETE", f"{self.machine_url}/{machine_name}")
 
         self._run_with_spinner("Destroying machine...", _destroy)
 
     def get_machines(self, machine_name: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get machine(s). If machine_name is provided, get that specific machine."""
-        url = self.base_url
+        url = self.machine_url
         if machine_name:
             url = f"{url}?machine_name={machine_name}"
 
@@ -159,11 +166,13 @@ class MachineAPI:
 
         return self._run_with_spinner("Fetching machines...", _get)
 
-    def get_machine_alias(self, machine_name: str) -> str:
+    def get_machine_alias(self, machine_name: str) -> Tuple[str | None, int | None]:
         """Get the alias for a machine"""
-        url = f"{self.base_url}/alias/{machine_name}"
+        url = f"{self.machine_url}/alias/{machine_name}"
 
-        return self._make_request("GET", url)
+        res = self._make_request("GET", url)
+
+        return res.get("alias"), res.get("port")
 
     @staticmethod
     def read_public_key(key_path: str) -> str:
