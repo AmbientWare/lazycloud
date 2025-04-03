@@ -5,6 +5,19 @@ from sqlalchemy import Column, String, DateTime
 from sqlalchemy.future import select
 
 from machines.database.base import BaseModel, BaseTable, DatabaseService
+from enum import Enum
+
+
+class TokenRole(str, Enum):
+    ADMIN = "admin"
+    USER = "user"
+
+
+class TokenExpiration(int, Enum):
+    ONE_DAY = 1
+    THIRTY_DAYS = 30
+    ONE_HUNDRED_DAYS = 100
+    THREE_HUNDRED_SIXTY_FIVE_DAYS = 365
 
 
 class TokenTable(BaseTable):
@@ -13,7 +26,8 @@ class TokenTable(BaseTable):
     __tablename__ = "tokens"
 
     token = Column(String, nullable=False, unique=True, index=True)
-    expires_at = Column(DateTime, nullable=False)
+    role = Column(String, nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
 
 
 class TokenPydantic(BaseModel):
@@ -21,6 +35,7 @@ class TokenPydantic(BaseModel):
 
     token: str
     expires_at: datetime
+    role: TokenRole
 
 
 class TokenService(DatabaseService[TokenTable, TokenPydantic]):
