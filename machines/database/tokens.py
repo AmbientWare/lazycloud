@@ -13,7 +13,17 @@ class TokenRole(str, Enum):
     USER = "user"
 
 
-class TokenExpiration(int, Enum):
+class TokenExpirationMinutes(int, Enum):
+    """The expiration time for a token in minutes"""
+
+    THIRTY_MINUTES = 30
+    ONE_HOUR = 60
+    THREE_HOURS = 180
+
+
+class TokenExpirationDays(int, Enum):
+    """The expiration time for a token in days"""
+
     ONE_DAY = 1
     THIRTY_DAYS = 30
     ONE_HUNDRED_DAYS = 100

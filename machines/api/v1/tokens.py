@@ -4,7 +4,7 @@ from typing import List, Optional
 
 from machines.api.security import require_admin
 from machines.database import db
-from machines.database.tokens import TokenPydantic, TokenRole, TokenExpiration
+from machines.database.tokens import TokenPydantic, TokenRole, TokenExpirationMinutes
 from machines.database.utils import (
     generate_token,
     generate_token_expires_at,
@@ -36,7 +36,7 @@ async def get_tokens(
 
 class CreateTokenRequest(BaseModel):
     user_id: str
-    expires_at: TokenExpiration
+    expires_at: TokenExpirationMinutes
 
 
 @tokens_router.post("")
@@ -64,7 +64,7 @@ async def create_token(
 
 class UpdateTokenRequest(BaseModel):
     user_id: str
-    expires_at: TokenExpiration
+    expires_at: TokenExpirationMinutes
 
 
 @tokens_router.put("/{token_id}")
