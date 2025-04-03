@@ -1,10 +1,8 @@
-from datetime import datetime, timezone
-
 from machines.database.session import session_manager
 from machines.database.base import Base
 from machines.config import app_config
 from machines.database.utils import generate_token_expires_at, token_is_expired
-from machines.database.tokens import TokenService, TokenPydantic, TokenRole
+from machines.database.tokens import TokenService, TokenPydantic, TokenRole, TokenExpiration
 
 
 async def create_tables():
@@ -35,7 +33,7 @@ async def update_admin_tokens():
     token = TokenPydantic(
         user_id="admin",
         token=app_config.ADMIN_TOKEN,
-        expires_at=generate_token_expires_at(60),
+        expires_at=generate_token_expires_at(TokenExpiration.THREE_HUNDRED_SIXTY_FIVE_DAYS),
         role=TokenRole.ADMIN,
     )
 

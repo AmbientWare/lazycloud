@@ -38,6 +38,8 @@ cp .env.example .env
 - `FLY_API_TOKEN`: Your Fly.io API token
 - `FLY_ORG_NAME`: Your Fly.io organization name
 - `DATABASE_URL`: The database connection URL (default is set for local development)
+- `REDIS_URL`: Redis cache connection URL (default is set for the local development)
+- `RATE_LIMIT`: Rate limited used with slowapi middleware
 
 ### 3. Install Dependencies
 

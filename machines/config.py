@@ -15,6 +15,7 @@ class AppConfig(BaseModel):
     model_config = ConfigDict(frozen=True)  # Make the config immutable
     ENV: ENVIRONMENT = ENVIRONMENT(ENV)
     ADMIN_TOKEN: str = os.getenv("ADMIN_TOKEN", "")
+    RATE_LIMIT: str = os.getenv("RATE_LIMIT", "50/minute")
 
     # Logging Configuration
     LOG_LEVEL: str = "DEBUG" if ENV == ENVIRONMENT.DEV else "INFO"
@@ -28,14 +29,11 @@ class AppConfig(BaseModel):
     FLY_API_TOKEN: str = os.getenv("FLY_API_TOKEN", "")
     FLY_ORG_NAME: str = os.getenv("FLY_ORG_NAME", "")
 
-    # Database Configuration
+    # Database Configurations
     DATABASE_URL: str = os.getenv(
         "DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5432/machines"
     )
-
-    # Redis Configuration
-    UPSTASH_REDIS_REST_URL: str = os.getenv("UPSTASH_REDIS_REST_URL", "")
-    UPSTASH_REDIS_REST_TOKEN: str = os.getenv("UPSTASH_REDIS_REST_TOKEN", "")
+    REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379")
 
     # Required Environment Variables
     required_env_vars: List[str] = [
@@ -43,8 +41,7 @@ class AppConfig(BaseModel):
         "FLY_API_TOKEN",
         "FLY_ORG_NAME",
         "DATABASE_URL",
-        "UPSTASH_REDIS_REST_URL",
-        "UPSTASH_REDIS_REST_TOKEN",
+        "REDIS_URL",
     ]
 
     @field_validator("required_env_vars")

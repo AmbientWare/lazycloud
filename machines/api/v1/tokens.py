@@ -1,62 +1,35 @@
-from fastapi import APIRouter, Depends, HTTPException, Body
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from typing import Literal, List, Optional
+from typing import List, Optional
 
-from machines.api.security import get_current_active_user, UserData, require_admin
+from machines.api.security import require_admin
 from machines.database import db
 from machines.database.tokens import TokenPydantic, TokenRole, TokenExpiration
 from machines.database.utils import (
     generate_token,
     generate_token_expires_at,
-    token_is_expired,
 )
 
-tokens_router = APIRouter(prefix="/tokens", tags=["tokens"])
+tokens_router = APIRouter(
+    prefix="/tokens", tags=["tokens"], dependencies=[Depends(require_admin)]
+)
 
 
-# NOTE: Tokens can only be created by admins.
-#       This allows us to keep track of authenticated users without a users db table.
-#       Users can fetch and update their own tokens.
-#       Users can only have one token at a time for now.
+# NOTE: Tokens access is limited to admins. This allows us to keep track of authenticated users without a users db table.
 
 
 @tokens_router.get("")
 async def get_tokens(
     user_id: str | None = None,
-    current_user: UserData = Depends(get_current_active_user),
 ) -> List[TokenPydantic]:
     # check if user is admin
-    is_admin = current_user.role == TokenRole.ADMIN
-
-    if is_admin:
-        # admins can fetch tokens for any and all users
-        if user_id:
-            tokens = await db.tokens.afind(filters={"user_id": user_id})
-        else:
-            tokens = await db.tokens.afind(filters={})
+    if user_id:
+        tokens = await db.tokens.afind(filters={"user_id": user_id})
     else:
-        # users can only fetch their own tokens
-        if user_id:
-            if user_id != current_user.user_id:
-                raise HTTPException(
-                    status_code=403,
-                    detail="Not enough permissions. Only admins can fetch tokens for other users.",
-                )
-
-        # this should only return one token -> [TokenPydantic]
-        tokens = await db.tokens.afind(filters={"user_id": current_user.user_id})
+        tokens = await db.tokens.afind(filters={})
 
     if len(tokens) == 0:
         raise HTTPException(status_code=404, detail="No tokens found")
-
-    if not is_admin:
-        # check if the user has any expired tokens
-        for token in tokens:
-            if token_is_expired(token.expires_at):
-                raise HTTPException(
-                    status_code=400,
-                    detail="Token expired. Please refresh your token.",
-                )
 
     return tokens
 
@@ -69,7 +42,6 @@ class CreateTokenRequest(BaseModel):
 @tokens_router.post("")
 async def create_token(
     request: CreateTokenRequest,
-    _=Depends(require_admin),
 ) -> TokenPydantic:
     # check if user already has a token
     token = await db.tokens.afind_one(filters={"user_id": request.user_id})
@@ -122,17 +94,24 @@ async def delete_tokens(
     token_id: Optional[int] = None,
     user_id: Optional[str] = None,
     _=Depends(require_admin),
-) -> TokenPydantic:
+) -> List[TokenPydantic]:
+    """
+    If user_id is provided, delete all tokens for the user.
+    If token_id is provided, delete the token with the given id.
+    If both, filter by both id and user_id to ensure we only delete the correct token.
+    """
     filters = {}
     if token_id:
         filters["id"] = token_id
     if user_id:
         filters["user_id"] = user_id
 
-    token = await db.tokens.afind_one(filters=filters)
-    if not token or token.id is None:
+    tokens = await db.tokens.afind(filters=filters)
+    if not tokens or len(tokens) == 0:
         raise HTTPException(status_code=404, detail="Token not found")
 
-    await db.tokens.adelete(token.id)
+    for token in tokens:
+        if token.id is not None:
+            await db.tokens.adelete(token.id)
 
-    return token
+    return tokens
