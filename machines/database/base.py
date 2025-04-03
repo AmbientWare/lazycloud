@@ -1,10 +1,8 @@
 import asyncio
 from typing import Optional, List, Generic, Type, TypeVar
 from datetime import datetime, timezone
-import uuid
 import nest_asyncio
 from sqlalchemy import Column, String, DateTime, Integer
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.future import select
 from pydantic import BaseModel as PydanticBaseModel

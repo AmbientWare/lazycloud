@@ -10,7 +10,7 @@ from cli.utils import (
     remove_from_ssh_config,
 )
 from cli.api import MachineAPI
-from cli.tokens import tokens  # Import the tokens group
+from cli.tokens import tokens
 
 
 @machine.command()
