@@ -43,9 +43,9 @@ def get_config_path() -> Path:
     return Path.home() / ".machines"
 
 
-def get_active_token() -> str | None:
-    """Get the currently active token"""
-    return config.active_token
+def get_active_api_key() -> str | None:
+    """Get the currently active api key"""
+    return config.active_api_key
 
 
 def get_default_key_path() -> str:

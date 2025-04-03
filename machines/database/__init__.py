@@ -1,18 +1,18 @@
 from dataclasses import dataclass
 
 from machines.database.machines import MachineService
-from machines.database.tokens import TokenService
+from machines.database.api_keys import ApiKeyService
 
 
 @dataclass
 class Database:
     machines: MachineService
-    tokens: TokenService
+    api_keys: ApiKeyService
 
 
 db = Database(
     machines=MachineService(),
-    tokens=TokenService(),
+    api_keys=ApiKeyService(),
 )
 
 __all__ = ["db"]

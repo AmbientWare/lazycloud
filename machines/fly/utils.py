@@ -19,8 +19,8 @@ async def run_async_command(
         check: Whether to raise an exception if the command fails
         print_output: Whether to print the output in real-time
     """
-    token_list = ["-t", app_config.FLY_API_TOKEN]
-    full_command = command + token_list
+    fly_token_list = ["-t", app_config.FLY_API_TOKEN]
+    full_command = command + fly_token_list
 
     if print_output:
         print(f"Running command: {' '.join(full_command)}")

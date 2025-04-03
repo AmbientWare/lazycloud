@@ -16,14 +16,14 @@ class MachineAPI:
     def _get_client(self) -> httpx.Client:
         """Get an HTTP client with authentication"""
         headers = {}
-        if config.active_token:
-            token_value = config.get_token()
-            if token_value:
-                headers["Authorization"] = f"Bearer {token_value}"
+        if config.active_api_key:
+            api_key = config.active_api_key
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
 
         else:
             raise Exception(
-                "No active token found. Please run `machines token add` to add a token."
+                "No active api key found. Please run `machines api-key add` to add an api key."
             )
 
         return httpx.Client(timeout=self.timeout, headers=headers)

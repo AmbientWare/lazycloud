@@ -14,7 +14,7 @@ class ENVIRONMENT(str, Enum):
 class AppConfig(BaseModel):
     model_config = ConfigDict(frozen=True)  # Make the config immutable
     ENV: ENVIRONMENT = ENVIRONMENT(ENV)
-    ADMIN_TOKEN: str = os.getenv("ADMIN_TOKEN", "")
+    ADMIN_API_KEY: str = os.getenv("ADMIN_API_KEY", "")
     RATE_LIMIT: str = os.getenv("RATE_LIMIT", "50/minute")
 
     # Logging Configuration
@@ -37,7 +37,7 @@ class AppConfig(BaseModel):
 
     # Required Environment Variables
     required_env_vars: List[str] = [
-        "ADMIN_TOKEN",
+        "ADMIN_API_KEY",
         "FLY_API_TOKEN",
         "FLY_ORG_NAME",
         "DATABASE_URL",

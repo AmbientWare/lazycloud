@@ -19,17 +19,18 @@ machines_router = APIRouter(prefix="/machines", tags=["machines"])
 
 @machines_router.get("")
 async def get_machines(
+    machine_id: str | None = None,
     machine_name: str | None = None,
     current_user: UserData = Depends(get_current_active_user),
 ) -> List[MachinePydantic]:
+    filters = {"user_id": current_user.user_id}
+    if machine_id is not None:
+        filters["id"] = machine_id
+    if machine_name is not None:
+        filters["name"] = machine_name
+
     """Get a list of machines"""
-    if machine_name is None:
-        machines = await db.machines.afind(filters={"user_id": current_user.user_id})
-    else:
-        machine = await db.machines.afind_one(
-            filters={"name": machine_name, "user_id": current_user.user_id}
-        )
-        machines = [machine] if machine else []
+    machines = await db.machines.afind(filters=filters)
 
     return machines
 
@@ -213,16 +214,21 @@ async def scale_machine(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@machines_router.delete("/{machine_name}")
+@machines_router.delete("")
 async def delete_machine(
-    machine_name: str,
+    machine_id: str | None = None,
+    machine_name: str | None = None,
     current_user: UserData = Depends(get_current_active_user),
 ):
+    filters = {"user_id": current_user.user_id}
+    if machine_id is not None:
+        filters["id"] = machine_id
+    if machine_name is not None:
+        filters["name"] = machine_name
+
     try:
         # get machine from db
-        machine = await db.machines.afind_one(
-            filters={"name": machine_name, "user_id": current_user.user_id}
-        )
+        machine = await db.machines.afind_one(filters=filters)
         if machine is None or machine.id is None:
             raise HTTPException(status_code=404, detail="Machine not found")
 
