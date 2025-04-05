@@ -6,7 +6,7 @@ from cli.paths.utils import (
     make_table_view,
     get_default_key_path,
 )
-from cli.api import MachineAPI
+from cli.api import machines_api
 from cli.paths.remachina import remach
 from cli.logging import logger
 from cli.paths.ssh import ssh_config_manager
@@ -54,7 +54,7 @@ def create(
         try:
             if public_key is None:
                 raise ValueError("Public key path cannot be None")
-            public_key_content = MachineAPI.read_public_key(public_key)
+            public_key_content = machines_api.read_public_key(public_key)
 
         except FileNotFoundError as e:
             logger.error(str(e))
@@ -69,8 +69,7 @@ def create(
             if machine_name is None:
                 raise ValueError("Machine name cannot be None")
 
-            api = MachineAPI()
-            result = api.create_machine(
+            result = machines_api.create_machine(
                 name=machine_name,
                 public_key=public_key_content,
                 region=region,
@@ -80,7 +79,7 @@ def create(
                 volume_size=volume_size,
             )
             if result:
-                created_machine = api.get_machines(machine_name)
+                created_machine = machines_api.get_machines(machine_name)
                 if created_machine:
                     headers = list(created_machine[0].keys())
                     logger.info(make_table_view([created_machine[0]], headers))
@@ -95,14 +94,14 @@ def create(
         )
         if should_add_to_ssh_config:
             # add to ssh config
-            alias, port = api.get_machine_alias(machine_name)
+            alias, port = machines_api.get_machine_alias(machine_name)
             if alias is None or port is None:
                 logger.error(
                     "Error getting machine alias. Please try again by running `machines connect add <machine-name>`."
                 )
                 return
 
-            user_id = api.get_user_id()
+            user_id = machines_api.get_user_id()
             ssh_config_manager.add_machine(machine_name, alias, port, user_id)
             logger.success(f"Added machine {machine_name} to SSH config")
 
@@ -125,8 +124,7 @@ def scale(
 ):
     """Scale machine resources"""
     try:
-        api = MachineAPI()
-        api.scale_machine(machine_name, cpu_kind, cpu, memory, region)
+        machines_api.scale_machine(machine_name, cpu_kind, cpu, memory, region)
         logger.success(f"Successfully scaled machine {machine_name}")
     except Exception as e:
         logger.error(f"Error scaling machine: {e}")
@@ -145,8 +143,7 @@ def destroy(machine_name: str):
             logger.info("Machine not destroyed")
             return
 
-        api = MachineAPI()
-        api.destroy_machine(machine_name)
+        machines_api.destroy_machine(machine_name)
 
         # remove from ssh config if it exists
         ssh_config_manager.remove_machine(machine_name)
@@ -162,8 +159,7 @@ def destroy(machine_name: str):
 def get(machine_name: Optional[str]):
     """Get machine(s). If machine_name is provided, get that specific machine."""
     try:
-        api = MachineAPI()
-        machines = api.get_machines(machine_name)
+        machines = machines_api.get_machines(machine_name)
 
         # Define headers based on the first machine's keys
         if machines:
@@ -179,8 +175,7 @@ def get(machine_name: Optional[str]):
 def list_machines():
     """List all machines"""
     try:
-        api = MachineAPI()
-        machines = api.get_machines()
+        machines = machines_api.get_machines()
         if machines:
             headers = list(machines[0].keys())
             logger.info(make_table_view(machines, headers))
@@ -197,8 +192,7 @@ def list_machines():
 def connect_machine(machine_name: str, ssh_key: Optional[str]):
     """Connect to a machine"""
     try:
-        api = MachineAPI()
-        alias, port = api.get_machine_alias(machine_name)
+        alias, port = machines_api.get_machine_alias(machine_name)
         if alias:
             if not ssh_key:
                 ssh_key = get_default_key_path().replace(
@@ -206,8 +200,7 @@ def connect_machine(machine_name: str, ssh_key: Optional[str]):
                 )  # Remove .pub extension to get private key
 
             logger.info(f"Connecting to machine {machine_name}...")
-            api = MachineAPI()
-            user_id = api.get_user_id()
+            user_id = machines_api.get_user_id()
             ssh_command = [
                 "ssh",
                 "-i",

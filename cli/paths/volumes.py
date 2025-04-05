@@ -2,7 +2,7 @@ import click
 import sys
 
 from cli.paths.machines import machines
-from cli.api import MachineAPI
+from cli.api import machines_api
 from cli.logging import logger
 
 
@@ -18,8 +18,7 @@ def volume():
 def extend(machine_name: str, size: int):
     """Extend a machine's storage volume to a specific size in GB"""
     try:
-        api = MachineAPI()
-        api.extend_volume(machine_name, size)
+        machines_api.extend_volume(machine_name, size)
         logger.success(f"Volume {machine_name} extended to {size}GB")
 
     except Exception as e:
