@@ -68,14 +68,11 @@ class PricingManager:
         self.soup: Optional[BeautifulSoup] = None
         self._region_markups: Optional[Markups] = None
         self._pricing_table: Optional[PricingTable] = None
-        self._redis_client: Optional[Redis] = None
         self._region_markup_key = "pricing:region_markups"
         self._pricing_table_key = "pricing:pricing_table"
-
-    async def initialize(self):
-        """Initialize async resources."""
         self._redis_client = Redis.from_url(app_config.REDIS_URL)
-        await self._redis_client.ping()  # Test connection
+        if self._redis_client is None or not self._redis_client.ping():
+            raise RuntimeError("Failed to connect to Redis")
 
     async def cleanup(self):
         """Cleanup async resources."""
@@ -84,9 +81,6 @@ class PricingManager:
 
     async def add_region_markups_to_redis(self):
         """Add region markups to Redis."""
-        if not self._redis_client:
-            raise RuntimeError("Redis client not initialized. Call initialize() first.")
-
         if not self._region_markups:
             raise ValueError("No region markups found. Call scrape() first.")
 
@@ -96,9 +90,6 @@ class PricingManager:
 
     async def add_pricing_table_to_redis(self):
         """Add pricing table to Redis."""
-        if not self._redis_client:
-            raise RuntimeError("Redis client not initialized. Call initialize() first.")
-
         if not self._pricing_table:
             raise ValueError("No pricing table found. Call scrape() first.")
 
@@ -147,11 +138,10 @@ class PricingManager:
             self.soup = None
             return False
 
-    async def _extract_region_markups(self) -> List[Region]:
+    async def _extract_region_markups(self) -> Markups:
         """Extracts region markups from the script tag in the soup."""
         if not self.soup:
-            print("Cannot extract region markups, soup is not loaded.")
-            return []
+            raise ValueError("Cannot extract region markups, soup is not loaded.")
 
         print("Extracting regionMarkups...")
         # Run BeautifulSoup operations in a thread pool
@@ -176,11 +166,14 @@ class PricingManager:
                         markups_raw = re.findall(r'"(\w+)":\s*([\d.]+)', markup_string)
                         # Convert dict items to Region objects
                         regions = [
-                            Region(region=key, markup=float(value))
+                            Region(
+                                region=key,
+                                markup=float(value) * (1 + app_config.REMACH_UPCHARGE),
+                            )
                             for key, value in markups_raw
                         ]
                         print("Successfully extracted and parsed regionMarkups.")
-                        return regions
+                        return Markups(regions=regions)
 
                     except (ValidationError, ValueError, TypeError) as e:
                         print(f"Error parsing/validating regionMarkups object: {e}")
@@ -195,16 +188,15 @@ class PricingManager:
                     )  # Log sample
 
         print("Could not find or parse the regionMarkups script.")
-        return []
+        raise ValueError("Could not find or parse the regionMarkups script.")
 
     async def _extract_pricing_table(self) -> PricingTable:
         """Extracts pricing data from the specified table ID into Pydantic models."""
         if not self.soup:
-            print("Cannot extract EWR pricing, soup is not loaded.")
-            return PricingTable(pricing_rows=[])
+            raise ValueError("Cannot extract EWR pricing, soup is not loaded.")
 
         print(f"Extracting pricing table...")
-        pricing_table_data_models: PricingTable = PricingTable(pricing_rows=[])
+        pricing_table_data_models = PricingTable(pricing_rows=[])
 
         # Run BeautifulSoup operations in a thread pool
         table_div = await asyncio.to_thread(self.soup.find, "div", id=EWR_TABLE_ID)
@@ -329,6 +321,9 @@ class PricingManager:
                 "No valid data extracted from the EWR table, check selectors or page structure."
             )
 
+        if not pricing_table_data_models.pricing_rows:
+            raise ValueError("No valid data extracted from the EWR table.")
+
         return pricing_table_data_models
 
     async def scrape(self) -> PricingData:
@@ -339,20 +334,19 @@ class PricingManager:
             )
 
         region_markups = await self._extract_region_markups()
-        self.region_markups = region_markups
-
+        self._region_markups = region_markups
         pricing_table = await self._extract_pricing_table()
-        self.pricing_table = pricing_table
+        self._pricing_table = pricing_table
 
-        pricing_data = PricingData(
-            markups=Markups(regions=region_markups), pricing_table=pricing_table
-        )
+        pricing_data = PricingData(markups=region_markups, pricing_table=pricing_table)
 
         return pricing_data
 
     async def update_pricing_data(self) -> None:
         """Updates pricing data in Redis."""
-        _ = await self.scrape()
+        pricing_data = await self.scrape()
+        self._region_markups = pricing_data.markups
+        self._pricing_table = pricing_data.pricing_table
         await self.add_region_markups_to_redis()
         await self.add_pricing_table_to_redis()
 
@@ -417,7 +411,6 @@ if __name__ == "__main__":
     async def main():
         scraper = PricingManager()
         try:
-            await scraper.initialize()
             pricing_data = await scraper.scrape()
             await display_results(pricing_data)
 

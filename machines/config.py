@@ -25,6 +25,12 @@ class AppConfig(BaseModel):
     PROJECT_VERSION: str = "1.0.0"
     API_VERSION: str = os.getenv("API_VERSION", "/v1")
 
+    # Pricing Configuration
+    REMACH_UPCHARGE: float = float(os.getenv("REMACH_UPCHARGE", 0))
+    VOLUME_PRICE: float = float(os.getenv("VOLUME_PRICE", 0))
+    DEDICATED_IPV4_PRICE: float = float(os.getenv("DEDICATED_IPV4_PRICE", 0))
+    DATA_EGRESS_PRICE: float = float(os.getenv("DATA_EGRESS_PRICE", 0))
+
     # Fly.io Configuration
     FLY_API_TOKEN: str = os.getenv("FLY_API_TOKEN", "")
     FLY_ORG_NAME: str = os.getenv("FLY_ORG_NAME", "")
@@ -38,14 +44,18 @@ class AppConfig(BaseModel):
     # Required Environment Variables
     required_env_vars: List[str] = [
         "ADMIN_API_KEY",
+        "REMACH_UPCHARGE",
+        "VOLUME_PRICE",
+        "DEDICATED_IPV4_PRICE",
+        "DATA_EGRESS_PRICE",
         "FLY_API_TOKEN",
         "FLY_ORG_NAME",
         "DATABASE_URL",
         "REDIS_URL",
     ]
 
-    @model_validator(mode='after')
-    def validate_required_env_vars(self: 'AppConfig') -> 'AppConfig':
+    @model_validator(mode="after")
+    def validate_required_env_vars(self: "AppConfig") -> "AppConfig":
         print("Validating required environment variables")
         missing_vars = [var for var in self.required_env_vars if not os.getenv(var)]
         if missing_vars:
