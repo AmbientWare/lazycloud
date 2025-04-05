@@ -10,7 +10,7 @@ from cli.utils import (
     remove_from_ssh_config,
 )
 from cli.api import MachineAPI
-from cli.api_keys import api_keys
+from cli.keys import keys
 
 
 @machine.command()
@@ -74,8 +74,10 @@ def create(
                 memory=memory,
                 volume_size=volume_size,
             )
-            headers = list(result.keys())
-            click.echo(make_table_view([result], headers))
+            if result:
+                created_machine = api.get_machine_status(name)
+                headers = list(created_machine.keys())
+                click.echo(make_table_view([created_machine], headers))
 
         except Exception as e:
             click.echo(f"Error creating machine: {e}", err=True)
@@ -245,4 +247,4 @@ def ssh_add(machine_name: str):
 
 
 # Add the api keys group to the main CLI
-machine.add_command(api_keys)
+machine.add_command(keys)

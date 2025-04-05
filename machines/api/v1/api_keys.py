@@ -101,8 +101,6 @@ async def delete_api_keys(
         filters["user_id"] = user_id
 
     api_keys = await db.api_keys.afind(filters=filters)
-    if not api_keys or len(api_keys) == 0:
-        raise HTTPException(status_code=404, detail="Api key not found")
 
     for api_key in api_keys:
         if api_key.id is not None:

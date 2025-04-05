@@ -71,7 +71,7 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
 
         return db_model.to_pydantic(self.pydantic_model_class)
 
-    async def aget_by_id(self, id: str) -> Optional[basePydanticType]:
+    async def aget_by_id(self, id: int) -> Optional[basePydanticType]:
         """Get a model instance by id"""
         async with self._session_manager.get_session() as session:
             query = select(self.db_model_class).where(self.db_model_class.id == id)
@@ -79,7 +79,7 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
             db_model = result.scalar_one_or_none()
             return self._to_pydantic(db_model)
 
-    def get_by_id(self, id: str) -> Optional[basePydanticType]:
+    def get_by_id(self, id: int) -> Optional[basePydanticType]:
         """Get a model instance by id"""
         return asyncio.run(self.aget_by_id(id))
 
@@ -121,7 +121,6 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
             )
             result = await session.execute(query)
             db_model = result.scalar_one_or_none()
-            print("updating model", db_model)
             if db_model:
                 for key, value in model.model_dump().items():
                     setattr(db_model, key, value)
@@ -148,11 +147,11 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
         """Delete a model instance"""
         return asyncio.run(self.adelete(id))
 
-    async def aexists(self, id: str) -> bool:
+    async def aexists(self, id: int) -> bool:
         """Check if a model instance exists"""
         return await self.aget_by_id(id) is not None
 
-    def exists(self, id: str) -> bool:
+    def exists(self, id: int) -> bool:
         """Check if a model instance exists"""
         return asyncio.run(self.aexists(id))
 

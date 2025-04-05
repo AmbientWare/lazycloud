@@ -4,12 +4,12 @@ from cli.config import config
 
 
 @click.group()
-def api_keys():
+def keys():
     """API key management commands"""
     pass
 
 
-@api_keys.command()
+@keys.command()
 @click.argument("name")
 @click.argument("value")
 def add(name: str, value: str):
@@ -44,7 +44,7 @@ def add(name: str, value: str):
         click.echo(f"Error setting api key: {e}", err=True)
 
 
-@api_keys.command()
+@keys.command()
 @click.argument("name", required=False)
 def get(name: str | None = None):
     """Get an api key value by name. If no name is provided, returns the active api key."""
@@ -67,7 +67,7 @@ def get(name: str | None = None):
         click.echo(f"Error getting api key: {e}", err=True)
 
 
-@api_keys.command(name="rm")
+@keys.command(name="rm")
 @click.argument("name")
 def remove(name: str):
     """Remove an api key by name"""
@@ -82,7 +82,7 @@ def remove(name: str):
         click.echo(f"Error removing api key: {e}", err=True)
 
 
-@api_keys.command(name="ls")
+@keys.command(name="ls")
 def list_api_keys():
     """List all available api keys"""
     try:
@@ -108,7 +108,7 @@ def list_api_keys():
         click.echo(f"Error listing api keys: {e}", err=True)
 
 
-@api_keys.command()
+@keys.command()
 @click.argument("name")
 def use(name: str):
     """Set the active api key to use for other commands"""

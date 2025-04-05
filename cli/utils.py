@@ -2,7 +2,7 @@ import time
 import sys
 import os
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from tabulate import tabulate
 
 from cli.config import config
@@ -13,29 +13,82 @@ class Spinner:
         self.message = message
         self.spinner_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
         self.spinner_index = 0
-        self.start_time = None
         self.running = False
+        self._last_update = 0
+        self._update_interval = 0.1
 
     def __enter__(self):
-        self.start_time = time.time()
         self.running = True
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.running = False
-        # Clear the spinner line
+        self._clear_line()
+
+    def _clear_line(self):
+        """Clear the current line"""
         sys.stdout.write("\r" + " " * (len(self.message) + 10) + "\r")
         sys.stdout.flush()
 
-    def spin(self):
-        if not self.running:
+    def set_message(self, new_message: str):
+        """Set a new message for the spinner"""
+        self.message = new_message
+        # Force an immediate update with the new message
+        sys.stdout.write(f"\r{self.spinner_chars[self.spinner_index]} {self.message}")
+        sys.stdout.flush()
+
+    def update(self):
+        """Update the spinner animation"""
+        current_time = time.time()
+        if current_time - self._last_update < self._update_interval:
             return
 
-        # Update spinner
         sys.stdout.write(f"\r{self.spinner_chars[self.spinner_index]} {self.message}")
         sys.stdout.flush()
         self.spinner_index = (self.spinner_index + 1) % len(self.spinner_chars)
-        time.sleep(0.1)
+        self._last_update = current_time
+
+
+class StatusSpinner(Spinner):
+    def __init__(self, message: str, status_checker, status_interval: float = 5.0):
+        super().__init__(message)
+        self.status_checker = status_checker
+        self.status_interval = status_interval
+        self._last_status_check = 0
+        self._last_status = None
+        self._base_message = message  # Store the original message
+        self._status_msg = ""
+
+    def status_update(self, new_status_msg: str):
+        """Set a new message for the spinner"""
+        self._status_msg = new_status_msg
+        super().set_message(f"{self._base_message} - {self._status_msg}")
+
+    def update(self):
+        """Update the spinner and check status if needed"""
+        current_time = time.time()
+
+        # Check status if interval has passed
+        if current_time - self._last_status_check >= self.status_interval:
+            try:
+                status = self.status_checker()
+                if status != self._last_status:
+                    status_msg = status.get("status", "unknown")
+                    # Update the message with the current status
+                    self.status_update(f"Status: {status_msg}")
+                    self._last_status = status
+
+                    # Stop if machine is ready or failed
+                    if status_msg in ["ready", "failed"]:
+                        self.running = False
+                        return
+
+            except Exception:
+                pass
+            self._last_status_check = current_time
+
+        # Update spinner animation
+        super().update()
 
 
 def get_config_path() -> Path:

@@ -3,14 +3,30 @@
 import asyncio
 import subprocess
 import sys
-from typing import List
+from typing import List, Callable, Awaitable
 
 from machines.config import app_config
 from machines.fly.schemas import FlyCommandError
+from machines.database.machines import MachineStatus
+from machines.database import db
+
+
+async def deploying_status_callback(machine_id: int, stdout_line: str) -> None:
+    lower_line = stdout_line.lower()
+    """Update the status of the machine as it is being deployed."""
+    if "building image" in lower_line:
+        await db.machines.update_machine_status(machine_id, MachineStatus.BUILDING)
+    elif "volume named" in lower_line:
+        await db.machines.update_machine_status(machine_id, MachineStatus.VOLUME)
+    elif "launching new machine" in lower_line:
+        await db.machines.update_machine_status(machine_id, MachineStatus.VM_CREATING)
 
 
 async def run_async_command(
-    command: List[str], check: bool = True, print_output: bool = True
+    command: List[str],
+    check: bool = True,
+    print_output: bool = True,
+    stdout_callback: Callable[[str], Awaitable[None]] | None = None,
 ) -> subprocess.CompletedProcess:
     """Run a command asynchronously and handle errors.
 
@@ -48,6 +64,9 @@ async def run_async_command(
                         break
                     # Decode the bytes to string
                     line = line.decode("utf-8", errors="replace").strip()
+                    if stdout_callback:
+                        await stdout_callback(line)
+
                     if is_error:
                         error_lines.append(line)
                         print(line, file=sys.stderr)

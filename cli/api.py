@@ -3,7 +3,7 @@ from typing import Optional, List, Dict, Any, Tuple
 from pathlib import Path
 import threading
 import time
-from cli.utils import Spinner
+from cli.utils import Spinner, StatusSpinner
 from cli.config import config
 
 
@@ -28,19 +28,32 @@ class MachineAPI:
 
         return httpx.Client(timeout=self.timeout, headers=headers)
 
-    def _run_with_spinner(self, message: str, func):
-        """Run a function with a spinner in a separate thread"""
-        spinner = Spinner(message)
+    def _run_with_spinner(
+        self, message: str, func, status_polling: Optional[Tuple[str, str]] = None
+    ):
+        """Run a function with a spinner in a separate thread. If status_polling is provided,
+        it should be a tuple of (machine_name, status_message) to poll for status updates.
+        """
+        if status_polling:
+            machine_name, status_message = status_polling
+
+            def status_checker():
+                return self._make_request(
+                    "GET", f"{self.machine_url}/status?machine_name={machine_name}"
+                )
+
+            spinner = StatusSpinner(status_message, status_checker)
+        else:
+            spinner = Spinner(message)
+
         spinner_thread = threading.Thread(target=self._spin_thread, args=(spinner,))
         spinner_thread.daemon = True
 
         with spinner:
             spinner_thread.start()
             try:
-                result = func()
-                return result
+                return func()
             finally:
-                # kill the spinner so it doesn't continue to run
                 spinner.running = False
 
     def _gb_to_mb(self, gb: float) -> int:
@@ -49,8 +62,8 @@ class MachineAPI:
 
     def _spin_thread(self, spinner: Spinner):
         """Run the spinner in a separate thread"""
-        while True:
-            spinner.spin()
+        while spinner.running:
+            spinner.update()
             time.sleep(0.1)
 
     def _make_request(
@@ -77,6 +90,12 @@ class MachineAPI:
         """Get the user ID"""
         return self._make_request("GET", f"{self.user_url}/id")
 
+    def get_machine_status(self, machine_name: str) -> Dict[str, Any]:
+        """Get the status of a specific machine"""
+        return self._make_request(
+            "GET", f"{self.machine_url}/status?machine_name={machine_name}"
+        )
+
     def create_machine(
         self,
         name: str,
@@ -87,7 +106,7 @@ class MachineAPI:
         memory: Optional[int] = None,
         volume_size: Optional[int] = None,
     ) -> Dict[str, Any]:
-        """Create a new machine"""
+        """Create a new machine and poll for status updates"""
         request_data = {
             "name": name,
             "public_key": public_key,
@@ -108,7 +127,10 @@ class MachineAPI:
         def _create():
             return self._make_request("POST", self.machine_url, json=request_data)
 
-        return self._run_with_spinner("Creating machine...", _create)
+        # Create the machine with status polling
+        return self._run_with_spinner(
+            "Creating machine...", _create, status_polling=(name, "Creating machine")
+        )
 
     def scale_machine(
         self,
@@ -151,7 +173,9 @@ class MachineAPI:
         """Destroy a machine"""
 
         def _destroy():
-            return self._make_request("DELETE", f"{self.machine_url}/{machine_name}")
+            return self._make_request(
+                "DELETE", f"{self.machine_url}?machine_name={machine_name}"
+            )
 
         self._run_with_spinner("Destroying machine...", _destroy)
 
