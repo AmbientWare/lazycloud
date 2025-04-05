@@ -35,27 +35,6 @@ async def get_machines(
     return machines
 
 
-@machines_router.get("/status")
-async def get_machine_status(
-    machine_id: str | None = None,
-    machine_name: str | None = None,
-    current_user: UserData = Depends(get_current_active_user),
-) -> MachinePydantic:
-    filters = {"user_id": current_user.user_id}
-    if machine_id is not None:
-        filters["id"] = machine_id
-
-    if machine_name is not None:
-        filters["name"] = machine_name
-
-    machine = await db.machines.afind_one(filters=filters)
-
-    if machine is None:
-        raise HTTPException(status_code=404, detail="Machine not found")
-
-    return machine
-
-
 class MachineAliasResponse(BaseModel):
     alias: str
     port: int

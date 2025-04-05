@@ -93,7 +93,11 @@ class CLIConfig(BaseModel):
     def get_api_key(self, name: Optional[str] = None) -> Optional[str]:
         """Get an api key value by name. If no name is provided, returns the active api key."""
         if name is None:
-            return self._api_keys.get(self._active_api_key) if self._active_api_key else None
+            return (
+                self._api_keys.get(self._active_api_key)
+                if self._active_api_key
+                else None
+            )
         return self._api_keys.get(name.lower())
 
     def list_api_keys(self) -> Dict[str, str]:

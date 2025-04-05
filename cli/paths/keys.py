@@ -1,9 +1,12 @@
 import click
-from cli.utils import make_table_view
+
+from cli.paths.utils import make_table_view
 from cli.config import config
+from cli.logging import logger
+from cli.paths.remachina import remach
 
 
-@click.group()
+@remach.group()
 def keys():
     """API key management commands"""
     pass
@@ -23,25 +26,25 @@ def add(name: str, value: str):
                     type=str,
                 )
                 if new_name.lower() == "n":
-                    click.echo("Operation cancelled.")
+                    logger.info("Operation cancelled.")
                     return
 
                 if new_name.lower() not in config.list_api_keys():
                     name = new_name
                     break
                 else:
-                    click.echo(
+                    logger.warning(
                         f"Api key '{new_name}' also exists. Please try another name."
                     )
 
         # Add the api key
         config.add_api_key(name, value)
-        click.echo(f"Successfully set api key {name}")
+        logger.success(f"Successfully set api key {name}")
         if config.active_api_key == name.lower():
-            click.echo(f"Api key {name} is now active")
+            logger.info(f"Api key {name} is now active")
 
     except Exception as e:
-        click.echo(f"Error setting api key: {e}", err=True)
+        logger.error(f"Error setting api key: {e}")
 
 
 @keys.command()
@@ -51,7 +54,7 @@ def get(name: str | None = None):
     try:
         api_key_value = config.get_api_key(name)
         if api_key_value is None:
-            click.echo("No api key found", err=True)
+            logger.error("No api key found")
             return
 
         is_active = name is None or name.lower() == config.active_api_key
@@ -62,9 +65,9 @@ def get(name: str | None = None):
                 "Status": "Active" if is_active else "Inactive",
             }
         ]
-        click.echo(make_table_view(data, ["Name", "Value", "Status"]))
+        logger.info(make_table_view(data, ["Name", "Value", "Status"]))
     except Exception as e:
-        click.echo(f"Error getting api key: {e}", err=True)
+        logger.error(f"Error getting api key: {e}")
 
 
 @keys.command(name="rm")
@@ -73,13 +76,13 @@ def remove(name: str):
     """Remove an api key by name"""
     try:
         config.remove_api_key(name)
-        click.echo(f"Successfully removed api key {name}")
+        logger.success(f"Successfully removed api key {name}")
 
     except ValueError as e:
-        click.echo(str(e), err=True)
+        logger.error(str(e))
 
     except Exception as e:
-        click.echo(f"Error removing api key: {e}", err=True)
+        logger.error(f"Error removing api key: {e}")
 
 
 @keys.command(name="ls")
@@ -88,7 +91,7 @@ def list_api_keys():
     try:
         api_keys = config.list_api_keys()
         if not api_keys:
-            click.echo("No api keys set", err=True)
+            logger.warning("No api keys set")
             return
 
         # Convert api keys to table format
@@ -103,9 +106,9 @@ def list_api_keys():
                 }
             )
 
-        click.echo(make_table_view(data, ["Name", "Value", "Status"]))
+        logger.info(make_table_view(data, ["Name", "Value", "Status"]))
     except Exception as e:
-        click.echo(f"Error listing api keys: {e}", err=True)
+        logger.error(f"Error listing api keys: {e}")
 
 
 @keys.command()
@@ -114,10 +117,10 @@ def use(name: str):
     """Set the active api key to use for other commands"""
     try:
         config.active_api_key = name.lower()
-        click.echo(f"Successfully set {name} as active api key")
+        logger.success(f"Successfully set {name} as active api key")
 
     except ValueError as e:
-        click.echo(str(e), err=True)
+        logger.error(str(e))
 
     except Exception as e:
-        click.echo(f"Error setting active api key: {e}", err=True)
+        logger.error(f"Error setting active api key: {e}")
