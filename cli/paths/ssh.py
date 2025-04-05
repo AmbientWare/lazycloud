@@ -2,7 +2,7 @@ import click
 
 from cli.paths.remachina import remach
 from cli.logging import logger
-from cli.api import MachineAPI
+from cli.api import machines_api
 from cli.ssh_config import ssh_config_manager
 
 
@@ -17,15 +17,14 @@ def ssh():
 def add(machine_name: str):
     """Add a machine to SSH config"""
     try:
-        api = MachineAPI()
-        alias, port = api.get_machine_alias(machine_name)
+        alias, port = machines_api.get_machine_alias(machine_name)
         if alias is None or port is None:
             logger.error(
                 "Error getting machine alias. Please make sure the machine exists."
             )
             return
 
-        user_id = api.get_user_id()
+        user_id = machines_api.get_user_id()
         ssh_config_manager.add_machine(machine_name, alias, port, user_id)
         logger.success(f"Successfully added machine {machine_name} to SSH config")
 

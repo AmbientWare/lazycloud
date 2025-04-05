@@ -186,3 +186,6 @@ class MachineAPI:
 
         with open(path) as f:
             return f.read().strip()
+
+
+machines_api = MachineAPI()
