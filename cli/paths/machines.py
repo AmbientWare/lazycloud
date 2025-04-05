@@ -2,19 +2,24 @@ import click
 from typing import Optional
 import subprocess
 
-from cli import machine
-from cli.utils import (
+from cli.paths.utils import (
     make_table_view,
     get_default_key_path,
-    add_to_ssh_config,
-    remove_from_ssh_config,
 )
 from cli.api import MachineAPI
-from cli.keys import keys
+from cli.paths.remachina import remach
+from cli.logging import logger
+from cli.paths.ssh import ssh_config_manager
 
 
-@machine.command()
-@click.argument("name")
+@remach.group()
+def machines():
+    """Machine management commands"""
+    pass
+
+
+@machines.command()
+@click.argument("machine_name")
 @click.option("--public-key", help="Path to SSH public key file")
 @click.option("--region", help="Region to deploy the machine")
 @click.option("--cpu-kind", help="CPU kind")
@@ -22,7 +27,7 @@ from cli.keys import keys
 @click.option("--memory", type=float, help="Memory in GB")
 @click.option("--volume-size", type=int, help="Volume size in GB")
 def create(
-    name: str,
+    machine_name: str,
     public_key: Optional[str],
     region: Optional[str],
     cpu_kind: Optional[str],
@@ -33,8 +38,8 @@ def create(
     """Create a new machine"""
     try:
         # Prompt for name if not provided
-        if not name:
-            name = click.prompt("Enter machine name")
+        if not machine_name:
+            machine_name = click.prompt("Enter machine name")
 
         # Get default key path if not provided
         if not public_key:
@@ -52,21 +57,21 @@ def create(
             public_key_content = MachineAPI.read_public_key(public_key)
 
         except FileNotFoundError as e:
-            click.echo(str(e), err=True)
+            logger.error(str(e))
             return
 
         except Exception as e:
-            click.echo(f"Error reading public key file: {e}", err=True)
+            logger.error(f"Error reading public key file: {e}")
             return
 
         # Create machine using API
         try:
-            if name is None:
+            if machine_name is None:
                 raise ValueError("Machine name cannot be None")
 
             api = MachineAPI()
             result = api.create_machine(
-                name=name,
+                name=machine_name,
                 public_key=public_key_content,
                 region=region,
                 cpu_kind=cpu_kind,
@@ -75,12 +80,13 @@ def create(
                 volume_size=volume_size,
             )
             if result:
-                created_machine = api.get_machine_status(name)
-                headers = list(created_machine.keys())
-                click.echo(make_table_view([created_machine], headers))
+                created_machine = api.get_machines(machine_name)
+                if created_machine:
+                    headers = list(created_machine[0].keys())
+                    logger.info(make_table_view([created_machine[0]], headers))
 
         except Exception as e:
-            click.echo(f"Error creating machine: {e}", err=True)
+            logger.error(f"Error creating machine: {e}")
             return
 
         # prompt to add to ssh config
@@ -89,27 +95,27 @@ def create(
         )
         if should_add_to_ssh_config:
             # add to ssh config
-            alias, port = api.get_machine_alias(name)
+            alias, port = api.get_machine_alias(machine_name)
             if alias is None or port is None:
-                click.echo(
-                    "Error getting machine alias. Please try again by running `machines connect add <machine-name>`.",
-                    err=True,
+                logger.error(
+                    "Error getting machine alias. Please try again by running `machines connect add <machine-name>`."
                 )
                 return
 
             user_id = api.get_user_id()
-            add_to_ssh_config(name, alias, port, user_id)
+            ssh_config_manager.add_machine(machine_name, alias, port, user_id)
+            logger.success(f"Added machine {machine_name} to SSH config")
 
     except Exception as e:
-        click.echo(f"Error creating machine: {e}", err=True)
+        logger.error(f"Error creating machine: {e}")
 
 
-@machine.command()
-@click.argument("machine-name")
-@click.option("--cpu-kind", help="CPU kind")
-@click.option("--cpu", type=int, help="Number of CPUs")
-@click.option("--memory", type=float, help="Memory in GB")
-@click.option("--region", help="Region to deploy the machine")
+@machines.command()
+@click.argument("machine_name")
+@click.option("--cpu-kind", "-k", help="CPU kind")
+@click.option("--cpu", "-c", type=int, help="Number of CPUs")
+@click.option("--memory", "-m", type=float, help="Memory in GB")
+@click.option("--region", "-r", help="Region to deploy the machine")
 def scale(
     machine_name: str,
     cpu_kind: Optional[str],
@@ -117,17 +123,17 @@ def scale(
     memory: Optional[int],
     region: Optional[str],
 ):
-    """Scale a machine"""
+    """Scale machine resources"""
     try:
         api = MachineAPI()
         api.scale_machine(machine_name, cpu_kind, cpu, memory, region)
-        click.echo(f"Successfully scaled machine {machine_name}")
+        logger.success(f"Successfully scaled machine {machine_name}")
     except Exception as e:
-        click.echo(f"Error scaling machine: {e}", err=True)
+        logger.error(f"Error scaling machine: {e}")
 
 
-@machine.command()
-@click.argument("machine-name")
+@machines.command()
+@click.argument("machine_name")
 def destroy(machine_name: str):
     """Destroy a machine"""
     try:
@@ -136,25 +142,25 @@ def destroy(machine_name: str):
             "Are you sure you want to destroy this machine?", default=False
         )
         if not should_destroy:
-            click.echo("Machine not destroyed")
+            logger.info("Machine not destroyed")
             return
 
-        click.echo(f"Destroying machine {machine_name}...")
         api = MachineAPI()
         api.destroy_machine(machine_name)
 
         # remove from ssh config if it exists
-        remove_from_ssh_config(machine_name)
+        ssh_config_manager.remove_machine(machine_name)
 
-        click.echo(f"Successfully destroyed machine {machine_name}")
+        logger.success(f"Successfully destroyed machine {machine_name}")
+
     except Exception as e:
-        click.echo(f"Error deleting machine: {e}", err=True)
+        logger.error(f"Error deleting machine: {e}")
 
 
-@machine.command()
-@click.argument("machine-name", required=False)
+@machines.command()
+@click.argument("machine_name", required=False)
 def get(machine_name: Optional[str]):
-    """Get machine(s). If machine-name is provided, get that specific machine."""
+    """Get machine(s). If machine_name is provided, get that specific machine."""
     try:
         api = MachineAPI()
         machines = api.get_machines(machine_name)
@@ -162,14 +168,14 @@ def get(machine_name: Optional[str]):
         # Define headers based on the first machine's keys
         if machines:
             headers = list(machines[0].keys())
-            click.echo(make_table_view(machines, headers))
+            logger.info(make_table_view(machines, headers))
         else:
-            click.echo("No machines found")
+            logger.warning("No machines found")
     except Exception as e:
-        click.echo(f"Error getting machine(s): {e}", err=True)
+        logger.error(f"Error getting machine(s): {e}")
 
 
-@machine.command(name="ls")
+@machines.command(name="ls")
 def list_machines():
     """List all machines"""
     try:
@@ -177,16 +183,16 @@ def list_machines():
         machines = api.get_machines()
         if machines:
             headers = list(machines[0].keys())
-            click.echo(make_table_view(machines, headers))
+            logger.info(make_table_view(machines, headers))
         else:
-            click.echo("No machines found")
+            logger.warning("No machines found")
 
     except Exception as e:
-        click.echo(f"Error listing machines: {e}", err=True)
+        logger.error(f"Error listing machines: {e}")
 
 
-@machine.command(name="connect")
-@click.argument("machine-name")
+@machines.command(name="connect")
+@click.argument("machine_name")
 @click.option("--ssh-key", help="Path to SSH private key file")
 def connect_machine(machine_name: str, ssh_key: Optional[str]):
     """Connect to a machine"""
@@ -199,7 +205,7 @@ def connect_machine(machine_name: str, ssh_key: Optional[str]):
                     ".pub", ""
                 )  # Remove .pub extension to get private key
 
-            click.echo(f"Connecting to machine {machine_name}...")
+            logger.info(f"Connecting to machine {machine_name}...")
             api = MachineAPI()
             user_id = api.get_user_id()
             ssh_command = [
@@ -218,33 +224,7 @@ def connect_machine(machine_name: str, ssh_key: Optional[str]):
             ]
             subprocess.run(ssh_command)
         else:
-            click.echo("No machines found")
+            logger.warning("No machines found")
 
     except Exception as e:
-        click.echo(f"Error connecting to machine: {e}", err=True)
-
-
-@machine.command(name="ssh-add")
-@click.argument("machine-name")
-def ssh_add(machine_name: str):
-    """Add a machine to SSH config"""
-    try:
-        api = MachineAPI()
-        alias, port = api.get_machine_alias(machine_name)
-        if alias is None or port is None:
-            click.echo(
-                "Error getting machine alias. Please make sure the machine exists.",
-                err=True,
-            )
-            return
-
-        user_id = api.get_user_id()
-        add_to_ssh_config(machine_name, alias, port, user_id)
-        click.echo(f"Successfully added machine {machine_name} to SSH config")
-
-    except Exception as e:
-        click.echo(f"Error adding machine to SSH config: {e}", err=True)
-
-
-# Add the api keys group to the main CLI
-machine.add_command(keys)
+        logger.error(f"Error connecting to machine: {e}")

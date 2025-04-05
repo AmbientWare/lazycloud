@@ -1,15 +1,9 @@
-import click
-
-
-@click.group(context_settings={"help_option_names": ["-h", "--help"]})
-def machine():
-    """CLI tool for managing machines"""
-    pass
-
-
 # Import modules to register their commands
-import cli.machines
-import cli.keys
-import cli.volumes
+from cli.paths.remachina import remach
+import cli.paths.machines
+import cli.paths.keys
+import cli.paths.volumes
+import cli.paths.ssh
 
-__all__ = ["machine"]
+
+__all__ = ["remach"]

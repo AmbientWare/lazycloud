@@ -1,9 +1,7 @@
 import httpx
 from typing import Optional, List, Dict, Any, Tuple
 from pathlib import Path
-import threading
-import time
-from cli.utils import Spinner, StatusSpinner
+from cli.paths.utils import Spinner, StatusSpinner
 from cli.config import config
 
 
@@ -38,33 +36,20 @@ class MachineAPI:
             machine_name, status_message = status_polling
 
             def status_checker():
-                return self._make_request(
-                    "GET", f"{self.machine_url}/status?machine_name={machine_name}"
-                )
+                machines = self.get_machines(machine_name)
+                return machines[0].get("status", "Pending") if machines else "Pending"
 
             spinner = StatusSpinner(status_message, status_checker)
+
         else:
             spinner = Spinner(message)
 
-        spinner_thread = threading.Thread(target=self._spin_thread, args=(spinner,))
-        spinner_thread.daemon = True
-
         with spinner:
-            spinner_thread.start()
-            try:
-                return func()
-            finally:
-                spinner.running = False
+            return func()
 
     def _gb_to_mb(self, gb: float) -> int:
         """Convert GB to MB"""
         return int(gb * 1024)
-
-    def _spin_thread(self, spinner: Spinner):
-        """Run the spinner in a separate thread"""
-        while spinner.running:
-            spinner.update()
-            time.sleep(0.1)
 
     def _make_request(
         self,
@@ -89,12 +74,6 @@ class MachineAPI:
     def get_user_id(self) -> str:
         """Get the user ID"""
         return self._make_request("GET", f"{self.user_url}/id")
-
-    def get_machine_status(self, machine_name: str) -> Dict[str, Any]:
-        """Get the status of a specific machine"""
-        return self._make_request(
-            "GET", f"{self.machine_url}/status?machine_name={machine_name}"
-        )
 
     def create_machine(
         self,
@@ -177,7 +156,7 @@ class MachineAPI:
                 "DELETE", f"{self.machine_url}?machine_name={machine_name}"
             )
 
-        self._run_with_spinner("Destroying machine...", _destroy)
+        self._run_with_spinner(f"Destroying machine {machine_name}...", _destroy)
 
     def get_machines(self, machine_name: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get machine(s). If machine_name is provided, get that specific machine."""
