@@ -3,13 +3,13 @@ from pathlib import Path
 import json
 
 from machines.config import app_config
-from machines.fly.schemas import (
+from machines.services.fly.schemas import (
     AppConfig,
     CheckStatus,
     FlyMachineConfig,
     RESOURCE_MAP,
 )
-from machines.fly.utils import run_async_command, deploying_status_callback
+from machines.services.fly.utils import run_async_command, deploying_status_callback
 from machines.database import db
 from machines.database.machines import MachineStatus
 
