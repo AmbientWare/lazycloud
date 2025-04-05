@@ -13,9 +13,15 @@ def generate_api_key_expires_at(
     expiration: ApiKeyExpirationMinutes | ApiKeyExpirationDays,
 ):
     if isinstance(expiration, ApiKeyExpirationMinutes):
+        if expiration.value == ApiKeyExpirationMinutes.NEVER:
+            return datetime.max.replace(tzinfo=timezone.utc)
+
         return datetime.now(timezone.utc) + timedelta(minutes=expiration.value)
 
     elif isinstance(expiration, ApiKeyExpirationDays):
+        if expiration.value == ApiKeyExpirationDays.NEVER:
+            return datetime.max.replace(tzinfo=timezone.utc)
+
         return datetime.now(timezone.utc) + timedelta(days=expiration.value)
 
     raise ValueError(f"Invalid expiration type: {type(expiration)}")

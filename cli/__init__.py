@@ -9,7 +9,7 @@ def machine():
 
 # Import modules to register their commands
 import cli.machines
-import cli.api_keys
+import cli.keys
 import cli.volumes
 
 __all__ = ["machine"]

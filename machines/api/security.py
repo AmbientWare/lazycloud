@@ -9,6 +9,7 @@ from machines.config import app_config, ENVIRONMENT
 
 security = HTTPBearer()
 
+
 class UserData(BaseModel):
     user_id: str
     role: ApiKeyRole

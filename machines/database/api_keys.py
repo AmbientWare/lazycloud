@@ -16,6 +16,7 @@ class ApiKeyRole(str, Enum):
 class ApiKeyExpirationMinutes(int, Enum):
     """The expiration time for a api key in minutes"""
 
+    NEVER = 0
     THIRTY_MINUTES = 30
     ONE_HOUR = 60
     THREE_HOURS = 180
@@ -24,6 +25,7 @@ class ApiKeyExpirationMinutes(int, Enum):
 class ApiKeyExpirationDays(int, Enum):
     """The expiration time for a api key in days"""
 
+    NEVER = 0
     ONE_DAY = 1
     THIRTY_DAYS = 30
     ONE_HUNDRED_DAYS = 100

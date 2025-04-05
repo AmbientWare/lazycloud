@@ -1,6 +1,6 @@
 from typing import List
 import os
-from pydantic import BaseModel, field_validator, ConfigDict
+from pydantic import BaseModel, field_validator, ConfigDict, model_validator
 from enum import Enum
 
 ENV = os.getenv("ENV", "dev")
@@ -44,15 +44,15 @@ class AppConfig(BaseModel):
         "REDIS_URL",
     ]
 
-    @field_validator("required_env_vars")
-    @classmethod  # Add classmethod decorator for clarity
-    def validate_required_env_vars(cls, v: List[str]) -> List[str]:
-        missing_vars = [var for var in v if not os.getenv(var)]
+    @model_validator(mode='after')
+    def validate_required_env_vars(self: 'AppConfig') -> 'AppConfig':
+        print("Validating required environment variables")
+        missing_vars = [var for var in self.required_env_vars if not os.getenv(var)]
         if missing_vars:
             raise ValueError(
                 f"Missing required environment variables: {', '.join(missing_vars)}"
             )
-        return v
+        return self
 
 
 app_config = AppConfig(ENV=ENVIRONMENT(ENV))

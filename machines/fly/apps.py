@@ -1,6 +1,5 @@
 import subprocess
 from pathlib import Path
-import os
 import json
 
 from machines.config import app_config
@@ -10,7 +9,9 @@ from machines.fly.schemas import (
     FlyMachineConfig,
     RESOURCE_MAP,
 )
-from machines.fly.utils import run_async_command
+from machines.fly.utils import run_async_command, deploying_status_callback
+from machines.database import db
+from machines.database.machines import MachineStatus
 
 
 class FlyAppManager:
@@ -24,9 +25,9 @@ class FlyAppManager:
         self.org_name = org_name
         self.base_dir = Path(__file__).resolve().parent
 
-    async def _get_app_name(self, name: str, user_id: str) -> str:
+    async def get_app_name(self, machine_id: int, user_id: str) -> str:
         """Get the name of the Fly.io application."""
-        return f"{name}-{user_id}"
+        return f"{user_id}-{machine_id}"
 
     async def _add_authorized_keys(self, config: AppConfig) -> None:
         """Add SSH authorized keys to the application."""
@@ -34,7 +35,9 @@ class FlyAppManager:
         if not pub_key:
             raise ValueError("SSH key file is empty")
 
-        print(f"Adding secrets to app {config.name}")
+        print(
+            f"Adding secrets to app {await self.get_app_name(config.machine_id, config.user_id)}"
+        )
         try:
             await run_async_command(
                 [
@@ -43,67 +46,92 @@ class FlyAppManager:
                     "set",
                     f"AUTHORIZED_KEYS={pub_key}",
                     "-a",
-                    await self._get_app_name(config.name, config.user_id),
+                    await self.get_app_name(config.machine_id, config.user_id),
                 ]
             )
         except subprocess.CalledProcessError as e:
             if "already exists" in e.stderr:
-                print(f"Secret {config.name} already exists")
+                print(
+                    f"Secret {await self.get_app_name(config.machine_id, config.user_id)} already exists"
+                )
             else:
                 raise e
 
     async def create_app(self, config: AppConfig) -> None:
         """Create a new Fly.io application."""
-        print(f"Creating app {config.name}")
+        print(
+            f"Creating app {await self.get_app_name(config.machine_id, config.user_id)}"
+        )
         # Create the app
         try:
+            await db.machines.update_machine_status(
+                config.machine_id, MachineStatus.INITIALIZED
+            )
             await run_async_command(
                 [
                     "fly",
                     "apps",
                     "create",
-                    await self._get_app_name(config.name, config.user_id),
+                    await self.get_app_name(config.machine_id, config.user_id),
                     "--org",
                     self.org_name,
                     "--network",
-                    f"{config.name}-network",
+                    config.network,
                 ]
             )
+
         except Exception as e:
             if "already been taken" in str(e):
-                print(f"App {config.name} already exists")
+                print(
+                    f"App {await self.get_app_name(config.machine_id, config.user_id)} already exists"
+                )
             else:
                 raise e
 
         try:
+            await db.machines.update_machine_status(
+                config.machine_id, MachineStatus.NETWORKING
+            )
             # Allocate IPv4 address
             await run_async_command(
                 [
-                    "flyctl",
+                    "fly",
                     "ips",
                     "allocate-v4",
                     "--app",
-                    await self._get_app_name(config.name, config.user_id),
+                    await self.get_app_name(config.machine_id, config.user_id),
                     "--yes",
                 ]
             )
         except subprocess.CalledProcessError as e:
             if "already exists" in e.stderr:
-                print(f"IPv4 address for app {config.name} already exists")
+                print(
+                    f"IPv4 address for app {await self.get_app_name(config.machine_id, config.user_id)} already exists"
+                )
             else:
                 # we made it this far, delete the app
                 print(f"raising error: {e}")
-                await self.delete_app(config.name, config.user_id)
+                await self.delete_app(
+                    config.machine_id,
+                    config.user_id,
+                )
                 raise e
 
         # add the authorized key so that we can ssh into the machine
         await self._add_authorized_keys(config)
 
-    async def delete_app(self, name: str, user_id: str) -> None:
+    async def delete_app(self, machine_id: int, user_id: str) -> None:
         """Delete a Fly.io application."""
-        print(f"Deleting app {name}")
+        print(f"Deleting app {await self.get_app_name(machine_id, user_id)}")
+        await db.machines.update_machine_status(machine_id, MachineStatus.DELETING)
         await run_async_command(
-            ["fly", "apps", "destroy", await self._get_app_name(name, user_id), "--yes"]
+            [
+                "fly",
+                "apps",
+                "destroy",
+                await self.get_app_name(machine_id, user_id),
+                "--yes",
+            ]
         )
 
     async def deploy_app(
@@ -112,7 +140,9 @@ class FlyAppManager:
         user_id: str,
     ) -> None:
         """Deploy the application to Fly.io."""
-        print(f"Deploying app {machine_config.name}")
+        print(
+            f"Deploying app {await self.get_app_name(machine_config.machine_id, user_id)}"
+        )
 
         fly_toml_path = self.base_dir / "app_files" / "fly.toml"
         # TODO: dynamically choose the dockerfile based on the image type
@@ -129,7 +159,7 @@ class FlyAppManager:
                 "deploy",
                 "--yes",
                 "-a",
-                await self._get_app_name(machine_config.name, user_id),
+                await self.get_app_name(machine_config.machine_id, user_id),
                 "-c",
                 str(fly_toml_path),
                 "--dockerfile",
@@ -147,14 +177,23 @@ class FlyAppManager:
                 "--volume-initial-size",
                 str(machine_config.initial_volume_size),
                 "--ha=false",
-            ]
+            ],
+            stdout_callback=lambda line: deploying_status_callback(
+                machine_config.machine_id, line
+            ),
+        )
+
+        await db.machines.update_machine_status(
+            machine_config.machine_id, MachineStatus.DEPLOYED
         )
 
     async def scale_app(
-        self, name: str, user_id: str, cpu_kind: str, cpu: int, memory: int
+        self, machine_id: int, user_id: str, cpu_kind: str, cpu: int, memory: int
     ) -> None:
         """Scale the application to the given number of machines."""
-        print(f"Scaling app {name} to {cpu_kind} {cpu} {memory}")
+        print(
+            f"Scaling app {await self.get_app_name(machine_id, user_id)} to {cpu_kind} {cpu} {memory}"
+        )
         vm_type = RESOURCE_MAP.get(cpu_kind)
         if not vm_type:
             raise ValueError(
@@ -182,15 +221,19 @@ class FlyAppManager:
                 "vm",
                 vm_config["name"],
                 "-a",
-                await self._get_app_name(name, user_id),
+                await self.get_app_name(machine_id, user_id),
                 "--vm-memory",
                 str(memory),
             ]
         )
 
-    async def extend_volume(self, name: str, user_id: str, volume_size: int) -> None:
+    async def extend_volume(
+        self, machine_id: int, user_id: str, volume_size: int
+    ) -> None:
         """Extend the volume of the application."""
-        print(f"Extending volume of app {name} to {volume_size}GB")
+        print(
+            f"Extending volume of app {await self.get_app_name(machine_id, user_id)} to {volume_size}GB"
+        )
 
         try:
             # get the volume id
@@ -200,7 +243,7 @@ class FlyAppManager:
                     "volume",
                     "list",
                     "-a",
-                    await self._get_app_name(name, user_id),
+                    await self.get_app_name(machine_id, user_id),
                     "--json",
                 ],
                 print_output=False,
@@ -213,7 +256,9 @@ class FlyAppManager:
                     break
 
             if not volume_id:
-                raise ValueError(f"Volume {name} not found")
+                raise ValueError(
+                    f"Volume {await self.get_app_name(machine_id, user_id)} not found"
+                )
 
         except subprocess.CalledProcessError as e:
             raise e
@@ -228,16 +273,16 @@ class FlyAppManager:
                     "-s",
                     str(volume_size),
                     "-a",
-                    await self._get_app_name(name, user_id),
+                    await self.get_app_name(machine_id, user_id),
                 ]
             )
 
         except subprocess.CalledProcessError as e:
             raise e
 
-    async def get_check_status(self, name: str, user_id: str) -> CheckStatus:
+    async def get_check_status(self, machine_id: int, user_id: str) -> CheckStatus:
         """Get the status of the check for the application."""
-        app_name = await self._get_app_name(name, user_id)
+        app_name = await self.get_app_name(machine_id, user_id)
         response = await run_async_command(
             [
                 "fly",

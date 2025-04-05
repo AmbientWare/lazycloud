@@ -7,9 +7,14 @@ from machines.database.base import BaseModel, BaseTable, DatabaseService
 class MachineStatus(str, Enum):
     """Status of a machine"""
 
-    DEPLOYING = "deploying"
-    DEPLOYED = "deployed"
-    DELETING = "deleting"
+    INITIALIZING = "Initializing"
+    INITIALIZED = "Initialized"
+    NETWORKING = "Setting up network"
+    BUILDING = "Building machine"
+    VOLUME = "Creating file system"
+    VM_CREATING = "Creating virtual machine"
+    DEPLOYED = "Deployed"
+    DELETING = "Deleting"
 
 
 class MachineTable(BaseTable):
@@ -45,6 +50,16 @@ class MachineService(DatabaseService[MachineTable, MachinePydantic]):
 
     def __init__(self):
         super().__init__(MachineTable, MachinePydantic)
+
+    async def update_machine_status(
+        self, machine_id: int, status: MachineStatus
+    ) -> None:
+        """Update the status of a machine"""
+        machine = await self.aget_by_id(machine_id)
+        if not machine:
+            raise ValueError(f"Machine {machine_id} not found")
+        machine.status = status
+        await self.aupdate(machine)
 
     async def asearch(
         self,
