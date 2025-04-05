@@ -42,6 +42,59 @@ services:
     ports:
       - 8000:8000
 
+  celery-beat:
+    image: machines-api:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: celery-beat
+    volumes:
+      # this allows for hot reloading
+      - ./poetry.lock:/machines/poetry.lock
+      - ./pyproject.toml:/machines/pyproject.toml
+      - ./machines:/machines
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://machines-dev:password@postgres:5432/machines
+      - REDIS_URL=redis://redis:6379
+    networks:
+      - machines
+    command: ["celery", "-A", "machines.celery_app", "beat", "--loglevel=info"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    deploy:
+      replicas: 1  # Ensure only one beat instance runs
+
+  celery-worker:
+    image: machines-api:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: celery-worker
+    volumes:
+      # this allows for hot reloading
+      - ./poetry.lock:/machines/poetry.lock
+      - ./pyproject.toml:/machines/pyproject.toml
+      - ./machines:/machines
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://machines-dev:password@postgres:5432/machines
+      - REDIS_URL=redis://redis:6379
+    networks:
+      - machines
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      celery-beat:
+        condition: service_started
+
   postgres:
     image: timescale/timescaledb-ha:pg17
     networks:

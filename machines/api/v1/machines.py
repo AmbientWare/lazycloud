@@ -5,8 +5,8 @@ from pydantic import BaseModel, Field
 from machines.api.security import get_current_active_user, UserData
 from machines.database import db
 from machines.database.machines import MachinePydantic, MachineStatus
-from machines.fly import app_manager
-from machines.fly.schemas import (
+from machines.services import fly_app_manager
+from machines.services.fly.schemas import (
     AppConfig,
     FlyMachineConfig,
     FlyRegion,
@@ -53,7 +53,7 @@ async def get_machines_alias(
     if machine is None or machine.id is None:
         raise HTTPException(status_code=404, detail="Machine not found")
 
-    app_name = await app_manager.get_app_name(machine.id, current_user.user_id)
+    app_name = await fly_app_manager.get_app_name(machine.id, current_user.user_id)
 
     alias = f"{app_name}.fly.dev"
 
@@ -110,7 +110,7 @@ async def create_machine(
     created_on_fly = False
     try:
         # create the app on fly
-        await app_manager.create_app(app_config)
+        await fly_app_manager.create_app(app_config)
         created_on_fly = True
 
         # now deploy the app with vm on fly
@@ -130,7 +130,7 @@ async def create_machine(
         if create_machine_request.region is not None:
             machine_config.region = create_machine_request.region
 
-        await app_manager.deploy_app(machine_config, current_user.user_id)
+        await fly_app_manager.deploy_app(machine_config, current_user.user_id)
 
     except Exception as e:
         print(f"Error creating machine: {e}")
@@ -138,7 +138,7 @@ async def create_machine(
 
         # delete the machine from fly if it was created
         if created_on_fly:
-            await app_manager.delete_app(new_machine.id, current_user.user_id)
+            await fly_app_manager.delete_app(new_machine.id, current_user.user_id)
         raise HTTPException(status_code=500, detail=str(e))
 
     return new_machine
@@ -158,7 +158,9 @@ async def extend_volume(
         raise HTTPException(status_code=404, detail="Machine not found")
 
     try:
-        await app_manager.extend_volume(machine.id, current_user.user_id, volume_size)
+        await fly_app_manager.extend_volume(
+            machine.id, current_user.user_id, volume_size
+        )
         machine.volume_size = volume_size
         await db.machines.aupdate(machine)
         return machine
@@ -205,7 +207,7 @@ async def scale_machine(
             machine.region = scale_machine_request.region.value
 
         # scale the app on fly
-        await app_manager.scale_app(
+        await fly_app_manager.scale_app(
             machine.id,
             current_user.user_id,
             machine.cpu_kind,
@@ -243,7 +245,7 @@ async def delete_machine(
 
         # delete the machine from fly
         try:
-            await app_manager.delete_app(machine.id, current_user.user_id)
+            await fly_app_manager.delete_app(machine.id, current_user.user_id)
         except Exception as e:
             print(f"Error deleting machine from fly: {e}")
             # raise HTTPException(status_code=500, detail=str(e))

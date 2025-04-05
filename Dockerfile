@@ -50,5 +50,13 @@ ENV PYTHONPATH "${PYTHONPATH}:/"
 
 # Second stage - api
 FROM builder AS api
-CMD ["/bin/bash", "-c", "source /root/.bashrc && python main.py"]
+CMD ["python", "main.py"]
+
+# Second stage - celery worker
+FROM builder AS celery-worker
+CMD ["celery", "-A", "machines.celery_app", "worker", "--loglevel=info"]
+
+# Second stage - celery beat
+FROM builder AS celery-beat
+CMD ["celery", "-A", "machines.celery_app", "beat", "--loglevel=info"]
 

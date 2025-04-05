@@ -6,7 +6,7 @@ import sys
 from typing import List, Callable, Awaitable
 
 from machines.config import app_config
-from machines.fly.schemas import FlyCommandError
+from machines.services.fly.schemas import FlyCommandError
 from machines.database.machines import MachineStatus
 from machines.database import db
 
