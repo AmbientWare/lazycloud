@@ -8,8 +8,9 @@ from cli.config import config
 class MachineAPI:
     def __init__(self, timeout: float = 300.0):
         self.timeout = timeout
-        self.machine_url = f"{config.api_url}/machines"
-        self.user_url = f"{config.api_url}/users"
+        self._machine_url = f"{config.api_url}/machines"
+        self._user_url = f"{config.api_url}/users"
+        self._ssh_key_url = f"{config.api_url}/ssh-keys"
 
     def _get_client(self) -> httpx.Client:
         """Get an HTTP client with authentication"""
@@ -73,7 +74,7 @@ class MachineAPI:
 
     def get_user_id(self) -> str:
         """Get the user ID"""
-        return self._make_request("GET", f"{self.user_url}/id")
+        return self._make_request("GET", f"{self._user_url}/id")
 
     def create_machine(
         self,
@@ -104,7 +105,7 @@ class MachineAPI:
             request_data["volume_size"] = str(volume_size)
 
         def _create():
-            return self._make_request("POST", self.machine_url, json=request_data)
+            return self._make_request("POST", self._machine_url, json=request_data)
 
         # Create the machine with status polling
         return self._run_with_spinner(
@@ -132,7 +133,7 @@ class MachineAPI:
 
         def _scale():
             return self._make_request(
-                "PUT", f"{self.machine_url}/{machine_name}", json=request_data
+                "PUT", f"{self._machine_url}/{machine_name}", json=request_data
             )
 
         return self._run_with_spinner("Scaling machine...", _scale)
@@ -143,7 +144,7 @@ class MachineAPI:
         def _extend():
             return self._make_request(
                 "POST",
-                f"{self.machine_url}/{machine_name}/volumes?volume_size={volume_size}",
+                f"{self._machine_url}/{machine_name}/volumes?volume_size={volume_size}",
             )
 
         return self._run_with_spinner("Extending volume...", _extend)
@@ -153,14 +154,14 @@ class MachineAPI:
 
         def _destroy():
             return self._make_request(
-                "DELETE", f"{self.machine_url}?machine_name={machine_name}"
+                "DELETE", f"{self._machine_url}?machine_name={machine_name}"
             )
 
         self._run_with_spinner(f"Destroying machine {machine_name}...", _destroy)
 
     def get_machines(self, machine_name: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get machine(s). If machine_name is provided, get that specific machine."""
-        url = self.machine_url
+        url = self._machine_url
         if machine_name:
             url = f"{url}?machine_name={machine_name}"
 
@@ -171,11 +172,42 @@ class MachineAPI:
 
     def get_machine_alias(self, machine_name: str) -> Tuple[str | None, int | None]:
         """Get the alias for a machine"""
-        url = f"{self.machine_url}/alias/{machine_name}"
+        url = f"{self._machine_url}/alias/{machine_name}"
 
         res = self._make_request("GET", url)
 
         return res.get("alias"), res.get("port")
+
+    def get_ssh_keys(self) -> List[Dict[str, Any]]:
+        """Get all SSH keys"""
+        url = f"{self._ssh_key_url}"
+
+        def _get():
+            return self._make_request("GET", url)
+
+        return self._run_with_spinner("Fetching SSH keys...", _get)
+
+    def create_ssh_key(self, name: str, public_key: str) -> Dict[str, Any]:
+        """Create a new SSH key"""
+        url = f"{self._ssh_key_url}"
+
+        def _create():
+            return self._make_request(
+                "POST", url, json={"name": name, "value": public_key}
+            )
+
+        return self._run_with_spinner("Creating SSH key...", _create)
+
+    def delete_ssh_key(self, ssh_key_id: int) -> None:
+        """Delete an SSH key"""
+        url = f"{self._ssh_key_url}"
+
+        data = {"ssh_key_id": ssh_key_id}
+
+        def _delete():
+            return self._make_request("DELETE", url, json=data)
+
+        return self._run_with_spinner("Deleting SSH key...", _delete)
 
     @staticmethod
     def read_public_key(key_path: str) -> str:
