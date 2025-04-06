@@ -18,6 +18,7 @@ from machines.api.v1.machines import machines_router
 from machines.api.v1.health import health_router
 from machines.api.v1.users import users_router
 from machines.api.v1.api_keys import api_keys_router
+from machines.api.v1.ssh_keys import ssh_keys_router
 from machines.api.v1.pricing import pricing_router
 
 # import other modules
@@ -66,6 +67,7 @@ versionsed_routes.include_router(machines_router)
 versionsed_routes.include_router(users_router)
 versionsed_routes.include_router(api_keys_router)
 versionsed_routes.include_router(pricing_router)
+versionsed_routes.include_router(ssh_keys_router)
 app.include_router(versionsed_routes)
 
 # include non versioned routes that are not part of the main api

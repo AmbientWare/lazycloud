@@ -83,6 +83,16 @@ async def create_machine(
     if found:
         raise HTTPException(status_code=400, detail="Machine name already exists")
 
+    # get the ssh key from the database
+    ssh_key = await db.ssh_keys.afind_one(
+        filters={
+            "name": create_machine_request.public_key,
+            "user_id": current_user.user_id,
+        }
+    )
+    if ssh_key is None:
+        raise HTTPException(status_code=400, detail="SSH key not found")
+
     # create the machine in our database
     new_machine = await db.machines.acreate(
         MachinePydantic(
@@ -104,7 +114,7 @@ async def create_machine(
     app_config = AppConfig(
         user_id=current_user.user_id,
         machine_id=new_machine.id,
-        public_key=create_machine_request.public_key,
+        public_key=ssh_key.value,
     )
 
     created_on_fly = False

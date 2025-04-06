@@ -20,7 +20,6 @@ def machines():
 
 @machines.command()
 @click.argument("machine_name")
-@click.option("--public-key", help="Path to SSH public key file")
 @click.option("--region", help="Region to deploy the machine")
 @click.option("--cpu-kind", help="CPU kind")
 @click.option("--cpu", type=int, help="Number of CPUs")
@@ -28,7 +27,6 @@ def machines():
 @click.option("--volume-size", type=int, help="Volume size in GB")
 def create(
     machine_name: str,
-    public_key: Optional[str],
     region: Optional[str],
     cpu_kind: Optional[str],
     cpu: Optional[int],
@@ -37,24 +35,26 @@ def create(
 ):
     """Create a new machine"""
     try:
+        ssh_keys = machines_api.get_ssh_keys()
+        if not ssh_keys:
+            logger.error(
+                "No SSH keys found. Please create an SSH key first with `remach ssh keys add`"
+            )
+            return
+
         # Prompt for name if not provided
         if not machine_name:
             machine_name = click.prompt("Enter machine name")
 
-        # Get default key path if not provided
-        if not public_key:
-            default_path = get_default_key_path()
-            public_key = click.prompt(
-                "Enter path to SSH public key file. Enter to use default: ",
-                default=default_path,
-                show_default=True,
-            )
-
-        # Read the public key file
+        # Ask which ssh key the user wants to use
         try:
-            if public_key is None:
-                raise ValueError("Public key path cannot be None")
-            public_key_content = machines_api.read_public_key(public_key)
+            ssh_key_name = click.prompt(
+                "Enter the name of the SSH key you want to use",
+                type=click.Choice([key["name"] for key in ssh_keys]),
+            )
+            # validate that the ssh key name is in the list
+            if ssh_key_name not in [key["name"] for key in ssh_keys]:
+                raise ValueError("Invalid SSH key name")
 
         except FileNotFoundError as e:
             logger.error(str(e))
@@ -71,7 +71,7 @@ def create(
 
             result = machines_api.create_machine(
                 name=machine_name,
-                public_key=public_key_content,
+                public_key=ssh_key_name,
                 region=region,
                 cpu_kind=cpu_kind,
                 cpu=cpu,
