@@ -37,7 +37,7 @@ async def get_ssh_keys(
 class CreateSshKeyRequest(BaseModel):
     user_id: Optional[str] = None
     name: str
-    value: str
+    public_key: str
 
 
 @ssh_keys_router.post("")
@@ -61,7 +61,7 @@ async def create_ssh_key(
     ssh_key = SshKeyPydantic(
         name=request.name,
         user_id=user_id,
-        value=request.value,
+        public_key=request.public_key,
     )
     new_ssh_key = await db.ssh_keys.acreate(ssh_key)
     if new_ssh_key is None:

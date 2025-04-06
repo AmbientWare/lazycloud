@@ -193,7 +193,7 @@ class MachineAPI:
 
         def _create():
             return self._make_request(
-                "POST", url, json={"name": name, "value": public_key}
+                "POST", url, json={"name": name, "public_key": public_key}
             )
 
         return self._run_with_spinner("Creating SSH key...", _create)

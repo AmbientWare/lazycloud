@@ -42,7 +42,7 @@ def list():
     # Format the data for table display
     data = []
     for key in public_keys:
-        value = key.get("value", "")
+        value = key.get("public_key", "")
         if value:
             value = value[:24] + "..." if len(value) > 24 else value
         data.append({"Name": key.get("name", ""), "Value": value})
@@ -51,7 +51,8 @@ def list():
 
 
 @keys.command(name="add")
-def add_key():
+@click.argument("name", required=True)
+def add_key(name: str):
     """Add a new SSH key"""
     # check for any keys that are in the normal ~/.ssh/id_rsa.pub
     default_key = os.path.expanduser("~/.ssh/id_rsa.pub")
@@ -78,7 +79,6 @@ def add_key():
         with open(public_key_path, "r") as f:
             public_key = f.read()
 
-    name = click.prompt("Enter a name for the SSH key")
     machines_api.create_ssh_key(name, public_key)
     logger.success(f"Successfully added SSH key {name}")
 
