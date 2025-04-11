@@ -1,9 +1,9 @@
 # Import modules to register their commands
-from cli.paths.remachina import remach
-import cli.paths.machines
-import cli.paths.keys
-import cli.paths.volumes
-import cli.paths.ssh
+from cli.commands import app
+import cli.commands.machines
+import cli.commands.ssh
+import cli.commands.volumes
+import cli.commands.keys
 
 
-__all__ = ["remach"]
+__all__ = ["app"]

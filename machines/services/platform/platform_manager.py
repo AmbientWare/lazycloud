@@ -3,14 +3,22 @@ from bs4 import BeautifulSoup, Tag
 import re
 import pandas as pd
 from pprint import pprint
-from typing import Dict, List, Optional, Any
-from pydantic import BaseModel, field_validator, ValidationError
+from typing import Dict, Optional, Any, List
+from pydantic import ValidationError
 from redis.asyncio import Redis
 import asyncio
 import nest_asyncio
 
 from machines.config import app_config
-
+from machines.services.platform.schemas import (
+    Markups,
+    PricingTable,
+    PricingData,
+    PricingRow,
+    Region,
+    PlatformOptions,
+    PresetGroup,
+)
 
 # This is needed to run asyncio in the main thread
 nest_asyncio.apply()
@@ -20,48 +28,8 @@ USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTM
 EWR_TABLE_ID = "started-machines-pricing-matrix-ewr"
 
 
-class Region(BaseModel):
-    region: str
-    markup: float
-
-
-class Markups(BaseModel):
-    regions: List[Region]
-
-
-class PricingRow(BaseModel):
-    preset_group: str
-    cpus: str
-    ram: str
-    price_sec: Optional[float] = None
-    price_hour: Optional[float] = None
-    price_month: Optional[float] = None
-
-    @field_validator("price_sec", "price_hour", "price_month", mode="before")
-    def clean_price(cls, v):
-        if isinstance(v, str):
-            # Remove currency symbols and commas
-            cleaned_v = re.sub(r"[\$,]", "", v)
-            try:
-                return float(cleaned_v)
-
-            except (ValueError, TypeError):
-                return None  # Or raise ValueError("Invalid price format")
-
-        return v  # Return as is if already float or None
-
-
-class PricingTable(BaseModel):
-    pricing_rows: List[PricingRow]
-
-
-class PricingData(BaseModel):
-    markups: Markups
-    pricing_table: PricingTable
-
-
 # --- Scraper Class ---
-class PricingManager:
+class PlatformManager:
     def __init__(self, url: str = FLY_PRICING_URL, user_agent: str = USER_AGENT):
         self.url = url
         self.headers = {"User-Agent": user_agent}
@@ -71,7 +39,7 @@ class PricingManager:
         self._region_markup_key = "pricing:region_markups"
         self._pricing_table_key = "pricing:pricing_table"
         self._redis_client = Redis.from_url(app_config.REDIS_URL)
-        if self._redis_client is None or not self._redis_client.ping():
+        if self._redis_client is None:
             raise RuntimeError("Failed to connect to Redis")
 
     async def cleanup(self):
@@ -118,6 +86,52 @@ class PricingManager:
             return PricingTable.model_validate_json(redis_data.decode("utf-8"))
 
         raise ValueError("No pricing table found in Redis.")
+
+    def _sort_ram_values(self, ram_values: List[str]) -> List[str]:
+        """Sort RAM values from smallest to largest, converting all to MB for comparison."""
+
+        def ram_to_mb(ram_str: str) -> int:
+            # Convert RAM string to MB
+            value = float(ram_str[:-2])  # Remove 'MB' or 'GB'
+            if ram_str.endswith("GB"):
+                value *= 1024  # Convert GB to MB
+            return int(value)
+
+        # Sort based on MB values
+        return sorted(ram_values, key=ram_to_mb)
+
+    async def get_platform_options(self) -> PlatformOptions:
+        """Get platform options from Redis."""
+        if not self._redis_client:
+            raise RuntimeError("Redis client not initialized. Call initialize() first.")
+
+        markups = await self.get_region_markups_from_redis()
+        pricing_table = await self.get_pricing_table_from_redis()
+
+        regions = [region.region for region in markups.regions]
+
+        # Group rows by preset_group to get unique CPU and RAM options
+        preset_groups_data = {}
+        for row in pricing_table.pricing_rows:
+            if row.preset_group not in preset_groups_data:
+                preset_groups_data[row.preset_group] = {
+                    "cpus": set(),
+                    "ram": set(),
+                }
+            preset_groups_data[row.preset_group]["cpus"].add(row.cpus)
+            preset_groups_data[row.preset_group]["ram"].add(row.ram)
+
+        # Convert sets to lists and create PresetGroup objects with sorted RAM values
+        preset_groups = [
+            PresetGroup(
+                name=group_name,
+                cpus=list(data["cpus"]),
+                ram=self._sort_ram_values(list(data["ram"])),
+            )
+            for group_name, data in preset_groups_data.items()
+        ]
+
+        return PlatformOptions(regions=regions, preset_groups=preset_groups)
 
     async def _fetch_html(self) -> bool:
         """Fetches HTML content and populates self.soup."""
@@ -409,7 +423,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     async def main():
-        scraper = PricingManager()
+        scraper = PlatformManager()
         try:
             pricing_data = await scraper.scrape()
             await display_results(pricing_data)

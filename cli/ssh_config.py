@@ -65,24 +65,28 @@ class SSHConfigManager:
             with open(self.config_path, "r") as f:
                 lines = f.readlines()
 
-            # Find and remove the entire config block
-            i = 0
-            while i < len(lines):
-                if lines[i].startswith(f"Host {machine_name}"):
-                    # Remove the Host line
-                    lines.pop(i)
-                    # Remove all indented lines until we hit another Host or end of file
-                    while i < len(lines) and (
-                        lines[i].startswith("    ") or lines[i].startswith("\t")
-                    ):
-                        lines.pop(i)
-                    continue
-                i += 1
-
             with open(self.config_path, "w") as f:
-                f.writelines(lines)
+                skip_lines = False
+                for line in lines:
+                    if line.startswith(f"Host {machine_name}"):
+                        skip_lines = True
+                        continue
+                    if skip_lines and line.startswith("Host "):
+                        skip_lines = False
+                    if not skip_lines:
+                        f.write(line)
+
         except IOError as e:
             print(f"Failed to remove machine from SSH config: {e}")
+            raise
+
+    def clear(self) -> None:
+        """Clear all machine configurations from the SSH config file."""
+        try:
+            with open(self.config_path, "w") as f:
+                f.write("")
+        except IOError as e:
+            print(f"Failed to clear SSH config: {e}")
             raise
 
 

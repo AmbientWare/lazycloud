@@ -1,11 +1,11 @@
 from fastapi import APIRouter, HTTPException, Depends
-from typing import List
+from typing import List, Optional
 from pydantic import BaseModel, Field
 
-from machines.api.security import get_current_active_user, UserData
+from machines.api.security import get_current_active_user, UserData, require_admin
 from machines.database import db
 from machines.database.machines import MachinePydantic, MachineStatus
-from machines.services import fly_app_manager
+from machines.services import fly_app_manager, platform_manager
 from machines.services.fly.schemas import (
     AppConfig,
     FlyMachineConfig,
@@ -13,6 +13,7 @@ from machines.services.fly.schemas import (
     ImageTypes,
     FlyCommandError,
 )
+from machines.services.platform.schemas import PlatformOptions
 
 machines_router = APIRouter(prefix="/machines", tags=["machines"])
 
@@ -35,6 +36,13 @@ async def get_machines(
     return machines
 
 
+@machines_router.get("/options")
+async def get_platform_options(
+    _=Depends(get_current_active_user),
+) -> PlatformOptions:
+    return await platform_manager.get_platform_options()
+
+
 class MachineAliasResponse(BaseModel):
     alias: str
     port: int
@@ -50,10 +58,10 @@ async def get_machines_alias(
     machine = await db.machines.afind_one(
         filters={"name": machine_name, "user_id": current_user.user_id}
     )
-    if machine is None or machine.id is None:
+    if machine is None or machine.machine_uuid is None:
         raise HTTPException(status_code=404, detail="Machine not found")
 
-    app_name = await fly_app_manager.get_app_name(machine.id, current_user.user_id)
+    app_name = await fly_app_manager.get_app_name(machine.machine_uuid)
 
     alias = f"{app_name}.fly.dev"
 
@@ -61,6 +69,7 @@ async def get_machines_alias(
 
 
 class CreateMachineRequest(BaseModel):
+    user_id: Optional[str] = None
     name: str
     public_key: str
     region: FlyRegion = Field(default=FlyRegion.LAX)
@@ -76,9 +85,22 @@ async def create_machine(
     create_machine_request: CreateMachineRequest,
     current_user: UserData = Depends(get_current_active_user),
 ):
+    if create_machine_request.user_id:
+        if not require_admin(current_user):
+            raise HTTPException(
+                status_code=403,
+                detail="Only admins can create machines for other users",
+            )
+        user_id = create_machine_request.user_id
+    else:
+        user_id = current_user.user_id
+
     # make sure the machine name is unique
     found = await db.machines.afind_one(
-        filters={"name": create_machine_request.name, "user_id": current_user.user_id}
+        filters={
+            "name": create_machine_request.name,
+            "user_id": user_id,
+        }
     )
     if found:
         raise HTTPException(status_code=400, detail="Machine name already exists")
@@ -87,7 +109,7 @@ async def create_machine(
     ssh_key = await db.ssh_keys.afind_one(
         filters={
             "name": create_machine_request.public_key,
-            "user_id": current_user.user_id,
+            "user_id": user_id,
         }
     )
     if ssh_key is None:
@@ -96,7 +118,7 @@ async def create_machine(
     # create the machine in our database
     new_machine = await db.machines.acreate(
         MachinePydantic(
-            user_id=current_user.user_id,
+            user_id=user_id,
             name=create_machine_request.name,
             region=create_machine_request.region.value,
             image=create_machine_request.image.value,
@@ -108,13 +130,18 @@ async def create_machine(
         )
     )
 
-    if new_machine is None or new_machine.id is None:
+    if (
+        new_machine is None
+        or new_machine.id is None
+        or new_machine.machine_uuid is None
+    ):
         raise HTTPException(status_code=500, detail="Failed to create machine")
 
     app_config = AppConfig(
-        user_id=current_user.user_id,
+        user_id=user_id,
         machine_id=new_machine.id,
-        public_key=ssh_key.value,
+        machine_uuid=new_machine.machine_uuid,
+        public_key=ssh_key.public_key,
     )
 
     created_on_fly = False
@@ -126,6 +153,7 @@ async def create_machine(
         # now deploy the app with vm on fly
         machine_config = FlyMachineConfig(
             machine_id=new_machine.id,
+            machine_uuid=new_machine.machine_uuid,
         )
 
         # Only set optional fields if they are provided
@@ -140,7 +168,7 @@ async def create_machine(
         if create_machine_request.region is not None:
             machine_config.region = create_machine_request.region
 
-        await fly_app_manager.deploy_app(machine_config, current_user.user_id)
+        await fly_app_manager.deploy_app(machine_config, user_id)
 
     except Exception as e:
         print(f"Error creating machine: {e}")
@@ -148,7 +176,8 @@ async def create_machine(
 
         # delete the machine from fly if it was created
         if created_on_fly:
-            await fly_app_manager.delete_app(new_machine.id, current_user.user_id)
+            await fly_app_manager.delete_app(new_machine.id, user_id)
+
         raise HTTPException(status_code=500, detail=str(e))
 
     return new_machine
@@ -164,13 +193,11 @@ async def extend_volume(
     machine = await db.machines.afind_one(
         filters={"name": machine_name, "user_id": current_user.user_id}
     )
-    if not machine or machine.id is None:
+    if not machine or machine.machine_uuid is None:
         raise HTTPException(status_code=404, detail="Machine not found")
 
     try:
-        await fly_app_manager.extend_volume(
-            machine.id, current_user.user_id, volume_size
-        )
+        await fly_app_manager.extend_volume(machine.machine_uuid, volume_size)
         machine.volume_size = volume_size
         await db.machines.aupdate(machine)
         return machine
@@ -199,7 +226,7 @@ async def scale_machine(
         machine = await db.machines.afind_one(
             filters={"name": machine_name, "user_id": current_user.user_id}
         )
-        if machine is None or machine.id is None:
+        if machine is None or machine.machine_uuid is None:
             raise HTTPException(status_code=404, detail="Machine not found")
 
         if machine.user_id != current_user.user_id:
@@ -218,8 +245,7 @@ async def scale_machine(
 
         # scale the app on fly
         await fly_app_manager.scale_app(
-            machine.id,
-            current_user.user_id,
+            machine.machine_uuid,
             machine.cpu_kind,
             machine.cpu,
             machine.memory,
@@ -263,6 +289,7 @@ async def delete_machine(
         # delete the machine from db
         try:
             await db.machines.adelete(machine.id)
+
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
