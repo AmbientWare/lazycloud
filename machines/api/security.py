@@ -18,11 +18,12 @@ class UserData(BaseModel):
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ) -> UserData:
-    if app_config.ENV.value == ENVIRONMENT.DEV.value:
+    if app_config.ENV.value == ENVIRONMENT.DEV.value and not credentials.credentials:
         return UserData(user_id="admin", role=ApiKeyRole.ADMIN)
 
     api_key = credentials.credentials
     db_api_key = await db.api_keys.afind_one(filters={"value": api_key})
+    print(api_key, db_api_key)
 
     if not db_api_key or api_key_is_expired(db_api_key.expires_at):
         raise HTTPException(

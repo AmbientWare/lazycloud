@@ -2,6 +2,7 @@ from typing import List, Optional
 from sqlalchemy import Column, String, Integer
 from enum import Enum
 from machines.database.base import BaseModel, BaseTable, DatabaseService
+import uuid
 
 
 class MachineStatus(str, Enum):
@@ -23,6 +24,7 @@ class MachineTable(BaseTable):
     __tablename__ = "machines"
 
     name = Column(String, nullable=False)
+    machine_uuid = Column(String, default=lambda: str(uuid.uuid4()), nullable=False)
     region = Column(String, nullable=False)
     image = Column(String, nullable=False)
     cpu_kind = Column(String, nullable=False)
@@ -36,6 +38,7 @@ class MachinePydantic(BaseModel):
     """Pydantic model for a machine"""
 
     name: str
+    machine_uuid: Optional[str] = None
     region: str
     image: str
     cpu_kind: str
@@ -64,6 +67,7 @@ class MachineService(DatabaseService[MachineTable, MachinePydantic]):
     async def asearch(
         self,
         user_id: Optional[str] = None,
+        machine_uuid: Optional[str] = None,
         region: Optional[str] = None,
         status: Optional[str] = None,
         min_cpu: Optional[int] = None,
@@ -80,6 +84,8 @@ class MachineService(DatabaseService[MachineTable, MachinePydantic]):
             filters["region"] = region
         if status:
             filters["status"] = status
+        if machine_uuid:
+            filters["machine_uuid"] = machine_uuid
         if min_cpu is not None:
             filters["cpu__gte"] = min_cpu
         if max_cpu is not None:

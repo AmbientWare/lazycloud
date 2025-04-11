@@ -1,37 +1,39 @@
 from pathlib import Path
 from typing import Optional, Dict
-from pydantic import BaseModel, Field, field_validator, PrivateAttr
+from pydantic import Field, field_validator, PrivateAttr
 import os
+from pydantic_settings import BaseSettings
 
 
-class CLIConfig(BaseModel):
+class CLIConfig(BaseSettings):
     """CLI Configuration"""
 
     # API Configuration
     api_base_url: str = Field(
         default="http://localhost:8000",
         description="Base URL for the API",
-        validation_alias="MACHINES_API_BASE_URL",
     )
     api_version: str = Field(
-        default="v1", description="API version", validation_alias="MACHINES_API_VERSION"
+        default="v1",
+        description="API version"
     )
 
     # SSH Configuration
     ssh_config_path: str = Field(
         default=str(Path.home() / ".ssh" / "config"),
         description="Path to SSH config file",
-        validation_alias="MACHINES_SSH_CONFIG_PATH",
     )
     default_ssh_key_path: str = Field(
         default=str(Path.home() / ".ssh" / "id_rsa.pub"),
         description="Path to default SSH public key",
-        validation_alias="MACHINES_DEFAULT_SSH_KEY_PATH",
     )
 
     # Private attributes for api key management
     _api_keys: Dict[str, str] = PrivateAttr(default_factory=dict)
     _active_api_key: Optional[str] = PrivateAttr(default=None)
+
+    class Config:
+        env_prefix = "MACHINES_"
 
     def __init__(self, **data):
         super().__init__(**data)
@@ -64,6 +66,18 @@ class CLIConfig(BaseModel):
         """Get the currently active api key"""
         return self._active_api_key
 
+    @property
+    def active_api_key_value(self) -> Optional[str]:
+        """Get the value of the currently active api key"""
+        if not self._active_api_key:
+            raise ValueError("No active api key found")
+
+        value = self._api_keys.get(self._active_api_key)
+        if value is None:
+            raise ValueError("No active api key found")
+
+        return value
+
     @active_api_key.setter
     def active_api_key(self, value: Optional[str]):
         """Set the active api key"""
@@ -74,9 +88,11 @@ class CLIConfig(BaseModel):
 
     def add_api_key(self, name: str, value: str):
         """Add a new api key"""
-        self._api_keys[name.lower()] = value
+        name = name.lower()
+        self._api_keys[name] = value
+        # Only set as active if it's the first key
         if not self._active_api_key:
-            self._active_api_key = name.lower()
+            self._active_api_key = name
         self._save_api_keys()
 
     def remove_api_key(self, name: str):
@@ -86,6 +102,7 @@ class CLIConfig(BaseModel):
             raise ValueError(f"Api key {name} does not exist")
 
         del self._api_keys[name]
+        # if the active key is being removed, set the active key to the next key
         if self._active_api_key == name:
             self._active_api_key = next(iter(self._api_keys.keys()), None)
         self._save_api_keys()
