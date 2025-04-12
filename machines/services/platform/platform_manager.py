@@ -39,8 +39,15 @@ class PlatformManager:
         self._region_markup_key = "pricing:region_markups"
         self._pricing_table_key = "pricing:pricing_table"
         self._redis_client = Redis.from_url(app_config.REDIS_URL)
+        self.performance_only = True
         if self._redis_client is None:
             raise RuntimeError("Failed to connect to Redis")
+
+    def _sort_ram_values(self, ram_values: List[int]) -> List[int]:
+        """Sort RAM values from smallest to largest, converting all to MB for comparison."""
+
+        # Sort based on MB values
+        return sorted(ram_values)
 
     async def cleanup(self):
         """Cleanup async resources."""
@@ -86,19 +93,6 @@ class PlatformManager:
             return PricingTable.model_validate_json(redis_data.decode("utf-8"))
 
         raise ValueError("No pricing table found in Redis.")
-
-    def _sort_ram_values(self, ram_values: List[str]) -> List[str]:
-        """Sort RAM values from smallest to largest, converting all to MB for comparison."""
-
-        def ram_to_mb(ram_str: str) -> int:
-            # Convert RAM string to MB
-            value = float(ram_str[:-2])  # Remove 'MB' or 'GB'
-            if ram_str.endswith("GB"):
-                value *= 1024  # Convert GB to MB
-            return int(value)
-
-        # Sort based on MB values
-        return sorted(ram_values, key=ram_to_mb)
 
     async def get_platform_options(self) -> PlatformOptions:
         """Get platform options from Redis."""
@@ -179,10 +173,12 @@ class PlatformManager:
                     try:
                         markups_raw = re.findall(r'"(\w+)":\s*([\d.]+)', markup_string)
                         # Convert dict items to Region objects
+                        print(f"LAZYCLOUD_UPCHARGE set to: {app_config.LAZYCLOUD_UPCHARGE}")
                         regions = [
                             Region(
                                 region=key,
-                                markup=float(value) * (1 + app_config.REMACH_UPCHARGE),
+                                markup=float(value)
+                                * (1 + app_config.LAZYCLOUD_UPCHARGE),
                             )
                             for key, value in markups_raw
                         ]
@@ -264,21 +260,52 @@ class PlatformManager:
                         current_cpus = await asyncio.to_thread(
                             cells[1].get_text, strip=True
                         )
+                        if (
+                            self.performance_only
+                            and "performance" not in current_machine_type.lower()
+                        ):
+                            # skip if we are only getting performance pricing and this row is not a performance machine
+                            continue
+
+                        # only grab the number of cpus from the current_cpus string
+                        # example: "2 CPUs" -> "2"
+                        cpu_count = current_cpus.split(" ")[0]
+                        try:
+                            cpu_value = int(cpu_count)
+                        except ValueError:
+                            raise ValueError(f"Invalid CPU format: {current_cpus}. Expected format: 'N CPUs'")
+
+                        # Extract RAM value and units from format like "2GB", "128GB"
+                        ram_text = await asyncio.to_thread(cells[2].get_text, strip=True)
+                        # Use regex to separate number and unit
+                        ram_match = re.match(r"(\d+)([A-Za-z]+)", ram_text)
+                        if not ram_match:
+                            raise ValueError(f"Invalid RAM format: {ram_text}. Expected format: 'N[GB|TB]'")
+
+                        ram_value = int(ram_match.group(1))
+                        ram_units = ram_match.group(2)
+
+                        # Validate RAM units
+                        if ram_units not in ["MB", "GB", "TB"]:
+                            raise ValueError(f"Invalid RAM unit: {ram_units}. Expected: MB, GB, or TB")
+
+                        # Validate price formats
+                        price_sec = await asyncio.to_thread(cells[3].get_text, strip=True)
+                        price_hour = await asyncio.to_thread(cells[4].get_text, strip=True)
+                        price_month = await asyncio.to_thread(cells[5].get_text, strip=True)
+
+                        # Check if at least one price is present
+                        if not any([price_sec, price_hour, price_month]):
+                            raise ValueError(f"No valid prices found for {current_machine_type} with {cpu_value} CPUs")
+
                         raw_row_data = {
                             "preset_group": current_machine_type,
-                            "cpus": current_cpus,
-                            "ram": await asyncio.to_thread(
-                                cells[2].get_text, strip=True
-                            ),
-                            "price_sec": await asyncio.to_thread(
-                                cells[3].get_text, strip=True
-                            ),
-                            "price_hour": await asyncio.to_thread(
-                                cells[4].get_text, strip=True
-                            ),
-                            "price_month": await asyncio.to_thread(
-                                cells[5].get_text, strip=True
-                            ),
+                            "cpus": cpu_value,
+                            "ram": ram_value,
+                            "ram_units": ram_units,
+                            "price_sec": price_sec,
+                            "price_hour": price_hour,
+                            "price_month": price_month,
                         }
                     else:
                         print(
@@ -287,23 +314,45 @@ class PlatformManager:
                         current_cpus = None
                         continue
 
-                elif first_cell.name == "td" and current_machine_type and current_cpus:
+                elif (
+                    first_cell.name == "td"
+                    and current_machine_type
+                    and current_cpus
+                    and self.performance_only
+                    and "performance" in current_machine_type.lower()
+                ):
                     if len(cells) >= 4:
+                        # Extract RAM value and units from format like "2GB", "128GB"
+                        ram_text = await asyncio.to_thread(cells[-4].get_text, strip=True)
+                        # Use regex to separate number and unit
+                        ram_match = re.match(r"(\d+)([A-Za-z]+)", ram_text)
+                        if not ram_match:
+                            raise ValueError(f"Invalid RAM format: {ram_text}. Expected format: 'N[GB|TB]'")
+
+                        ram_value = int(ram_match.group(1))
+                        ram_units = ram_match.group(2)
+
+                        # Validate RAM units
+                        if ram_units not in ["MB", "GB", "TB"]:
+                            raise ValueError(f"Invalid RAM unit: {ram_units}. Expected: MB, GB, or TB")
+
+                        # Validate price formats
+                        price_sec = await asyncio.to_thread(cells[-3].get_text, strip=True)
+                        price_hour = await asyncio.to_thread(cells[-2].get_text, strip=True)
+                        price_month = await asyncio.to_thread(cells[-1].get_text, strip=True)
+
+                        # Check if at least one price is present
+                        if not any([price_sec, price_hour, price_month]):
+                            raise ValueError(f"No valid prices found for {current_machine_type} with {cpu_count} CPUs")
+
                         raw_row_data = {
                             "preset_group": current_machine_type,
-                            "cpus": current_cpus,
-                            "ram": await asyncio.to_thread(
-                                cells[-4].get_text, strip=True
-                            ),
-                            "price_sec": await asyncio.to_thread(
-                                cells[-3].get_text, strip=True
-                            ),
-                            "price_hour": await asyncio.to_thread(
-                                cells[-2].get_text, strip=True
-                            ),
-                            "price_month": await asyncio.to_thread(
-                                cells[-1].get_text, strip=True
-                            ),
+                            "cpus": int(cpu_count),
+                            "ram": ram_value,
+                            "ram_units": ram_units,
+                            "price_sec": price_sec,
+                            "price_hour": price_hour,
+                            "price_month": price_month,
                         }
                     else:
                         print(

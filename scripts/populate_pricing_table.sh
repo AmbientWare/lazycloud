@@ -1,3 +1,6 @@
 #!/bin/bash
 
-python -m machines.services.platform.pricing_manager --populate
+# make sure ../.env is set
+source ../.env
+
+python -m machines.services.platform.platform_manager --populate

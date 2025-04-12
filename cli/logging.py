@@ -94,10 +94,12 @@ class Logger:
             header_style="bold cyan",
             title=title if title else None,
             title_style="bold magenta",
+            title_justify="center",
             border_style="blue",
             box=ROUNDED,
             expand=False,
-            width=None
+            width=None,
+            show_lines=True,
         )
 
         # Get all unique keys and calculate max length for each column in a single pass
@@ -124,7 +126,10 @@ class Logger:
             row = [str(item.get(column, "")) for column in columns]
             table.add_row(*row, style="white")
 
+        # print line above and below the table
+        self.console.print("")
         self.console.print(table)
+        self.console.print("")
 
     def print(self, *args, **kwargs):
         """Direct access to Rich's print function"""

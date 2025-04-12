@@ -29,6 +29,7 @@ class MachineTable(BaseTable):
     image = Column(String, nullable=False)
     cpu_kind = Column(String, nullable=False)
     cpu = Column(Integer, nullable=False)
+    gpu_kind = Column(String, nullable=True)
     memory = Column(Integer, nullable=False)
     volume_size = Column(Integer, nullable=False)
     status = Column(String, nullable=False)
@@ -43,6 +44,7 @@ class MachinePydantic(BaseModel):
     image: str
     cpu_kind: str
     cpu: int
+    gpu_kind: str | None = None
     memory: int
     status: MachineStatus
     volume_size: int
@@ -61,6 +63,7 @@ class MachineService(DatabaseService[MachineTable, MachinePydantic]):
         machine = await self.aget_by_id(machine_id)
         if not machine:
             raise ValueError(f"Machine {machine_id} not found")
+
         machine.status = status
         await self.aupdate(machine)
 
@@ -74,6 +77,7 @@ class MachineService(DatabaseService[MachineTable, MachinePydantic]):
         max_cpu: Optional[int] = None,
         min_memory: Optional[int] = None,
         max_memory: Optional[int] = None,
+        gpu_kind: Optional[str] = None,
     ) -> List[MachinePydantic]:
         """Advanced search with multiple filters"""
         filters = {}
@@ -94,5 +98,7 @@ class MachineService(DatabaseService[MachineTable, MachinePydantic]):
             filters["memory__gte"] = min_memory
         if max_memory is not None:
             filters["memory__lte"] = max_memory
+        if gpu_kind is not None:
+            filters["gpu_kind"] = gpu_kind
 
         return await self.afind(**filters)

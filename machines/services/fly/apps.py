@@ -8,8 +8,10 @@ from machines.services.fly.schemas import (
     CheckStatus,
     FlyMachineConfig,
     RESOURCE_MAP,
+    IMAGE_MAP,
 )
 from machines.services.fly.utils import run_async_command, deploying_status_callback
+from machines.services.aws.route53 import Route53Service
 from machines.database import db
 from machines.database.machines import MachineStatus
 
@@ -22,12 +24,13 @@ class FlyAppManager:
             org_name: The Fly.io organization name
             base_dir: The base directory for app files. Defaults to the directory containing this file.
         """
+        self.route_53 = Route53Service()
         self.org_name = org_name
         self.base_dir = Path(__file__).resolve().parent
 
     async def get_app_name(self, machine_uuid: str) -> str:
         """Get the name of the Fly.io application."""
-        return f"remach-{machine_uuid}"
+        return f"lc-{machine_uuid}"
 
     async def _add_authorized_keys(self, config: AppConfig) -> None:
         """Add SSH authorized keys to the application."""
@@ -105,12 +108,6 @@ class FlyAppManager:
                     f"IPv4 address for app {await self.get_app_name(config.machine_uuid)} already exists"
                 )
             else:
-                # we made it this far, delete the app
-                print(f"raising error: {e}")
-                await self.delete_app(
-                    config.machine_id,
-                    config.user_id,
-                )
                 raise e
 
         # add the authorized key so that we can ssh into the machine
@@ -130,23 +127,37 @@ class FlyAppManager:
             ]
         )
 
+        # now try to delete the CNAME record from Route53
+        await self.route_53.delete_cname_record(
+            await self.get_app_name(machine_uuid),
+        )
+
+        # finally, delete the machine from the database
+        await db.machines.adelete(machine_id)
+
     async def deploy_app(
         self,
         machine_config: FlyMachineConfig,
-        user_id: str,
     ) -> None:
         """Deploy the application to Fly.io."""
         print(f"Deploying app {await self.get_app_name(machine_config.machine_uuid)}")
 
-        fly_toml_path = self.base_dir / "app_files" / "fly.toml"
-        # TODO: dynamically choose the dockerfile based on the image type
-        dockerfile_path = (
-            self.base_dir
-            / "docker_files"
-            / machine_config.image_type.value
-            / f"Dockerfile"
-        )
+        # now try to add a CNAME record to the app in Route53
+        try:
+            await self.route_53.create_cname_record(
+                await self.get_app_name(machine_config.machine_uuid),
+            )
 
+        except Exception as e:
+            raise e
+
+        image = IMAGE_MAP.get(machine_config.image_type)
+        if not image:
+            raise ValueError(
+                f"Invalid image type: {machine_config.image_type}. Must be one of {IMAGE_MAP.keys()}"
+            )
+
+        fly_toml_path = self.base_dir / "app_files" / "fly.toml"
         await run_async_command(
             [
                 "fly",
@@ -156,10 +167,8 @@ class FlyAppManager:
                 await self.get_app_name(machine_config.machine_uuid),
                 "-c",
                 str(fly_toml_path),
-                "--dockerfile",
-                str(dockerfile_path),
-                "--build-arg",
-                f"USER={user_id}",
+                "--image",
+                image,
                 "--primary-region",
                 machine_config.region.value,
                 "--vm-cpu-kind",
@@ -170,6 +179,8 @@ class FlyAppManager:
                 str(machine_config.memory),
                 "--volume-initial-size",
                 str(machine_config.initial_volume_size),
+                "--vm-gpu-kind",
+                machine_config.gpu_kind if machine_config.gpu_kind else "none",
                 "--ha=false",
             ],
             stdout_callback=lambda line: deploying_status_callback(

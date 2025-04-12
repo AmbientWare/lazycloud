@@ -32,8 +32,6 @@ if [ ! -f "/data/root/etc/passwd" ]; then
 fi
 
 # Create the user, defaulting to admin
-USER_ARG=${USER_ARG:-admin}
-
 HOME_DIR=/data/home
 SSH_DIR=/data/etc/ssh
 
@@ -44,12 +42,12 @@ echo "Ensure SSH host keys"
 mkdir -p $SSH_DIR
 ssh-keygen -A -f /data
 
-echo "Setup SSH access for user $USER_ARG"
+echo "Setup SSH access for user ubuntu"
 mkdir -p $HOME_DIR/.ssh
 echo "$AUTHORIZED_KEYS" > $HOME_DIR/.ssh/authorized_keys
 
 echo "chowning your home to you"
-chown -R $USER_ARG:$USER_ARG $HOME_DIR
+chown -R ubuntu:ubuntu $HOME_DIR
 
 # Set proper permissions for root filesystem
 chown -R root:root /data/root

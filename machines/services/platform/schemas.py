@@ -14,8 +14,9 @@ class Markups(BaseModel):
 
 class PricingRow(BaseModel):
     preset_group: str
-    cpus: str
-    ram: str
+    cpus: int
+    ram: int
+    ram_units: str
     price_sec: Optional[float] = None
     price_hour: Optional[float] = None
     price_month: Optional[float] = None
@@ -45,8 +46,8 @@ class PricingData(BaseModel):
 
 class PresetGroup(BaseModel):
     name: str
-    cpus: List[str]
-    ram: List[str]
+    cpus: List[int]
+    ram: List[int]
 
 
 class PlatformOptions(BaseModel):

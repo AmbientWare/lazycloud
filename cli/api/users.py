@@ -12,6 +12,7 @@ class UsersAPI(BaseAPI):
         """Get the user ID"""
         try:
             return self._get("id")
+
         except Exception as e:
             logger.error(f"Error getting user ID: {e}")
             return ""

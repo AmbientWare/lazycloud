@@ -7,10 +7,13 @@ from cli.ssh_config import ssh_config_manager
 
 app = typer.Typer(help="Connect to machines")
 
+
 @app.command()
 def connect(
     machine_name: str = typer.Argument(..., help="Name of the machine to connect to"),
-    command: str = typer.Option(None, "--command", "-c", help="Command to execute on the remote machine"),
+    command: str = typer.Option(
+        None, "--command", "-c", help="Command to execute on the remote machine"
+    ),
 ):
     """Connect to a machine via SSH"""
     try:
@@ -25,13 +28,9 @@ def connect(
         # Get machine connection details
         alias, port = api.machines.get_machine_alias(machine_name)
         if not alias or not port:
-            logger.error(f"Failed to get connection details for machine '{machine_name}'")
-            raise typer.Exit(1)
-
-        # Get user ID
-        user_id = api.users.get_user_id()
-        if not user_id:
-            logger.error("Failed to get user ID")
+            logger.error(
+                f"Failed to get connection details for machine '{machine_name}'"
+            )
             raise typer.Exit(1)
 
         # Ensure SSH config is up to date
@@ -39,7 +38,6 @@ def connect(
             machine_name=machine_name,
             alias=alias,
             port=port,
-            user_id=user_id
         )
 
         # Build SSH command

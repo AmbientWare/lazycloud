@@ -9,7 +9,7 @@ app = typer.Typer(help="Add SSH keys")
 
 @app.command()
 def add(
-    name: str = typer.Argument(..., help="Name for the SSH key"),
+    name: str = typer.Option(..., prompt="Name for the SSH key", help="Name for the SSH key"),
     key_path: str = typer.Option(
         None,
         "--path",

@@ -43,6 +43,12 @@ class ImageTypes(Enum):
     UBUNTU_22_04 = "ubuntu"
 
 
+# NOTE: we maintain a public image that is pre-built and can be used to deploy machines faster
+IMAGE_MAP = {
+    ImageTypes.UBUNTU_22_04: "cmclean165/lazycloud:latest",
+}
+
+
 class CheckStatus(Enum):
     PASSING = "passing"
     FAILING = "failing"
@@ -56,6 +62,7 @@ class FlyMachineConfig(BaseModel):
     cpu_kind: str = "shared"
     cpu: int = 1
     memory: int = 1024
+    gpu_kind: str | None = None
     image_type: ImageTypes = ImageTypes.UBUNTU_22_04
     initial_volume_size: int | None = 10
 
