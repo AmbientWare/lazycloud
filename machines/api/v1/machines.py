@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 from machines.api.security import get_current_active_user, UserData, require_admin
 from machines.database import db
 from machines.database.machines import MachinePydantic, MachineStatus
-from machines.services import fly_app_manager, platform_manager
+from machines.services import fly_app_manager, platform_manager, route_53
 from machines.services.fly.schemas import (
     AppConfig,
     FlyMachineConfig,
@@ -20,11 +20,21 @@ machines_router = APIRouter(prefix="/machines", tags=["machines"])
 
 @machines_router.get("")
 async def get_machines(
+    user_id: str | None = None,
     machine_id: str | None = None,
     machine_name: str | None = None,
     current_user: UserData = Depends(get_current_active_user),
 ) -> List[MachinePydantic]:
-    filters = {"user_id": current_user.user_id}
+    filters = {}
+    if user_id is not None:
+        if not await require_admin(current_user):
+            raise HTTPException(
+                status_code=403, detail="Only admins can access other users' machines"
+            )
+        filters["user_id"] = user_id
+    else:
+        filters["user_id"] = current_user.user_id
+
     if machine_id is not None:
         filters["id"] = machine_id
     if machine_name is not None:
@@ -62,8 +72,7 @@ async def get_machines_alias(
         raise HTTPException(status_code=404, detail="Machine not found")
 
     app_name = await fly_app_manager.get_app_name(machine.machine_uuid)
-
-    alias = f"{app_name}.fly.dev"
+    alias = route_53.get_cname_domain(app_name)
 
     return MachineAliasResponse(alias=alias, port=10022)
 
@@ -74,10 +83,10 @@ class CreateMachineRequest(BaseModel):
     public_key: str
     region: FlyRegion = Field(default=FlyRegion.LAX)
     image: ImageTypes = Field(default=ImageTypes.UBUNTU_22_04)
-    cpu_kind: str = Field(default="shared")
     cpu: int = Field(default=1)
     memory: int = Field(default=1024)
     volume_size: int = Field(default=10)
+    gpu_kind: str | None = Field(default=None)
 
 
 @machines_router.post("")
@@ -122,10 +131,11 @@ async def create_machine(
             name=create_machine_request.name,
             region=create_machine_request.region.value,
             image=create_machine_request.image.value,
-            cpu_kind=create_machine_request.cpu_kind,
+            cpu_kind="performance",  # TODO: maybe make configurable in the future
             cpu=create_machine_request.cpu,
             memory=create_machine_request.memory,
             volume_size=create_machine_request.volume_size,
+            gpu_kind=create_machine_request.gpu_kind,
             status=MachineStatus.INITIALIZING,
         )
     )
@@ -144,21 +154,24 @@ async def create_machine(
         public_key=ssh_key.public_key,
     )
 
-    created_on_fly = False
+    # create the app on fly
     try:
-        # create the app on fly
         await fly_app_manager.create_app(app_config)
-        created_on_fly = True
 
-        # now deploy the app with vm on fly
+    except Exception as e:
+        # only delete the machine from db, at this point it is not created on fly
+        await db.machines.adelete(new_machine.id)
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # now deploy the app with vm on fly
+    try:
         machine_config = FlyMachineConfig(
             machine_id=new_machine.id,
             machine_uuid=new_machine.machine_uuid,
+            cpu_kind="performance",  # TODO: maybe make configurable in the future
         )
 
         # Only set optional fields if they are provided
-        if create_machine_request.cpu_kind is not None:
-            machine_config.cpu_kind = create_machine_request.cpu_kind
         if create_machine_request.cpu is not None:
             machine_config.cpu = create_machine_request.cpu
         if create_machine_request.memory is not None:
@@ -167,16 +180,14 @@ async def create_machine(
             machine_config.initial_volume_size = create_machine_request.volume_size
         if create_machine_request.region is not None:
             machine_config.region = create_machine_request.region
+        if create_machine_request.gpu_kind is not None:
+            machine_config.gpu_kind = create_machine_request.gpu_kind
 
-        await fly_app_manager.deploy_app(machine_config, user_id)
+        await fly_app_manager.deploy_app(machine_config)
 
     except Exception as e:
-        print(f"Error creating machine: {e}")
-        await db.machines.adelete(new_machine.id)
-
-        # delete the machine from fly if it was created
-        if created_on_fly:
-            await fly_app_manager.delete_app(new_machine.id, user_id)
+        # delete the machine from fly, dns record, and db
+        await fly_app_manager.delete_app(new_machine.id, new_machine.machine_uuid)
 
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -263,35 +274,33 @@ async def delete_machine(
     machine_id: str | None = None,
     machine_name: str | None = None,
     current_user: UserData = Depends(get_current_active_user),
-):
+) -> MachinePydantic | None:
     filters = {"user_id": current_user.user_id}
     if machine_id is not None:
         filters["id"] = machine_id
     if machine_name is not None:
         filters["name"] = machine_name
 
+    # get machine from db
+    machine = await db.machines.afind_one(filters=filters)
+    if machine is None or machine.id is None or machine.machine_uuid is None:
+        return None
+
+    if machine.user_id != current_user.user_id:
+        return None
+
+    # delete the machine from fly
     try:
-        # get machine from db
-        machine = await db.machines.afind_one(filters=filters)
-        if machine is None or machine.id is None:
-            raise HTTPException(status_code=404, detail="Machine not found")
+        await fly_app_manager.delete_app(machine.id, machine.machine_uuid)
 
-        if machine.user_id != current_user.user_id:
-            raise HTTPException(status_code=403, detail="Machine not found")
+    except Exception as e:
+        print(f"Error deleting machine from fly: {e}")
+        # raise HTTPException(status_code=500, detail=str(e))
 
-        # delete the machine from fly
-        try:
-            await fly_app_manager.delete_app(machine.id, current_user.user_id)
-        except Exception as e:
-            print(f"Error deleting machine from fly: {e}")
-            # raise HTTPException(status_code=500, detail=str(e))
-
-        # delete the machine from db
-        try:
-            await db.machines.adelete(machine.id)
-
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+    # delete the machine from db
+    try:
+        await db.machines.adelete(machine.id)
+        return machine
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -1,25 +1,24 @@
 FROM ubuntu:jammy
 
 RUN apt-get update && apt-get install --no-install-recommends -y \
-    ca-certificates curl sudo openssh-server bash git \
+    ca-certificates curl sudo openssh-server bash git apt-utils htop \
     iproute2 apt-transport-https gnupg-agent software-properties-common && \
     apt-get autoremove -y
 
 # Create the user
-ARG USER=admin
-RUN test -n "${USER}"
+RUN test -n ubuntu
 
 # Create your user
-RUN adduser --disabled-password --gecos '' --home /data/home ${USER}
+RUN adduser --disabled-password --gecos '' --home /data/home ubuntu
 # passwordless sudo for your user's group
-RUN echo "%${USER} ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+RUN echo "%ubuntu ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 
-ENV USER_ARG=${USER}
+ENV USER_ARG=ubuntu
 
 # Install Docker and add user to docker group
 RUN curl -fsSL https://get.docker.com -o get-docker.sh \
     && sh get-docker.sh \
-    && usermod -aG docker ${USER}
+    && usermod -aG docker ubuntu
 
 # Setup the SSH server daemon, copy pre-generated keys
 RUN rm -rf /etc/ssh/ssh_host_*_key*

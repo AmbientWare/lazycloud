@@ -48,10 +48,10 @@ class MachineAPI(BaseAPI):
         name: str,
         public_key: str,
         region: Optional[str] = None,
-        cpu_kind: Optional[str] = None,
         cpu: Optional[int] = None,
         memory: Optional[int] = None,
         volume_size: Optional[int] = None,
+        gpu_kind: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Create a new machine and poll for status updates"""
         request_data = {
@@ -61,15 +61,15 @@ class MachineAPI(BaseAPI):
 
         # Add optional fields only if they are explicitly provided
         if region is not None:
-            request_data["region"] = region.upper()
-        if cpu_kind is not None:
-            request_data["cpu_kind"] = cpu_kind
+            request_data["region"] = region.lower()
         if cpu is not None:
             request_data["cpu"] = str(cpu)
         if memory is not None:
             request_data["memory"] = str(self._gb_to_mb(memory))
         if volume_size is not None:
             request_data["volume_size"] = str(volume_size)
+        if gpu_kind is not None:
+            request_data["gpu_kind"] = gpu_kind
 
         def _create():
             return self._post(json=request_data)
@@ -86,21 +86,21 @@ class MachineAPI(BaseAPI):
     def scale_machine(
         self,
         machine_name: str,
-        cpu_kind: Optional[str] = None,
         cpu: Optional[int] = None,
         memory: Optional[int] = None,
         region: Optional[str] = None,
+        gpu_kind: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Scale a machine"""
         request_data = {}
-        if cpu_kind is not None:
-            request_data["cpu_kind"] = cpu_kind
         if cpu is not None:
             request_data["cpu"] = str(cpu)
         if memory is not None:
             request_data["memory"] = str(self._gb_to_mb(memory))
         if region is not None:
             request_data["region"] = region.upper()
+        if gpu_kind is not None:
+            request_data["gpu_kind"] = gpu_kind
 
         def _scale():
             return self._put(machine_name, json=request_data)
@@ -117,19 +117,21 @@ class MachineAPI(BaseAPI):
 
         return self._run_with_spinner("Extending volume...", _extend)
 
-    def delete_machine(self, machine_name: str) -> bool:
+    def delete_machine(self, machine_name: str) -> Dict[str, Any] | None:
         """Delete a machine"""
         try:
 
             def _destroy():
                 return self._delete(params={"machine_name": machine_name})
 
-            self._run_with_spinner(f"Destroying machine {machine_name}...", _destroy)
-            return True
+            response = self._run_with_spinner(
+                f"Destroying machine {machine_name}...", _destroy
+            )
+            return response
 
         except Exception as e:
             logger.error(f"Error deleting machine {machine_name}: {e}")
-            return False
+            return None
 
     def get_machine_alias(self, machine_name: str) -> Tuple[str | None, int | None]:
         """Get the alias for a machine"""

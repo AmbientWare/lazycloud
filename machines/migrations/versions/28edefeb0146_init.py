@@ -1,8 +1,8 @@
 """init
 
-Revision ID: 71d9f25e6453
+Revision ID: 28edefeb0146
 Revises: 
-Create Date: 2025-04-06 01:13:29.362183
+Create Date: 2025-04-12 14:04:24.034821
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '71d9f25e6453'
+revision: str = '28edefeb0146'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -38,10 +38,12 @@ def upgrade() -> None:
     op.create_index(op.f('ix_api_keys_value'), 'api_keys', ['value'], unique=True)
     op.create_table('machines',
     sa.Column('name', sa.String(), nullable=False),
+    sa.Column('machine_uuid', sa.String(), nullable=False),
     sa.Column('region', sa.String(), nullable=False),
     sa.Column('image', sa.String(), nullable=False),
     sa.Column('cpu_kind', sa.String(), nullable=False),
     sa.Column('cpu', sa.Integer(), nullable=False),
+    sa.Column('gpu_kind', sa.String(), nullable=True),
     sa.Column('memory', sa.Integer(), nullable=False),
     sa.Column('volume_size', sa.Integer(), nullable=False),
     sa.Column('status', sa.String(), nullable=False),

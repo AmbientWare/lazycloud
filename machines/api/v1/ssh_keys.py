@@ -21,7 +21,7 @@ async def get_ssh_keys(
 ) -> List[SshKeyPydantic]:
     # check if user is admin
     if user_id:
-        if not require_admin(current_user):
+        if not await require_admin(current_user):
             # only admins can access other users' ssh keys
             raise HTTPException(
                 status_code=403, detail="You are not authorized to access this resource"
@@ -47,7 +47,7 @@ async def create_ssh_key(
 ) -> SshKeyPydantic:
     # create a new api key that expires at the requested time
     if request.user_id:
-        if not require_admin(current_user):
+        if not await require_admin(current_user):
             # only admins can create ssh keys for other users
             raise HTTPException(
                 status_code=403,
@@ -77,7 +77,7 @@ async def delete_ssh_keys(
     current_user: UserData = Depends(get_current_active_user),
 ) -> List[SshKeyPydantic]:
     if user_id:
-        if not require_admin(current_user):
+        if not await require_admin(current_user):
             # only admins can delete ssh keys for other users
             raise HTTPException(
                 status_code=403,

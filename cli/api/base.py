@@ -3,7 +3,6 @@ import httpx
 from cli.config import config
 from cli.api.utils import Spinner, StatusSpinner
 
-
 class BaseAPI:
     def __init__(self, url_path: str):
         self._base_url = f"{config.api_base_url}/{config.api_version}/{url_path}"
@@ -16,6 +15,8 @@ class BaseAPI:
             api_key = config.active_api_key_value
             if api_key:
                 headers["Authorization"] = f"Bearer {api_key}"
+            else:
+                raise Exception("No API key set. Please set an API key with `lazycloud keys add`")
 
         return httpx.Client(timeout=self.timeout, headers=headers)
 
@@ -33,11 +34,8 @@ class BaseAPI:
             response.raise_for_status()
             return response.json()
 
-        except httpx.HTTPError:
-            return None
-
-        except Exception:
-            return None
+        except Exception as e:
+            raise e
 
     def _get(
         self,

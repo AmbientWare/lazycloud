@@ -20,9 +20,7 @@ class SSHConfigManager:
                 print(f"Failed to create SSH config file: {e}")
                 raise
 
-    def add_machine(
-        self, machine_name: str, alias: str, port: int, user_id: str
-    ) -> None:
+    def add_machine(self, machine_name: str, alias: str, port: int) -> None:
         """
         Add a machine configuration to the SSH config file.
 
@@ -30,7 +28,6 @@ class SSHConfigManager:
             machine_name: Name of the machine
             alias: Hostname or IP address
             port: SSH port
-            user_id: SSH user ID
         """
         self._ensure_config_file()
         self.remove_machine(machine_name)
@@ -40,7 +37,7 @@ class SSHConfigManager:
                 f.write(
                     f"""Host {machine_name}
     HostName {alias}
-    User {user_id}
+    User ubuntu
     Port {port}
     StrictHostKeyChecking no
     ForwardAgent yes

@@ -26,7 +26,7 @@ class AppConfig(BaseModel):
     API_VERSION: str = os.getenv("API_VERSION", "/v1")
 
     # Pricing Configuration
-    REMACH_UPCHARGE: float = float(os.getenv("REMACH_UPCHARGE", 0))
+    LAZYCLOUD_UPCHARGE: float = float(os.getenv("LAZYCLOUD_UPCHARGE", 0))
     VOLUME_PRICE: float = float(os.getenv("VOLUME_PRICE", 0))
     DEDICATED_IPV4_PRICE: float = float(os.getenv("DEDICATED_IPV4_PRICE", 0))
     DATA_EGRESS_PRICE: float = float(os.getenv("DATA_EGRESS_PRICE", 0))
@@ -34,6 +34,12 @@ class AppConfig(BaseModel):
     # Fly.io Configuration
     FLY_API_TOKEN: str = os.getenv("FLY_API_TOKEN", "")
     FLY_ORG_NAME: str = os.getenv("FLY_ORG_NAME", "")
+
+    # AWS Configuration
+    AWS_ACCESS_KEY_ID: str = os.getenv("AWS_ACCESS_KEY_ID", "")
+    AWS_SECRET_ACCESS_KEY: str = os.getenv("AWS_SECRET_ACCESS_KEY", "")
+    AWS_REGION: str = os.getenv("AWS_REGION", "")
+    AWS_ROUTE53_ZONE_ID: str = os.getenv("AWS_ROUTE53_ZONE_ID", "")
 
     # Database Configurations
     DATABASE_URL: str = os.getenv(
@@ -44,7 +50,7 @@ class AppConfig(BaseModel):
     # Required Environment Variables
     required_env_vars: List[str] = [
         "ADMIN_API_KEY",
-        "REMACH_UPCHARGE",
+        "LAZYCLOUD_UPCHARGE",
         "VOLUME_PRICE",
         "DEDICATED_IPV4_PRICE",
         "DATA_EGRESS_PRICE",
@@ -52,6 +58,10 @@ class AppConfig(BaseModel):
         "FLY_ORG_NAME",
         "DATABASE_URL",
         "REDIS_URL",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_REGION",
+        "AWS_ROUTE53_ZONE_ID",
     ]
 
     @model_validator(mode="after")

@@ -27,7 +27,7 @@ def scale(
         if result:
             scaled_machine = api.machines.get_machines(machine_name)
             if scaled_machine:
-                logger.table(scaled_machine)
+                logger.table(scaled_machine, title=f"Machine: {machine_name}")
 
     except Exception as e:
         logger.error(f"Error scaling machine: {e}")

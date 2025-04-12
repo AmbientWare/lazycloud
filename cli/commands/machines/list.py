@@ -34,7 +34,7 @@ def ls(
             return
 
         # Display the table
-        logger.table(machines)
+        logger.table(machines, title="Existing Machines")
 
     except Exception as e:
         logger.error(f"Failed to list machines: {e}")

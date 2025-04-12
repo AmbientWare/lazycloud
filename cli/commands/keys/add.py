@@ -7,8 +7,8 @@ app = typer.Typer(help="Add a new API key")
 
 @app.command()
 def add(
-    name: str = typer.Argument(..., help="Name for the API key"),
-    value: str = typer.Option(..., prompt=True, hide_input=True, help="API key value"),
+    name: str = typer.Option(..., prompt="Name for the API key", help="Name for the API key"),
+    value: str = typer.Option(..., prompt="API key value", hide_input=True, help="API key value"),
 ):
     """Add a new API key"""
     try:
