@@ -76,6 +76,7 @@ def create(
 
         ssh_config_manager.add_machine(machine_name, alias, port)
         logger.success(f"Added machine {machine_name} to SSH config")
+        logger.success(f"Machine created successfully. You can now connect to it using `lazycloud machines connect {machine_name}`")
 
     except Exception as e:
         logger.error(f"Error creating machine: {e}")
