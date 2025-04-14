@@ -10,7 +10,7 @@ app = typer.Typer(help="Create a new machine")
 
 @app.command()
 def create(
-    machine_name: str = typer.Option(None, prompt="Name of the machine to create", help="Name of the machine to create"),
+    machine_name: str = typer.Argument(None, help="Name of the machine to create"),
     region: Optional[str] = typer.Option("lax", prompt="Region to deploy the machine", help="Region to deploy the machine"),
     cpu: Optional[int] = typer.Option(1, prompt="Number of CPUs", help="Number of CPUs"),
     memory: Optional[int] = typer.Option(2, prompt="Memory in GB", help="Memory in GB"),
@@ -60,7 +60,7 @@ def create(
             if result:
                 created_machine = api.machines.get_machines(machine_name)
                 if created_machine:
-                    logger.table(created_machine, title=f"Machine: {machine_name}")
+                    logger.table(created_machine)
 
         except Exception as e:
             logger.error(f"Error creating machine: {e}")

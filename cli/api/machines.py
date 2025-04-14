@@ -24,7 +24,9 @@ class MachineAPI(BaseAPI):
             logger.error(f"Error listing machines: {e}")
             return []
 
-    def get_machines(self, machine_name: Optional[str] = None) -> List[Dict[str, Any]]:
+    def get_machines(
+        self, machine_name: Optional[str] = None, with_spinner: bool = True
+    ) -> List[Dict[str, Any]]:
         """Get machine(s). If machine_name is provided, get that specific machine."""
 
         def _get():
@@ -32,16 +34,11 @@ class MachineAPI(BaseAPI):
                 return self._get(params={"machine_name": machine_name})
             return self._get()
 
-        return self._run_with_spinner("Fetching machines...", _get)
-
-    def get_machine(self, machine_name: str) -> Optional[Dict]:
-        """Get a specific machine by name"""
-        try:
-            return self._get(machine_name)
-
-        except Exception as e:
-            logger.error(f"Error getting machine {machine_name}: {e}")
-            return None
+        return (
+            self._run_with_spinner("Fetching machines...", _get)
+            if with_spinner
+            else _get()
+        )
 
     def create_machine(
         self,
@@ -75,7 +72,7 @@ class MachineAPI(BaseAPI):
             return self._post(json=request_data)
 
         def status_checker():
-            machines = self.get_machines(name)
+            machines = self.get_machines(name, with_spinner=False)
             return str(machines[0].get("status", "Pending")) if machines else "Pending"
 
         # Create the machine with status polling

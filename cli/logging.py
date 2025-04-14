@@ -77,7 +77,7 @@ class Logger:
         if self.verbose:
             self._log(LogLevel.DEBUG, message, bold)
 
-    def table(self, data: List[Dict[str, Any]], title: str = "") -> None:
+    def table(self, data: List[Dict[str, Any]]) -> None:
         """Log a table with enhanced styling
 
         Args:
@@ -92,7 +92,6 @@ class Logger:
         table = Table(
             show_header=True,
             header_style="bold cyan",
-            title=title if title else None,
             title_style="bold magenta",
             title_justify="center",
             border_style="blue",
@@ -127,9 +126,7 @@ class Logger:
             table.add_row(*row, style="white")
 
         # print line above and below the table
-        self.console.print("")
         self.console.print(table)
-        self.console.print("")
 
     def print(self, *args, **kwargs):
         """Direct access to Rich's print function"""
