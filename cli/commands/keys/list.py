@@ -22,7 +22,7 @@ def ls():
             status = "Active" if name == active_key else ""
             data.append({"name": name, "status": status})
 
-        logger.table(data, title="API Keys")
+        logger.table(data)
 
     except Exception as e:
         logger.error(f"Failed to list API keys: {e}")

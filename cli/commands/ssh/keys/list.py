@@ -16,7 +16,7 @@ def ls():
             return
 
         # Create and display the table
-        logger.table(keys, title="SSH Keys")
+        logger.table(keys)
 
     except Exception as e:
         logger.error(f"Failed to list SSH keys: {e}")

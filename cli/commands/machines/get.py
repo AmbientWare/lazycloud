@@ -22,7 +22,7 @@ def get(
             raise typer.Exit(1)
 
         # Display the table
-        logger.table(machines, title=f"Machine: {machine_name}")
+        logger.table(machines)
 
     except Exception as e:
         logger.error(f"Failed to get machine details: {e}")

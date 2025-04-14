@@ -61,7 +61,7 @@ class StatusSpinner:
         if self._progress and self._task_id is not None:
             description = self._base_message
             if status_msg:
-                description += f" - Status: {status_msg}"
+                description += f"\n[yellow]Status: {status_msg}[/yellow]"
             try:
                 self._progress.update(self._task_id, description=description)
             except Exception as e:
