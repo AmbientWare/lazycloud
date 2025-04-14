@@ -19,6 +19,7 @@ custom_theme = Theme(
     {
         "info": "white",
         "success": "green",
+        "status": "yellow",
         "warning": "yellow",
         "error": "red",
         "debug": "blue",
@@ -31,6 +32,7 @@ class LogLevel(Enum):
 
     INFO = "info"
     SUCCESS = "success"
+    STATUS = "status"
     WARNING = "warning"
     ERROR = "error"
     DEBUG = "debug"
@@ -63,6 +65,10 @@ class Logger:
     def success(self, message: str, bold: bool = False) -> None:
         """Log a success message"""
         self._log(LogLevel.SUCCESS, message, bold)
+
+    def status(self, message: str, bold: bool = False) -> None:
+        """Log a status message"""
+        self._log(LogLevel.STATUS, message, bold)
 
     def warning(self, message: str, bold: bool = False) -> None:
         """Log a warning message"""

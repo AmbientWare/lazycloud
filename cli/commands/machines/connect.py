@@ -46,7 +46,7 @@ def connect(
             ssh_cmd.extend(["-t", command])
 
         # Execute SSH command
-        logger.info(f"Connecting to {machine_name}...")
+        logger.status(f"Connecting to {machine_name}...")
         subprocess.run(ssh_cmd)
 
     except Exception as e:

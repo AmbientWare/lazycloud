@@ -18,9 +18,9 @@ def ls():
 
         # creat data for table
         data = []
-        for name in keys:
+        for name, value in keys.items():
             status = "Active" if name == active_key else ""
-            data.append({"name": name, "status": status})
+            data.append({"name": name, "value": value, "status": status})
 
         logger.table(data)
 
