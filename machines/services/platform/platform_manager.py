@@ -17,7 +17,6 @@ from machines.services.platform.schemas import (
     PricingRow,
     Region,
     PlatformOptions,
-    PresetGroup,
 )
 
 # This is needed to run asyncio in the main thread
@@ -105,27 +104,19 @@ class PlatformManager:
         regions = [region.region for region in markups.regions]
 
         # Group rows by preset_group to get unique CPU and RAM options
-        preset_groups_data = {}
+        option_dict = {}
         for row in pricing_table.pricing_rows:
-            if row.preset_group not in preset_groups_data:
-                preset_groups_data[row.preset_group] = {
-                    "cpus": set(),
-                    "ram": set(),
-                }
-            preset_groups_data[row.preset_group]["cpus"].add(row.cpus)
-            preset_groups_data[row.preset_group]["ram"].add(row.ram)
+            if row.cpus not in option_dict:
+                option_dict[row.cpus] = set()
+
+            option_dict[row.cpus].add(row.ram)
+
+        # sort the ram values
+        for num_cpus in option_dict:
+            option_dict[num_cpus] = self._sort_ram_values(list(option_dict[num_cpus]))
 
         # Convert sets to lists and create PresetGroup objects with sorted RAM values
-        preset_groups = [
-            PresetGroup(
-                name=group_name,
-                cpus=list(data["cpus"]),
-                ram=self._sort_ram_values(list(data["ram"])),
-            )
-            for group_name, data in preset_groups_data.items()
-        ]
-
-        return PlatformOptions(regions=regions, preset_groups=preset_groups)
+        return PlatformOptions(regions=regions, options=option_dict)
 
     async def _fetch_html(self) -> bool:
         """Fetches HTML content and populates self.soup."""
@@ -173,7 +164,9 @@ class PlatformManager:
                     try:
                         markups_raw = re.findall(r'"(\w+)":\s*([\d.]+)', markup_string)
                         # Convert dict items to Region objects
-                        print(f"LAZYCLOUD_UPCHARGE set to: {app_config.LAZYCLOUD_UPCHARGE}")
+                        print(
+                            f"LAZYCLOUD_UPCHARGE set to: {app_config.LAZYCLOUD_UPCHARGE}"
+                        )
                         regions = [
                             Region(
                                 region=key,
@@ -273,30 +266,46 @@ class PlatformManager:
                         try:
                             cpu_value = int(cpu_count)
                         except ValueError:
-                            raise ValueError(f"Invalid CPU format: {current_cpus}. Expected format: 'N CPUs'")
+                            raise ValueError(
+                                f"Invalid CPU format: {current_cpus}. Expected format: 'N CPUs'"
+                            )
 
                         # Extract RAM value and units from format like "2GB", "128GB"
-                        ram_text = await asyncio.to_thread(cells[2].get_text, strip=True)
+                        ram_text = await asyncio.to_thread(
+                            cells[2].get_text, strip=True
+                        )
                         # Use regex to separate number and unit
                         ram_match = re.match(r"(\d+)([A-Za-z]+)", ram_text)
                         if not ram_match:
-                            raise ValueError(f"Invalid RAM format: {ram_text}. Expected format: 'N[GB|TB]'")
+                            raise ValueError(
+                                f"Invalid RAM format: {ram_text}. Expected format: 'N[GB|TB]'"
+                            )
 
                         ram_value = int(ram_match.group(1))
                         ram_units = ram_match.group(2)
 
                         # Validate RAM units
                         if ram_units not in ["MB", "GB", "TB"]:
-                            raise ValueError(f"Invalid RAM unit: {ram_units}. Expected: MB, GB, or TB")
+                            raise ValueError(
+                                f"Invalid RAM unit: {ram_units}. Expected: MB, GB, or TB"
+                            )
 
                         # Validate price formats
-                        price_sec = await asyncio.to_thread(cells[3].get_text, strip=True)
-                        price_hour = await asyncio.to_thread(cells[4].get_text, strip=True)
-                        price_month = await asyncio.to_thread(cells[5].get_text, strip=True)
+                        price_sec = await asyncio.to_thread(
+                            cells[3].get_text, strip=True
+                        )
+                        price_hour = await asyncio.to_thread(
+                            cells[4].get_text, strip=True
+                        )
+                        price_month = await asyncio.to_thread(
+                            cells[5].get_text, strip=True
+                        )
 
                         # Check if at least one price is present
                         if not any([price_sec, price_hour, price_month]):
-                            raise ValueError(f"No valid prices found for {current_machine_type} with {cpu_value} CPUs")
+                            raise ValueError(
+                                f"No valid prices found for {current_machine_type} with {cpu_value} CPUs"
+                            )
 
                         raw_row_data = {
                             "preset_group": current_machine_type,
@@ -323,27 +332,41 @@ class PlatformManager:
                 ):
                     if len(cells) >= 4:
                         # Extract RAM value and units from format like "2GB", "128GB"
-                        ram_text = await asyncio.to_thread(cells[-4].get_text, strip=True)
+                        ram_text = await asyncio.to_thread(
+                            cells[-4].get_text, strip=True
+                        )
                         # Use regex to separate number and unit
                         ram_match = re.match(r"(\d+)([A-Za-z]+)", ram_text)
                         if not ram_match:
-                            raise ValueError(f"Invalid RAM format: {ram_text}. Expected format: 'N[GB|TB]'")
+                            raise ValueError(
+                                f"Invalid RAM format: {ram_text}. Expected format: 'N[GB|TB]'"
+                            )
 
                         ram_value = int(ram_match.group(1))
                         ram_units = ram_match.group(2)
 
                         # Validate RAM units
                         if ram_units not in ["MB", "GB", "TB"]:
-                            raise ValueError(f"Invalid RAM unit: {ram_units}. Expected: MB, GB, or TB")
+                            raise ValueError(
+                                f"Invalid RAM unit: {ram_units}. Expected: MB, GB, or TB"
+                            )
 
                         # Validate price formats
-                        price_sec = await asyncio.to_thread(cells[-3].get_text, strip=True)
-                        price_hour = await asyncio.to_thread(cells[-2].get_text, strip=True)
-                        price_month = await asyncio.to_thread(cells[-1].get_text, strip=True)
+                        price_sec = await asyncio.to_thread(
+                            cells[-3].get_text, strip=True
+                        )
+                        price_hour = await asyncio.to_thread(
+                            cells[-2].get_text, strip=True
+                        )
+                        price_month = await asyncio.to_thread(
+                            cells[-1].get_text, strip=True
+                        )
 
                         # Check if at least one price is present
                         if not any([price_sec, price_hour, price_month]):
-                            raise ValueError(f"No valid prices found for {current_machine_type} with {cpu_count} CPUs")
+                            raise ValueError(
+                                f"No valid prices found for {current_machine_type} with {cpu_count} CPUs"
+                            )
 
                         raw_row_data = {
                             "preset_group": current_machine_type,
