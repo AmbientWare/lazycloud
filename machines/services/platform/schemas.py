@@ -1,5 +1,5 @@
 from pydantic import BaseModel, field_validator
-from typing import List, Optional
+from typing import List, Optional, Dict
 import re
 
 
@@ -44,12 +44,6 @@ class PricingData(BaseModel):
     pricing_table: PricingTable
 
 
-class PresetGroup(BaseModel):
-    name: str
-    cpus: List[int]
-    ram: List[int]
-
-
 class PlatformOptions(BaseModel):
     regions: List[str]
-    preset_groups: List[PresetGroup]
+    options: Dict[int, List[int]]
