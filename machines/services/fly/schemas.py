@@ -6,12 +6,12 @@ from pydantic import BaseModel
 @dataclass
 class AppConfig:
     machine_id: int
-    machine_uuid: str
+    usage_uuid: str
     user_id: str
     public_key: str
 
     def __post_init__(self):
-        self.network = f"network-{self.machine_uuid}"
+        self.network = f"network-{self.usage_uuid}-{self.machine_id}"
 
 
 class FlyCommandError(Exception):
@@ -57,7 +57,7 @@ class CheckStatus(Enum):
 
 class FlyMachineConfig(BaseModel):
     machine_id: int
-    machine_uuid: str
+    usage_uuid: str
     region: FlyRegion = FlyRegion.LAX
     cpu_kind: str = "shared"
     cpu: int = 1

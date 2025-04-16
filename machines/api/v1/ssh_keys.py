@@ -70,13 +70,17 @@ async def create_ssh_key(
     return new_ssh_key
 
 
+class DeleteSshKeyRequest(BaseModel):
+    ssh_key_id: Optional[int] = None
+    user_id: Optional[str] = None
+
+
 @ssh_keys_router.delete("")
 async def delete_ssh_keys(
-    ssh_key_id: Optional[int] = None,
-    user_id: Optional[str] = None,
+    request: DeleteSshKeyRequest,
     current_user: UserData = Depends(get_current_active_user),
 ) -> List[SshKeyPydantic]:
-    if user_id:
+    if request.user_id:
         if not await require_admin(current_user):
             # only admins can delete ssh keys for other users
             raise HTTPException(
@@ -88,14 +92,15 @@ async def delete_ssh_keys(
         user_id = current_user.user_id
 
     filters = {}
-    if ssh_key_id:
-        filters["id"] = ssh_key_id
-    if user_id:
-        filters["user_id"] = user_id
+    if request.ssh_key_id:
+        filters["id"] = request.ssh_key_id
+    if request.user_id:
+        filters["user_id"] = request.user_id
 
     ssh_keys = await db.ssh_keys.afind(filters=filters)
 
     for ssh_key in ssh_keys:
+        print(ssh_key)
         if ssh_key.id is not None:
             await db.ssh_keys.adelete(ssh_key.id)
 

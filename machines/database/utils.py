@@ -28,6 +28,11 @@ def generate_api_key_expires_at(
 
 
 def api_key_is_expired(expires_at: datetime) -> bool:
+    """Check if the api key is expired"""
+    # Ensure expires_at has timezone information
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+
     if expires_at < datetime.now(timezone.utc):
         return True
 
