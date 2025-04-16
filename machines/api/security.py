@@ -1,4 +1,4 @@
-from fastapi import Depends, HTTPException, status, Request
+from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 
@@ -38,6 +38,18 @@ async def get_current_active_user(
     current_user: UserData = Depends(get_current_user),
 ) -> UserData:
     return current_user
+
+
+async def get_user_usage_uuid(
+    current_user: UserData = Depends(get_current_user),
+) -> str:
+    usage = await db.usage.afind_one(filters={"user_id": current_user.user_id})
+    if not usage or usage.uuid is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Usage not found"
+        )
+
+    return usage.uuid
 
 
 async def require_admin(current_user: UserData = Depends(get_current_user)) -> UserData:

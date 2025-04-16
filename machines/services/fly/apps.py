@@ -28,9 +28,9 @@ class FlyAppManager:
         self.org_name = org_name
         self.base_dir = Path(__file__).resolve().parent
 
-    async def get_app_name(self, machine_uuid: str) -> str:
+    async def get_app_name(self, usage_uuid: str, machine_id: int) -> str:
         """Get the name of the Fly.io application."""
-        return f"lc-{machine_uuid}"
+        return f"lc-{usage_uuid}-{machine_id}"
 
     async def _add_authorized_keys(self, config: AppConfig) -> None:
         """Add SSH authorized keys to the application."""
@@ -38,7 +38,7 @@ class FlyAppManager:
         if not pub_key:
             raise ValueError("SSH key file is empty")
 
-        print(f"Adding secrets to app {await self.get_app_name(config.machine_uuid)}")
+        print(f"Adding secrets to app {await self.get_app_name(config.usage_uuid, config.machine_id)}")
         try:
             await run_async_command(
                 [
@@ -47,20 +47,20 @@ class FlyAppManager:
                     "set",
                     f"AUTHORIZED_KEYS={pub_key}",
                     "-a",
-                    await self.get_app_name(config.machine_uuid),
+                    await self.get_app_name(config.usage_uuid, config.machine_id),
                 ]
             )
         except subprocess.CalledProcessError as e:
             if "already exists" in e.stderr:
                 print(
-                    f"Secret {await self.get_app_name(config.machine_uuid)} already exists"
+                    f"Secret {await self.get_app_name(config.usage_uuid, config.machine_id)} already exists"
                 )
             else:
                 raise e
 
     async def create_app(self, config: AppConfig) -> None:
         """Create a new Fly.io application."""
-        print(f"Creating app {await self.get_app_name(config.machine_uuid)}")
+        print(f"Creating app {await self.get_app_name(config.usage_uuid, config.machine_id)}")
         # Create the app
         try:
             await db.machines.update_machine_status(
@@ -71,7 +71,7 @@ class FlyAppManager:
                     "fly",
                     "apps",
                     "create",
-                    await self.get_app_name(config.machine_uuid),
+                    await self.get_app_name(config.usage_uuid, config.machine_id),
                     "--org",
                     self.org_name,
                     "--network",
@@ -82,7 +82,7 @@ class FlyAppManager:
         except Exception as e:
             if "already been taken" in str(e):
                 print(
-                    f"App {await self.get_app_name(config.machine_uuid)} already exists"
+                    f"App {await self.get_app_name(config.usage_uuid, config.machine_id)} already exists"
                 )
             else:
                 raise e
@@ -98,14 +98,14 @@ class FlyAppManager:
                     "ips",
                     "allocate-v4",
                     "--app",
-                    await self.get_app_name(config.machine_uuid),
+                    await self.get_app_name(config.usage_uuid, config.machine_id),
                     "--yes",
                 ]
             )
         except subprocess.CalledProcessError as e:
             if "already exists" in e.stderr:
                 print(
-                    f"IPv4 address for app {await self.get_app_name(config.machine_uuid)} already exists"
+                    f"IPv4 address for app {await self.get_app_name(config.usage_uuid, config.machine_id)} already exists"
                 )
             else:
                 raise e
@@ -113,23 +113,23 @@ class FlyAppManager:
         # add the authorized key so that we can ssh into the machine
         await self._add_authorized_keys(config)
 
-    async def delete_app(self, machine_id: int, machine_uuid: str) -> None:
+    async def delete_app(self, usage_uuid: str, machine_id: int) -> None:
         """Delete a Fly.io application."""
-        print(f"Deleting app {await self.get_app_name(machine_uuid)}")
+        print(f"Deleting app {await self.get_app_name(usage_uuid, machine_id)}")
         await db.machines.update_machine_status(machine_id, MachineStatus.DELETING)
         await run_async_command(
             [
                 "fly",
                 "apps",
                 "destroy",
-                await self.get_app_name(machine_uuid),
+                await self.get_app_name(usage_uuid, machine_id),
                 "--yes",
             ]
         )
 
         # now try to delete the CNAME record from Route53
         await self.route_53.delete_cname_record(
-            await self.get_app_name(machine_uuid),
+            await self.get_app_name(usage_uuid, machine_id),
         )
 
         # finally, delete the machine from the database
@@ -140,12 +140,12 @@ class FlyAppManager:
         machine_config: FlyMachineConfig,
     ) -> None:
         """Deploy the application to Fly.io."""
-        print(f"Deploying app {await self.get_app_name(machine_config.machine_uuid)}")
+        print(f"Deploying app {await self.get_app_name(machine_config.usage_uuid, machine_config.machine_id)}")
 
         # now try to add a CNAME record to the app in Route53
         try:
             await self.route_53.create_cname_record(
-                await self.get_app_name(machine_config.machine_uuid),
+                await self.get_app_name(machine_config.usage_uuid, machine_config.machine_id),
             )
 
         except Exception as e:
@@ -164,7 +164,7 @@ class FlyAppManager:
                 "deploy",
                 "--yes",
                 "-a",
-                await self.get_app_name(machine_config.machine_uuid),
+                await self.get_app_name(machine_config.usage_uuid, machine_config.machine_id),
                 "-c",
                 str(fly_toml_path),
                 "--image",
@@ -193,11 +193,11 @@ class FlyAppManager:
         )
 
     async def scale_app(
-        self, machine_uuid: str, cpu_kind: str, cpu: int, memory: int
+        self, usage_uuid: str, machine_id: int, cpu_kind: str, cpu: int, memory: int
     ) -> None:
         """Scale the application to the given number of machines."""
         print(
-            f"Scaling app {await self.get_app_name(machine_uuid)} to {cpu_kind} {cpu} {memory}"
+            f"Scaling app {await self.get_app_name(usage_uuid, machine_id)} to {cpu_kind} {cpu} {memory}"
         )
         vm_type = RESOURCE_MAP.get(cpu_kind)
         if not vm_type:
@@ -226,16 +226,16 @@ class FlyAppManager:
                 "vm",
                 vm_config["name"],
                 "-a",
-                await self.get_app_name(machine_uuid),
+                await self.get_app_name(usage_uuid, machine_id),
                 "--vm-memory",
                 str(memory),
             ]
         )
 
-    async def extend_volume(self, machine_uuid: str, volume_size: int) -> None:
+    async def extend_volume(self, usage_uuid: str, machine_id: int, volume_size: int) -> None:
         """Extend the volume of the application."""
         print(
-            f"Extending volume of app {await self.get_app_name(machine_uuid)} to {volume_size}GB"
+            f"Extending volume of app {await self.get_app_name(usage_uuid, machine_id)} to {volume_size}GB"
         )
 
         try:
@@ -246,7 +246,7 @@ class FlyAppManager:
                     "volume",
                     "list",
                     "-a",
-                    await self.get_app_name(machine_uuid),
+                    await self.get_app_name(usage_uuid, machine_id),
                     "--json",
                 ],
                 print_output=False,
@@ -260,7 +260,7 @@ class FlyAppManager:
 
             if not volume_id:
                 raise ValueError(
-                    f"Volume {await self.get_app_name(machine_uuid)} not found"
+                    f"Volume {await self.get_app_name(usage_uuid, machine_id)} not found"
                 )
 
         except subprocess.CalledProcessError as e:
@@ -276,16 +276,16 @@ class FlyAppManager:
                     "-s",
                     str(volume_size),
                     "-a",
-                    await self.get_app_name(machine_uuid),
+                    await self.get_app_name(usage_uuid, machine_id),
                 ]
             )
 
         except subprocess.CalledProcessError as e:
             raise e
 
-    async def get_check_status(self, machine_uuid: str) -> CheckStatus:
+    async def get_check_status(self, usage_uuid: str, machine_id: int) -> CheckStatus:
         """Get the status of the check for the application."""
-        app_name = await self.get_app_name(machine_uuid)
+        app_name = await self.get_app_name(usage_uuid, machine_id)
         response = await run_async_command(
             [
                 "fly",

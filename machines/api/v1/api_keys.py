@@ -83,10 +83,14 @@ async def update_api_key(
     return new_api_key
 
 
+class DeleteApiKeyRequest(BaseModel):
+    api_key_id: Optional[int] = None
+    user_id: Optional[str] = None
+
+
 @api_keys_router.delete("")
 async def delete_api_keys(
-    api_key_id: Optional[int] = None,
-    user_id: Optional[str] = None,
+    request: DeleteApiKeyRequest,
     _=Depends(require_admin),
 ) -> List[ApiKeyPydantic]:
     """
@@ -95,10 +99,10 @@ async def delete_api_keys(
     If both, filter by both id and user_id to ensure we only delete the correct api key.
     """
     filters = {}
-    if api_key_id:
-        filters["id"] = api_key_id
-    if user_id:
-        filters["user_id"] = user_id
+    if request.api_key_id:
+        filters["id"] = request.api_key_id
+    if request.user_id:
+        filters["user_id"] = request.user_id
 
     api_keys = await db.api_keys.afind(filters=filters)
 
