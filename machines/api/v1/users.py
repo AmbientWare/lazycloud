@@ -5,6 +5,7 @@ from machines.database import db
 from machines.database.usage import UsagePydantic
 from machines.database.api_keys import ApiKeyPydantic, ApiKeyRole, ApiKeyExpirationDays
 from machines.database.utils import generate_api_key, generate_api_key_expires_at
+from datetime import datetime, timezone
 
 users_router = APIRouter(prefix="/users", tags=["users"])
 
@@ -19,6 +20,7 @@ async def current_user(
 
 class OnboardingRequest(BaseModel):
     user_id: str
+
 
 class OnboardingResponse(BaseModel):
     success: bool
@@ -41,7 +43,11 @@ async def get_onboarding_status(
         raise HTTPException(status_code=400, detail="User already has an api key")
 
     # create a new usage record
-    usage = UsagePydantic(user_id=request.user_id, balance=0, usage={})
+    usage = UsagePydantic(
+        user_id=request.user_id,
+        balance=0,
+        last_collected_at=datetime.now(timezone.utc),
+    )
     await db.usage.acreate(usage)
 
     # create a default api key that expires at the requested time
