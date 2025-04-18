@@ -1,8 +1,3 @@
-import dotenv
-
-# we load the environment variables from the .env file first so we can use them in rest of the app
-dotenv.load_dotenv()
-
 import argparse
 import uvicorn
 from fastapi import FastAPI, APIRouter

@@ -1,6 +1,10 @@
+import dotenv
+# we load the environment variables from the .env file first so we can use them in rest of the app
+dotenv.load_dotenv()
+
 from typing import List
 import os
-from pydantic import BaseModel, field_validator, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator
 from enum import Enum
 
 ENV = os.getenv("ENV", "dev")
@@ -41,6 +45,10 @@ class AppConfig(BaseModel):
     AWS_REGION: str = os.getenv("AWS_REGION", "")
     AWS_ROUTE53_ZONE_ID: str = os.getenv("AWS_ROUTE53_ZONE_ID", "")
 
+    # Stripe Configuration
+    STRIPE_SECRET_KEY: str = os.getenv("STRIPE_SECRET_KEY", "")
+    STRIPE_PUBLISHABLE_KEY: str = os.getenv("STRIPE_PUBLISHABLE_KEY", "")
+
     # Database Configurations
     DATABASE_URL: str = os.getenv(
         "DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5432/machines"
@@ -62,6 +70,8 @@ class AppConfig(BaseModel):
         "AWS_SECRET_ACCESS_KEY",
         "AWS_REGION",
         "AWS_ROUTE53_ZONE_ID",
+        "STRIPE_SECRET_KEY",
+        "STRIPE_PUBLISHABLE_KEY",
     ]
 
     @model_validator(mode="after")

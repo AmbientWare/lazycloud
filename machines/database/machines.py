@@ -1,5 +1,5 @@
 from typing import List, Optional
-from sqlalchemy import Column, String, Integer
+from sqlalchemy import Column, String, Integer, ForeignKey
 from enum import Enum
 from machines.database.base import BaseModel, BaseTable, DatabaseService
 
@@ -31,6 +31,8 @@ class MachineTable(BaseTable):
     memory = Column(Integer, nullable=False)
     volume_size = Column(Integer, nullable=False)
     status = Column(String, nullable=False)
+    app_port = Column(Integer, nullable=False)
+    file_system_id = Column(Integer, ForeignKey("file_systems.id"), nullable=False)
 
 
 class MachinePydantic(BaseModel):
@@ -45,6 +47,8 @@ class MachinePydantic(BaseModel):
     memory: int
     status: MachineStatus
     volume_size: int
+    app_port: int
+    file_system_id: int
 
 
 class MachineService(DatabaseService[MachineTable, MachinePydantic]):
@@ -63,6 +67,19 @@ class MachineService(DatabaseService[MachineTable, MachinePydantic]):
 
         machine.status = status
         await self.aupdate(machine)
+
+    async def get_first_available_port(self, usage_uuid: str) -> int:
+        """Get the first available port"""
+        deployted_machines = await self.afind(
+            filters={"status": MachineStatus.DEPLOYED, "usage_uuid": usage_uuid}
+        )
+        used_ports = [machine.app_port for machine in deployted_machines]
+        # port start from 10022
+        for port in range(10022, 65535):
+            if port not in used_ports:
+                return port
+
+        raise ValueError("No available ports")
 
     async def asearch(
         self,

@@ -5,13 +5,12 @@ from pydantic import BaseModel
 
 @dataclass
 class AppConfig:
-    machine_id: int
     usage_uuid: str
     user_id: str
     public_key: str
 
     def __post_init__(self):
-        self.network = f"network-{self.usage_uuid}-{self.machine_id}"
+        self.network = f"network-{self.usage_uuid}"
 
 
 class FlyCommandError(Exception):
@@ -62,9 +61,10 @@ class FlyMachineConfig(BaseModel):
     cpu_kind: str = "shared"
     cpu: int = 1
     memory: int = 1024
+    file_system_id: int
     gpu_kind: str | None = None
     image_type: ImageTypes = ImageTypes.UBUNTU_22_04
-    initial_volume_size: int | None = 10
+    port: int
 
 
 RESOURCE_MAP = {

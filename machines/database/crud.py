@@ -9,6 +9,7 @@ from machines.database.api_keys import (
     ApiKeyExpirationDays,
 )
 from datetime import datetime, timezone, timedelta
+from machines.database.usage import UsageService, UsagePydantic
 
 
 async def create_tables():
@@ -18,6 +19,18 @@ async def create_tables():
 
 async def update_admin_api_keys():
     api_key_service = ApiKeyService()
+
+    # check if we have a usage record
+    usage_service = UsageService()
+    usage_record = await usage_service.afind_one(filters={"user_id": "admin"})
+    if not usage_record:
+        await usage_service.acreate(
+            UsagePydantic(
+                user_id="admin",
+                balance=0,
+                last_collected_at=datetime.now(timezone.utc),
+            )
+        )
 
     # check if the admin api key exists
     admin_api_keys = await api_key_service.afind(filters={"user_id": "admin"})

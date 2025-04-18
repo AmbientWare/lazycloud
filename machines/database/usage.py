@@ -1,6 +1,8 @@
 from typing import List, Optional
-from sqlalchemy import Column, String, JSON, Float
+from sqlalchemy import Column, String, Float, DateTime
 import uuid
+from datetime import datetime
+
 from machines.database.base import BaseModel, BaseTable, DatabaseService
 
 
@@ -12,7 +14,7 @@ class UsageTable(BaseTable):
     # NOTE: uuid will be used to identify the app in fly along with machine id
     uuid = Column(String, default=lambda: str(uuid.uuid4()), nullable=False)
     balance = Column(Float, nullable=False)
-    usage = Column(JSON, nullable=False)
+    last_collected_at = Column(DateTime(timezone=True), nullable=False)
 
 
 class UsagePydantic(BaseModel):
@@ -20,7 +22,7 @@ class UsagePydantic(BaseModel):
 
     uuid: Optional[str] = None
     balance: float
-    usage: dict
+    last_collected_at: datetime
 
 
 class UsageService(DatabaseService[UsageTable, UsagePydantic]):
@@ -41,16 +43,3 @@ class UsageService(DatabaseService[UsageTable, UsagePydantic]):
         usage = await self.afind_one(filters=filters)
 
         return usage.balance if usage else 0
-
-    async def update_balance(self, user_id: str, balance: float):
-        """Update balance"""
-        filters = {"user_id": user_id}
-        usage = await self.afind_one(filters=filters)
-        if usage:
-            usage.balance = balance
-            await self.aupdate(usage)
-
-        else:
-            await self.acreate(
-                UsagePydantic(user_id=user_id, balance=balance, usage={})
-            )
