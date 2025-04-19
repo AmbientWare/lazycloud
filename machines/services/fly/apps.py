@@ -118,7 +118,6 @@ class FlyAppManager:
     async def destroy_app(self, usage_uuid: str) -> None:
         """Delete a Fly.io application."""
         logger.info(f"Deleting app {await get_app_name(usage_uuid)}")
-
         # also release the IP address as this also deletes the CNAME record
         await self.release_ip_address(usage_uuid)
         await fly_api.apps.destroy(await get_app_name(usage_uuid))
@@ -166,6 +165,10 @@ class FlyAppManager:
             await db.machines.update_machine_status(
                 machine_config.machine_id, MachineStatus.VM_CREATING
             )
+
+            # slight sleep to ensure the machine is created
+            await asyncio.sleep(5)
+
             await self.wait_for_checks(
                 machine_config.usage_uuid, machine_config.machine_id
             )
@@ -240,6 +243,9 @@ class FlyAppManager:
             memory=memory,
         )
 
+        # wait for the machine to be updated
+        await self.wait_for_checks(usage_uuid, machine_id)
+
     async def extend_volume(
         self, usage_uuid: str, file_system_id: int, volume_size: int
     ) -> None:
@@ -304,7 +310,10 @@ class FlyAppManager:
         ]
         volumes_to_destroy_promises = []
         for fly_volume in fly_volumes:
-            if fly_volume.get("name") not in db_volume_names:
+            if (
+                fly_volume.get("name") not in db_volume_names
+                and fly_volume.get("status") != "pending_destroy"
+            ):
                 volumes_to_destroy_promises.append(
                     fly_api.volumes.destroy(
                         await get_app_name(usage_uuid), fly_volume["id"]
@@ -317,11 +326,12 @@ class FlyAppManager:
             f"cleaning up app {await get_app_name(usage_uuid)}: {len(machines)} machines, {len(volumes)} volumes, {ip_address} ip address"
         )
 
-        if len(machines) == 0 and len(volumes) == 0:
+        if len(machines) == 0:
             await self.destroy_app(usage_uuid)
 
-        elif len(machines) == 0 and ip_address:
-            await self.release_ip_address(usage_uuid)
+        # TODO: when we allow the useer to create file systems dynamically, we need to add back in similar logic
+        # elif len(machines) == 0 and ip_address:
+        #     await self.release_ip_address(usage_uuid)
 
-        elif len(machines) > 0 and not ip_address:
-            await self._allocate_ip_address(usage_uuid)
+        # elif len(machines) > 0 and not ip_address:
+        #     await self._allocate_ip_address(usage_uuid)
