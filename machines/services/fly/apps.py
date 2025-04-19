@@ -1,20 +1,27 @@
-import subprocess
+import asyncio
+import time
 from pathlib import Path
 import json
+from loguru import logger
 
 from machines.config import app_config
 from machines.services.fly.schemas import (
     AppConfig,
-    CheckStatus,
     FlyMachineConfig,
     RESOURCE_MAP,
-    IMAGE_MAP,
 )
-from machines.services.fly.utils import run_async_command, deploying_status_callback
+from machines.services.fly.utils import (
+    run_async_command,
+    get_app_name,
+    get_machine_name,
+    get_app_volume_name,
+    get_volume_id,
+)
 from machines.services.aws.route53 import Route53Service
 from machines.database import db
 from machines.database.machines import MachineStatus
 from machines.services.fly.schemas import FlyRegion
+from machines.services.fly.api import fly_api
 
 
 class FlyAppManager:
@@ -29,90 +36,27 @@ class FlyAppManager:
         self.org_name = org_name
         self.base_dir = Path(__file__).resolve().parent
 
-    async def _get_machine_id(self, usage_uuid: str, machine_id: int) -> str:
+    async def _get_machine_id(self, usage_uuid: str, machine_id: int) -> str | None:
         """Get the machine id for the application."""
-        response = await run_async_command(
-            [
-                "fly",
-                "machines",
-                "list",
-                "-a",
-                await self.get_app_name(usage_uuid),
-                "--json",
-            ],
-            print_output=False,
-        )
+        app_name = await get_app_name(usage_uuid)
+        machines = await fly_api.machines.list(app_name)
+        machine_name = await get_machine_name(machine_id)
 
-        machine_name = await self.get_machine_name(machine_id)
-
-        machines = json.loads(response.stdout)
         for machine in machines:
             if machine.get("name") == machine_name:
                 return machine.get("id")
 
-        raise ValueError(f"Machine {machine_name} not found")
-
-    async def _get_volume_id(self, usage_uuid: str, volume_id: int) -> str:
-        """Get the volume id for the application."""
-        response = await run_async_command(
-            [
-                "fly",
-                "volume",
-                "list",
-                "-a",
-                await self.get_app_name(usage_uuid),
-                "--json",
-            ],
-            print_output=False,
-        )
-
-        volumes = json.loads(response.stdout)
-        for volume in volumes:
-            if volume.get("name") == await self.get_app_volume_name(volume_id):
-                return volume.get("id")
-
-        raise ValueError(
-            f"Volume {await self.get_app_volume_name(volume_id)} not found"
-        )
-
-    async def _add_authorized_keys(self, config: AppConfig) -> None:
-        """Add SSH authorized keys to the application."""
-        pub_key = config.public_key.strip()
-        if not pub_key:
-            raise ValueError("SSH key file is empty")
-
-        print(f"Adding secrets to app {await self.get_app_name(config.usage_uuid)}")
-        try:
-            await run_async_command(
-                [
-                    "fly",
-                    "secrets",
-                    "set",
-                    f"AUTHORIZED_KEYS={pub_key}",
-                    "-a",
-                    await self.get_app_name(config.usage_uuid),
-                ]
-            )
-        except subprocess.CalledProcessError as e:
-            if "already exists" in e.stderr:
-                print(
-                    f"Secret {await self.get_app_name(config.usage_uuid)} already exists"
-                )
-            else:
-                raise e
+        logger.error(f"Machine {machine_name} not found on fly.")
+        return None
 
     async def check_app_exists(self, usage_uuid: str):
-        app_name = await self.get_app_name(usage_uuid)
-        response = await run_async_command(
-            ["fly", "apps", "list", "--org", self.org_name, "--json"],
-            print_output=False,
-        )
-        apps = json.loads(response.stdout)
-        return app_name in [app.get("Name") for app in apps]
+        app_name = await get_app_name(usage_uuid)
+        app = await fly_api.apps.get(app_name)
+        return app is not None
 
     async def _get_allocated_ip_address(self, usage_uuid: str) -> str | None:
         """Get the allocated IP address for the application."""
-        app_name = await self.get_app_name(usage_uuid)
+        app_name = await get_app_name(usage_uuid)
         response = await run_async_command(
             ["fly", "ips", "list", "--app", app_name, "--json"],
             print_output=False,
@@ -123,34 +67,21 @@ class FlyAppManager:
 
         return None
 
-    async def get_app_name(self, usage_uuid: str) -> str:
-        """Get the name of the Fly.io application."""
-        return f"lc-{usage_uuid}"
-
-    async def get_machine_name(self, machine_id: int) -> str:
-        """Get the name of the Fly.io machine."""
-        return f"lc_machine_{machine_id}"
-
-    async def get_app_volume_name(self, volume_id: int) -> str:
-        """Get the name of the Fly.io application volume."""
-        return f"lc_volume_{volume_id}"
-
-    async def get_volume_info(self, volume_name: str) -> tuple[int, str]:
+    async def get_volume_info(
+        self, usage_uuid: str, volume_id: int
+    ) -> tuple[int | None, str | None]:
         """Get the volume size of the Fly.io application."""
-        response = await run_async_command(
-            ["fly", "volume", "list", "-a", volume_name, "--json"], print_output=False
-        )
+        app_name = await get_app_name(usage_uuid)
+        volume = await fly_api.volumes.get(app_name, str(volume_id))
 
-        volumes = json.loads(response.stdout)
-        for volume in volumes:
-            if volume.get("name") == volume_name:
-                return volume.get("size_gb"), volume.get("region")
+        if volume:
+            return volume.get("size_gb"), volume.get("region")
 
-        raise ValueError(f"Error getting volume size for {volume_name}")
+        return None, None
 
     async def _allocate_ip_address(self, usage_uuid: str) -> None:
         """Allocate an IP address for the application."""
-        app_name = await self.get_app_name(usage_uuid)
+        app_name = await get_app_name(usage_uuid)
         await run_async_command(
             ["fly", "ips", "allocate-v4", "--app", app_name, "--yes"]
         )
@@ -158,7 +89,7 @@ class FlyAppManager:
         # now try to add a CNAME record to the app in Route53
         try:
             await self.route_53.create_cname_record(
-                await self.get_app_name(usage_uuid),
+                await get_app_name(usage_uuid),
             )
 
         except Exception as e:
@@ -166,7 +97,7 @@ class FlyAppManager:
 
     async def release_ip_address(self, usage_uuid: str) -> None:
         """Release an IP address for the application."""
-        app_name = await self.get_app_name(usage_uuid)
+        app_name = await get_app_name(usage_uuid)
         ip_address = await self._get_allocated_ip_address(usage_uuid)
         if ip_address:
             await run_async_command(
@@ -174,185 +105,104 @@ class FlyAppManager:
             )
 
         await self.route_53.delete_cname_record(
-            await self.get_app_name(usage_uuid),
+            await get_app_name(usage_uuid),
         )
 
     async def create_app(self, config: AppConfig) -> None:
         """Create a new Fly.io application."""
-        print(f"Creating app {await self.get_app_name(config.usage_uuid)}")
-        # Create the app
-        try:
-            await run_async_command(
-                [
-                    "fly",
-                    "apps",
-                    "create",
-                    await self.get_app_name(config.usage_uuid),
-                    "--org",
-                    self.org_name,
-                    "--network",
-                    config.network,
-                ]
-            )
-
-        except Exception as e:
-            if "already been taken" in str(e):
-                print(
-                    f"App {await self.get_app_name(config.usage_uuid)} already exists"
-                )
-            else:
-                raise e
-
-        try:
-            # Allocate IPv4 address
-            await self._allocate_ip_address(config.usage_uuid)
-
-        except subprocess.CalledProcessError as e:
-            if "already exists" in e.stderr:
-                print(
-                    f"IPv4 address for app {await self.get_app_name(config.usage_uuid)} already exists"
-                )
-            else:
-                raise e
-
-        # add the authorized key so that we can ssh into the machine
-        await self._add_authorized_keys(config)
+        logger.info(f"Creating app {await get_app_name(config.usage_uuid)}")
+        # Create the app and allocate an IP address
+        await fly_api.apps.create(await get_app_name(config.usage_uuid))
+        await self._allocate_ip_address(config.usage_uuid)
 
     async def destroy_app(self, usage_uuid: str) -> None:
         """Delete a Fly.io application."""
-        print(f"Deleting app {await self.get_app_name(usage_uuid)}")
+        logger.info(f"Deleting app {await get_app_name(usage_uuid)}")
 
         # also release the IP address as this also deletes the CNAME record
         await self.release_ip_address(usage_uuid)
-
-        await run_async_command(
-            [
-                "fly",
-                "apps",
-                "destroy",
-                await self.get_app_name(usage_uuid),
-                "--yes",
-            ]
-        )
+        await fly_api.apps.destroy(await get_app_name(usage_uuid))
 
     async def create_file_system(
         self,
         usage_uuid: str,
-        volume_id: int,
+        file_system_id: int,
         size: int,
         region: FlyRegion,
     ) -> str:
         """Create a file system for the application."""
-        print(f"Creating file system for {volume_id}")
-        volume_name = await self.get_app_volume_name(volume_id)
-        await run_async_command(
-            [
-                "fly",
-                "volume",
-                "create",
-                volume_name,
-                "--size",
-                str(size),
-                "--app",
-                await self.get_app_name(usage_uuid),
-                "--region",
-                region.value,
-                "--yes",
-            ]
+        volume_name = await get_app_volume_name(file_system_id)
+        logger.info(f"Creating volume {volume_name} for {file_system_id}")
+        await fly_api.volumes.create(
+            volume_name, await get_app_name(usage_uuid), region.value, size
         )
 
         return volume_name
 
-    async def destroy_file_system(self, usage_uuid: str, volume_id: int) -> None:
+    async def destroy_file_system(self, usage_uuid: str, file_system_id: int) -> None:
         """Destroy a file system for the application."""
-        print(f"Destroying file system for {volume_id}")
-        fly_volume_id = await self._get_volume_id(usage_uuid, volume_id)
-        await run_async_command(["fly", "volume", "destroy", fly_volume_id, "--yes"])
-
-        await db.file_systems.adelete(volume_id)
+        logger.info(f"Destroying file system for {file_system_id}")
+        fly_volume_id = await get_volume_id(usage_uuid, file_system_id)
+        await fly_api.volumes.destroy(await get_app_name(usage_uuid), fly_volume_id)
+        await db.file_systems.adelete(file_system_id)
 
     async def create_machine(
         self,
         machine_config: FlyMachineConfig,
     ) -> None:
         """Deploy the application to Fly.io."""
-        print(f"Deploying app {await self.get_app_name(machine_config.usage_uuid)}")
+        logger.info(f"Deploying app {await get_app_name(machine_config.usage_uuid)}")
 
         await db.machines.update_machine_status(
-            machine_config.machine_id, MachineStatus.INITIALIZED
+            machine_config.machine_id, MachineStatus.BUILDING
         )
 
-        image = IMAGE_MAP.get(machine_config.image_type)
-        if not image:
-            raise ValueError(
-                f"Invalid image type: {machine_config.image_type}. Must be one of {IMAGE_MAP.keys()}"
+        await fly_api.machines.create(
+            app_name=await get_app_name(machine_config.usage_uuid),
+            machine_config=machine_config,
+        )
+
+        try:
+            await db.machines.update_machine_status(
+                machine_config.machine_id, MachineStatus.VM_CREATING
+            )
+            await self.wait_for_checks(
+                machine_config.usage_uuid, machine_config.machine_id
             )
 
-        file_system_name = await self.get_app_volume_name(machine_config.file_system_id)
+        finally:
+            await db.machines.update_machine_status(
+                machine_config.machine_id, MachineStatus.DEPLOYED
+            )
 
-        await run_async_command(
-            [
-                "fly",
-                "machine",
-                "run",
-                image,
-                "--name",
-                await self.get_machine_name(machine_config.machine_id),
-                "-a",
-                await self.get_app_name(machine_config.usage_uuid),
-                "--config",
-                f"{self.base_dir}/app_files/fly.toml",
-                "--autostart=true",
-                "--autostop=suspend",
-                "--port",
-                # ssh is exposed on port 2222 on the machine
-                f"{machine_config.port}:2222/tcp",
-                "--region",
-                machine_config.region.value,
-                "--vm-cpu-kind",
-                machine_config.cpu_kind,
-                "--vm-cpus",
-                str(machine_config.cpu),
-                "--vm-memory",
-                str(machine_config.memory),
-                "--volume",
-                # mount the volume to /data on the machine
-                file_system_name + ":data",
-            ],
-            stdout_callback=lambda line: deploying_status_callback(
-                machine_config.machine_id, line
-            ),
-        )
-
-        await db.machines.update_machine_status(
-            machine_config.machine_id, MachineStatus.DEPLOYED
-        )
+            await self.clean(machine_config.usage_uuid)
 
     async def destroy_machine(self, usage_uuid: str, machine_id: int) -> None:
         """Destroy the machine."""
-        print(f"Destroying machine {await self.get_machine_name(machine_id)}")
+        machine_name = await get_machine_name(machine_id)
+        logger.info(f"Destroying machine {machine_name}")
         await db.machines.update_machine_status(machine_id, MachineStatus.DELETING)
         # get the machine id
         fly_machine_id = await self._get_machine_id(usage_uuid, machine_id)
-        await run_async_command(
-            [
-                "fly",
-                "machine",
-                "destroy",
-                fly_machine_id,
-                "--force",
-            ]
-        )
+        if fly_machine_id:
+            logger.info(f"Destroying machine {fly_machine_id} in fly")
+            await fly_api.machines.destroy(
+                app_name=await get_app_name(usage_uuid), machine_id=fly_machine_id
+            )
 
-        # finally, delete the machine from the database
+        else:
+            logger.warning(f"Machine {machine_name} not found on fly.")
+
+        # delete the machine from the database
+        logger.info(f"Deleting machine {machine_name} from database")
         await db.machines.adelete(machine_id)
 
     async def scale_machine(
         self, usage_uuid: str, machine_id: int, cpu_kind: str, cpu: int, memory: int
     ) -> None:
         """Scale the application to the given number of machines."""
-        print(
-            f"Scaling machine {await self.get_machine_name(machine_id)} to {cpu_kind} {cpu} {memory}"
+        logger.info(
+            f"Scaling machine {await get_machine_name(machine_id)} to {cpu_kind} {cpu} {memory}"
         )
         vm_type = RESOURCE_MAP.get(cpu_kind)
         if not vm_type:
@@ -377,101 +227,64 @@ class FlyAppManager:
         ## get the machine id
         fly_machine_id = await self._get_machine_id(usage_uuid, machine_id)
 
-        await run_async_command(
-            [
-                "fly",
-                "machine",
-                "update",
-                fly_machine_id,
-                "--vm-size",
-                vm_config["name"],
-                "--vm-memory",
-                str(memory),
-                "--vm-gpu-kind",
-                "a10",
-                "--yes",
-            ]
+        if not fly_machine_id:
+            raise ValueError(
+                f"Machine {await get_machine_name(machine_id)} not found on fly."
+            )
+
+        await fly_api.machines.update(
+            app_name=await get_app_name(usage_uuid),
+            machine_id=fly_machine_id,
+            cpu_kind=cpu_kind,
+            cpus=cpu,
+            memory=memory,
         )
 
     async def extend_volume(
-        self, usage_uuid: str, volume_id: int, volume_size: int
+        self, usage_uuid: str, file_system_id: int, volume_size: int
     ) -> None:
         """Extend the volume of the application."""
         print(
-            f"Extending volume of app {await self.get_app_name(usage_uuid)} to {volume_size}GB"
+            f"Extending volume of app {await get_app_name(usage_uuid)} to {volume_size}GB"
         )
 
-        try:
-            # get the volume id
-            response = await run_async_command(
-                [
-                    "fly",
-                    "volume",
-                    "list",
-                    "-a",
-                    await self.get_app_name(usage_uuid),
-                    "--json",
-                ],
-                print_output=False,
-            )
+        await fly_api.volumes.extend(
+            app_name=await get_app_name(usage_uuid),
+            volume_id=await get_volume_id(usage_uuid, file_system_id),
+            size=volume_size,
+        )
 
-            volumes = json.loads(response.stdout)
-            for volume in volumes:
-                if volume["name"] == await self.get_app_volume_name(volume_id):
-                    volume_id = volume["id"]
-                    break
-
-            if not volume_id:
-                raise ValueError(f"Volume {volume_id} not found")
-
-        except subprocess.CalledProcessError as e:
-            raise e
-
-        try:
-            await run_async_command(
-                [
-                    "fly",
-                    "volume",
-                    "extend",
-                    str(volume_id),
-                    "-s",
-                    str(volume_size),
-                    "-a",
-                    await self.get_app_name(usage_uuid),
-                ]
-            )
-
-        except subprocess.CalledProcessError as e:
-            raise e
-
-    async def get_check_status(self, usage_uuid: str, machine_id: int) -> CheckStatus:
+    async def wait_for_checks(
+        self, usage_uuid: str, machine_id: int, timeout: int = 120
+    ):
         """Get the status of the check for the application."""
-        app_name = await self.get_app_name(usage_uuid)
-        response = await run_async_command(
-            [
-                "fly",
-                "machines",
-                "list",
-                "-a",
-                app_name,
-                "--json",
-            ],
-            print_output=False,
-        )
-        machines = json.loads(response.stdout)
-        for machine in machines:
+        app_name = await get_app_name(usage_uuid)
+        fly_machine_id = await self._get_machine_id(usage_uuid, machine_id)
+        if not fly_machine_id:
+            logger.error(f"Machine {machine_id} not found on fly.")
+            return
+
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            machine = await fly_api.machines.get(app_name, fly_machine_id)
+
+            if not machine:
+                raise Exception(f"Machine {fly_machine_id} not found on fly.")
+
             checks = machine.get("checks", {})
-            ssh_check = checks.get("sshCheck", {})
-            if ssh_check.get("status") == "passing":
-                return CheckStatus.PASSING
+            passing_list = [False] * len(checks)
+            for loc, check in enumerate(checks):
+                if check.get("status") == "passing":
+                    passing_list[loc] = True
 
-            elif ssh_check.get("status") == "failing":
-                return CheckStatus.FAILING
+            if all(passing_list):
+                return
 
-            else:
-                return CheckStatus.UNKNOWN
+            await asyncio.sleep(2)
 
-        return CheckStatus.UNKNOWN
+        raise Exception(
+            f"Machine {await get_machine_name(machine_id)} failed to deploy"
+        )
 
     async def clean(self, usage_uuid: str) -> None:
         """
@@ -484,7 +297,25 @@ class FlyAppManager:
         volumes = await db.file_systems.afind(filters={"usage_uuid": usage_uuid})
         ip_address = await self._get_allocated_ip_address(usage_uuid)
 
-        app_name = await self.get_app_name(usage_uuid)
+        # get volumes from fly, we will destroy any volumes that are not in the database
+        fly_volumes = await fly_api.volumes.list(await get_app_name(usage_uuid))
+        db_volume_names = [
+            await get_app_volume_name(v.id) for v in volumes if v.id is not None
+        ]
+        volumes_to_destroy_promises = []
+        for fly_volume in fly_volumes:
+            if fly_volume.get("name") not in db_volume_names:
+                volumes_to_destroy_promises.append(
+                    fly_api.volumes.destroy(
+                        await get_app_name(usage_uuid), fly_volume["id"]
+                    )
+                )
+
+        await asyncio.gather(*volumes_to_destroy_promises)
+
+        logger.info(
+            f"cleaning up app {await get_app_name(usage_uuid)}: {len(machines)} machines, {len(volumes)} volumes, {ip_address} ip address"
+        )
 
         if len(machines) == 0 and len(volumes) == 0:
             await self.destroy_app(usage_uuid)

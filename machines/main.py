@@ -1,5 +1,6 @@
 import argparse
 import uvicorn
+from loguru import logger
 from fastapi import FastAPI, APIRouter
 from contextlib import asynccontextmanager
 from slowapi.middleware import SlowAPIMiddleware
@@ -19,14 +20,21 @@ from machines.api.v1.pricing import pricing_router
 # import other modules
 from machines.database.crud import create_tables, update_admin_api_keys
 from machines.config import app_config
+from machines.log_config import setup_logger
+
+# Setup logging
+setup_logger()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handle startup and shutdown events"""
+    logger.info("Starting up application")
     await create_tables()
     await update_admin_api_keys()
+    logger.info("Application startup complete")
     yield
+    logger.info("Shutting down application")
 
 
 # create a fastapi app

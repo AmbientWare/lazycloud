@@ -1,14 +1,64 @@
 # move here
 
 import asyncio
+import json
 import subprocess
 import sys
 from typing import List, Callable, Awaitable
+from loguru import logger
 
 from machines.config import app_config
 from machines.services.fly.schemas import FlyCommandError
 from machines.database.machines import MachineStatus
 from machines.database import db
+
+
+async def get_app_name(usage_uuid: str) -> str:
+    """Get the name of the Fly.io application."""
+    return f"lc-{usage_uuid}"
+
+
+async def get_machine_name(machine_id: int) -> str:
+    """Get the name of the Fly.io machine."""
+    return f"lc_machine_{machine_id}"
+
+
+async def get_app_volume_name(file_system_id: int) -> str:
+    """Get the name of the Fly.io application volume."""
+    return f"lc_volume_{file_system_id}"
+
+
+async def get_volume_id(
+    usage_uuid: str, file_system_id: int | None = None, volume_name: str | None = None
+) -> str:
+    """Get the volume id for the application."""
+    if file_system_id is None and volume_name is None:
+        raise ValueError("Either file_system_id or volume_name must be provided")
+
+    elif volume_name is None:
+        if file_system_id is None:
+            raise ValueError("file_system_id must be provided if volume_name is not")
+
+        volume_name = await get_app_volume_name(file_system_id)
+
+    response = await run_async_command(
+        [
+            "fly",
+            "volume",
+            "list",
+            "-a",
+            await get_app_name(usage_uuid),
+            "--json",
+        ],
+        print_output=False,
+    )
+
+    volumes = json.loads(response.stdout)
+    for volume in volumes:
+        if volume.get("name") == volume_name:
+            return volume.get("id")
+
+    raise ValueError(f"Volume {volume_name} not found")
 
 
 async def deploying_status_callback(machine_id: int, stdout_line: str) -> None:
@@ -39,7 +89,7 @@ async def run_async_command(
     full_command = command + fly_token_list
 
     if print_output:
-        print(f"Running command: {' '.join(full_command)}")
+        logger.info(f"Running command: {' '.join(full_command)}")
 
     try:
         # Create the subprocess asynchronously

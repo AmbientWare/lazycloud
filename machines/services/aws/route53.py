@@ -27,17 +27,17 @@ class Route53Service:
             await client.change_resource_record_sets(
                 HostedZoneId=app_config.AWS_ROUTE53_ZONE_ID,
                 ChangeBatch={
-                "Changes": [
-                    {
-                        "Action": "CREATE",
-                        "ResourceRecordSet": {
-                            "Name": self.get_cname_domain(name),
-                            "Type": "CNAME",
-                            "TTL": 300,
-                            "ResourceRecords": [{"Value": fly_app_name}],
-                        },
-                    }
-                ]
+                    "Changes": [
+                        {
+                            "Action": "CREATE",
+                            "ResourceRecordSet": {
+                                "Name": self.get_cname_domain(name),
+                                "Type": "CNAME",
+                                "TTL": 300,
+                                "ResourceRecords": [{"Value": fly_app_name}],
+                            },
+                        }
+                    ]
                 },
             )
 
@@ -48,6 +48,8 @@ class Route53Service:
             name: name to delete the record for
         """
         current_record = await self.get_cname_record(name)
+        if not current_record:
+            return
 
         async with self.session.client("route53") as client:
             await client.change_resource_record_sets(
@@ -61,7 +63,7 @@ class Route53Service:
                                 "Type": "CNAME",
                                 "TTL": 300,
                                 "ResourceRecords": [{"Value": current_record}],
-                            }
+                            },
                         }
                     ]
                 },
@@ -93,8 +95,7 @@ class Route53Service:
                 },
             )
 
-
-    async def get_cname_record(self, name: str) -> str:
+    async def get_cname_record(self, name: str) -> str | None:
         # Format the DNS name as a subdomain of the hosted zone
         dns_name = self.get_cname_domain(name)
 
@@ -105,7 +106,10 @@ class Route53Service:
                 StartRecordType="CNAME",
             )
 
-            if not response.get("ResourceRecordSets") or len(response["ResourceRecordSets"]) == 0:
-                raise Exception(f"CNAME record for {name} not found")
+            if (
+                not response.get("ResourceRecordSets")
+                or len(response["ResourceRecordSets"]) == 0
+            ):
+                return None
 
             return response["ResourceRecordSets"][0]["ResourceRecords"][0]["Value"]
