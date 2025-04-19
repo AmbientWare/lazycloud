@@ -48,12 +48,6 @@ IMAGE_MAP = {
 }
 
 
-class CheckStatus(Enum):
-    PASSING = "passing"
-    FAILING = "failing"
-    UNKNOWN = "unknown"
-
-
 class FlyMachineConfig(BaseModel):
     machine_id: int
     usage_uuid: str
@@ -65,6 +59,7 @@ class FlyMachineConfig(BaseModel):
     gpu_kind: str | None = None
     image_type: ImageTypes = ImageTypes.UBUNTU_22_04
     port: int
+    public_key: str
 
 
 RESOURCE_MAP = {

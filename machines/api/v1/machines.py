@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Depends
 from typing import List, Optional
 from pydantic import BaseModel, Field
+from loguru import logger
 
 from machines.api.security import (
     get_current_active_user,
@@ -20,6 +21,7 @@ from machines.services.fly.schemas import (
 )
 from machines.database.file_systems import FileSystemPydantic
 from machines.services.platform.schemas import PlatformOptions
+from machines.services.fly.utils import get_app_name
 
 machines_router = APIRouter(prefix="/machines", tags=["machines"])
 
@@ -78,7 +80,7 @@ async def get_machines_alias(
     if machine is None or machine.id is None:
         raise HTTPException(status_code=404, detail="Machine not found")
 
-    app_name = await fly_app_manager.get_app_name(usage_uuid)
+    app_name = await get_app_name(usage_uuid)
     alias = route_53.get_cname_domain(app_name)
     port = machine.app_port
 
@@ -221,6 +223,7 @@ async def create_machine(
             file_system_id=file_system.id,
             cpu_kind="performance",  # TODO: maybe make configurable in the future
             port=app_port,
+            public_key=ssh_key.public_key,
         )
 
         # Only set optional fields if they are provided
@@ -236,10 +239,23 @@ async def create_machine(
         await fly_app_manager.create_machine(machine_config)
 
     except Exception as e:
-        # delete the machine from fly, dns record, and db
-        await fly_app_manager.destroy_machine(usage_uuid, new_machine.id)
+        logger.error(f"Error creating machine: {e}\n Attempting to clean up machine.")
+        try:
+            # delete the machine from fly, dns record, and db
+            await fly_app_manager.destroy_machine(usage_uuid, new_machine.id)
+        except Exception as e:
+            logger.error(f"Error deleting machine: {e}")
 
-        raise HTTPException(status_code=500, detail=str(e))
+        # delete the file system from fly
+        if file_system is not None and file_system.id is not None:
+            logger.info(f"Attempting to delete new file system: {file_system.id}")
+            try:
+                await fly_app_manager.destroy_file_system(usage_uuid, file_system.id)
+            except Exception as e:
+                logger.error(f"Error deleting new file system: {e}")
+
+    finally:
+        await fly_app_manager.clean(usage_uuid)
 
     return new_machine
 
@@ -349,6 +365,11 @@ async def delete_machine(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+    finally:
+        # run cleanup to make ip is allocated if it was previously released
+        print(f"Running cleanup for usage_uuid: {usage_uuid}")
+        await fly_app_manager.clean(usage_uuid)
 
     # delete the file system if requested
     # TODO: make configurable in the future

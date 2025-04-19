@@ -2,6 +2,7 @@ import dotenv
 # we load the environment variables from the .env file first so we can use them in rest of the app
 dotenv.load_dotenv()
 
+from loguru import logger
 from typing import List
 import os
 from pydantic import BaseModel, ConfigDict, model_validator
@@ -76,7 +77,7 @@ class AppConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_required_env_vars(self: "AppConfig") -> "AppConfig":
-        print("Validating required environment variables")
+        logger.info("Validating required environment variables")
         missing_vars = [var for var in self.required_env_vars if not os.getenv(var)]
         if missing_vars:
             raise ValueError(
