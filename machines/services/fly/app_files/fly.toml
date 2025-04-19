@@ -3,29 +3,11 @@
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
-app = 'ssh-machine'
-primary_region = 'den'
-
-[build]
-
-[[mounts]]
-  source = 'persistant_data'
-  destination = '/data'
-  initial_size = '10gb'
-
 [[services]]
   protocol = 'tcp'
   internal_port = 2222
   auto_stop_machines = 'suspend'
   auto_start_machines = true
-
-  [[services.ports]]
-    port = 10022
-
-  [services.concurrency]
-    type = 'connections'
-    hard_limit = 10
-    soft_limit = 5
 
 [checks]
   [checks.sshCheck]

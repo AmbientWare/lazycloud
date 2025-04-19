@@ -300,6 +300,10 @@ class FlyAppManager:
                 await self.get_machine_name(machine_config.machine_id),
                 "-a",
                 await self.get_app_name(machine_config.usage_uuid),
+                "--config",
+                f"{self.base_dir}/app_files/fly.toml",
+                "--autostart=true",
+                "--autostop=suspend",
                 "--port",
                 # ssh is exposed on port 2222 on the machine
                 f"{machine_config.port}:2222/tcp",
