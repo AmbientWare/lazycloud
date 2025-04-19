@@ -366,14 +366,10 @@ async def delete_machine(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    finally:
-        # run cleanup to make ip is allocated if it was previously released
-        print(f"Running cleanup for usage_uuid: {usage_uuid}")
-        await fly_app_manager.clean(usage_uuid)
-
     # delete the file system if requested
     # TODO: make configurable in the future
-    await fly_app_manager.destroy_file_system(usage_uuid, machine.file_system_id)
+    if machine.file_system_id is not None:
+        await fly_app_manager.destroy_file_system(usage_uuid, machine.file_system_id)
 
     # finally run cleanup
     await fly_app_manager.clean(usage_uuid)

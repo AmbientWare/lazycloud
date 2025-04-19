@@ -116,17 +116,18 @@ class MachinesAPI(BaseFlyAPI):
         self, app_name: str, machine_id: str, cpu_kind: str, cpus: int, memory: int
     ) -> None:
         url = f"/{app_name}/machines/{machine_id}"
-        data = {
-            "config": {
-                "guest": {
-                    "cpu_kind": cpu_kind,
-                    "cpus": cpus,
-                    "memory_mb": memory,
-                },
-            },
-        }
 
-        await self._post(url, json=data)
+        # get the current machine config
+        machine = await self.get(app_name, machine_id)
+        if machine is None:
+            raise ValueError(f"Machine {machine_id} not found")
+
+        # update the machine config
+        machine["config"]["guest"]["cpu_kind"] = cpu_kind
+        machine["config"]["guest"]["cpus"] = cpus
+        machine["config"]["guest"]["memory_mb"] = memory
+
+        await self._post(url, json=machine)
 
     @retry(
         stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=15)

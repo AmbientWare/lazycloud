@@ -40,8 +40,19 @@ class BaseFlyAPI:
             async with client:
                 logger.info(f"Making request to {url} with method {method}")
                 response = await client.request(method, url, json=json, params=params)
-
                 response.raise_for_status()
+
+                # For 202 Accepted and 204 No Content, return None
+                if response.status_code in (202, 204):
+                    return None
+
+                # Check if there's actually content to parse
+                content_type = response.headers.get("content-type", "")
+                if not response.content or not content_type.startswith(
+                    "application/json"
+                ):
+                    return None
+
                 return response.json()
 
         except httpx.HTTPStatusError as e:
