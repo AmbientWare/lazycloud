@@ -1,6 +1,7 @@
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
+from typing import Any
 
 from machines.database import db
 from machines.database.api_keys import ApiKeyRole
@@ -58,3 +59,17 @@ async def require_admin(current_user: UserData = Depends(get_current_user)) -> U
             status_code=status.HTTP_403_FORBIDDEN, detail="Not enough permissions"
         )
     return current_user
+
+
+async def check_user_id_request(user_id: str | None, current_user: UserData) -> str:
+    if user_id:
+        if not await require_admin(current_user):
+            # only admins can delete file systems for other users
+            raise HTTPException(
+                status_code=403,
+                detail="You are not authorized to delete file systems for other users",
+            )
+
+        return user_id
+
+    return current_user.user_id

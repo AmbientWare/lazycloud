@@ -1,8 +1,8 @@
 """init
 
-Revision ID: 76981c8c2bfe
+Revision ID: c1243d668b21
 Revises: 
-Create Date: 2025-04-18 22:40:20.228114
+Create Date: 2025-04-21 06:03:31.479288
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '76981c8c2bfe'
+revision: str = 'c1243d668b21'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -81,7 +81,6 @@ def upgrade() -> None:
     sa.Column('cpu', sa.Integer(), nullable=False),
     sa.Column('gpu_kind', sa.String(), nullable=True),
     sa.Column('memory', sa.Integer(), nullable=False),
-    sa.Column('volume_size', sa.Integer(), nullable=False),
     sa.Column('status', sa.String(), nullable=False),
     sa.Column('app_port', sa.Integer(), nullable=False),
     sa.Column('file_system_id', sa.Integer(), nullable=False),

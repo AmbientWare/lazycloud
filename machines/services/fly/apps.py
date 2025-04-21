@@ -36,6 +36,15 @@ class FlyAppManager:
         self.org_name = org_name
         self.base_dir = Path(__file__).resolve().parent
 
+    # create the app on fly
+    async def _ensure_app_exists(self, usage_uuid: str) -> None:
+        if not await self.check_app_exists(usage_uuid):
+            logger.info(f"No app found for usage_uuid: {usage_uuid}, Creating app.")
+            await self.create_app(usage_uuid)
+
+        else:
+            logger.info(f"App found for usage_uuid: {usage_uuid}. Skipping creation.")
+
     async def _get_machine_id(self, usage_uuid: str, machine_id: int) -> str | None:
         """Get the machine id for the application."""
         app_name = await get_app_name(usage_uuid)
@@ -108,12 +117,12 @@ class FlyAppManager:
             await get_app_name(usage_uuid),
         )
 
-    async def create_app(self, config: AppConfig) -> None:
+    async def create_app(self, usage_uuid: str) -> None:
         """Create a new Fly.io application."""
-        logger.info(f"Creating app {await get_app_name(config.usage_uuid)}")
+        logger.info(f"Creating app {await get_app_name(usage_uuid)}")
         # Create the app and allocate an IP address
-        await fly_api.apps.create(await get_app_name(config.usage_uuid))
-        await self._allocate_ip_address(config.usage_uuid)
+        await fly_api.apps.create(await get_app_name(usage_uuid))
+        await self._allocate_ip_address(usage_uuid)
 
     async def destroy_app(self, usage_uuid: str) -> None:
         """Delete a Fly.io application."""
@@ -130,6 +139,9 @@ class FlyAppManager:
         region: FlyRegion,
     ) -> str:
         """Create a file system for the application."""
+        # first make sure the app exists, if not create it
+        await self._ensure_app_exists(usage_uuid)
+
         volume_name = await get_app_volume_name(file_system_id)
         logger.info(f"Creating volume {volume_name} for {file_system_id}")
         await fly_api.volumes.create(
@@ -144,12 +156,17 @@ class FlyAppManager:
         fly_volume_id = await get_volume_id(usage_uuid, file_system_id)
         await fly_api.volumes.destroy(await get_app_name(usage_uuid), fly_volume_id)
         await db.file_systems.adelete(file_system_id)
+        # finally clean up the app
+        await self.clean(usage_uuid)
 
     async def create_machine(
         self,
         machine_config: FlyMachineConfig,
     ) -> None:
         """Deploy the application to Fly.io."""
+        # first make sure the app exists, if not create it
+        await self._ensure_app_exists(machine_config.usage_uuid)
+
         logger.info(f"Deploying app {await get_app_name(machine_config.usage_uuid)}")
 
         await db.machines.update_machine_status(
@@ -246,7 +263,7 @@ class FlyAppManager:
         # wait for the machine to be updated
         await self.wait_for_checks(usage_uuid, machine_id)
 
-    async def extend_volume(
+    async def extend_file_system(
         self, usage_uuid: str, file_system_id: int, volume_size: int
     ) -> None:
         """Extend the volume of the application."""
@@ -326,12 +343,11 @@ class FlyAppManager:
             f"cleaning up app {await get_app_name(usage_uuid)}: {len(machines)} machines, {len(volumes)} volumes, {ip_address} ip address"
         )
 
-        if len(machines) == 0:
+        if len(machines) == 0 and len(volumes) == 0:
             await self.destroy_app(usage_uuid)
 
-        # TODO: when we allow the useer to create file systems dynamically, we need to add back in similar logic
-        # elif len(machines) == 0 and ip_address:
-        #     await self.release_ip_address(usage_uuid)
+        elif len(machines) == 0 and ip_address:
+            await self.release_ip_address(usage_uuid)
 
-        # elif len(machines) > 0 and not ip_address:
-        #     await self._allocate_ip_address(usage_uuid)
+        elif len(machines) > 0 and not ip_address:
+            await self._allocate_ip_address(usage_uuid)

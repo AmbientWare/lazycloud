@@ -6,8 +6,8 @@ from loguru import logger
 from machines.api.security import (
     get_current_active_user,
     UserData,
-    require_admin,
     get_user_usage_uuid,
+    check_user_id_request,
 )
 from machines.database import db
 from machines.database.machines import MachinePydantic, MachineStatus
@@ -17,7 +17,6 @@ from machines.services.fly.schemas import (
     FlyMachineConfig,
     FlyRegion,
     ImageTypes,
-    FlyCommandError,
 )
 from machines.database.file_systems import FileSystemPydantic
 from machines.services.platform.schemas import PlatformOptions
@@ -33,15 +32,7 @@ async def get_machines(
     machine_name: str | None = None,
     current_user: UserData = Depends(get_current_active_user),
 ) -> List[MachinePydantic]:
-    filters = {}
-    if user_id is not None:
-        if not await require_admin(current_user):
-            raise HTTPException(
-                status_code=403, detail="Only admins can access other users' machines"
-            )
-        filters["user_id"] = user_id
-    else:
-        filters["user_id"] = current_user.user_id
+    filters = {"user_id": await check_user_id_request(user_id, current_user)}
 
     if machine_id is not None:
         filters["id"] = machine_id
@@ -91,13 +82,13 @@ class CreateMachineRequest(BaseModel):
     user_id: Optional[str] = None
     name: str
     public_key: str
+    file_system_id: int
     region: FlyRegion = Field(default=FlyRegion.LAX)
     image: ImageTypes = Field(default=ImageTypes.UBUNTU_22_04)
     cpu: int = Field(default=1)
     memory: int = Field(default=1024)
     volume_size: int = Field(default=10)
     gpu_kind: str | None = Field(default=None)
-    file_system_name: str | None = Field(default=None)
 
 
 @machines_router.post("")
@@ -106,15 +97,7 @@ async def create_machine(
     current_user: UserData = Depends(get_current_active_user),
     usage_uuid: str = Depends(get_user_usage_uuid),
 ):
-    if create_machine_request.user_id:
-        if not require_admin(current_user):
-            raise HTTPException(
-                status_code=403,
-                detail="Only admins can create machines for other users",
-            )
-        user_id = create_machine_request.user_id
-    else:
-        user_id = current_user.user_id
+    user_id = await check_user_id_request(create_machine_request.user_id, current_user)
 
     # make sure the machine name is unique
     found = await db.machines.afind_one(
@@ -124,7 +107,10 @@ async def create_machine(
         }
     )
     if found:
-        raise HTTPException(status_code=400, detail="Machine name already exists")
+        raise HTTPException(
+            status_code=400,
+            detail="Machine name already exists. Please choose a different name.",
+        )
 
     # get the ssh key from the database
     ssh_key = await db.ssh_keys.afind_one(
@@ -136,58 +122,13 @@ async def create_machine(
     if ssh_key is None:
         raise HTTPException(status_code=400, detail="SSH key not found")
 
-    app_config = AppConfig(
-        user_id=user_id,
-        usage_uuid=usage_uuid,
-        public_key=ssh_key.public_key,
+    # get the file_system from our database by name
+    file_system = await db.file_systems.afind_one(
+        filters={
+            "id": create_machine_request.file_system_id,
+            "user_id": user_id,
+        }
     )
-
-    # create the app on fly
-    if not await fly_app_manager.check_app_exists(usage_uuid):
-        print(f"No app found for usage_uuid: {usage_uuid}, Creating app.")
-        try:
-            await fly_app_manager.create_app(app_config)
-
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
-
-    if create_machine_request.file_system_name is None:
-        # create a volume if no file system name is provided
-        try:
-            # first create the file system in our database
-            file_system = await db.file_systems.acreate(
-                FileSystemPydantic(
-                    user_id=user_id,
-                    name=create_machine_request.name + "_fs",
-                    size=create_machine_request.volume_size,
-                    region=create_machine_request.region.value,
-                )
-            )
-
-            # create the volume on fly
-            if file_system is not None and file_system.id is not None:
-                await fly_app_manager.create_file_system(
-                    usage_uuid,
-                    file_system.id,
-                    create_machine_request.volume_size,
-                    create_machine_request.region,
-                )
-
-        except Exception as e:
-            # delete the file system from our database
-            if file_system is not None and file_system.id is not None:
-                await db.file_systems.adelete(file_system.id)
-
-            raise HTTPException(status_code=500, detail=str(e))
-
-    else:
-        # get the file_system from our database by name
-        file_system = await db.file_systems.afind_one(
-            filters={
-                "name": create_machine_request.file_system_name,
-                "user_id": user_id,
-            }
-        )
 
     # make sure the file system exists
     if file_system is None or file_system.id is None:
@@ -204,7 +145,6 @@ async def create_machine(
             cpu_kind="performance",  # TODO: maybe make configurable in the future
             cpu=create_machine_request.cpu,
             memory=create_machine_request.memory,
-            volume_size=create_machine_request.volume_size,
             gpu_kind=create_machine_request.gpu_kind,
             status=MachineStatus.INITIALIZING,
             app_port=app_port,
@@ -246,48 +186,14 @@ async def create_machine(
         except Exception as e:
             logger.error(f"Error deleting machine: {e}")
 
-        # delete the file system from fly
-        if file_system is not None and file_system.id is not None:
-            logger.info(f"Attempting to delete new file system: {file_system.id}")
-            try:
-                await fly_app_manager.destroy_file_system(usage_uuid, file_system.id)
-            except Exception as e:
-                logger.error(f"Error deleting new file system: {e}")
-
     finally:
         await fly_app_manager.clean(usage_uuid)
 
     return new_machine
 
 
-@machines_router.post("/{machine_name}/volumes")
-async def extend_volume(
-    machine_name: str,
-    volume_size: int,
-    current_user: UserData = Depends(get_current_active_user),
-    usage_uuid: str = Depends(get_user_usage_uuid),
-) -> MachinePydantic:
-    """Extend the volume of a machine"""
-    machine = await db.machines.afind_one(
-        filters={"name": machine_name, "user_id": current_user.user_id}
-    )
-    if not machine or machine.id is None:
-        raise HTTPException(status_code=404, detail="Machine not found")
-
-    try:
-        await fly_app_manager.extend_volume(usage_uuid, machine.id, volume_size)
-        machine.volume_size = volume_size
-        await db.machines.aupdate(machine)
-        return machine
-
-    except FlyCommandError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 class ScaleMachineRequest(BaseModel):
+    user_id: Optional[str] = None
     cpu_kind: str | None = None
     cpu: int | None = None
     memory: int | None = None
@@ -301,14 +207,16 @@ async def scale_machine(
     current_user: UserData = Depends(get_current_active_user),
     usage_uuid: str = Depends(get_user_usage_uuid),
 ):
+    user_id = await check_user_id_request(scale_machine_request.user_id, current_user)
+
     try:
         machine = await db.machines.afind_one(
-            filters={"name": machine_name, "user_id": current_user.user_id}
+            filters={"name": machine_name, "user_id": user_id}
         )
         if machine is None or machine.id is None:
             raise HTTPException(status_code=404, detail="Machine not found")
 
-        if machine.user_id != current_user.user_id:
+        if machine.user_id != user_id:
             raise HTTPException(status_code=403, detail="Machine not found")
 
         print(f"Scaling machine with new values: {scale_machine_request}")
@@ -340,12 +248,15 @@ async def scale_machine(
 
 @machines_router.delete("")
 async def delete_machine(
+    user_id: str | None = None,
     machine_id: str | None = None,
     machine_name: str | None = None,
     current_user: UserData = Depends(get_current_active_user),
     usage_uuid: str = Depends(get_user_usage_uuid),
 ) -> MachinePydantic | None:
-    filters = {"user_id": current_user.user_id}
+    user_id = await check_user_id_request(user_id, current_user)
+
+    filters = {"user_id": user_id}
     if machine_id is not None:
         filters["id"] = machine_id
     if machine_name is not None:
@@ -356,20 +267,12 @@ async def delete_machine(
     if machine is None or machine.id is None:
         return None
 
-    if machine.user_id != current_user.user_id:
-        return None
-
     # delete the machine from fly
     try:
         await fly_app_manager.destroy_machine(usage_uuid, machine.id)
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-    # delete the file system if requested
-    # TODO: make configurable in the future
-    if machine.file_system_id is not None:
-        await fly_app_manager.destroy_file_system(usage_uuid, machine.file_system_id)
 
     # finally run cleanup
     await fly_app_manager.clean(usage_uuid)
