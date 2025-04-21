@@ -1,4 +1,6 @@
 import dotenv
+import json
+
 # we load the environment variables from the .env file first so we can use them in rest of the app
 dotenv.load_dotenv()
 
@@ -44,7 +46,7 @@ class AppConfig(BaseModel):
     AWS_ACCESS_KEY_ID: str = os.getenv("AWS_ACCESS_KEY_ID", "")
     AWS_SECRET_ACCESS_KEY: str = os.getenv("AWS_SECRET_ACCESS_KEY", "")
     AWS_REGION: str = os.getenv("AWS_REGION", "")
-    AWS_ROUTE53_ZONE_ID: str = os.getenv("AWS_ROUTE53_ZONE_ID", "")
+    AWS_ROUTE53_ZONES: dict[str, str] = json.loads(os.getenv("AWS_ROUTE53_ZONES", "{}"))
 
     # Stripe Configuration
     STRIPE_SECRET_KEY: str = os.getenv("STRIPE_SECRET_KEY", "")
@@ -67,10 +69,9 @@ class AppConfig(BaseModel):
         "FLY_ORG_NAME",
         "DATABASE_URL",
         "REDIS_URL",
-        "AWS_ACCESS_KEY_ID",
         "AWS_SECRET_ACCESS_KEY",
         "AWS_REGION",
-        "AWS_ROUTE53_ZONE_ID",
+        "AWS_ROUTE53_ZONES",
         "STRIPE_SECRET_KEY",
         "STRIPE_PUBLISHABLE_KEY",
     ]
