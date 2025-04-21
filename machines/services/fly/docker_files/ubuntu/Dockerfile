@@ -31,5 +31,3 @@ COPY ./services/fly/docker_files/ubuntu/docker-entrypoint.d/* ./docker-entrypoin
 EXPOSE 2222
 
 ENTRYPOINT ["./entrypoint"]
-
-CMD ["/usr/sbin/sshd", "-D"]
