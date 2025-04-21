@@ -10,10 +10,13 @@ class Route53Service:
             aws_secret_access_key=app_config.AWS_SECRET_ACCESS_KEY,
             region_name=app_config.AWS_REGION,
         )
-        self.domain = "lazycloud.dev"
+        self._hosted_zones = app_config.AWS_ROUTE53_ZONES
+        # TODO: make this configurable, if we fail to get the zone name, we should try the next one
+        self._hosted_zone = list(self._hosted_zones.keys())[0]
+        self._zone_id = self._hosted_zones[self._hosted_zone]
 
     def get_cname_domain(self, name: str) -> str:
-        return f"{name}.{self.domain}."
+        return f"{name}.{self._hosted_zone}"
 
     async def create_cname_record(self, name: str) -> None:
         """Create a CNAME record for a machine.
@@ -25,7 +28,7 @@ class Route53Service:
         fly_app_name = f"{name}.fly.dev"
         async with self.session.client("route53") as client:  # type: ignore
             await client.change_resource_record_sets(
-                HostedZoneId=app_config.AWS_ROUTE53_ZONE_ID,
+                HostedZoneId=self._zone_id,
                 ChangeBatch={
                     "Changes": [
                         {
@@ -54,7 +57,7 @@ class Route53Service:
         async with self.session.client("route53") as client:  # type: ignore
             try:
                 await client.change_resource_record_sets(
-                    HostedZoneId=app_config.AWS_ROUTE53_ZONE_ID,
+                    HostedZoneId=self._zone_id,
                     ChangeBatch={
                         "Changes": [
                             {
@@ -83,7 +86,7 @@ class Route53Service:
         print(f"Updating CNAME record for {name} to {new_value}")
         async with self.session.client("route53") as client:  # type: ignore
             await client.change_resource_record_sets(
-                HostedZoneId=app_config.AWS_ROUTE53_ZONE_ID,
+                HostedZoneId=self._zone_id,
                 ChangeBatch={
                     "Changes": [
                         {
@@ -105,7 +108,7 @@ class Route53Service:
 
         async with self.session.client("route53") as client:  # type: ignore
             response = await client.list_resource_record_sets(
-                HostedZoneId=app_config.AWS_ROUTE53_ZONE_ID,
+                HostedZoneId=self._zone_id,
                 StartRecordName=dns_name,
                 StartRecordType="CNAME",
             )
