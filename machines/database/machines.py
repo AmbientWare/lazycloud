@@ -29,7 +29,6 @@ class MachineTable(BaseTable):
     cpu = Column(Integer, nullable=False)
     gpu_kind = Column(String, nullable=True)
     memory = Column(Integer, nullable=False)
-    volume_size = Column(Integer, nullable=False)
     status = Column(String, nullable=False)
     app_port = Column(Integer, nullable=False)
     file_system_id = Column(Integer, ForeignKey("file_systems.id"), nullable=False)
@@ -46,7 +45,6 @@ class MachinePydantic(BaseModel):
     gpu_kind: str | None = None
     memory: int
     status: MachineStatus
-    volume_size: int
     app_port: int
     file_system_id: int
 

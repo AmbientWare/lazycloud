@@ -1,11 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
-from machines.api.security import require_admin
+from machines.api.security import (
+    require_admin,
+    check_user_id_request,
+    get_current_active_user,
+)
 from machines.database import db
 from machines.database.ssh_keys import SshKeyPydantic
-from machines.api.security import get_current_active_user, require_admin
 from machines.api.security import UserData
 
 ssh_keys_router = APIRouter(prefix="/ssh-keys", tags=["ssh-keys"])
@@ -19,16 +22,7 @@ async def get_ssh_keys(
     user_id: Optional[str] = None,
     current_user: UserData = Depends(get_current_active_user),
 ) -> List[SshKeyPydantic]:
-    # check if user is admin
-    if user_id:
-        if not await require_admin(current_user):
-            # only admins can access other users' ssh keys
-            raise HTTPException(
-                status_code=403, detail="You are not authorized to access this resource"
-            )
-    else:
-        user_id = current_user.user_id
-
+    user_id = await check_user_id_request(user_id, current_user)
     ssh_keys = await db.ssh_keys.afind(filters={"user_id": user_id})
 
     return ssh_keys
@@ -46,17 +40,7 @@ async def create_ssh_key(
     current_user: UserData = Depends(get_current_active_user),
 ) -> SshKeyPydantic:
     # create a new api key that expires at the requested time
-    if request.user_id:
-        if not await require_admin(current_user):
-            # only admins can create ssh keys for other users
-            raise HTTPException(
-                status_code=403,
-                detail="You are not authorized to create ssh keys for other users",
-            )
-        user_id = request.user_id
-
-    else:
-        user_id = current_user.user_id
+    user_id = await check_user_id_request(request.user_id, current_user)
 
     ssh_key = SshKeyPydantic(
         name=request.name,
@@ -80,27 +64,15 @@ async def delete_ssh_keys(
     request: DeleteSshKeyRequest,
     current_user: UserData = Depends(get_current_active_user),
 ) -> List[SshKeyPydantic]:
-    if request.user_id:
-        if not await require_admin(current_user):
-            # only admins can delete ssh keys for other users
-            raise HTTPException(
-                status_code=403,
-                detail="You are not authorized to delete ssh keys for other users",
-            )
+    user_id = await check_user_id_request(request.user_id, current_user)
 
-    else:
-        user_id = current_user.user_id
-
-    filters = {}
-    if request.ssh_key_id:
+    filters: Dict[str, Any] = {"user_id": user_id}
+    if request.ssh_key_id is not None:
         filters["id"] = request.ssh_key_id
-    if request.user_id:
-        filters["user_id"] = request.user_id
 
     ssh_keys = await db.ssh_keys.afind(filters=filters)
 
     for ssh_key in ssh_keys:
-        print(ssh_key)
         if ssh_key.id is not None:
             await db.ssh_keys.adelete(ssh_key.id)
 

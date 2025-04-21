@@ -1,0 +1,143 @@
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+from typing import List, Optional, Dict, Any
+
+from machines.api.security import (
+    check_user_id_request,
+    get_user_usage_uuid,
+    get_current_active_user,
+    UserData,
+)
+from machines.database import db
+from machines.database.file_systems import FileSystemPydantic
+from machines.services.fly.schemas import FlyRegion
+from machines.services import fly_app_manager
+
+file_systems_router = APIRouter(prefix="/file-systems", tags=["file-systems"])
+
+
+@file_systems_router.get("")
+async def get_file_systems(
+    user_id: Optional[str] = None,
+    id: Optional[int] = None,
+    name: Optional[str] = None,
+    current_user: UserData = Depends(get_current_active_user),
+) -> List[FileSystemPydantic]:
+    user_id = await check_user_id_request(user_id, current_user)
+
+    filters: Dict[str, Any] = {"user_id": user_id}
+    if id:
+        filters["id"] = id
+    if name:
+        filters["name"] = name
+
+    file_systems = await db.file_systems.afind(filters=filters)
+
+    return file_systems
+
+
+class CreateFileSystemRequest(BaseModel):
+    user_id: Optional[str] = None
+    name: str
+    size: int
+    region: FlyRegion
+
+
+@file_systems_router.post("")
+async def create_file_system(
+    request: CreateFileSystemRequest,
+    current_user: UserData = Depends(get_current_active_user),
+    usage_uuid: str = Depends(get_user_usage_uuid),
+) -> FileSystemPydantic:
+    user_id = await check_user_id_request(request.user_id, current_user)
+
+    try:
+        # first create the file system in our database
+        file_system = await db.file_systems.acreate(
+            FileSystemPydantic(
+                user_id=user_id,
+                name=request.name,
+                size=request.size,
+                region=request.region.value,
+            )
+        )
+
+        # create the volume on fly
+        if file_system is not None and file_system.id is not None:
+            await fly_app_manager.create_file_system(
+                usage_uuid,
+                file_system.id,
+                request.size,
+                request.region,
+            )
+
+    except Exception as e:
+        # delete the file system from our database
+        if file_system is not None and file_system.id is not None:
+            await db.file_systems.adelete(file_system.id)
+
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return file_system
+
+
+class ExtendFileSystemRequest(BaseModel):
+    user_id: Optional[str] = None
+    size: int
+    id: int
+
+
+@file_systems_router.put("")
+async def extend_file_system(
+    request: ExtendFileSystemRequest,
+    current_user: UserData = Depends(get_current_active_user),
+    usage_uuid: str = Depends(get_user_usage_uuid),
+) -> FileSystemPydantic:
+    user_id = await check_user_id_request(request.user_id, current_user)
+
+    """Extend the volume of a file system"""
+    file_system = await db.file_systems.afind_one(
+        filters={"id": request.id, "user_id": user_id}
+    )
+    if not file_system or file_system.id is None:
+        raise HTTPException(status_code=404, detail="File system not found")
+
+    try:
+        await fly_app_manager.extend_file_system(
+            usage_uuid, file_system.id, request.size
+        )
+        file_system.size = request.size
+        await db.file_systems.aupdate(file_system)
+
+        return file_system
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class DeleteFileSystemRequest(BaseModel):
+    id: int
+    user_id: Optional[str] = None
+
+
+@file_systems_router.delete("")
+async def delete_file_systems(
+    request: DeleteFileSystemRequest,
+    current_user: UserData = Depends(get_current_active_user),
+    usage_uuid: str = Depends(get_user_usage_uuid),
+) -> FileSystemPydantic | None:
+    user_id = await check_user_id_request(request.user_id, current_user)
+
+    filters: Dict[str, Any] = {"user_id": user_id}
+    if request.id:
+        filters["id"] = request.id
+
+    file_system = await db.file_systems.afind_one(filters=filters)
+
+    if file_system is None or file_system.id is None:
+        raise HTTPException(status_code=404, detail="File system not found")
+
+    # remove the volume from fly
+    await fly_app_manager.destroy_file_system(usage_uuid, file_system.id)
+
+    return file_system

@@ -16,6 +16,7 @@ from machines.api.v1.users import users_router
 from machines.api.v1.api_keys import api_keys_router
 from machines.api.v1.ssh_keys import ssh_keys_router
 from machines.api.v1.pricing import pricing_router
+from machines.api.v1.file_systems import file_systems_router
 
 # import other modules
 from machines.database.crud import create_tables, update_admin_api_keys
@@ -71,6 +72,7 @@ versionsed_routes.include_router(users_router)
 versionsed_routes.include_router(api_keys_router)
 versionsed_routes.include_router(pricing_router)
 versionsed_routes.include_router(ssh_keys_router)
+versionsed_routes.include_router(file_systems_router)
 app.include_router(versionsed_routes)
 
 # include non versioned routes that are not part of the main api
