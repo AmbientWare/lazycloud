@@ -23,7 +23,7 @@ class Route53Service:
         """
         print(f"Creating CNAME record for {name}")
         fly_app_name = f"{name}.fly.dev"
-        async with self.session.client("route53") as client:
+        async with self.session.client("route53") as client:  # type: ignore
             await client.change_resource_record_sets(
                 HostedZoneId=app_config.AWS_ROUTE53_ZONE_ID,
                 ChangeBatch={
@@ -51,23 +51,27 @@ class Route53Service:
         if not current_record:
             return
 
-        async with self.session.client("route53") as client:
-            await client.change_resource_record_sets(
-                HostedZoneId=app_config.AWS_ROUTE53_ZONE_ID,
-                ChangeBatch={
-                    "Changes": [
-                        {
-                            "Action": "DELETE",
-                            "ResourceRecordSet": {
-                                "Name": self.get_cname_domain(name),
-                                "Type": "CNAME",
-                                "TTL": 300,
-                                "ResourceRecords": [{"Value": current_record}],
-                            },
-                        }
-                    ]
-                },
-            )
+        async with self.session.client("route53") as client:  # type: ignore
+            try:
+                await client.change_resource_record_sets(
+                    HostedZoneId=app_config.AWS_ROUTE53_ZONE_ID,
+                    ChangeBatch={
+                        "Changes": [
+                            {
+                                "Action": "DELETE",
+                                "ResourceRecordSet": {
+                                    "Name": self.get_cname_domain(name),
+                                    "Type": "CNAME",
+                                    "TTL": 300,
+                                    "ResourceRecords": [{"Value": current_record}],
+                                },
+                            }
+                        ]
+                    },
+                )
+            except client.exceptions.InvalidChangeBatch:
+                # Record doesn't exist, which is fine since we want to delete it anyway
+                return
 
     async def update_cname_record(self, name: str, new_value: str) -> None:
         """Update a CNAME record for a machine.
@@ -77,7 +81,7 @@ class Route53Service:
             new_value: new value for the CNAME record
         """
         print(f"Updating CNAME record for {name} to {new_value}")
-        async with self.session.client("route53") as client:
+        async with self.session.client("route53") as client:  # type: ignore
             await client.change_resource_record_sets(
                 HostedZoneId=app_config.AWS_ROUTE53_ZONE_ID,
                 ChangeBatch={
@@ -99,7 +103,7 @@ class Route53Service:
         # Format the DNS name as a subdomain of the hosted zone
         dns_name = self.get_cname_domain(name)
 
-        async with self.session.client("route53") as client:
+        async with self.session.client("route53") as client:  # type: ignore
             response = await client.list_resource_record_sets(
                 HostedZoneId=app_config.AWS_ROUTE53_ZONE_ID,
                 StartRecordName=dns_name,
