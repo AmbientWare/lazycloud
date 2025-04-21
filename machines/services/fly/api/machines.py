@@ -84,7 +84,7 @@ class MachinesAPI(BaseFlyAPI):
                 ],
                 "checks": {
                     "ssh_check": {
-                        "grace_period": "60s",
+                        "grace_period": "40s",
                         "type": "tcp",
                         "port": 2222,
                         "interval": "30s",
