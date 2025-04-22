@@ -1,27 +1,24 @@
 import asyncio
 import time
 from pathlib import Path
-import json
 from loguru import logger
 
 from machines.config import app_config
 from machines.services.fly.schemas import (
-    AppConfig,
     FlyMachineConfig,
     RESOURCE_MAP,
 )
 from machines.services.fly.utils import (
-    run_async_command,
     get_app_name,
     get_machine_name,
     get_app_volume_name,
-    get_volume_id,
+    get_fly_volume_id,
 )
-from machines.services.aws.route53 import Route53Service
 from machines.database import db
 from machines.database.machines import MachineStatus
 from machines.services.fly.schemas import FlyRegion
 from machines.services.fly.api import fly_api
+from machines.database.file_systems import FileSystemPydantic
 
 
 class FlyAppManager:
@@ -32,7 +29,6 @@ class FlyAppManager:
             org_name: The Fly.io organization name
             base_dir: The base directory for app files. Defaults to the directory containing this file.
         """
-        self.route_53 = Route53Service()
         self.org_name = org_name
         self.base_dir = Path(__file__).resolve().parent
 
@@ -63,19 +59,6 @@ class FlyAppManager:
         app = await fly_api.apps.get(app_name)
         return app is not None
 
-    async def _get_allocated_ip_address(self, usage_uuid: str) -> str | None:
-        """Get the allocated IP address for the application."""
-        app_name = await get_app_name(usage_uuid)
-        response = await run_async_command(
-            ["fly", "ips", "list", "--app", app_name, "--json"],
-            print_output=False,
-        )
-        ips = json.loads(response.stdout)
-        if len(ips) > 0:
-            return ips[0].get("Address")
-
-        return None
-
     async def get_volume_info(
         self, usage_uuid: str, volume_id: int
     ) -> tuple[int | None, str | None]:
@@ -88,47 +71,18 @@ class FlyAppManager:
 
         return None, None
 
-    async def _allocate_ip_address(self, usage_uuid: str) -> None:
-        """Allocate an IP address for the application."""
-        app_name = await get_app_name(usage_uuid)
-        await run_async_command(
-            ["fly", "ips", "allocate-v4", "--app", app_name, "--yes"]
-        )
-
-        # now try to add a CNAME record to the app in Route53
-        try:
-            await self.route_53.create_cname_record(
-                await get_app_name(usage_uuid),
-            )
-
-        except Exception as e:
-            raise e
-
-    async def release_ip_address(self, usage_uuid: str) -> None:
-        """Release an IP address for the application."""
-        app_name = await get_app_name(usage_uuid)
-        ip_address = await self._get_allocated_ip_address(usage_uuid)
-        if ip_address:
-            await run_async_command(
-                ["fly", "ips", "release", ip_address, "--app", app_name]
-            )
-
-        await self.route_53.delete_cname_record(
-            await get_app_name(usage_uuid),
-        )
-
     async def create_app(self, usage_uuid: str) -> None:
         """Create a new Fly.io application."""
         logger.info(f"Creating app {await get_app_name(usage_uuid)}")
         # Create the app and allocate an IP address
         await fly_api.apps.create(await get_app_name(usage_uuid))
-        await self._allocate_ip_address(usage_uuid)
+        await fly_api.apps._allocate_ip_address(usage_uuid)
 
     async def destroy_app(self, usage_uuid: str) -> None:
         """Delete a Fly.io application."""
         logger.info(f"Deleting app {await get_app_name(usage_uuid)}")
         # also release the IP address as this also deletes the CNAME record
-        await self.release_ip_address(usage_uuid)
+        await fly_api.apps.release_ip_address(usage_uuid)
         await fly_api.apps.destroy(await get_app_name(usage_uuid))
 
     async def create_file_system(
@@ -153,11 +107,65 @@ class FlyAppManager:
     async def destroy_file_system(self, usage_uuid: str, file_system_id: int) -> None:
         """Destroy a file system for the application."""
         logger.info(f"Destroying file system for {file_system_id}")
-        fly_volume_id = await get_volume_id(usage_uuid, file_system_id)
-        await fly_api.volumes.destroy(await get_app_name(usage_uuid), fly_volume_id)
-        await db.file_systems.adelete(file_system_id)
-        # finally clean up the app
-        await self.clean(usage_uuid)
+        try:
+            fly_volume_id = await get_fly_volume_id(usage_uuid, file_system_id)
+            if fly_volume_id:
+                await fly_api.volumes.destroy(
+                    await get_app_name(usage_uuid), fly_volume_id
+                )
+        except Exception as e:
+            logger.error(f"Error destroying file system {file_system_id}: {e}")
+
+        try:
+            await db.file_systems.adelete(file_system_id)
+            # finally clean up the app
+            await self.clean(usage_uuid)
+        except Exception as e:
+            logger.error(f"Error destroying file system {file_system_id}: {e}")
+            raise e
+
+    async def duplicate_file_system(
+        self,
+        usage_uuid: str,
+        file_system: FileSystemPydantic,
+        new_file_system_name: str,
+    ) -> FileSystemPydantic:
+        """Duplicate a file system for the application."""
+        if not file_system or file_system.id is None:
+            raise ValueError(f"File system {file_system.id} not found")
+
+        logger.info(f"Duplicating file system for {file_system.id}")
+        current_volume_id = await get_fly_volume_id(usage_uuid, file_system.id)
+        if current_volume_id is None:
+            raise ValueError(f"File system {file_system.id} not found on fly.")
+
+        # now create a new file system in the database
+        new_file_system = await db.file_systems.acreate(
+            FileSystemPydantic(
+                user_id=file_system.user_id,
+                name=new_file_system_name,
+                size=file_system.size,
+                region=file_system.region,
+            )
+        )
+
+        if new_file_system.id is None or new_file_system.id == file_system.id:
+            raise ValueError(f"Failed to create new file system")
+
+        try:
+            new_fly_volume_name = await get_app_volume_name(new_file_system.id)
+            await fly_api.volumes.fork(
+                await get_app_name(usage_uuid),
+                current_volume_id,
+                new_fly_volume_name,
+            )
+
+        except Exception as e:
+            logger.error(f"Error duplicating file system {file_system.id}: {e}")
+            await db.file_systems.adelete(new_file_system.id)
+            raise e
+
+        return new_file_system
 
     async def create_machine(
         self,
@@ -271,9 +279,13 @@ class FlyAppManager:
             f"Extending volume of app {await get_app_name(usage_uuid)} to {volume_size}GB"
         )
 
+        volume_id = await get_fly_volume_id(usage_uuid, file_system_id)
+        if volume_id is None:
+            raise ValueError(f"File system {file_system_id} not found on fly.")
+
         await fly_api.volumes.extend(
             app_name=await get_app_name(usage_uuid),
-            volume_id=await get_volume_id(usage_uuid, file_system_id),
+            volume_id=volume_id,
             size=volume_size,
         )
 
@@ -318,7 +330,7 @@ class FlyAppManager:
         """
         machines = await db.machines.afind(filters={"usage_uuid": usage_uuid})
         volumes = await db.file_systems.afind(filters={"usage_uuid": usage_uuid})
-        ip_address = await self._get_allocated_ip_address(usage_uuid)
+        ip_address = await fly_api.apps.get_allocated_ip_address(usage_uuid)
 
         # get volumes from fly, we will destroy any volumes that are not in the database
         fly_volumes = await fly_api.volumes.list(await get_app_name(usage_uuid))
@@ -347,7 +359,7 @@ class FlyAppManager:
             await self.destroy_app(usage_uuid)
 
         elif len(machines) == 0 and ip_address:
-            await self.release_ip_address(usage_uuid)
+            await fly_api.apps.release_ip_address(usage_uuid)
 
         elif len(machines) > 0 and not ip_address:
-            await self._allocate_ip_address(usage_uuid)
+            await fly_api.apps._allocate_ip_address(usage_uuid)

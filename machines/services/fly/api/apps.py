@@ -1,12 +1,18 @@
 from tenacity import retry, stop_after_attempt, wait_exponential
+import json
 
 from machines.services.fly.api.base import BaseFlyAPI
 from machines.config import app_config
+from machines.services.fly.utils import run_async_command, get_app_name
+from machines.services.aws.route53 import Route53Service
+
+# NOTE: anything useing the fly cli is not currently available in the fly api
 
 
 class AppsAPI(BaseFlyAPI):
     def __init__(self):
         super().__init__()
+        self._route_53 = Route53Service()
 
     @retry(
         stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=15)
@@ -44,3 +50,45 @@ class AppsAPI(BaseFlyAPI):
     async def destroy(self, app_name: str) -> None:
         url = f"/{app_name}"
         await self._delete(url)
+
+    async def _allocate_ip_address(self, usage_uuid: str) -> None:
+        """Allocate an IP address for the application."""
+        app_name = await get_app_name(usage_uuid)
+        await run_async_command(
+            ["fly", "ips", "allocate-v4", "--app", app_name, "--yes"]
+        )
+
+        # now try to add a CNAME record to the app in Route53
+        try:
+            await self._route_53.create_cname_record(
+                await get_app_name(usage_uuid),
+            )
+
+        except Exception as e:
+            raise e
+
+    async def get_allocated_ip_address(self, usage_uuid: str) -> str | None:
+        """Get the allocated IP address for the application."""
+        app_name = await get_app_name(usage_uuid)
+        response = await run_async_command(
+            ["fly", "ips", "list", "--app", app_name, "--json"],
+            print_output=False,
+        )
+        ips = json.loads(response.stdout)
+        if len(ips) > 0:
+            return ips[0].get("Address")
+
+        return None
+
+    async def release_ip_address(self, usage_uuid: str) -> None:
+        """Release an IP address for the application."""
+        app_name = await get_app_name(usage_uuid)
+        ip_address = await self.get_allocated_ip_address(usage_uuid)
+        if ip_address:
+            await run_async_command(
+                ["fly", "ips", "release", ip_address, "--app", app_name]
+            )
+
+        await self._route_53.delete_cname_record(
+            await get_app_name(usage_uuid),
+        )

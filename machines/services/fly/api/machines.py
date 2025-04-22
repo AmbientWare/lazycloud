@@ -1,4 +1,3 @@
-import asyncio
 from pydantic import BaseModel
 from tenacity import retry, stop_after_attempt, wait_exponential
 from loguru import logger
@@ -7,7 +6,7 @@ from machines.services.fly.api.base import BaseFlyAPI
 from machines.services.fly.schemas import FlyMachineConfig, IMAGE_MAP
 from machines.services.fly.utils import (
     get_machine_name,
-    get_volume_id,
+    get_fly_volume_id,
 )
 
 
@@ -53,7 +52,7 @@ class MachinesAPI(BaseFlyAPI):
     )
     async def create(self, app_name: str, machine_config: FlyMachineConfig) -> None:
         machine_name = await get_machine_name(machine_config.machine_id)
-        volume_id = await get_volume_id(
+        volume_id = await get_fly_volume_id(
             machine_config.usage_uuid, machine_config.file_system_id
         )
 

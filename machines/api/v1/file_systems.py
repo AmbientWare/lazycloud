@@ -81,6 +81,37 @@ async def create_file_system(
     return file_system
 
 
+class DuplicateFileSystemRequest(BaseModel):
+    user_id: Optional[str] = None
+    id: int
+    name: str
+
+
+@file_systems_router.post("/duplicate")
+async def duplicate_file_system(
+    request: DuplicateFileSystemRequest,
+    current_user: UserData = Depends(get_current_active_user),
+    usage_uuid: str = Depends(get_user_usage_uuid),
+) -> FileSystemPydantic:
+    user_id = await check_user_id_request(request.user_id, current_user)
+
+    file_system = await db.file_systems.afind_one(
+        filters={"id": request.id, "user_id": user_id}
+    )
+    if not file_system or file_system.id is None:
+        raise HTTPException(status_code=404, detail="File system not found")
+
+    try:
+        new_file_system = await fly_app_manager.duplicate_file_system(
+            usage_uuid, file_system, request.name
+        )
+
+        return new_file_system
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 class ExtendFileSystemRequest(BaseModel):
     user_id: Optional[str] = None
     size: int
