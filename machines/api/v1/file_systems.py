@@ -20,18 +20,27 @@ file_systems_router = APIRouter(prefix="/file-systems", tags=["file-systems"])
 async def get_file_systems(
     user_id: Optional[str] = None,
     id: Optional[int] = None,
-    name: Optional[str] = None,
+    available: bool = False,
     current_user: UserData = Depends(get_current_active_user),
 ) -> List[FileSystemPydantic]:
     user_id = await check_user_id_request(user_id, current_user)
 
     filters: Dict[str, Any] = {"user_id": user_id}
     if id:
+        # add the id to the filters if it is provided
         filters["id"] = id
-    if name:
-        filters["name"] = name
 
     file_systems = await db.file_systems.afind(filters=filters)
+
+    if available:
+        # get all file systems that are not connected to a machine
+        file_systems = await db.file_systems.afind(filters={"user_id": user_id})
+        for file_system in file_systems:
+            machine = await db.machines.afind_one(
+                filters={"file_system_id": file_system.id}
+            )
+            if machine:
+                file_systems.remove(file_system)
 
     return file_systems
 
@@ -89,7 +98,7 @@ async def create_file_system(
 class DuplicateFileSystemRequest(BaseModel):
     user_id: Optional[str] = None
     id: int
-    name: str
+    duplicate_name: str
 
 
 @file_systems_router.post("/duplicate")
@@ -101,7 +110,7 @@ async def duplicate_file_system(
     user_id = await check_user_id_request(request.user_id, current_user)
 
     name_already_exists = await db.file_systems.afind_one(
-        filters={"name": request.name, "user_id": user_id}
+        filters={"name": request.duplicate_name, "user_id": user_id}
     )
     if name_already_exists:
         raise HTTPException(status_code=400, detail="File system name already exists")
@@ -114,7 +123,7 @@ async def duplicate_file_system(
 
     try:
         new_file_system = await fly_app_manager.duplicate_file_system(
-            usage_uuid, file_system, request.name
+            usage_uuid, file_system, request.duplicate_name
         )
 
         return new_file_system
@@ -178,6 +187,14 @@ async def delete_file_systems(
 
     if file_system is None or file_system.id is None:
         raise HTTPException(status_code=404, detail="File system not found")
+
+    # make sure the fs is not connected to a machine
+    machine = await db.machines.afind_one(filters={"file_system_id": file_system.id})
+    if machine:
+        raise HTTPException(
+            status_code=400,
+            detail="File system is connected to a machine. Destroy the machine first.",
+        )
 
     # remove the volume from fly
     await fly_app_manager.destroy_file_system(usage_uuid, file_system.id)

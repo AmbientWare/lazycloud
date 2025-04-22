@@ -1,6 +1,5 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Dict
 
 from machines.services import platform_manager
 from machines.services.platform.platform_manager import (
@@ -8,7 +7,6 @@ from machines.services.platform.platform_manager import (
     Markups,
     PricingTable,
     GPUPricingTable,
-    PlatformOptions,
 )
 from machines.config import app_config
 
@@ -47,15 +45,6 @@ async def get_gpu_pricing() -> GPUPricingTable:
     if not pricing_data.gpu_pricing:
         raise HTTPException(status_code=404, detail="GPU pricing data not found")
     return pricing_data.gpu_pricing
-
-
-@pricing_router.get("/options")
-async def get_platform_options() -> PlatformOptions:
-    """Get available platform options including regions, compute configurations, and GPU models."""
-    try:
-        return await platform_manager.get_platform_options()
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
 
 
 class PriceResponse(BaseModel):
