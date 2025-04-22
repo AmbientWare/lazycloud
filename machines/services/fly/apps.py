@@ -272,6 +272,39 @@ class FlyAppManager:
         # wait for the machine to be updated
         await self.wait_for_checks(usage_uuid, machine_id)
 
+    async def restart_machine(self, usage_uuid: str, machine_id: int) -> None:
+        """Restart the machine."""
+        fly_machine_id = await self._get_machine_id(usage_uuid, machine_id)
+        if not fly_machine_id:
+            raise ValueError(
+                f"Machine {await get_machine_name(machine_id)} not found on fly."
+            )
+
+        await fly_api.machines.restart(
+            app_name=await get_app_name(usage_uuid),
+            machine_id=fly_machine_id,
+        )
+
+        # wait for the machine to be updated
+        await self.wait_for_checks(usage_uuid, machine_id)
+
+    async def auto_stop(self, usage_uuid: str, machine_id: int, enabled: bool) -> None:
+        """Enable or disable auto stop for the machine."""
+        fly_machine_id = await self._get_machine_id(usage_uuid, machine_id)
+        if not fly_machine_id:
+            raise ValueError(
+                f"Machine {await get_machine_name(machine_id)} not found on fly."
+            )
+
+        await fly_api.machines.auto_stop(
+            app_name=await get_app_name(usage_uuid),
+            machine_id=fly_machine_id,
+            enabled=enabled,
+        )
+
+        # wait for the machine to be updated
+        await self.wait_for_checks(usage_uuid, machine_id)
+
     async def extend_file_system(
         self, usage_uuid: str, file_system_id: int, volume_size: int
     ) -> None:

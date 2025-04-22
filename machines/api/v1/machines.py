@@ -190,6 +190,63 @@ async def create_machine(
     return new_machine
 
 
+class RestartMachineRequest(BaseModel):
+    user_id: Optional[str] = None
+
+
+@machines_router.post("/{id}/restart")
+async def restart_machine(
+    id: int,
+    restart_machine_request: RestartMachineRequest,
+    current_user: UserData = Depends(get_current_active_user),
+    usage_uuid: str = Depends(get_user_usage_uuid),
+) -> bool:
+    user_id = await check_user_id_request(restart_machine_request.user_id, current_user)
+
+    # make sure the machine exists and belongs to the user
+    machine = await db.machines.afind_one(filters={"id": id, "user_id": user_id})
+    if machine is None or machine.id is None:
+        raise HTTPException(status_code=404, detail="Machine not found")
+
+    try:
+        await fly_app_manager.restart_machine(usage_uuid, machine.id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return True
+
+
+class EnableMachineAutoStopRequest(BaseModel):
+    enabled: bool
+    user_id: Optional[str] = None
+
+
+@machines_router.post("/{id}/auto-stop")
+async def enable_machine_auto_stop(
+    id: int,
+    enable_machine_auto_stop_request: EnableMachineAutoStopRequest,
+    current_user: UserData = Depends(get_current_active_user),
+    usage_uuid: str = Depends(get_user_usage_uuid),
+) -> bool:
+    user_id = await check_user_id_request(
+        enable_machine_auto_stop_request.user_id, current_user
+    )
+
+    # make sure the machine exists and belongs to the user
+    machine = await db.machines.afind_one(filters={"id": id, "user_id": user_id})
+    if machine is None or machine.id is None:
+        raise HTTPException(status_code=404, detail="Machine not found")
+
+    try:
+        await fly_app_manager.auto_stop(
+            usage_uuid, id, enable_machine_auto_stop_request.enabled
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return True
+
+
 class ScaleMachineRequest(BaseModel):
     user_id: Optional[str] = None
     cpu_kind: str | None = None
