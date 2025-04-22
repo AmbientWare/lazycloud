@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Depends
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 from loguru import logger
 
@@ -25,17 +25,17 @@ machines_router = APIRouter(prefix="/machines", tags=["machines"])
 
 @machines_router.get("")
 async def get_machines(
+    id: int | None = None,
     user_id: str | None = None,
-    machine_id: str | None = None,
-    machine_name: str | None = None,
     current_user: UserData = Depends(get_current_active_user),
 ) -> List[MachinePydantic]:
-    filters = {"user_id": await check_user_id_request(user_id, current_user)}
+    filters: Dict[str, Any] = {
+        "user_id": await check_user_id_request(user_id, current_user)
+    }
 
-    if machine_id is not None:
-        filters["id"] = machine_id
-    if machine_name is not None:
-        filters["name"] = machine_name
+    if id is not None:
+        # add the id to the filters if it is provided
+        filters["id"] = id
 
     """Get a list of machines"""
     machines = await db.machines.afind(filters=filters)
@@ -55,16 +55,16 @@ class MachineAliasResponse(BaseModel):
     port: int
 
 
-@machines_router.get("/alias/{machine_name}")
+@machines_router.get("/{id}/alias")
 async def get_machines_alias(
-    machine_name: str,
+    id: int,
     current_user: UserData = Depends(get_current_active_user),
     usage_uuid: str = Depends(get_user_usage_uuid),
 ) -> MachineAliasResponse:
     """Get a list of machines"""
     # make sure the machine exists
     machine = await db.machines.afind_one(
-        filters={"name": machine_name, "user_id": current_user.user_id}
+        filters={"id": id, "user_id": current_user.user_id}
     )
     if machine is None or machine.id is None:
         raise HTTPException(status_code=404, detail="Machine not found")
@@ -198,9 +198,9 @@ class ScaleMachineRequest(BaseModel):
     region: FlyRegion | None = None
 
 
-@machines_router.put("/{machine_name}")
+@machines_router.put("/{id}")
 async def scale_machine(
-    machine_name: str,
+    id: int,
     scale_machine_request: ScaleMachineRequest,
     current_user: UserData = Depends(get_current_active_user),
     usage_uuid: str = Depends(get_user_usage_uuid),
@@ -208,9 +208,7 @@ async def scale_machine(
     user_id = await check_user_id_request(scale_machine_request.user_id, current_user)
 
     try:
-        machine = await db.machines.afind_one(
-            filters={"name": machine_name, "user_id": user_id}
-        )
+        machine = await db.machines.afind_one(filters={"id": id, "user_id": user_id})
         if machine is None or machine.id is None:
             raise HTTPException(status_code=404, detail="Machine not found")
 
@@ -246,22 +244,15 @@ async def scale_machine(
 
 @machines_router.delete("")
 async def delete_machine(
+    id: int,
     user_id: str | None = None,
-    machine_id: str | None = None,
-    machine_name: str | None = None,
     current_user: UserData = Depends(get_current_active_user),
     usage_uuid: str = Depends(get_user_usage_uuid),
 ) -> MachinePydantic | None:
     user_id = await check_user_id_request(user_id, current_user)
 
-    filters = {"user_id": user_id}
-    if machine_id is not None:
-        filters["id"] = machine_id
-    if machine_name is not None:
-        filters["name"] = machine_name
-
     # get machine from db
-    machine = await db.machines.afind_one(filters=filters)
+    machine = await db.machines.afind_one(filters={"user_id": user_id, "id": id})
     if machine is None or machine.id is None:
         return None
 
