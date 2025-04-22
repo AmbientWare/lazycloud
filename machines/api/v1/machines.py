@@ -13,12 +13,10 @@ from machines.database import db
 from machines.database.machines import MachinePydantic, MachineStatus
 from machines.services import fly_app_manager, platform_manager, route_53
 from machines.services.fly.schemas import (
-    AppConfig,
     FlyMachineConfig,
     FlyRegion,
     ImageTypes,
 )
-from machines.database.file_systems import FileSystemPydantic
 from machines.services.platform.schemas import PlatformOptions
 from machines.services.fly.utils import get_app_name
 

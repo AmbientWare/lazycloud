@@ -2,7 +2,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from loguru import logger
 
 from machines.services.fly.api.base import BaseFlyAPI
-from machines.services.fly.utils import get_volume_id
+from machines.services.fly.utils import get_fly_volume_id, run_async_command
 
 
 class VolumesAPI(BaseFlyAPI):
@@ -21,7 +21,7 @@ class VolumesAPI(BaseFlyAPI):
         stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=15)
     )
     async def get(self, app_name: str, volume_name: str) -> dict | None:
-        volume_id = await get_volume_id(app_name, volume_name=volume_name)
+        volume_id = await get_fly_volume_id(app_name, volume_name=volume_name)
         url = f"/{app_name}/volumes/{volume_id}"
         response = await self._get(url)
         return response
@@ -55,3 +55,17 @@ class VolumesAPI(BaseFlyAPI):
     async def destroy(self, app_name: str, volume_id: str) -> None:
         url = f"/{app_name}/volumes/{volume_id}"
         await self._delete(url)
+
+    async def fork(self, app_name: str, volume_id: str, new_volume_name: str) -> None:
+        await run_async_command(
+            [
+                "fly",
+                "volumes",
+                "fork",
+                volume_id,
+                "--name",
+                new_volume_name,
+                "--app",
+                app_name,
+            ]
+        )

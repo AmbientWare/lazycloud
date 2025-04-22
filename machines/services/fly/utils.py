@@ -28,9 +28,9 @@ async def get_app_volume_name(file_system_id: int) -> str:
     return f"lc_volume_{file_system_id}"
 
 
-async def get_volume_id(
+async def get_fly_volume_id(
     usage_uuid: str, file_system_id: int | None = None, volume_name: str | None = None
-) -> str:
+) -> str | None:
     """Get the volume id for the application."""
     if file_system_id is None and volume_name is None:
         raise ValueError("Either file_system_id or volume_name must be provided")
@@ -55,10 +55,14 @@ async def get_volume_id(
 
     volumes = json.loads(response.stdout)
     for volume in volumes:
-        if volume.get("name") == volume_name:
+        if (
+            volume.get("name") == volume_name
+            and volume.get("status") != "pending_destroy"
+        ):
+            logger.info(f"Found volume {volume_name} with id {volume.get('id')}")
             return volume.get("id")
 
-    raise ValueError(f"Volume {volume_name} not found")
+    return None
 
 
 async def deploying_status_callback(machine_id: int, stdout_line: str) -> None:

@@ -1,16 +1,5 @@
 from enum import Enum
-from dataclasses import dataclass
 from pydantic import BaseModel
-
-
-@dataclass
-class AppConfig:
-    usage_uuid: str
-    user_id: str
-    public_key: str
-
-    def __post_init__(self):
-        self.network = f"network-{self.usage_uuid}"
 
 
 class FlyCommandError(Exception):
