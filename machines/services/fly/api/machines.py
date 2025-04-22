@@ -137,6 +137,35 @@ class MachinesAPI(BaseFlyAPI):
     @retry(
         stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=15)
     )
+    async def restart(self, app_name: str, machine_id: str) -> None:
+        url = f"/{app_name}/machines/{machine_id}/restart"
+
+        # get the current machine config
+        machine = await self.get(app_name, machine_id)
+        if machine is None:
+            raise ValueError(f"Machine {machine_id} not found")
+
+        await self._post(url, json=machine)
+
+    @retry(
+        stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=15)
+    )
+    async def auto_stop(self, app_name: str, machine_id: str, enabled: bool) -> None:
+        url = f"/{app_name}/machines/{machine_id}"
+
+        # get the current machine config
+        machine = await self.get(app_name, machine_id)
+        if machine is None:
+            raise ValueError(f"Machine {machine_id} not found")
+
+        # update the machine config
+        machine["config"]["autostop"] = "suspend" if enabled else None
+
+        await self._post(url, json=machine)
+
+    @retry(
+        stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=15)
+    )
     async def destroy(self, app_name: str, machine_id: str) -> None:
         url = f"/{app_name}/machines/{machine_id}"
         query_params = {"force": True}
