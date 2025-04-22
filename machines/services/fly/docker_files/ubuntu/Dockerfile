@@ -1,17 +1,15 @@
-FROM ubuntu:jammy
+FROM ubuntu:24.04
 
 RUN apt-get update && apt-get install --no-install-recommends -y \
     ca-certificates curl sudo openssh-server bash git apt-utils htop \
     iproute2 apt-transport-https gnupg-agent software-properties-common && \
     apt-get autoremove -y
 
-# Create the user
-RUN test -n ubuntu
-
-# Create your user
-RUN adduser --disabled-password --gecos '' --home /data/home ubuntu
-# passwordless sudo for your user's group
-RUN echo "%ubuntu ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+# Configure the existing ubuntu user
+RUN mkdir -p /data/home && \
+    usermod -d /data/home ubuntu && \
+    chown ubuntu:ubuntu /data/home && \
+    echo "%ubuntu ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 
 ENV USER_ARG=ubuntu
 
