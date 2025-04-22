@@ -1,136 +1,104 @@
+import asyncio
+from typing import Dict, List, Optional, Any, Sequence, cast
+import re
+
 import aiohttp
 from bs4 import BeautifulSoup, Tag
-import re
+from bs4.element import PageElement, ResultSet
 import pandas as pd
-from pprint import pprint
-from typing import Dict, Optional, Any, List
 from pydantic import ValidationError
 from redis.asyncio import Redis
-import asyncio
-import nest_asyncio
 
 from machines.config import app_config
 from machines.services.platform.schemas import (
+    GPUPricingRow,
+    GPUPricingTable,
     Markups,
-    PricingTable,
+    PlatformOptions,
     PricingData,
     PricingRow,
+    PricingTable,
     Region,
-    PlatformOptions,
+    GPUInfo,
 )
+from machines.services.fly.schemas import RESOURCE_MAP, FlyRegion
 
-# This is needed to run asyncio in the main thread
-nest_asyncio.apply()
-
+# Constants
 FLY_PRICING_URL = "https://fly.io/docs/about/pricing/"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
 EWR_TABLE_ID = "started-machines-pricing-matrix-ewr"
 
+# Redis keys
+REDIS_KEYS = {
+    "region_markups": "pricing:region_markups",
+    "pricing_table": "pricing:pricing_table",
+    "gpu_pricing": "pricing:gpu_pricing",
+}
 
-# --- Scraper Class ---
+# GPU name mapping between pricing table and resource map
+GPU_NAME_MAP = {
+    "A10": "a10",
+    "L40S": "l40s",
+    "A100 40G PCIe": "a100-40gb",
+    "A100 80G SXM": "a100-80gb",
+}
+
+
 class PlatformManager:
-    def __init__(self, url: str = FLY_PRICING_URL, user_agent: str = USER_AGENT):
+    def __init__(
+        self,
+        url: str = FLY_PRICING_URL,
+        user_agent: str = USER_AGENT,
+        performance_only: bool = True,
+    ):
+        """Initialize the platform manager.
+
+        Args:
+            url: The URL to scrape pricing data from
+            user_agent: User agent string for HTTP requests
+            performance_only: Whether to only extract performance machine pricing
+        """
         self.url = url
         self.headers = {"User-Agent": user_agent}
+        self.performance_only = performance_only
+
+        # Internal state
         self.soup: Optional[BeautifulSoup] = None
         self._region_markups: Optional[Markups] = None
         self._pricing_table: Optional[PricingTable] = None
-        self._region_markup_key = "pricing:region_markups"
-        self._pricing_table_key = "pricing:pricing_table"
+        self._gpu_pricing: Optional[GPUPricingTable] = None
+
+        # Initialize Redis client
         self._redis_client = Redis.from_url(app_config.REDIS_URL)
-        self.performance_only = True
-        if self._redis_client is None:
+        if not self._redis_client:
             raise RuntimeError("Failed to connect to Redis")
 
-    def _sort_ram_values(self, ram_values: List[int]) -> List[int]:
-        """Sort RAM values from smallest to largest, converting all to MB for comparison."""
+    async def __aenter__(self):
+        """Async context manager entry."""
+        return self
 
-        # Sort based on MB values
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit."""
+        await self.cleanup()
+
+    @staticmethod
+    def _sort_ram_values(ram_values: List[int]) -> List[int]:
+        """Sort RAM values from smallest to largest."""
         return sorted(ram_values)
 
-    async def cleanup(self):
-        """Cleanup async resources."""
+    async def cleanup(self) -> None:
+        """Cleanup Redis connection."""
         if self._redis_client:
             await self._redis_client.aclose()
 
-    async def add_region_markups_to_redis(self):
-        """Add region markups to Redis."""
-        if not self._region_markups:
-            raise ValueError("No region markups found. Call scrape() first.")
-
-        await self._redis_client.set(
-            self._region_markup_key, self._region_markups.model_dump_json()
-        )
-
-    async def add_pricing_table_to_redis(self):
-        """Add pricing table to Redis."""
-        if not self._pricing_table:
-            raise ValueError("No pricing table found. Call scrape() first.")
-
-        await self._redis_client.set(
-            self._pricing_table_key, self._pricing_table.model_dump_json()
-        )
-
-    async def get_region_markups_from_redis(self) -> Markups:
-        """Get region markups from Redis."""
-        if not self._redis_client:
-            raise RuntimeError("Redis client not initialized. Call initialize() first.")
-
-        redis_data = await self._redis_client.get(self._region_markup_key)
-        if redis_data:
-            return Markups.model_validate_json(redis_data.decode("utf-8"))
-
-        raise ValueError("No region markups found in Redis.")
-
-    async def get_pricing_table_from_redis(self) -> PricingTable:
-        """Get pricing table from Redis."""
-        if not self._redis_client:
-            raise RuntimeError("Redis client not initialized. Call initialize() first.")
-
-        redis_data = await self._redis_client.get(self._pricing_table_key)
-        if redis_data:
-            return PricingTable.model_validate_json(redis_data.decode("utf-8"))
-
-        raise ValueError("No pricing table found in Redis.")
-
-    async def get_platform_options(self) -> PlatformOptions:
-        """Get platform options from Redis."""
-        if not self._redis_client:
-            raise RuntimeError("Redis client not initialized. Call initialize() first.")
-
-        markups = await self.get_region_markups_from_redis()
-        pricing_table = await self.get_pricing_table_from_redis()
-
-        regions = [region.region for region in markups.regions]
-
-        # Group rows by preset_group to get unique CPU and RAM options
-        option_dict = {}
-        for row in pricing_table.pricing_rows:
-            if row.cpus not in option_dict:
-                option_dict[row.cpus] = set()
-
-            option_dict[row.cpus].add(row.ram)
-
-        # sort the ram values
-        for num_cpus in option_dict:
-            option_dict[num_cpus] = self._sort_ram_values(list(option_dict[num_cpus]))
-
-        # Convert sets to lists and create PresetGroup objects with sorted RAM values
-        return PlatformOptions(regions=regions, options=option_dict)
-
     async def _fetch_html(self) -> bool:
-        """Fetches HTML content and populates self.soup."""
-        print(f"Fetching data from {self.url}...")
+        """Fetch and parse HTML content."""
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(self.url, headers=self.headers) as response:
                     response.raise_for_status()
                     html_content = await response.text()
-                    print("Successfully fetched page content.")
-                    # Run BeautifulSoup parsing in a thread pool since it's CPU-bound
-                    self.soup = await asyncio.to_thread(
-                        BeautifulSoup, html_content, "html.parser"
-                    )
+                    self.soup = BeautifulSoup(html_content, "html.parser")
                     return True
         except aiohttp.ClientError as e:
             print(f"Error fetching URL {self.url}: {e}")
@@ -138,349 +106,374 @@ class PlatformManager:
             return False
 
     async def _extract_region_markups(self) -> Markups:
-        """Extracts region markups from the script tag in the soup."""
+        """Extract region markup data from HTML."""
         if not self.soup:
-            raise ValueError("Cannot extract region markups, soup is not loaded.")
+            raise ValueError("BeautifulSoup not initialized")
 
-        print("Extracting regionMarkups...")
-        # Run BeautifulSoup operations in a thread pool
-        scripts = await asyncio.to_thread(
-            self.soup.find_all, "script", type="text/javascript"
-        )
-        for script in scripts:
-            if isinstance(script, Tag):
-                script_content = script.string
-            else:
-                continue  # Skip non-Tag elements like NavigableString
+        valid_regions = {region.value for region in FlyRegion}
 
-            if script_content and "const regionMarkups = {" in script_content:
-                match = re.search(
-                    r"const\s+regionMarkups\s*=\s*(\{.*?\});",
-                    script_content,
-                    re.DOTALL | re.MULTILINE,
-                )
-                if match:
-                    markup_string = match.group(1)
-                    try:
-                        markups_raw = re.findall(r'"(\w+)":\s*([\d.]+)', markup_string)
-                        # Convert dict items to Region objects
-                        print(
-                            f"LAZYCLOUD_UPCHARGE set to: {app_config.LAZYCLOUD_UPCHARGE}"
-                        )
-                        regions = [
-                            Region(
-                                region=key,
-                                markup=float(value)
-                                * (1 + app_config.LAZYCLOUD_UPCHARGE),
-                            )
-                            for key, value in markups_raw
-                        ]
-                        print("Successfully extracted and parsed regionMarkups.")
-                        return Markups(regions=regions)
+        for script in self.soup.find_all("script", type="text/javascript"):
+            if not isinstance(script, Tag) or not script.string:
+                continue
 
-                    except (ValidationError, ValueError, TypeError) as e:
-                        print(f"Error parsing/validating regionMarkups object: {e}")
-                        print(f"Attempted to parse string segment: {markup_string}")
+            if "const regionMarkups = {" not in script.string:
+                continue
 
-                else:
-                    print(
-                        "Found script containing 'regionMarkups' but regex failed to match the object."
+            match = re.search(
+                r"const\s+regionMarkups\s*=\s*(\{.*?\});",
+                script.string,
+                re.DOTALL | re.MULTILINE,
+            )
+            if not match:
+                continue
+
+            try:
+                markups_raw = re.findall(r'"(\w+)":\s*([\d.]+)', match.group(1))
+                regions = [
+                    Region(
+                        region=key,
+                        markup=float(value) * (1 + app_config.LAZYCLOUD_UPCHARGE),
                     )
-                    print(
-                        f"Script content sample: {script_content[:200]}..."
-                    )  # Log sample
+                    for key, value in markups_raw
+                    if key in valid_regions
+                ]
+                return Markups(regions=regions)
+            except (ValidationError, ValueError) as e:
+                print(f"Error parsing markups: {e}")
 
-        print("Could not find or parse the regionMarkups script.")
-        raise ValueError("Could not find or parse the regionMarkups script.")
+        raise ValueError("Could not find region markups data")
 
     async def _extract_pricing_table(self) -> PricingTable:
-        """Extracts pricing data from the specified table ID into Pydantic models."""
+        """Extract machine pricing data from HTML."""
         if not self.soup:
-            raise ValueError("Cannot extract EWR pricing, soup is not loaded.")
+            raise ValueError("BeautifulSoup not initialized")
 
-        print(f"Extracting pricing table...")
-        pricing_table_data_models = PricingTable(pricing_rows=[])
+        pricing_rows = []
+        table_div = self.soup.find("div", id=EWR_TABLE_ID)
+        if not table_div or not isinstance(table_div, Tag):
+            raise ValueError(f"Could not find pricing table with id '{EWR_TABLE_ID}'")
 
-        # Run BeautifulSoup operations in a thread pool
-        table_div = await asyncio.to_thread(self.soup.find, "div", id=EWR_TABLE_ID)
+        table = table_div.find("table")
+        if not table or not isinstance(table, Tag):
+            raise ValueError("Could not find pricing table")
 
-        if not table_div:
-            print(f"Could not find the container div with id '{EWR_TABLE_ID}'")
-            return pricing_table_data_models
+        tbody = table.find("tbody")
+        if not tbody or not isinstance(tbody, Tag):
+            raise ValueError("Could not find pricing table body")
 
-        assert isinstance(table_div, Tag)
+        current_machine_type = None
+        current_cpus = None
 
-        html_table = await asyncio.to_thread(table_div.find, "table")
-        if not html_table:
-            print(f"Found div with id '{EWR_TABLE_ID}', but no table inside.")
-            return pricing_table_data_models
-
-        assert isinstance(html_table, Tag)
-
-        tbody = await asyncio.to_thread(html_table.find, "tbody")
-        if not tbody:
-            print(f"Could not find tbody in table '{EWR_TABLE_ID}'")
-            return pricing_table_data_models
-        assert isinstance(tbody, Tag)
-
-        rows = await asyncio.to_thread(tbody.find_all, "tr")
-        if not rows:
-            print(f"No rows found in tbody for table '{EWR_TABLE_ID}'")
-            return pricing_table_data_models
-
-        current_machine_type: Optional[str] = None
-        current_cpus: Optional[str] = None
-
-        for i, row in enumerate(rows):
+        for row in tbody.find_all("tr"):
             if not isinstance(row, Tag):
                 continue
 
-            cells = await asyncio.to_thread(row.find_all, ["th", "td"])
-            if not cells:
-                continue  # Skip empty rows
-
-            first_cell = cells[0]
-            if not isinstance(first_cell, Tag):
+            cells = cast(List[Tag], row.find_all(["th", "td"]))
+            if not cells or not isinstance(cells[0], Tag):
                 continue
 
-            raw_row_data: Dict[str, Any] = {}
             try:
-                if first_cell.name == "th" and first_cell.has_attr("rowspan"):
-                    current_machine_type = await asyncio.to_thread(
-                        first_cell.get_text, strip=True
-                    )
-                    if len(cells) >= 6:
-                        current_cpus = await asyncio.to_thread(
-                            cells[1].get_text, strip=True
-                        )
-                        if (
-                            self.performance_only
-                            and "performance" not in current_machine_type.lower()
-                        ):
-                            # skip if we are only getting performance pricing and this row is not a performance machine
-                            continue
+                pricing_row = self._parse_pricing_row(
+                    cells, current_machine_type, current_cpus
+                )
+                if pricing_row:
+                    if isinstance(cells[0], Tag) and cells[0].name == "th":
+                        current_machine_type = pricing_row.preset_group
+                        current_cpus = str(pricing_row.cpus)
+                    pricing_rows.append(pricing_row)
+            except (ValueError, ValidationError) as e:
+                print(f"Error parsing row: {e}")
+                continue
 
-                        # only grab the number of cpus from the current_cpus string
-                        # example: "2 CPUs" -> "2"
-                        cpu_count = current_cpus.split(" ")[0]
-                        try:
-                            cpu_value = int(cpu_count)
-                        except ValueError:
-                            raise ValueError(
-                                f"Invalid CPU format: {current_cpus}. Expected format: 'N CPUs'"
-                            )
+        if not pricing_rows:
+            raise ValueError("No valid pricing data extracted")
 
-                        # Extract RAM value and units from format like "2GB", "128GB"
-                        ram_text = await asyncio.to_thread(
-                            cells[2].get_text, strip=True
-                        )
-                        # Use regex to separate number and unit
-                        ram_match = re.match(r"(\d+)([A-Za-z]+)", ram_text)
-                        if not ram_match:
-                            raise ValueError(
-                                f"Invalid RAM format: {ram_text}. Expected format: 'N[GB|TB]'"
-                            )
+        return PricingTable(pricing_rows=pricing_rows)
 
-                        ram_value = int(ram_match.group(1))
-                        ram_units = ram_match.group(2)
+    def _parse_pricing_row(
+        self,
+        cells: Sequence[Tag],
+        current_machine_type: Optional[str],
+        current_cpus: Optional[str],
+    ) -> Optional[PricingRow]:
+        """Parse a single pricing table row."""
+        first_cell = cells[0]
 
-                        # Validate RAM units
-                        if ram_units not in ["MB", "GB", "TB"]:
-                            raise ValueError(
-                                f"Invalid RAM unit: {ram_units}. Expected: MB, GB, or TB"
-                            )
+        # Handle header rows
+        if (
+            isinstance(first_cell, Tag)
+            and first_cell.name == "th"
+            and first_cell.has_attr("rowspan")
+        ):
+            if len(cells) < 6:
+                return None
 
-                        # Validate price formats
-                        price_sec = await asyncio.to_thread(
-                            cells[3].get_text, strip=True
-                        )
-                        price_hour = await asyncio.to_thread(
-                            cells[4].get_text, strip=True
-                        )
-                        price_month = await asyncio.to_thread(
-                            cells[5].get_text, strip=True
-                        )
+            machine_type = first_cell.get_text(strip=True)
+            if self.performance_only and "performance" not in machine_type.lower():
+                return None
 
-                        # Check if at least one price is present
-                        if not any([price_sec, price_hour, price_month]):
-                            raise ValueError(
-                                f"No valid prices found for {current_machine_type} with {cpu_value} CPUs"
-                            )
+            cpu_count = cells[1].get_text(strip=True).split()[0]
+            ram_text = cells[2].get_text(strip=True)
 
-                        raw_row_data = {
-                            "preset_group": current_machine_type,
-                            "cpus": cpu_value,
-                            "ram": ram_value,
-                            "ram_units": ram_units,
-                            "price_sec": price_sec,
-                            "price_hour": price_hour,
-                            "price_month": price_month,
-                        }
-                    else:
-                        print(
-                            f"Warning: Row {i+1}: Machine type row has unexpected cell count: {[await asyncio.to_thread(c.get_text, strip=True) for c in cells]}"
-                        )
-                        current_cpus = None
-                        continue
+            return self._create_pricing_row(
+                machine_type,
+                cpu_count,
+                ram_text,
+                cells[3].get_text(strip=True),
+                cells[4].get_text(strip=True),
+                cells[5].get_text(strip=True),
+            )
 
-                elif (
-                    first_cell.name == "td"
-                    and current_machine_type
-                    and current_cpus
-                    and self.performance_only
-                    and "performance" in current_machine_type.lower()
-                ):
-                    if len(cells) >= 4:
-                        # Extract RAM value and units from format like "2GB", "128GB"
-                        ram_text = await asyncio.to_thread(
-                            cells[-4].get_text, strip=True
-                        )
-                        # Use regex to separate number and unit
-                        ram_match = re.match(r"(\d+)([A-Za-z]+)", ram_text)
-                        if not ram_match:
-                            raise ValueError(
-                                f"Invalid RAM format: {ram_text}. Expected format: 'N[GB|TB]'"
-                            )
+        # Handle data rows
+        elif (
+            isinstance(first_cell, Tag)
+            and first_cell.name == "td"
+            and current_machine_type
+            and current_cpus
+            and (
+                not self.performance_only
+                or "performance" in current_machine_type.lower()
+            )
+        ):
+            if len(cells) < 4:
+                return None
 
-                        ram_value = int(ram_match.group(1))
-                        ram_units = ram_match.group(2)
+            ram_text = cells[-4].get_text(strip=True)
+            return self._create_pricing_row(
+                current_machine_type,
+                current_cpus,
+                ram_text,
+                cells[-3].get_text(strip=True),
+                cells[-2].get_text(strip=True),
+                cells[-1].get_text(strip=True),
+            )
 
-                        # Validate RAM units
-                        if ram_units not in ["MB", "GB", "TB"]:
-                            raise ValueError(
-                                f"Invalid RAM unit: {ram_units}. Expected: MB, GB, or TB"
-                            )
+        return None
 
-                        # Validate price formats
-                        price_sec = await asyncio.to_thread(
-                            cells[-3].get_text, strip=True
-                        )
-                        price_hour = await asyncio.to_thread(
-                            cells[-2].get_text, strip=True
-                        )
-                        price_month = await asyncio.to_thread(
-                            cells[-1].get_text, strip=True
-                        )
+    @staticmethod
+    def _create_pricing_row(
+        machine_type: str,
+        cpu_count: str,
+        ram_text: str,
+        price_sec: str,
+        price_hour: str,
+        price_month: str,
+    ) -> PricingRow:
+        """Create a PricingRow from raw values."""
+        try:
+            cpu_value = int(cpu_count)
+        except ValueError:
+            raise ValueError(f"Invalid CPU format: {cpu_count}")
 
-                        # Check if at least one price is present
-                        if not any([price_sec, price_hour, price_month]):
-                            raise ValueError(
-                                f"No valid prices found for {current_machine_type} with {cpu_count} CPUs"
-                            )
+        ram_match = re.match(r"(\d+)([A-Za-z]+)", ram_text)
+        if not ram_match:
+            raise ValueError(f"Invalid RAM format: {ram_text}")
 
-                        raw_row_data = {
-                            "preset_group": current_machine_type,
-                            "cpus": int(cpu_count),
-                            "ram": ram_value,
-                            "ram_units": ram_units,
-                            "price_sec": price_sec,
-                            "price_hour": price_hour,
-                            "price_month": price_month,
-                        }
-                    else:
-                        print(
-                            f"Warning: Row {i+1}: Data row has unexpected cell count: {[await asyncio.to_thread(c.get_text, strip=True) for c in cells]}"
-                        )
-                        continue
-                else:
+        ram_value = int(ram_match.group(1))
+        ram_units = ram_match.group(2)
+
+        if ram_units not in ["MB", "GB", "TB"]:
+            raise ValueError(f"Invalid RAM unit: {ram_units}")
+
+        if not any([price_sec, price_hour, price_month]):
+            raise ValueError(f"No valid prices found for {machine_type}")
+
+        # Convert price strings to floats
+        try:
+            price_sec_float = float(price_sec.replace("$", "")) if price_sec else None
+            price_hour_float = (
+                float(price_hour.replace("$", "")) if price_hour else None
+            )
+            price_month_float = (
+                float(price_month.replace("$", "")) if price_month else None
+            )
+        except ValueError as e:
+            raise ValueError(f"Invalid price format: {e}")
+
+        return PricingRow(
+            preset_group=machine_type,
+            cpus=cpu_value,
+            ram=ram_value,
+            ram_units=ram_units,
+            price_sec=price_sec_float,
+            price_hour=price_hour_float,
+            price_month=price_month_float,
+        )
+
+    async def _extract_gpu_pricing(self) -> GPUPricingTable:
+        """Extract GPU pricing data from HTML."""
+        if not self.soup:
+            raise ValueError("BeautifulSoup not initialized")
+
+        gpu_rows = []
+        for p in self.soup.find_all("p"):
+            if not isinstance(p, Tag):
+                continue
+
+            if p.get_text(strip=True) != "On-demand GPU pricing:":
+                continue
+
+            pricing_list = p.find_next_sibling("ul")
+            if not pricing_list or not isinstance(pricing_list, Tag):
+                continue
+
+            for item in pricing_list.find_all("li"):
+                if not isinstance(item, Tag):
                     continue
 
-                if raw_row_data:
-                    validated_row = PricingRow(**raw_row_data)
-                    pricing_table_data_models.pricing_rows.append(validated_row)
+                try:
+                    text = item.get_text(strip=True)
+                    if ":" not in text:
+                        continue
 
-            except ValidationError as e:
-                print(f"Pydantic Validation Error on row {i+1}: {e}")
-                print(f"Raw data: {raw_row_data}")
-            except Exception as e:
-                print(f"Error processing row {i+1}: {e}")
-                print(
-                    f"Cells: {[await asyncio.to_thread(c.get_text, strip=True) for c in cells]}"
-                )
+                    model, price_text = text.split(":", 1)
+                    price_text = price_text.replace("per GPU", "").strip()
 
-        if pricing_table_data_models:
-            print(
-                f"Successfully extracted and validated {len(pricing_table_data_models.pricing_rows)} rows from the EWR table."
-            )
-        else:
-            print(
-                "No valid data extracted from the EWR table, check selectors or page structure."
-            )
+                    price_match = re.search(r"\$?([\d.]+)/hr", price_text)
+                    if not price_match:
+                        continue
 
-        if not pricing_table_data_models.pricing_rows:
-            raise ValueError("No valid data extracted from the EWR table.")
+                    gpu_rows.append(
+                        GPUPricingRow(
+                            model=model.strip(), price_hour=float(price_match.group(1))
+                        )
+                    )
+                except (ValueError, ValidationError) as e:
+                    print(f"Error parsing GPU price: {e}")
+                    continue
 
-        return pricing_table_data_models
+            break
+
+        return GPUPricingTable(gpu_rows=gpu_rows)
+
+    async def _save_to_redis(self, key: str, data: Any) -> None:
+        """Save data to Redis."""
+        await self._redis_client.set(key, data.model_dump_json())
+
+    async def _load_from_redis(self, key: str, model_class: type) -> Any:
+        """Load data from Redis."""
+        data = await self._redis_client.get(key)
+        if not data:
+            raise ValueError(f"No data found in Redis for key: {key}")
+        return model_class.model_validate_json(data.decode())
 
     async def scrape(self) -> PricingData:
-        """Performs the complete scraping process."""
+        """Perform complete scraping process."""
         if not await self._fetch_html() or not self.soup:
             return PricingData(
-                markups=Markups(regions=[]), pricing_table=PricingTable(pricing_rows=[])
+                markups=Markups(regions=[]),
+                pricing_table=PricingTable(pricing_rows=[]),
+                gpu_pricing=GPUPricingTable(gpu_rows=[]),
             )
 
-        region_markups = await self._extract_region_markups()
-        self._region_markups = region_markups
-        pricing_table = await self._extract_pricing_table()
-        self._pricing_table = pricing_table
+        self._region_markups = await self._extract_region_markups()
+        self._pricing_table = await self._extract_pricing_table()
+        self._gpu_pricing = await self._extract_gpu_pricing()
 
-        pricing_data = PricingData(markups=region_markups, pricing_table=pricing_table)
-
-        return pricing_data
+        return PricingData(
+            markups=self._region_markups,
+            pricing_table=self._pricing_table,
+            gpu_pricing=self._gpu_pricing,
+        )
 
     async def update_pricing_data(self) -> None:
-        """Updates pricing data in Redis."""
+        """Update all pricing data in Redis."""
         pricing_data = await self.scrape()
-        self._region_markups = pricing_data.markups
-        self._pricing_table = pricing_data.pricing_table
-        await self.add_region_markups_to_redis()
-        await self.add_pricing_table_to_redis()
+
+        await asyncio.gather(
+            self._save_to_redis(REDIS_KEYS["region_markups"], pricing_data.markups),
+            self._save_to_redis(
+                REDIS_KEYS["pricing_table"], pricing_data.pricing_table
+            ),
+            self._save_to_redis(REDIS_KEYS["gpu_pricing"], pricing_data.gpu_pricing),
+        )
 
     async def get_latest_pricing_data(self) -> PricingData:
-        """Gets the latest pricing data from Redis."""
+        """Get latest pricing data from Redis or scrape if not available."""
         try:
-            pricing_table = await self.get_pricing_table_from_redis()
-            markups = await self.get_region_markups_from_redis()
-            return PricingData(markups=markups, pricing_table=pricing_table)
+            pricing_table = await self._load_from_redis(
+                REDIS_KEYS["pricing_table"], PricingTable
+            )
+            markups = await self._load_from_redis(REDIS_KEYS["region_markups"], Markups)
+            gpu_pricing = await self._load_from_redis(
+                REDIS_KEYS["gpu_pricing"], GPUPricingTable
+            )
 
+            return PricingData(
+                markups=markups, pricing_table=pricing_table, gpu_pricing=gpu_pricing
+            )
         except ValueError:
-            # If data is not in Redis, fetch it fresh
             return await self.scrape()
 
+    async def get_platform_options(self) -> PlatformOptions:
+        """Get available platform options."""
+        pricing_data = await self.get_latest_pricing_data()
 
-# --- Helper function to display the scraped results ---
-async def display_results(pricing_data: PricingData):
-    """Displays the scraped results."""
-    # Check if the regions list within markups is not empty
+        if not pricing_data.markups or not pricing_data.pricing_table:
+            raise ValueError("Required pricing data not found")
+
+        regions = [region.region for region in pricing_data.markups.regions]
+
+        # Group CPU and RAM options
+        compute: Dict[int, List[int]] = {}
+        for row in pricing_data.pricing_table.pricing_rows:
+            if row.cpus not in compute:
+                compute[row.cpus] = []
+            compute[row.cpus].append(row.ram)
+
+        # Sort RAM values for each CPU option
+        for cpus in compute:
+            compute[cpus] = self._sort_ram_values(compute[cpus])
+
+        # Handle GPU options
+        gpu: Dict[str, GPUInfo] = {}
+        if pricing_data.gpu_pricing and pricing_data.gpu_pricing.gpu_rows:
+            for row in pricing_data.gpu_pricing.gpu_rows:
+                if row.price_hour is not None:
+                    resource_name = GPU_NAME_MAP.get(row.model)
+                    if resource_name:
+                        gpu[resource_name] = GPUInfo(
+                            price=row.price_hour,
+                            regions=[
+                                r.value
+                                for r in RESOURCE_MAP["gpus"]
+                                .get(resource_name, {})
+                                .get("regions", [])
+                            ],
+                        )
+
+        return PlatformOptions(regions=regions, compute=compute, gpu=gpu)
+
+
+async def display_results(pricing_data: PricingData) -> None:
+    """Display pricing data in a formatted way."""
+    # Display region markups
     if pricing_data.markups and pricing_data.markups.regions:
         print("\n--- Region Markups ---")
-        # Display the list of Region objects nicely
-        for region_info in pricing_data.markups.regions:
-            print(f"  {region_info.region}: {region_info.markup}")
-    else:
-        print("\nNo region markups found or extracted.")
+        for region in pricing_data.markups.regions:
+            print(f"  {region.region}: {region.markup}")
 
-    if pricing_data:
+    # Display pricing table
+    if pricing_data.pricing_table and pricing_data.pricing_table.pricing_rows:
         print("\n--- EWR Pricing Table ---")
         try:
-            # Convert Pydantic models to dicts for DataFrame creation
-            pricing_list_of_dicts = [
-                row.model_dump() for row in pricing_data.pricing_table.pricing_rows
-            ]
-            df = pd.DataFrame(pricing_list_of_dicts)
-            # Prices are already floats due to Pydantic validation
+            df = pd.DataFrame(
+                [row.model_dump() for row in pricing_data.pricing_table.pricing_rows]
+            )
             print(df.to_string())
-
-        except ImportError:
-            print("Pandas not installed. Printing raw list:")
-            pprint(pricing_data)
-
         except Exception as e:
-            print(f"Error creating/processing DataFrame: {e}")
-            print("Printing raw list:")
-            pprint(pricing_data)
-    else:
-        print("\nNo EWR pricing data found or extracted.")
+            print(f"Error displaying pricing table: {e}")
+
+    # Display GPU pricing
+    if pricing_data.gpu_pricing and pricing_data.gpu_pricing.gpu_rows:
+        print("\n--- GPU Pricing Table ---")
+        try:
+            df = pd.DataFrame(
+                [row.model_dump() for row in pricing_data.gpu_pricing.gpu_rows]
+            )
+            print(df.to_string())
+        except Exception as e:
+            print(f"Error displaying GPU pricing: {e}")
 
 
 if __name__ == "__main__":
@@ -488,22 +481,16 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--populate",
-        action="store_true",
-        help="Populate pricing data in Redis",
+        "--populate", action="store_true", help="Populate pricing data in Redis"
     )
     args = parser.parse_args()
 
-    async def main():
-        scraper = PlatformManager()
-        try:
-            pricing_data = await scraper.scrape()
+    async def main() -> None:
+        async with PlatformManager() as manager:
+            pricing_data = await manager.scrape()
             await display_results(pricing_data)
 
             if args.populate:
-                await scraper.update_pricing_data()
-
-        finally:
-            await scraper.cleanup()
+                await manager.update_pricing_data()
 
     asyncio.run(main())

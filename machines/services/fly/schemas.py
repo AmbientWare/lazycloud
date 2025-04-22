@@ -65,4 +65,10 @@ RESOURCE_MAP = {
         8: {"name": "performance-8x", "memory_options": [16384, 32768, 65536]},
         16: {"name": "performance-16x", "memory_options": [32768, 65536, 131072]},
     },
+    "gpus": {
+        "a10": {"regions": [FlyRegion.ORD]},
+        "l40s": {"regions": [FlyRegion.ORD]},
+        "a100-40gb": {"regions": [FlyRegion.ORD]},
+        "a100-80gb": {"regions": [FlyRegion.IAD, FlyRegion.SJC, FlyRegion.SYD]},
+    },
 }

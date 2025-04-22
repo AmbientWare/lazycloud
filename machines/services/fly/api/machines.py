@@ -102,6 +102,12 @@ class MachinesAPI(BaseFlyAPI):
             },
         }
 
+        # add a gpu if machine_config.gpu_kind is not None
+        if machine_config.gpu_kind is not None:
+            data["config"]["guest"]["gpu_kind"] = machine_config.gpu_kind
+            # only allocate 1 gpu TODO: maybe make this configurable in the future?
+            data["config"]["guest"]["gpus"] = 1
+
         response = await self._post(url, json=data)
 
         await self.wait_for_status(app_name, response.get("id"))

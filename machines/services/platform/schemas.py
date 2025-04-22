@@ -1,5 +1,5 @@
 from pydantic import BaseModel, field_validator
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 import re
 
 
@@ -39,11 +39,38 @@ class PricingTable(BaseModel):
     pricing_rows: List[PricingRow]
 
 
+class GPUPricingRow(BaseModel):
+    model: str  # e.g. "A10", "L40S"
+    price_hour: Optional[float] = None
+
+    @field_validator("price_hour", mode="before")
+    def clean_price(cls, v):
+        if isinstance(v, str):
+            # Remove currency symbols and commas
+            cleaned_v = re.sub(r"[\$,]", "", v)
+            try:
+                return float(cleaned_v)
+            except (ValueError, TypeError):
+                return None
+        return v
+
+
+class GPUPricingTable(BaseModel):
+    gpu_rows: List[GPUPricingRow]
+
+
 class PricingData(BaseModel):
     markups: Markups
     pricing_table: PricingTable
+    gpu_pricing: Optional[GPUPricingTable] = None
+
+
+class GPUInfo(BaseModel):
+    price: float
+    regions: List[str]
 
 
 class PlatformOptions(BaseModel):
     regions: List[str]
-    options: Dict[int, List[int]]
+    compute: Dict[int, List[int]]
+    gpu: Dict[str, GPUInfo]
