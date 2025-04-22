@@ -78,6 +78,9 @@ async def create_file_system(
 
         raise HTTPException(status_code=500, detail=str(e))
 
+    # run cleanup
+    await fly_app_manager.clean(usage_uuid)
+
     return file_system
 
 
@@ -94,6 +97,12 @@ async def duplicate_file_system(
     usage_uuid: str = Depends(get_user_usage_uuid),
 ) -> FileSystemPydantic:
     user_id = await check_user_id_request(request.user_id, current_user)
+
+    name_already_exists = await db.file_systems.afind_one(
+        filters={"name": request.name, "user_id": user_id}
+    )
+    if name_already_exists:
+        raise HTTPException(status_code=400, detail="File system name already exists")
 
     file_system = await db.file_systems.afind_one(
         filters={"id": request.id, "user_id": user_id}
