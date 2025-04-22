@@ -81,7 +81,7 @@ class CreateMachineRequest(BaseModel):
     name: str
     public_key: str
     file_system_id: int
-    region: FlyRegion = Field(default=FlyRegion.LAX)
+    region: FlyRegion = Field(default=FlyRegion.ORD)
     image: ImageTypes = Field(default=ImageTypes.UBUNTU_22_04)
     cpu: int = Field(default=1)
     memory: int = Field(default=1024)

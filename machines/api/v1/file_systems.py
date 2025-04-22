@@ -38,6 +38,7 @@ async def get_file_systems(
 
 class CreateFileSystemRequest(BaseModel):
     user_id: Optional[str] = None
+    gpu_kind: Optional[str] = None
     name: str
     size: int
     region: FlyRegion
@@ -69,6 +70,7 @@ async def create_file_system(
                 file_system.id,
                 request.size,
                 request.region,
+                request.gpu_kind,
             )
 
     except Exception as e:

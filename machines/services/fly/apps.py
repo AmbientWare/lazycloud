@@ -2,7 +2,7 @@ import asyncio
 import time
 from pathlib import Path
 from loguru import logger
-
+from typing import Optional
 from machines.config import app_config
 from machines.services.fly.schemas import (
     FlyMachineConfig,
@@ -91,6 +91,7 @@ class FlyAppManager:
         file_system_id: int,
         size: int,
         region: FlyRegion,
+        gpu_kind: Optional[str] = None,
     ) -> str:
         """Create a file system for the application."""
         # first make sure the app exists, if not create it
@@ -99,7 +100,7 @@ class FlyAppManager:
         volume_name = await get_app_volume_name(file_system_id)
         logger.info(f"Creating volume {volume_name} for {file_system_id}")
         await fly_api.volumes.create(
-            volume_name, await get_app_name(usage_uuid), region.value, size
+            volume_name, await get_app_name(usage_uuid), region.value, size, gpu_kind
         )
 
         return volume_name

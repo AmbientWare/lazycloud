@@ -1,6 +1,6 @@
+from typing import Optional
 from tenacity import retry, stop_after_attempt, wait_exponential
 from loguru import logger
-
 from machines.services.fly.api.base import BaseFlyAPI
 from machines.services.fly.utils import get_fly_volume_id, run_async_command
 
@@ -30,14 +30,36 @@ class VolumesAPI(BaseFlyAPI):
         stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=15)
     )
     async def create(
-        self, volume_name: str, app_name: str, region: str, size: int
+        self,
+        volume_name: str,
+        app_name: str,
+        region: str,
+        size: int,
+        gpu_kind: Optional[str] = None,
     ) -> None:
         url = f"/{app_name}/volumes"
+
+        compute_data = {
+            "cpu_kind": "performance",
+            "cpus": None,
+            "gpu_kind": gpu_kind,
+            "gpus": 1 if gpu_kind is not None else None,
+            "host_dedication_id": "",
+            "kernel_args": [""],
+            "memory_mb": None,
+        }
+
         data = {
             "name": volume_name,
             "region": region,
             "size_gb": size,
+            "compute": compute_data,
         }
+
+        logger.info(
+            f"Creating volume {volume_name} on {region} with {size}GB and {gpu_kind} GPU"
+        )
+
         response = await self._post(url, json=data)
         return response
 
