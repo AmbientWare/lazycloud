@@ -27,6 +27,7 @@ class FlyRegion(Enum):
     SIN = "sin"  # Singapore, Singapore
     SJC = "sjc"  # San Jose, California (US)
     SYD = "syd"  # Sydney, Australia
+    MIA = "mia"  # Miami, Florida (US)
 
 
 class FlyMachineConfig(BaseModel):
@@ -61,6 +62,6 @@ RESOURCE_MAP = {
         "a10": {"regions": [FlyRegion.ORD]},
         "l40s": {"regions": [FlyRegion.ORD]},
         "a100-40gb": {"regions": [FlyRegion.ORD]},
-        "a100-80gb": {"regions": [FlyRegion.IAD, FlyRegion.SJC, FlyRegion.SYD]},
+        "a100-80gb": {"regions": [FlyRegion.IAD, FlyRegion.SJC, FlyRegion.SYD, FlyRegion.MIA, FlyRegion.AMS]},
     },
 }

@@ -5,8 +5,8 @@ from machines.services import platform_manager
 from machines.services.platform.platform_manager import (
     PricingData,
     Markups,
-    PricingTable,
     GPUPricingTable,
+    UnitPricing,
 )
 from machines.config import app_config
 
@@ -30,12 +30,13 @@ async def get_region_markups() -> Markups:
 
 
 @pricing_router.get("/compute")
-async def get_compute_pricing() -> PricingTable:
-    """Get compute instance pricing data."""
-    pricing_data = await platform_manager.get_latest_pricing_data()
-    if not pricing_data.pricing_table:
-        raise HTTPException(status_code=404, detail="Compute pricing data not found")
-    return pricing_data.pricing_table
+async def get_compute_pricing() -> UnitPricing:
+    try:
+        return await platform_manager.get_unit_pricing()
+    except ValueError as e:
+        raise HTTPException(
+            status_code=404, detail=f"Unit pricing data not available: {str(e)}"
+        )
 
 
 @pricing_router.get("/gpu")
@@ -48,22 +49,23 @@ async def get_gpu_pricing() -> GPUPricingTable:
 
 
 class PriceResponse(BaseModel):
-    price: str
+    price: float
+    units: str
 
 
 @pricing_router.get("/volume")
 async def get_volume_pricing() -> PriceResponse:
     """Get volume storage pricing."""
-    return PriceResponse(price=f"${app_config.VOLUME_PRICE}/GB")
+    return PriceResponse(price=app_config.VOLUME_PRICE, units="GB/month")
 
 
 @pricing_router.get("/ipv4")
 async def get_dedicated_ipv4_pricing() -> PriceResponse:
     """Get dedicated IPv4 pricing."""
-    return PriceResponse(price=f"${app_config.DEDICATED_IPV4_PRICE}")
+    return PriceResponse(price=app_config.DEDICATED_IPV4_PRICE, units="month")
 
 
 @pricing_router.get("/egress")
 async def get_data_egress_pricing() -> PriceResponse:
     """Get data egress pricing."""
-    return PriceResponse(price=f"${app_config.DATA_EGRESS_PRICE}/GB")
+    return PriceResponse(price=app_config.DATA_EGRESS_PRICE, units="GB")
