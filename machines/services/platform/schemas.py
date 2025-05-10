@@ -76,7 +76,6 @@ class PricingData(BaseModel):
 
 
 class GPUInfo(BaseModel):
-    price: float
     regions: List[str]
 
 

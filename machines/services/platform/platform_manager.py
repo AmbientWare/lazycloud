@@ -4,9 +4,8 @@ import re
 
 import aiohttp
 from bs4 import BeautifulSoup, Tag
-from bs4.element import PageElement, ResultSet
 import pandas as pd
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError  # Added BaseModel for UnitPrice
 from redis.asyncio import Redis
 
 from machines.config import app_config
@@ -26,13 +25,16 @@ from machines.services.fly.schemas import RESOURCE_MAP, FlyRegion
 # Constants
 FLY_PRICING_URL = "https://fly.io/docs/about/pricing/"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-EWR_TABLE_ID = "started-machines-pricing-matrix-ewr"
+EWR_TABLE_ID = "started-machines-pricing-matrix-ewr"  # This is assumed to be the region with markup 1.0
 
 # Redis keys
 REDIS_KEYS = {
     "region_markups": "pricing:region_markups",
     "pricing_table": "pricing:pricing_table",
     "gpu_pricing": "pricing:gpu_pricing",
+    "single_cpu_price": "pricing:single_cpu_price",
+    "single_memory_price_gb": "pricing:single_memory_price_gb",
+    "upcharge": "pricing:upcharge",
 }
 
 # GPU name mapping between pricing table and resource map
@@ -44,6 +46,24 @@ GPU_NAME_MAP = {
 }
 
 
+# Make these models public for API use
+class UnitPrice(BaseModel):
+    price_sec: Optional[float] = None
+    price_hour: Optional[float] = None
+    price_month: Optional[float] = None
+
+
+class UpchargeData(BaseModel):
+    value: float
+
+
+class UnitPricing(BaseModel):
+    """Model for combined CPU and memory unit pricing"""
+
+    cpu: UnitPrice
+    memory_gb: UnitPrice
+
+
 class PlatformManager:
     def __init__(
         self,
@@ -51,13 +71,6 @@ class PlatformManager:
         user_agent: str = USER_AGENT,
         performance_only: bool = True,
     ):
-        """Initialize the platform manager.
-
-        Args:
-            url: The URL to scrape pricing data from
-            user_agent: User agent string for HTTP requests
-            performance_only: Whether to only extract performance machine pricing
-        """
         self.url = url
         self.headers = {"User-Agent": user_agent}
         self.performance_only = performance_only
@@ -67,6 +80,10 @@ class PlatformManager:
         self._region_markups: Optional[Markups] = None
         self._pricing_table: Optional[PricingTable] = None
         self._gpu_pricing: Optional[GPUPricingTable] = None
+
+        # These will store the newly calculated prices
+        self._single_cpu_price: Optional[UnitPrice] = None
+        self._calculated_memory_price_gb: Optional[UnitPrice] = None
 
         # Initialize Redis client
         self._redis_client = Redis.from_url(app_config.REDIS_URL)
@@ -100,6 +117,7 @@ class PlatformManager:
                     html_content = await response.text()
                     self.soup = BeautifulSoup(html_content, "html.parser")
                     return True
+
         except aiohttp.ClientError as e:
             print(f"Error fetching URL {self.url}: {e}")
             self.soup = None
@@ -132,7 +150,7 @@ class PlatformManager:
                 regions = [
                     Region(
                         region=key,
-                        markup=float(value) * (1 + app_config.LAZYCLOUD_UPCHARGE),
+                        markup=float(value),
                     )
                     for key, value in markups_raw
                     if key in valid_regions
@@ -144,11 +162,12 @@ class PlatformManager:
         raise ValueError("Could not find region markups data")
 
     async def _extract_pricing_table(self) -> PricingTable:
-        """Extract machine pricing data from HTML."""
+        """Extract machine pricing data from HTML (specifically EWR table for base pricing)."""
         if not self.soup:
             raise ValueError("BeautifulSoup not initialized")
 
         pricing_rows = []
+        # EWR_TABLE_ID is used here, which corresponds to a region with markup 1.0
         table_div = self.soup.find("div", id=EWR_TABLE_ID)
         if not table_div or not isinstance(table_div, Tag):
             raise ValueError(f"Could not find pricing table with id '{EWR_TABLE_ID}'")
@@ -180,13 +199,32 @@ class PlatformManager:
                     if isinstance(cells[0], Tag) and cells[0].name == "th":
                         current_machine_type = pricing_row.preset_group
                         current_cpus = str(pricing_row.cpus)
-                    pricing_rows.append(pricing_row)
+                    # Filter for performance machines if self.performance_only is True
+                    if (
+                        self.performance_only
+                        and "performance" not in pricing_row.preset_group.lower()
+                    ):
+                        # If we are in a new non-performance group, reset current type to avoid adding its data rows
+                        if (
+                            isinstance(cells[0], Tag)
+                            and cells[0].name == "th"
+                            and cells[0].has_attr("rowspan")
+                        ):
+                            current_machine_type = None
+                            current_cpus = None
+                        continue  # Skip non-performance rows if performance_only
+                    elif (
+                        not self.performance_only
+                        or "performance" in pricing_row.preset_group.lower()
+                    ):
+                        pricing_rows.append(pricing_row)
+
             except (ValueError, ValidationError) as e:
                 print(f"Error parsing row: {e}")
                 continue
 
         if not pricing_rows:
-            raise ValueError("No valid pricing data extracted")
+            raise ValueError("No valid pricing data extracted for EWR table")
 
         return PricingTable(pricing_rows=pricing_rows)
 
@@ -208,15 +246,13 @@ class PlatformManager:
             if len(cells) < 6:
                 return None
 
-            machine_type = first_cell.get_text(strip=True)
-            if self.performance_only and "performance" not in machine_type.lower():
-                return None
+            machine_type_text = first_cell.get_text(strip=True)
 
             cpu_count = cells[1].get_text(strip=True).split()[0]
             ram_text = cells[2].get_text(strip=True)
 
             return self._create_pricing_row(
-                machine_type,
+                machine_type_text,
                 cpu_count,
                 ram_text,
                 cells[3].get_text(strip=True),
@@ -230,15 +266,13 @@ class PlatformManager:
             and first_cell.name == "td"
             and current_machine_type
             and current_cpus
-            and (
-                not self.performance_only
-                or "performance" in current_machine_type.lower()
-            )
         ):
             if len(cells) < 4:
                 return None
 
-            ram_text = cells[-4].get_text(strip=True)
+            ram_text = cells[-4].get_text(
+                strip=True
+            )  # cells[0] is RAM for data rows after first
             return self._create_pricing_row(
                 current_machine_type,
                 current_cpus,
@@ -263,7 +297,12 @@ class PlatformManager:
         try:
             cpu_value = int(cpu_count)
         except ValueError:
-            raise ValueError(f"Invalid CPU format: {cpu_count}")
+            # Handle cases like "1 shared" or "1 performance" if cpu_count is not just a number
+            match_cpu = re.match(r"(\d+)", cpu_count)
+            if match_cpu:
+                cpu_value = int(match_cpu.group(1))
+            else:
+                raise ValueError(f"Invalid CPU format: {cpu_count}")
 
         ram_match = re.match(r"(\d+)([A-Za-z]+)", ram_text)
         if not ram_match:
@@ -280,12 +319,20 @@ class PlatformManager:
 
         # Convert price strings to floats
         try:
-            price_sec_float = float(price_sec.replace("$", "")) if price_sec else None
+            price_sec_float = (
+                float(price_sec.replace("$", ""))
+                if price_sec and price_sec != "-"
+                else None
+            )
             price_hour_float = (
-                float(price_hour.replace("$", "")) if price_hour else None
+                float(price_hour.replace("$", ""))
+                if price_hour and price_hour != "-"
+                else None
             )
             price_month_float = (
-                float(price_month.replace("$", "")) if price_month else None
+                float(price_month.replace("$", ""))
+                if price_month and price_month != "-"
+                else None
             )
         except ValueError as e:
             raise ValueError(f"Invalid price format: {e}")
@@ -346,6 +393,87 @@ class PlatformManager:
 
         return GPUPricingTable(gpu_rows=gpu_rows)
 
+    def _calculate_cpu_memory_prices(
+        self, pricing_table: PricingTable
+    ) -> tuple[UnitPrice, UnitPrice]:
+        """
+        Calculates the price for 1 performance CPU and 1GB of performance memory
+        based on specific machine configurations from the pricing table (assumed to be markup 1.0).
+        """
+        row_1cpu_2gb: Optional[PricingRow] = None
+        row_1cpu_4gb: Optional[PricingRow] = None
+
+        # Find the required performance machine configurations
+        for row in pricing_table.pricing_rows:
+            if row.preset_group.lower() == "performance-1x" and row.cpus == 1:
+                if row.ram == 2 and row.ram_units == "GB":
+                    row_1cpu_2gb = row
+                elif row.ram == 4 and row.ram_units == "GB":
+                    row_1cpu_4gb = row
+            # Optimization: if both found, no need to iterate further
+            if row_1cpu_2gb and row_1cpu_4gb:
+                break
+
+        if not row_1cpu_2gb:
+            raise ValueError(
+                "Pricing for 1 performance CPU, 2GB RAM (performance-1x) not found in EWR table."
+            )
+        if not row_1cpu_4gb:
+            raise ValueError(
+                "Pricing for 1 performance CPU, 4GB RAM (performance-1x) not found in EWR table."
+            )
+
+        # --- Calculate Price per 1GB RAM ---
+        price_1gb_ram_sec: Optional[float] = None
+        price_1gb_ram_hour: Optional[float] = None
+        price_1gb_ram_month: Optional[float] = None
+        price_2gb_ram_sec: Optional[float] = None
+        price_2gb_ram_hour: Optional[float] = None
+        price_2gb_ram_month: Optional[float] = None
+
+        # Price of 2GB RAM = (Price of 1CPU+4GB machine) - (Price of 1CPU+2GB machine)
+        if row_1cpu_4gb.price_sec is not None and row_1cpu_2gb.price_sec is not None:
+            price_2gb_ram_sec = row_1cpu_4gb.price_sec - row_1cpu_2gb.price_sec
+            price_1gb_ram_sec = price_2gb_ram_sec / 2
+        if row_1cpu_4gb.price_hour is not None and row_1cpu_2gb.price_hour is not None:
+            price_2gb_ram_hour = row_1cpu_4gb.price_hour - row_1cpu_2gb.price_hour
+            price_1gb_ram_hour = price_2gb_ram_hour / 2
+        if (
+            row_1cpu_4gb.price_month is not None
+            and row_1cpu_2gb.price_month is not None
+        ):
+            price_2gb_ram_month = row_1cpu_4gb.price_month - row_1cpu_2gb.price_month
+            price_1gb_ram_month = price_2gb_ram_month / 2
+
+        self._calculated_memory_price_gb = UnitPrice(
+            price_sec=price_1gb_ram_sec,
+            price_hour=price_1gb_ram_hour,
+            price_month=price_1gb_ram_month,
+        )
+
+        # --- Calculate Price per 1 CPU ---
+        # Price of 1 CPU = (Price of 1CPU+2GB machine) - (Price of 2GB RAM)
+        price_1cpu_sec: Optional[float] = None
+        price_1cpu_hour: Optional[float] = None
+        price_1cpu_month: Optional[float] = None
+
+        if (
+            row_1cpu_2gb.price_sec is not None and price_2gb_ram_sec is not None
+        ):  # Use price_2gb_ram here
+            price_1cpu_sec = row_1cpu_2gb.price_sec - price_2gb_ram_sec
+        if row_1cpu_2gb.price_hour is not None and price_2gb_ram_hour is not None:
+            price_1cpu_hour = row_1cpu_2gb.price_hour - price_2gb_ram_hour
+        if row_1cpu_2gb.price_month is not None and price_2gb_ram_month is not None:
+            price_1cpu_month = row_1cpu_2gb.price_month - price_2gb_ram_month
+
+        self._single_cpu_price = UnitPrice(
+            price_sec=price_1cpu_sec,
+            price_hour=price_1cpu_hour,
+            price_month=price_1cpu_month,
+        )
+
+        return self._single_cpu_price, self._calculated_memory_price_gb
+
     async def _save_to_redis(self, key: str, data: Any) -> None:
         """Save data to Redis."""
         await self._redis_client.set(key, data.model_dump_json())
@@ -360,15 +488,14 @@ class PlatformManager:
     async def scrape(self) -> PricingData:
         """Perform complete scraping process."""
         if not await self._fetch_html() or not self.soup:
-            return PricingData(
-                markups=Markups(regions=[]),
-                pricing_table=PricingTable(pricing_rows=[]),
-                gpu_pricing=GPUPricingTable(gpu_rows=[]),
-            )
-
-        self._region_markups = await self._extract_region_markups()
-        self._pricing_table = await self._extract_pricing_table()
-        self._gpu_pricing = await self._extract_gpu_pricing()
+            # Return empty data if fetching fails
+            self._region_markups = Markups(regions=[])
+            self._pricing_table = PricingTable(pricing_rows=[])
+            self._gpu_pricing = GPUPricingTable(gpu_rows=[])
+        else:
+            self._region_markups = await self._extract_region_markups()
+            self._pricing_table = await self._extract_pricing_table()
+            self._gpu_pricing = await self._extract_gpu_pricing()
 
         return PricingData(
             markups=self._region_markups,
@@ -377,16 +504,45 @@ class PlatformManager:
         )
 
     async def update_pricing_data(self) -> None:
-        """Update all pricing data in Redis."""
+        """Update all pricing data in Redis, including calculated CPU/Memory prices."""
         pricing_data = await self.scrape()
 
-        await asyncio.gather(
+        # Create tasks for all Redis saves
+        tasks = [
             self._save_to_redis(REDIS_KEYS["region_markups"], pricing_data.markups),
             self._save_to_redis(
                 REDIS_KEYS["pricing_table"], pricing_data.pricing_table
             ),
             self._save_to_redis(REDIS_KEYS["gpu_pricing"], pricing_data.gpu_pricing),
-        )
+            self._save_to_redis(
+                REDIS_KEYS["upcharge"],
+                UpchargeData(value=app_config.LAZYCLOUD_UPCHARGE),
+            ),
+        ]
+
+        # Calculate and save CPU/Memory prices if possible
+        if pricing_data.pricing_table and pricing_data.pricing_table.pricing_rows:
+            try:
+                self._calculate_cpu_memory_prices(pricing_data.pricing_table)
+                if self._single_cpu_price:
+                    tasks.append(
+                        self._save_to_redis(
+                            REDIS_KEYS["single_cpu_price"],
+                            self._single_cpu_price,
+                        )
+                    )
+                if self._calculated_memory_price_gb:
+                    tasks.append(
+                        self._save_to_redis(
+                            REDIS_KEYS["single_memory_price_gb"],
+                            self._calculated_memory_price_gb,
+                        )
+                    )
+            except ValueError as e:
+                print(f"Could not calculate CPU/Memory prices: {e}")
+
+        await asyncio.gather(*tasks)
+        print("Pricing data update completed.")
 
     async def get_latest_pricing_data(self) -> PricingData:
         """Get latest pricing data from Redis or scrape if not available."""
@@ -403,23 +559,151 @@ class PlatformManager:
                 markups=markups, pricing_table=pricing_table, gpu_pricing=gpu_pricing
             )
         except ValueError:
-            return await self.scrape()
+            # If any key is missing, rescrape everything
+            print("Data not found in Redis or error loading, scraping from web...")
+            pricing_data_scraped = await self.scrape()
+            # After scraping, also attempt to calculate and store derived prices
+            if (
+                pricing_data_scraped.pricing_table
+                and pricing_data_scraped.pricing_table.pricing_rows
+            ):
+                try:
+                    # Populate instance attributes for derived prices
+                    self._calculate_cpu_memory_prices(
+                        pricing_data_scraped.pricing_table
+                    )
+                except ValueError as e:
+                    print(
+                        f"Could not calculate CPU/Memory prices during fallback scrape: {e}"
+                    )
+
+            return pricing_data_scraped
+
+    async def get_unit_pricing(self) -> UnitPricing:
+        """Get the calculated unit pricing for CPU and memory with upcharge applied."""
+        try:
+            # Load CPU pricing from Redis
+            cpu_price = await self._load_from_redis(
+                REDIS_KEYS["single_cpu_price"], UnitPrice
+            )
+
+            # Load memory pricing from Redis
+            memory_price = await self._load_from_redis(
+                REDIS_KEYS["single_memory_price_gb"], UnitPrice
+            )
+
+            # Load upcharge from Redis
+            upcharge = await self._load_from_redis(REDIS_KEYS["upcharge"], UpchargeData)
+
+            # Apply upcharge to prices
+            return self._apply_upcharge_to_prices(
+                cpu_price, memory_price, upcharge.value
+            )
+        except ValueError:
+            # If any key is missing, try to recalculate and return
+            print("Unit pricing not found in Redis, recalculating...")
+
+            # Get latest pricing data to calculate values
+            pricing_data = await self.get_latest_pricing_data()
+
+            if (
+                not pricing_data.pricing_table
+                or not pricing_data.pricing_table.pricing_rows
+            ):
+                raise ValueError(
+                    "Unable to calculate unit pricing: pricing table not available"
+                )
+
+            # Calculate unit prices
+            cpu_price, memory_price = self._calculate_cpu_memory_prices(
+                pricing_data.pricing_table
+            )
+
+            # Get upcharge value
+            upcharge_value = app_config.LAZYCLOUD_UPCHARGE
+
+            # Apply upcharge to prices
+            return self._apply_upcharge_to_prices(
+                cpu_price, memory_price, upcharge_value
+            )
+
+    def _apply_upcharge_to_prices(
+        self, cpu_price: UnitPrice, memory_price: UnitPrice, upcharge: float
+    ) -> UnitPricing:
+        """Apply upcharge to CPU and memory prices."""
+        # Create new UnitPrice objects with upcharge applied
+        cpu_with_upcharge = UnitPrice(
+            price_sec=(
+                cpu_price.price_sec * (1 + upcharge)
+                if cpu_price.price_sec is not None
+                else None
+            ),
+            price_hour=(
+                cpu_price.price_hour * (1 + upcharge)
+                if cpu_price.price_hour is not None
+                else None
+            ),
+            price_month=(
+                cpu_price.price_month * (1 + upcharge)
+                if cpu_price.price_month is not None
+                else None
+            ),
+        )
+
+        memory_with_upcharge = UnitPrice(
+            price_sec=(
+                memory_price.price_sec * (1 + upcharge)
+                if memory_price.price_sec is not None
+                else None
+            ),
+            price_hour=(
+                memory_price.price_hour * (1 + upcharge)
+                if memory_price.price_hour is not None
+                else None
+            ),
+            price_month=(
+                memory_price.price_month * (1 + upcharge)
+                if memory_price.price_month is not None
+                else None
+            ),
+        )
+
+        return UnitPricing(cpu=cpu_with_upcharge, memory_gb=memory_with_upcharge)
 
     async def get_platform_options(self) -> PlatformOptions:
         """Get available platform options."""
         pricing_data = await self.get_latest_pricing_data()
 
-        if not pricing_data.markups or not pricing_data.pricing_table:
-            raise ValueError("Required pricing data not found")
+        if not pricing_data.markups or not pricing_data.markups.regions:
+            raise ValueError("Required markups data not found")
+        if (
+            not pricing_data.pricing_table
+            or not pricing_data.pricing_table.pricing_rows
+        ):
+            raise ValueError("Required pricing_table data (EWR base) not found")
 
         regions = [region.region for region in pricing_data.markups.regions]
 
-        # Group CPU and RAM options
+        # Group CPU and RAM options from the EWR base table
         compute: Dict[int, List[int]] = {}
         for row in pricing_data.pricing_table.pricing_rows:
+            # Only include performance machines if performance_only is true
+            if self.performance_only and "performance" not in row.preset_group.lower():
+                continue
             if row.cpus not in compute:
                 compute[row.cpus] = []
-            compute[row.cpus].append(row.ram)
+
+            # Convert RAM to GB if in MB for consistent comparison/storage if needed
+            ram_gb = row.ram
+            if row.ram_units == "MB":
+                ram_gb = row.ram / 1024  # Or handle as float if precision matters
+            elif row.ram_units == "TB":
+                ram_gb = row.ram * 1024
+
+            if (
+                ram_gb not in compute[row.cpus]
+            ):  # Avoid duplicates if multiple entries for same CPU/RAM
+                compute[row.cpus].append(int(ram_gb))
 
         # Sort RAM values for each CPU option
         for cpus in compute:
@@ -432,48 +716,65 @@ class PlatformManager:
                 if row.price_hour is not None:
                     resource_name = GPU_NAME_MAP.get(row.model)
                     if resource_name:
+                        gpu_regions = (
+                            RESOURCE_MAP["gpus"]
+                            .get(resource_name, {})
+                            .get("regions", [])
+                        )
                         gpu[resource_name] = GPUInfo(
-                            price=row.price_hour,
-                            regions=[
-                                r.value
-                                for r in RESOURCE_MAP["gpus"]
-                                .get(resource_name, {})
-                                .get("regions", [])
-                            ],
+                            regions=[r.value for r in gpu_regions],
                         )
 
         return PlatformOptions(regions=regions, compute=compute, gpu=gpu)
 
 
-async def display_results(pricing_data: PricingData) -> None:
-    """Display pricing data in a formatted way."""
-    # Display region markups
-    if pricing_data.markups and pricing_data.markups.regions:
-        print("\n--- Region Markups ---")
-        for region in pricing_data.markups.regions:
-            print(f"  {region.region}: {region.markup}")
+def format_price(price: Optional[float], unit: str = "") -> str:
+    """Format price with currency symbol and unit."""
+    return "N/A" if price is None else f"${price:.6f}{unit}"
 
-    # Display pricing table
+
+def print_unit_price(price: UnitPrice, label: str) -> None:
+    """Print unit price data in a formatted way."""
+    print(f"\n=== {label} ===")
+    print(f"  Per second: {format_price(price.price_sec, '/sec')}")
+    print(f"  Per hour:   {format_price(price.price_hour, '/hr')}")
+    print(f"  Per month:  {format_price(price.price_month, '/month')}")
+
+
+def create_markup_df(markups):
+    data = [(r.region, r.markup) for r in markups.regions]
+    df = pd.DataFrame(data, columns=["Region", "Markup"])
+    return df.sort_values("Region")
+
+
+def create_gpu_df(gpu_rows):
+    data = [(r.model, f"${r.price_hour:.4f}/hr") for r in gpu_rows]
+    return pd.DataFrame(data, columns=["GPU Model", "Price"])
+
+
+async def display_results(pricing_data: PricingData) -> None:
+    if pricing_data.markups and pricing_data.markups.regions:
+        print("\n=== REGION MARKUPS ===")
+        print(create_markup_df(pricing_data.markups).to_string(index=False))
+
     if pricing_data.pricing_table and pricing_data.pricing_table.pricing_rows:
-        print("\n--- EWR Pricing Table ---")
+        print("\n=== EWR PRICING TABLE (Markup 1.0 Base) ===")
         try:
             df = pd.DataFrame(
                 [row.model_dump() for row in pricing_data.pricing_table.pricing_rows]
             )
-            print(df.to_string())
+            for col in ["price_sec", "price_hour", "price_month"]:
+                if col in df.columns:
+                    df[col] = df[col].apply(
+                        lambda x: format_price(x) if pd.notna(x) else "N/A"
+                    )
+            print(df.to_string(index=False))
         except Exception as e:
             print(f"Error displaying pricing table: {e}")
 
-    # Display GPU pricing
     if pricing_data.gpu_pricing and pricing_data.gpu_pricing.gpu_rows:
-        print("\n--- GPU Pricing Table ---")
-        try:
-            df = pd.DataFrame(
-                [row.model_dump() for row in pricing_data.gpu_pricing.gpu_rows]
-            )
-            print(df.to_string())
-        except Exception as e:
-            print(f"Error displaying GPU pricing: {e}")
+        print("\n=== GPU PRICING TABLE ===")
+        print(create_gpu_df(pricing_data.gpu_pricing.gpu_rows).to_string(index=False))
 
 
 if __name__ == "__main__":
@@ -486,11 +787,79 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     async def main() -> None:
-        async with PlatformManager() as manager:
-            pricing_data = await manager.scrape()
-            await display_results(pricing_data)
-
+        async with PlatformManager(performance_only=True) as manager:
             if args.populate:
+                print("Populating pricing data in Redis...")
                 await manager.update_pricing_data()
+
+                print("\n" + "=" * 80)
+                print(" " * 30 + "PRICING DATA IN REDIS")
+                print("=" * 80)
+
+                try:
+                    # Load and display all data from Redis
+                    markups = await manager._load_from_redis(
+                        REDIS_KEYS["region_markups"], Markups
+                    )
+                    print("\n=== REGION MARKUPS ===")
+                    print(create_markup_df(markups).to_string(index=False))
+
+                    upcharge = await manager._load_from_redis(
+                        REDIS_KEYS["upcharge"], UpchargeData
+                    )
+                    print(
+                        f"\n=== UPCHARGE ===\n  Value: {upcharge.value:.4f} ({upcharge.value*100:.2f}%)"
+                    )
+
+                    gpu_pricing = await manager._load_from_redis(
+                        REDIS_KEYS["gpu_pricing"], GPUPricingTable
+                    )
+                    print("\n=== GPU PRICING ===")
+                    print(create_gpu_df(gpu_pricing.gpu_rows).to_string(index=False))
+
+                    # Load and display calculated prices
+                    cpu_price = await manager._load_from_redis(
+                        REDIS_KEYS["single_cpu_price"], UnitPrice
+                    )
+                    print_unit_price(
+                        cpu_price, "CALCULATED CPU PRICE (1 performance CPU)"
+                    )
+
+                    mem_price = await manager._load_from_redis(
+                        REDIS_KEYS["single_memory_price_gb"], UnitPrice
+                    )
+                    print_unit_price(mem_price, "CALCULATED MEMORY PRICE (per 1GB)")
+
+                except Exception as e:
+                    print(f"Could not load prices from Redis: {e}")
+
+                print("\n" + "=" * 80)
+            else:
+                pricing_data = await manager.scrape()
+
+                print("\n" + "=" * 80)
+                print(" " * 30 + "SCRAPED PRICING DATA")
+                print("=" * 80)
+
+                await display_results(pricing_data)
+
+                if (
+                    pricing_data.pricing_table
+                    and pricing_data.pricing_table.pricing_rows
+                ):
+                    try:
+                        cpu_price, mem_price = manager._calculate_cpu_memory_prices(
+                            pricing_data.pricing_table
+                        )
+                        print_unit_price(
+                            cpu_price, "CALCULATED CPU PRICE (1 performance CPU)"
+                        )
+                        print_unit_price(mem_price, "CALCULATED MEMORY PRICE (per 1GB)")
+                    except ValueError as e:
+                        print(
+                            f"Could not calculate CPU/Memory prices from scraped data: {e}"
+                        )
+
+                print("\n" + "=" * 80)
 
     asyncio.run(main())
