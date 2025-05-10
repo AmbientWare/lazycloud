@@ -63,6 +63,14 @@ class BaseFlyAPI:
             logger.error(
                 f"Response body: {e.response.text if e.response else 'No response body'}"
             )
+            # try to parse the response body as json
+            try:
+                response_json = e.response.json()
+                if "error" in response_json:
+                    raise Exception(response_json["error"])
+            except Exception:
+                pass
+
             raise e
 
         except Exception as e:

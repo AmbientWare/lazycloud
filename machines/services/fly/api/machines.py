@@ -3,7 +3,8 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from loguru import logger
 
 from machines.services.fly.api.base import BaseFlyAPI
-from machines.services.fly.schemas import FlyMachineConfig, IMAGE_MAP
+from machines.services.fly.schemas import FlyMachineConfig
+from machines.services.platform.schemas import IMAGE_MAP
 from machines.services.fly.utils import (
     get_machine_name,
     get_fly_volume_id,

@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
+from loguru import logger
 
 from machines.api.security import (
     check_user_id_request,
@@ -10,6 +11,7 @@ from machines.api.security import (
 )
 from machines.database import db
 from machines.database.file_systems import FileSystemPydantic
+from machines.services.platform.schemas import ImageTypes
 from machines.services.fly.schemas import FlyRegion
 from machines.services import fly_app_manager
 
@@ -35,12 +37,14 @@ async def get_file_systems(
     if available:
         # get all file systems that are not connected to a machine
         file_systems = await db.file_systems.afind(filters={"user_id": user_id})
-        for file_system in file_systems:
+        for file_system in file_systems.copy():
             machine = await db.machines.afind_one(
                 filters={"file_system_id": file_system.id}
             )
             if machine:
                 file_systems.remove(file_system)
+
+    logger.info(f"Found {len(file_systems)} file systems")
 
     return file_systems
 
@@ -69,6 +73,9 @@ async def create_file_system(
                 name=request.name,
                 size=request.size,
                 region=request.region.value,
+                # NOTE: maybe make this configurable?
+                # For now we will manage the latest image version on our end.
+                image=ImageTypes.UBUNTU_22_04.value,
             )
         )
 

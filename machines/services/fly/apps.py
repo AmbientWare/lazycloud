@@ -147,6 +147,7 @@ class FlyAppManager:
                 name=new_file_system_name,
                 size=file_system.size,
                 region=file_system.region,
+                image=file_system.image,
             )
         )
 

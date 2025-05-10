@@ -20,10 +20,10 @@ RUN curl -fsSL https://get.docker.com -o get-docker.sh \
 
 # Setup the SSH server daemon, copy pre-generated keys
 RUN rm -rf /etc/ssh/ssh_host_*_key*
-COPY ./services/fly/docker_files/ubuntu/etc/ssh/sshd_config /etc/ssh/sshd_config
+COPY ./services/fly/docker_files/ubuntu/2204/etc/ssh/sshd_config /etc/ssh/sshd_config
 
-COPY ./services/fly/docker_files/ubuntu/entrypoint ./entrypoint
-COPY ./services/fly/docker_files/ubuntu/docker-entrypoint.d/* ./docker-entrypoint.d/
+COPY ./services/fly/docker_files/ubuntu/2204/entrypoint ./entrypoint
+COPY ./services/fly/docker_files/ubuntu/2204/docker-entrypoint.d/* ./docker-entrypoint.d/
 
 # expose the ssh port, we wet to 2222 in the sshd_config
 EXPOSE 2222
