@@ -41,12 +41,12 @@ class VolumesAPI(BaseFlyAPI):
 
         compute_data = {
             "cpu_kind": "performance",
-            "cpus": None,
+            "cpus": 16, # just say lots of cpu so we reserve spots on server
             "gpu_kind": gpu_kind,
             "gpus": 1 if gpu_kind is not None else None,
             "host_dedication_id": "",
             "kernel_args": [""],
-            "memory_mb": None,
+            "memory_mb": 131072,  # 128GB, just say lots of memory so we reserve spots on server
         }
 
         data = {
