@@ -1,8 +1,9 @@
 #!/bin/bash
 
 # Set variables
-DOCKERFILE_PATH="./services/fly/docker_files/ubuntu/Dockerfile"
-IMAGE_NAME="cmclean165/lazycloud"
+VERSION="2204"
+DOCKERFILE_PATH="./services/fly/docker_files/ubuntu/${VERSION}/Dockerfile"
+IMAGE_NAME="cmclean165/ubuntu${VERSION}"
 TAG="latest"
 
 # Go to the machines directory. This is so that the Dockerfile builds correctly

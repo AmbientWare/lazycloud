@@ -15,7 +15,6 @@ from machines.services import fly_app_manager, platform_manager, route_53
 from machines.services.fly.schemas import (
     FlyMachineConfig,
     FlyRegion,
-    ImageTypes,
 )
 from machines.services.platform.schemas import PlatformOptions
 from machines.services.fly.utils import get_app_name
@@ -82,7 +81,6 @@ class CreateMachineRequest(BaseModel):
     public_key: str
     file_system_id: int
     region: FlyRegion = Field(default=FlyRegion.ORD)
-    image: ImageTypes = Field(default=ImageTypes.UBUNTU_22_04)
     cpu: int = Field(default=1)
     memory: int = Field(default=1024)
     volume_size: int = Field(default=10)
@@ -139,8 +137,8 @@ async def create_machine(
             user_id=user_id,
             name=create_machine_request.name,
             region=create_machine_request.region.value,
-            image=create_machine_request.image.value,
-            cpu_kind="performance",  # TODO: maybe make configurable in the future
+            image=file_system.image,  # set the image to be the same as the file system
+            cpu_kind="performance",  # NOTE: right now we only support performance machines, maybe shared in the future
             cpu=create_machine_request.cpu,
             memory=create_machine_request.memory,
             gpu_kind=create_machine_request.gpu_kind,

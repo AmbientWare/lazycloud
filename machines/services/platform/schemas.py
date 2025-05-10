@@ -1,6 +1,16 @@
 from pydantic import BaseModel, field_validator
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict
 import re
+from enum import Enum
+
+class ImageTypes(Enum):
+    UBUNTU_22_04 = "ubuntu2204"
+
+
+# NOTE: we maintain a public image that is pre-built and can be used to deploy machines faster
+IMAGE_MAP = {
+    ImageTypes.UBUNTU_22_04: "cmclean165/ubuntu2204:latest",
+}
 
 
 class Region(BaseModel):

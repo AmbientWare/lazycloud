@@ -1,6 +1,8 @@
 from enum import Enum
 from pydantic import BaseModel
 
+from machines.services.platform.schemas import ImageTypes
+
 
 class FlyCommandError(Exception):
     """Raised when a Fly.io command fails."""
@@ -25,16 +27,6 @@ class FlyRegion(Enum):
     SIN = "sin"  # Singapore, Singapore
     SJC = "sjc"  # San Jose, California (US)
     SYD = "syd"  # Sydney, Australia
-
-
-class ImageTypes(Enum):
-    UBUNTU_22_04 = "ubuntu"
-
-
-# NOTE: we maintain a public image that is pre-built and can be used to deploy machines faster
-IMAGE_MAP = {
-    ImageTypes.UBUNTU_22_04: "cmclean165/lazycloud:latest",
-}
 
 
 class FlyMachineConfig(BaseModel):

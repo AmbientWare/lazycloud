@@ -15,16 +15,17 @@ Port 2222
 #ListenAddress 0.0.0.0
 #ListenAddress ::
 
-HostKey /data/etc/ssh/ssh_host_rsa_key
-HostKey /data/etc/ssh/ssh_host_ecdsa_key
-HostKey /data/etc/ssh/ssh_host_ed25519_key
+# Updated host key paths to standard location
+HostKey /etc/ssh/ssh_host_rsa_key
+HostKey /etc/ssh/ssh_host_ecdsa_key
+HostKey /etc/ssh/ssh_host_ed25519_key
 
 # Ciphers and keying
 #RekeyLimit default none
 
 # Logging
 #SyslogFacility AUTH
-#LogLevel INFO
+LogLevel INFO
 
 # Authentication:
 
@@ -34,10 +35,13 @@ StrictModes yes
 MaxAuthTries 3
 MaxSessions 10
 
+# Allow only ubuntu user
+AllowUsers ubuntu
+
 PubkeyAuthentication yes
 
 # Expect .ssh/authorized_keys2 to be disregarded by default in future.
-#AuthorizedKeysFile     .ssh/authorized_keys .ssh/authorized_keys2
+AuthorizedKeysFile /data/home/.ssh/authorized_keys
 
 #AuthorizedPrincipalsFile none
 
@@ -83,24 +87,25 @@ ChallengeResponseAuthentication no
 # and ChallengeResponseAuthentication to 'no'.
 UsePAM yes
 
+# Explicitly enable all forwarding for VS Code
 AllowAgentForwarding yes
-#AllowTcpForwarding yes
-#GatewayPorts no
+AllowTcpForwarding yes
+GatewayPorts yes
+PermitTunnel yes
+PermitOpen any
+PermitListen any
 X11Forwarding yes
-#X11DisplayOffset 10
-#X11UseLocalhost yes
-#PermitTTY yes
+PermitTTY yes
 PrintMotd no
-#PrintLastLog yes
-#TCPKeepAlive yes
-#PermitUserEnvironment no
-#Compression delayed
+
+# Disable forwarding restrictions
+DisableForwarding no
+
 #ClientAliveInterval 0
 #ClientAliveCountMax 3
 #UseDNS no
 #PidFile /var/run/sshd.pid
 #MaxStartups 10:30:100
-#PermitTunnel no
 #ChrootDirectory none
 #VersionAddendum none
 
