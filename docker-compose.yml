@@ -17,9 +17,7 @@ services:
       target: api
     volumes:
       # this allows for hot reloading
-      - ./poetry.lock:/machines/poetry.lock
-      - ./pyproject.toml:/machines/pyproject.toml
-      - ./machines:/machines
+      - ./src:/app
     env_file:
       - .env
     environment:
@@ -27,7 +25,7 @@ services:
       - REDIS_URL=redis://redis:6379
     networks:
       - machines
-    command: ["python", "main.py", "--debug", "--workers", "1"]
+    command: ["uv", "run", "python", "main.py", "--debug", "--workers", "1"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://api:8000/health"]
       interval: 30s
@@ -50,9 +48,7 @@ services:
       target: celery-beat
     volumes:
       # this allows for hot reloading
-      - ./poetry.lock:/machines/poetry.lock
-      - ./pyproject.toml:/machines/pyproject.toml
-      - ./machines:/machines
+      - ./src:/app
     env_file:
       - .env
     environment:
@@ -60,7 +56,7 @@ services:
       - REDIS_URL=redis://redis:6379
     networks:
       - machines
-    command: ["celery", "-A", "machines.celery_app", "beat", "--loglevel=info"]
+    command: ["uv", "run", "celery", "-A", "celery_app", "beat", "--loglevel=info"]
     depends_on:
       postgres:
         condition: service_healthy
@@ -77,9 +73,7 @@ services:
       target: celery-worker
     volumes:
       # this allows for hot reloading
-      - ./poetry.lock:/machines/poetry.lock
-      - ./pyproject.toml:/machines/pyproject.toml
-      - ./machines:/machines
+      - ./src:/app
     env_file:
       - .env
     environment:

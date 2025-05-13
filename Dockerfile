@@ -1,18 +1,8 @@
 # Second stage: build the python base image
-FROM python:3.11-slim AS builder
+FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS builder
 
 # make the machines directory
-RUN mkdir /machines
-
-# Set non-interactive frontend during docker build
-ENV DEBIAN_FRONTEND=noninteractive
-
-# Set python/poetry environment variables
-ENV PYTHONDONTWRITEBYTECODE 1
-ENV PYTHONUNBUFFERED 1
-ENV POETRY_NO_INTERACTION 1
-# Disable poetry's virtual environment creation
-ENV POETRY_VENV_CREATE false
+RUN mkdir /app
 
 # Install system dependencies, cron, and clean up in one layer to keep image small
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -20,7 +10,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     gcc \
     libpq-dev \
-    && curl -sSL https://install.python-poetry.org | python3 - \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
     && curl -L https://fly.io/install.sh | sh
@@ -29,34 +18,29 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV FLYCTL_INSTALL="/root/.fly"
 ENV PATH="/root/.fly/bin:$PATH"
 
-# Ensure Poetry and any globally installed packages' bins are in PATH
-ENV PATH="/root/.local/bin:$PATH"
+# copy uv requirements
+COPY ./pyproject.toml ./
+COPY ./uv.lock ./
+COPY ./README.md ./
 
-# copy the main directory
-COPY machines/ /machines
+# copy the source code directory
+COPY ./src /app
 
-# copy over poetry and pyproject.toml related files
-COPY ./pyproject.toml .
-COPY ./poetry.lock .
-COPY ./README.md .
+# Build the Python package using uv
+RUN uv sync --locked
 
-# Build the Python package using poetry
-RUN poetry config virtualenvs.create false && poetry install --only main
-
-WORKDIR /machines
-
-# Activate the virtual environment
-ENV PYTHONPATH "${PYTHONPATH}:/"
+# set the working directory
+WORKDIR /app
 
 # Second stage - api
 FROM builder AS api
-CMD ["python", "main.py"]
+CMD [ "uv", "run", "python", "main.py"]
 
 # Second stage - celery worker
 FROM builder AS celery-worker
-CMD ["celery", "-A", "machines.celery_app", "worker", "--loglevel=info"]
+CMD [ "uv", "run", "celery", "-A", "celery_app", "worker", "--loglevel=info"]
 
 # Second stage - celery beat
 FROM builder AS celery-beat
-CMD ["celery", "-A", "machines.celery_app", "beat", "--loglevel=info"]
+CMD [ "uv", "run", "celery", "-A", "celery_app", "beat", "--loglevel=info"]
 
