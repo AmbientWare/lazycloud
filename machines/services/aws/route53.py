@@ -2,6 +2,7 @@ import aioboto3
 
 from machines.config import app_config
 
+# TODO: support for dns names for the machines is not currently used, we can add support in the future with these methods
 
 class Route53Service:
     def __init__(self):

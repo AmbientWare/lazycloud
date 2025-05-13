@@ -17,7 +17,7 @@ from machines.services.fly.schemas import (
     FlyRegion,
 )
 from machines.services.platform.schemas import PlatformOptions
-from machines.services.fly.utils import get_app_name
+from machines.services.fly.utils import get_app_ipv4
 
 machines_router = APIRouter(prefix="/machines", tags=["machines"])
 
@@ -49,17 +49,17 @@ async def get_platform_options(
     return await platform_manager.get_platform_options()
 
 
-class MachineAliasResponse(BaseModel):
-    alias: str
+class MachineConnectionDetailsResponse(BaseModel):
+    ip: str
     port: int
 
 
-@machines_router.get("/{id}/alias")
-async def get_machines_alias(
+@machines_router.get("/{id}/connection-details")
+async def get_machines_connection_details(
     id: int,
     current_user: UserData = Depends(get_current_active_user),
     usage_uuid: str = Depends(get_user_usage_uuid),
-) -> MachineAliasResponse:
+) -> MachineConnectionDetailsResponse:
     """Get a list of machines"""
     # make sure the machine exists
     machine = await db.machines.afind_one(
@@ -68,11 +68,13 @@ async def get_machines_alias(
     if machine is None or machine.id is None:
         raise HTTPException(status_code=404, detail="Machine not found")
 
-    app_name = await get_app_name(usage_uuid)
-    alias = route_53.get_cname_domain(app_name)
+    ipv4 = await get_app_ipv4(usage_uuid)
     port = machine.app_port
 
-    return MachineAliasResponse(alias=alias, port=port)
+    if ipv4 is None:
+        raise HTTPException(status_code=500, detail="Machine has no IPv4")
+
+    return MachineConnectionDetailsResponse(ip=ipv4, port=port)
 
 
 class CreateMachineRequest(BaseModel):

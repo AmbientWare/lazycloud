@@ -28,6 +28,21 @@ async def get_app_volume_name(file_system_id: int) -> str:
     return f"lc_volume_{file_system_id}"
 
 
+async def get_app_ipv4(usage_uuid: str) -> str | None:
+    """Get the name of the Fly.io application IPv4."""
+    app_name = await get_app_name(usage_uuid)
+    cmd = ["fly", "ips", "list", "-a", app_name, "--json"]
+
+    response = await run_async_command(cmd, print_output=False)
+    ips = json.loads(response.stdout)
+
+    if len(ips) == 0:
+        return None
+
+    # each app will only have one ipv4
+    return ips[0].get("Address")
+
+
 async def get_fly_volume_id(
     usage_uuid: str, file_system_id: int | None = None, volume_name: str | None = None
 ) -> str | None:

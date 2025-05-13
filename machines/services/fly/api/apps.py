@@ -58,15 +58,6 @@ class AppsAPI(BaseFlyAPI):
             ["fly", "ips", "allocate-v4", "--app", app_name, "--yes"]
         )
 
-        # now try to add a CNAME record to the app in Route53
-        try:
-            await self._route_53.create_cname_record(
-                await get_app_name(usage_uuid),
-            )
-
-        except Exception as e:
-            raise e
-
     async def get_allocated_ip_address(self, usage_uuid: str) -> str | None:
         """Get the allocated IP address for the application."""
         app_name = await get_app_name(usage_uuid)
@@ -88,7 +79,3 @@ class AppsAPI(BaseFlyAPI):
             await run_async_command(
                 ["fly", "ips", "release", ip_address, "--app", app_name]
             )
-
-        await self._route_53.delete_cname_record(
-            await get_app_name(usage_uuid),
-        )
