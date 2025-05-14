@@ -1,6 +1,6 @@
 from sqlalchemy import Column, String
 
-from database.base import BaseModel, BaseTable, DatabaseService
+from src.database.base import BaseModel, BaseTable, DatabaseService
 
 
 class SshKeyTable(BaseTable):

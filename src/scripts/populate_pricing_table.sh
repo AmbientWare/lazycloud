@@ -3,4 +3,4 @@
 # make sure .env is set
 source .env
 
-python -m services.platform.platform_manager --populate
+python -m src.services.platform.platform_manager --populate

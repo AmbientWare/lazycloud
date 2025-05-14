@@ -3,9 +3,9 @@ from datetime import datetime
 import asyncio
 from sqlalchemy import Column, String, DateTime
 from sqlalchemy.future import select
-
-from database.base import BaseModel, BaseTable, DatabaseService
 from enum import Enum
+
+from src.database.base import BaseModel, BaseTable, DatabaseService
 
 
 class ApiKeyRole(str, Enum):

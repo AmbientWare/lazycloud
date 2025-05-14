@@ -3,21 +3,21 @@ from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 from loguru import logger
 
-from api.security import (
+from src.api.security import (
     get_current_active_user,
     UserData,
     get_user_usage_uuid,
     check_user_id_request,
 )
-from database import db
-from database.machines import MachinePydantic, MachineStatus
-from services import fly_app_manager, platform_manager
-from services.fly.schemas import (
+from src.database import db
+from src.database.machines import MachinePydantic, MachineStatus
+from src.services import fly_app_manager, platform_manager
+from src.services.fly.schemas import (
     FlyMachineConfig,
     FlyRegion,
 )
-from services.platform.schemas import PlatformOptions
-from services.fly.utils import get_app_ipv4
+from src.services.platform.schemas import PlatformOptions
+from src.services.fly.utils import get_app_ipv4
 
 machines_router = APIRouter(prefix="/machines", tags=["machines"])
 

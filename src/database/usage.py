@@ -3,7 +3,7 @@ from sqlalchemy import Column, String, Float, DateTime
 import uuid
 from datetime import datetime
 
-from database.base import BaseModel, BaseTable, DatabaseService
+from src.database.base import BaseModel, BaseTable, DatabaseService
 
 
 class UsageTable(BaseTable):

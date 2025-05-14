@@ -1,3 +1,3 @@
-from services.fly.apps import FlyAppManager
+from src.services.fly.apps import FlyAppManager
 
 __all__ = ["FlyAppManager"]

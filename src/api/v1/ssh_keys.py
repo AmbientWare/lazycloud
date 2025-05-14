@@ -2,13 +2,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 
-from api.security import (
+from src.api.security import (
     check_user_id_request,
     get_current_active_user,
 )
-from database import db
-from database.ssh_keys import SshKeyPydantic
-from api.security import UserData
+from src.database import db
+from src.database.ssh_keys import SshKeyPydantic
+from src.api.security import UserData
 
 ssh_keys_router = APIRouter(prefix="/ssh-keys", tags=["ssh-keys"])
 

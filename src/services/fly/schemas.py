@@ -1,7 +1,7 @@
 from enum import Enum
 from pydantic import BaseModel
 
-from services.platform.schemas import ImageTypes
+from src.services.platform.schemas import ImageTypes
 
 
 class FlyCommandError(Exception):

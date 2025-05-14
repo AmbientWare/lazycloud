@@ -1,10 +1,9 @@
 from tenacity import retry, stop_after_attempt, wait_exponential
 import json
 
-from services.fly.api.base import BaseFlyAPI
-from config import app_config
-from services.fly.utils import run_async_command, get_app_name
-from services.aws.route53 import Route53Service
+from src.services.fly.api.base import BaseFlyAPI
+from src.config import app_config
+from src.services.fly.utils import run_async_command, get_app_name
 
 # NOTE: anything useing the fly cli is not currently available in the fly api
 
@@ -12,7 +11,6 @@ from services.aws.route53 import Route53Service
 class AppsAPI(BaseFlyAPI):
     def __init__(self):
         super().__init__()
-        self._route_53 = Route53Service()
 
     @retry(
         stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=15)

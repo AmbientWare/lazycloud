@@ -3,22 +3,22 @@ import time
 from pathlib import Path
 from loguru import logger
 from typing import Optional
-from config import app_config
-from services.fly.schemas import (
+from src.config import app_config
+from src.services.fly.schemas import (
     FlyMachineConfig,
     RESOURCE_MAP,
 )
-from services.fly.utils import (
+from src.services.fly.utils import (
     get_app_name,
     get_machine_name,
     get_app_volume_name,
     get_fly_volume_id,
 )
-from database import db
-from database.machines import MachineStatus
-from services.fly.schemas import FlyRegion
-from services.fly.api import fly_api
-from database.file_systems import FileSystemPydantic
+from src.database import db
+from src.database.machines import MachineStatus
+from src.services.fly.schemas import FlyRegion
+from src.services.fly.api import fly_api
+from src.database.file_systems import FileSystemPydantic
 
 
 class FlyAppManager:

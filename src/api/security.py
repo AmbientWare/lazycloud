@@ -3,10 +3,10 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from typing import Any
 
-from database import db
-from database.api_keys import ApiKeyRole
-from database.utils import api_key_is_expired
-from config import app_config, ENVIRONMENT
+from src.database import db
+from src.database.api_keys import ApiKeyRole
+from src.database.utils import api_key_is_expired
+from src.config import app_config, ENVIRONMENT
 
 security = HTTPBearer()
 

@@ -2,7 +2,7 @@ from typing import Dict, Optional, Any
 import httpx
 from loguru import logger
 
-from config import app_config
+from src.config import app_config
 
 
 class BaseFlyAPI:

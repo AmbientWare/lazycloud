@@ -2,10 +2,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional
 
-from api.security import require_admin
-from database import db
-from database.api_keys import ApiKeyPydantic, ApiKeyRole, ApiKeyExpirationDays
-from database.utils import (
+from src.api.security import require_admin
+from src.database import db
+from src.database.api_keys import ApiKeyPydantic, ApiKeyRole, ApiKeyExpirationDays
+from src.database.utils import (
     generate_api_key,
     generate_api_key_expires_at,
 )

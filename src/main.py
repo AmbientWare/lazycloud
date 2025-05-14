@@ -13,18 +13,18 @@ from slowapi.util import get_remote_address
 from slowapi import Limiter
 
 # import app routers
-from api.v1.machines import machines_router
-from api.v1.health import health_router
-from api.v1.users import users_router
-from api.v1.api_keys import api_keys_router
-from api.v1.ssh_keys import ssh_keys_router
-from api.v1.pricing import pricing_router
-from api.v1.file_systems import file_systems_router
+from src.api.v1.machines import machines_router
+from src.api.v1.health import health_router
+from src.api.v1.users import users_router
+from src.api.v1.api_keys import api_keys_router
+from src.api.v1.ssh_keys import ssh_keys_router
+from src.api.v1.pricing import pricing_router
+from src.api.v1.file_systems import file_systems_router
 
 # import other modules
-from database.crud import create_tables, update_admin_api_keys
-from config import app_config
-from log_config import setup_logger
+from src.database.crud import create_tables, update_admin_api_keys
+from src.config import app_config
+from src.log_config import setup_logger
 
 # Setup logging
 setup_logger()

@@ -1,6 +1,6 @@
 import aioboto3
 
-from config import app_config
+from src.config import app_config
 
 # TODO: support for dns names for the machines is not currently used, we can add support in the future with these methods
 
