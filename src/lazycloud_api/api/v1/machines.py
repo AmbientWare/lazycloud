@@ -42,13 +42,6 @@ async def get_machines(
     return machines
 
 
-@machines_router.get("/options")
-async def get_platform_options(
-    _=Depends(get_current_active_user),
-) -> PlatformOptions:
-    return await platform_manager.get_platform_options()
-
-
 class MachineConnectionDetailsResponse(BaseModel):
     ip: str
     port: int

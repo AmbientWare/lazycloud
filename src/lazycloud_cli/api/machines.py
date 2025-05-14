@@ -1,20 +1,9 @@
 from typing import Dict, List, Optional, Tuple, Any
 import typer
-from pydantic import BaseModel
 
 from lazycloud_cli.logging import logger
 from lazycloud_cli.api.base import BaseAPI
 from lazycloud_cli.api.utils import mb_to_gb
-
-
-class GPUInfo(BaseModel):
-    regions: List[str]
-
-
-class MachineOptions(BaseModel):
-    regions: List[str]
-    compute: Dict[str, List[int]]
-    gpu: Dict[str, GPUInfo]
 
 
 class MachineAPI(BaseAPI):
@@ -41,15 +30,6 @@ class MachineAPI(BaseAPI):
             raise typer.Exit(1)
 
         return machine_id
-
-    def get_machine_options(self) -> MachineOptions:
-        """Get the options for a machine"""
-        res = self._get("options")
-        return MachineOptions(
-            regions=res.get("regions", []),
-            compute=res.get("compute", {}),
-            gpu=res.get("gpu", {}),
-        )
 
     def list_machines(self) -> List[Dict]:
         """List all machines"""
