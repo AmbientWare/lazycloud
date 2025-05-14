@@ -1,0 +1,148 @@
+# SSH Commands
+
+The `ssh` command group allows you to manage SSH keys for your cloud machines. These commands help you set up and manage SSH access to your machines.
+
+## Add SSH Key
+
+Add a new SSH key to your account.
+
+```bash
+lazycloud ssh add <name> [options]
+```
+
+### Options
+
+- `--path` or `-p` - Path to the public key file (defaults to ~/.ssh/id_rsa.pub)
+
+### Example
+
+```bash
+# Add using default key
+lazycloud ssh add my-key
+
+# Add using specific key
+lazycloud ssh add my-key --path ~/.ssh/custom_key.pub
+```
+
+## List SSH Keys
+
+List all your SSH keys.
+
+```bash
+lazycloud ssh ls
+```
+
+## Remove SSH Key
+
+Remove an SSH key by name.
+
+```bash
+lazycloud ssh rm <name>
+```
+
+### Example
+
+```bash
+lazycloud ssh rm my-key
+```
+
+## SSH Config
+
+### Show SSH Config
+
+Display your current SSH configuration.
+
+```bash
+lazycloud ssh config show
+```
+
+### Clear SSH Config
+
+Clear your SSH configuration file.
+
+```bash
+lazycloud ssh config clear
+```
+
+This command will prompt for confirmation before proceeding.
+
+## Machine SSH Management
+
+### Add Machine to SSH Config
+
+Add a machine to your SSH configuration file for easier access.
+
+```bash
+lazycloud ssh add <machine-name>
+```
+
+This command will:
+1. Get the machine's ip address and port from the API
+2. Add the machine to your SSH config with the appropriate settings
+3. Use your user ID for the SSH connection
+
+#### Example
+
+```bash
+lazycloud ssh add my-machine
+```
+
+### Remove Machine from SSH Config
+
+Remove a machine from your SSH configuration file.
+
+```bash
+lazycloud ssh remove <machine-name>
+```
+
+This command will remove the machine's entry from your SSH config file.
+
+#### Example
+
+```bash
+lazycloud ssh remove my-machine
+```
+
+## Notes
+
+- Machines are automatically added to your SSH config when created using `lazycloud machines create`
+- Machines are automatically removed from your SSH config when destroyed using `lazycloud machines destroy`
+- The SSH config is managed in your local SSH configuration file
+- All commands require an active API key to be set
+- Machine names are case-sensitive
+- You can connect to machines using either:
+  - `lazycloud machines connect <machine-name>` (recommended)
+  - `ssh <machine-name>` (after adding to SSH config)
+
+## Examples
+
+Here's a complete workflow example:
+
+```bash
+# Add an SSH key
+lazycloud ssh add my-key
+
+# List SSH keys
+lazycloud ssh ls
+
+# Create a new machine (automatically adds to SSH config)
+lazycloud machines create my-machine
+
+# Show SSH config
+lazycloud ssh config show
+
+# Manually add to SSH config if needed
+lazycloud ssh add my-machine
+
+# Connect to the machine
+lazycloud machines connect my-machine
+
+# Remove from SSH config if needed
+lazycloud ssh remove my-machine
+
+# Remove SSH key when done
+lazycloud ssh rm my-key
+
+# Or destroy the machine (automatically removes from SSH config)
+lazycloud machines destroy my-machine
+```
