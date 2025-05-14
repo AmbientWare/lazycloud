@@ -1,14 +1,14 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from services import platform_manager
-from services.platform.platform_manager import (
+from src.services import platform_manager
+from src.services.platform.platform_manager import (
     PricingData,
     Markups,
     GPUPricingTable,
     UnitPricing,
 )
-from config import app_config
+from src.config import app_config
 
 
 pricing_router = APIRouter(prefix="/pricing", tags=["pricing"])

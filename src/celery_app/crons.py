@@ -1,7 +1,7 @@
 # In your Celery configuration, you can specify schedule:
 from celery.schedules import crontab
 
-from celery_app import app
+from src.celery_app import app
 
 app.conf.beat_schedule = {
     "update-pricing-data-every-day-at-midnight": {

@@ -2,10 +2,10 @@ from pydantic import BaseModel
 from tenacity import retry, stop_after_attempt, wait_exponential
 from loguru import logger
 
-from services.fly.api.base import BaseFlyAPI
-from services.fly.schemas import FlyMachineConfig
-from services.platform.schemas import IMAGE_MAP
-from services.fly.utils import (
+from src.services.fly.api.base import BaseFlyAPI
+from src.services.fly.schemas import FlyMachineConfig
+from src.services.platform.schemas import IMAGE_MAP
+from src.services.fly.utils import (
     get_machine_name,
     get_fly_volume_id,
 )

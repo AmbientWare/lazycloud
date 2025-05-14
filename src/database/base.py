@@ -7,7 +7,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.future import select
 from pydantic import BaseModel as PydanticBaseModel
 
-from database.session import session_manager
+from src.database.session import session_manager
 
 nest_asyncio.apply()
 

@@ -1,7 +1,7 @@
 import asyncio
 
-from celery_app import app
-from services import platform_manager
+from src.celery_app import app
+from src.services import platform_manager
 
 
 @app.task()

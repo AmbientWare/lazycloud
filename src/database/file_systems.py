@@ -1,5 +1,5 @@
 from sqlalchemy import Column, String, Integer
-from database.base import BaseModel, BaseTable, DatabaseService
+from src.database.base import BaseModel, BaseTable, DatabaseService
 
 class FileSystemTable(BaseTable):
     """SQLAlchemy model for a file system"""

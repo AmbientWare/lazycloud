@@ -1,7 +1,7 @@
 from typing import List, Optional
 from sqlalchemy import Column, String, Integer, ForeignKey
 from enum import Enum
-from database.base import BaseModel, BaseTable, DatabaseService
+from src.database.base import BaseModel, BaseTable, DatabaseService
 
 
 class MachineStatus(str, Enum):

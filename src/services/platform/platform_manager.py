@@ -8,8 +8,8 @@ import pandas as pd
 from pydantic import BaseModel, ValidationError  # Added BaseModel for UnitPrice
 from redis.asyncio import Redis
 
-from config import app_config
-from services.platform.schemas import (
+from src.config import app_config
+from src.services.platform.schemas import (
     GPUPricingRow,
     GPUPricingTable,
     Markups,
@@ -20,7 +20,7 @@ from services.platform.schemas import (
     Region,
     GPUInfo,
 )
-from services.fly.schemas import RESOURCE_MAP, FlyRegion
+from src.services.fly.schemas import RESOURCE_MAP, FlyRegion
 
 # Constants
 FLY_PRICING_URL = "https://fly.io/docs/about/pricing/"

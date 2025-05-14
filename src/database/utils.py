@@ -1,7 +1,7 @@
 import secrets
 from datetime import datetime, timedelta, timezone
 
-from database.api_keys import ApiKeyExpirationDays, ApiKeyExpirationMinutes
+from src.database.api_keys import ApiKeyExpirationDays, ApiKeyExpirationMinutes
 
 
 def generate_api_key():

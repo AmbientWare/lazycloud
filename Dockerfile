@@ -1,8 +1,7 @@
 # Second stage: build the python base image
 FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS builder
 
-# make the machines directory
-RUN mkdir /app
+RUN mkdir /src
 
 # Install system dependencies, cron, and clean up in one layer to keep image small
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -23,14 +22,13 @@ COPY ./pyproject.toml ./
 COPY ./uv.lock ./
 COPY ./README.md ./
 
-# copy the source code directory
-COPY ./src /app
+COPY ./src /src
 
 # Build the Python package using uv
 RUN uv sync --locked
 
 # set the working directory
-WORKDIR /app
+WORKDIR /src
 
 # Second stage - api
 FROM builder AS api

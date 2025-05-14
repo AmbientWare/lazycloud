@@ -1,6 +1,6 @@
-# from services.aws.route53 import Route53Service
-from services.fly.apps import FlyAppManager
-from services.platform.platform_manager import PlatformManager
+# from src.services.aws.route53 import Route53Service
+from src.services.fly.apps import FlyAppManager
+from src.services.platform.platform_manager import PlatformManager
 
 # route_53 = Route53Service()
 fly_app_manager = FlyAppManager()

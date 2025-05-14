@@ -1,6 +1,6 @@
-from services.fly.api.apps import AppsAPI
-from services.fly.api.machines import MachinesAPI
-from services.fly.api.volumes import VolumesAPI
+from src.services.fly.api.apps import AppsAPI
+from src.services.fly.api.machines import MachinesAPI
+from src.services.fly.api.volumes import VolumesAPI
 
 
 class FlyAPI:

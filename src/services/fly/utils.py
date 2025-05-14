@@ -7,10 +7,10 @@ import sys
 from typing import List, Callable, Awaitable
 from loguru import logger
 
-from config import app_config
-from services.fly.schemas import FlyCommandError
-from database.machines import MachineStatus
-from database import db
+from src.config import app_config
+from src.services.fly.schemas import FlyCommandError
+from src.database.machines import MachineStatus
+from src.database import db
 
 
 async def get_app_name(usage_uuid: str) -> str:
