@@ -1,0 +1,69 @@
+# LazyCloud CLI Overview
+
+The LazyCloud CLI (`lazycloud`) is a command-line tool for managing your cloud machines and resources.
+
+## Installation
+
+Install the LazyCloud CLI using pip:
+
+```bash
+pip install lazycloud
+```
+
+## Getting Started
+
+Before using the CLI, you'll need to:
+
+1. Set up your API key:
+- Copy your default API key from [lazycloud.dev/api-keys](https://lazycloud.dev/api-keys)
+```bash
+# Add your API key
+lazycloud auth add default YOUR_API_KEY
+
+# Set it as active
+lazycloud auth set default
+```
+
+2. Set up SSH keys for machine access:
+```bash
+# Generate SSH key pair if you don't have one
+ssh-keygen -t ed25519 -C "your_email@example.com"
+
+# Add the SSH key to your account
+lazycloud ssh add my-ssh-key
+```
+
+## Basic Usage
+
+Here's a simple example of creating and managing a machine:
+
+```bash
+# Create a new machine (interactive)
+lazycloud machines create my-machine
+
+# List your machines
+lazycloud machines ls
+
+# Connect to the machine
+lazycloud machines connect my-machine
+
+# When done, clean up
+lazycloud machines destroy my-machine
+```
+
+## Getting Help
+
+The CLI provides built-in help for all commands:
+
+```bash
+# List all available commands
+lazycloud --help
+
+# Get help for a specific command group
+lazycloud machines --help
+
+# Get help for a specific command
+lazycloud machines create --help
+```
+
+For more detailed information about specific commands, refer to the individual command documentation.

@@ -17,7 +17,7 @@ services:
       target: api
     volumes:
       # this allows for hot reloading
-      - ./src:/app
+      - ./src/lazycloud_api:/src/lazycloud_api
     env_file:
       - .env
     environment:
@@ -48,7 +48,7 @@ services:
       target: celery-beat
     volumes:
       # this allows for hot reloading
-      - ./src:/app
+      - ./src/lazycloud_api:/src/lazycloud_api
     env_file:
       - .env
     environment:
@@ -73,7 +73,7 @@ services:
       target: celery-worker
     volumes:
       # this allows for hot reloading
-      - ./src:/app
+      - ./src/lazycloud_api:/src/lazycloud_api
     env_file:
       - .env
     environment:

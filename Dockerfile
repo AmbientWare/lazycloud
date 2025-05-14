@@ -22,13 +22,13 @@ COPY ./pyproject.toml ./
 COPY ./uv.lock ./
 COPY ./README.md ./
 
-COPY ./src /src
+COPY ./src/lazycloud_api /src/lazycloud_api
 
 # Build the Python package using uv
 RUN uv sync --locked
 
 # set the working directory
-WORKDIR /src
+WORKDIR /src/lazycloud_api
 
 # Second stage - api
 FROM builder AS api

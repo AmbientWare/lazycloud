@@ -1,0 +1,127 @@
+# Machines Commands
+
+The `machines` command group allows you to manage your cloud machines. Here are all the available commands:
+
+## Create a Machine
+
+Creates a new cloud machine with specified configuration.
+
+```bash
+lazycloud machines create <name>
+```
+
+The command will interactively prompt you for the following configuration options:
+
+- Region to deploy the machine
+- Number of CPUs
+- Memory in GB
+- Volume size in GB
+- GPU kind
+- SSH key to use
+
+### Example
+
+```bash
+lazycloud machines create my-machine
+```
+
+After creating a machine, the machine will be automatically added to your SSH config for easier access.
+
+## List Machines
+
+Lists all your cloud machines.
+
+```bash
+lazycloud machines ls
+```
+
+## Get Machine Details
+
+Get detailed information about one or all machines.
+
+```bash
+lazycloud machines get [machine-name]
+```
+
+If no machine name is provided, it will show details for all machines.
+
+## Scale a Machine
+
+Scale an existing machine's resources.
+
+```bash
+lazycloud machines scale <machine-name>
+```
+
+The command will interactively prompt you to select new CPU and memory values from the available options. It will show the current values and only display options that are different from the current configuration.
+
+### Example
+
+```bash
+lazycloud machines scale my-machine
+```
+
+## Connect to a Machine
+
+Connect to a machine via SSH.
+
+```bash
+lazycloud machines connect <machine-name> [options]
+```
+
+### Options
+
+- `--command` or `-c` - Command to execute on the remote machine
+
+### Example
+
+```bash
+# Connect to the machine
+lazycloud machines connect my-machine
+
+# Execute a command on the remote machine
+lazycloud machines connect my-machine --command "ls -la"
+```
+
+## Destroy a Machine
+
+Destroy a machine and all its associated resources.
+
+```bash
+lazycloud machines destroy <machine-name>
+```
+
+This command will prompt for confirmation before proceeding. It will also automatically remove the machine from your SSH config if it was previously added.
+
+## Examples
+
+Here's a complete workflow example:
+
+```bash
+# Create a new machine
+lazycloud machines create my-machine
+
+# List all machines
+lazycloud machines ls
+
+# Scale the machine
+lazycloud machines scale my-machine
+
+# Connect to the machine
+lazycloud machines connect my-machine
+
+# Execute a command on the remote machine
+lazycloud machines connect my-machine --command "docker ps"
+
+# When done, destroy the machine
+lazycloud machines destroy my-machine
+```
+
+## Notes
+
+- When creating a machine, you'll be prompted to select an existing SSH key
+- The machine will be automatically added to your SSH config after creation
+- When destroying a machine, it will be automatically removed from your SSH config
+- All commands require an active API key to be set
+- Machine names are case-sensitive
+- The scale command will only show options that are different from the current configuration
