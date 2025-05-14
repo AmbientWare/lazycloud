@@ -7,20 +7,26 @@ from lazycloud_api.services.platform.platform_manager import (
     Markups,
     GPUPricingTable,
     UnitPricing,
+    PlatformOptions,
 )
 from lazycloud_api.config import app_config
 
 
-pricing_router = APIRouter(prefix="/pricing", tags=["pricing"])
+platform_router = APIRouter(prefix="/platform", tags=["platform"])
 
 
-@pricing_router.get("/")
+@platform_router.get("/options")
+async def get_platform_options() -> PlatformOptions:
+    return await platform_manager.get_platform_options()
+
+
+@platform_router.get("/pricing")
 async def get_pricing() -> PricingData:
     """Get all pricing data including region markups, compute pricing, and GPU pricing."""
     return await platform_manager.get_latest_pricing_data()
 
 
-@pricing_router.get("/markups")
+@platform_router.get("/pricing/markups")
 async def get_region_markups() -> Markups:
     """Get region markup data."""
     pricing_data = await platform_manager.get_latest_pricing_data()
@@ -29,7 +35,7 @@ async def get_region_markups() -> Markups:
     return pricing_data.markups
 
 
-@pricing_router.get("/compute")
+@platform_router.get("/pricing/compute")
 async def get_compute_pricing() -> UnitPricing:
     try:
         return await platform_manager.get_unit_pricing()
@@ -39,7 +45,7 @@ async def get_compute_pricing() -> UnitPricing:
         )
 
 
-@pricing_router.get("/gpu")
+@platform_router.get("/pricing/gpu")
 async def get_gpu_pricing() -> GPUPricingTable:
     """Get GPU pricing data."""
     pricing_data = await platform_manager.get_latest_pricing_data()
@@ -53,19 +59,19 @@ class PriceResponse(BaseModel):
     units: str
 
 
-@pricing_router.get("/volume")
+@platform_router.get("/pricing/volume")
 async def get_volume_pricing() -> PriceResponse:
     """Get volume storage pricing."""
     return PriceResponse(price=app_config.VOLUME_PRICE, units="GB/month")
 
 
-@pricing_router.get("/ipv4")
+@platform_router.get("/pricing/ipv4")
 async def get_dedicated_ipv4_pricing() -> PriceResponse:
     """Get dedicated IPv4 pricing."""
     return PriceResponse(price=app_config.DEDICATED_IPV4_PRICE, units="month")
 
 
-@pricing_router.get("/egress")
+@platform_router.get("/pricing/egress")
 async def get_data_egress_pricing() -> PriceResponse:
     """Get data egress pricing."""
     return PriceResponse(price=app_config.DATA_EGRESS_PRICE, units="GB")

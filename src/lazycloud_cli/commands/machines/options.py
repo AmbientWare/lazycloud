@@ -62,8 +62,8 @@ def create_gpu_table(gpu_options: dict) -> Table:
 @app.command()
 def options():
     """Display available machine options"""
-    machine_options = api.machines.get_machine_options()
-    if not machine_options:
+    platform_options = api.platform.get_platform_options()
+    if not platform_options:
         logger.error(
             "No machine options found. Please check your connection and try again."
         )
@@ -71,11 +71,11 @@ def options():
 
     # Display compute options
     compute_table = create_compute_table(
-        machine_options.compute, machine_options.regions
+        platform_options.compute, platform_options.regions
     )
     logger.print(compute_table)
     logger.print()  # Empty line for spacing
 
     # Display GPU options
-    gpu_table = create_gpu_table(machine_options.gpu)
+    gpu_table = create_gpu_table(platform_options.gpu)
     logger.print(gpu_table)

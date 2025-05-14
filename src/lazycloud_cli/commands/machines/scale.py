@@ -20,9 +20,9 @@ def scale(
             return
 
         # Get available machine options
-        machine_options = api.machines.get_machine_options()
-        if not machine_options:
-            logger.error("No machine options found")
+        platform_options = api.platform.get_platform_options()
+        if not platform_options:
+            logger.error("No platform options found")
             return
 
         # Get current values
@@ -30,7 +30,7 @@ def scale(
         current_memory = current_machine[0].get("memory", 2)
 
         # Get CPU options
-        cpu_options = list(machine_options.compute.keys())
+        cpu_options = list(platform_options.compute.keys())
         cpu_options = [opt for opt in cpu_options if int(opt) != int(current_cpu)]
         cpu = logger.option(
             "Available CPU options (Current: " + str(current_cpu) + "):",
@@ -41,7 +41,7 @@ def scale(
         # Get memory options for the selected CPU
         memory_options = [
             opt
-            for opt in machine_options.compute[str(cpu)]
+            for opt in platform_options.compute[str(cpu)]
             if int(opt) != int(current_memory)
         ]
         memory = logger.option(

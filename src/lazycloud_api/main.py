@@ -18,7 +18,7 @@ from lazycloud_api.api.v1.health import health_router
 from lazycloud_api.api.v1.users import users_router
 from lazycloud_api.api.v1.api_keys import api_keys_router
 from lazycloud_api.api.v1.ssh_keys import ssh_keys_router
-from lazycloud_api.api.v1.pricing import pricing_router
+from lazycloud_api.api.v1.platform import platform_router
 from lazycloud_api.api.v1.file_systems import file_systems_router
 
 # import other modules
@@ -73,7 +73,7 @@ versionsed_routes = APIRouter(prefix=app_config.API_VERSION)
 versionsed_routes.include_router(machines_router)
 versionsed_routes.include_router(users_router)
 versionsed_routes.include_router(api_keys_router)
-versionsed_routes.include_router(pricing_router)
+versionsed_routes.include_router(platform_router)
 versionsed_routes.include_router(ssh_keys_router)
 versionsed_routes.include_router(file_systems_router)
 app.include_router(versionsed_routes)

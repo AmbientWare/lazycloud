@@ -18,10 +18,10 @@ def create(name: str = typer.Argument(..., help="Name of the file system to crea
             raise typer.Exit(1)
 
         # NOTE: regions is dependent on the machine options
-        machine_options = api.machines.get_machine_options()
-        if not machine_options:
+        platform_options = api.platform.get_platform_options()
+        if not platform_options:
             logger.error(
-                "No machine options found. Please create a machine first with `lazycloud machines create`"
+                "No platform options found. Please create a machine first with `lazycloud machines create`"
             )
             return
 
@@ -34,13 +34,13 @@ def create(name: str = typer.Argument(..., help="Name of the file system to crea
             # get the specific gpu type from the user
             gpu_kind = logger.option(
                 "Which GPU kind do you plan to use?",
-                list(machine_options.gpu.keys()),
-                default=list(machine_options.gpu.keys())[0],
+                list(platform_options.gpu.keys()),
+                default=list(platform_options.gpu.keys())[0],
             )
-            regions = machine_options.gpu[gpu_kind].regions
+            regions = platform_options.gpu[gpu_kind].regions
         else:
             gpu_kind = None
-            regions = machine_options.regions
+            regions = platform_options.regions
 
         # prompt to get the region
         region = logger.option("Select a region:", regions, default=regions[0])

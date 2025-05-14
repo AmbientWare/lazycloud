@@ -30,35 +30,35 @@ def create(
             )
             return
 
-        machine_options = api.machines.get_machine_options()
-        if not machine_options:
+        platform_options = api.platform.get_platform_options()
+        if not platform_options:
             logger.error(
-                "No machine options found. Please create a machine first with `lazycloud machines create`"
+                "No platform options found. Please create a machine first with `lazycloud machines create`"
             )
             return
 
         # prompt to get the gpu kind
         gpu_kind = logger.option(
             "Select a GPU to attach to the machine, otherwise leave blank",
-            list(machine_options.gpu.keys()),
+            list(platform_options.gpu.keys()),
             default="None",
         )
 
         # prompt to get the region
         if gpu_kind != "None":
             # GPU regions are specific to the GPU kind
-            regions = machine_options.gpu[gpu_kind].regions
+            regions = platform_options.gpu[gpu_kind].regions
         else:
             # There are several more supported regions for CPU only machines
             gpu_kind = None # later methods expect gpu_kind to be None if no GPU is selected
-            regions = machine_options.regions
+            regions = platform_options.regions
 
         region = logger.option(
             "Select a region to deploy the machine:", regions, default=regions[0]
         )
 
         # prompt to get the cpu
-        cpu_options = list(machine_options.compute.keys())
+        cpu_options = list(platform_options.compute.keys())
         cpu = logger.option(
             "Select how many CPU cores to allocate:",
             [str(cpu) for cpu in cpu_options],
@@ -66,7 +66,7 @@ def create(
         )
 
         # prompt to get the memory
-        memory_options = machine_options.compute[cpu]
+        memory_options = platform_options.compute[cpu]
         memory = logger.option(
             "Select how much RAM to allocate (GB):",
             [str(memory) for memory in memory_options],
