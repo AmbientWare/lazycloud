@@ -92,9 +92,9 @@ def create(
             return
 
         disk_size = typer.prompt(
-            "Enter the initial size of the file system in GB. Minimum size is 10GB.",
-            default=10,
-            type=click.IntRange(min=10),
+            "Enter the initial size of the file system in GB. Minimum size is 100GB.",
+            default=100,
+            type=click.IntRange(min=10, max=500),
         )
 
         # Create machine using API

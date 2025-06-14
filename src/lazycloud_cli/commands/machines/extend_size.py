@@ -1,5 +1,6 @@
 import typer
 from rich.console import Console
+import click
 
 from lazycloud_cli.api import api
 from lazycloud_cli.logging import logger
@@ -29,29 +30,8 @@ def extend_size(
     # prompt user for new size
     new_size = typer.prompt(
         f"Enter the new size for {name} (current size: {machine['disk_size']}GB)",
-        type=int,
+        type=click.IntRange(min=machine["disk_size"], max=500),
     )
-
-    cases = {
-        (
-            new_size <= machine["disk_size"]
-        ): "New size must be greater than current size",
-        (new_size > 500): "New size must be less than or equal to 500GB",
-    }
-
-    for case, error_message in cases.items():
-        if case:
-            logger.error(error_message)
-            raise typer.Exit(1)
-
-    # make sure new size is greater than current size
-    if new_size <= machine["disk_size"]:
-        logger.error("New size must be greater than current size")
-        raise typer.Exit(1)
-    # make sure new size is <= 500GB
-    if new_size > 500:
-        logger.error("New size must be less than or equal to 500GB")
-        raise typer.Exit(1)
 
     # confirm the extension since volumes cannot be shrunk
     typer.confirm(
