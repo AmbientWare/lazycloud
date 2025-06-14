@@ -5,7 +5,11 @@ from datetime import datetime, timezone
 from lazycloud_api.api.security import get_current_active_user, UserData, require_admin
 from lazycloud_api.database import db
 from lazycloud_api.database.usage import UsagePydantic
-from lazycloud_api.database.api_keys import ApiKeyPydantic, ApiKeyRole, ApiKeyExpirationDays
+from lazycloud_api.database.api_keys import (
+    ApiKeyPydantic,
+    ApiKeyRole,
+    ApiKeyExpirationDays,
+)
 from lazycloud_api.database.utils import generate_api_key, generate_api_key_expires_at
 
 users_router = APIRouter(prefix="/users", tags=["users"])

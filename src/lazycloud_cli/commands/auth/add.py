@@ -9,9 +9,7 @@ app = typer.Typer(help="Add a new API key")
 
 @app.command()
 def add(
-    name: str = typer.Argument(
-        ..., help="Name for the API key"
-    ),
+    name: str = typer.Argument(..., help="Name for the API key"),
 ):
     """Add a new API key"""
     # Check if key name already exists

@@ -102,7 +102,9 @@ class StatusSpinner:
     def __enter__(self) -> "StatusSpinner":
         """Context manager entry"""
         # Start with the base message
-        self._progress, self._task_id = logger.create_progress_spinner(self._base_message)
+        self._progress, self._task_id = logger.create_progress_spinner(
+            self._base_message
+        )
         self._progress.start()
         self._running = True
         self._status_thread = threading.Thread(target=self._status_check_thread)

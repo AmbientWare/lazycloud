@@ -11,15 +11,25 @@ from lazycloud_api.api.security import (
 )
 from lazycloud_api.database import db
 from lazycloud_api.database.machines import MachinePydantic, MachineStatus
-from lazycloud_api.services import fly_app_manager, platform_manager
+from lazycloud_api.services import fly_app_manager
 from lazycloud_api.services.fly.schemas import (
     FlyMachineConfig,
     FlyRegion,
 )
-from lazycloud_api.services.platform.schemas import PlatformOptions
 from lazycloud_api.services.fly.utils import get_app_ipv4
 
 machines_router = APIRouter(prefix="/machines", tags=["machines"])
+
+
+class GetMachinesResponse(BaseModel):
+    id: int
+    name: str
+    status: MachineStatus
+    region: FlyRegion
+    cpu: int
+    memory: int
+    disk_size: int
+    gpu_kind: str | None
 
 
 @machines_router.get("")
@@ -27,7 +37,7 @@ async def get_machines(
     id: int | None = None,
     user_id: str | None = None,
     current_user: UserData = Depends(get_current_active_user),
-) -> List[MachinePydantic]:
+) -> List[GetMachinesResponse]:
     filters: Dict[str, Any] = {
         "user_id": await check_user_id_request(user_id, current_user)
     }
@@ -39,7 +49,29 @@ async def get_machines(
     """Get a list of machines"""
     machines = await db.machines.afind(filters=filters)
 
-    return machines
+    response_data = []
+    for machine in machines:
+        if machine.id is None:
+            continue
+
+        volume = await db.volumes.afind_one(filters={"machine_id": machine.id})
+        if volume is None:
+            continue
+
+        response_data.append(
+            GetMachinesResponse(
+                id=machine.id,
+                name=machine.name,
+                status=machine.status,
+                region=FlyRegion(machine.region),
+                cpu=machine.cpu,
+                memory=machine.memory,
+                disk_size=volume.size,
+                gpu_kind=machine.gpu_kind,
+            )
+        )
+
+    return response_data
 
 
 class MachineConnectionDetailsResponse(BaseModel):
@@ -61,7 +93,7 @@ async def get_machines_connection_details(
     if machine is None or machine.id is None:
         raise HTTPException(status_code=404, detail="Machine not found")
 
-    ipv4 = await get_app_ipv4(usage_uuid)
+    ipv4 = await get_app_ipv4(usage_uuid, machine.id)
     port = machine.app_port
 
     if ipv4 is None:
@@ -74,11 +106,10 @@ class CreateMachineRequest(BaseModel):
     user_id: Optional[str] = None
     name: str
     public_key: str
-    file_system_id: int
     region: FlyRegion = Field(default=FlyRegion.ORD)
     cpu: int = Field(default=1)
     memory: int = Field(default=1024)
-    volume_size: int = Field(default=10)
+    disk_size: int = Field(default=10)
     gpu_kind: str | None = Field(default=None)
 
 
@@ -113,48 +144,13 @@ async def create_machine(
     if ssh_key is None:
         raise HTTPException(status_code=400, detail="SSH key not found")
 
-    # get the file_system from our database by name
-    file_system = await db.file_systems.afind_one(
-        filters={
-            "id": create_machine_request.file_system_id,
-            "user_id": user_id,
-        }
-    )
-
-    # make sure the file system exists
-    if file_system is None or file_system.id is None:
-        raise HTTPException(status_code=404, detail="File system not found")
-
-    # create the machine in our database
-    app_port = await db.machines.get_first_available_port(usage_uuid)
-    new_machine = await db.machines.acreate(
-        MachinePydantic(
-            user_id=user_id,
-            name=create_machine_request.name,
-            region=create_machine_request.region.value,
-            image=file_system.image,  # set the image to be the same as the file system
-            cpu_kind="performance",  # NOTE: right now we only support performance machines, maybe shared in the future
-            cpu=create_machine_request.cpu,
-            memory=create_machine_request.memory,
-            gpu_kind=create_machine_request.gpu_kind,
-            status=MachineStatus.INITIALIZING,
-            app_port=app_port,
-            file_system_id=file_system.id,
-        )
-    )
-
-    if new_machine is None or new_machine.id is None:
-        raise HTTPException(status_code=500, detail="Failed to create machine")
-
     # now deploy the app with vm on fly
     try:
         machine_config = FlyMachineConfig(
-            machine_id=new_machine.id,
             usage_uuid=usage_uuid,
-            file_system_id=file_system.id,
             cpu_kind="performance",  # TODO: maybe make configurable in the future
-            port=app_port,
             public_key=ssh_key.public_key,
+            volume_size=create_machine_request.disk_size,
         )
 
         # Only set optional fields if they are provided
@@ -167,18 +163,13 @@ async def create_machine(
         if create_machine_request.gpu_kind is not None:
             machine_config.gpu_kind = create_machine_request.gpu_kind
 
-        await fly_app_manager.create_machine(machine_config)
+        new_machine = await fly_app_manager.create_machine(
+            user_id, create_machine_request.name, machine_config
+        )
 
     except Exception as e:
-        logger.error(f"Error creating machine: {e}\n Attempting to clean up machine.")
-        try:
-            # delete the machine from fly, dns record, and db
-            await fly_app_manager.destroy_machine(usage_uuid, new_machine.id)
-        except Exception as e:
-            logger.error(f"Error deleting machine: {e}")
-
-    finally:
-        await fly_app_manager.clean(usage_uuid)
+        logger.error(f"Error creating machine: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
     return new_machine
 
@@ -306,14 +297,11 @@ async def delete_machine(
     if machine is None or machine.id is None:
         return None
 
-    # delete the machine from fly
+    # destroying the app will also destroy the machine and volume
     try:
-        await fly_app_manager.destroy_machine(usage_uuid, machine.id)
+        await fly_app_manager.destroy_app(usage_uuid, machine.id)
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-    # finally run cleanup
-    await fly_app_manager.clean(usage_uuid)
 
     return machine

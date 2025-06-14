@@ -31,17 +31,16 @@ class FlyRegion(Enum):
 
 
 class FlyMachineConfig(BaseModel):
-    machine_id: int
     usage_uuid: str
+    volume_size: int
+    public_key: str
     region: FlyRegion = FlyRegion.LAX
     cpu_kind: str = "shared"
     cpu: int = 1
     memory: int = 1024
-    file_system_id: int
     gpu_kind: str | None = None
     image_type: ImageTypes = ImageTypes.UBUNTU_22_04
-    port: int
-    public_key: str
+    machine_id: int | None = None
 
 
 RESOURCE_MAP = {
@@ -62,6 +61,14 @@ RESOURCE_MAP = {
         "a10": {"regions": [FlyRegion.ORD]},
         "l40s": {"regions": [FlyRegion.ORD]},
         "a100-40gb": {"regions": [FlyRegion.ORD]},
-        "a100-80gb": {"regions": [FlyRegion.IAD, FlyRegion.SJC, FlyRegion.SYD, FlyRegion.MIA, FlyRegion.AMS]},
+        "a100-80gb": {
+            "regions": [
+                FlyRegion.IAD,
+                FlyRegion.SJC,
+                FlyRegion.SYD,
+                FlyRegion.MIA,
+                FlyRegion.AMS,
+            ]
+        },
     },
 }

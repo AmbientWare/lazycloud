@@ -21,7 +21,6 @@ REMOVABLE_TABLE_NAMES = [
     "user_id",
     "machine_uuid",
     "app_port",
-    "file_system_id",
 ]
 
 

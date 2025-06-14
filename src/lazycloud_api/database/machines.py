@@ -1,5 +1,6 @@
 from typing import List, Optional
-from sqlalchemy import Column, String, Integer, ForeignKey
+from sqlalchemy import Column, String, Integer
+from sqlalchemy.orm import relationship
 from enum import Enum
 from lazycloud_api.database.base import BaseModel, BaseTable, DatabaseService
 
@@ -31,7 +32,11 @@ class MachineTable(BaseTable):
     memory = Column(Integer, nullable=False)
     status = Column(String, nullable=False)
     app_port = Column(Integer, nullable=False)
-    file_system_id = Column(Integer, ForeignKey("file_systems.id"), nullable=False)
+
+    # One-to-many relationship with volumes
+    volumes = relationship(
+        "VolumeTable", back_populates="machine", cascade="all, delete-orphan"
+    )
 
 
 class MachinePydantic(BaseModel):
@@ -46,7 +51,6 @@ class MachinePydantic(BaseModel):
     memory: int
     status: MachineStatus
     app_port: int
-    file_system_id: int
 
 
 class MachineService(DatabaseService[MachineTable, MachinePydantic]):

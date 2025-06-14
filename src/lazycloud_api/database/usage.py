@@ -1,9 +1,18 @@
 from typing import List, Optional
-from sqlalchemy import Column, String, Float, DateTime
+from sqlalchemy import Column, String, Float
 import uuid
-from datetime import datetime
+from enum import Enum
+from sqlalchemy.orm import relationship
 
 from lazycloud_api.database.base import BaseModel, BaseTable, DatabaseService
+
+
+class UsageStatus(str, Enum):
+    """Status of usage"""
+
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+    DELETED = "deleted"
 
 
 class UsageTable(BaseTable):
@@ -13,8 +22,13 @@ class UsageTable(BaseTable):
 
     # NOTE: uuid will be used to identify the app in fly along with machine id
     uuid = Column(String, default=lambda: str(uuid.uuid4()), nullable=False)
-    balance = Column(Float, nullable=False)
-    last_collected_at = Column(DateTime(timezone=True), nullable=False)
+    balance = Column(Float, nullable=False, default=0)
+    status = Column(String, nullable=False, default=UsageStatus.ACTIVE)
+
+    # one to many relationship with usage periods
+    usage_periods = relationship(
+        "UsagePeriodTable", back_populates="usage", cascade="all, delete-orphan"
+    )
 
 
 class UsagePydantic(BaseModel):
@@ -22,7 +36,7 @@ class UsagePydantic(BaseModel):
 
     uuid: Optional[str] = None
     balance: float
-    last_collected_at: datetime
+    status: UsageStatus
 
 
 class UsageService(DatabaseService[UsageTable, UsagePydantic]):

@@ -3,6 +3,7 @@ from pydantic import BaseModel
 
 from lazycloud_cli.api.base import BaseAPI
 
+
 class GPUInfo(BaseModel):
     regions: List[str]
 

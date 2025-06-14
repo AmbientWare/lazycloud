@@ -3,6 +3,7 @@ from typing import List, Optional, Dict
 import re
 from enum import Enum
 
+
 class ImageTypes(Enum):
     UBUNTU_22_04 = "ubuntu2204"
 

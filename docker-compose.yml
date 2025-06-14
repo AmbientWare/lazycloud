@@ -1,6 +1,6 @@
 # create a network for the services to communicate
 networks:
-  machines:
+  lazycloud:
     external: true
 
 # create volumes for the databases
@@ -10,7 +10,7 @@ volumes:
 
 services:
   api:
-    image: machines-api:latest
+    image: lazycloud-api:latest
     build:
       context: .
       dockerfile: Dockerfile
@@ -21,10 +21,10 @@ services:
     env_file:
       - .env
     environment:
-      - DATABASE_URL=postgresql+asyncpg://machines-dev:password@postgres:5432/machines
+      - DATABASE_URL=postgresql+asyncpg://lazycloud-dev:password@postgres:5432/lazycloud
       - REDIS_URL=redis://redis:6379
     networks:
-      - machines
+      - lazycloud
     command: ["uv", "run", "python", "main.py", "--debug", "--workers", "1"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://api:8000/health"]
@@ -41,7 +41,7 @@ services:
       - 8000:8000
 
   celery-beat:
-    image: machines-api:latest
+    image: lazycloud-api:latest
     build:
       context: .
       dockerfile: Dockerfile
@@ -55,7 +55,7 @@ services:
       - DATABASE_URL=postgresql+asyncpg://machines-dev:password@postgres:5432/machines
       - REDIS_URL=redis://redis:6379
     networks:
-      - machines
+      - lazycloud
     command: ["uv", "run", "celery", "-A", "celery_app", "beat", "--loglevel=info"]
     depends_on:
       postgres:
@@ -66,7 +66,7 @@ services:
       replicas: 1  # Ensure only one beat instance runs
 
   celery-worker:
-    image: machines-api:latest
+    image: lazycloud-api:latest
     build:
       context: .
       dockerfile: Dockerfile
@@ -80,7 +80,7 @@ services:
       - DATABASE_URL=postgresql+asyncpg://machines-dev:password@postgres:5432/machines
       - REDIS_URL=redis://redis:6379
     networks:
-      - machines
+      - lazycloud
     depends_on:
       postgres:
         condition: service_healthy
@@ -92,11 +92,11 @@ services:
   postgres:
     image: timescale/timescaledb-ha:pg17
     networks:
-      - machines
+      - lazycloud
     environment:
-      POSTGRES_USER: machines-dev
+      POSTGRES_USER: lazycloud-dev
       POSTGRES_PASSWORD: password
-      POSTGRES_DB: machines
+      POSTGRES_DB: lazycloud
       POSTGRES_KEEPALIVES: 1
       POSTGRES_KEEPALIVES_IDLE: 60
       POSTGRES_KEEPALIVES_INTERVAL: 10
@@ -107,7 +107,7 @@ services:
     ports:
       - 5432:5432
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U machines-dev"]
+      test: ["CMD-SHELL", "pg_isready -U lazycloud-dev"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -115,7 +115,7 @@ services:
   redis:
     image: redis:latest
     networks:
-      - machines
+      - lazycloud
     volumes:
       - redis-data:/data
     ports:

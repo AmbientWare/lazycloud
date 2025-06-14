@@ -4,7 +4,11 @@ from typing import List, Optional
 
 from lazycloud_api.api.security import require_admin
 from lazycloud_api.database import db
-from lazycloud_api.database.api_keys import ApiKeyPydantic, ApiKeyRole, ApiKeyExpirationDays
+from lazycloud_api.database.api_keys import (
+    ApiKeyPydantic,
+    ApiKeyRole,
+    ApiKeyExpirationDays,
+)
 from lazycloud_api.database.utils import (
     generate_api_key,
     generate_api_key_expires_at,
