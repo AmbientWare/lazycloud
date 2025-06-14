@@ -10,7 +10,7 @@ from lazycloud_api.database.api_keys import (
     ApiKeyRole,
     ApiKeyExpirationDays,
 )
-from lazycloud_api.database.usage import UsageService, UsagePydantic
+from lazycloud_api.database.usage import UsageService, UsagePydantic, UsageStatus
 
 
 async def create_tables():
@@ -29,7 +29,7 @@ async def update_admin_api_keys():
             UsagePydantic(
                 user_id="admin",
                 balance=0,
-                last_collected_at=datetime.now(timezone.utc),
+                status=UsageStatus.ACTIVE,
             )
         )
 

@@ -13,9 +13,9 @@ from lazycloud_api.database.machines import MachineStatus
 from lazycloud_api.database import db
 
 
-async def get_app_name(usage_uuid: str) -> str:
+async def get_app_name(usage_uuid: str, machine_id: int) -> str:
     """Get the name of the Fly.io application."""
-    return f"lc-{usage_uuid}"
+    return f"lc-{usage_uuid}-{machine_id}"
 
 
 async def get_machine_name(machine_id: int) -> str:
@@ -23,14 +23,14 @@ async def get_machine_name(machine_id: int) -> str:
     return f"lc_machine_{machine_id}"
 
 
-async def get_app_volume_name(file_system_id: int) -> str:
+async def get_app_volume_name(volume_id: int) -> str:
     """Get the name of the Fly.io application volume."""
-    return f"lc_volume_{file_system_id}"
+    return f"lc_volume_{volume_id}"
 
 
-async def get_app_ipv4(usage_uuid: str) -> str | None:
+async def get_app_ipv4(usage_uuid: str, machine_id: int) -> str | None:
     """Get the name of the Fly.io application IPv4."""
-    app_name = await get_app_name(usage_uuid)
+    app_name = await get_app_name(usage_uuid, machine_id)
     cmd = ["fly", "ips", "list", "-a", app_name, "--json"]
 
     response = await run_async_command(cmd, print_output=False)
@@ -44,17 +44,22 @@ async def get_app_ipv4(usage_uuid: str) -> str | None:
 
 
 async def get_fly_volume_id(
-    usage_uuid: str, file_system_id: int | None = None, volume_name: str | None = None
+    usage_uuid: str,
+    machine_id: int,
+    volume_id: int | None = None,
+    volume_name: str | None = None,
 ) -> str | None:
     """Get the volume id for the application."""
-    if file_system_id is None and volume_name is None:
-        raise ValueError("Either file_system_id or volume_name must be provided")
+    if volume_id is None and volume_name is None:
+        logger.error("Either volume_id or volume_name must be provided")
+        raise ValueError("Either volume_id or volume_name must be provided")
 
     elif volume_name is None:
-        if file_system_id is None:
-            raise ValueError("file_system_id must be provided if volume_name is not")
+        if volume_id is None:
+            logger.error("volume_id must be provided if volume_name is not")
+            raise ValueError("volume_id must be provided if volume_name is not")
 
-        volume_name = await get_app_volume_name(file_system_id)
+        volume_name = await get_app_volume_name(volume_id)
 
     response = await run_async_command(
         [
@@ -62,7 +67,7 @@ async def get_fly_volume_id(
             "volume",
             "list",
             "-a",
-            await get_app_name(usage_uuid),
+            await get_app_name(usage_uuid, machine_id),
             "--json",
         ],
         print_output=False,
@@ -155,7 +160,9 @@ async def run_async_command(
                 error_msg = (
                     "\n".join(output_lines)
                     if output_lines
-                    else "\n".join(error_lines) if error_lines else "Unknown error"
+                    else "\n".join(error_lines)
+                    if error_lines
+                    else "Unknown error"
                 )
                 raise subprocess.CalledProcessError(
                     return_code,
@@ -193,7 +200,9 @@ async def run_async_command(
         error_msg = (
             e.stdout.strip()
             if e.stdout
-            else e.stderr.strip() if e.stderr else "Unknown error"
+            else e.stderr.strip()
+            if e.stderr
+            else "Unknown error"
         )
         # Extract just the actual error message, removing redundant wrapping
         if "failed to extend volume:" in error_msg:

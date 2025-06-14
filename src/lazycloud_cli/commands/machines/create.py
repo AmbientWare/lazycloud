@@ -50,7 +50,9 @@ def create(
             regions = platform_options.gpu[gpu_kind].regions
         else:
             # There are several more supported regions for CPU only machines
-            gpu_kind = None # later methods expect gpu_kind to be None if no GPU is selected
+            gpu_kind = (
+                None  # later methods expect gpu_kind to be None if no GPU is selected
+            )
             regions = platform_options.regions
 
         region = logger.option(
@@ -89,42 +91,11 @@ def create(
             logger.error(f"Error reading public key file: {e}")
             return
 
-        # have user input the file system size, default to 10
-        file_systems = api.file_systems.get_available_file_systems()
-        # only keep file systems in the selected region
-        file_systems = [fs for fs in file_systems if fs["region"] == region]
-        if file_systems:
-            fs_names = [fs["name"] for fs in file_systems]
-            file_system_name = logger.option(
-                "Select a file system or leave blank to create a new one (only shows file systems in the selected region)",
-                fs_names,
-                default="Create New",
-            )
-        else:
-            logger.warning(
-                "No file systems found. you will need to create a file system first."
-            )
-            file_system_name = "Create New"
-
-        if file_system_name == "Create New":
-            file_system_name = typer.prompt("Enter the name of the file system")
-            file_system_size = typer.prompt(
-                "Enter the size of the file system in GB. Minimum size is 10GB.",
-                default=10,
-                type=click.IntRange(min=10),
-            )
-            # create a new file system if wants to
-            file_system = api.file_systems.create_file_system(
-                file_system_name, file_system_size, region, gpu_kind
-            )
-
-        else:
-            file_system = api.file_systems.get_file_system(file_system_name)
-
-        fs_id = file_system.get("id")
-        if not fs_id:
-            logger.error(f"File system '{file_system_name}' not found")
-            return
+        disk_size = typer.prompt(
+            "Enter the initial size of the file system in GB. Minimum size is 10GB.",
+            default=10,
+            type=click.IntRange(min=10),
+        )
 
         # Create machine using API
         try:
@@ -134,8 +105,8 @@ def create(
                 region=region,
                 cpu=int(cpu),
                 memory=int(memory),
-                file_system_id=fs_id,
                 gpu_kind=gpu_kind if gpu_kind != "None" else None,
+                disk_size=disk_size,
             )
 
             if result:

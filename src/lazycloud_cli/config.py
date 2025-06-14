@@ -13,10 +13,7 @@ class CLIConfig(BaseSettings):
         default="http://localhost:8000",
         description="Base URL for the API",
     )
-    api_version: str = Field(
-        default="v1",
-        description="API version"
-    )
+    api_version: str = Field(default="v1", description="API version")
 
     # SSH Configuration
     ssh_config_path: str = Field(

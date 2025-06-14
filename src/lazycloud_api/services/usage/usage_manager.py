@@ -14,9 +14,7 @@ class UsageManager:
     def __init__(self):
         """Initialize the collector with organization slug."""
         self.client: httpx.AsyncClient | None = httpx.AsyncClient()
-        self.base_url: str = (
-            f"https://api.fly.io/prometheus/{app_config.FLY_ORG_NAME}/api/v1/query_range"
-        )
+        self.base_url: str = f"https://api.fly.io/prometheus/{app_config.FLY_ORG_NAME}/api/v1/query_range"
         self.fly_manager = FlyAppManager()
 
     def _get_today_time_range(self):

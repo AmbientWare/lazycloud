@@ -12,6 +12,7 @@ class SSHKeysAPI(BaseAPI):
     def get_ssh_keys(self) -> List[Dict[str, Any]]:
         """Get all SSH keys"""
         try:
+
             def _get():
                 return self._get()
 
@@ -23,6 +24,7 @@ class SSHKeysAPI(BaseAPI):
     def create_ssh_key(self, name: str, public_key: str) -> Optional[Dict[str, Any]]:
         """Create a new SSH key"""
         try:
+
             def _create():
                 return self._post(json={"name": name, "public_key": public_key})
 
@@ -34,6 +36,7 @@ class SSHKeysAPI(BaseAPI):
     def delete_ssh_key(self, ssh_key_id: int) -> bool:
         """Delete an SSH key"""
         try:
+
             def _delete():
                 return self._delete(json={"ssh_key_id": ssh_key_id})
 

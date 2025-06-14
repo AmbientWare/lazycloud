@@ -49,16 +49,16 @@ class AppsAPI(BaseFlyAPI):
         url = f"/{app_name}"
         await self._delete(url)
 
-    async def _allocate_ip_address(self, usage_uuid: str) -> None:
+    async def _allocate_ip_address(self, usage_uuid: str, machine_id: int) -> None:
         """Allocate an IP address for the application."""
-        app_name = await get_app_name(usage_uuid)
+        app_name = await get_app_name(usage_uuid, machine_id)
         await run_async_command(
             ["fly", "ips", "allocate-v4", "--app", app_name, "--yes"]
         )
 
-    async def get_allocated_ip_address(self, usage_uuid: str) -> str | None:
+    async def get_allocated_ip_address(self, usage_uuid: str, machine_id: int) -> str | None:
         """Get the allocated IP address for the application."""
-        app_name = await get_app_name(usage_uuid)
+        app_name = await get_app_name(usage_uuid, machine_id)
         response = await run_async_command(
             ["fly", "ips", "list", "--app", app_name, "--json"],
             print_output=False,
@@ -69,10 +69,10 @@ class AppsAPI(BaseFlyAPI):
 
         return None
 
-    async def release_ip_address(self, usage_uuid: str) -> None:
+    async def release_ip_address(self, usage_uuid: str, machine_id: int ) -> None:
         """Release an IP address for the application."""
-        app_name = await get_app_name(usage_uuid)
-        ip_address = await self.get_allocated_ip_address(usage_uuid)
+        app_name = await get_app_name(usage_uuid, machine_id)
+        ip_address = await self.get_allocated_ip_address(usage_uuid, machine_id)
         if ip_address:
             await run_async_command(
                 ["fly", "ips", "release", ip_address, "--app", app_name]

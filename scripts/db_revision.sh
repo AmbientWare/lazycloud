@@ -31,4 +31,4 @@ echo "Creating a new revision..."
 echo "Revision message: $message"
 
 docker compose up -d postgres
-docker compose run --rm api poetry run alembic revision -m "$message" --autogenerate
+docker compose run --rm api uv run alembic revision -m "$message" --autogenerate

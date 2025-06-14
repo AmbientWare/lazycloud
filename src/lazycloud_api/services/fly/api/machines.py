@@ -1,6 +1,5 @@
 from pydantic import BaseModel
 from tenacity import retry, stop_after_attempt, wait_exponential
-from loguru import logger
 
 from lazycloud_api.services.fly.api.base import BaseFlyAPI
 from lazycloud_api.services.fly.schemas import FlyMachineConfig
@@ -51,10 +50,17 @@ class MachinesAPI(BaseFlyAPI):
     @retry(
         stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=15)
     )
-    async def create(self, app_name: str, machine_config: FlyMachineConfig) -> None:
+    async def create(
+        self, app_name: str, volume_id: int, machine_config: FlyMachineConfig
+    ) -> None:
+        if machine_config.machine_id is None:
+            raise ValueError("Machine ID is required to be passed in machine config")
+
         machine_name = await get_machine_name(machine_config.machine_id)
-        volume_id = await get_fly_volume_id(
-            machine_config.usage_uuid, machine_config.file_system_id
+        fly_volume_id = await get_fly_volume_id(
+            usage_uuid=machine_config.usage_uuid,
+            machine_id=machine_config.machine_id,
+            volume_id=volume_id,
         )
 
         url = f"/{app_name}/machines"
@@ -74,7 +80,7 @@ class MachinesAPI(BaseFlyAPI):
                 "services": [
                     {
                         "ports": [
-                            {"port": machine_config.port},
+                            {"port": 22},  # expose the ssh port
                         ],
                         "protocol": "tcp",
                         "internal_port": 2222,
@@ -93,9 +99,9 @@ class MachinesAPI(BaseFlyAPI):
                 },
                 "mounts": [
                     {
-                        "volume": volume_id,
+                        "volume": fly_volume_id,
                         "path": "/data",
-                        "extend_threshold_percent": 90,
+                        "extend_threshold_percent": 85,
                         "add_size_gb": 10,
                         "size_gb_limit": 500,
                     }

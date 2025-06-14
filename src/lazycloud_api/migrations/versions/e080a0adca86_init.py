@@ -1,8 +1,8 @@
 """init
 
-Revision ID: 43c4369f7483
+Revision ID: e080a0adca86
 Revises: 
-Create Date: 2025-05-10 05:42:22.802612
+Create Date: 2025-06-14 18:25:56.077862
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '43c4369f7483'
+revision: str = 'e080a0adca86'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -36,19 +36,24 @@ def upgrade() -> None:
     op.create_index(op.f('ix_api_keys_name'), 'api_keys', ['name'], unique=True)
     op.create_index(op.f('ix_api_keys_user_id'), 'api_keys', ['user_id'], unique=False)
     op.create_index(op.f('ix_api_keys_value'), 'api_keys', ['value'], unique=True)
-    op.create_table('file_systems',
+    op.create_table('machines',
     sa.Column('name', sa.String(), nullable=False),
-    sa.Column('image', sa.String(), nullable=False),
     sa.Column('region', sa.String(), nullable=False),
-    sa.Column('size', sa.Integer(), nullable=False),
+    sa.Column('image', sa.String(), nullable=False),
+    sa.Column('cpu_kind', sa.String(), nullable=False),
+    sa.Column('cpu', sa.Integer(), nullable=False),
+    sa.Column('gpu_kind', sa.String(), nullable=True),
+    sa.Column('memory', sa.Integer(), nullable=False),
+    sa.Column('status', sa.String(), nullable=False),
+    sa.Column('app_port', sa.Integer(), nullable=False),
     sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('user_id', sa.String(), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_index(op.f('ix_file_systems_id'), 'file_systems', ['id'], unique=True)
-    op.create_index(op.f('ix_file_systems_user_id'), 'file_systems', ['user_id'], unique=False)
+    op.create_index(op.f('ix_machines_id'), 'machines', ['id'], unique=True)
+    op.create_index(op.f('ix_machines_user_id'), 'machines', ['user_id'], unique=False)
     op.create_table('ssh_keys',
     sa.Column('name', sa.String(), nullable=False),
     sa.Column('public_key', sa.String(), nullable=False),
@@ -65,7 +70,7 @@ def upgrade() -> None:
     op.create_table('usage',
     sa.Column('uuid', sa.String(), nullable=False),
     sa.Column('balance', sa.Float(), nullable=False),
-    sa.Column('last_collected_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('status', sa.String(), nullable=False),
     sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('user_id', sa.String(), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=True),
@@ -74,35 +79,48 @@ def upgrade() -> None:
     )
     op.create_index(op.f('ix_usage_id'), 'usage', ['id'], unique=True)
     op.create_index(op.f('ix_usage_user_id'), 'usage', ['user_id'], unique=False)
-    op.create_table('machines',
-    sa.Column('name', sa.String(), nullable=False),
-    sa.Column('region', sa.String(), nullable=False),
-    sa.Column('image', sa.String(), nullable=False),
-    sa.Column('cpu_kind', sa.String(), nullable=False),
-    sa.Column('cpu', sa.Integer(), nullable=False),
-    sa.Column('gpu_kind', sa.String(), nullable=True),
-    sa.Column('memory', sa.Integer(), nullable=False),
-    sa.Column('status', sa.String(), nullable=False),
-    sa.Column('app_port', sa.Integer(), nullable=False),
-    sa.Column('file_system_id', sa.Integer(), nullable=False),
+    op.create_table('usage_periods',
+    sa.Column('start_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('end_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('data', sa.JSON(), nullable=False),
+    sa.Column('usage_id', sa.Integer(), nullable=False),
     sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('user_id', sa.String(), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True),
-    sa.ForeignKeyConstraint(['file_system_id'], ['file_systems.id'], ),
+    sa.ForeignKeyConstraint(['usage_id'], ['usage.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_index(op.f('ix_machines_id'), 'machines', ['id'], unique=True)
-    op.create_index(op.f('ix_machines_user_id'), 'machines', ['user_id'], unique=False)
+    op.create_index(op.f('ix_usage_periods_id'), 'usage_periods', ['id'], unique=True)
+    op.create_index(op.f('ix_usage_periods_user_id'), 'usage_periods', ['user_id'], unique=False)
+    op.create_table('volumes',
+    sa.Column('name', sa.String(), nullable=False),
+    sa.Column('region', sa.String(), nullable=False),
+    sa.Column('size', sa.Integer(), nullable=False),
+    sa.Column('mount_path', sa.String(), nullable=False),
+    sa.Column('type', sa.String(), nullable=False),
+    sa.Column('machine_id', sa.Integer(), nullable=False),
+    sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
+    sa.Column('user_id', sa.String(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True),
+    sa.ForeignKeyConstraint(['machine_id'], ['machines.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_volumes_id'), 'volumes', ['id'], unique=True)
+    op.create_index(op.f('ix_volumes_user_id'), 'volumes', ['user_id'], unique=False)
     # ### end Alembic commands ###
 
 
 def downgrade() -> None:
     """Downgrade schema."""
     # ### commands auto generated by Alembic - please adjust! ###
-    op.drop_index(op.f('ix_machines_user_id'), table_name='machines')
-    op.drop_index(op.f('ix_machines_id'), table_name='machines')
-    op.drop_table('machines')
+    op.drop_index(op.f('ix_volumes_user_id'), table_name='volumes')
+    op.drop_index(op.f('ix_volumes_id'), table_name='volumes')
+    op.drop_table('volumes')
+    op.drop_index(op.f('ix_usage_periods_user_id'), table_name='usage_periods')
+    op.drop_index(op.f('ix_usage_periods_id'), table_name='usage_periods')
+    op.drop_table('usage_periods')
     op.drop_index(op.f('ix_usage_user_id'), table_name='usage')
     op.drop_index(op.f('ix_usage_id'), table_name='usage')
     op.drop_table('usage')
@@ -111,9 +129,9 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_ssh_keys_name'), table_name='ssh_keys')
     op.drop_index(op.f('ix_ssh_keys_id'), table_name='ssh_keys')
     op.drop_table('ssh_keys')
-    op.drop_index(op.f('ix_file_systems_user_id'), table_name='file_systems')
-    op.drop_index(op.f('ix_file_systems_id'), table_name='file_systems')
-    op.drop_table('file_systems')
+    op.drop_index(op.f('ix_machines_user_id'), table_name='machines')
+    op.drop_index(op.f('ix_machines_id'), table_name='machines')
+    op.drop_table('machines')
     op.drop_index(op.f('ix_api_keys_value'), table_name='api_keys')
     op.drop_index(op.f('ix_api_keys_user_id'), table_name='api_keys')
     op.drop_index(op.f('ix_api_keys_name'), table_name='api_keys')

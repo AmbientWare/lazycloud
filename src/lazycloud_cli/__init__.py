@@ -2,7 +2,6 @@
 from lazycloud_cli.commands import cli
 import lazycloud_cli.commands.machines
 import lazycloud_cli.commands.ssh
-import lazycloud_cli.commands.file_systems
 import lazycloud_cli.commands.auth
 
 

@@ -73,7 +73,7 @@ class MachineAPI(BaseAPI):
         self,
         name: str,
         public_key: str,
-        file_system_id: int,
+        disk_size: int,
         region: Optional[str] = None,
         cpu: Optional[int] = None,
         memory: Optional[int] = None,
@@ -83,7 +83,7 @@ class MachineAPI(BaseAPI):
         request_data = {
             "name": name,
             "public_key": public_key,
-            "file_system_id": file_system_id,
+            "disk_size": disk_size,
         }
 
         # Add optional fields only if they are explicitly provided
@@ -174,7 +174,9 @@ class MachineAPI(BaseAPI):
             return self._post(f"{machine_id}/auto-stop", json=data)
 
         return self._run_with_spinner(
-            "Enabling auto stop..." if enabled else "Making sure machine is kept alive...",
+            "Enabling auto stop..."
+            if enabled
+            else "Making sure machine is kept alive...",
             _auto_stop,
         )
 

@@ -41,7 +41,7 @@ class VolumesAPI(BaseFlyAPI):
 
         compute_data = {
             "cpu_kind": "performance",
-            "cpus": 16, # just say lots of cpu so we reserve spots on server
+            "cpus": 16,  # just say lots of cpu so we reserve spots on server
             "gpu_kind": gpu_kind,
             "gpus": 1 if gpu_kind is not None else None,
             "host_dedication_id": "",

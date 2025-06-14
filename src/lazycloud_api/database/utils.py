@@ -1,7 +1,10 @@
 import secrets
 from datetime import datetime, timedelta, timezone
 
-from lazycloud_api.database.api_keys import ApiKeyExpirationDays, ApiKeyExpirationMinutes
+from lazycloud_api.database.api_keys import (
+    ApiKeyExpirationDays,
+    ApiKeyExpirationMinutes,
+)
 
 
 def generate_api_key():

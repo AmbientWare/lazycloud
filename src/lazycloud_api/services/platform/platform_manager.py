@@ -808,7 +808,7 @@ if __name__ == "__main__":
                         REDIS_KEYS["upcharge"], UpchargeData
                     )
                     print(
-                        f"\n=== UPCHARGE ===\n  Value: {upcharge.value:.4f} ({upcharge.value*100:.2f}%)"
+                        f"\n=== UPCHARGE ===\n  Value: {upcharge.value:.4f} ({upcharge.value * 100:.2f}%)"
                     )
 
                     gpu_pricing = await manager._load_from_redis(
