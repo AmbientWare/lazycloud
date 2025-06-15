@@ -12,7 +12,12 @@ from lazycloud_api.api.security import (
 from lazycloud_api.database import db
 from lazycloud_api.database.volumes import VolumePydantic
 from lazycloud_api.services.fly.schemas import FlyRegion
-from lazycloud_api.services import fly_app_manager
+from lazycloud_api.api.v1.utils import TaskResponse, TaskStatus
+from lazycloud_api.celery_app.volumes import (
+    create_volume_task,
+    extend_volume_task,
+    delete_volume_task,
+)
 
 volumes_router = APIRouter(prefix="/volumes", tags=["volumes"])
 
@@ -73,7 +78,7 @@ async def create_volume(
     request: CreateVolumeRequest,
     current_user: UserData = Depends(get_current_active_user),
     usage_uuid: str = Depends(get_user_usage_uuid),
-) -> VolumePydantic:
+) -> TaskResponse:
     user_id = await check_user_id_request(request.user_id, current_user)
 
     try:
@@ -88,25 +93,34 @@ async def create_volume(
             )
         )
 
-        # create the volume on fly
+        # Queue the volume creation task
         if volume is not None and volume.id is not None:
-            await fly_app_manager.create_volume(
+            task = create_volume_task.delay(
                 usage_uuid,
                 volume.id,
                 request.machine_id,
                 request.size,
-                request.region,
+                request.region.value,
                 request.gpu_kind,
             )
 
+            return TaskResponse(
+                task_id=task.id,
+                status=TaskStatus.QUEUED,
+                message=f"Volume '{request.name}' creation has been queued",
+            )
+
+        else:
+            raise HTTPException(
+                status_code=500, detail="Failed to create volume in database"
+            )
+
     except Exception as e:
-        # delete the volume from our database
-        if volume is not None and volume.id is not None:
+        # delete the volume from our database if it was created
+        if "volume" in locals() and volume is not None and volume.id is not None:
             await db.volumes.adelete(volume.id)
 
         raise HTTPException(status_code=500, detail=str(e))
-
-    return volume
 
 
 class ExtendVolumeRequest(BaseModel):
@@ -121,7 +135,7 @@ async def extend_volume(
     request: ExtendVolumeRequest,
     current_user: UserData = Depends(get_current_active_user),
     usage_uuid: str = Depends(get_user_usage_uuid),
-) -> VolumePydantic:
+) -> TaskResponse:
     user_id = await check_user_id_request(request.user_id, current_user)
 
     """Extend the volume of a file system"""
@@ -136,13 +150,20 @@ async def extend_volume(
         raise HTTPException(status_code=404, detail="Volume not found")
 
     try:
-        await fly_app_manager.extend_volume(
+        # Queue the extend volume task
+        task = extend_volume_task.delay(
             usage_uuid, request.machine_id, volume.id, request.size
         )
+
+        # Update the volume size in database immediately (optimistic update)
         volume.size = request.size
         await db.volumes.aupdate(volume)
 
-        return volume
+        return TaskResponse(
+            task_id=task.id,
+            status=TaskStatus.QUEUED,
+            message=f"Volume extension to {request.size}GB has been queued",
+        )
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -158,7 +179,7 @@ async def delete_volumes(
     request: DeleteVolumeRequest,
     current_user: UserData = Depends(get_current_active_user),
     usage_uuid: str = Depends(get_user_usage_uuid),
-) -> VolumePydantic | None:
+) -> TaskResponse:
     user_id = await check_user_id_request(request.user_id, current_user)
 
     filters: Dict[str, Any] = {"user_id": user_id}
@@ -180,6 +201,10 @@ async def delete_volumes(
         )
 
     # remove the volume from fly
-    await fly_app_manager.destroy_volume(usage_uuid, machine.id, volume.id)
+    task = delete_volume_task.delay(usage_uuid, machine.id, volume.id)
 
-    return volume
+    return TaskResponse(
+        task_id=task.id,
+        status=TaskStatus.QUEUED,
+        message="Volume deletion has been queued",
+    )

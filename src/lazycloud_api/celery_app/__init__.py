@@ -13,4 +13,4 @@ app.conf.update(
 )
 
 # NOTE: Import tasks to ensure they are registered THIS IS REQUIRED
-from lazycloud_api.celery_app import pricing, usage, crons
+from lazycloud_api.celery_app import pricing, usage, crons, machinees, volumes
