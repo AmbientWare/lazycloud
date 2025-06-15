@@ -9,14 +9,22 @@ from lazycloud_api.api.security import (
     get_user_usage_uuid,
     check_user_id_request,
 )
+
 from lazycloud_api.database import db
-from lazycloud_api.database.machines import MachinePydantic, MachineStatus
-from lazycloud_api.services import fly_app_manager
+from lazycloud_api.database.machines import MachineStatus
 from lazycloud_api.services.fly.schemas import (
     FlyMachineConfig,
     FlyRegion,
 )
 from lazycloud_api.services.fly.utils import get_app_ipv4
+from lazycloud_api.api.v1.utils import TaskResponse, TaskStatus
+from lazycloud_api.celery_app.machinees import (
+    create_machine_task,
+    restart_machine_task,
+    scale_machine_task,
+    delete_machine_task,
+    enable_machine_auto_stop_task,
+)
 
 machines_router = APIRouter(prefix="/machines", tags=["machines"])
 
@@ -144,7 +152,7 @@ async def create_machine(
     if ssh_key is None:
         raise HTTPException(status_code=400, detail="SSH key not found")
 
-    # now deploy the app with vm on fly
+    # now deploy the app with vm on fly in background
     try:
         machine_config = FlyMachineConfig(
             usage_uuid=usage_uuid,
@@ -163,15 +171,20 @@ async def create_machine(
         if create_machine_request.gpu_kind is not None:
             machine_config.gpu_kind = create_machine_request.gpu_kind
 
-        new_machine = await fly_app_manager.create_machine(
-            user_id, create_machine_request.name, machine_config
+        # Queue the machine creation task
+        task = create_machine_task.delay(
+            user_id, create_machine_request.name, machine_config.dict()
+        )
+
+        return TaskResponse(
+            task_id=task.id,
+            status=TaskStatus.QUEUED,
+            message=f"Machine '{create_machine_request.name}' creation has been queued",
         )
 
     except Exception as e:
-        logger.error(f"Error creating machine: {e}")
+        logger.error(f"Error queuing machine creation: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-    return new_machine
 
 
 class RestartMachineRequest(BaseModel):
@@ -184,7 +197,7 @@ async def restart_machine(
     restart_machine_request: RestartMachineRequest,
     current_user: UserData = Depends(get_current_active_user),
     usage_uuid: str = Depends(get_user_usage_uuid),
-) -> bool:
+) -> TaskResponse:
     user_id = await check_user_id_request(restart_machine_request.user_id, current_user)
 
     # make sure the machine exists and belongs to the user
@@ -193,11 +206,17 @@ async def restart_machine(
         raise HTTPException(status_code=404, detail="Machine not found")
 
     try:
-        await fly_app_manager.restart_machine(usage_uuid, machine.id)
+        # Queue the restart task
+        task = restart_machine_task.delay(usage_uuid, machine.id)
+
+        return TaskResponse(
+            task_id=task.id,
+            status=TaskStatus.QUEUED,
+            message="Machine restart has been queued",
+        )
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-    return True
 
 
 class EnableMachineAutoStopRequest(BaseModel):
@@ -211,7 +230,7 @@ async def enable_machine_auto_stop(
     enable_machine_auto_stop_request: EnableMachineAutoStopRequest,
     current_user: UserData = Depends(get_current_active_user),
     usage_uuid: str = Depends(get_user_usage_uuid),
-) -> bool:
+) -> TaskResponse:
     user_id = await check_user_id_request(
         enable_machine_auto_stop_request.user_id, current_user
     )
@@ -222,13 +241,19 @@ async def enable_machine_auto_stop(
         raise HTTPException(status_code=404, detail="Machine not found")
 
     try:
-        await fly_app_manager.auto_stop(
+        # Queue the auto-stop task
+        task = enable_machine_auto_stop_task.delay(
             usage_uuid, id, enable_machine_auto_stop_request.enabled
         )
+
+        return TaskResponse(
+            task_id=task.id,
+            status=TaskStatus.QUEUED,
+            message="Machine auto-stop configuration has been queued",
+        )
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-    return True
 
 
 class ScaleMachineRequest(BaseModel):
@@ -267,17 +292,23 @@ async def scale_machine(
         if scale_machine_request.region is not None:
             machine.region = scale_machine_request.region.value
 
-        # scale the app on fly
-        await fly_app_manager.scale_machine(
-            usage_uuid,
-            machine.id,
-            machine.cpu_kind,
-            machine.cpu,
-            machine.memory,
-        )
+        # Queue the scale task
+        scale_config = {
+            "cpu_kind": machine.cpu_kind,
+            "cpu": machine.cpu,
+            "memory": machine.memory,
+        }
+        task = scale_machine_task.delay(usage_uuid, machine.id, scale_config)
 
-        # update the machine in our database
-        return await db.machines.aupdate(machine)
+        # Update the machine in our database immediately (optimistic update)
+        updated_machine = await db.machines.aupdate(machine)
+
+        return {
+            "task_id": task.id,
+            "status": "queued",
+            "message": "Machine scaling has been queued",
+            "machine": updated_machine,
+        }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -289,19 +320,23 @@ async def delete_machine(
     user_id: str | None = None,
     current_user: UserData = Depends(get_current_active_user),
     usage_uuid: str = Depends(get_user_usage_uuid),
-) -> MachinePydantic | None:
+) -> TaskResponse:
     user_id = await check_user_id_request(user_id, current_user)
 
     # get machine from db
     machine = await db.machines.afind_one(filters={"user_id": user_id, "id": id})
     if machine is None or machine.id is None:
-        return None
+        raise HTTPException(status_code=404, detail="Machine not found")
 
-    # destroying the app will also destroy the machine and volume
+    # Queue the delete task - destroying the app will also destroy the machine and volume
     try:
-        await fly_app_manager.destroy_app(usage_uuid, machine.id)
+        task = delete_machine_task.delay(usage_uuid, machine.id)
+
+        return TaskResponse(
+            task_id=task.id,
+            status=TaskStatus.QUEUED,
+            message="Machine deletion has been queued",
+        )
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-    return machine
