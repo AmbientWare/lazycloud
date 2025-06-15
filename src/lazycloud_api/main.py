@@ -18,6 +18,7 @@ from lazycloud_api.api.v1.api_keys import api_keys_router
 from lazycloud_api.api.v1.ssh_keys import ssh_keys_router
 from lazycloud_api.api.v1.platform import platform_router
 from lazycloud_api.api.v1.volumes import volumes_router
+from lazycloud_api.api.v1.tasks import tasks_router
 
 # import other modules
 from lazycloud_api.database.crud import create_tables, update_admin_api_keys
@@ -74,6 +75,7 @@ versionsed_routes.include_router(api_keys_router)
 versionsed_routes.include_router(platform_router)
 versionsed_routes.include_router(ssh_keys_router)
 versionsed_routes.include_router(volumes_router)
+versionsed_routes.include_router(tasks_router)
 app.include_router(versionsed_routes)
 
 # include non versioned routes that are not part of the main api

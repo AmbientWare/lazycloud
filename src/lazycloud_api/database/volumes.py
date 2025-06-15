@@ -1,12 +1,12 @@
 from sqlalchemy import Column, String, Integer, ForeignKey
 from sqlalchemy.orm import relationship
-from enum import Enum
+from enum import StrEnum
 from typing import Optional
 
 from lazycloud_api.database.base import BaseModel, BaseTable, DatabaseService
 
 
-class VolumeTypes(str, Enum):
+class VolumeTypes(StrEnum):
     """Types of volumes"""
 
     ROOT = "root"

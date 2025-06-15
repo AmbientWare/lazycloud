@@ -14,12 +14,11 @@ from lazycloud_api.services.fly.utils import (
     get_app_volume_name,
     get_fly_volume_id,
 )
-from lazycloud_api.database.machines import MachinePydantic
 from lazycloud_api.database import db
-from lazycloud_api.database.machines import MachineStatus
-from lazycloud_api.services.fly.schemas import FlyRegion
-from lazycloud_api.services.fly.api import fly_api
+from lazycloud_api.database.machines import MachinePydantic
 from lazycloud_api.database.volumes import VolumePydantic, VolumeTypes
+from lazycloud_api.services.fly.api import fly_api
+from lazycloud_api.shared.schemas import FlyRegion, MachineStatus
 from lazycloud_api.services.platform.schemas import ImageTypes
 
 
@@ -109,7 +108,7 @@ class FlyAppManager:
         await fly_api.volumes.create(
             volume_name,
             await get_app_name(usage_uuid, machine_id),
-            region.value,
+            region,
             size,
             gpu_kind,
         )
@@ -150,7 +149,7 @@ class FlyAppManager:
             MachinePydantic(
                 user_id=user_id,
                 name=name,
-                region=machine_config.region.value,
+                region=machine_config.region,
                 image=ImageTypes.UBUNTU_22_04.value,
                 cpu_kind=machine_config.cpu_kind,
                 cpu=machine_config.cpu,
@@ -174,7 +173,7 @@ class FlyAppManager:
                 machine_id=new_machine.id,
                 name=name,
                 size=machine_config.volume_size,
-                region=machine_config.region.value,
+                region=machine_config.region,
                 type=VolumeTypes.ROOT,
                 mount_path="/data",  # NOTE: /data is eventually mounted as root on the machine
             )

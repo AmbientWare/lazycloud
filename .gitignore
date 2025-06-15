@@ -1,6 +1,9 @@
 # ignore the logs directory created by uvicorn
 logs/
 
+# ignore celerybeat schedule
+celerybeat-schedule*
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

@@ -1,13 +1,13 @@
 from typing import List, Optional
 from sqlalchemy import Column, String, Float
 import uuid
-from enum import Enum
+from enum import StrEnum
 from sqlalchemy.orm import relationship
 
 from lazycloud_api.database.base import BaseModel, BaseTable, DatabaseService
 
 
-class UsageStatus(str, Enum):
+class UsageStatus(StrEnum):
     """Status of usage"""
 
     ACTIVE = "active"

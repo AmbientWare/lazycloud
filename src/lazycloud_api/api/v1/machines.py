@@ -11,13 +11,10 @@ from lazycloud_api.api.security import (
 )
 
 from lazycloud_api.database import db
-from lazycloud_api.database.machines import MachineStatus
-from lazycloud_api.services.fly.schemas import (
-    FlyMachineConfig,
-    FlyRegion,
-)
+from lazycloud_api.services.fly.schemas import FlyMachineConfig
+from lazycloud_api.shared.schemas import FlyRegion, MachineStatus
 from lazycloud_api.services.fly.utils import get_app_ipv4
-from lazycloud_api.api.v1.utils import TaskResponse, TaskStatus
+from lazycloud_api.api.v1.tasks import TaskResponse, TaskStatus
 from lazycloud_api.celery_app.machinees import (
     create_machine_task,
     restart_machine_task,
@@ -43,6 +40,7 @@ class GetMachinesResponse(BaseModel):
 @machines_router.get("")
 async def get_machines(
     id: int | None = None,
+    name: str | None = None,
     user_id: str | None = None,
     current_user: UserData = Depends(get_current_active_user),
 ) -> List[GetMachinesResponse]:
@@ -53,6 +51,16 @@ async def get_machines(
     if id is not None:
         # add the id to the filters if it is provided
         filters["id"] = id
+
+    if name is not None:
+        # add the name to the filters if it is provided
+        filters["name"] = name
+
+    if id is not None and name is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot filter by both id and name. Please provide only one.",
+        )
 
     """Get a list of machines"""
     machines = await db.machines.afind(filters=filters)
@@ -71,7 +79,7 @@ async def get_machines(
                 id=machine.id,
                 name=machine.name,
                 status=machine.status,
-                region=FlyRegion(machine.region),
+                region=machine.region,
                 cpu=machine.cpu,
                 memory=machine.memory,
                 disk_size=volume.size,
@@ -114,7 +122,7 @@ class CreateMachineRequest(BaseModel):
     user_id: Optional[str] = None
     name: str
     public_key: str
-    region: FlyRegion = Field(default=FlyRegion.ORD)
+    region: FlyRegion = FlyRegion.ORD
     cpu: int = Field(default=1)
     memory: int = Field(default=1024)
     disk_size: int = Field(default=10)
@@ -173,7 +181,7 @@ async def create_machine(
 
         # Queue the machine creation task
         task = create_machine_task.delay(
-            user_id, create_machine_request.name, machine_config.dict()
+            user_id, create_machine_request.name, machine_config.model_dump()
         )
 
         return TaskResponse(
@@ -290,7 +298,7 @@ async def scale_machine(
         if scale_machine_request.memory is not None:
             machine.memory = scale_machine_request.memory
         if scale_machine_request.region is not None:
-            machine.region = scale_machine_request.region.value
+            machine.region = scale_machine_request.region
 
         # Queue the scale task
         scale_config = {

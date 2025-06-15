@@ -1,10 +1,10 @@
 from pydantic import BaseModel, field_validator
 from typing import List, Optional, Dict
 import re
-from enum import Enum
+from enum import StrEnum
 
 
-class ImageTypes(Enum):
+class ImageTypes(StrEnum):
     UBUNTU_22_04 = "ubuntu2204"
 
 

@@ -9,7 +9,7 @@ from loguru import logger
 
 from lazycloud_api.config import app_config
 from lazycloud_api.services.fly.schemas import FlyCommandError
-from lazycloud_api.database.machines import MachineStatus
+from lazycloud_api.shared.schemas import MachineStatus
 from lazycloud_api.database import db
 
 

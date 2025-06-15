@@ -5,7 +5,7 @@ from loguru import logger
 from typing import List
 import os
 from pydantic import BaseModel, ConfigDict, model_validator
-from enum import Enum
+from enum import StrEnum
 
 # we load the environment variables from the .env file first so we can use them in rest of the app
 dotenv.load_dotenv()
@@ -13,7 +13,7 @@ dotenv.load_dotenv()
 ENV = os.getenv("ENV", "dev")
 
 
-class ENVIRONMENT(str, Enum):
+class ENVIRONMENT(StrEnum):
     DEV = "dev"
     PROD = "prod"
 

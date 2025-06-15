@@ -12,7 +12,7 @@ from lazycloud_api.api.security import (
 from lazycloud_api.database import db
 from lazycloud_api.database.volumes import VolumePydantic
 from lazycloud_api.services.fly.schemas import FlyRegion
-from lazycloud_api.api.v1.utils import TaskResponse, TaskStatus
+from lazycloud_api.api.v1.tasks import TaskResponse, TaskStatus
 from lazycloud_api.celery_app.volumes import (
     create_volume_task,
     extend_volume_task,
@@ -88,7 +88,7 @@ async def create_volume(
                 user_id=user_id,
                 name=request.name,
                 size=request.size,
-                region=request.region.value,
+                region=request.region,
                 mount_path=request.mount_path,
             )
         )
@@ -100,7 +100,7 @@ async def create_volume(
                 volume.id,
                 request.machine_id,
                 request.size,
-                request.region.value,
+                request.region,
                 request.gpu_kind,
             )
 

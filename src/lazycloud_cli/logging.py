@@ -1,5 +1,5 @@
 # rich logging
-from enum import Enum
+from enum import StrEnum
 from typing import List, Dict, Any
 from rich.console import Console
 from rich.theme import Theme
@@ -37,7 +37,7 @@ custom_theme = Theme(
 )
 
 
-class LogLevel(Enum):
+class LogLevel(StrEnum):
     """Log levels with their corresponding styles"""
 
     INFO = "info"

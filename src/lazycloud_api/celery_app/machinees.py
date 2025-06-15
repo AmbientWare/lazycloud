@@ -26,7 +26,7 @@ def create_machine_task(
     )
 
     logger.info(f"Successfully created machine {machine_name} for user {user_id}")
-    return {"status": "success", "machine": result}
+    return {"status": "success", "machine_id": result.id}
 
 
 @app.task(
@@ -81,7 +81,8 @@ def scale_machine_task(usage_uuid: str, machine_id: int, scale_config: Dict[str,
 )
 def delete_machine_task(usage_uuid: str, machine_id: int):
     """Delete a machine in the background"""
-    result = asyncio.run(fly_app_manager.destroy_machine(usage_uuid, machine_id))
+    # destroying the app will delete all machine associated entities
+    result = asyncio.run(fly_app_manager.destroy_app(usage_uuid, machine_id))
 
     logger.info(f"Successfully deleted machine {machine_id}")
     return {"status": "success", "machine_id": machine_id, "result": result}

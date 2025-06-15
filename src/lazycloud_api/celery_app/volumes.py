@@ -18,11 +18,9 @@ def create_volume_task(
     volume_id: int,
     machine_id: int,
     size: int,
-    region_str: str,
+    region: FlyRegion,
     gpu_kind: Optional[str] = None,
 ):
-    """Create a volume in the background"""
-    region = FlyRegion(region_str)
 
     asyncio.run(
         fly_app_manager.create_volume(
