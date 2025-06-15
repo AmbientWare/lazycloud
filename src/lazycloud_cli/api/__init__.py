@@ -3,6 +3,7 @@ from lazycloud_cli.api.ssh_keys import ssh_keys_api
 from lazycloud_cli.api.users import users_api
 from lazycloud_cli.api.platform import platform_api
 from lazycloud_cli.api.volumes import volumes_api
+from lazycloud_cli.api.tasks import tasks_api
 
 
 class API:
@@ -12,6 +13,7 @@ class API:
         self.users = users_api
         self.platform = platform_api
         self.volumes = volumes_api
+        self.tasks = tasks_api
 
 
 api = API()

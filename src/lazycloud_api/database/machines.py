@@ -1,21 +1,9 @@
 from typing import List, Optional
 from sqlalchemy import Column, String, Integer
 from sqlalchemy.orm import relationship
-from enum import Enum
+
+from lazycloud_api.shared.schemas import FlyRegion, MachineStatus
 from lazycloud_api.database.base import BaseModel, BaseTable, DatabaseService
-
-
-class MachineStatus(str, Enum):
-    """Status of a machine"""
-
-    INITIALIZING = "Initializing"
-    INITIALIZED = "Initialized"
-    NETWORKING = "Setting up network"
-    BUILDING = "Building machine"
-    VOLUME = "Creating file system"
-    VM_CREATING = "Creating virtual machine"
-    DEPLOYED = "Deployed"
-    DELETING = "Deleting"
 
 
 class MachineTable(BaseTable):
@@ -43,7 +31,7 @@ class MachinePydantic(BaseModel):
     """Pydantic model for a machine"""
 
     name: str
-    region: str
+    region: FlyRegion
     image: str
     cpu_kind: str
     cpu: int

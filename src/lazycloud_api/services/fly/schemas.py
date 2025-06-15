@@ -1,33 +1,13 @@
-from enum import Enum
 from pydantic import BaseModel
 
 from lazycloud_api.services.platform.schemas import ImageTypes
+from lazycloud_api.shared.schemas import FlyRegion
 
 
 class FlyCommandError(Exception):
     """Raised when a Fly.io command fails."""
 
     pass
-
-
-class FlyRegion(Enum):
-    AMS = "ams"  # Amsterdam, Netherlands
-    CDG = "cdg"  # Paris, France
-    DEN = "den"  # Denver, Colorado (US)
-    DFW = "dfw"  # Dallas, Texas (US)
-    FRA = "fra"  # Frankfurt, Germany
-    HKG = "hkg"  # Hong Kong, Hong Kong
-    IAD = "iad"  # Ashburn, Virginia (US)
-    LAX = "lax"  # Los Angeles, California (US)
-    LHR = "lhr"  # London, United Kingdom
-    NRT = "nrt"  # Tokyo, Japan
-    ORD = "ord"  # Chicago, Illinois (US)
-    SCL = "scl"  # Santiago, Chile
-    SEA = "sea"  # Seattle, Washington (US)
-    SIN = "sin"  # Singapore, Singapore
-    SJC = "sjc"  # San Jose, California (US)
-    SYD = "syd"  # Sydney, Australia
-    MIA = "mia"  # Miami, Florida (US)
 
 
 class FlyMachineConfig(BaseModel):
@@ -58,16 +38,16 @@ RESOURCE_MAP = {
         16: {"name": "performance-16x", "memory_options": [32768, 65536, 131072]},
     },
     "gpus": {
-        "a10": {"regions": [FlyRegion.ORD]},
-        "l40s": {"regions": [FlyRegion.ORD]},
-        "a100-40gb": {"regions": [FlyRegion.ORD]},
+        "a10": {"regions": ["ord"]},
+        "l40s": {"regions": ["ord"]},
+        "a100-40gb": {"regions": ["ord"]},
         "a100-80gb": {
             "regions": [
-                FlyRegion.IAD,
-                FlyRegion.SJC,
-                FlyRegion.SYD,
-                FlyRegion.MIA,
-                FlyRegion.AMS,
+                "iad",
+                "sjc",
+                "syd",
+                "mia",
+                "ams",
             ]
         },
     },

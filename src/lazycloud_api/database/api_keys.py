@@ -3,17 +3,17 @@ from datetime import datetime
 import asyncio
 from sqlalchemy import Column, String, DateTime
 from sqlalchemy.future import select
-from enum import Enum
+from enum import StrEnum, IntEnum
 
 from lazycloud_api.database.base import BaseModel, BaseTable, DatabaseService
 
 
-class ApiKeyRole(str, Enum):
+class ApiKeyRole(StrEnum):
     ADMIN = "admin"
     USER = "user"
 
 
-class ApiKeyExpirationMinutes(int, Enum):
+class ApiKeyExpirationMinutes(IntEnum):
     """The expiration time for a api key in minutes"""
 
     NEVER = 0
@@ -22,7 +22,7 @@ class ApiKeyExpirationMinutes(int, Enum):
     THREE_HOURS = 180
 
 
-class ApiKeyExpirationDays(int, Enum):
+class ApiKeyExpirationDays(IntEnum):
     """The expiration time for a api key in days"""
 
     NEVER = 0

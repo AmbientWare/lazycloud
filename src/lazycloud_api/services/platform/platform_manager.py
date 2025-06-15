@@ -20,7 +20,8 @@ from lazycloud_api.services.platform.schemas import (
     Region,
     GPUInfo,
 )
-from lazycloud_api.services.fly.schemas import RESOURCE_MAP, FlyRegion
+from lazycloud_api.services.fly.schemas import RESOURCE_MAP
+from lazycloud_api.shared.schemas import FlyRegion
 
 # Constants
 FLY_PRICING_URL = "https://fly.io/docs/about/pricing/"
@@ -722,7 +723,7 @@ class PlatformManager:
                             .get("regions", [])
                         )
                         gpu[resource_name] = GPUInfo(
-                            regions=[r.value for r in gpu_regions],
+                            regions=[r for r in gpu_regions],
                         )
 
         return PlatformOptions(regions=regions, compute=compute, gpu=gpu)
