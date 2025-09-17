@@ -1,30 +1,27 @@
 import typer
+from rich.console import Console
 
 from lazycloud_cli.config import config
-from lazycloud_cli.logging import logger
+from lazycloud_cli.ui.views import AuthView
 
 app = typer.Typer(help="List API keys")
+console = Console()
+view = AuthView(console)
 
 
 @app.command()
-def ls():
+def list():
     """List all API keys"""
     try:
         keys = config.list_api_keys()
         active_key = config.active_api_key
 
         if not keys:
-            logger.info("No API keys found")
+            view.show_no_keys()
             return
 
-        # creat data for table
-        data = []
-        for name, value in keys.items():
-            status = "Active" if name == active_key else ""
-            data.append({"name": name, "value": value, "status": status})
-
-        logger.table(data)
+        view.show_api_keys(keys, active_key)
 
     except Exception as e:
-        logger.error(f"Failed to list API keys: {e}")
+        view.show_error(f"Failed to list API keys: {e}")
         raise typer.Exit(1)

@@ -1,0 +1,103 @@
+# Default values for lazycloud-namespace chart
+# This chart sets up a secure namespace for user deployments
+
+# Namespace configuration
+namespace:
+  # Name is typically set via --namespace flag during install
+  # But can be overridden here
+  name: ""
+  
+  # Labels to apply to the namespace
+  labels:
+    "lazycloud.io/managed": "true"
+    "lazycloud.io/type": "user-namespace"
+  
+  # Annotations for the namespace
+  annotations: {}
+
+# Pod Security Standards
+podSecurityStandards:
+  enabled: true
+  enforce: baseline  # Options: privileged, baseline, restricted
+  enforceVersion: latest
+  audit: baseline
+  auditVersion: latest
+  warn: baseline
+  warnVersion: latest
+
+# Resource Quota for the entire namespace
+resourceQuota:
+  enabled: true
+  # Resource requests (guaranteed minimums)
+  requests:
+    cpu: "100"  # Total CPU cores for all deployments
+    memory: "100Gi"  # Total memory for all deployments
+    storage: "500Gi"  # Total storage for all PVCs
+    ephemeral-storage: "50Gi"  # Total ephemeral storage
+  # Resource limits (maximum allowed)
+  limits:
+    cpu: "200"  # Maximum CPU cores for all deployments
+    memory: "200Gi"  # Maximum memory for all deployments
+    ephemeral-storage: "100Gi"  # Maximum ephemeral storage
+  objects:
+    # Limit number of objects across all deployments
+    pods: "100"
+    services: "50"
+    persistentvolumeclaims: "50"
+    configmaps: "100"
+    secrets: "100"
+    count/deployments.apps: "20"
+    count/statefulsets.apps: "10"
+    count/ingresses.networking.k8s.io: "20"
+
+# Default NetworkPolicy for namespace isolation
+networkPolicy:
+  enabled: true
+  # Create a default deny-all policy
+  defaultDenyAll: true
+  # Allow DNS lookups
+  allowDNS: true
+  # Allow access to Kubernetes API (not recommended)
+  allowKubeAPI: false
+  # Additional allowed namespaces
+  allowedNamespaces: []
+  # Block cloud metadata services
+  blockMetadataServices: true
+
+# LimitRange for default container limits
+limitRange:
+  enabled: true
+  limits:
+    # Default limits for containers
+    default:
+      cpu: "2"
+      memory: "2Gi"
+      ephemeral-storage: "2Gi"
+    # Default requests for containers
+    defaultRequest:
+      cpu: "125m"
+      memory: "512Mi"
+      ephemeral-storage: "1Gi"
+    # Maximum limits
+    max:
+      cpu: "8"
+      memory: "16Gi"
+      ephemeral-storage: "256Gi"
+    # Minimum limits
+    min:
+      cpu: "125m"
+      memory: "128Mi"
+      ephemeral-storage: "512Mi"
+
+# ServiceAccount for the namespace
+serviceAccount:
+  create: true
+  name: "restricted-sa"
+  # No permissions by default
+  automountServiceAccountToken: false
+
+# RBAC settings
+rbac:
+  create: true
+  # Create a ClusterRole that explicitly denies access
+  createDenyRole: true

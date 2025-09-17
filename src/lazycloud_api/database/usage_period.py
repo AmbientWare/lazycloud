@@ -1,9 +1,10 @@
-from sqlalchemy import Column, DateTime, JSON, Integer, ForeignKey
+from sqlalchemy import Column, DateTime, JSON, ForeignKey
+from sqlalchemy.dialects.postgresql import UUID
 from datetime import datetime, timezone
 from sqlalchemy.orm import relationship
 from typing import Optional
 
-from lazycloud_api.database.base import BaseModel, BaseTable, DatabaseService
+from lazycloud_api.database.base import BaseModel, BaseTable, DatabaseService, UUIDStr
 from lazycloud_api.database.usage import UsageStatus
 
 
@@ -17,7 +18,7 @@ class UsagePeriodTable(BaseTable):
     data = Column(JSON, nullable=False, default={})
 
     # many to one relationship with usage
-    usage_id = Column(Integer, ForeignKey("usage.id"), nullable=False)
+    usage_id = Column(UUID(as_uuid=True), ForeignKey("usage.id"), nullable=False)
     usage = relationship("UsageTable", back_populates="usage_periods")
 
 
@@ -27,7 +28,7 @@ class UsagePeriodPydantic(BaseModel):
     start_at: datetime
     end_at: datetime
     data: dict = {}
-    usage_id: Optional[int] = None
+    usage_id: Optional[UUIDStr] = None
 
 
 class UsagePeriodService(DatabaseService[UsagePeriodTable, UsagePeriodPydantic]):
@@ -37,7 +38,7 @@ class UsagePeriodService(DatabaseService[UsagePeriodTable, UsagePeriodPydantic])
         super().__init__(UsagePeriodTable, UsagePeriodPydantic)
 
     async def add_usage_to_current_period(
-        self, user_id: str, usage_id: int, data: dict
+        self, user_id: str, usage_id: str, data: dict
     ) -> UsagePeriodPydantic:
         """Add usage data"""
         today = datetime.now(timezone.utc)
@@ -69,7 +70,7 @@ class UsagePeriodService(DatabaseService[UsagePeriodTable, UsagePeriodPydantic])
         return current_usage_period or new_usage_period
 
     async def get_current_usage_period(
-        self, usage_id: int
+        self, usage_id: str
     ) -> UsagePeriodPydantic | None:
         """Get current usage period"""
         # Usage is broken into 1st-15th and 16th-end of the month

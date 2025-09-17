@@ -1,17 +1,28 @@
 import asyncio
 from typing import Optional, List, Generic, Type, TypeVar
 from datetime import datetime, timezone
-import nest_asyncio
-from sqlalchemy import Column, String, DateTime, Integer
-from sqlalchemy.ext.declarative import declarative_base
+import uuid
+from sqlalchemy import Column, String, DateTime
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import orm
 from sqlalchemy.future import select
-from pydantic import BaseModel as PydanticBaseModel
+from pydantic import BaseModel as PydanticBaseModel, ConfigDict
+from pydantic.functional_validators import BeforeValidator
+from typing import Annotated
 
 from lazycloud_api.database.session import session_manager
 
-nest_asyncio.apply()
+Base = orm.declarative_base()
 
-Base = declarative_base()
+
+# Custom type that automatically converts UUID to string
+def uuid_to_str(v):
+    if isinstance(v, uuid.UUID):
+        return str(v)
+    return v
+
+
+UUIDStr = Annotated[str, BeforeValidator(uuid_to_str)]
 
 
 class BaseTable(Base):
@@ -19,7 +30,7 @@ class BaseTable(Base):
 
     __abstract__ = True
 
-    id = Column(Integer, primary_key=True, index=True, unique=True, autoincrement=True)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
     user_id = Column(String, nullable=False, index=True)
     created_at = Column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
@@ -34,13 +45,15 @@ class BaseTable(Base):
         self, pydantic_class: Type["basePydanticType"]
     ) -> "basePydanticType":
         """Convert the model to a Pydantic model"""
-        return pydantic_class(**self.__dict__)
+        return pydantic_class.model_validate(self)
 
 
 class BaseModel(PydanticBaseModel):
     """Base class for all Pydantic models"""
 
-    id: Optional[int] = None
+    model_config = ConfigDict(from_attributes=True)
+
+    id: Optional[UUIDStr] = None
     user_id: str
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -71,7 +84,7 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
 
         return db_model.to_pydantic(self.pydantic_model_class)
 
-    async def aget_by_id(self, id: int) -> Optional[basePydanticType]:
+    async def aget_by_id(self, id: str) -> Optional[basePydanticType]:
         """Get a model instance by id"""
         async with self._session_manager.get_session() as session:
             query = select(self.db_model_class).where(self.db_model_class.id == id)
@@ -79,7 +92,7 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
             db_model = result.scalar_one_or_none()
             return self._to_pydantic(db_model)
 
-    def get_by_id(self, id: int) -> Optional[basePydanticType]:
+    def get_by_id(self, id: str) -> Optional[basePydanticType]:
         """Get a model instance by id"""
         return asyncio.run(self.aget_by_id(id))
 
@@ -133,7 +146,7 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
         """Update an existing model instance"""
         return asyncio.run(self.aupdate(model))
 
-    async def adelete(self, id: int) -> None:
+    async def adelete(self, id: str) -> None:
         """Delete a model instance"""
         async with self._session_manager.get_session() as session:
             query = select(self.db_model_class).where(self.db_model_class.id == id)
@@ -143,15 +156,15 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
                 await session.delete(db_model)
                 await session.commit()
 
-    def delete(self, id: int) -> None:
+    def delete(self, id: str) -> None:
         """Delete a model instance"""
         return asyncio.run(self.adelete(id))
 
-    async def aexists(self, id: int) -> bool:
+    async def aexists(self, id: str) -> bool:
         """Check if a model instance exists"""
         return await self.aget_by_id(id) is not None
 
-    def exists(self, id: int) -> bool:
+    def exists(self, id: str) -> bool:
         """Check if a model instance exists"""
         return asyncio.run(self.aexists(id))
 

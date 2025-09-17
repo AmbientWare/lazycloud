@@ -1,11 +1,14 @@
-import dotenv
 import json
-
-from loguru import logger
-from typing import List
 import os
-from pydantic import BaseModel, ConfigDict, model_validator
 from enum import StrEnum
+from typing import List
+
+import dotenv
+from loguru import logger
+from pydantic import BaseModel, ConfigDict, model_validator
+
+from lazycloud_api.registry.base import BaseRegistryConfig
+from lazycloud_api.registry.factory import create_registry_config
 
 # we load the environment variables from the .env file first so we can use them in rest of the app
 dotenv.load_dotenv()
@@ -23,6 +26,7 @@ class AppConfig(BaseModel):
     ENV: ENVIRONMENT = ENVIRONMENT(ENV)
     ADMIN_API_KEY: str = os.getenv("ADMIN_API_KEY", "")
     RATE_LIMIT: str = os.getenv("RATE_LIMIT", "50/minute")
+    IS_WORKER: bool = os.getenv("IS_WORKER", "false").lower() == "true"
 
     # Logging Configuration
     LOG_LEVEL: str = "DEBUG" if ENV == ENVIRONMENT.DEV else "INFO"
@@ -53,10 +57,33 @@ class AppConfig(BaseModel):
     STRIPE_PUBLISHABLE_KEY: str = os.getenv("STRIPE_PUBLISHABLE_KEY", "")
 
     # Database Configurations
-    DATABASE_URL: str = os.getenv(
-        "DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5432/machines"
-    )
+    DB_SECRET_KEY: str = os.getenv("DB_SECRET_KEY", "")
+    DATABASE_URL: str = os.getenv("DATABASE_URL", "")
+    DATABASE_POOL_URL: str = os.getenv("DATABASE_POOL_URL", "")
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379")
+
+    # Registry Configuration
+    REGISTRY_TYPE: str = os.getenv("REGISTRY_TYPE", "docker_hub")
+    REGISTRY_URL: str | None = os.getenv("REGISTRY_URL", None)
+    REGISTRY_USERNAME: str | None = os.getenv("REGISTRY_USERNAME", None)
+    REGISTRY_PASSWORD: str | None = os.getenv("REGISTRY_PASSWORD", None)
+    REGISTRY_REGION: str | None = os.getenv("REGISTRY_REGION", None)
+
+    @property
+    def registry(self) -> BaseRegistryConfig:
+        """Get registry configuration based on type."""
+        kwargs = {}
+
+        if self.REGISTRY_URL:
+            kwargs["registry_url"] = self.REGISTRY_URL
+        if self.REGISTRY_USERNAME:
+            kwargs["username"] = self.REGISTRY_USERNAME
+        if self.REGISTRY_PASSWORD:
+            kwargs["password"] = self.REGISTRY_PASSWORD
+        if self.REGISTRY_REGION:
+            kwargs["region"] = self.REGISTRY_REGION
+
+        return create_registry_config(self.REGISTRY_TYPE, **kwargs)
 
     # Required Environment Variables
     required_env_vars: List[str] = [
@@ -67,13 +94,13 @@ class AppConfig(BaseModel):
         "DATA_EGRESS_PRICE",
         "FLY_API_TOKEN",
         "FLY_ORG_NAME",
-        "DATABASE_URL",
         "REDIS_URL",
         "AWS_SECRET_ACCESS_KEY",
         "AWS_REGION",
         "AWS_ROUTE53_ZONES",
         "STRIPE_SECRET_KEY",
         "STRIPE_PUBLISHABLE_KEY",
+        "DB_SECRET_KEY",
     ]
 
     @model_validator(mode="after")
@@ -84,6 +111,14 @@ class AppConfig(BaseModel):
             raise ValueError(
                 f"Missing required environment variables: {', '.join(missing_vars)}"
             )
+
+        # validate that if IS_WORKER, we have a DATABASE_POOL_URL otherwise we have a DATABASE_URL
+        if self.IS_WORKER and not self.DATABASE_POOL_URL:
+            raise ValueError("DATABASE_POOL_URL is required when IS_WORKER is true")
+
+        elif not self.IS_WORKER and not self.DATABASE_URL:
+            raise ValueError("DATABASE_URL is required when IS_WORKER is false")
+
         return self
 
 

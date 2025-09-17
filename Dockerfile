@@ -11,7 +11,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
-    && curl -L https://fly.io/install.sh | sh
+    && curl -L https://fly.io/install.sh | sh \
+    && curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 \
+    && chmod 700 get_helm.sh \
+    && ./get_helm.sh \
+    && rm get_helm.sh \
+    && curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" \
+    && chmod +x kubectl \
+    && mv kubectl /usr/local/bin/
 
 # Set up flyctl environment so we can access flyctl from the container
 ENV FLYCTL_INSTALL="/root/.fly"
@@ -23,9 +30,10 @@ COPY ./uv.lock ./
 COPY ./README.md ./
 
 COPY ./src/lazycloud_api /src/lazycloud_api
+COPY ./src/shared /src/shared
 
 # Build the Python package using uv
-RUN uv sync --locked
+RUN uv sync --no-dev
 
 # set the working directory
 WORKDIR /src/lazycloud_api
@@ -33,12 +41,3 @@ WORKDIR /src/lazycloud_api
 # Second stage - api
 FROM builder AS api
 CMD [ "uv", "run", "python", "main.py"]
-
-# Second stage - celery worker
-FROM builder AS celery-worker
-CMD [ "uv", "run", "celery", "-A", "celery_app", "worker", "--loglevel=info"]
-
-# Second stage - celery beat
-FROM builder AS celery-beat
-CMD [ "uv", "run", "celery", "-A", "celery_app", "beat", "--loglevel=info"]
-

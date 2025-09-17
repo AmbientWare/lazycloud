@@ -1,9 +1,12 @@
 import typer
+from rich.console import Console
 
 from lazycloud_cli.config import config
-from lazycloud_cli.logging import logger
+from lazycloud_cli.ui.views import AuthView
 
 app = typer.Typer(help="Set the active API key")
+console = Console()
+view = AuthView(console)
 
 
 @app.command()
@@ -14,13 +17,16 @@ def set(
     try:
         # Check if key exists
         if name not in config.list_api_keys():
-            logger.error(f"API key '{name}' not found")
+            view.show_key_not_found(name)
             raise typer.Exit(1)
 
         # Set the active key
         config.active_api_key = name
-        logger.success(f"Set '{name}' as active API key")
+        view.show_active_key_set(name)
+
+    except typer.Exit:
+        raise
 
     except Exception as e:
-        logger.error(f"Failed to set active API key: {e}")
+        view.show_error(f"Failed to set active API key: {e}")
         raise typer.Exit(1)

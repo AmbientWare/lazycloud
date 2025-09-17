@@ -1,0 +1,43 @@
+{{/*
+Create Services for each service that has ports exposed
+*/}}
+{{- range $service := .Values.services }}
+{{- if and $service.enabled $service.ports }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $service.name }}
+  namespace: {{ include "lazycloud-compose.serviceNamespace" (dict "serviceName" $service.name "Values" $.Values "root" $) }}
+  labels:
+    {{- include "lazycloud-compose.labels" $ | nindent 4 }}
+    app.kubernetes.io/name: {{ $service.name }}
+    app.kubernetes.io/component: service
+    lazycloud.io/service: {{ $service.name }}
+    {{- if $service.labels }}
+    {{- toYaml $service.labels | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- include "lazycloud-compose.annotations" $ | nindent 4 }}
+    {{- if $service.annotations }}
+    {{- toYaml $service.annotations | nindent 4 }}
+    {{- end }}
+spec:
+  type: {{ $service.serviceType | default $.Values.defaultService.type }}
+  {{- if $service.sessionAffinity }}
+  sessionAffinity: {{ $service.sessionAffinity }}
+  {{- else if $.Values.defaultService.sessionAffinity }}
+  sessionAffinity: {{ $.Values.defaultService.sessionAffinity }}
+  {{- end }}
+  ports:
+    {{- range $service.ports }}
+    - port: {{ .port }}
+      targetPort: {{ .targetPort }}
+      protocol: {{ .protocol | default "TCP" }}
+      name: {{ .name }}
+    {{- end }}
+  selector:
+    app.kubernetes.io/name: {{ $service.name }}
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+{{- end }}
+{{- end }}
