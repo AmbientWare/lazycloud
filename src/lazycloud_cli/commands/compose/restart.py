@@ -1,9 +1,3 @@
-"""
-Restart command for compose deployments.
-"""
-
-from typing import Optional
-
 import typer
 from rich.console import Console
 from rich.text import Text
@@ -16,8 +10,8 @@ console = Console()
 
 
 def restart(
-    deployment: Optional[str] = typer.Argument(None, help="Deployment ID or name"),
-    service: Optional[str] = typer.Argument(None, help="Service name to restart"),
+    deployment: str | None = typer.Argument(None, help="Deployment ID or name"),
+    service: str | None = typer.Argument(None, help="Service name to restart"),
 ):
     """Restart services in a compose deployment."""
     if deployment and not service:

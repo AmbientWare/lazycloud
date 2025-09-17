@@ -1,8 +1,9 @@
-import httpx
 import json
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import Any
+
+import httpx
 
 from lazycloud_api.config import app_config
 
@@ -13,7 +14,7 @@ class UsageRecord:
 
     value: float
     app: str
-    labels: Dict[str, Any]
+    labels: dict[str, Any]
     day: str
 
 
@@ -21,9 +22,9 @@ class UsageRecord:
 class UsageResponse:
     """Represents the response structure from Fly.io usage API."""
 
-    data: List[UsageRecord]
+    data: list[UsageRecord]
     more: bool
-    cursor: Optional[str] = None
+    cursor: str | None = None
 
 
 class UsageCollector:
@@ -49,7 +50,7 @@ class UsageCollector:
             await self.client.aclose()
             self.client = None
 
-    def _get_headers(self) -> Dict[str, str]:
+    def _get_headers(self) -> dict[str, str]:
         """Get headers for API requests."""
         return {"Authorization": f"Bearer {app_config.FLY_API_TOKEN}"}
 
@@ -62,8 +63,8 @@ class UsageCollector:
         resource_kind: str,
         start_date: str,
         end_date: str,
-        app: Optional[str] = None,
-        cursor: Optional[str] = None,
+        app: str | None = None,
+        cursor: str | None = None,
     ) -> UsageResponse:
         """Fetch a single page of usage data."""
         if not self.client:
@@ -151,8 +152,8 @@ class UsageCollector:
         resource_kind: str,
         start_date: str,
         end_date: str,
-        app: Optional[str] = None,
-    ) -> List[UsageRecord]:
+        app: str | None = None,
+    ) -> list[UsageRecord]:
         """Fetch all pages of usage data for a resource kind."""
         all_records = []
         cursor = None
@@ -179,8 +180,8 @@ class UsageCollector:
         self,
         start_date: datetime,
         end_date: datetime,
-        app: Optional[str] = None,
-    ) -> List[UsageRecord]:
+        app: str | None = None,
+    ) -> list[UsageRecord]:
         """Get machine usage data between start and end dates."""
         start_str = self._format_date(start_date)
         end_str = self._format_date(end_date)
@@ -196,8 +197,8 @@ class UsageCollector:
         self,
         start_date: datetime,
         end_date: datetime,
-        app: Optional[str] = None,
-    ) -> List[UsageRecord]:
+        app: str | None = None,
+    ) -> list[UsageRecord]:
         """Get volume usage data between start and end dates."""
         start_str = self._format_date(start_date)
         end_str = self._format_date(end_date)
@@ -212,8 +213,8 @@ class UsageCollector:
     async def get_daily_usage(
         self,
         target_date: datetime,
-        app: Optional[str] = None,
-    ) -> Tuple[List[UsageRecord], List[UsageRecord]]:
+        app: str | None = None,
+    ) -> tuple[list[UsageRecord], list[UsageRecord]]:
         """Get both machine and volume usage for a specific day."""
         # API requires end_date to be after start_date, so for a single day:
         # start_date = target_date, end_date = target_date + 1 day
@@ -238,8 +239,8 @@ class UsageCollector:
         self,
         start_date: datetime,
         end_date: datetime,
-        app: Optional[str] = None,
-    ) -> Tuple[List[UsageRecord], List[UsageRecord]]:
+        app: str | None = None,
+    ) -> tuple[list[UsageRecord], list[UsageRecord]]:
         """Get both machine and volume usage for a date range."""
         # Validate date range (max 31 days as per API limits)
         date_diff = (end_date - start_date).days
@@ -262,9 +263,9 @@ class UsageCollector:
 
     def group_usage_by_app(
         self,
-        machine_usage: List[UsageRecord],
-        volume_usage: List[UsageRecord],
-    ) -> Dict[str, Dict]:
+        machine_usage: list[UsageRecord],
+        volume_usage: list[UsageRecord],
+    ) -> dict[str, dict]:
         """Group usage records by app name."""
         grouped = {}
 

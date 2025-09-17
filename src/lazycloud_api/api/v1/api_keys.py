@@ -1,5 +1,3 @@
-from typing import List, Optional
-
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
@@ -26,7 +24,7 @@ api_keys_router = APIRouter(
 @api_keys_router.get("")
 async def get_api_keys(
     user_id: str | None = None,
-) -> List[ApiKeyPydantic]:
+) -> list[ApiKeyPydantic]:
     # check if user is admin
     if user_id:
         api_keys = await db.api_keys.afind(filters={"user_id": user_id})
@@ -89,15 +87,15 @@ async def update_api_key(
 
 
 class DeleteApiKeyRequest(BaseModel):
-    api_key_id: Optional[int] = None
-    user_id: Optional[str] = None
+    api_key_id: int | None = None
+    user_id: str | None = None
 
 
 @api_keys_router.delete("")
 async def delete_api_keys(
     request: DeleteApiKeyRequest,
     _=Depends(require_admin),
-) -> List[ApiKeyPydantic]:
+) -> list[ApiKeyPydantic]:
     """
     If user_id is provided, delete all api keys for the user.
     If api_key_id is provided, delete the api key with the given id.

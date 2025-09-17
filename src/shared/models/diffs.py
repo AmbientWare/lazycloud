@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -26,25 +26,25 @@ class FieldChange(BaseModel):
 class ResourceSection(BaseModel):
     """Resources in a section (services, volumes, networks)."""
 
-    services: List[Dict[str, Any]] = []
-    volumes: List[Dict[str, Any]] = []
-    networks: List[Dict[str, Any]] = []
+    services: list[dict[str, Any]] = []
+    volumes: list[dict[str, Any]] = []
+    networks: list[dict[str, Any]] = []
 
 
 class ModifiedSection(BaseModel):
     """Modified resources with their changes."""
 
-    services: Dict[str, Dict[str, Any]] = {}
-    volumes: Dict[str, Dict[str, Any]] = {}
-    networks: Dict[str, Dict[str, Any]] = {}
+    services: dict[str, dict[str, Any]] = {}
+    volumes: dict[str, dict[str, Any]] = {}
+    networks: dict[str, dict[str, Any]] = {}
 
 
 class ComposeDiff(BaseModel):
     """Structured diff between two compose files."""
 
-    added: Optional[ResourceSection] = None
-    modified: Optional[ModifiedSection] = None
-    removed: Optional[ResourceSection] = None
+    added: ResourceSection | None = None
+    modified: ModifiedSection | None = None
+    removed: ResourceSection | None = None
 
     def has_changes(self) -> bool:
         """Check if there are any changes."""

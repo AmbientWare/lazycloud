@@ -1,10 +1,6 @@
-"""
-Status command for compose deployments.
-"""
-
 import asyncio
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any
 
 import typer
 from rich.console import Console, Group
@@ -26,12 +22,12 @@ class RealtimeStatusView:
         self.console = console
         self.view = StatusView(console)
         self.ws_client = None
-        self._current_status: Optional[Dict[str, Any]] = None
-        self._deployment_info: Optional[Dict[str, Any]] = None
-        self._live: Optional[Live] = None
-        self._error_message: Optional[str] = None
+        self._current_status: dict[str, Any] | None = None
+        self._deployment_info: dict[str, Any] | None = None
+        self._live: Live | None = None
+        self._error_message: str | None = None
 
-    def set_deployment_info(self, deployment_info: Dict[str, Any]):
+    def set_deployment_info(self, deployment_info: dict[str, Any]):
         """Set the deployment info."""
         self._deployment_info = deployment_info
 
@@ -148,7 +144,7 @@ class RealtimeStatusView:
             Text(status_msg, style=status_style),
         )
 
-    def _on_status_update(self, data: Dict[str, Any]):
+    def _on_status_update(self, data: dict[str, Any]):
         """Handle status update from WebSocket."""
         self._current_status = data
         if self._live:
@@ -193,7 +189,7 @@ class RealtimeStatusView:
 
 
 def status(
-    deployment: Optional[str] = typer.Argument(None, help="Deployment ID or name"),
+    deployment: str | None = typer.Argument(None, help="Deployment ID or name"),
 ):
     """Get real-time status of a compose deployment.
 

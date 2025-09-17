@@ -1,6 +1,5 @@
 from collections import deque
 from datetime import datetime
-from typing import Optional
 
 from rich.console import Console
 from rich.live import Live
@@ -25,14 +24,14 @@ class LogViewer:
         self.max_lines = max_lines
         self.log_messages: deque[str] = deque(maxlen=max_lines)
 
-        self._live: Optional[Live] = None
+        self._live: Live | None = None
         self._follow = True
-        self._error_message: Optional[str] = None
+        self._error_message: str | None = None
         self._view_top_index = 0
         self._auto_scroll = True
         self._paused = False
 
-    def add_log_line(self, message: Optional[str]) -> None:
+    def add_log_line(self, message: str | None) -> None:
         if message is None or self._paused:
             return
 

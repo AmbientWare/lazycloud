@@ -1,14 +1,14 @@
 import asyncio
-from typing import Optional, List, Generic, Type, TypeVar
-from datetime import datetime, timezone
 import uuid
-from sqlalchemy import Column, String, DateTime
-from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy import orm
-from sqlalchemy.future import select
-from pydantic import BaseModel as PydanticBaseModel, ConfigDict
+from datetime import datetime, timezone
+from typing import Annotated, Generic, Type, TypeVar
+
+from pydantic import BaseModel as PydanticBaseModel
+from pydantic import ConfigDict
 from pydantic.functional_validators import BeforeValidator
-from typing import Annotated
+from sqlalchemy import Column, DateTime, String, orm
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.future import select
 
 from lazycloud_api.database.session import session_manager
 
@@ -53,10 +53,10 @@ class BaseModel(PydanticBaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-    id: Optional[UUIDStr] = None
+    id: UUIDStr | None = None
     user_id: str
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 basePydanticType = TypeVar("basePydanticType", bound=BaseModel)
@@ -75,16 +75,14 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
         self.pydantic_model_class = pydantic_model_class
         self._session_manager = session_manager
 
-    def _to_pydantic(
-        self, db_model: Optional[baseDbType]
-    ) -> Optional[basePydanticType]:
+    def _to_pydantic(self, db_model: baseDbType | None) -> basePydanticType | None:
         """Convert SQLAlchemy model to Pydantic model"""
         if db_model is None:
             return None
 
         return db_model.to_pydantic(self.pydantic_model_class)
 
-    async def aget_by_id(self, id: str) -> Optional[basePydanticType]:
+    async def aget_by_id(self, id: str) -> basePydanticType | None:
         """Get a model instance by id"""
         async with self._session_manager.get_session() as session:
             query = select(self.db_model_class).where(self.db_model_class.id == id)
@@ -92,11 +90,11 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
             db_model = result.scalar_one_or_none()
             return self._to_pydantic(db_model)
 
-    def get_by_id(self, id: str) -> Optional[basePydanticType]:
+    def get_by_id(self, id: str) -> basePydanticType | None:
         """Get a model instance by id"""
         return asyncio.run(self.aget_by_id(id))
 
-    async def aget_by_user_id(self, user_id: str) -> List[basePydanticType]:
+    async def aget_by_user_id(self, user_id: str) -> list[basePydanticType]:
         """Get all model instances by user id"""
         async with self._session_manager.get_session() as session:
             query = select(self.db_model_class).where(
@@ -106,7 +104,7 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
             db_models = list(result.scalars().all())
             return [model.to_pydantic(self.pydantic_model_class) for model in db_models]
 
-    def get_by_user_id(self, user_id: str) -> List[basePydanticType]:
+    def get_by_user_id(self, user_id: str) -> list[basePydanticType]:
         """Get all model instances by user id"""
         return asyncio.run(self.aget_by_user_id(user_id))
 
@@ -126,7 +124,7 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
         """Create a new model instance"""
         return asyncio.run(self.acreate(model))
 
-    async def aupdate(self, model: basePydanticType) -> Optional[basePydanticType]:
+    async def aupdate(self, model: basePydanticType) -> basePydanticType | None:
         """Update an existing model instance"""
         async with self._session_manager.get_session() as session:
             query = select(self.db_model_class).where(
@@ -142,7 +140,7 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
                 return db_model.to_pydantic(self.pydantic_model_class)
             return None
 
-    def update(self, model: basePydanticType) -> Optional[basePydanticType]:
+    def update(self, model: basePydanticType) -> basePydanticType | None:
         """Update an existing model instance"""
         return asyncio.run(self.aupdate(model))
 
@@ -168,7 +166,7 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
         """Check if a model instance exists"""
         return asyncio.run(self.aexists(id))
 
-    async def afind(self, filters: dict) -> List[basePydanticType]:
+    async def afind(self, filters: dict) -> list[basePydanticType]:
         """Find models matching the filters"""
         async with self._session_manager.get_session() as session:
             query = select(self.db_model_class)
@@ -191,15 +189,15 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
             db_models = list(result.scalars().all())
             return [model.to_pydantic(self.pydantic_model_class) for model in db_models]
 
-    def find(self, filters: dict) -> List[basePydanticType]:
+    def find(self, filters: dict) -> list[basePydanticType]:
         """Find models matching the filters"""
         return asyncio.run(self.afind(filters))
 
-    async def afind_one(self, filters: dict) -> Optional[basePydanticType]:
+    async def afind_one(self, filters: dict) -> basePydanticType | None:
         """Find a single model matching the filters"""
         results = await self.afind(filters)
         return results[0] if results else None
 
-    def find_one(self, filters: dict) -> Optional[basePydanticType]:
+    def find_one(self, filters: dict) -> basePydanticType | None:
         """Find a single model matching the filters"""
         return asyncio.run(self.afind_one(filters))

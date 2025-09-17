@@ -2,7 +2,7 @@
 API client for compose operations.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 from lazycloud_cli.api.base import BaseAPI
 from lazycloud_cli.api.tasks import tasks_api
@@ -23,7 +23,7 @@ class DeploymentsAPI(BaseAPI):
     def create_deployment(
         self,
         compose_yaml: str,
-        name: Optional[str] = None,
+        name: str | None = None,
         secrets: bool = False,
     ) -> DeploymentTaskStatusResponse:
         """Create a deployment and return the task response."""
@@ -74,12 +74,12 @@ class DeploymentsAPI(BaseAPI):
 
     def list_deployments(
         self,
-        status: Optional[str] = None,
+        status: str | None = None,
         limit: int = 10,
-        namespace: Optional[str] = None,
+        namespace: str | None = None,
     ) -> DeploymentListResponse:
         """List compose deployments."""
-        params: Dict[str, Any] = {"limit": limit}
+        params: dict[str, Any] = {"limit": limit}
         if status:
             params["status"] = status
         if namespace:
@@ -92,14 +92,14 @@ class DeploymentsAPI(BaseAPI):
         self,
         deployment_id: str,
         compose_yaml: str,
-        deployment_name: Optional[str] = None,
-        env_keys: Optional[list[str]] = None,
+        deployment_name: str | None = None,
+        env_keys: list[str] | None = None,
     ) -> DiffResponse:
         """Get diff between current deployment and new compose file.
 
         For new deployments, use deployment_id='new' and provide deployment_name.
         """
-        request_data: Dict[str, Any] = {
+        request_data: dict[str, Any] = {
             "compose_yaml": compose_yaml,
         }
         if deployment_name:

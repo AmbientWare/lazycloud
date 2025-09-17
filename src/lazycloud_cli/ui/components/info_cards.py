@@ -1,7 +1,3 @@
-"""Information card components for replacing plain text messages."""
-
-from typing import Optional
-
 from rich.console import Group
 from rich.text import Text
 
@@ -49,7 +45,7 @@ class BuildInfoCard(Card):
 class SuccessCard(Card):
     """Success message card."""
 
-    def __init__(self, message: str, title: Optional[str] = None):
+    def __init__(self, message: str, title: str | None = None):
         """Initialize success card."""
         content = Text()
         content.append("✅  ", style=theme.success)
@@ -65,7 +61,7 @@ class SuccessCard(Card):
 class WarningCard(Card):
     """Warning message card."""
 
-    def __init__(self, message: str, title: Optional[str] = None):
+    def __init__(self, message: str, title: str | None = None):
         """Initialize warning card."""
         content = Text()
         content.append("⚠️  ", style=theme.warning)
@@ -84,8 +80,8 @@ class ErrorCard(Card):
     def __init__(
         self,
         message: str,
-        title: Optional[str] = None,
-        suggestion: Optional[str] = None,
+        title: str | None = None,
+        suggestion: str | None = None,
     ):
         """Initialize error card."""
         content = Text()
@@ -145,9 +141,7 @@ class StatusMessageCard(Card):
 class DeploymentActionCard(Card):
     """Card for deployment actions like creating, updating, etc."""
 
-    def __init__(
-        self, action: str, deployment_name: str, details: Optional[str] = None
-    ):
+    def __init__(self, action: str, deployment_name: str, details: str | None = None):
         """Initialize deployment action card.
 
         Args:

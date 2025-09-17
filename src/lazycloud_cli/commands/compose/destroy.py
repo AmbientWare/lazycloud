@@ -1,9 +1,3 @@
-"""
-Destroy command for Docker Compose deployments (CDK-style).
-"""
-
-from typing import Optional
-
 import typer
 from rich.console import Console
 
@@ -16,7 +10,7 @@ console = Console()
 
 
 def destroy(
-    name: Optional[str] = typer.Argument(
+    name: str | None = typer.Argument(
         None,
         help="Deployment name to destroy (use 'lazycloud compose list' to see available deployments)",
     ),

@@ -1,7 +1,5 @@
-"""Common Kubernetes models shared across the application."""
-
 from enum import StrEnum
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -36,25 +34,25 @@ class Protocol(StrEnum):
 class ResourceRequirements(BaseModel):
     """CPU and memory resource specifications."""
 
-    cpu: Optional[str] = None
-    memory: Optional[str] = None
+    cpu: str | None = None
+    memory: str | None = None
 
 
 class Resources(BaseModel):
     """Kubernetes resource requirements."""
 
-    limits: Optional[ResourceRequirements] = None
-    requests: Optional[ResourceRequirements] = None
+    limits: ResourceRequirements | None = None
+    requests: ResourceRequirements | None = None
 
 
 class PortConfig(BaseModel):
     """Port configuration."""
 
-    name: Optional[str] = None
+    name: str | None = None
     port: int
-    target_port: Optional[int] = Field(None, alias="targetPort")
+    target_port: int | None = Field(None, alias="targetPort")
     protocol: Protocol = Protocol.TCP
-    node_port: Optional[int] = Field(None, alias="nodePort")
+    node_port: int | None = Field(None, alias="nodePort")
 
 
 class HttpGetProbe(BaseModel):
@@ -62,14 +60,14 @@ class HttpGetProbe(BaseModel):
 
     path: str
     port: int
-    scheme: Optional[str] = None
-    http_headers: Optional[List[Dict[str, str]]] = Field(None, alias="httpHeaders")
+    scheme: str | None = None
+    http_headers: list[dict[str, str]] | None = Field(None, alias="httpHeaders")
 
 
 class ExecProbe(BaseModel):
     """Exec probe configuration."""
 
-    command: List[str]
+    command: list[str]
 
 
 class TcpSocketProbe(BaseModel):
@@ -81,14 +79,14 @@ class TcpSocketProbe(BaseModel):
 class ProbeConfig(BaseModel):
     """Kubernetes probe configuration."""
 
-    http_get: Optional[HttpGetProbe] = Field(None, alias="httpGet")
-    tcp_socket: Optional[TcpSocketProbe] = Field(None, alias="tcpSocket")
-    exec: Optional[ExecProbe] = None
-    initial_delay_seconds: Optional[int] = Field(None, alias="initialDelaySeconds")
-    timeout_seconds: Optional[int] = Field(None, alias="timeoutSeconds")
-    period_seconds: Optional[int] = Field(None, alias="periodSeconds")
-    success_threshold: Optional[int] = Field(None, alias="successThreshold")
-    failure_threshold: Optional[int] = Field(None, alias="failureThreshold")
+    http_get: HttpGetProbe | None = Field(None, alias="httpGet")
+    tcp_socket: TcpSocketProbe | None = Field(None, alias="tcpSocket")
+    exec: ExecProbe | None = None
+    initial_delay_seconds: int | None = Field(None, alias="initialDelaySeconds")
+    timeout_seconds: int | None = Field(None, alias="timeoutSeconds")
+    period_seconds: int | None = Field(None, alias="periodSeconds")
+    success_threshold: int | None = Field(None, alias="successThreshold")
+    failure_threshold: int | None = Field(None, alias="failureThreshold")
 
 
 class VolumeMount(BaseModel):
@@ -97,47 +95,45 @@ class VolumeMount(BaseModel):
     name: str
     mount_path: str = Field(..., alias="mountPath")
     read_only: bool = Field(False, alias="readOnly")
-    sub_path: Optional[str] = Field(None, alias="subPath")
+    sub_path: str | None = Field(None, alias="subPath")
 
 
 class SecurityCapabilities(BaseModel):
     """Security capabilities."""
 
-    drop: List[str] = []
-    add: List[str] = []
+    drop: list[str] = []
+    add: list[str] = []
 
 
 class SecurityContext(BaseModel):
     """Container security context."""
 
-    run_as_non_root: Optional[bool] = Field(None, alias="runAsNonRoot")
-    run_as_user: Optional[int] = Field(None, alias="runAsUser")
-    run_as_group: Optional[int] = Field(None, alias="runAsGroup")
-    read_only_root_filesystem: Optional[bool] = Field(
-        None, alias="readOnlyRootFilesystem"
-    )
-    allow_privilege_escalation: Optional[bool] = Field(
+    run_as_non_root: bool | None = Field(None, alias="runAsNonRoot")
+    run_as_user: int | None = Field(None, alias="runAsUser")
+    run_as_group: int | None = Field(None, alias="runAsGroup")
+    read_only_root_filesystem: bool | None = Field(None, alias="readOnlyRootFilesystem")
+    allow_privilege_escalation: bool | None = Field(
         None, alias="allowPrivilegeEscalation"
     )
-    privileged: Optional[bool] = None
-    capabilities: Optional[SecurityCapabilities] = None
+    privileged: bool | None = None
+    capabilities: SecurityCapabilities | None = None
 
 
 class PodSecurityContext(BaseModel):
     """Pod-level security context."""
 
-    fs_group: Optional[int] = Field(None, alias="fsGroup")
-    run_as_user: Optional[int] = Field(None, alias="runAsUser")
-    run_as_group: Optional[int] = Field(None, alias="runAsGroup")
-    run_as_non_root: Optional[bool] = Field(None, alias="runAsNonRoot")
-    supplemental_groups: Optional[List[int]] = Field(None, alias="supplementalGroups")
+    fs_group: int | None = Field(None, alias="fsGroup")
+    run_as_user: int | None = Field(None, alias="runAsUser")
+    run_as_group: int | None = Field(None, alias="runAsGroup")
+    run_as_non_root: bool | None = Field(None, alias="runAsNonRoot")
+    supplemental_groups: list[int] | None = Field(None, alias="supplementalGroups")
 
 
 class LabelSelector(BaseModel):
     """Kubernetes label selector."""
 
-    match_labels: Optional[Dict[str, str]] = Field(None, alias="matchLabels")
-    match_expressions: Optional[List[Dict[str, Any]]] = Field(
+    match_labels: dict[str, str] | None = Field(None, alias="matchLabels")
+    match_expressions: list[dict[str, Any]] | None = Field(
         None, alias="matchExpressions"
     )
 
@@ -145,27 +141,27 @@ class LabelSelector(BaseModel):
 class ObjectMeta(BaseModel):
     """Kubernetes object metadata."""
 
-    name: Optional[str] = None  # Optional for pod templates
-    namespace: Optional[str] = None
-    labels: Optional[Dict[str, str]] = None
-    annotations: Optional[Dict[str, str]] = None
-    uid: Optional[str] = None
-    resource_version: Optional[str] = Field(None, alias="resourceVersion")
-    generation: Optional[int] = None
-    creation_timestamp: Optional[str] = Field(None, alias="creationTimestamp")
+    name: str | None = None
+    namespace: str | None = None
+    labels: dict[str, str] | None = None
+    annotations: dict[str, str] | None = None
+    uid: str | None = None
+    resource_version: str | None = Field(None, alias="resourceVersion")
+    generation: int | None = None
+    creation_timestamp: str | None = Field(None, alias="creationTimestamp")
 
 
 class EnvVar(BaseModel):
     """Environment variable configuration."""
 
     name: str
-    value: Optional[str] = None
-    value_from: Optional[Dict[str, Any]] = Field(None, alias="valueFrom")
+    value: str | None = None
+    value_from: dict[str, Any] | None = Field(None, alias="valueFrom")
 
 
 class EnvFromSource(BaseModel):
     """Environment variables from source."""
 
-    config_map_ref: Optional[Dict[str, Any]] = Field(None, alias="configMapRef")
-    secret_ref: Optional[Dict[str, Any]] = Field(None, alias="secretRef")
-    prefix: Optional[str] = None
+    config_map_ref: dict[str, Any] | None = Field(None, alias="configMapRef")
+    secret_ref: dict[str, Any] | None = Field(None, alias="secretRef")
+    prefix: str | None = None

@@ -1,10 +1,5 @@
-"""
-Initialize a LazyCloud deployment configuration.
-"""
-
 import re
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
@@ -97,16 +92,16 @@ def suggest_deployment_name(directory: Path = Path.cwd()) -> str:
 
 
 def init_deployment(
-    deployment_name: Optional[str] = typer.Option(
+    deployment_name: str | None = typer.Option(
         None, "--name", "-n", help="Deployment name (will prompt if not provided)"
     ),
-    compose_file: Optional[str] = typer.Option(
+    compose_file: str | None = typer.Option(
         None, "--file", "-f", help="Docker Compose file to use"
     ),
     force: bool = typer.Option(
         False, "--force", help="Overwrite existing .lazycloud file"
     ),
-    environment: Optional[str] = typer.Option(
+    environment: str | None = typer.Option(
         None, "--env", "-e", help="Environment name (e.g., production, staging)"
     ),
 ) -> None:

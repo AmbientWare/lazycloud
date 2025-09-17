@@ -1,9 +1,4 @@
-"""
-UI views for restart operations.
-"""
-
 from datetime import datetime
-from typing import List, Optional
 
 from rich.console import Console
 from rich.table import Table
@@ -22,7 +17,7 @@ from shared.responses.deployments import (
 class RestartSummaryCard(Card):
     """Card showing restart operation summary."""
 
-    def __init__(self, deployment_name: str, service: Optional[str] = None):
+    def __init__(self, deployment_name: str, service: str | None = None):
         """Initialize restart summary card."""
         table = Table(show_header=False, box=None)
         table.add_column("Property", style=theme.primary)
@@ -48,7 +43,7 @@ class RestartSummaryCard(Card):
 class RestartResultCard(Card):
     """Card for displaying restart results."""
 
-    def __init__(self, response: RestartResponse, service: Optional[str] = None):
+    def __init__(self, response: RestartResponse, service: str | None = None):
         """Initialize restart result card."""
         if service:
             # Single service restart
@@ -119,7 +114,7 @@ class RestartResultCard(Card):
 class RestartDetailsCard(Card):
     """Card showing detailed results for each service."""
 
-    def __init__(self, results: List[RestartServiceResult]):
+    def __init__(self, results: list[RestartServiceResult]):
         """Initialize restart details card."""
         table = Table(
             show_header=True, header_style=theme.table_header, box=None, expand=True
@@ -168,7 +163,7 @@ class RestartDetailsCard(Card):
 class RestartProgressCard(Card):
     """Card showing restart operation in progress."""
 
-    def __init__(self, deployment_name: str, service: Optional[str] = None):
+    def __init__(self, deployment_name: str, service: str | None = None):
         """Initialize restart progress card."""
         table = Table(show_header=False, box=None)
         table.add_column("Status", style=theme.warning)
@@ -195,7 +190,7 @@ class RestartView:
         self.console = Console()
 
     def show_restart_initiation(
-        self, deployment: DeploymentResponse, service: Optional[str] = None
+        self, deployment: DeploymentResponse, service: str | None = None
     ):
         """Show restart initiation information."""
         summary_card = RestartSummaryCard(
@@ -203,9 +198,7 @@ class RestartView:
         )
         self.console.print(summary_card)
 
-    def show_restart_progress(
-        self, deployment_name: str, service: Optional[str] = None
-    ):
+    def show_restart_progress(self, deployment_name: str, service: str | None = None):
         """Show restart in progress."""
         progress_card = RestartProgressCard(deployment_name, service)
         self.console.print(progress_card)

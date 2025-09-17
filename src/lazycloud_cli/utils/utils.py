@@ -1,12 +1,11 @@
 import importlib.metadata
 from pathlib import Path
-from typing import Optional
 
 from lazycloud_cli.api import api
 from lazycloud_cli.lazycloud_file import LazyCloudFile
 
 
-def get_current_deployment_name() -> Optional[str]:
+def get_current_deployment_name() -> str | None:
     """Get the deployment name from the current directory's lazycloud.yaml file.
 
     Returns:

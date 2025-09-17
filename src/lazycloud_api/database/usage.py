@@ -1,7 +1,7 @@
-from typing import List, Optional
-from sqlalchemy import Column, String, Float
 import uuid
 from enum import StrEnum
+
+from sqlalchemy import Column, Float, String
 from sqlalchemy.orm import relationship
 
 from lazycloud_api.database.base import BaseModel, BaseTable, DatabaseService
@@ -34,7 +34,7 @@ class UsageTable(BaseTable):
 class UsagePydantic(BaseModel):
     """Pydantic model for usage"""
 
-    uuid: Optional[str] = None
+    uuid: str | None = None
     balance: float
     status: UsageStatus
 
@@ -45,7 +45,7 @@ class UsageService(DatabaseService[UsageTable, UsagePydantic]):
     def __init__(self):
         super().__init__(UsageTable, UsagePydantic)
 
-    async def usage_by_user_id(self, user_id: str) -> List[UsagePydantic]:
+    async def usage_by_user_id(self, user_id: str) -> list[UsagePydantic]:
         """Get usage by user id"""
         filters = {"user_id": user_id}
         return await self.afind(filters=filters)

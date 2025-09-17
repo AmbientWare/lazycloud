@@ -1,5 +1,4 @@
 from pathlib import Path
-from typing import Dict, Optional
 
 from pydantic import PrivateAttr, field_validator
 from pydantic_settings import BaseSettings
@@ -14,8 +13,8 @@ class CLIConfig(BaseSettings):
     registry_url: str = "localhost:5000"
 
     # Private attributes for api key management
-    _api_keys: Dict[str, str] = PrivateAttr(default_factory=dict)
-    _active_api_key: Optional[str] = PrivateAttr(default=None)
+    _api_keys: dict[str, str] = PrivateAttr(default_factory=dict)
+    _active_api_key: str | None = PrivateAttr(default=None)
 
     class Config:
         env_prefix = "LAZYCLOUD_"
@@ -47,12 +46,12 @@ class CLIConfig(BaseSettings):
                 f.write(f"ACTIVE_API_KEY={self._active_api_key}\n")
 
     @property
-    def active_api_key(self) -> Optional[str]:
+    def active_api_key(self) -> str | None:
         """Get the currently active api key"""
         return self._active_api_key
 
     @property
-    def active_api_key_value(self) -> Optional[str]:
+    def active_api_key_value(self) -> str | None:
         """Get the value of the currently active api key"""
         if not self._active_api_key:
             raise ValueError("No active api key found")
@@ -64,7 +63,7 @@ class CLIConfig(BaseSettings):
         return value
 
     @active_api_key.setter
-    def active_api_key(self, value: Optional[str]):
+    def active_api_key(self, value: str | None):
         """Set the active api key"""
         if value is not None and value not in self._api_keys:
             raise ValueError(f"Api key {value} does not exist")
@@ -92,7 +91,7 @@ class CLIConfig(BaseSettings):
             self._active_api_key = next(iter(self._api_keys.keys()), None)
         self._save_api_keys()
 
-    def get_api_key(self, name: Optional[str] = None) -> Optional[str]:
+    def get_api_key(self, name: str | None = None) -> str | None:
         """Get an api key value by name. If no name is provided, returns the active api key."""
         if name is None:
             return (
@@ -102,7 +101,7 @@ class CLIConfig(BaseSettings):
             )
         return self._api_keys.get(name.lower())
 
-    def list_api_keys(self) -> Dict[str, str]:
+    def list_api_keys(self) -> dict[str, str]:
         """List all api keys"""
         return self._api_keys.copy()
 

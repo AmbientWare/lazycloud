@@ -19,6 +19,7 @@ class K8sLogStreamer:
         callback: Callable[[str], None] | Callable[[str], Awaitable[None]],
         follow: bool = True,
         tail_lines: int = 100,
+        pod_name: str | None = None,
     ):
         """Initialize the log streamer."""
         self.deployment_id = deployment_id
@@ -27,6 +28,7 @@ class K8sLogStreamer:
         self.callback = callback
         self.follow = follow
         self.tail_lines = tail_lines
+        self.pod_name = pod_name
         self._process: asyncio.subprocess.Process | None = None
         self._running = False
 
@@ -43,11 +45,15 @@ class K8sLogStreamer:
             "logs",
             "-n",
             self.namespace,
-            "-l",
-            f"app.kubernetes.io/name={self.service_name}",
-            "--tail",
-            str(self.tail_lines),
         ]
+
+        # Use pod name if specified, otherwise use label selector
+        if self.pod_name:
+            cmd.append(self.pod_name)
+        else:
+            cmd.extend(["-l", f"app.kubernetes.io/name={self.service_name}"])
+
+        cmd.extend(["--tail", str(self.tail_lines)])
 
         if self.follow:
             cmd.append("-f")
@@ -58,8 +64,9 @@ class K8sLogStreamer:
                 *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
             )
 
+            pod_info = f"pod {self.pod_name}" if self.pod_name else f"service {self.service_name}"
             logger.info(
-                f"Started log streaming for {self.service_name} in {self.namespace}"
+                f"Started log streaming for {pod_info} in {self.namespace}"
             )
 
             # Read stdout line by line
@@ -127,4 +134,5 @@ class K8sLogStreamer:
             except Exception as e:
                 logger.error(f"Error stopping log stream: {e}")
 
-        logger.info(f"Stopped log streaming for {self.service_name}")
+        pod_info = f"pod {self.pod_name}" if self.pod_name else f"service {self.service_name}"
+        logger.info(f"Stopped log streaming for {pod_info}")

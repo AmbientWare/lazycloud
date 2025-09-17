@@ -1,7 +1,3 @@
-"""Card component for displaying information in a bordered panel."""
-
-from typing import Optional, Union
-
 from rich.box import ROUNDED, Box
 from rich.console import Console, ConsoleOptions, RenderableType, RenderResult
 from rich.panel import Panel
@@ -12,10 +8,10 @@ class Card:
     def __init__(
         self,
         content: RenderableType,
-        title: Optional[str] = None,
-        subtitle: Optional[str] = None,
-        border_style: Optional[str] = None,
-        padding: Union[int, tuple[int, int]] = (0, 1),
+        title: str | None = None,
+        subtitle: str | None = None,
+        border_style: str | None = None,
+        padding: int | tuple[int, int] = (0, 1),
         expand: bool = True,
         box: Box = ROUNDED,
     ):

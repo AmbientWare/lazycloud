@@ -1,9 +1,5 @@
-"""
-Textual-based service status view with scrolling support.
-"""
-
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any
 
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, VerticalScroll
@@ -115,15 +111,15 @@ class ServiceStatusApp(App):
         self,
         deployment_id: str,
         service_name: str,
-        deployment_info: Dict[str, Any],
+        deployment_info: dict[str, Any],
     ):
         super().__init__()
         self.deployment_id = deployment_id
         self.service_name = service_name
         self.deployment_info = deployment_info
         self.ws_client = None
-        self._current_status: Optional[Dict[str, Any]] = None
-        self._error_message: Optional[str] = None
+        self._current_status: dict[str, Any] | None = None
+        self._error_message: str | None = None
 
     def compose(self) -> ComposeResult:
         """Create child widgets."""
@@ -288,7 +284,7 @@ class ServiceStatusApp(App):
         # Update connection status
         self._update_connection_status("Live updates active")
 
-    def _get_service_data(self) -> Optional[Dict[str, Any]]:
+    def _get_service_data(self) -> dict[str, Any] | None:
         """Extract service data from current status."""
         if not self._current_status:
             return None
@@ -389,7 +385,7 @@ class ServiceStatusApp(App):
         status_widget = self.query_one("#connection-status", Static)
         status_widget.update(status)
 
-    def _on_status_update(self, data: Dict[str, Any]) -> None:
+    def _on_status_update(self, data: dict[str, Any]) -> None:
         """Handle status update from WebSocket."""
         self._current_status = data
         # WebSocket callbacks are already in the app's thread, so call directly

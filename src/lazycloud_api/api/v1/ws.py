@@ -158,6 +158,7 @@ async def websocket_service_logs(
     deployment_id: str,
     service_name: str,
     tail: int = Query(100),
+    pod: str | None = Query(None),
 ):
     """WebSocket endpoint for streaming service logs."""
     await websocket.accept()
@@ -195,6 +196,7 @@ async def websocket_service_logs(
             service_name=service_name,
             callback=log_callback,
             tail_lines=tail,
+            pod_name=pod,
         )
 
         logger.info(f"WebSocket connected for logs: {deployment_id}/{service_name}")

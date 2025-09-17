@@ -1,13 +1,8 @@
-"""
-Logs command for compose deployments.
-"""
-
 import asyncio
 import select
 import sys
 import termios
 import tty
-from typing import Optional
 
 import typer
 from rich.console import Console
@@ -25,8 +20,8 @@ MOUSE_SCROLL_LINES = 3
 
 
 def logs(
-    deployment: Optional[str] = typer.Argument(None, help="Deployment ID or name"),
-    service: Optional[str] = typer.Argument(None, help="Service name to get logs from"),
+    deployment: str | None = typer.Argument(None, help="Deployment ID or name"),
+    service: str | None = typer.Argument(None, help="Service name to get logs from"),
     no_follow: bool = typer.Option(
         False,
         "--no-follow",
@@ -62,7 +57,7 @@ def logs(
 
 
 def _resolve_deployment_and_service(
-    deployment: Optional[str], service: Optional[str]
+    deployment: str | None, service: str | None
 ) -> tuple[str, str]:
     if deployment and not service:
         service = deployment

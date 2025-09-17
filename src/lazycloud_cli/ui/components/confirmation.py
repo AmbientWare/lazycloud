@@ -1,7 +1,3 @@
-"""Confirmation dialog component for user confirmations."""
-
-from typing import List, Optional
-
 from rich.console import Console
 from rich.prompt import Confirm
 from rich.text import Text
@@ -17,8 +13,8 @@ class ConfirmationDialog:
         self,
         title: str,
         question: str,
-        details: Optional[List[str]] = None,
-        warning_message: Optional[str] = None,
+        details: list[str] | None = None,
+        warning_message: str | None = None,
         danger: bool = False,
         default: bool = False,
     ):
@@ -93,8 +89,8 @@ class DestructiveConfirmationDialog(ConfirmationDialog):
         self,
         resource_type: str,
         resource_name: str,
-        consequences: Optional[List[str]] = None,
-        custom_warning: Optional[str] = None,
+        consequences: list[str] | None = None,
+        custom_warning: str | None = None,
     ):
         """Initialize destructive confirmation dialog.
 
@@ -133,8 +129,8 @@ class SimpleConfirmationDialog(ConfirmationDialog):
     def __init__(
         self,
         action: str,
-        details: Optional[List[str]] = None,
-        title: Optional[str] = None,
+        details: list[str] | None = None,
+        title: str | None = None,
     ):
         dialog_title = title or "Confirmation Required"
         question = f"Do you want to {action}?"
@@ -151,8 +147,8 @@ class SimpleConfirmationDialog(ConfirmationDialog):
 def confirm_action(
     console: Console,
     action: str,
-    resource_name: Optional[str] = None,
-    details: Optional[List[str]] = None,
+    resource_name: str | None = None,
+    details: list[str] | None = None,
     danger: bool = False,
 ) -> bool:
     """Convenience function for quick confirmations"""

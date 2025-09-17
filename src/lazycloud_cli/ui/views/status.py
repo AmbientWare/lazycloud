@@ -1,7 +1,5 @@
-"""Status command view components."""
-
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from rich.console import Console
 from rich.table import Table
@@ -16,7 +14,7 @@ from lazycloud_cli.ui.theme import theme
 class DeploymentDetailsCard(Card):
     """Card showing detailed deployment information."""
 
-    def __init__(self, deployment: Dict[str, Any]):
+    def __init__(self, deployment: dict[str, Any]):
         """Initialize deployment details card."""
         # Create details table
         table = Table(show_header=False, box=None)
@@ -69,7 +67,7 @@ class DeploymentDetailsCard(Card):
 class ServiceStatusCard(Card):
     """Card showing status of services in the deployment."""
 
-    def __init__(self, services: List[Dict[str, Any]]):
+    def __init__(self, services: list[dict[str, Any]]):
         """Initialize service status card."""
         if not services:
             content = Text("No services found", style=theme.text_secondary)
@@ -129,7 +127,7 @@ class ServiceStatusCard(Card):
 class ResourceTreeCard(Card):
     """Card showing deployment resources as a tree."""
 
-    def __init__(self, resources: Dict[str, List[str]]):
+    def __init__(self, resources: dict[str, list[str]]):
         """Initialize resource tree card.
 
         Args:
@@ -157,7 +155,7 @@ class ResourceTreeCard(Card):
 class InstanceDetailsCard(Card):
     """Card showing service instance details."""
 
-    def __init__(self, instances: List[Dict[str, Any]]):
+    def __init__(self, instances: list[dict[str, Any]]):
         """Initialize instance details card."""
         if not instances:
             content = Text("No instances found", style=theme.text_secondary)
@@ -213,10 +211,10 @@ class StatusView:
 
     def show_deployment_status(
         self,
-        deployment: Dict[str, Any],
-        services: Optional[List[Dict[str, Any]]] = None,
-        instances: Optional[List[Dict[str, Any]]] = None,
-        resources: Optional[Dict[str, List[str]]] = None,
+        deployment: dict[str, Any],
+        services: list[dict[str, Any]] | None = None,
+        instances: list[dict[str, Any]] | None = None,
+        resources: dict[str, list[str]] | None = None,
     ):
         """Show complete deployment status.
 

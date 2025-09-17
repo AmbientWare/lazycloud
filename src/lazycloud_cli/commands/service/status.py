@@ -1,9 +1,3 @@
-"""
-Service status command for detailed service information.
-"""
-
-from typing import Optional
-
 import typer
 from rich.console import Console
 
@@ -16,7 +10,7 @@ console = Console()
 
 def status(
     service: str = typer.Argument(..., help="Service name"),
-    deployment: Optional[str] = typer.Argument(None, help="Deployment ID or name"),
+    deployment: str | None = typer.Argument(None, help="Deployment ID or name"),
 ):
     """Get detailed real-time status of a specific service.
 
