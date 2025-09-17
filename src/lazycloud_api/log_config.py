@@ -1,16 +1,14 @@
 import sys
-from typing import Any, Dict, Optional
+from typing import Any
 
 from loguru import logger
 
-# Remove default logger
 logger.remove()
 
-# Add custom logging format with colors and structured information
 LOG_FORMAT = "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>"
 
 
-def setup_logger(config: Optional[Dict[str, Any]] = None) -> None:
+def setup_logger(config: dict[str, Any] | None = None) -> None:
     """Setup logger with custom configuration"""
     if config is None:
         config = {

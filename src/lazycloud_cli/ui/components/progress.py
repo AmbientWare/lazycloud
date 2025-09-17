@@ -1,7 +1,3 @@
-"""Progress components for displaying operation status."""
-
-from typing import List, Optional
-
 from rich.box import ROUNDED
 from rich.console import Console, ConsoleOptions, RenderResult
 from rich.panel import Panel
@@ -17,7 +13,7 @@ class ProgressCard:
         self,
         title: str,
         current_status: str = "Initializing...",
-        steps: Optional[List[tuple[str, str]]] = None,  # (step_name, status)
+        steps: list[tuple[str, str]] | None = None,  # (step_name, status)
         show_elapsed: bool = True,
     ):
         """Initialize a ProgressCard.

@@ -1,7 +1,5 @@
-"""Panel components for structured information display."""
-
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 from rich import box
 from rich.console import Console, Group
@@ -21,17 +19,17 @@ class DeploymentInfo:
     id: str
     name: str
     state: str
-    created_at: Optional[str] = None
-    updated_at: Optional[str] = None
-    services: Optional[List[Dict[str, Any]]] = None
-    errors: Optional[List[str]] = None
-    warnings: Optional[List[str]] = None
+    created_at: str | None = None
+    updated_at: str | None = None
+    services: list[dict[str, Any]] | None = None
+    errors: list[str] | None = None
+    warnings: list[str] | None = None
 
 
 class DeploymentInfoPanel:
     """A panel component for displaying detailed deployment information."""
 
-    def __init__(self, deployment: Union[DeploymentInfo, Dict[str, Any]]):
+    def __init__(self, deployment: DeploymentInfo | dict[str, Any]):
         """Initialize the panel with deployment data.
 
         Args:
@@ -159,7 +157,7 @@ class ConfirmationPanel:
         message: str,
         title: str = "Confirm Action",
         danger: bool = False,
-        details: Optional[Union[str, List[str]]] = None,
+        details: str | list[str] | None = None,
     ):
         """Initialize the confirmation panel.
 
@@ -210,7 +208,7 @@ class ConfirmationPanel:
             expand=False,
         )
 
-    def confirm(self, console: Optional[Console] = None) -> bool:
+    def confirm(self, console: Console | None = None) -> bool:
         """Show the panel and prompt for confirmation.
 
         Args:
@@ -238,8 +236,8 @@ class CommandResult:
         self,
         success: bool,
         message: str,
-        details: Optional[Union[str, List[str], Dict[str, Any]]] = None,
-        data: Optional[Any] = None,
+        details: str | list[str] | dict[str, Any] | None = None,
+        data: Any | None = None,
     ):
         """Initialize the command result.
 
@@ -254,7 +252,7 @@ class CommandResult:
         self.details = details
         self.data = data
 
-    def render(self, show_data: bool = True) -> Union[Panel, Text]:
+    def render(self, show_data: bool = True) -> Panel | Text:
         """Render the command result.
 
         Args:
@@ -321,7 +319,7 @@ class CommandResult:
             expand=False,
         )
 
-    def print(self, console: Optional[Console] = None):
+    def print(self, console: Console | None = None):
         """Print the result to console.
 
         Args:
@@ -330,6 +328,6 @@ class CommandResult:
         console = console or Console()
         console.print(self.render())
 
-    def __rich__(self) -> Union[Panel, Text]:
+    def __rich__(self) -> Panel | Text:
         """Rich protocol support for direct console printing."""
         return self.render()

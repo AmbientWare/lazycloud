@@ -1,6 +1,4 @@
-"""Pydantic models for Kubernetes API responses."""
-
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -22,36 +20,34 @@ class KubectlContainer(BaseModel):
 
     name: str
     image: str
-    image_pull_policy: Optional[str] = Field("IfNotPresent", alias="imagePullPolicy")
-    resources: Optional[Resources] = None
-    env: Optional[List[EnvVar]] = None
-    env_from: Optional[List[EnvFromSource]] = Field(None, alias="envFrom")
-    ports: Optional[List[PortConfig]] = None
-    volume_mounts: Optional[List[VolumeMount]] = Field(None, alias="volumeMounts")
-    liveness_probe: Optional[ProbeConfig] = Field(None, alias="livenessProbe")
-    readiness_probe: Optional[ProbeConfig] = Field(None, alias="readinessProbe")
-    startup_probe: Optional[ProbeConfig] = Field(None, alias="startupProbe")
-    security_context: Optional[SecurityContext] = Field(None, alias="securityContext")
+    image_pull_policy: str | None = Field("IfNotPresent", alias="imagePullPolicy")
+    resources: Resources | None = None
+    env: list[EnvVar] | None = None
+    env_from: list[EnvFromSource] | None = Field(None, alias="envFrom")
+    ports: list[PortConfig] | None = None
+    volume_mounts: list[VolumeMount] | None = Field(None, alias="volumeMounts")
+    liveness_probe: ProbeConfig | None = Field(None, alias="livenessProbe")
+    readiness_probe: ProbeConfig | None = Field(None, alias="readinessProbe")
+    startup_probe: ProbeConfig | None = Field(None, alias="startupProbe")
+    security_context: SecurityContext | None = Field(None, alias="securityContext")
 
 
 class KubectlPodSpec(BaseModel):
     """Pod specification."""
 
-    containers: List[KubectlContainer]
-    service_account: Optional[str] = Field(None, alias="serviceAccount")
-    service_account_name: Optional[str] = Field(None, alias="serviceAccountName")
-    restart_policy: Optional[str] = Field("Always", alias="restartPolicy")
-    dns_policy: Optional[str] = Field("ClusterFirst", alias="dnsPolicy")
-    security_context: Optional[PodSecurityContext] = Field(
-        None, alias="securityContext"
-    )
-    volumes: Optional[List[Dict[str, Any]]] = None
-    runtime_class_name: Optional[str] = Field(None, alias="runtimeClassName")
-    scheduler_name: Optional[str] = Field(None, alias="schedulerName")
-    termination_grace_period_seconds: Optional[int] = Field(
+    containers: list[KubectlContainer]
+    service_account: str | None = Field(None, alias="serviceAccount")
+    service_account_name: str | None = Field(None, alias="serviceAccountName")
+    restart_policy: str | None = Field("Always", alias="restartPolicy")
+    dns_policy: str | None = Field("ClusterFirst", alias="dnsPolicy")
+    security_context: PodSecurityContext | None = Field(None, alias="securityContext")
+    volumes: list[dict[str, Any]] | None = None
+    runtime_class_name: str | None = Field(None, alias="runtimeClassName")
+    scheduler_name: str | None = Field(None, alias="schedulerName")
+    termination_grace_period_seconds: int | None = Field(
         None, alias="terminationGracePeriodSeconds"
     )
-    automount_service_account_token: Optional[bool] = Field(
+    automount_service_account_token: bool | None = Field(
         None, alias="automountServiceAccountToken"
     )
 
@@ -59,69 +55,67 @@ class KubectlPodSpec(BaseModel):
 class KubectlPodTemplateSpec(BaseModel):
     """Pod template specification."""
 
-    metadata: Optional[ObjectMeta] = None
+    metadata: ObjectMeta | None = None
     spec: KubectlPodSpec
 
 
 class KubectlDeploymentSpec(BaseModel):
     """Deployment specification."""
 
-    replicas: Optional[int] = 1
-    selector: Dict[str, Any]
+    replicas: int | None = 1
+    selector: dict[str, Any]
     template: KubectlPodTemplateSpec
-    strategy: Optional[Dict[str, Any]] = None
-    revision_history_limit: Optional[int] = Field(None, alias="revisionHistoryLimit")
-    progress_deadline_seconds: Optional[int] = Field(
-        None, alias="progressDeadlineSeconds"
-    )
+    strategy: dict[str, Any] | None = None
+    revision_history_limit: int | None = Field(None, alias="revisionHistoryLimit")
+    progress_deadline_seconds: int | None = Field(None, alias="progressDeadlineSeconds")
 
 
 class KubectlStatefulSetSpec(BaseModel):
     """StatefulSet specification."""
 
-    replicas: Optional[int] = 1
-    selector: Dict[str, Any]
+    replicas: int | None = 1
+    selector: dict[str, Any]
     template: KubectlPodTemplateSpec
     service_name: str = Field(..., alias="serviceName")
-    pod_management_policy: Optional[str] = Field(
+    pod_management_policy: str | None = Field(
         "OrderedReady", alias="podManagementPolicy"
     )
-    update_strategy: Optional[Dict[str, Any]] = Field(None, alias="updateStrategy")
-    volume_claim_templates: Optional[List[Dict[str, Any]]] = Field(
+    update_strategy: dict[str, Any] | None = Field(None, alias="updateStrategy")
+    volume_claim_templates: list[dict[str, Any]] | None = Field(
         None, alias="volumeClaimTemplates"
     )
-    persistent_volume_claim_retention_policy: Optional[Dict[str, Any]] = Field(
+    persistent_volume_claim_retention_policy: dict[str, Any] | None = Field(
         None, alias="persistentVolumeClaimRetentionPolicy"
     )
-    revision_history_limit: Optional[int] = Field(None, alias="revisionHistoryLimit")
+    revision_history_limit: int | None = Field(None, alias="revisionHistoryLimit")
 
 
 class KubectlDeploymentStatus(BaseModel):
     """Deployment status."""
 
-    observed_generation: Optional[int] = Field(None, alias="observedGeneration")
-    replicas: Optional[int] = 0
-    updated_replicas: Optional[int] = Field(0, alias="updatedReplicas")
-    ready_replicas: Optional[int] = Field(0, alias="readyReplicas")
-    available_replicas: Optional[int] = Field(0, alias="availableReplicas")
-    unavailable_replicas: Optional[int] = Field(0, alias="unavailableReplicas")
-    conditions: Optional[List[Dict[str, Any]]] = None
-    collision_count: Optional[int] = Field(None, alias="collisionCount")
+    observed_generation: int | None = Field(None, alias="observedGeneration")
+    replicas: int | None = 0
+    updated_replicas: int | None = Field(0, alias="updatedReplicas")
+    ready_replicas: int | None = Field(0, alias="readyReplicas")
+    available_replicas: int | None = Field(0, alias="availableReplicas")
+    unavailable_replicas: int | None = Field(0, alias="unavailableReplicas")
+    conditions: list[dict[str, Any]] | None = None
+    collision_count: int | None = Field(None, alias="collisionCount")
 
 
 class KubectlStatefulSetStatus(BaseModel):
     """StatefulSet status."""
 
-    observed_generation: Optional[int] = Field(None, alias="observedGeneration")
-    replicas: Optional[int] = 0
-    ready_replicas: Optional[int] = Field(0, alias="readyReplicas")
-    current_replicas: Optional[int] = Field(0, alias="currentReplicas")
-    updated_replicas: Optional[int] = Field(0, alias="updatedReplicas")
-    available_replicas: Optional[int] = Field(0, alias="availableReplicas")
-    collision_count: Optional[int] = Field(None, alias="collisionCount")
-    current_revision: Optional[str] = Field(None, alias="currentRevision")
-    update_revision: Optional[str] = Field(None, alias="updateRevision")
-    conditions: Optional[List[Dict[str, Any]]] = None
+    observed_generation: int | None = Field(None, alias="observedGeneration")
+    replicas: int | None = 0
+    ready_replicas: int | None = Field(0, alias="readyReplicas")
+    current_replicas: int | None = Field(0, alias="currentReplicas")
+    updated_replicas: int | None = Field(0, alias="updatedReplicas")
+    available_replicas: int | None = Field(0, alias="availableReplicas")
+    collision_count: int | None = Field(None, alias="collisionCount")
+    current_revision: str | None = Field(None, alias="currentRevision")
+    update_revision: str | None = Field(None, alias="updateRevision")
+    conditions: list[dict[str, Any]] | None = None
 
 
 class KubectlDeployment(BaseModel):
@@ -131,7 +125,7 @@ class KubectlDeployment(BaseModel):
     kind: str = "Deployment"
     metadata: ObjectMeta
     spec: KubectlDeploymentSpec
-    status: Optional[KubectlDeploymentStatus] = None
+    status: KubectlDeploymentStatus | None = None
 
 
 class KubectlStatefulSet(BaseModel):
@@ -141,27 +135,27 @@ class KubectlStatefulSet(BaseModel):
     kind: str = "StatefulSet"
     metadata: ObjectMeta
     spec: KubectlStatefulSetSpec
-    status: Optional[KubectlStatefulSetStatus] = None
+    status: KubectlStatefulSetStatus | None = None
 
 
 class KubectlPodStatus(BaseModel):
     """Pod status information."""
 
-    phase: Optional[str] = None  # Pending, Running, Succeeded, Failed, Unknown
-    conditions: Optional[List[Dict[str, Any]]] = None
-    host_ip: Optional[str] = Field(None, alias="hostIP")
-    pod_ip: Optional[str] = Field(None, alias="podIP")
-    pod_ips: Optional[List[Dict[str, str]]] = Field(None, alias="podIPs")
-    start_time: Optional[str] = Field(None, alias="startTime")
-    container_statuses: Optional[List[Dict[str, Any]]] = Field(
+    phase: str | None = None  # Pending, Running, Succeeded, Failed, Unknown
+    conditions: list[dict[str, Any]] | None = None
+    host_ip: str | None = Field(None, alias="hostIP")
+    pod_ip: str | None = Field(None, alias="podIP")
+    pod_ips: list[dict[str, str]] | None = Field(None, alias="podIPs")
+    start_time: str | None = Field(None, alias="startTime")
+    container_statuses: list[dict[str, Any]] | None = Field(
         None, alias="containerStatuses"
     )
-    init_container_statuses: Optional[List[Dict[str, Any]]] = Field(
+    init_container_statuses: list[dict[str, Any]] | None = Field(
         None, alias="initContainerStatuses"
     )
-    nominated_node_name: Optional[str] = Field(None, alias="nominatedNodeName")
-    reason: Optional[str] = None
-    message: Optional[str] = None
+    nominated_node_name: str | None = Field(None, alias="nominatedNodeName")
+    reason: str | None = None
+    message: str | None = None
 
 
 class KubectlPod(BaseModel):
@@ -171,7 +165,7 @@ class KubectlPod(BaseModel):
     kind: str = "Pod"
     metadata: ObjectMeta
     spec: KubectlPodSpec
-    status: Optional[KubectlPodStatus] = None
+    status: KubectlPodStatus | None = None
 
 
 class KubectlPodList(BaseModel):
@@ -179,21 +173,19 @@ class KubectlPodList(BaseModel):
 
     api_version: str = Field("v1", alias="apiVersion")
     kind: str = "PodList"
-    items: List[KubectlPod]
-    metadata: Optional[Dict[str, Any]] = None
+    items: list[KubectlPod]
+    metadata: dict[str, Any] | None = None
 
 
 class KubectlHPAStatus(BaseModel):
     """Horizontal Pod Autoscaler status."""
 
-    observed_generation: Optional[int] = Field(None, alias="observedGeneration")
-    last_scale_time: Optional[str] = Field(None, alias="lastScaleTime")
+    observed_generation: int | None = Field(None, alias="observedGeneration")
+    last_scale_time: str | None = Field(None, alias="lastScaleTime")
     current_replicas: int = Field(0, alias="currentReplicas")
     desired_replicas: int = Field(0, alias="desiredReplicas")
-    current_metrics: Optional[List[Dict[str, Any]]] = Field(
-        None, alias="currentMetrics"
-    )
-    conditions: Optional[List[Dict[str, Any]]] = None
+    current_metrics: list[dict[str, Any]] | None = Field(None, alias="currentMetrics")
+    conditions: list[dict[str, Any]] | None = None
 
 
 class KubectlHPA(BaseModel):
@@ -202,5 +194,5 @@ class KubectlHPA(BaseModel):
     api_version: str = Field("autoscaling/v2", alias="apiVersion")
     kind: str = "HorizontalPodAutoscaler"
     metadata: ObjectMeta
-    spec: Optional[Dict[str, Any]] = None
-    status: Optional[KubectlHPAStatus] = None
+    spec: dict[str, Any] | None = None
+    status: KubectlHPAStatus | None = None

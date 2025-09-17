@@ -2,7 +2,7 @@
 API client for logs operations.
 """
 
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable
 
 from lazycloud_cli.api.base_ws import BaseWsAPI
 
@@ -16,19 +16,15 @@ class LogsAPI(BaseWsAPI):
         deployment_id: str,
         service_name: str,
         tail: int,
-        on_message: Callable[[Dict[str, Any]], None],
-        on_error: Optional[Callable[[Exception], None]] = None,
+        on_message: Callable[[dict[str, Any]], None],
+        on_error: Callable[[Exception], None] | None = None,
+        pod_name: str | None = None,
     ) -> None:
-        """Stream logs from a service.
-
-        Args:
-            deployment_id: Deployment ID
-            service_name: Service name to get logs from
-            tail: Number of lines to show from the end
-            on_message: Callback for log messages
-            on_error: Optional callback for errors
-        """
+        """Stream logs from a service"""
         url_path = f"/deployments/{deployment_id}/logs/{service_name}?tail={tail}"
+
+        if pod_name:
+            url_path += f"&pod={pod_name}"
 
         await self.connect_with_retry(
             url_path=url_path,

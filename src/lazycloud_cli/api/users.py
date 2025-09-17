@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional
+from typing import Any
 
 from lazycloud_cli.api.base import BaseAPI
 from lazycloud_cli.api.response_models import UserInfoResponse
@@ -21,7 +21,7 @@ class UsersAPI(BaseAPI):
         except Exception:
             return None
 
-    def get_user_info(self) -> Optional[UserInfoResponse]:
+    def get_user_info(self) -> UserInfoResponse | None:
         """Get user information"""
         try:
             response = self._get()
@@ -31,7 +31,7 @@ class UsersAPI(BaseAPI):
             logger.error(f"Error getting user info: {e}")
             return None
 
-    def update_user_info(self, user_data: Dict[str, Any]) -> Optional[UserInfoResponse]:
+    def update_user_info(self, user_data: dict[str, Any]) -> UserInfoResponse | None:
         """Update user information"""
         try:
 

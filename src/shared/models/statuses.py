@@ -1,6 +1,5 @@
 from datetime import datetime
 from enum import StrEnum
-from typing import List, Optional
 
 from pydantic import BaseModel
 
@@ -24,6 +23,7 @@ class KubernetesPhase(StrEnum):
     """Status enumeration."""
 
     RUNNING = "Running"
+    PARTIALLY_RUNNING = "Partially Running"
     PENDING = "Pending"
     STOPPED = "Stopped"
     ERROR = "Error"
@@ -39,9 +39,9 @@ class PodStatus(BaseModel):
     restart_count: int
     age: str
     node: str
-    ip: Optional[str] = None
-    cpu_usage: Optional[str] = None
-    memory_usage: Optional[str] = None
+    ip: str | None = None
+    cpu_usage: str | None = None
+    memory_usage: str | None = None
 
 
 class ServiceStatus(BaseModel):
@@ -53,13 +53,13 @@ class ServiceStatus(BaseModel):
     status: KubernetesPhase  # running, pending, stopped, error
     replicas: int = 1
     ready_replicas: int = 0
-    pods: Optional[List[PodStatus]] = None
-    resources: Optional[Resources] = None
-    current_usage: Optional[CurrentUsage] = None
-    ports: Optional[List[str]] = None  # Format: "8080:8080/TCP"
-    volumes: Optional[List[str]] = None
-    hpa: Optional[HPAValues] = None
-    healthcheck: Optional[HealthCheckValues] = None
+    pods: list[PodStatus] | None = None
+    resources: Resources | None = None
+    current_usage: CurrentUsage | None = None
+    ports: list[str] | None = None  # Format: "8080:8080/TCP"
+    volumes: list[str] | None = None
+    hpa: HPAValues | None = None
+    healthcheck: HealthCheckValues | None = None
     total_restarts: int = 0
 
 

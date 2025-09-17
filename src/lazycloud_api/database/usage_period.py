@@ -1,8 +1,8 @@
-from sqlalchemy import Column, DateTime, JSON, ForeignKey
-from sqlalchemy.dialects.postgresql import UUID
 from datetime import datetime, timezone
+
+from sqlalchemy import JSON, Column, DateTime, ForeignKey
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
-from typing import Optional
 
 from lazycloud_api.database.base import BaseModel, BaseTable, DatabaseService, UUIDStr
 from lazycloud_api.database.usage import UsageStatus
@@ -28,7 +28,7 @@ class UsagePeriodPydantic(BaseModel):
     start_at: datetime
     end_at: datetime
     data: dict = {}
-    usage_id: Optional[UUIDStr] = None
+    usage_id: UUIDStr | None = None
 
 
 class UsagePeriodService(DatabaseService[UsagePeriodTable, UsagePeriodPydantic]):

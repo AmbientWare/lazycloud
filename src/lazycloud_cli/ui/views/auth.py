@@ -1,7 +1,3 @@
-"""Auth command view components."""
-
-from typing import Dict, Optional
-
 from rich.console import Console
 from rich.prompt import Prompt
 from rich.table import Table
@@ -18,7 +14,7 @@ from lazycloud_cli.ui.theme import theme
 class ApiKeyListCard(Card):
     """Card for displaying API keys."""
 
-    def __init__(self, keys: Dict[str, str], active_key: Optional[str] = None):
+    def __init__(self, keys: dict[str, str], active_key: str | None = None):
         """Initialize API key list card."""
         if not keys:
             content = Text("No API keys configured", style=theme.text_secondary)
@@ -77,7 +73,7 @@ class AuthView:
         """Initialize the auth view."""
         self.console = console
 
-    def show_api_keys(self, keys: Dict[str, str], active_key: Optional[str] = None):
+    def show_api_keys(self, keys: dict[str, str], active_key: str | None = None):
         """Display list of API keys."""
         self.console.print(ApiKeyListCard(keys, active_key))
 

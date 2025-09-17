@@ -1,7 +1,3 @@
-"""Init command view components."""
-
-from typing import List, Optional
-
 from rich.console import Console
 from rich.prompt import Prompt
 from rich.table import Table
@@ -16,7 +12,7 @@ from lazycloud_cli.ui.theme import theme
 class ComposeFileCard(Card):
     """Card for displaying found compose files."""
 
-    def __init__(self, compose_files: List[str]):
+    def __init__(self, compose_files: list[str]):
         """Initialize compose file card."""
         table = Table(show_header=False, box=None)
         table.add_column("Index", style=theme.primary, width=6)
@@ -40,7 +36,7 @@ class InitConfigCard(Card):
         self,
         deployment_name: str,
         compose_file: str,
-        environment: Optional[str] = None,
+        environment: str | None = None,
     ):
         """Initialize config card."""
         table = Table(show_header=False, box=None)
@@ -124,7 +120,7 @@ class InitView:
             default="docker-compose.yml",
         )
 
-    def show_compose_files(self, compose_files: List[str]):
+    def show_compose_files(self, compose_files: list[str]):
         """Display found compose files."""
         section = Section(
             title="Available Compose Files",
@@ -132,7 +128,7 @@ class InitView:
         )
         self.console.print(section)
 
-    def prompt_compose_file_selection(self, compose_files: List[str]) -> str:
+    def prompt_compose_file_selection(self, compose_files: list[str]) -> str:
         """Prompt user to select from multiple compose files."""
         choice = Prompt.ask(
             "Select compose file",
@@ -157,7 +153,7 @@ class InitView:
         self,
         deployment_name: str,
         compose_file: str,
-        environment: Optional[str] = None,
+        environment: str | None = None,
     ):
         """Show the initialization configuration summary."""
         section = Section(
@@ -171,7 +167,7 @@ class InitView:
         self,
         deployment_name: str,
         compose_file: str,
-        environment: Optional[str] = None,
+        environment: str | None = None,
     ):
         """Show successful initialization message."""
         # Create success content
@@ -230,7 +226,7 @@ class InitView:
         self,
         deployment_name: str,
         compose_file: str,
-        environment: Optional[str] = None,
+        environment: str | None = None,
     ):
         """Show successful sync message for existing deployment."""
         # Create success content

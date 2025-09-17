@@ -1,9 +1,9 @@
-from typing import Optional
-from datetime import datetime
 import asyncio
-from sqlalchemy import Column, String, DateTime
+from datetime import datetime
+from enum import IntEnum, StrEnum
+
+from sqlalchemy import Column, DateTime, String
 from sqlalchemy.future import select
-from enum import StrEnum, IntEnum
 
 from lazycloud_api.database.base import BaseModel, BaseTable, DatabaseService
 
@@ -58,7 +58,7 @@ class ApiKeyService(DatabaseService[ApiKeyTable, ApiKeyPydantic]):
     def __init__(self):
         super().__init__(ApiKeyTable, ApiKeyPydantic)
 
-    async def auser_by_value(self, value: str) -> Optional[str]:
+    async def auser_by_value(self, value: str) -> str | None:
         """Get a user by value"""
         async with self._session_manager.get_session() as session:
             query = select(ApiKeyTable).where(ApiKeyTable.value == value)
@@ -70,6 +70,6 @@ class ApiKeyService(DatabaseService[ApiKeyTable, ApiKeyPydantic]):
 
             return None
 
-    def user_by_value(self, value: str) -> Optional[str]:
+    def user_by_value(self, value: str) -> str | None:
         """Get a user by value"""
         return asyncio.run(self.auser_by_value(value))

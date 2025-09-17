@@ -1,7 +1,3 @@
-"""Section component for organizing content with headers."""
-
-from typing import Optional
-
 from rich.console import Console, ConsoleOptions, RenderableType, RenderResult
 from rich.rule import Rule
 from rich.text import Text
@@ -17,8 +13,8 @@ class Section:
     def __init__(
         self,
         title: str,
-        content: Optional[RenderableType] = None,
-        icon: Optional[str] = None,
+        content: RenderableType | None = None,
+        icon: str | None = None,
         style: str = "bright_cyan",
         rule: bool = True,
     ):

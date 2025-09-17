@@ -1,5 +1,3 @@
-from typing import Optional
-
 from textual.containers import Container
 from textual.widgets import DataTable, RichLog, Static
 from textual.worker import Worker
@@ -12,19 +10,34 @@ from shared.models.k8s import Resources
 from shared.models.statuses import KubernetesPhase, PodStatus, ServiceStatus
 
 
+class PodTable(DataTable):
+    """Custom DataTable for pod selection that handles its own events."""
+
+    def __init__(self, service_view, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.service_view = service_view
+
+    def on_row_selected(self, event: DataTable.RowSelected) -> None:
+        """Handle row selection and notify the service view."""
+        if event.row_key:
+            self.service_view._on_pod_selected(event.row_key.value)
+
+
 class ServiceView:
     """Handles service-specific UI rendering and updates."""
 
     def __init__(self, parent_container: Container):
         self.parent = parent_container
-        self._overview_widget: Optional[Static] = None
-        self._pods_table: Optional[DataTable] = None
-        self._logs_widget: Optional[RichLog] = None
+        self._overview_widget: Static | None = None
+        self._pods_table: DataTable | None = None
+        self._logs_widget: RichLog | None = None
         self._logs_client = None
-        self._ws_task: Optional[Worker] = None
+        self._ws_task: Worker | None = None
         self.ws_client = status_api
-        self.current_deployment_id: Optional[str] = None
-        self.current_service_name: Optional[str] = None
+        self.current_deployment_id: str | None = None
+        self.current_service_name: str | None = None
+        self.selected_pod_name: str | None = None
+        self._logs_section: SectionContainer | None = None
 
     async def render(
         self,
@@ -35,57 +48,46 @@ class ServiceView:
         """Render service details in the parent container"""
         self.current_deployment_id = deployment_id
         self.current_service_name = service.name
+        self.run_worker_fn = run_worker_fn
+        self._pods = []
 
-        # Service Overview
         overview_content = self._build_overview_content(service)
         overview_section = SectionContainer("📦 Service Overview")
         self.parent.mount(overview_section)
         self._overview_widget = Static("\n".join(overview_content).strip(), markup=True)
         overview_section.mount(self._overview_widget)
 
-        # Ports
         if service.ports:
             ports_content = self._build_ports_content(service.ports)
             self._create_section("🌐 Network Ports", ports_content)
 
-        # Resources
         if service.resources and (
             service.resources.limits or service.resources.requests
         ):
             resources_content = self._build_resources_content(service.resources)
             self._create_section("💻 Resource Configuration", resources_content)
 
-        # Health Checks
         if service.healthcheck:
             health_content = self._build_health_content(service.healthcheck)
             self._create_section("❤️ Health Checks", health_content)
 
-        # Auto-scaling
         autoscaling_content = self._build_autoscaling_content(service.hpa)
         self._create_section("🔄 Auto-scaling", autoscaling_content)
 
-        # Pods/Instances table
         self._pods_table = self._create_pods_table()
         if service.pods:
             self._update_pods_table(service.pods)
 
-        # Service Logs section
-        logs_section = SectionContainer("📜 Service Logs")
-        self.parent.mount(logs_section)
+        self._logs_section = SectionContainer("📜 Service Logs (All Pods)")
+        self.parent.mount(self._logs_section)
 
-        # Create RichLog widget for logs display
         self._logs_widget = RichLog(highlight=True, markup=True)
-        self._logs_widget.styles.height = 15  # Fixed height for logs
+        self._logs_widget.styles.height = 15
         self._logs_widget.styles.min_height = 10
-        logs_section.mount(self._logs_widget)
+        self._logs_section.mount(self._logs_widget)
 
-        # Add initial message
-        self._logs_widget.write("[dim]Connecting to log stream...[/dim]")
-
-        # Start WebSocket connection for real-time updates
+        self._logs_widget.write("[dim]Connecting to log stream for all pods...[/dim]")
         self._ws_task = run_worker_fn(self._connect_service_websocket())
-
-        # Start logs streaming in background
         run_worker_fn(self._connect_logs_stream())
 
     def update_overview(self, service: ServiceStatus) -> None:
@@ -124,7 +126,6 @@ class ServiceView:
             f"Replicas:     {service.ready_replicas}/{service.replicas}",
         ]
 
-        # Add current usage if available
         if service.current_usage:
             if service.current_usage.cpu:
                 content.append(f"CPU Usage:    {service.current_usage.cpu}")
@@ -226,10 +227,10 @@ class ServiceView:
 
     def _create_pods_table(self) -> DataTable:
         """Create a data table for instances."""
-        section = SectionContainer("🔍 Instances")
+        section = SectionContainer("🔍 Instances (click to filter logs)")
         self.parent.mount(section)
 
-        table = DataTable(show_header=True, zebra_stripes=True)
+        table = PodTable(self, show_header=True, zebra_stripes=True, cursor_type="row")
         table.add_columns(
             "Instance Name", "Status", "Ready", "CPU", "Memory", "Restarts", "Age"
         )
@@ -244,6 +245,8 @@ class ServiceView:
 
         self._pods_table.clear()
 
+        self._pods = pods
+
         for pod in pods:
             status_color = self._get_status_color(pod.phase)
             status_text = f"[{status_color}]{pod.phase.value}[/{status_color}]"
@@ -257,13 +260,57 @@ class ServiceView:
 
             age = pod.age or "Unknown"
 
-            name = pod.name
-            if len(name) > 30:
-                name = name[:27] + "..."
+            display_name = pod.name
+            if len(display_name) > 30:
+                display_name = display_name[:27] + "..."
 
             self._pods_table.add_row(
-                name, status_text, ready, cpu, memory, restarts, age
+                display_name,
+                status_text,
+                ready,
+                cpu,
+                memory,
+                restarts,
+                age,
+                key=pod.name,
             )
+
+    def _on_pod_selected(self, pod_name: str | None) -> None:
+        """Handle pod selection from the table."""
+        self.selected_pod_name = pod_name
+
+        if self._logs_section:
+            if pod_name:
+                display_name = (
+                    pod_name if len(pod_name) <= 40 else pod_name[:37] + "..."
+                )
+                self._logs_section.border_title = (
+                    f"📜 Service Logs (Pod: {display_name})"
+                )
+            else:
+                self._logs_section.border_title = "📜 Service Logs (All Pods)"
+
+        if self._logs_widget:
+            self._logs_widget.clear()
+            if pod_name:
+                self._logs_widget.write(
+                    f"[dim]Connecting to log stream for pod: {pod_name}...[/dim]"
+                )
+            else:
+                self._logs_widget.write(
+                    "[dim]Connecting to log stream for all pods...[/dim]"
+                )
+
+        if self.run_worker_fn:
+            self.run_worker_fn(self._restart_log_stream())
+
+    async def _restart_log_stream(self) -> None:
+        """Restart the log stream with current pod selection."""
+        if self._logs_client:
+            await self._logs_client.disconnect()
+            self._logs_client = None
+
+        await self._connect_logs_stream()
 
     def _get_status_color(self, status: KubernetesPhase) -> str:
         """Get color for status display."""
@@ -294,7 +341,7 @@ class ServiceView:
                         if service.pods:
                             self.update_pods_table(service.pods)
 
-            def on_error(error: Exception) -> None:
+            def on_error(_: Exception) -> None:
                 """Handle WebSocket errors."""
                 pass  # Silently ignore errors for now
 
@@ -326,17 +373,16 @@ class ServiceView:
             if self._logs_widget:
                 self._logs_widget.write(f"[red]Log stream error: {str(error)}[/red]")
 
-        # Clear the "connecting" message
         if self._logs_widget:
             self._logs_widget.clear()
             self._logs_widget.write("[green]Connected to log stream[/green]\n")
 
-        # Connect to logs stream
         self._logs_client = logs_api
         await self._logs_client.stream_logs(
             deployment_id=self.current_deployment_id,
             service_name=self.current_service_name,
-            tail=100,  # Get last 100 lines
+            tail=100,
             on_message=on_log_message,
             on_error=on_log_error,
+            pod_name=self.selected_pod_name,  # Filter by selected pod if any
         )

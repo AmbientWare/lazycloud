@@ -1,5 +1,3 @@
-from typing import Optional
-
 from fastapi import Depends, HTTPException, WebSocket, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
@@ -76,7 +74,7 @@ async def check_user_id_request(user_id: str | None, current_user: UserData) -> 
     return current_user.user_id
 
 
-async def get_current_active_user_ws(websocket: WebSocket) -> Optional[UserData]:
+async def get_current_active_user_ws(websocket: WebSocket) -> UserData | None:
     """Get current user from WebSocket connection.
 
     Expects the API key to be sent as a query parameter: ?token=<api_key>

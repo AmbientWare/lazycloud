@@ -1,6 +1,6 @@
-import time
-from typing import Any, Optional, Callable
 import threading
+import time
+from typing import Any, Callable
 
 from lazycloud_cli.logging import logger
 
@@ -24,9 +24,9 @@ class Spinner:
 
     def __exit__(
         self,
-        exc_type: Optional[type],
-        exc_val: Optional[Exception],
-        exc_tb: Optional[Any],
+        exc_type: type | None,
+        exc_val: Exception | None,
+        exc_tb: Any | None,
     ) -> None:
         """Context manager exit"""
         if self._progress:
@@ -51,12 +51,12 @@ class StatusSpinner:
         self._progress = None
         self._task_id = None
         self._last_status_check = 0
-        self._last_status: Optional[str] = None
+        self._last_status: str | None = None
         self._status_msg = ""
         self._status_thread = None
         self._running = False
 
-    def _update_description(self, status_msg: Optional[str] = None) -> None:
+    def _update_description(self, status_msg: str | None = None) -> None:
         """Update the spinner's description."""
         if self._progress and self._task_id is not None:
             description = self._base_message
@@ -104,9 +104,9 @@ class StatusSpinner:
 
     def __exit__(
         self,
-        exc_type: Optional[type],
-        exc_val: Optional[Exception],
-        exc_tb: Optional[Any],
+        exc_type: type | None,
+        exc_val: Exception | None,
+        exc_tb: Any | None,
     ) -> None:
         """Context manager exit"""
         self._running = False

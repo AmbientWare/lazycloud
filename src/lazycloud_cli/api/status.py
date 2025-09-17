@@ -3,7 +3,7 @@ API client for real-time status operations.
 """
 
 import json
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable
 
 from lazycloud_cli.api.base_ws import BaseWsAPI
 
@@ -15,9 +15,9 @@ class StatusAPI(BaseWsAPI):
     async def stream_deployment_status(
         self,
         deployment_id: str,
-        on_update: Callable[[Dict[str, Any]], None],
-        on_error: Optional[Callable[[Exception], None]] = None,
-        service_name: Optional[str] = None,
+        on_update: Callable[[dict[str, Any]], None],
+        on_error: Callable[[Exception], None] | None = None,
+        service_name: str | None = None,
     ) -> "StatusAPI":
         """Stream real-time deployment status updates."""
         url_path = f"/deployments/{deployment_id}/status"

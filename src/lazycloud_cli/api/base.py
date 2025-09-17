@@ -1,4 +1,4 @@
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable
 
 import httpx
 
@@ -32,8 +32,8 @@ class BaseAPI:
         self,
         method: str,
         url: str,
-        json: Optional[Dict[str, Any]] = None,
-        params: Optional[dict] = None,
+        json: dict[str, Any] | None = None,
+        params: dict | None = None,
     ) -> Any:
         """Make a request to the API"""
         client = self._get_client()
@@ -70,8 +70,8 @@ class BaseAPI:
     def _get(
         self,
         path: str = "",
-        params: Optional[dict] = None,
-        json: Optional[Dict[str, Any]] = None,
+        params: dict | None = None,
+        json: dict[str, Any] | None = None,
     ) -> Any:
         """Get a resource from the API"""
         url = self._base_url if not path else f"{self._base_url}/{path}"
@@ -80,8 +80,8 @@ class BaseAPI:
     def _post(
         self,
         path: str = "",
-        params: Optional[dict] = None,
-        json: Optional[Dict[str, Any]] = None,
+        params: dict | None = None,
+        json: dict[str, Any] | None = None,
     ) -> Any:
         """Post a resource to the API"""
         url = self._base_url if not path else f"{self._base_url}/{path}"
@@ -90,8 +90,8 @@ class BaseAPI:
     def _put(
         self,
         path: str = "",
-        params: Optional[dict] = None,
-        json: Optional[Dict[str, Any]] = None,
+        params: dict | None = None,
+        json: dict[str, Any] | None = None,
     ) -> Any:
         """Put a resource to the API"""
         url = self._base_url if not path else f"{self._base_url}/{path}"
@@ -100,8 +100,8 @@ class BaseAPI:
     def _delete(
         self,
         path: str = "",
-        params: Optional[dict] = None,
-        json: Optional[Dict[str, Any]] = None,
+        params: dict | None = None,
+        json: dict[str, Any] | None = None,
     ) -> Any:
         """Delete a resource from the API"""
         url = self._base_url if not path else f"{self._base_url}/{path}"
@@ -111,7 +111,7 @@ class BaseAPI:
         self,
         message: str,
         func: Callable,
-        status_checker: Optional[Callable[[], str]] = None,
+        status_checker: Callable[[], str] | None = None,
     ) -> Any:
         """Run a function with a spinner in a separate thread. If status_checker is provided,
         it should be a function that returns the current status as a string.

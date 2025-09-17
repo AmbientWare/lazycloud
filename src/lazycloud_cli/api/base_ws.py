@@ -4,7 +4,7 @@ Base class for WebSocket API clients.
 
 import asyncio
 import json
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable
 from urllib.parse import urlparse, urlunparse
 
 import websockets
@@ -17,7 +17,7 @@ class BaseWsAPI:
 
     def __init__(self, url_path: str = ""):
         self._base_path = url_path
-        self._websocket: Optional[Any] = None
+        self._websocket: Any | None = None
         self._running = False
         self._retry_count = 0
         self._max_retries = 3
@@ -50,9 +50,9 @@ class BaseWsAPI:
     async def connect_with_retry(
         self,
         url_path: str,
-        on_connect: Optional[Callable] = None,
-        on_message: Callable[[Dict[str, Any]], None] = None,
-        on_error: Optional[Callable[[Exception], None]] = None,
+        on_connect: Callable | None = None,
+        on_message: Callable[[dict[str, Any]], None] = None,
+        on_error: Callable[[Exception], None] | None = None,
         message_type: str = "log",
     ) -> None:
         """Connect to WebSocket with retry logic."""
@@ -83,9 +83,9 @@ class BaseWsAPI:
     async def _connect(
         self,
         url: str,
-        on_connect: Optional[Callable] = None,
-        on_message: Callable[[Dict[str, Any]], None] = None,
-        on_error: Optional[Callable[[Exception], None]] = None,
+        on_connect: Callable | None = None,
+        on_message: Callable[[dict[str, Any]], None] = None,
+        on_error: Callable[[Exception], None] | None = None,
         message_type: str = "log",
     ) -> None:
         """Core WebSocket connection logic."""
