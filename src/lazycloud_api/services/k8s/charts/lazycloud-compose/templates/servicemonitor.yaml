@@ -1,0 +1,44 @@
+{{/*
+Create ServiceMonitor for each service that has metrics enabled
+Only create if monitoring.serviceMonitor.enabled is true (requires Prometheus Operator CRDs)
+*/}}
+{{- if .Values.monitoring.serviceMonitor.enabled }}
+{{- range $service := .Values.services }}
+{{- if and $service.enabled $service.metrics $service.metrics.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ $service.name }}
+  namespace: {{ include "lazycloud-compose.serviceNamespace" (dict "serviceName" $service.name "Values" $.Values "root" $) }}
+  labels:
+    {{- include "lazycloud-compose.labels" $ | nindent 4 }}
+    app.kubernetes.io/name: {{ $service.name }}
+    app.kubernetes.io/component: monitoring
+    lazycloud.io/service: {{ $service.name }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $service.name }}
+      app.kubernetes.io/instance: {{ $.Release.Name }}
+  endpoints:
+    - port: {{ $service.metrics.port | default "metrics" }}
+      path: {{ $service.metrics.path | default "/metrics" }}
+      interval: {{ $service.metrics.interval | default "30s" }}
+      {{- if $service.metrics.scrapeTimeout }}
+      scrapeTimeout: {{ $service.metrics.scrapeTimeout }}
+      {{- end }}
+      {{- if $service.metrics.honorLabels }}
+      honorLabels: {{ $service.metrics.honorLabels }}
+      {{- end }}
+      {{- if $service.metrics.relabelings }}
+      relabelings:
+        {{- toYaml $service.metrics.relabelings | nindent 8 }}
+      {{- end }}
+      {{- if $service.metrics.metricRelabelings }}
+      metricRelabelings:
+        {{- toYaml $service.metrics.metricRelabelings | nindent 8 }}
+      {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

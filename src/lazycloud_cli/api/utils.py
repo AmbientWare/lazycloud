@@ -5,16 +5,6 @@ import threading
 from lazycloud_cli.logging import logger
 
 
-def mb_to_gb(mb: int) -> int:
-    """Convert MB to GB"""
-    return mb // 1024
-
-
-def gb_to_mb(gb: int) -> int:
-    """Convert GB to MB"""
-    return gb * 1024
-
-
 class Spinner:
     """
     A simple context manager for displaying a spinner using Rich's Progress.

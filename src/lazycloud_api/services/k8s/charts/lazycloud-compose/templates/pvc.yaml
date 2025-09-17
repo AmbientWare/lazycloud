@@ -1,0 +1,55 @@
+{{/*
+Create PersistentVolumeClaims for each volume (except for StatefulSet volumes which use volumeClaimTemplates)
+*/}}
+{{- range $volume := .Values.volumes }}
+{{- if $volume.enabled }}
+{{- $volumeNamespace := $.Release.Namespace }}
+{{- $isStatefulSetVolume := false }}
+{{- range $service := $.Values.services }}
+{{- if $service.enabled }}
+{{- range $serviceVolume := $service.volumes }}
+{{- if eq $serviceVolume.name $volume.name }}
+{{- $volumeNamespace = include "lazycloud-compose.serviceNamespace" (dict "serviceName" $service.name "Values" $.Values "root" $) }}
+{{- if eq ($service.workloadType | default "Deployment") "StatefulSet" }}
+{{- $isStatefulSetVolume = true }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if not $isStatefulSetVolume }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "lazycloud-compose.sanitizeName" $volume.name }}
+  namespace: {{ $volumeNamespace }}
+  labels:
+    {{- include "lazycloud-compose.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: storage
+    lazycloud.io/volume: {{ $volume.name }}
+    {{- with $volume.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- include "lazycloud-compose.annotations" $ | nindent 4 }}
+    helm.sh/resource-policy: keep  # Preserve PVCs on helm upgrade
+    {{- if $volume.annotations }}
+    {{- toYaml $volume.annotations | nindent 4 }}
+    {{- end }}
+spec:
+  accessModes:
+    {{- if $volume.accessModes }}
+    {{- toYaml $volume.accessModes | nindent 4 }}
+    {{- else }}
+    {{- toYaml $.Values.defaultStorage.accessModes | nindent 4 }}
+    {{- end }}
+  resources:
+    requests:
+      storage: {{ $volume.size | default $.Values.defaultStorage.size }}
+  {{- if or $volume.storageClass $.Values.defaultStorage.storageClass }}
+  storageClassName: {{ $volume.storageClass | default $.Values.defaultStorage.storageClass }}
+  {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

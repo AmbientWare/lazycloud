@@ -1,13 +1,17 @@
-from typing import Dict, Optional, Any, Callable
+from typing import Any, Callable, Dict, Optional
+
 import httpx
 
-from lazycloud_cli.config import config
 from lazycloud_cli.api.utils import Spinner, StatusSpinner
+from lazycloud_cli.config import config
 
 
 class BaseAPI:
-    def __init__(self, url_path: str):
-        self._base_url = f"{config.api_base_url}/{config.api_version}/{url_path}"
+    def __init__(self, url_path: str, use_version: bool = True):
+        if use_version:
+            self._base_url = f"{config.api_base_url}/{config.api_version}/{url_path}"
+        else:
+            self._base_url = f"{config.api_base_url}/{url_path}"
         self.timeout = 300.0
 
     def _get_client(self) -> httpx.Client:

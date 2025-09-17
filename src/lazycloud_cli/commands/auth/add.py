@@ -1,10 +1,13 @@
 import typer
+from rich.console import Console
 
 from lazycloud_cli.config import config
-from lazycloud_cli.logging import logger
+from lazycloud_cli.ui.views import AuthView
 from lazycloud_cli.api import api
 
 app = typer.Typer(help="Add a new API key")
+console = Console()
+view = AuthView(console)
 
 
 @app.command()
@@ -14,41 +17,56 @@ def add(
     """Add a new API key"""
     # Check if key name already exists
     if name in config.list_api_keys():
-        if not logger.confirm(f"API key '{name}' already exists. Overwrite?"):
+        if not view.confirm_overwrite(name):
             return
 
-    value = typer.prompt("Enter the API key value")
+    value = view.prompt_api_key()
 
-    ## First we need to check if the key is valid
+    # First we need to check if the key is valid
+    view.show_validating_key()
+
     # save the old key to restore it later
     old_key = config.active_api_key
+    validation_passed = False
 
     try:
         # create a new TMP key and make it active
         config.add_api_key(f"tmp_{name}", value)
         config.active_api_key = f"tmp_{name}"
         # check if the key is valid
-        api.users.get_user_id()
+        user_id = api.users.get_user_id()
+        if user_id:  # Only valid if we get a non-empty user ID
+            validation_passed = True
+        else:
+            view.show_key_invalid()
 
-    except Exception as e:
-        logger.error(f"The API key is invalid. Please check the key and try again.")
-        raise typer.Exit(1)
+    except Exception:
+        view.show_key_invalid()
 
     finally:
         # restore the old key
         config.active_api_key = old_key
-        config.remove_api_key(f"TMP_{name}")
+        # Remove the temporary key
+        try:
+            config.remove_api_key(f"tmp_{name}")
+        except Exception:
+            pass  # Ignore if it doesn't exist
+
+    # Only proceed if validation passed
+    if not validation_passed:
+        raise typer.Exit(1)
 
     try:
         # Add the API key
         config.add_api_key(name, value)
-        logger.success(f"Added API key '{name}'")
 
         # If this is the first key, set it as active
-        if not config.active_api_key:
+        set_active = not config.active_api_key
+        if set_active:
             config.active_api_key = name
-            logger.info(f"Set '{name}' as active API key")
+
+        view.show_key_added(name, set_active)
 
     except Exception as e:
-        logger.error(f"Failed to add API key: {e}")
+        view.show_error(f"Failed to add API key: {e}")
         raise typer.Exit(1)

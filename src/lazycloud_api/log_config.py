@@ -1,6 +1,7 @@
-from loguru import logger
 import sys
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
+
+from loguru import logger
 
 # Remove default logger
 logger.remove()

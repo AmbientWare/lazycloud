@@ -1,0 +1,19 @@
+apiVersion: v2
+name: lazycloud-compose
+description: A Helm chart for deploying Docker Compose applications to Kubernetes with full feature support
+type: application
+version: 0.2.0
+appVersion: "1.0"
+keywords:
+  - docker-compose
+  - kubernetes
+  - deployment
+  - lazycloud
+home: https://github.com/lazycloud/lazycloud-compose
+sources:
+  - https://github.com/lazycloud/lazycloud-compose
+maintainers:
+  - name: LazyCloud Team
+    email: team@lazycloud.io
+annotations:
+  category: Deployment

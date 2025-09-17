@@ -1,0 +1,60 @@
+{{/*
+Create Ingress for each service that has ingress enabled
+*/}}
+{{- range $service := .Values.services }}
+{{- if and $service.enabled $service.ingress $service.ingress.enabled $service.ports }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $service.name }}
+  namespace: {{ include "lazycloud-compose.serviceNamespace" (dict "serviceName" $service.name "Values" $.Values "root" $) }}
+  labels:
+    {{- include "lazycloud-compose.labels" $ | nindent 4 }}
+    app.kubernetes.io/name: {{ $service.name }}
+    app.kubernetes.io/component: ingress
+    lazycloud.io/service: {{ $service.name }}
+    {{- if $service.labels }}
+    {{- toYaml $service.labels | nindent 4 }}
+    {{- end }}
+    {{- if $service.ingress.labels }}
+    {{- toYaml $service.ingress.labels | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- include "lazycloud-compose.annotations" $ | nindent 4 }}
+    {{- if $service.annotations }}
+    {{- toYaml $service.annotations | nindent 4 }}
+    {{- end }}
+    {{- if $service.ingress.annotations }}
+    {{- toYaml $service.ingress.annotations | nindent 4 }}
+    {{- end }}
+    {{- if eq ($service.ingress.className | default "nginx") "alb" }}
+    alb.ingress.kubernetes.io/target-type: ip
+    {{- end }}
+spec:
+  ingressClassName: {{ $service.ingress.className | default "nginx" }}
+  {{- if and $service.ingress.tls $service.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ $service.ingress.hostnamePrefix }}.{{ $service.ingress.domain | default "example.com" }}
+      {{- if $service.ingress.tls.secretName }}
+      secretName: {{ $service.ingress.tls.secretName }}
+      {{- else }}
+      secretName: {{ $service.name }}-tls
+      {{- end }}
+  {{- end }}
+  rules:
+    - host: {{ $service.ingress.hostnamePrefix }}.{{ $service.ingress.domain | default "example.com" }}
+      http:
+        paths:
+          {{- range $service.ports }}
+          - path: {{ $service.ingress.path | default "/" }}
+            pathType: {{ $service.ingress.pathType | default "Prefix" }}
+            backend:
+              service:
+                name: {{ $service.name }}
+                port:
+                  number: {{ .port }}
+          {{- end }}
+{{- end }}
+{{- end }}

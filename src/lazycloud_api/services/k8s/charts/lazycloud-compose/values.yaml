@@ -1,0 +1,173 @@
+# Default values for lazycloud-compose chart
+# This is a YAML-formatted file.
+
+# Services configuration
+# This section will be populated from docker-compose.yml
+services: []
+  # Example service configuration:
+  # - name: web
+  #   enabled: true
+  #   workloadType: Deployment  # or StatefulSet
+  #   serviceName: web  # Only for StatefulSets
+  #   image:
+  #     repository: nginx
+  #     tag: latest
+  #     pullPolicy: IfNotPresent
+  #   command: []  # Override container command
+  #   ports:
+  #     - name: http
+  #       port: 80
+  #       targetPort: 80
+  #       protocol: TCP
+  #   volumes:
+  #     - name: web-data
+  #       mountPath: /usr/share/nginx/html
+  #       readOnly: false
+  #   network: frontend  # Single network assignment (maps to namespace)
+  #   replicas: 1
+  #   restartPolicy: Always
+  #   healthcheck:
+  #     enabled: false
+  #     livenessProbe: {}
+  #     readinessProbe: {}
+  #   resources: {}
+  #   ingress:
+  #     enabled: false
+  #     className: nginx
+  #     hostnamePrefix: my-app
+  #     domain: example.com
+  #     path: /
+  #     pathType: Prefix
+  #     tls:
+  #       enabled: false
+  #       secretName: ""
+  #     annotations: {}
+  #   hpa:
+  #     enabled: false
+  #     minReplicas: 1
+  #     maxReplicas: 10
+  #     targetCPUUtilizationPercentage: 80
+  #     targetMemoryUtilizationPercentage: 80
+  #     behavior: {}
+  #     customMetrics: []
+  #   metrics:
+  #     enabled: false
+  #     port: metrics
+  #     path: /metrics
+  #     interval: 30s
+  #     scrapeTimeout: 10s
+  #     honorLabels: false
+  #     relabelings: []
+  #     metricRelabelings: []
+  #   nodeSelector: {}
+  #   tolerations: []
+  #   affinity: {}
+
+# Networks configuration - maps to Kubernetes namespaces
+networks: []
+  # Example:
+  # - name: frontend
+  #   enabled: true
+  #   labels: {}
+  # - name: backend
+  #   enabled: true
+  #   labels: {}
+
+# Volumes configuration - maps to PersistentVolumeClaims
+volumes: []
+  # Example:
+  # - name: web-data
+  #   enabled: true
+  #   size: 1Gi
+  #   accessModes:
+  #     - ReadWriteOnce
+  #   storageClass: ""
+  #   labels: {}
+
+# Secrets configuration
+secrets: []
+  # Example:
+  # - name: app-secret
+  #   enabled: true
+  #   type: Opaque
+  #   data: {}
+  #   labels: {}
+
+# Default resource limits and requests
+defaultResources:
+  limits:
+    cpu: 2000m
+    memory: 2048Mi
+  requests:
+    cpu: 1000m
+    memory: 1024Mi
+
+# Default storage settings
+defaultStorage:
+  size: 1Gi
+  accessModes:
+    - ReadWriteOnce
+  storageClass: "efs-sc"
+
+# Service defaults
+defaultService:
+  type: ClusterIP
+  sessionAffinity: None
+
+# Monitoring configuration
+monitoring:
+  serviceMonitor:
+    # Enable ServiceMonitor creation (requires Prometheus Operator CRDs)
+    enabled: false
+
+# Common labels applied to all resources
+commonLabels:
+  app.kubernetes.io/managed-by: lazycloud-compose
+
+# Image pull secrets
+imagePullSecrets: []
+
+# Service account settings
+serviceAccount:
+  # Use the restricted ServiceAccount created by namespace chart
+  create: false
+  name: "restricted-sa"  # Name of the ServiceAccount created by namespace chart
+  annotations: {}
+  # Prevent automatic mounting of ServiceAccount tokens
+  automountServiceAccountToken: false
+
+# Pod security context
+podSecurityContext:
+  # With gVisor, we can be more permissive as the sandbox provides isolation
+  runAsNonRoot: false  # Allow root if needed - gVisor provides isolation
+  fsGroup: 0  # Root group for compatibility
+  seccompProfile:
+    type: RuntimeDefault
+
+# Security context for containers
+securityContext:
+  # With gVisor, containers are already sandboxed
+  runAsNonRoot: false  # Allow root - gVisor handles isolation
+  runAsUser: 0  # Run as root by default for compatibility
+  runAsGroup: 0
+  readOnlyRootFilesystem: false  # Allow writes for compatibility
+  allowPrivilegeEscalation: true  # Allow - gVisor provides isolation
+  capabilities:
+    drop: []  # Don't drop capabilities - gVisor handles security
+    add: []  # No need to add specific capabilities
+
+# Node selector for all pods
+nodeSelector: {}
+
+# Tolerations for all pods
+tolerations: []
+
+# Affinity settings for all pods
+affinity: {}
+
+# NetworkPolicy settings
+networkPolicies:
+  enabled: true  # Enable per-service network policies
+  allowExternal: false  # Deny external traffic by default for services
+  ingressNamespace: ingress-nginx  # Namespace where ingress controller runs
+  monitoringNamespace: monitoring  # Namespace where monitoring stack runs

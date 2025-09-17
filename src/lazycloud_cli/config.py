@@ -1,7 +1,7 @@
 from pathlib import Path
-from typing import Optional, Dict
-from pydantic import Field, field_validator, PrivateAttr
-import os
+from typing import Dict, Optional
+
+from pydantic import PrivateAttr, field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -9,28 +9,16 @@ class CLIConfig(BaseSettings):
     """CLI Configuration"""
 
     # API Configuration
-    api_base_url: str = Field(
-        default="http://localhost:8000",
-        description="Base URL for the API",
-    )
-    api_version: str = Field(default="v1", description="API version")
-
-    # SSH Configuration
-    ssh_config_path: str = Field(
-        default=str(Path.home() / ".ssh" / "config"),
-        description="Path to SSH config file",
-    )
-    default_ssh_key_path: str = Field(
-        default=str(Path.home() / ".ssh" / "id_rsa.pub"),
-        description="Path to default SSH public key",
-    )
+    api_base_url: str = "http://localhost:8000"
+    api_version: str = "v1"
+    registry_url: str = "localhost:5000"
 
     # Private attributes for api key management
     _api_keys: Dict[str, str] = PrivateAttr(default_factory=dict)
     _active_api_key: Optional[str] = PrivateAttr(default=None)
 
     class Config:
-        env_prefix = "MACHINES_"
+        env_prefix = "LAZYCLOUD_"
 
     def __init__(self, **data):
         super().__init__(**data)
@@ -38,7 +26,7 @@ class CLIConfig(BaseSettings):
 
     def _load_api_keys(self):
         """Load api keys from the config file"""
-        config_path = Path.home() / ".machines"
+        config_path = Path.home() / ".lazycloud"
         if config_path.exists():
             with open(config_path) as f:
                 for line in f:
@@ -51,7 +39,7 @@ class CLIConfig(BaseSettings):
 
     def _save_api_keys(self):
         """Save api keys to the config file"""
-        config_path = Path.home() / ".machines"
+        config_path = Path.home() / ".lazycloud"
         with open(config_path, "w") as f:
             for api_key_name, value in self._api_keys.items():
                 f.write(f"API_KEY_{api_key_name.upper()}={value}\n")
@@ -130,14 +118,6 @@ class CLIConfig(BaseSettings):
         if not v.startswith(("http://", "https://")):
             raise ValueError("API base URL must start with http:// or https://")
         return v.rstrip("/")
-
-    @field_validator("ssh_config_path", "default_ssh_key_path")
-    @classmethod
-    def validate_path_exists(cls, v: str) -> str:
-        """Validate that the path exists"""
-        if not os.path.exists(v):
-            raise ValueError(f"Path does not exist: {v}")
-        return v
 
 
 # Global config instance

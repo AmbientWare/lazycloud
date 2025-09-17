@@ -1,12 +1,13 @@
-from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel
-from typing import Any
+from typing import Optional
 
+from fastapi import Depends, HTTPException, WebSocket, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import BaseModel
+
+from lazycloud_api.config import ENVIRONMENT, app_config
 from lazycloud_api.database import db
 from lazycloud_api.database.api_keys import ApiKeyRole
 from lazycloud_api.database.utils import api_key_is_expired
-from lazycloud_api.config import app_config, ENVIRONMENT
 
 security = HTTPBearer()
 
@@ -73,3 +74,24 @@ async def check_user_id_request(user_id: str | None, current_user: UserData) -> 
         return user_id
 
     return current_user.user_id
+
+
+async def get_current_active_user_ws(websocket: WebSocket) -> Optional[UserData]:
+    """Get current user from WebSocket connection.
+
+    Expects the API key to be sent as a query parameter: ?token=<api_key>
+    """
+    token = websocket.query_params.get("token")
+
+    if not token:
+        # In dev mode, allow no token
+        if app_config.ENV.value == ENVIRONMENT.DEV.value:
+            return UserData(user_id="admin", role=ApiKeyRole.ADMIN)
+        return None
+
+    db_api_key = await db.api_keys.afind_one(filters={"value": token})
+
+    if not db_api_key or api_key_is_expired(db_api_key.expires_at):
+        return None
+
+    return UserData(user_id=db_api_key.user_id, role=db_api_key.role)

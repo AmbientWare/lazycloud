@@ -1,0 +1,200 @@
+{{/*
+Create Deployments or StatefulSets for each service
+*/}}
+{{- range $service := .Values.services }}
+{{- if $service.enabled }}
+---
+apiVersion: apps/v1
+kind: {{ $service.workloadType | default "Deployment" }}
+metadata:
+  name: {{ $service.name }}
+  namespace: {{ include "lazycloud-compose.serviceNamespace" (dict "serviceName" $service.name "Values" $.Values "root" $) }}
+  labels:
+    {{- include "lazycloud-compose.labels" $ | nindent 4 }}
+    app.kubernetes.io/name: {{ $service.name }}
+    app.kubernetes.io/component: application
+    lazycloud.io/service: {{ $service.name }}
+    {{- if $.Values.global.labels }}
+    {{- toYaml $.Values.global.labels | nindent 4 }}
+    {{- end }}
+    {{- if $service.labels }}
+    {{- toYaml $service.labels | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- include "lazycloud-compose.annotations" $ | nindent 4 }}
+    {{- if $service.annotations }}
+    {{- toYaml $service.annotations | nindent 4 }}
+    {{- end }}
+spec:
+  {{- if not (and $service.hpa $service.hpa.enabled) }}
+  replicas: {{ $service.replicas | default 1 }}
+  {{- end }}
+  {{- if eq ($service.workloadType | default "Deployment") "StatefulSet" }}
+  serviceName: {{ $service.serviceName | default $service.name }}
+  {{- if $service.volumes }}
+  volumeClaimTemplates:
+    {{- range $service.volumes }}
+    - metadata:
+        name: {{ include "lazycloud-compose.sanitizeName" .name }}
+        labels:
+          {{- include "lazycloud-compose.labels" $ | nindent 10 }}
+          app.kubernetes.io/component: storage
+          lazycloud.io/volume: {{ .name }}
+        annotations:
+          {{- include "lazycloud-compose.annotations" $ | nindent 10 }}
+      spec:
+        accessModes:
+          {{- if .accessModes }}
+          {{- toYaml .accessModes | nindent 10 }}
+          {{- else }}
+          {{- toYaml $.Values.defaultStorage.accessModes | nindent 10 }}
+          {{- end }}
+        resources:
+          requests:
+            storage: {{ .size | default $.Values.defaultStorage.size }}
+        {{- if or .storageClass $.Values.defaultStorage.storageClass }}
+        storageClassName: {{ .storageClass | default $.Values.defaultStorage.storageClass }}
+        {{- end }}
+    {{- end }}
+  {{- end }}
+  {{- end }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $service.name }}
+      app.kubernetes.io/instance: {{ $.Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ $service.name }}
+        app.kubernetes.io/instance: {{ $.Release.Name }}
+        lazycloud.io/service: {{ $service.name }}
+        {{- if $.Values.global.labels }}
+        {{- toYaml $.Values.global.labels | nindent 8 }}
+        {{- end }}
+        {{- if $service.labels }}
+        {{- toYaml $service.labels | nindent 8 }}
+        {{- end }}
+      annotations:
+        {{- include "lazycloud-compose.annotations" $ | nindent 8 }}
+        {{- if $service.annotations }}
+        {{- toYaml $service.annotations | nindent 8 }}
+        {{- end }}
+        {{- with $.Values.commonLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- if $.Values.global.runtimeClassName }}
+      runtimeClassName: {{ $.Values.global.runtimeClassName }}
+      {{- end }}
+      {{- with $.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if $.Values.serviceAccount.create }}
+      serviceAccountName: {{ include "lazycloud-compose.serviceAccountName" $ }}
+      {{- else if $.Values.serviceAccount.name }}
+      serviceAccountName: {{ $.Values.serviceAccount.name }}
+      {{- end }}
+      automountServiceAccountToken: {{ $service.automountServiceAccountToken | default $.Values.serviceAccount.automountServiceAccountToken | default false }}
+      securityContext:
+        {{- if $service.podSecurityContext }}
+        {{- toYaml $service.podSecurityContext | nindent 8 }}
+        {{- else }}
+        {{- toYaml $.Values.podSecurityContext | nindent 8 }}
+        {{- end }}
+      containers:
+        - name: {{ $service.name }}
+          securityContext:
+            {{- if $service.securityContext }}
+            {{- toYaml $service.securityContext | nindent 12 }}
+            {{- else }}
+            {{- toYaml $.Values.securityContext | nindent 12 }}
+            {{- end }}
+          image: "{{ $service.image.repository }}:{{ $service.image.tag | default "latest" }}"
+          imagePullPolicy: {{ $service.image.pullPolicy | default "IfNotPresent" }}
+          {{- if $service.command }}
+          command:
+            {{- if kindIs "string" $service.command }}
+            - /bin/sh
+            - -c
+            - {{ $service.command | quote }}
+            {{- else }}
+            {{- toYaml $service.command | nindent 12 }}
+            {{- end }}
+          {{- end }}
+          {{- if $service.ports }}
+          ports:
+            {{- range $service.ports }}
+            - name: {{ .name }}
+              containerPort: {{ .targetPort }}
+              protocol: {{ .protocol | default "TCP" }}
+            {{- end }}
+          {{- end }}
+          {{- range $secret := $.Values.secrets }}
+          {{- if and (hasPrefix "env-" $secret.name) $secret.enabled }}
+          envFrom:
+            - secretRef:
+                name: {{ $secret.name }}
+          {{- end }}
+          {{- end }}
+          {{- if or $service.volumes $service.secrets }}
+          volumeMounts:
+            {{- range $service.volumes }}
+            - name: {{ include "lazycloud-compose.sanitizeName" .name }}
+              mountPath: {{ .mountPath }}
+              {{- if .readOnly }}
+              readOnly: {{ .readOnly }}
+              {{- end }}
+            {{- end }}
+            {{- range $service.secrets }}
+            - name: {{ include "lazycloud-compose.sanitizeName" .name }}
+              mountPath: {{ .mountPath }}
+              readOnly: {{ .readOnly }}
+            {{- end }}
+          {{- end }}
+          {{- if and $service.healthcheck $service.healthcheck.enabled }}
+          {{- with $service.healthcheck.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $service.healthcheck.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- end }}
+          resources:
+            {{- if $service.resources }}
+            {{- toYaml $service.resources | nindent 12 }}
+            {{- else }}
+            {{- toYaml $.Values.defaultResources | nindent 12 }}
+            {{- end }}
+      {{- if or (and $service.volumes (ne ($service.workloadType | default "Deployment") "StatefulSet")) $service.secrets }}
+      volumes:
+        {{- if and $service.volumes (ne ($service.workloadType | default "Deployment") "StatefulSet") }}
+        {{- range $service.volumes }}
+        - name: {{ include "lazycloud-compose.sanitizeName" .name }}
+          persistentVolumeClaim:
+            claimName: {{ include "lazycloud-compose.sanitizeName" .name }}
+        {{- end }}
+        {{- end }}
+        {{- range $service.secrets }}
+        - name: {{ include "lazycloud-compose.sanitizeName" .name }}
+          secret:
+            secretName: {{ include "lazycloud-compose.sanitizeName" .name }}
+        {{- end }}
+      {{- end }}
+      restartPolicy: {{ $service.restartPolicy | default "Always" }}
+      {{- with $service.nodeSelector | default $.Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $service.affinity | default $.Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $service.tolerations | default $.Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+{{- end }}

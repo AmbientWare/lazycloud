@@ -1,19 +1,21 @@
-from lazycloud_cli.api.machines import machines_api
-from lazycloud_cli.api.ssh_keys import ssh_keys_api
-from lazycloud_cli.api.users import users_api
-from lazycloud_cli.api.platform import platform_api
-from lazycloud_cli.api.volumes import volumes_api
+from lazycloud_cli.api.deployments import deployments_api
+from lazycloud_cli.api.logs import logs_api
+from lazycloud_cli.api.secrets import secrets_api
+from lazycloud_cli.api.status import status_api
 from lazycloud_cli.api.tasks import tasks_api
+from lazycloud_cli.api.users import users_api
+from lazycloud_cli.api.versions import versions_api
 
 
 class API:
     def __init__(self):
-        self.machines = machines_api
-        self.ssh_keys = ssh_keys_api
         self.users = users_api
-        self.platform = platform_api
-        self.volumes = volumes_api
         self.tasks = tasks_api
+        self.deployments = deployments_api
+        self.versions = versions_api
+        self.secrets = secrets_api
+        self.logs = logs_api
+        self.status = status_api
 
 
 api = API()

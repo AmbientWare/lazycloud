@@ -1,0 +1,124 @@
+{{/*
+Create NetworkPolicies to enforce network isolation between services
+Note: The namespace-level default deny policy is handled by the lazycloud-namespace chart
+*/}}
+{{- if .Values.networkPolicies.enabled }}
+{{/* Per-service network policies */}}
+{{- range $service := .Values.services }}
+{{- if $service.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $service.name }}
+  namespace: {{ include "lazycloud-compose.serviceNamespace" (dict "serviceName" $service.name "Values" $.Values "root" $) }}
+  labels:
+    {{- include "lazycloud-compose.labels" $ | nindent 4 }}
+    app.kubernetes.io/name: {{ $service.name }}
+    app.kubernetes.io/component: network-policy
+    lazycloud.io/service: {{ $service.name }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $service.name }}
+      app.kubernetes.io/instance: {{ $.Release.Name }}
+  policyTypes:
+  - Ingress
+  - Egress
+  
+  ingress:
+  {{- if $service.networks }}
+  # Allow traffic from services in the same network(s)
+  {{- range $network := $service.networks }}
+  {{- range $otherService := $.Values.services }}
+  {{- if and $otherService.enabled (ne $service.name $otherService.name) }}
+  {{- range $otherNetwork := $otherService.networks }}
+  {{- if eq $network.name $otherNetwork.name }}
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: {{ $otherService.name }}
+          app.kubernetes.io/instance: {{ $.Release.Name }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
+  
+  # Allow traffic from ingress controller if service has ingress
+  {{- if $service.ingress }}
+  {{- if $service.ingress.enabled }}
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: {{ $.Values.networkPolicies.ingressNamespace | default "ingress-nginx" }}
+  {{- end }}
+  {{- end }}
+  
+  # Allow metrics scraping if enabled
+  {{- if $service.metrics }}
+  {{- if $service.metrics.enabled }}
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: {{ $.Values.networkPolicies.monitoringNamespace | default "monitoring" }}
+    ports:
+    - protocol: TCP
+      port: {{ $service.metrics.port }}
+  {{- end }}
+  {{- end }}
+  
+  egress:
+  # Allow DNS
+  - to:
+    - namespaceSelector: {}
+    ports:
+    - protocol: TCP
+      port: 53
+    - protocol: UDP
+      port: 53
+  
+  # Allow traffic to services in the same network(s)
+  {{- range $network := $service.networks }}
+  {{- range $otherService := $.Values.services }}
+  {{- if $otherService.enabled }}
+  {{- range $otherNetwork := $otherService.networks }}
+  {{- if eq $network.name $otherNetwork.name }}
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: {{ $otherService.name }}
+          app.kubernetes.io/instance: {{ $.Release.Name }}
+    {{- if $otherService.ports }}
+    ports:
+    {{- range $port := $otherService.ports }}
+    - protocol: {{ $port.protocol | default "TCP" }}
+      port: {{ $port.targetPort }}
+    {{- end }}
+    {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
+  
+  # Allow external traffic only if explicitly enabled for this service
+  {{- if and $.Values.networkPolicies.allowExternal $service.allowExternal }}
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 169.254.169.254/32  # AWS metadata service
+        - 10.0.0.0/8          # Private networks
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+        {{- if $.Values.networkPolicies.blockedCIDRs }}
+        {{- range $.Values.networkPolicies.blockedCIDRs }}
+        - {{ . }}
+        {{- end }}
+        {{- end }}
+  {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

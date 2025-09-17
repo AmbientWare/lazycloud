@@ -1,0 +1,54 @@
+{{/*
+Create ResourceQuota for user namespaces to limit resource consumption
+*/}}
+{{- if .Values.resourceQuota.enabled }}
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: {{ include "lazycloud-namespace.fullname" . }}-quota
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "lazycloud-namespace.labels" . | nindent 4 }}
+    app.kubernetes.io/component: resource-quota
+  annotations:
+    {{- include "lazycloud-namespace.annotations" . | nindent 4 }}
+spec:
+  hard:
+    {{- with .Values.resourceQuota.requests }}
+    {{- if .cpu }}
+    requests.cpu: {{ .cpu | quote }}
+    {{- end }}
+    {{- if .memory }}
+    requests.memory: {{ .memory | quote }}
+    {{- end }}
+    {{- if .storage }}
+    requests.storage: {{ .storage | quote }}
+    {{- end }}
+    {{- if index . "ephemeral-storage" }}
+    requests.ephemeral-storage: {{ index . "ephemeral-storage" | quote }}
+    {{- end }}
+    {{- end }}
+    {{- with .Values.resourceQuota.limits }}
+    {{- if .cpu }}
+    limits.cpu: {{ .cpu | quote }}
+    {{- end }}
+    {{- if .memory }}
+    limits.memory: {{ .memory | quote }}
+    {{- end }}
+    {{- if index . "ephemeral-storage" }}
+    limits.ephemeral-storage: {{ index . "ephemeral-storage" | quote }}
+    {{- end }}
+    {{- end }}
+    {{- if .Values.resourceQuota.objects }}
+    {{- range $key, $value := .Values.resourceQuota.objects }}
+    {{ $key }}: {{ $value | quote }}
+    {{- end }}
+    {{- end }}
+  {{- if .Values.resourceQuota.scopes }}
+  scopes:
+  {{- range .Values.resourceQuota.scopes }}
+  - {{ . }}
+  {{- end }}
+  {{- end }}
+{{- end }}

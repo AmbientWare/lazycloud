@@ -1,13 +1,14 @@
+from typing import List, Optional
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from typing import List, Optional
 
 from lazycloud_api.api.security import require_admin
 from lazycloud_api.database import db
 from lazycloud_api.database.api_keys import (
+    ApiKeyExpirationDays,
     ApiKeyPydantic,
     ApiKeyRole,
-    ApiKeyExpirationDays,
 )
 from lazycloud_api.database.utils import (
     generate_api_key,

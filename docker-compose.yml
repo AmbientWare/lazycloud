@@ -1,12 +1,18 @@
-# create a network for the services to communicate
 networks:
+  # NOTE: normamally we would use this, but we are using host cause its easier with minikube
   lazycloud:
     external: true
 
 # create volumes for the databases
 volumes:
-  pg-data: # postgres data
-  redis-data: # redis data
+  pg-data:
+  redis-data:
+  prefect-data:
+  prefect-task-storage:
+
+x-database-environment: &lazycloud-databases
+  DATABASE_URL: postgresql+asyncpg://lc_dev:password@localhost:5432/postgres
+  REDIS_URL: redis://localhost:6379
 
 services:
   api:
@@ -18,16 +24,24 @@ services:
     volumes:
       # this allows for hot reloading
       - ./src/lazycloud_api:/src/lazycloud_api
+      # Mount the actual kubeconfig
+      - ~/.kube/config:/root/.kube/config:ro
+      - ~/.minikube:/home/${USER}/.minikube:ro
+      - ./src/shared:/src/shared
+      - prefect-task-storage:/task-storage
     env_file:
       - .env
     environment:
-      - DATABASE_URL=postgresql+asyncpg://lazycloud-dev:password@postgres:5432/lazycloud
-      - REDIS_URL=redis://redis:6379
-    networks:
-      - lazycloud
-    command: ["uv", "run", "python", "main.py", "--debug", "--workers", "1"]
+      <<: *lazycloud-databases
+      KUBECONFIG: /root/.kube/config
+      PREFECT_API_URL: http://localhost:4200/api
+      PREFECT_LOGGING_LOG_PRINTS: "true"
+      PREFECT_LOCAL_STORAGE_PATH: /task-storage
+      PREFECT_RESULTS_PERSIST_BY_DEFAULT: "true"
+    network_mode: host
+    command: [ "uv", "run", "python", "main.py", "--debug", "--workers", "1" ]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://api:8000/health"]
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -37,90 +51,45 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
-    ports:
-      - 8000:8000
+      prefect-server:
+        condition: service_started
 
-  celery-beat:
-    image: lazycloud-api:latest
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: celery-beat
+  prefect-server:
+    image: prefecthq/prefect:3-latest
+    network_mode: host
+    command: ["prefect", "server", "start"]
     volumes:
-      # this allows for hot reloading
-      - ./src/lazycloud_api:/src/lazycloud_api
-    env_file:
-      - .env
+      - prefect-data:/root/.prefect
     environment:
-      - DATABASE_URL=postgresql+asyncpg://lazycloud-dev:password@postgres:5432/lazycloud
-      - REDIS_URL=redis://redis:6379
-    networks:
-      - lazycloud
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_started
-    deploy:
-      replicas: 1  # Ensure only one beat instance runs
-
-  celery-worker:
-    image: lazycloud-api:latest
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: celery-worker
-    volumes:
-      # this allows for hot reloading
-      - ./src/lazycloud_api:/src/lazycloud_api
-    env_file:
-      - .env
-    environment:
-      - DATABASE_URL=postgresql+asyncpg://lazycloud-dev:password@postgres:5432/lazycloud
-      - REDIS_URL=redis://redis:6379
-    networks:
-      - lazycloud
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_started
-      celery-beat:
-        condition: service_started
+      # Allow connections from other containers
+      PREFECT_SERVER_API_HOST: 0.0.0.0
 
   postgres:
-    image: timescale/timescaledb-ha:pg17
-    networks:
-      - lazycloud
+    image: postgres:17
+    network_mode: host
     environment:
-      POSTGRES_USER: lazycloud-dev
+      POSTGRES_USER: lc_dev
       POSTGRES_PASSWORD: password
-      POSTGRES_DB: lazycloud
+      POSTGRES_DB: postgres
       POSTGRES_KEEPALIVES: 1
       POSTGRES_KEEPALIVES_IDLE: 60
       POSTGRES_KEEPALIVES_INTERVAL: 10
       POSTGRES_KEEPALIVES_COUNT: 3
-    # add persistent storage
     volumes:
       - pg-data:/var/lib/postgresql/data
-    ports:
-      - 5432:5432
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U lazycloud-dev"]
+      test: [ "CMD-SHELL", "pg_isready -U lc_dev -d postgres" ]
       interval: 10s
       timeout: 5s
       retries: 5
 
   redis:
     image: redis:latest
-    networks:
-      - lazycloud
+    network_mode: host
     volumes:
       - redis-data:/data
-    ports:
-      - 6379:6379
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [ "CMD", "redis-cli", "ping" ]
       interval: 10s
       timeout: 5s
       retries: 5

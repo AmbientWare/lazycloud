@@ -1,5 +1,4 @@
-from . import cli
-
+from lazycloud_cli import main_cli
 
 if __name__ == "__main__":
-    cli()
+    main_cli()

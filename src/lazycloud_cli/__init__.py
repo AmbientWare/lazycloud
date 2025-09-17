@@ -1,8 +1,9 @@
 # Import modules to register their commands
-from lazycloud_cli.commands import cli
-import lazycloud_cli.commands.machines
-import lazycloud_cli.commands.ssh
 import lazycloud_cli.commands.auth
+import lazycloud_cli.commands.compose  # noqa: F401
+from lazycloud_cli.commands import main_cli
+from lazycloud_cli.utils import validate_cli_version
 
+validate_cli_version()
 
-__all__ = ["cli"]
+__all__ = ["main_cli"]
