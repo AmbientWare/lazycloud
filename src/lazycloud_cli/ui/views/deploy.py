@@ -155,13 +155,13 @@ class DeployView:
         # Create card with table content
         if status.lower() == "deployed":
             border_style = theme.border_success
-            title = "✅ Deployment Successful"
+            title = "✅  Deployment Successful"
         elif status.lower() == "failed":
             border_style = theme.border_error
-            title = "❌ Deployment Failed"
+            title = "❌  Deployment Failed"
         else:
             border_style = theme.border_warning
-            title = "⚠️ Deployment Status"
+            title = "⚠️  Deployment Status"
 
         card = Card(
             content=table,
@@ -221,10 +221,20 @@ class DeployView:
 
         # Check if there are changes
         if not cards:
-            self.show_info("No changes detected", title="Deployment Up-to-date")
             return False
 
         return True
+
+    def show_no_changes(self) -> bool:
+        """Show no changes detected message."""
+        dialog = Card(
+            content=Text(
+                "We can still build and deploy anyway", style=theme.text_secondary
+            ),
+            title="No Changes Detected",
+            border_style=theme.border_warning,
+        )
+        self.console.print(dialog)
 
     def confirm_deployment(self, deployment_name: str) -> bool:
         """Show deployment confirmation prompt."""

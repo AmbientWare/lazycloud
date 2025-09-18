@@ -1,50 +1,28 @@
-import asyncio
-
 from textual.containers import Container
-from textual.widgets import DataTable, RichLog, Static
+from textual.widgets import DataTable, Static
 from textual.worker import Worker
 
 from lazycloud_cli.api import api
-from lazycloud_cli.ui.dashboard.containers.common import SectionContainer
+from lazycloud_cli.ui.dashboard.components.section import SectionContainer
+from lazycloud_cli.ui.dashboard.containers.content.service_details.pods_table import (
+    PodTable,
+)
 from lazycloud_cli.ui.dashboard.containers.content.utils import get_status_color
 from shared.models.helm import HealthCheckValues, HPAValues
 from shared.models.k8s import Resources
 from shared.models.statuses import PodStatus, ServiceStatus
 
 
-class PodTable(DataTable):
-    """Custom DataTable for pod selection that handles its own events."""
-
-    def __init__(self, service_view, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.service_view = service_view
-
-    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        """Handle row selection and notify the service view."""
-        if event.row_key:
-            pod_name = event.row_key.value
-            self.service_view._on_pod_selected(pod_name)
-
-    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
-        """Handle row highlight (cursor movement) and notify the service view."""
-        if event.row_key:
-            pod_name = event.row_key.value
-            self.service_view._on_pod_selected(pod_name)
-
-
-class ServiceView:
+class ServiceDetailsContainer:
     """Handles service-specific UI rendering and updates."""
 
     def __init__(self, parent_container: Container):
         self.parent = parent_container
         self._overview_widget: Static | None = None
         self._pods_table: DataTable | None = None
-        self._logs_widget: RichLog | None = None
         self._ws_task: Worker | None = None
         self.current_deployment_id: str | None = None
         self.current_service_name: str | None = None
-        self.selected_pod_name: str | None = None
-        self._logs_section: SectionContainer | None = None
 
     async def render(
         self,
@@ -85,17 +63,7 @@ class ServiceView:
         if service.pods:
             self._update_pods_table(service.pods)
 
-        self._logs_section = SectionContainer("📜 Service Logs (All Pods)")
-        self.parent.mount(self._logs_section)
-
-        self._logs_widget = RichLog(highlight=True, markup=True)
-        self._logs_widget.styles.height = 15
-        self._logs_widget.styles.min_height = 10
-        self._logs_section.mount(self._logs_widget)
-
-        self._logs_widget.write("[dim]Connecting to log stream for all pods...[/dim]")
         self._ws_task = run_worker_fn(self._connect_service_websocket())
-        run_worker_fn(self._connect_logs_stream())
 
     def update_overview(self, service: ServiceStatus) -> None:
         """Update the overview widget with new service data."""
@@ -108,6 +76,7 @@ class ServiceView:
         if self._pods_table:
             self._update_pods_table(pods)
 
+
     async def cleanup(self) -> None:
         """Clean up WebSocket connections and tasks."""
         if self._ws_task:
@@ -116,9 +85,6 @@ class ServiceView:
 
         if api.status:
             await api.status.disconnect()
-
-        if api.logs:
-            await api.logs.disconnect()
 
     def _build_overview_content(self, service: ServiceStatus) -> list[str]:
         """Build service overview section content."""
@@ -191,16 +157,18 @@ class ServiceView:
 
         content = []
 
-        # Show liveness probe if configured
         if healthcheck.livenessProbe:
             probe = healthcheck.livenessProbe
-            probe_type = "HTTP" if probe.http_get else "TCP" if probe.tcp_socket else "Exec"
+            probe_type = (
+                "HTTP" if probe.http_get else "TCP" if probe.tcp_socket else "Exec"
+            )
             content.append(f"Liveness:  {probe_type} check")
 
-        # Show readiness probe if configured
         if healthcheck.readinessProbe:
             probe = healthcheck.readinessProbe
-            probe_type = "HTTP" if probe.http_get else "TCP" if probe.tcp_socket else "Exec"
+            probe_type = (
+                "HTTP" if probe.http_get else "TCP" if probe.tcp_socket else "Exec"
+            )
             content.append(f"Readiness: {probe_type} check")
 
         return content if content else ["Not configured"]
@@ -237,7 +205,7 @@ class ServiceView:
 
     def _create_pods_table(self) -> DataTable:
         """Create a data table for instances."""
-        section = SectionContainer("🔍 Instances (click to filter logs)")
+        section = SectionContainer("🔍 Instances (click to view logs)")
         self.parent.mount(section)
 
         table = PodTable(self, show_header=True, zebra_stripes=True, cursor_type="row")
@@ -285,48 +253,6 @@ class ServiceView:
                 key=pod.name,
             )
 
-    def _on_pod_selected(self, pod_name: str | None) -> None:
-        """Handle pod selection from the table."""
-        # Only restart if selection actually changed
-        if self.selected_pod_name == pod_name:
-            return
-
-        self.selected_pod_name = pod_name
-
-        if self._logs_section:
-            if pod_name:
-                display_name = (
-                    pod_name if len(pod_name) <= 40 else pod_name[:37] + "..."
-                )
-                self._logs_section.border_title = (
-                    f"📜 Service Logs (Pod: {display_name})"
-                )
-            else:
-                self._logs_section.border_title = "📜 Service Logs (All Pods)"
-
-        if self._logs_widget:
-            self._logs_widget.clear()
-            if pod_name:
-                self._logs_widget.write(
-                    f"[dim]Switching to logs for pod: {pod_name}...[/dim]"
-                )
-            else:
-                self._logs_widget.write("[dim]Switching to logs for all pods...[/dim]")
-
-        if self.run_worker_fn:
-            self.run_worker_fn(self._restart_log_stream())
-
-    async def _restart_log_stream(self) -> None:
-        """Restart the log stream with current pod selection."""
-        # Disconnect existing client if any
-        if api.logs and api.logs.is_connected():
-            await api.logs.disconnect()
-            # Small delay to ensure clean disconnection
-            await asyncio.sleep(0.5)
-
-        # Create new connection with updated pod selection
-        await self._connect_logs_stream()
-
     async def _connect_service_websocket(self) -> None:
         """Connect to WebSocket for real-time service updates."""
         if not self.current_deployment_id or not self.current_service_name:
@@ -347,7 +273,7 @@ class ServiceView:
 
             def on_error(_: Exception) -> None:
                 """Handle WebSocket errors."""
-                pass  # Silently ignore errors for now
+                pass
 
             await api.status.stream_service_status(
                 deployment_id=self.current_deployment_id,
@@ -357,42 +283,4 @@ class ServiceView:
             )
 
         except Exception:
-            pass  # Silently handle connection errors
-
-    async def _connect_logs_stream(self) -> None:
-        """Connect to the logs WebSocket stream."""
-        if not self.current_deployment_id or not self.current_service_name:
-            return
-
-        def on_log_message(data: dict) -> None:
-            """Handle incoming log messages."""
-            if self._logs_widget:
-                log_line = data.get("line", "")
-
-                if log_line:
-                    self._logs_widget.write(log_line)
-
-        def on_log_error(error: Exception) -> None:
-            """Handle log stream errors."""
-            if self._logs_widget:
-                self._logs_widget.write(f"[red]Log stream error: {str(error)}[/red]")
-
-        if self._logs_widget:
-            self._logs_widget.clear()
-            if self.selected_pod_name:
-                self._logs_widget.write(
-                    f"[green]Connected to log stream for pod: {self.selected_pod_name}[/green]\n"
-                )
-            else:
-                self._logs_widget.write(
-                    "[green]Connected to log stream for all pods[/green]\n"
-                )
-
-        await api.logs.stream_logs(
-            deployment_id=self.current_deployment_id,
-            service_name=self.current_service_name,
-            tail=100,
-            on_message=on_log_message,
-            on_error=on_log_error,
-            pod_name=self.selected_pod_name,  # Filter by selected pod if any
-        )
+            pass

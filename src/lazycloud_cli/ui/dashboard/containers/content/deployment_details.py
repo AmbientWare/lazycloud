@@ -1,12 +1,12 @@
 from textual.containers import Container
 from textual.widgets import Static
 
-from lazycloud_cli.ui.dashboard.containers.common import SectionContainer
+from lazycloud_cli.ui.dashboard.components.section import SectionContainer
 from lazycloud_cli.ui.dashboard.containers.content.utils import get_status_color
 from shared.models.statuses import DeploymentStatus
 
 
-class DeploymentView:
+class DeploymentDetailsContainer:
     """Handles deployment-specific UI rendering."""
 
     def __init__(self, parent_container: Container):

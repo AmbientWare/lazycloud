@@ -1,47 +1,11 @@
-"""
-Deployments container for the dashboard.
-"""
-
 from textual.app import ComposeResult
 from textual.containers import Container
 from textual.message import Message
 from textual.reactive import reactive
-from textual.widgets import Label, ListItem, ListView
 
 from lazycloud_cli.api import api
-from lazycloud_cli.ui.dashboard.components.listview import LcListView
+from lazycloud_cli.ui.dashboard.components import ListItemData, ListView
 from lazycloud_cli.ui.dashboard.theme import theme
-
-
-class DeploymentItem(ListItem):
-    """A selectable deployment item."""
-
-    def __init__(self, deployment_id: str, name: str, state: str):
-        super().__init__()
-        self.deployment_id = deployment_id
-        self.deployment_name = name
-        self.deployment_state = state
-
-    def compose(self) -> ComposeResult:
-        # Status dot
-        status_symbol = "●" if self.deployment_state == "deployed" else "○"
-        dot = Label(status_symbol)
-        dot.styles.width = 2
-        dot.styles.color = theme.get_status_color(self.deployment_state)
-        yield dot
-
-        # Deployment name with ellipsis truncation
-        name = Label(self.deployment_name)
-        name.styles.width = "1fr"
-        name.styles.overflow = "ellipsis"
-        name.styles.text_overflow = "ellipsis"
-        yield name
-
-    def on_mount(self) -> None:
-        """Apply minimal styling."""
-        self.styles.layout = "horizontal"
-        self.styles.height = 1
-        self.styles.padding = (0, 1)
 
 
 class DeploymentsContainer(Container):
@@ -57,10 +21,18 @@ class DeploymentsContainer(Container):
             self.deployment_id = deployment_id
             self.deployment_name = deployment_name
 
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._list_view = None
+
     def compose(self) -> ComposeResult:
         """Create the deployments widget."""
-        list_view = LcListView(id="deployments-list")
-        yield list_view
+        self._list_view = ListView(
+            on_select=self._handle_selection,
+            empty_message="No deployments found",
+            id="deployments-list",
+        )
+        yield self._list_view
 
     def on_mount(self) -> None:
         """Style the container when mounted."""
@@ -76,43 +48,43 @@ class DeploymentsContainer(Container):
 
     async def load_deployments(self) -> None:
         """Fetch and display deployments from API."""
-        list_view = self.query_one("#deployments-list", ListView)
-        list_view.clear()
+        if not self._list_view:
+            return
 
         # Show loading indicator
-        list_view.loading = True
+        self._list_view.show_loading("Loading deployments...")
 
         try:
             # Fetch deployments from API
             response = api.deployments.list_deployments()
 
-            if not response.deployments:
-                list_view.append(ListItem(Label("No deployments found")))
-            else:
+            # Convert to ListItemData
+            items = []
+            if response.deployments:
                 for deployment in response.deployments:
-                    item = DeploymentItem(
-                        deployment_id=deployment.id,
-                        name=deployment.name,
-                        state=deployment.state,
+                    items.append(
+                        ListItemData(
+                            id=deployment.id,
+                            name=deployment.name,
+                            status=deployment.state,
+                            data=deployment,  # Store the full deployment object
+                        )
                     )
-                    list_view.append(item)
 
-        except Exception as e:
-            list_view.append(ListItem(Label(f"Error: {str(e)}")))
+            self._list_view.update_items(items)
+
+        except Exception:
+            self._list_view.update_items([])
+            self._list_view.show_empty_message()
 
         finally:
-            list_view.loading = False
+            self._list_view.hide_loading()
 
-    def on_list_view_selected(self, event: ListView.Selected) -> None:
+    def _handle_selection(self, item_data: ListItemData) -> None:
         """Handle deployment selection."""
-        if isinstance(event.item, DeploymentItem):
-            self.selected_deployment_id = event.item.deployment_id
-            # Emit message for parent to handle
-            self.post_message(
-                self.DeploymentSelected(
-                    event.item.deployment_id, event.item.deployment_name
-                )
-            )
+        self.selected_deployment_id = item_data.id
+        # Emit message for parent to handle
+        self.post_message(self.DeploymentSelected(item_data.id, item_data.name))
 
     async def refresh_deployments(self) -> None:
         """Refresh the deployments list."""

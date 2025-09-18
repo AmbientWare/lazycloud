@@ -318,14 +318,14 @@ def _show_and_confirm_changes(
         # Show diff using view components
         has_changes = view.show_diff(diff_response, show_warnings=warnings)
 
-        if not has_changes and not diff_response.errors:
-            return None  # No changes
+        if not has_changes:
+            view.show_no_changes()
 
         if diff_response.errors:
             view.show_error("Cannot proceed due to errors")
             raise typer.Exit(1)
 
-        if not yes and has_changes:
+        if not yes:
             # Show confirmation using view
             confirmed = view.confirm_deployment(
                 deployment_name=deployment_name,
