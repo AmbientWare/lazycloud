@@ -1,7 +1,3 @@
-"""
-Helm deployment manager with robust handling for stuck deployments and updates.
-"""
-
 import json
 import os
 import subprocess
@@ -88,13 +84,13 @@ class HelmManager:
                 # Optionally wait for resources to be ready
                 ready_result = self._wait_for_resources(config)
                 if not ready_result.success:
+                    # NOTE: we don't fail the deployment, just warn
                     logger.warning(f"Resources not ready: {ready_result.message}")
-                    # Don't fail the deployment, just warn
 
             return result
 
         finally:
-            # Cleanup temporary values file
+            # Cleanup temporary values file if it exists
             if values_file and values_file.exists():
                 values_file.unlink()
 
@@ -130,7 +126,6 @@ class HelmManager:
                     error="Helm uninstall did not remove the release",
                 )
 
-        # Check if release doesn't exist
         if "release: not found" in result.stderr:
             return DeploymentResult(
                 success=True, message=f"Release {release_name} does not exist"
@@ -151,7 +146,7 @@ class HelmManager:
                 success=False, message=f"Release {release_name} not found"
             )
 
-        # Get release info
+        # Get release values
         cmd = ["helm", "get", "values", release_name, "-n", namespace, "-o", "json"]
         result = self._run_helm_command(cmd)
 
@@ -162,7 +157,7 @@ class HelmManager:
                 error=result.stderr,
             )
 
-        # Get resource status
+        # Get resource statuses
         resources = self._get_resource_status(release_name, namespace)
 
         return DeploymentResult(
@@ -193,21 +188,6 @@ class HelmManager:
             message=f"Failed to rollback {release_name}",
             error=result.stderr,
         )
-
-    def list_releases(self, namespace: str | None = None) -> list[dict[str, Any]]:
-        """List all Helm releases."""
-        cmd = ["helm", "list", "-o", "json"]
-        if namespace:
-            cmd.extend(["-n", namespace])
-        else:
-            cmd.append("-A")  # All namespaces
-
-        result = self._run_helm_command(cmd)
-
-        if result.returncode == 0 and result.stdout:
-            return json.loads(result.stdout)
-
-        return []
 
     def _helm_install(
         self, config: HelmDeploymentConfig, values_file: Path
@@ -491,7 +471,7 @@ class HelmManager:
 
         with open(fd, "w") as f:
             yaml.dump(
-                values.model_dump(exclude_none=True, by_alias=True),
+                values.model_dump(exclude_none=True, by_alias=True, mode="json"),
                 f,
                 default_flow_style=False,
             )

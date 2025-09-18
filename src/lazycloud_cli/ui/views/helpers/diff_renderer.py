@@ -19,7 +19,7 @@ from lazycloud_cli.ui.views.helpers.formatters import (
     format_value_summary,
     format_volume_list,
 )
-from shared.models.diffs import ComposeDiff, EnvVarChanges
+from shared.models.diffs import ComposeDiff, EnvVarChanges, FieldChange, ResourceSection
 
 
 @dataclass
@@ -39,43 +39,104 @@ CHANGE_DISPLAYS = {
 }
 
 
-def create_resource_table(resources: list[dict[str, Any]], change_type: str) -> Table:
-    """Create a table for displaying resource changes."""
+def create_services_card(services: ResourceSection) -> Card | None:
+    """Create a card for service changes."""
+    if not services.has_changes():
+        return None
+
     table = Table(show_header=True, header_style="bold", box=None)
-    display = CHANGE_DISPLAYS[change_type]
+    table.add_column("Service", style=theme.primary)
+    table.add_column("Change", style=theme.text_secondary)
+    table.add_column("Details", style=theme.text_secondary, overflow="fold")
 
-    if change_type == "added":
-        table.add_column("Resource", style=display.style, width=20)
-        table.add_column("Type", style=theme.text_secondary, width=10)
-        table.add_column("Details", style=theme.text_secondary, no_wrap=False)
+    # Add added services
+    for svc in services.added:
+        name = svc.get("name", "unknown") if isinstance(svc, dict) else "unknown"
+        details = format_resource_details(svc, "service")
+        table.add_row(name, Text("Added", style=theme.success), details)
 
-        for resource in resources:
-            details = format_resource_details(resource["details"], resource["type"])
-            table.add_row(f"{resource['name']}", resource["type"], details)
+    # Add modified services
+    for name, changes in services.modified.items():
+        changes_str = format_service_modifications(changes)
+        table.add_row(name, Text("Modified", style=theme.warning), changes_str)
 
-    elif change_type == "modified":
-        table.add_column("Resource", style=display.style)
-        table.add_column("Type", style=theme.text_secondary)
-        table.add_column("Changes", style=theme.text_secondary, overflow="fold")
+    # Add removed services
+    for svc in services.removed:
+        name = svc.get("name", "unknown") if isinstance(svc, dict) else "unknown"
+        image = svc.get("image", "") if isinstance(svc, dict) else ""
+        table.add_row(name, Text("Removed", style=theme.error), image)
 
-        for resource in resources:
-            changes = format_resource_changes(resource["details"])
-            table.add_row(f"{resource['name']}", resource["type"], changes)
+    count = len(services.added) + len(services.modified) + len(services.removed)
+    return Card(
+        content=table,
+        title=f"🐳 Service Changes ({count})",
+        border_style=theme.border_default,
+    )
 
-    elif change_type == "removed":
-        table.add_column("Resource", style=display.style, width=20)
-        table.add_column("Type", style=theme.text_secondary, width=10)
-        table.add_column("Details", style=theme.text_secondary)
 
-        for resource in resources:
-            details = (
-                resource["details"].get("image", "")
-                if resource["type"] == "service"
-                else ""
-            )
-            table.add_row(f"{resource['name']}", resource["type"], details)
+def create_volumes_card(volumes: ResourceSection) -> Card | None:
+    """Create a card for volume changes."""
+    if not volumes.has_changes():
+        return None
 
-    return table
+    table = Table(show_header=True, header_style="bold", box=None)
+    table.add_column("Volume", style=theme.primary)
+    table.add_column("Change", style=theme.text_secondary)
+
+    # Add added volumes
+    for vol in volumes.added:
+        name = vol.get("name", "unknown") if isinstance(vol, dict) else "unknown"
+        table.add_row(name, Text("Added", style=theme.success))
+
+    # Add modified volumes
+    for name, _ in volumes.modified.items():
+        table.add_row(name, Text("Modified", style=theme.warning))
+
+    # Add removed volumes
+    for vol in volumes.removed:
+        name = vol.get("name", "unknown") if isinstance(vol, dict) else "unknown"
+        table.add_row(name, Text("Removed", style=theme.error))
+
+    count = len(volumes.added) + len(volumes.modified) + len(volumes.removed)
+    return Card(
+        content=table,
+        title=f"💾 Volume Changes ({count})",
+        border_style=theme.border_default,
+    )
+
+
+def create_networks_card(networks: ResourceSection) -> Card | None:
+    """Create a card for network changes."""
+    if not networks.has_changes():
+        return None
+
+    table = Table(show_header=True, header_style="bold", box=None)
+    table.add_column("Network", style=theme.primary)
+    table.add_column("Change", style=theme.text_secondary)
+    table.add_column("Type", style=theme.text_secondary)
+
+    # Add added networks
+    for net in networks.added:
+        name = net.get("name", "unknown") if isinstance(net, dict) else "unknown"
+        external = net.get("external", False) if isinstance(net, dict) else False
+        net_type = "External" if external else "Internal"
+        table.add_row(name, Text("Added", style=theme.success), net_type)
+
+    # Add modified networks
+    for name, _ in networks.modified.items():
+        table.add_row(name, Text("Modified", style=theme.warning), "")
+
+    # Add removed networks
+    for net in networks.removed:
+        name = net.get("name", "unknown") if isinstance(net, dict) else "unknown"
+        table.add_row(name, Text("Removed", style=theme.error), "")
+
+    count = len(networks.added) + len(networks.modified) + len(networks.removed)
+    return Card(
+        content=table,
+        title=f"🌐 Network Changes ({count})",
+        border_style=theme.border_default,
+    )
 
 
 def format_resource_details(details: dict[str, Any], resource_type: str) -> str:
@@ -129,8 +190,8 @@ def format_service_details(details: dict[str, Any]) -> str:
     return "\n".join(parts[:8]) if parts else "-"
 
 
-def format_resource_changes(changes: dict[str, Any]) -> str:
-    """Format resource changes for display."""
+def format_service_modifications(changes: dict[str, Any]) -> str:
+    """Format service modification changes for display."""
     formatted_changes = []
 
     # Priority fields to show first
@@ -157,35 +218,29 @@ def format_resource_changes(changes: dict[str, Any]) -> str:
 
 def format_field_change(field: str, change: Any) -> str | None:
     """Format a single field change."""
-    if isinstance(change, dict) and "from" in change and "to" in change:
-        old_val = change["from"]
-        new_val = change["to"]
-
+    # Check if it's a FieldChange object
+    if isinstance(change, FieldChange):
         # Special formatting for specific fields
         if field == "image":
-            return f"Image: {format_image_change(old_val, new_val)}"
+            return f"Image: {format_image_change(change.from_value, change.to_value)}"
         elif field == "ports":
-            return f"Ports: {format_ports_list(old_val)} → {format_ports_list(new_val)}"
+            return f"Ports: {format_ports_list(change.from_value)} → {format_ports_list(change.to_value)}"
         elif field == "command":
-            return f"Command: {format_command(old_val)} → {format_command(new_val)}"
-        elif field == "deploy":
-            return f"Deploy: {format_deploy_config(old_val)} → {format_deploy_config(new_val)}"
-        elif field == "scaling":
-            return f"Scaling: {format_scaling_config(old_val)} → {format_scaling_config(new_val)}"
+            return f"Command: {format_command(change.from_value)} → {format_command(change.to_value)}"
         else:
-            return f"{field.title()}: {format_value_summary(old_val)} → {format_value_summary(new_val)}"
+            return f"{field.title()}: {format_value_summary(change.from_value)} → {format_value_summary(change.to_value)}"
 
-    # Handle nested changes
+    # Handle dict of FieldChanges (nested changes like deploy.replicas)
     elif isinstance(change, dict):
         nested_changes = []
         for key, value in change.items():
-            if isinstance(value, dict) and "from" in value:
-                old_str = format_value_summary(value["from"])
-                new_str = format_value_summary(value["to"])
+            if isinstance(value, FieldChange):
+                old_str = format_value_summary(value.from_value)
+                new_str = format_value_summary(value.to_value)
                 nested_changes.append(f"  {key}: {old_str} → {new_str}")
 
         if nested_changes:
-            return f"{field.title()}:\n" + "\n".join(nested_changes[:3])
+            return f"{field.title()}:\n" + "\n".join(nested_changes)
 
     return None
 
@@ -194,129 +249,29 @@ def create_diff_cards(diff: ComposeDiff) -> list[Card]:
     """Create cards for all diff changes."""
     cards = []
 
-    # Process additions
-    if diff.added:
-        resources = extract_resources(diff.added, "added")
-        if resources:
-            display = CHANGE_DISPLAYS["added"]
-            table = create_resource_table(resources, "added")
-            cards.append(
-                Card(
-                    content=table,
-                    title=f"{display.icon} {display.title} Resources ({len(resources)})",
-                    border_style=display.style,
-                )
-            )
+    # Create card for services if there are any changes
+    if diff.services.has_changes():
+        services_card = create_services_card(diff.services)
+        if services_card:
+            cards.append(services_card)
 
-    # Process modifications
-    if diff.modified:
-        resources = extract_modified_resources(diff.modified)
-        if resources:
-            display = CHANGE_DISPLAYS["modified"]
-            table = create_resource_table(resources, "modified")
-            cards.append(
-                Card(
-                    content=table,
-                    title=f"{display.icon} {display.title} Resources ({len(resources)})",
-                    border_style=display.style,
-                )
-            )
+    # Create card for volumes if there are any changes
+    if diff.volumes.has_changes():
+        volumes_card = create_volumes_card(diff.volumes)
+        if volumes_card:
+            cards.append(volumes_card)
 
-    # Process removals
-    if diff.removed:
-        resources = extract_resources(diff.removed, "removed")
-        if resources:
-            display = CHANGE_DISPLAYS["removed"]
-            table = create_resource_table(resources, "removed")
-            cards.append(
-                Card(
-                    content=table,
-                    title=f"{display.icon} {display.title} Resources ({len(resources)})",
-                    border_style=display.style,
-                )
-            )
+    # Create card for networks if there are any changes
+    if diff.networks.has_changes():
+        networks_card = create_networks_card(diff.networks)
+        if networks_card:
+            cards.append(networks_card)
 
     return cards
 
 
-def extract_resources(section: Any, change_type: str) -> list[dict[str, Any]]:
-    """Extract resources from a diff section."""
-    resources = []
-
-    # Services
-    for svc in getattr(section, "services", []):
-        resources.append(
-            {
-                "name": svc.get("name", "unknown"),
-                "type": "service",
-                "details": svc,
-                "change_type": change_type,
-            }
-        )
-
-    # Volumes
-    for vol in getattr(section, "volumes", []):
-        resources.append(
-            {
-                "name": vol.get("name", "unknown"),
-                "type": "volume",
-                "details": vol,
-                "change_type": change_type,
-            }
-        )
-
-    # Networks
-    for net in getattr(section, "networks", []):
-        resources.append(
-            {
-                "name": net.get("name", "unknown"),
-                "type": "network",
-                "details": net,
-                "change_type": change_type,
-            }
-        )
-
-    return resources
-
-
-def extract_modified_resources(section: Any) -> list[dict[str, Any]]:
-    """Extract modified resources from diff section."""
-    resources = []
-
-    # Services
-    for name, changes in getattr(section, "services", {}).items():
-        resources.append(
-            {
-                "name": name,
-                "type": "service",
-                "details": changes,
-                "change_type": "modified",
-            }
-        )
-
-    # Volumes
-    for name, changes in getattr(section, "volumes", {}).items():
-        resources.append(
-            {
-                "name": name,
-                "type": "volume",
-                "details": changes,
-                "change_type": "modified",
-            }
-        )
-
-    # Networks
-    for name, changes in getattr(section, "networks", {}).items():
-        resources.append(
-            {
-                "name": name,
-                "type": "network",
-                "details": changes,
-                "change_type": "modified",
-            }
-        )
-
-    return resources
+# Helper functions no longer needed with new structure
+# The logic is now directly in create_diff_cards
 
 
 def create_env_var_card(env_changes: EnvVarChanges) -> Card | None:
@@ -326,34 +281,28 @@ def create_env_var_card(env_changes: EnvVarChanges) -> Card | None:
 
     table = Table(show_header=True, header_style="bold", box=None)
     table.add_column("Variable", style=theme.primary)
-    table.add_column("Status", style=theme.text_secondary)
+    table.add_column("Change", style=theme.text_secondary)
     table.add_column("Notes", style=theme.text_secondary)
 
-    # Added variables
+    # Add added variables
     for var in env_changes.added:
         table.add_row(
-            f"+ {var}",
-            Text("New", style=theme.success),
+            var,
+            Text("Added", style=theme.success),
             "Will be collected during deployment",
         )
 
-    # Removed variables
+    # Add removed variables
     for var in env_changes.removed:
         table.add_row(
-            f"- {var}",
+            var,
             Text("Removed", style=theme.error),
             "Will be removed from secrets",
         )
 
-    # Determine style
-    if env_changes.added and not env_changes.removed:
-        border_style = theme.border_success
-        title = f"🔐 Environment Variables (+{len(env_changes.added)})"
-    elif env_changes.removed and not env_changes.added:
-        border_style = theme.border_error
-        title = f"🔐 Environment Variables (-{len(env_changes.removed)})"
-    else:
-        border_style = theme.border_warning
-        title = f"🔐 Environment Variables (+{len(env_changes.added)}, -{len(env_changes.removed)})"
-
-    return Card(content=table, title=title, border_style=border_style)
+    count = len(env_changes.added) + len(env_changes.removed)
+    return Card(
+        content=table,
+        title=f"🔐 Environment Variable Changes ({count})",
+        border_style=theme.border_default,
+    )
