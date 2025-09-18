@@ -13,7 +13,7 @@ from shared.models.helm import (
     PodSecurityContext,
     SecurityContext,
 )
-from shared.models.k8s import ResourceRequirements, SecurityCapabilities
+from shared.models.k8s import ResourceRequirements, Resources, SecurityCapabilities
 
 
 def parse_image(image_string: str) -> ImageConfig:
@@ -78,43 +78,37 @@ def should_be_statefulset(image: str, service_name: str) -> bool:
 
 def generate_resources_values(
     resources_config: ResourcesConfig,
-) -> ResourceRequirements | None:
+) -> Resources | None:
     """Generate Kubernetes resource constraints from Docker Compose deploy.resources."""
-    resources = ResourceRequirements()
+    resources = Resources()
 
     # Handle limits
     if resources_config.limits:
-        resources.limits = resources_config.limits
+        limits = ResourceRequirements()
 
         if resources_config.limits.cpus:
-            resources.limits.cpu = convert_cpu_value(resources_config.limits.cpus)
+            limits.cpu = convert_cpu_value(resources_config.limits.cpus)
         if resources_config.limits.memory:
-            resources.limits.memory = convert_memory_value(
-                resources_config.limits.memory
-            )
+            limits.memory = convert_memory_value(resources_config.limits.memory)
 
-        if resources.limits.cpu or resources.limits.memory:
-            resources.limits = resources.limits
+        if limits.cpu or limits.memory:
+            resources.limits = limits
 
     # Handle requests (from "reservations" in Docker Compose)
     if resources_config.reservations:
-        resources.requests = resources_config.reservations
+        requests = ResourceRequirements()
 
         if resources_config.reservations.cpus:
-            resources.requests.cpu = convert_cpu_value(
-                resources_config.reservations.cpus
-            )
+            requests.cpu = convert_cpu_value(resources_config.reservations.cpus)
         if resources_config.reservations.memory:
-            resources.requests.memory = convert_memory_value(
-                resources_config.reservations.memory
-            )
+            requests.memory = convert_memory_value(resources_config.reservations.memory)
 
-        if resources.requests.cpu or resources.requests.memory:
-            resources.requests = resources.requests
+        if requests.cpu or requests.memory:
+            resources.requests = requests
 
     # Auto-generate requests if only limits are specified
     elif resources.limits:
-        resources.requests = ResourceRequirements()
+        requests = ResourceRequirements()
 
         # CPU: Default to 50% of limit
         if resources.limits.cpu:
@@ -123,34 +117,26 @@ def generate_resources_values(
             if cpu_limit.endswith("m"):
                 # Millicores
                 cpu_limit_value = float(cpu_limit[:-1])
-                resources.requests.cpu = f"{int(cpu_limit_value * 0.5)}m"
+                requests.cpu = f"{int(cpu_limit_value * 0.5)}m"
             else:
                 # Cores
                 cpu_limit_value = float(cpu_limit)
-                resources.requests.cpu = str(cpu_limit_value * 0.5)
+                requests.cpu = str(cpu_limit_value * 0.5)
 
         # Memory: Default to 80% of limit
         if resources.limits.memory:
             memory_limit = resources.limits.memory
             # Parse memory value to calculate percentage
-            resources.requests.memory = _calculate_memory_request(memory_limit, 0.8)
+            requests.memory = _calculate_memory_request(memory_limit, 0.8)
 
-        if resources.requests.cpu or resources.requests.memory:
-            resources.requests = resources.requests
+        if requests.cpu or requests.memory:
+            resources.requests = requests
 
     return resources if resources.limits or resources.requests else None
 
 
 def generate_security_context_values() -> SecurityContext:
-    """Generate security context based on image and port requirements.
-
-    Args:
-        image: The container image name
-        ports: List of port configurations
-
-    Returns:
-        Security context values for the container
-    """
+    """Generate security context based on image and port requirements"""
     # Default context - permissive since we're using gVisor for isolation
     security_context = SecurityContext(
         runAsNonRoot=False,  # Allow root
@@ -172,14 +158,7 @@ def generate_security_context_values() -> SecurityContext:
 def generate_pod_security_context_values(
     has_volumes: bool = False,
 ) -> PodSecurityContext:
-    """Generate pod-level security context.
-
-    Args:
-        has_volumes: Whether the pod has persistent volumes
-
-    Returns:
-        Pod security context values
-    """
+    """Generate pod-level security context"""
     # Minimal pod security context - let gVisor handle security
     pod_security_context = PodSecurityContext()
 
@@ -191,7 +170,7 @@ def generate_pod_security_context_values(
 
 
 def _calculate_memory_request(memory_limit: str, percentage: float = 0.8) -> str:
-    # Handle different memory formats
+    """Calculate memory request based on memory limit"""
     if memory_limit.endswith("Gi"):
         value = float(memory_limit[:-2])
         return f"{value * percentage:.1f}Gi"

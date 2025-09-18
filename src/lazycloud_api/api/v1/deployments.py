@@ -72,7 +72,7 @@ async def create_deployment(
         namespace = create_ns_name(current_user.user_id)
 
         # Validate compose file with user context
-        compose_file = ComposeParser.parse_dict(compose_data, current_user.user_id)
+        compose_file = ComposeParser.parse_dict(compose_data)
 
         # Validate the compose file
         validator = ComposeValidator()
@@ -269,7 +269,7 @@ async def diff_deployment(
 
     # Parse new compose file
     compose_data = yaml.safe_load(request.compose_yaml)
-    compose_file = ComposeParser.parse_dict(compose_data, current_user.user_id)
+    compose_file = ComposeParser.parse_dict(compose_data)
 
     # Validate the compose file
     validator = ComposeValidator()
@@ -304,9 +304,7 @@ async def diff_deployment(
     if deployment:
         try:
             current_compose_data = yaml.safe_load(deployment.compose_yaml)
-            current_compose = ComposeParser.parse_dict(
-                current_compose_data, current_user.user_id
-            )
+            current_compose = ComposeParser.parse_dict(current_compose_data)
         except Exception as e:
             logger.warning(f"Failed to parse current compose file: {e}")
             current_compose = None

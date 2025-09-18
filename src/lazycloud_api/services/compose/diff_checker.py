@@ -1,258 +1,314 @@
-from typing import Any
-
-from jsondiff import diff
+from loguru import logger
+from pydantic import BaseModel
 
 from shared.models.compose import (
     ComposeFile,
     ComposeNetwork,
+    ComposePort,
     ComposeService,
     ComposeVolume,
+    ServiceVolume,
 )
-from shared.models.diffs import ComposeDiff, ModifiedSection, ResourceSection
+from shared.models.diffs import (
+    ComposeDiff,
+    FieldChange,
+    ModificationDict,
+    ResourceDict,
+    ResourceSection,
+)
 
 
 class ComposeDiffChecker:
-    """Compares two Docker Compose files with model-aware formatting."""
-
-    # Map resource types to their model classes
-    RESOURCE_MODELS = {
-        "services": ComposeService,
-        "volumes": ComposeVolume,
-        "networks": ComposeNetwork,
-    }
-
-    # Fields to exclude from diffs (internal/metadata)
-    EXCLUDE_FIELDS = {"user_id"}
-
-    # Fields that should be formatted specially
-    SPECIAL_FORMAT_FIELDS = {
-        "ports": "port_list",
-        "volumes": "volume_list",
-        "environment": "env_dict",
-        "labels": "label_dict",
-        "deploy": "deploy_config",
-        "scaling": "scaling_config",
-    }
+    """Compares two Docker Compose files with compose-aware logic."""
 
     def compare_compose_files(
         self, current: ComposeFile | None, new: ComposeFile
     ) -> ComposeDiff:
         """Compare two compose files and return structured differences."""
-        new_dict = new.model_dump(exclude_none=True)
+        if not current:
+            logger.info("No current compose file found, everything is new")
+            return ComposeDiff(
+                services=ResourceSection(
+                    added=[self._service_to_dict(s) for s in new.services],
+                    modified={},
+                    removed=[],
+                ),
+                volumes=ResourceSection(
+                    added=[self._volume_to_dict(v) for v in new.volumes],
+                    modified={},
+                    removed=[],
+                ),
+                networks=ResourceSection(
+                    added=[self._network_to_dict(n) for n in new.networks],
+                    modified={},
+                    removed=[],
+                ),
+            )
 
-        current_dict = (
-            current.model_dump(exclude_none=True)
-            if current
-            else ComposeFile().model_dump(exclude_none=True)
+        logger.info("Comparing compose files...")
+        diff = ComposeDiff(
+            services=self._compare_services(current.services, new.services),
+            volumes=self._compare_volumes(current.volumes, new.volumes),
+            networks=self._compare_networks(current.networks, new.networks),
         )
 
-        raw_diff = diff(current_dict, new_dict, syntax="symmetric", marshal=True)
+        return diff
 
-        return self._structure_diff(current_dict, new_dict, raw_diff)
+    def _compare_services(
+        self, current: list[ComposeService], new: list[ComposeService]
+    ) -> ResourceSection:
+        """Compare service lists."""
+        logger.info("Comparing services...")
+        current_by_name = {s.name: s for s in current}
+        new_by_name = {s.name: s for s in new}
 
-    def _structure_diff(
-        self, current_dict: dict, new_dict: dict, raw_diff: dict
-    ) -> ComposeDiff:
-        """Convert jsondiff output to structured format."""
-        result = ComposeDiff()
+        # Find added services
+        added = [
+            self._service_to_dict(new_by_name[name])
+            for name in new_by_name
+            if name not in current_by_name
+        ]
 
-        for resource_type in self.RESOURCE_MODELS.keys():
-            if resource_type in raw_diff:
-                added, modified, removed = self._process_resource_type(
-                    resource_type,
-                    current_dict.get(resource_type, []),
-                    raw_diff[resource_type],
+        # Find removed services
+        removed = [
+            self._service_to_dict(current_by_name[name])
+            for name in current_by_name
+            if name not in new_by_name
+        ]
+
+        # Find modified services
+        modified = {}
+        for name in current_by_name:
+            if name in new_by_name:
+                changes = self._compare_service(
+                    current_by_name[name], new_by_name[name]
+                )
+                if changes:
+                    modified[name] = changes
+
+        logger.info(
+            f"Service comparison results: Added: {added}, Modified: {modified}, Removed: {removed}"
+        )
+        return ResourceSection(added=added, modified=modified, removed=removed)
+
+    def _compare_service(
+        self, current: ComposeService, new: ComposeService
+    ) -> ModificationDict | None:
+        """Compare two services and return all changes."""
+        changes = {}
+
+        # Compare simple fields
+        simple_fields = ["image", "command", "entrypoint", "working_dir", "user"]
+        for field in simple_fields:
+            current_val = getattr(current, field, None)
+            new_val = getattr(new, field, None)
+            if current_val != new_val:
+                changes[field] = FieldChange(
+                    from_value=current_val,
+                    to_value=new_val,
                 )
 
-                if added:
-                    if not result.added:
-                        result.added = ResourceSection()
-                    setattr(result.added, resource_type, added)
+        # Compare lists with custom serialization
+        if current.ports != new.ports:
+            changes["ports"] = FieldChange(
+                from_value=[self._port_to_string(p) for p in (current.ports or [])],
+                to_value=[self._port_to_string(p) for p in (new.ports or [])],
+            )
 
-                if modified:
-                    if not result.modified:
-                        result.modified = ModifiedSection()
-                    setattr(result.modified, resource_type, modified)
+        if current.volumes != new.volumes:
+            changes["volumes"] = FieldChange(
+                from_value=[self._volume_to_string(v) for v in (current.volumes or [])],
+                to_value=[self._volume_to_string(v) for v in (new.volumes or [])],
+            )
 
-                if removed:
-                    if not result.removed:
-                        result.removed = ResourceSection()
-                    setattr(result.removed, resource_type, removed)
+        # Compare networks
+        if current.networks != new.networks:
+            changes["networks"] = FieldChange(
+                from_value=current.networks or [],
+                to_value=new.networks or [],
+            )
+
+        # Compare nested models - show all changes including defaults
+        if current.deploy != new.deploy:
+            deploy_changes = self._compare_models(current.deploy, new.deploy, include_defaults=True)
+            if deploy_changes:
+                changes["deploy"] = deploy_changes
+
+        if current.healthcheck != new.healthcheck:
+            health_changes = self._compare_models(current.healthcheck, new.healthcheck)
+            if health_changes:
+                changes["healthcheck"] = health_changes
+
+        if current.scaling != new.scaling:
+            scaling_changes = self._compare_models(current.scaling, new.scaling)
+            if scaling_changes:
+                changes["scaling"] = scaling_changes
+
+        return changes if changes else None
+
+    def _compare_models(
+        self, current: BaseModel | None, new: BaseModel | None, include_defaults: bool = False
+    ) -> ModificationDict | None:
+        """Generic comparison for Pydantic models.
+
+        Args:
+            current: Current model state
+            new: New model state
+            include_defaults: If True, show changes even for default values
+        """
+        # Both None - no changes
+        if current is None and new is None:
+            return None
+
+        # One is None - model added or removed
+        if current is None:
+            if new:
+                # Model added - show what was added
+                new_dict = new.model_dump(exclude_defaults=not include_defaults, exclude_none=True)
+                if new_dict or include_defaults:
+                    return FieldChange(from_value=None, to_value=new_dict)
+            return None
+
+        if new is None:
+            if current:
+                # Model removed - show what was removed
+                current_dict = current.model_dump(exclude_defaults=not include_defaults, exclude_none=True)
+                if current_dict or include_defaults:
+                    return FieldChange(from_value=current_dict, to_value=None)
+            return None
+
+        # Both exist - compare all fields
+        current_dict = current.model_dump(exclude_none=True)
+        new_dict = new.model_dump(exclude_none=True)
+
+        changes = {}
+        all_keys = set(current_dict.keys()) | set(new_dict.keys())
+
+        for key in all_keys:
+            current_val = current_dict.get(key)
+            new_val = new_dict.get(key)
+
+            if current_val != new_val:
+                if isinstance(current_val, dict) and isinstance(new_val, dict):
+                    nested_changes = self._compare_dicts(current_val, new_val)
+                    if nested_changes:
+                        changes[key] = nested_changes
+                else:
+                    changes[key] = FieldChange(from_value=current_val, to_value=new_val)
+
+        return changes if changes else None
+
+    def _compare_dicts(self, current: dict, new: dict) -> ModificationDict | None:
+        """Compare two dictionaries recursively."""
+        changes = {}
+
+        all_keys = set(current.keys()) | set(new.keys())
+        for key in all_keys:
+            current_val = current.get(key)
+            new_val = new.get(key)
+
+            if current_val == new_val:
+                continue
+
+            if isinstance(current_val, dict) and isinstance(new_val, dict):
+                nested_changes = self._compare_dicts(current_val, new_val)
+                if nested_changes:
+                    changes[key] = nested_changes
+            else:
+                changes[key] = FieldChange(from_value=current_val, to_value=new_val)
+
+        return changes if changes else None
+
+    def _compare_volumes(
+        self, current: list[ComposeVolume], new: list[ComposeVolume]
+    ) -> ResourceSection:
+        """Compare volume lists."""
+        logger.info("Comparing volumes...")
+        current_names = {v.name for v in current}
+        new_names = {v.name for v in new}
+
+        added = [self._volume_to_dict(v) for v in new if v.name not in current_names]
+        removed = [self._volume_to_dict(v) for v in current if v.name not in new_names]
+
+        # Volumes typically don't have properties to modify
+        modified = {}
+        logger.info(
+            f"Volume comparison results: Added: {added}, Modified: {modified}, Removed: {removed}"
+        )
+
+        return ResourceSection(added=added, modified=modified, removed=removed)
+
+    def _compare_networks(
+        self, current: list[ComposeNetwork], new: list[ComposeNetwork]
+    ) -> ResourceSection:
+        """Compare network lists."""
+        logger.info("Comparing networks...")
+        current_names = {n.name for n in current}
+        new_names = {n.name for n in new}
+
+        added = [self._network_to_dict(n) for n in new if n.name not in current_names]
+        removed = [self._network_to_dict(n) for n in current if n.name not in new_names]
+
+        # Networks typically don't have properties to modify
+        modified = {}
+        logger.info(
+            f"Network comparison results: Added: {added}, Modified: {modified}, Removed: {removed}"
+        )
+
+        return ResourceSection(added=added, modified=modified, removed=removed)
+
+    # Helper methods to convert models to dicts for display
+
+    def _service_to_dict(self, service: ComposeService) -> ResourceDict:
+        """Convert service to dict for display."""
+        data = service.model_dump(exclude_none=True, exclude_defaults=True)
+
+        # Always include name and image
+        result = {"name": service.name, "image": service.image}
+
+        # Add other fields if they're set
+        if "command" in data:
+            result["command"] = data["command"]
+
+        if service.ports:
+            result["ports"] = [self._port_to_string(p) for p in service.ports]
+
+        if service.volumes:
+            result["volumes"] = [self._volume_to_string(v) for v in service.volumes]
+
+        # Only show replicas if not 1
+        if data.get("deploy", {}).get("replicas", 1) != 1:
+            result["replicas"] = data["deploy"]["replicas"]
 
         return result
 
-    def _process_resource_type(
-        self,
-        resource_type: str,
-        current_list: list[dict],
-        changes: dict,
-    ) -> tuple[list, dict, list]:
-        """Process changes for a specific resource type."""
-        added = []
-        modified = {}
-        removed = []
+    def _volume_to_dict(self, volume: ComposeVolume) -> ResourceDict:
+        """Convert volume to dict for display."""
+        return volume.model_dump(exclude_none=True, exclude_defaults=True)
 
-        # Handle additions
-        if "$insert" in changes:
-            for _, resource in changes["$insert"]:
-                # Ensure resource is a dict
-                if isinstance(resource, dict):
-                    added.append(self._clean_resource(resource, resource_type))
-                else:
-                    # If it's not a dict, skip it
-                    continue
+    def _network_to_dict(self, network: ComposeNetwork) -> ResourceDict:
+        """Convert network to dict for display."""
+        return network.model_dump(exclude_none=True, exclude_defaults=True)
 
-        # Handle removals
-        if "$delete" in changes:
-            for _, resource in changes["$delete"]:
-                # Ensure resource is a dict
-                if isinstance(resource, dict):
-                    removed.append(self._clean_resource(resource, resource_type))
-                else:
-                    # If it's not a dict, skip it
-                    continue
+    def _port_to_string(self, port: ComposePort) -> str:
+        """Convert port to string representation."""
+        if port.published == port.target:
+            return f"{port.target}/{port.protocol}"
+        return f"{port.published}:{port.target}/{port.protocol}"
 
-        # Handle modifications
-        for key, value in changes.items():
-            if isinstance(key, int) and isinstance(value, dict):
-                if 0 <= key < len(current_list):
-                    resource_name = current_list[key].get(
-                        "name", f"{resource_type}[{key}]"
-                    )
-                    formatted = self._format_changes(value, resource_type)
-                    if formatted:
-                        modified[resource_name] = formatted
+    def _volume_to_string(self, volume: ServiceVolume) -> str:
+        """Convert volume to string representation."""
+        if not volume.target:
+            return volume.source or ""
 
-        return added, modified, removed
-
-    def _clean_resource(self, resource: dict, resource_type: str) -> dict:
-        """Clean resource dict using model knowledge."""
-        cleaned = {}
-
-        # Always include the name for identification
-        if "name" in resource:
-            cleaned["name"] = resource["name"]
-
-        for key, value in resource.items():
-            if key not in self.EXCLUDE_FIELDS:
-                # Apply field-specific formatting
-                if key in self.SPECIAL_FORMAT_FIELDS:
-                    cleaned[key] = self._format_field(key, value)
-                else:
-                    cleaned[key] = value
-
-        return cleaned
-
-    def _format_changes(self, changes: dict, resource_type: str) -> dict:
-        """Format changes for a single resource."""
-        formatted = {}
-
-        for field, value in changes.items():
-            if field in self.EXCLUDE_FIELDS:
-                continue
-
-            if field.startswith("$"):
-                # Handle jsondiff operations
-                if field == "$insert":
-                    for k, v in value.items():
-                        formatted[k] = {"from": None, "to": self._format_field(k, v)}
-
-                elif field == "$delete":
-                    for k, v in value.items():
-                        formatted[k] = {"from": self._format_field(k, v), "to": None}
-
-            elif isinstance(value, list) and len(value) == 2:
-                # [old, new] format
-                formatted[field] = {
-                    "from": self._format_field(field, value[0]),
-                    "to": self._format_field(field, value[1]),
-                }
-
-            elif isinstance(value, dict):
-                # Nested changes
-                nested = self._format_changes(value, resource_type)
-                if nested:
-                    formatted[field] = nested
-
-        return formatted
-
-    def _format_field(self, field_name: str, value: Any) -> Any:
-        """Format a field value based on its type."""
-        if value is None:
-            return None
-
-        format_type = self.SPECIAL_FORMAT_FIELDS.get(field_name)
-
-        if format_type == "port_list" and isinstance(value, list):
-            # Format port mappings
-            return [self._format_port(p) if isinstance(p, dict) else p for p in value]
-
-        elif format_type == "volume_list" and isinstance(value, list):
-            # Format volume mappings
-            return [self._format_volume(v) if isinstance(v, dict) else v for v in value]
-
-        elif format_type == "deploy_config" and isinstance(value, dict):
-            # Simplify deploy config
-            return self._format_deploy(value)
-
-        elif format_type == "scaling_config" and isinstance(value, dict):
-            # Format scaling config
-            return self._format_scaling(value)
-
-        return value
-
-    def _format_port(self, port: dict) -> str:
-        """Format port mapping."""
-        published = port.get("published", port.get("published", "?"))
-        target = port.get("target", port.get("port", "?"))
-        protocol = port.get("protocol", "tcp")
-
-        if protocol == "tcp":
-            return f"{published}:{target}"
-        return f"{published}:{target}/{protocol}"
-
-    def _format_volume(self, volume: dict) -> str:
-        """Format volume mapping."""
-        source = volume.get("source", "")
-        target = volume.get("target", "?")
-        read_only = volume.get("read_only", False)
-        vol_type = volume.get("type", "volume")
-
-        if vol_type == "bind" and source:
-            base = f"{source}:{target}"
-        elif vol_type == "volume" and source:
-            base = f"{source}:{target}"
+        # Format as source:target or just target
+        if volume.source:
+            result = f"{volume.source}:{volume.target}"
         else:
-            base = target
+            result = volume.target
 
-        if read_only:
-            return f"{base}:ro"
-        return base
+        # Add read-only flag if set
+        if volume.read_only:
+            result += ":ro"
 
-    def _format_deploy(self, deploy: dict) -> dict:
-        """Simplify deploy config to important fields."""
-        result = {}
-
-        if "replicas" in deploy:
-            result["replicas"] = deploy["replicas"]
-
-        if "resources" in deploy:
-            resources = deploy["resources"]
-            if "limits" in resources:
-                result["limits"] = resources["limits"]
-            if "reservations" in resources:
-                result["reservations"] = resources["reservations"]
-
-        return result if result else deploy
-
-    def _format_scaling(self, scaling: dict) -> dict:
-        """Format scaling config."""
-        result = {}
-
-        # Only include the important fields
-        important_fields = ["enabled", "min", "max", "cpu", "memory"]
-        for field in important_fields:
-            if field in scaling:
-                result[field] = scaling[field]
-
-        return result if result else scaling
+        return result

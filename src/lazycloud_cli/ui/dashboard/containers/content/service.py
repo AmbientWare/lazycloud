@@ -1,13 +1,15 @@
+import asyncio
+
 from textual.containers import Container
 from textual.widgets import DataTable, RichLog, Static
 from textual.worker import Worker
 
-from lazycloud_cli.api.logs import logs_api
-from lazycloud_cli.api.status import status_api
+from lazycloud_cli.api import api
 from lazycloud_cli.ui.dashboard.containers.common import SectionContainer
+from lazycloud_cli.ui.dashboard.containers.content.utils import get_status_color
 from shared.models.helm import HealthCheckValues, HPAValues
 from shared.models.k8s import Resources
-from shared.models.statuses import KubernetesPhase, PodStatus, ServiceStatus
+from shared.models.statuses import PodStatus, ServiceStatus
 
 
 class PodTable(DataTable):
@@ -17,10 +19,17 @@ class PodTable(DataTable):
         super().__init__(*args, **kwargs)
         self.service_view = service_view
 
-    def on_row_selected(self, event: DataTable.RowSelected) -> None:
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Handle row selection and notify the service view."""
         if event.row_key:
-            self.service_view._on_pod_selected(event.row_key.value)
+            pod_name = event.row_key.value
+            self.service_view._on_pod_selected(pod_name)
+
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        """Handle row highlight (cursor movement) and notify the service view."""
+        if event.row_key:
+            pod_name = event.row_key.value
+            self.service_view._on_pod_selected(pod_name)
 
 
 class ServiceView:
@@ -31,9 +40,7 @@ class ServiceView:
         self._overview_widget: Static | None = None
         self._pods_table: DataTable | None = None
         self._logs_widget: RichLog | None = None
-        self._logs_client = None
         self._ws_task: Worker | None = None
-        self.ws_client = status_api
         self.current_deployment_id: str | None = None
         self.current_service_name: str | None = None
         self.selected_pod_name: str | None = None
@@ -107,17 +114,15 @@ class ServiceView:
             self._ws_task.cancel()
             self._ws_task = None
 
-        if self.ws_client:
-            await self.ws_client.disconnect()
-            self.ws_client = None
+        if api.status:
+            await api.status.disconnect()
 
-        if self._logs_client:
-            await self._logs_client.disconnect()
-            self._logs_client = None
+        if api.logs:
+            await api.logs.disconnect()
 
     def _build_overview_content(self, service: ServiceStatus) -> list[str]:
         """Build service overview section content."""
-        status_color = self._get_status_color(service.status)
+        status_color = get_status_color(service.status)
 
         content = [
             f"Name:         {service.name}",
@@ -181,19 +186,24 @@ class ServiceView:
 
     def _build_health_content(self, healthcheck: HealthCheckValues) -> list[str]:
         """Build service health check section content."""
-        content = []
-        if healthcheck.test:
-            content.append(
-                f"Test:     {' '.join(healthcheck.test) if isinstance(healthcheck.test, list) else healthcheck.test}"
-            )
-        if healthcheck.interval:
-            content.append(f"Interval: {healthcheck.interval}")
-        if healthcheck.timeout:
-            content.append(f"Timeout:  {healthcheck.timeout}")
-        if healthcheck.retries:
-            content.append(f"Retries:  {healthcheck.retries}")
+        if not healthcheck or not healthcheck.enabled:
+            return ["Disabled"]
 
-        return content
+        content = []
+
+        # Show liveness probe if configured
+        if healthcheck.livenessProbe:
+            probe = healthcheck.livenessProbe
+            probe_type = "HTTP" if probe.http_get else "TCP" if probe.tcp_socket else "Exec"
+            content.append(f"Liveness:  {probe_type} check")
+
+        # Show readiness probe if configured
+        if healthcheck.readinessProbe:
+            probe = healthcheck.readinessProbe
+            probe_type = "HTTP" if probe.http_get else "TCP" if probe.tcp_socket else "Exec"
+            content.append(f"Readiness: {probe_type} check")
+
+        return content if content else ["Not configured"]
 
     def _build_autoscaling_content(self, hpa: HPAValues | None) -> list[str]:
         """Build service autoscaling section content."""
@@ -248,7 +258,7 @@ class ServiceView:
         self._pods = pods
 
         for pod in pods:
-            status_color = self._get_status_color(pod.phase)
+            status_color = get_status_color(pod.phase)
             status_text = f"[{status_color}]{pod.phase.value}[/{status_color}]"
 
             ready = f"{pod.ready_containers}/{pod.total_containers}"
@@ -277,6 +287,10 @@ class ServiceView:
 
     def _on_pod_selected(self, pod_name: str | None) -> None:
         """Handle pod selection from the table."""
+        # Only restart if selection actually changed
+        if self.selected_pod_name == pod_name:
+            return
+
         self.selected_pod_name = pod_name
 
         if self._logs_section:
@@ -294,34 +308,24 @@ class ServiceView:
             self._logs_widget.clear()
             if pod_name:
                 self._logs_widget.write(
-                    f"[dim]Connecting to log stream for pod: {pod_name}...[/dim]"
+                    f"[dim]Switching to logs for pod: {pod_name}...[/dim]"
                 )
             else:
-                self._logs_widget.write(
-                    "[dim]Connecting to log stream for all pods...[/dim]"
-                )
+                self._logs_widget.write("[dim]Switching to logs for all pods...[/dim]")
 
         if self.run_worker_fn:
             self.run_worker_fn(self._restart_log_stream())
 
     async def _restart_log_stream(self) -> None:
         """Restart the log stream with current pod selection."""
-        if self._logs_client:
-            await self._logs_client.disconnect()
-            self._logs_client = None
+        # Disconnect existing client if any
+        if api.logs and api.logs.is_connected():
+            await api.logs.disconnect()
+            # Small delay to ensure clean disconnection
+            await asyncio.sleep(0.5)
 
+        # Create new connection with updated pod selection
         await self._connect_logs_stream()
-
-    def _get_status_color(self, status: KubernetesPhase) -> str:
-        """Get color for status display."""
-        if status == KubernetesPhase.RUNNING:
-            return "green"
-        elif status in (KubernetesPhase.PENDING, KubernetesPhase.PARTIALLY_RUNNING):
-            return "yellow"
-        elif status == KubernetesPhase.STOPPED:
-            return "dim"
-        else:
-            return "red"
 
     async def _connect_service_websocket(self) -> None:
         """Connect to WebSocket for real-time service updates."""
@@ -345,7 +349,7 @@ class ServiceView:
                 """Handle WebSocket errors."""
                 pass  # Silently ignore errors for now
 
-            await self.ws_client.connect_service(
+            await api.status.stream_service_status(
                 deployment_id=self.current_deployment_id,
                 service_name=self.current_service_name,
                 on_message=on_message,
@@ -375,10 +379,16 @@ class ServiceView:
 
         if self._logs_widget:
             self._logs_widget.clear()
-            self._logs_widget.write("[green]Connected to log stream[/green]\n")
+            if self.selected_pod_name:
+                self._logs_widget.write(
+                    f"[green]Connected to log stream for pod: {self.selected_pod_name}[/green]\n"
+                )
+            else:
+                self._logs_widget.write(
+                    "[green]Connected to log stream for all pods[/green]\n"
+                )
 
-        self._logs_client = logs_api
-        await self._logs_client.stream_logs(
+        await api.logs.stream_logs(
             deployment_id=self.current_deployment_id,
             service_name=self.current_service_name,
             tail=100,

@@ -96,7 +96,7 @@ class HelmValuesGenerator:
         )
 
         values = HelmValues(
-            global_values=global_values,  # type: ignore
+            global_values=global_values,
             services=[],
             networks=[],
             volumes=[],
@@ -158,6 +158,10 @@ class HelmValuesGenerator:
         image_info.pullPolicy = registry.pull_policy
 
         service_values = ServiceValues(
+            replicas=service.deploy.replicas,
+            # resources will be set later after conversion
+            restartPolicy=service.deploy.restart_policy,
+            # healthcheck and hpa will be set later after conversion
             name=service.name,
             enabled=True,
             image=image_info,
@@ -184,10 +188,10 @@ class HelmValuesGenerator:
         # Since labels are now in deploy config for scaling, use empty dict for workload detection
         is_statefulset = should_be_statefulset(service.image, service.name)
         if is_statefulset:
-            service_values.workloadType = WorkloadType.STATEFULSET.value
+            service_values.workloadType = WorkloadType.STATEFULSET
             service_values.serviceName = service.name
         else:
-            service_values.workloadType = WorkloadType.DEPLOYMENT.value
+            service_values.workloadType = WorkloadType.DEPLOYMENT
 
         # Add command if specified
         if service.command:
@@ -249,14 +253,14 @@ class HelmValuesGenerator:
         if hpa_config:
             service_values.hpa = hpa_config
 
-        # Add replicas only if HPA is not enabled
+        # NOTE: ONLY ADD REPLICAS IF HPA IS NOT ENABLED !!! HPA MANAGES THE REPLICAS
         # When HPA is enabled, it manages the replica count
         if service.scaling and service.scaling.enabled:
             if not hpa_config or not hpa_config.enabled:
                 service_values.replicas = service.scaling.min
 
         # Add metrics configuration
-        # TODO: Add metrics configuration
+        # TODO: Add metrics configuration (not supported yet)
         # metrics_config = generate_metrics_values(service.ports)
         # if metrics_config:
         #     service_values.metrics = metrics_config
@@ -344,8 +348,8 @@ class HelmValuesGenerator:
                                         f"Service '{service.name}': Volume '{volume_source}' not defined in volumes section"
                                     )
 
-        # We don't support external networks or volumes, but our simplified model
-        # already filters these out during parsing
+        # We don't support external networks or volumes
+        # but, we already filters these out during parsing
 
         return warnings
 
@@ -368,7 +372,7 @@ class HelmValuesGenerator:
         service_name: str,
     ) -> bool:
         """Check if should be StatefulSet - wrapper for testing."""
-        # Note: volumes parameter kept for backward compatibility with tests
+        # NOTE: volumes parameter kept for backward compatibility with tests
         return should_be_statefulset(image, service_name)
 
     def _parse_image(self, image_string: str) -> dict[str, str]:

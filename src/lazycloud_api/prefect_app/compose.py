@@ -86,7 +86,7 @@ async def deploy_compose_task(
 
     # Parse the compose YAML
     compose_data = yaml.safe_load(deployment.compose_yaml)
-    compose_file = ComposeParser.parse_dict(compose_data, deployment.user_id)
+    compose_file = ComposeParser.parse_dict(compose_data)
 
     # get the helm values with deployment_id to load secrets
     helm_generator = HelmValuesGenerator(deployment)

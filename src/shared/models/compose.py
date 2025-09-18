@@ -32,7 +32,7 @@ class ServiceVolume(BaseModel):
 
     type: str = "volume"
     source: str | None = None
-    target: str
+    target: str | None = None
     read_only: bool = False
 
 
@@ -46,11 +46,11 @@ class ServiceNetwork(BaseModel):
 class HealthCheck(BaseModel):
     """Health check configuration for a service."""
 
-    test: str | list[str]
-    interval: str | None = "30s"
-    timeout: str | None = "10s"
-    retries: int | None = 3
-    start_period: str | None = "40s"
+    test: str | list[str] | None = None
+    interval: str = "30s"
+    timeout: str = "10s"
+    retries: int = 3
+    start_period: str = "40s"
     disable: bool = True
 
 
@@ -64,26 +64,26 @@ class ResourceConfig(BaseModel):
 class ResourcesConfig(BaseModel):
     """Resources configuration."""
 
-    limits: ResourceConfig | None = None
-    reservations: ResourceConfig | None = None
+    limits: ResourceConfig = ResourceConfig()
+    reservations: ResourceConfig = ResourceConfig()
 
 
 class DeployConfig(BaseModel):
     """Deployment configuration (for Swarm/Kubernetes)."""
 
-    replicas: int | None = None
-    resources: ResourcesConfig | None = None
-    restart_policy: RestartPolicy | None = RestartPolicy.ALWAYS
+    replicas: int = 1
+    resources: ResourcesConfig = ResourcesConfig()
+    restart_policy: RestartPolicy = RestartPolicy.ALWAYS
 
 
 class ScalingConfig(BaseModel):
     """Scaling configuration."""
 
     enabled: bool = False
-    min: int | None = None
-    max: int | None = None
-    cpu: str = "0.7"  # 70%
-    memory: str = "0.7"  # 70%
+    min: int = 1
+    max: int = 3
+    cpu: str = "0.7"
+    memory: str = "0.7"
     scale_up_policy: str = "conservative"
     scale_down_policy: str = "conservative"
 
@@ -91,27 +91,27 @@ class ScalingConfig(BaseModel):
 class ComposeService(BaseModel):
     """Docker Compose service definition."""
 
-    name: str | None = None
-    image: str | None = None
+    name: str
+    image: str
     command: str | list[str] | None = None
     ports: list[ComposePort] | None = None
     volumes: list[ServiceVolume] | None = None
     networks: list[ServiceNetwork] | None = None
-    deploy: DeployConfig | None = None
-    healthcheck: HealthCheck | None = None
-    scaling: ScalingConfig | None = None
+    deploy: DeployConfig = DeployConfig()
+    healthcheck: HealthCheck = HealthCheck()
+    scaling: ScalingConfig = ScalingConfig()
 
 
 class ComposeNetwork(BaseModel):
     """Docker Compose network definition."""
 
-    name: str | None = None
+    name: str
 
 
 class ComposeVolume(BaseModel):
     """Docker Compose volume definition."""
 
-    name: str | None = None
+    name: str
 
 
 class ComposeFile(BaseModel):
@@ -121,4 +121,3 @@ class ComposeFile(BaseModel):
     services: list[ComposeService] = []
     networks: list[ComposeNetwork] = []
     volumes: list[ComposeVolume] = []
-    user_id: str | None = None  # User context for tracking

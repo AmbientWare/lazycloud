@@ -1,14 +1,6 @@
-from typing import Any
+from typing import Any, Dict, Union
 
 from pydantic import BaseModel
-
-
-class EnvVarChanges(BaseModel):
-    """Changes to environment variables."""
-
-    added: list[str] = []
-    removed: list[str] = []
-    existing: list[str] = []
 
 
 class FieldChange(BaseModel):
@@ -18,37 +10,64 @@ class FieldChange(BaseModel):
     to_value: Any = None
 
     class Config:
-        json_encoders = {
-            object: str  # Fallback for any non-serializable objects
-        }
+        json_encoders = {object: str}
+
+
+ResourceDict = Dict[str, Union[str, int, list, dict]]
+ModificationDict = Dict[str, Union[FieldChange, Dict[str, FieldChange]]]
 
 
 class ResourceSection(BaseModel):
-    """Resources in a section (services, volumes, networks)."""
+    """Changes to a specific type of resource (services, volumes, or networks)."""
 
-    services: list[dict[str, Any]] = []
-    volumes: list[dict[str, Any]] = []
-    networks: list[dict[str, Any]] = []
+    added: list[ResourceDict] = []
+    modified: dict[str, ModificationDict] = {}
+    removed: list[ResourceDict] = []
 
-
-class ModifiedSection(BaseModel):
-    """Modified resources with their changes."""
-
-    services: dict[str, dict[str, Any]] = {}
-    volumes: dict[str, dict[str, Any]] = {}
-    networks: dict[str, dict[str, Any]] = {}
+    def has_changes(self) -> bool:
+        """Check if there are any changes in this section."""
+        return bool(self.added or self.modified or self.removed)
 
 
 class ComposeDiff(BaseModel):
     """Structured diff between two compose files."""
 
-    added: ResourceSection | None = None
-    modified: ModifiedSection | None = None
-    removed: ResourceSection | None = None
+    services: ResourceSection = ResourceSection()
+    volumes: ResourceSection = ResourceSection()
+    networks: ResourceSection = ResourceSection()
 
     def has_changes(self) -> bool:
         """Check if there are any changes."""
-        if self.added or self.modified or self.removed:
-            return True
+        return (
+            self.services.has_changes()
+            or self.volumes.has_changes()
+            or self.networks.has_changes()
+        )
 
-        return False
+    def summary(self) -> dict[str, dict[str, int]]:
+        """Get a summary of changes."""
+        return {
+            "services": {
+                "added": len(self.services.added),
+                "modified": len(self.services.modified),
+                "removed": len(self.services.removed),
+            },
+            "volumes": {
+                "added": len(self.volumes.added),
+                "modified": len(self.volumes.modified),
+                "removed": len(self.volumes.removed),
+            },
+            "networks": {
+                "added": len(self.networks.added),
+                "modified": len(self.networks.modified),
+                "removed": len(self.networks.removed),
+            },
+        }
+
+
+class EnvVarChanges(BaseModel):
+    """Changes to environment variables."""
+
+    added: list[str] = []
+    removed: list[str] = []
+    existing: list[str] = []
