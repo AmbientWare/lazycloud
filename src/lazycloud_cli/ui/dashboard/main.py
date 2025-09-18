@@ -18,7 +18,6 @@ class DashboardApp(App):
 
     BINDINGS = [
         ("q", "quit", "Quit"),
-        ("r", "refresh", "Refresh"),
         ("1", "switch_to_deployments", "Deployments"),
         ("2", "switch_to_services", "Services"),
         ("3", "switch_to_content", "Content"),

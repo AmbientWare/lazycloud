@@ -1,7 +1,3 @@
-"""
-Common UI components for dashboard containers.
-"""
-
 from textual.containers import Container
 
 from lazycloud_cli.ui.dashboard.theme import theme
@@ -16,7 +12,7 @@ class SectionContainer(Container):
 
     def on_mount(self) -> None:
         """Style the section container."""
-        self.styles.border = ("round", theme.primary)
+        self.styles.border = (theme.border_style, theme.primary)
         self.styles.background = theme.background
         self.styles.padding = (0, 1)
         self.styles.height = "auto"
