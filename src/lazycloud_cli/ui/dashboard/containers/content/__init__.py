@@ -1,5 +1,3 @@
-"""Content container for the dashboard."""
+from .container import ContentContainer, DisplayMode
 
-from .container import ContentContainer
-
-__all__ = ["ContentContainer"]
+__all__ = ["ContentContainer", "DisplayMode"]

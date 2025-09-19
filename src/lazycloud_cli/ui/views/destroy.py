@@ -1,5 +1,3 @@
-"""Destroy command view components."""
-
 from typing import Any, Dict
 
 from rich.console import Console

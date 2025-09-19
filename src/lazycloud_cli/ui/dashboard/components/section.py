@@ -1,5 +1,4 @@
-from textual.containers import Container
-
+from lazycloud_cli.ui.dashboard.components import Container
 from lazycloud_cli.ui.dashboard.theme import theme
 
 
