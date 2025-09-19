@@ -1,29 +1,28 @@
 from textual.app import ComposeResult
 from textual.containers import Container
-from textual.message import Message
 from textual.reactive import reactive
 
 from lazycloud_cli.api import api
 from lazycloud_cli.ui.dashboard.components import ListItemData, ListView
+from lazycloud_cli.ui.dashboard.messages import DeploymentSelected
 from lazycloud_cli.ui.dashboard.theme import theme
 
 
 class DeploymentsContainer(Container):
     """Container for displaying and selecting deployments."""
 
+    BINDINGS = [
+        ("up", "cursor_up", "Move up"),
+        ("down", "cursor_down", "Move down"),
+        ("enter", "select_item", "Select"),
+    ]
+
     selected_deployment_id = reactive(None)
-
-    class DeploymentSelected(Message):
-        """Message emitted when a deployment is selected."""
-
-        def __init__(self, deployment_id: str, deployment_name: str):
-            super().__init__()
-            self.deployment_id = deployment_id
-            self.deployment_name = deployment_name
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._list_view = None
+        self.border_title = "[1] Deployments"
 
     def compose(self) -> ComposeResult:
         """Create the deployments widget."""
@@ -34,31 +33,43 @@ class DeploymentsContainer(Container):
         )
         yield self._list_view
 
-    def on_mount(self) -> None:
-        """Style the container when mounted."""
-        self.border_title = "Deployments [1]"
+    async def on_mount(self) -> None:
+        """Style the container when mounted and load deployments."""
         self.styles.height = theme.vertical_split
         self.styles.border = theme.get_border()
         self.styles.background = theme.background
         self.styles.padding = theme.padding
+        self.can_focus = True
 
-    async def on_show(self) -> None:
-        """Load deployments when container is shown."""
+        # Load deployments after mounting
         await self.load_deployments()
+
+    def on_focus(self) -> None:
+        """Handle focus event."""
+        self.styles.border = theme.get_border(focused=True)
+        self.border_subtitle = "↑↓ Navigate • ↵ Select"
+        # Reset other container borders
+        if self.app:
+            self.app.query(
+                "#services-container"
+            ).first().styles.border = theme.get_border()
+            self.app.query("#main-container").first().styles.border = theme.get_border()
+
+    def on_blur(self) -> None:
+        """Handle blur event."""
+        self.styles.border = theme.get_border()
+        self.border_subtitle = None
 
     async def load_deployments(self) -> None:
         """Fetch and display deployments from API."""
         if not self._list_view:
             return
 
-        # Show loading indicator
         self._list_view.show_loading("Loading deployments...")
 
         try:
-            # Fetch deployments from API
             response = api.deployments.list_deployments()
 
-            # Convert to ListItemData
             items = []
             if response.deployments:
                 for deployment in response.deployments:
@@ -67,7 +78,7 @@ class DeploymentsContainer(Container):
                             id=deployment.id,
                             name=deployment.name,
                             status=deployment.state,
-                            data=deployment,  # Store the full deployment object
+                            data=deployment,
                         )
                     )
 
@@ -83,9 +94,23 @@ class DeploymentsContainer(Container):
     def _handle_selection(self, item_data: ListItemData) -> None:
         """Handle deployment selection."""
         self.selected_deployment_id = item_data.id
-        # Emit message for parent to handle
-        self.post_message(self.DeploymentSelected(item_data.id, item_data.name))
+        self.post_message(DeploymentSelected(item_data.id, item_data.name))
 
     async def refresh_deployments(self) -> None:
         """Refresh the deployments list."""
         await self.load_deployments()
+
+    def action_cursor_up(self) -> None:
+        """Move cursor up in the list."""
+        if self._list_view:
+            self._list_view.action_cursor_up()
+
+    def action_cursor_down(self) -> None:
+        """Move cursor down in the list."""
+        if self._list_view:
+            self._list_view.action_cursor_down()
+
+    def action_select_item(self) -> None:
+        """Select the currently highlighted item."""
+        if self._list_view:
+            self._list_view.action_select_cursor()

@@ -1,5 +1,5 @@
 from textual.containers import Container
-from textual.widgets import DataTable, Static
+from textual.widgets import Static
 from textual.worker import Worker
 
 from lazycloud_cli.api import api
@@ -19,7 +19,7 @@ class ServiceDetailsContainer:
     def __init__(self, parent_container: Container):
         self.parent = parent_container
         self._overview_widget: Static | None = None
-        self._pods_table: DataTable | None = None
+        self._pods_table: PodTable | None = None
         self._ws_task: Worker | None = None
         self.current_deployment_id: str | None = None
         self.current_service_name: str | None = None
@@ -37,7 +37,7 @@ class ServiceDetailsContainer:
         self._pods = []
 
         overview_content = self._build_overview_content(service)
-        overview_section = SectionContainer("📦 Service Overview")
+        overview_section = SectionContainer("📦 Overview")
         self.parent.mount(overview_section)
         self._overview_widget = Static("\n".join(overview_content).strip(), markup=True)
         overview_section.mount(self._overview_widget)
@@ -59,9 +59,9 @@ class ServiceDetailsContainer:
         autoscaling_content = self._build_autoscaling_content(service.hpa)
         self._create_section("🔄 Auto-scaling", autoscaling_content)
 
-        self._pods_table = self._create_pods_table()
+        self._pods_table = self._create_pods_table(deployment_id, service.name)
         if service.pods:
-            self._update_pods_table(service.pods)
+            self._pods_table.update_pods(service.pods)
 
         self._ws_task = run_worker_fn(self._connect_service_websocket())
 
@@ -74,8 +74,12 @@ class ServiceDetailsContainer:
     def update_pods_table(self, pods: list[PodStatus]) -> None:
         """Update the pods table with new data."""
         if self._pods_table:
-            self._update_pods_table(pods)
+            self._pods_table.update_pods(pods)
 
+    def action_focus_instances(self) -> None:
+        """Focus the instances table."""
+        if self._pods_table:
+            self._pods_table.focus()
 
     async def cleanup(self) -> None:
         """Clean up WebSocket connections and tasks."""
@@ -203,55 +207,17 @@ class ServiceDetailsContainer:
         widget = Static(text_content, markup=True)
         section.mount(widget)
 
-    def _create_pods_table(self) -> DataTable:
+    def _create_pods_table(self, deployment_id: str, service_name: str) -> PodTable:
         """Create a data table for instances."""
-        section = SectionContainer("🔍 Instances (click to view logs)")
-        self.parent.mount(section)
-
-        table = PodTable(self, show_header=True, zebra_stripes=True, cursor_type="row")
-        table.add_columns(
-            "Instance Name", "Status", "Ready", "CPU", "Memory", "Restarts", "Age"
+        table = PodTable(
+            deployment_id=deployment_id,
+            service_name=service_name,
+            show_header=True,
+            zebra_stripes=True,
+            cursor_type="row",
         )
-        section.mount(table)
-
+        self.parent.mount(table)
         return table
-
-    def _update_pods_table(self, pods: list[PodStatus]) -> None:
-        """Update the instances table with data."""
-        if not self._pods_table:
-            return
-
-        self._pods_table.clear()
-
-        self._pods = pods
-
-        for pod in pods:
-            status_color = get_status_color(pod.phase)
-            status_text = f"[{status_color}]{pod.phase.value}[/{status_color}]"
-
-            ready = f"{pod.ready_containers}/{pod.total_containers}"
-
-            cpu = pod.cpu_usage or "N/A"
-            memory = pod.memory_usage or "N/A"
-
-            restarts = str(pod.restart_count) if pod.restart_count > 0 else "0"
-
-            age = pod.age or "Unknown"
-
-            display_name = pod.name
-            if len(display_name) > 30:
-                display_name = display_name[:27] + "..."
-
-            self._pods_table.add_row(
-                display_name,
-                status_text,
-                ready,
-                cpu,
-                memory,
-                restarts,
-                age,
-                key=pod.name,
-            )
 
     async def _connect_service_websocket(self) -> None:
         """Connect to WebSocket for real-time service updates."""

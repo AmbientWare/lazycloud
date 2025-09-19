@@ -1,7 +1,3 @@
-"""
-Dashboard view for LazyCloud using Textual.
-"""
-
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 
@@ -10,27 +6,28 @@ from lazycloud_cli.ui.dashboard.containers import (
     DeploymentsContainer,
     ServicesContainer,
 )
+from lazycloud_cli.ui.dashboard.containers.content.container import DisplayMode
+from lazycloud_cli.ui.dashboard.messages import DeploymentSelected, ServiceSelected
 from lazycloud_cli.ui.dashboard.theme import theme
 
 
 class DashboardApp(App):
-    """Main dashboard application."""
+    """Main dashboard application"""
 
     BINDINGS = [
         ("q", "quit", "Quit"),
         ("1", "switch_to_deployments", "Deployments"),
         ("2", "switch_to_services", "Services"),
         ("3", "switch_to_content", "Content"),
+        ("4", "focus_instances", "Focus Instances"),
     ]
 
     def on_mount(self) -> None:
-        """Style the app when mounted."""
-        # Style the screen
         self.screen.styles.background = theme.background
+        self.set_focus(self.query_one("#deployments-container"))
 
     def compose(self) -> ComposeResult:
         """Create the dashboard layout."""
-        # Main layout container
         layout = Horizontal(id="layout")
         layout.styles.layout = "horizontal"
         layout.styles.width = "100%"
@@ -49,11 +46,8 @@ class DashboardApp(App):
 
             yield ContentContainer(id="main-container")
 
-    async def on_deployments_container_deployment_selected(
-        self, message: DeploymentsContainer.DeploymentSelected
-    ) -> None:
+    async def on_deployment_selected(self, message: DeploymentSelected) -> None:
         """Handle deployment selection."""
-        # Update content container (clear any service view first)
         content_container = self.query_one("#main-container", ContentContainer)
         if content_container.display_mode == "service":
             await content_container.clear_content()
@@ -61,66 +55,62 @@ class DashboardApp(App):
             message.deployment_id, message.deployment_name
         )
 
-        # Update services container
+        # update services container so it can show the services for the selected deployment
         services_container = self.query_one("#services-container", ServicesContainer)
         await services_container.update_deployment(
             message.deployment_id, message.deployment_name
         )
 
-    async def on_services_container_service_selected(
-        self, message: ServicesContainer.ServiceSelected
-    ) -> None:
-        """Handle service selection."""
-        # Update content container to show service details
+    async def on_service_selected(self, message: ServiceSelected) -> None:
+        """Handle service selection"""
         content_container = self.query_one("#main-container", ContentContainer)
         await content_container.update_service_content(
             message.deployment_id,
             message.service,
         )
 
-    async def action_refresh(self) -> None:
-        """Refresh all data."""
-        deployments_container = self.query_one(
-            "#deployments-container", DeploymentsContainer
-        )
-        await deployments_container.refresh_deployments()
-
     def action_switch_to_deployments(self) -> None:
         """Switch to deployments section."""
         # Reset all borders to primary
         self._reset_borders()
-        # Focus on the deployments container and change border
+        # focus on the deployments container and change border
         deployments_container = self.query_one("#deployments-container")
         deployments_container.styles.border = theme.get_border(focused=True)
         self.set_focus(deployments_container)
 
     def action_switch_to_services(self) -> None:
         """Switch to services section."""
-        # Reset all borders to primary
+        # reset all borders to primary
         self._reset_borders()
-        # Focus on the services container
+        # focus on the services container
         services_container = self.query_one("#services-container")
         services_container.styles.border = theme.get_border(focused=True)
         self.set_focus(services_container)
 
     def action_switch_to_content(self) -> None:
         """Switch to content section."""
-        # Reset all borders to primary
+        # reset all borders to primary
         self._reset_borders()
-        # Focus on the main content container
+        # focus on the main content container
         content_container = self.query_one("#main-container")
         content_container.styles.border = theme.get_border(focused=True)
         self.set_focus(content_container)
 
     def _reset_borders(self) -> None:
-        """Reset all container borders to primary color."""
+        """Reset all container borders to primary color"""
         self.query_one("#deployments-container").styles.border = theme.get_border()
         self.query_one("#services-container").styles.border = theme.get_border()
         self.query_one("#main-container").styles.border = theme.get_border()
 
+    def action_focus_instances(self) -> None:
+        """Focus the instances table if it exists."""
+        content_container = self.query_one("#main-container", ContentContainer)
+        if content_container.display_mode == DisplayMode.SERVICE and content_container._service_view:
+            if hasattr(content_container._service_view, '_pods_table') and content_container._service_view._pods_table:
+                self.set_focus(content_container._service_view._pods_table)
+
 
 def run_dashboard():
-    """Run the dashboard application."""
     app = DashboardApp()
     app.run()
 
