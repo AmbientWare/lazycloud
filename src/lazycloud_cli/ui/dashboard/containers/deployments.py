@@ -1,23 +1,29 @@
 from textual.app import ComposeResult
-from textual.containers import Container
 from textual.reactive import reactive
 
 from lazycloud_cli.api import api
-from lazycloud_cli.ui.dashboard.components import ListItemData, ListView
-from lazycloud_cli.ui.dashboard.messages import DeploymentSelected
+from lazycloud_cli.ui.dashboard.components import Container, ListItemData, ListView
+from lazycloud_cli.ui.dashboard.components.listview import ListItem
+from lazycloud_cli.ui.dashboard.containers.content.container import ContentContainer
+from lazycloud_cli.ui.dashboard.containers.services import ServicesContainer
 from lazycloud_cli.ui.dashboard.theme import theme
+from shared.models.statuses import DeploymentStatus, ServiceStatus
+from shared.responses.deployments import DeploymentResponse
 
 
 class DeploymentsContainer(Container):
     """Container for displaying and selecting deployments."""
+
+    # Reactive attributes
+    selected_deployment: reactive[DeploymentResponse | None] = reactive(None)
+    deployment_status: reactive[DeploymentStatus | None] = reactive(None)
+    services: reactive[list[ServiceStatus] | None] = reactive(None)
 
     BINDINGS = [
         ("up", "cursor_up", "Move up"),
         ("down", "cursor_down", "Move down"),
         ("enter", "select_item", "Select"),
     ]
-
-    selected_deployment_id = reactive(None)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -28,6 +34,7 @@ class DeploymentsContainer(Container):
         """Create the deployments widget."""
         self._list_view = ListView(
             on_select=self._handle_selection,
+            on_highlight=self._handle_highlight,
             empty_message="No deployments found",
             id="deployments-list",
         )
@@ -48,17 +55,45 @@ class DeploymentsContainer(Container):
         """Handle focus event."""
         self.styles.border = theme.get_border(focused=True)
         self.border_subtitle = "↑↓ Navigate • ↵ Select"
-        # Reset other container borders
-        if self.app:
-            self.app.query(
-                "#services-container"
-            ).first().styles.border = theme.get_border()
-            self.app.query("#main-container").first().styles.border = theme.get_border()
+
+        # Ensure an item is highlighted in the list
+        if self._list_view:
+            self._list_view.ensure_highlighted()
+            # Only update if we're switching from service view or if deployment changed
+            if self._list_view.index is not None and self._list_view.index < len(
+                self._list_view.children
+            ):
+                item = self._list_view.children[self._list_view.index]
+                if isinstance(item, ListItem):
+                    # Only fetch and update if it's a different deployment
+                    if self.selected_deployment != item.item_data.data:
+                        self.selected_deployment = item.item_data.data
+                        # get status associated with the deployment
+                        status = api.deployments.get_deployment_status(
+                            item.item_data.id
+                        )
+                        self.deployment_status = status.status
+                        self.services = status.status.services
 
     def on_blur(self) -> None:
         """Handle blur event."""
         self.styles.border = theme.get_border()
         self.border_subtitle = None
+
+    async def watch_selected_deployment(self, old_value, new_value) -> None:
+        """React when deployment is selected - update content container"""
+        if new_value:
+            # Update the content container
+            content = self.app.query_one(ContentContainer)
+            content.deployment = new_value
+            content.deployment_status = self.deployment_status
+
+    async def watch_services(self, old_value, new_value) -> None:
+        """React when services list changes - update services container"""
+        if new_value is not None:
+            # Update the services container
+            services = self.app.query_one(ServicesContainer)
+            services.services = new_value
 
     async def load_deployments(self) -> None:
         """Fetch and display deployments from API."""
@@ -92,13 +127,25 @@ class DeploymentsContainer(Container):
             self._list_view.hide_loading()
 
     def _handle_selection(self, item_data: ListItemData) -> None:
-        """Handle deployment selection."""
-        self.selected_deployment_id = item_data.id
-        self.post_message(DeploymentSelected(item_data.id, item_data.name))
+        """Handle deployment selection (Enter key pressed)."""
+        # Update our own reactive state
+        self.selected_deployment = item_data.data
+        # get status associated with the deployment
+        status = api.deployments.get_deployment_status(item_data.id)
+        self.deployment_status = status.status
+        # update the services
+        self.services = status.status.services
 
-    async def refresh_deployments(self) -> None:
-        """Refresh the deployments list."""
-        await self.load_deployments()
+    def _handle_highlight(self, item_data: ListItemData) -> None:
+        """Handle deployment highlight (arrow navigation)."""
+        # Only update content if the highlight actually changed to a different item
+        if self.selected_deployment != item_data.data:
+            self.selected_deployment = item_data.data
+            # get status associated with the deployment
+            status = api.deployments.get_deployment_status(item_data.id)
+            self.deployment_status = status.status
+            # update the services
+            self.services = status.status.services
 
     def action_cursor_up(self) -> None:
         """Move cursor up in the list."""

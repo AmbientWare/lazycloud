@@ -4,10 +4,9 @@ from textual.containers import Horizontal, Vertical
 from lazycloud_cli.ui.dashboard.containers import (
     ContentContainer,
     DeploymentsContainer,
+    DisplayMode,
     ServicesContainer,
 )
-from lazycloud_cli.ui.dashboard.containers.content.container import DisplayMode
-from lazycloud_cli.ui.dashboard.messages import DeploymentSelected, ServiceSelected
 from lazycloud_cli.ui.dashboard.theme import theme
 
 
@@ -24,7 +23,7 @@ class DashboardApp(App):
 
     def on_mount(self) -> None:
         self.screen.styles.background = theme.background
-        self.set_focus(self.query_one("#deployments-container"))
+        self.set_focus(self.query_one(DeploymentsContainer))
 
     def compose(self) -> ComposeResult:
         """Create the dashboard layout."""
@@ -44,69 +43,61 @@ class DashboardApp(App):
                 yield DeploymentsContainer(id="deployments-container")
                 yield ServicesContainer(id="services-container")
 
+            # Main content container
             yield ContentContainer(id="main-container")
-
-    async def on_deployment_selected(self, message: DeploymentSelected) -> None:
-        """Handle deployment selection."""
-        content_container = self.query_one("#main-container", ContentContainer)
-        if content_container.display_mode == "service":
-            await content_container.clear_content()
-        await content_container.update_content(
-            message.deployment_id, message.deployment_name
-        )
-
-        # update services container so it can show the services for the selected deployment
-        services_container = self.query_one("#services-container", ServicesContainer)
-        await services_container.update_deployment(
-            message.deployment_id, message.deployment_name
-        )
-
-    async def on_service_selected(self, message: ServiceSelected) -> None:
-        """Handle service selection"""
-        content_container = self.query_one("#main-container", ContentContainer)
-        await content_container.update_service_content(
-            message.deployment_id,
-            message.service,
-        )
 
     def action_switch_to_deployments(self) -> None:
         """Switch to deployments section."""
         # Reset all borders to primary
         self._reset_borders()
         # focus on the deployments container and change border
-        deployments_container = self.query_one("#deployments-container")
+        deployments_container = self.query_one(DeploymentsContainer)
         deployments_container.styles.border = theme.get_border(focused=True)
         self.set_focus(deployments_container)
+
+        # get the main content container and set the mode to deployment
+        main_content_container = self.query_one(ContentContainer)
+        main_content_container.display_mode = DisplayMode.DEPLOYMENT
 
     def action_switch_to_services(self) -> None:
         """Switch to services section."""
         # reset all borders to primary
         self._reset_borders()
         # focus on the services container
-        services_container = self.query_one("#services-container")
+        services_container = self.query_one(ServicesContainer)
         services_container.styles.border = theme.get_border(focused=True)
         self.set_focus(services_container)
+
+        # get the main content container and set the mode to service
+        main_content_container = self.query_one(ContentContainer)
+        main_content_container.display_mode = DisplayMode.SERVICE
 
     def action_switch_to_content(self) -> None:
         """Switch to content section."""
         # reset all borders to primary
         self._reset_borders()
         # focus on the main content container
-        content_container = self.query_one("#main-container")
+        content_container = self.query_one(ContentContainer)
         content_container.styles.border = theme.get_border(focused=True)
         self.set_focus(content_container)
 
     def _reset_borders(self) -> None:
         """Reset all container borders to primary color"""
-        self.query_one("#deployments-container").styles.border = theme.get_border()
-        self.query_one("#services-container").styles.border = theme.get_border()
-        self.query_one("#main-container").styles.border = theme.get_border()
+        self.query_one(DeploymentsContainer).styles.border = theme.get_border()
+        self.query_one(ServicesContainer).styles.border = theme.get_border()
+        self.query_one(ContentContainer).styles.border = theme.get_border()
 
     def action_focus_instances(self) -> None:
         """Focus the instances table if it exists."""
-        content_container = self.query_one("#main-container", ContentContainer)
-        if content_container.display_mode == DisplayMode.SERVICE and content_container._service_view:
-            if hasattr(content_container._service_view, '_pods_table') and content_container._service_view._pods_table:
+        content_container = self.query_one(ContentContainer)
+        if (
+            content_container.display_mode == DisplayMode.SERVICE
+            and content_container._service_view
+        ):
+            if (
+                hasattr(content_container._service_view, "_pods_table")
+                and content_container._service_view._pods_table
+            ):
                 self.set_focus(content_container._service_view._pods_table)
 
 

@@ -12,27 +12,25 @@ class ModalContainer(Container):
         self.modal_title = title
 
     def on_mount(self) -> None:
-        """Style the modal container."""
-        self.styles.width = "90%"
-        self.styles.height = "90%"
-        self.styles.border = (theme.border_style, theme.primary)
+        """Apply theme-based styling."""
+        self.styles.width = "auto"
+        self.styles.height = "auto"
+        self.styles.padding = 2
         self.styles.background = theme.background
-        self.styles.padding = 1
+        self.styles.border = (theme.border_style, theme.primary)
 
 
 class BaseModalScreen(ModalScreen):
     """Base modal screen with common keybindings."""
 
-    DEFAULT_CSS = """
-    BaseModalScreen {
-        align: center middle;
-    }
-    """
-
     BINDINGS = [
         ("escape", "dismiss", "Close"),
         ("q", "dismiss", "Close"),
     ]
+
+    def on_mount(self) -> None:
+        """Style the modal screen."""
+        self.styles.align = ("center", "middle")
 
     def action_dismiss(self) -> None:
         """Close the modal."""

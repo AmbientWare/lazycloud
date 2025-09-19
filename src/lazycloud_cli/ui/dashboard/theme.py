@@ -15,8 +15,8 @@ class LazyCloudTheme(BaseModel):
     primary_bright: str = "rgb(147,197,253)"
 
     # Base colors
-    background: str = "transparent"
-    surface: str = "transparent"
+    background: str = "black"
+    surface: str = "rgb(17,24,39)"
 
     # Text colors
     text: str = "rgb(229,231,235)"

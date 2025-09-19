@@ -1,8 +1,8 @@
-from textual.containers import Container
 from textual.widgets import Static
 from textual.worker import Worker
 
 from lazycloud_cli.api import api
+from lazycloud_cli.ui.dashboard.components import Container
 from lazycloud_cli.ui.dashboard.components.section import SectionContainer
 from lazycloud_cli.ui.dashboard.containers.content.service_details.pods_table import (
     PodTable,

@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 from textual.app import ComposeResult
 from textual.widgets import Label as TextualLabel
@@ -15,9 +15,9 @@ class ListItemData:
 
     id: str
     name: str
-    status: Optional[str] = None
-    extra_text: Optional[str] = None
-    data: Optional[Any] = None  # Store any additional data
+    status: str | None = None
+    extra_text: str | None = None
+    data: Any | None = None  # Store any additional data
 
 
 class ListItem(TextualListItem):
@@ -64,16 +64,19 @@ class ListView(TextualListView):
 
     def __init__(
         self,
-        items: Optional[list[ListItemData]] = None,
-        on_select: Optional[Callable[[ListItemData], None]] = None,
+        items: list[ListItemData] | None = None,
+        on_select: Callable[[ListItemData], None] | None = None,
+        on_highlight: Callable[[ListItemData], None] | None = None,
         empty_message: str = "No items found",
         *args,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self._on_select = on_select
+        self._on_highlight = on_highlight
         self._empty_message = empty_message
         self._items = items or []
+        self._last_index = 0  # Track last selected index
 
     def on_mount(self) -> None:
         """Apply consistent styling and render items on mount."""
@@ -90,6 +93,9 @@ class ListView(TextualListView):
 
     def update_items(self, items: list[ListItemData]) -> None:
         """Update the list with new items."""
+        # Remember current index before clearing
+        current_index = self.index if self.index is not None else self._last_index
+
         self.clear()
         self._items = items
 
@@ -101,6 +107,10 @@ class ListView(TextualListView):
             list_item = ListItem(item_data)
             self.append(list_item)
 
+        # Remember the position for later restoration
+        if len(self.children) > 0:
+            self._last_index = min(current_index, len(self.children) - 1)
+
     def show_empty_message(self) -> None:
         """Show the empty message."""
         self.clear()
@@ -110,6 +120,7 @@ class ListView(TextualListView):
         """Show a loading message."""
         self.clear()
         self.loading = True
+        # message parameter is used by the loading indicator widget
 
     def hide_loading(self) -> None:
         """Hide the loading indicator."""
@@ -119,3 +130,17 @@ class ListView(TextualListView):
         """Handle item selection."""
         if self._on_select and isinstance(event.item, ListItem):
             self._on_select(event.item.item_data)
+            # Remember the selected index
+            self._last_index = self.index
+
+    def ensure_highlighted(self) -> None:
+        """Ensure an item is highlighted when the list gains focus."""
+        if len(self.children) > 0 and self.index is None:
+            # If no item is highlighted, highlight the last selected or first item
+            self.index = min(self._last_index, len(self.children) - 1)
+
+    def on_list_view_highlighted(self, event: TextualListView.Highlighted) -> None:
+        """Handle item highlight change (when navigating with arrows)."""
+        if self._on_highlight and isinstance(event.item, ListItem):
+            self._on_highlight(event.item.item_data)
+            self._last_index = self.index
