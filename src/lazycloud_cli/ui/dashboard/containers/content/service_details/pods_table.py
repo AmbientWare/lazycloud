@@ -3,33 +3,97 @@ from textual.widgets import DataTable
 from lazycloud_cli.ui.dashboard.containers.content.service_details.logs_modal import (
     LogViewerModal,
 )
+from lazycloud_cli.ui.dashboard.containers.content.utils import get_status_color
+from lazycloud_cli.ui.dashboard.theme import theme
+from shared.models.statuses import PodStatus
 
 
 class PodTable(DataTable):
     """Custom DataTable for pod selection that handles its own events."""
 
-    def __init__(self, service_view, *args, **kwargs):
+    def __init__(self, deployment_id: str, service_name: str, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.service_view = service_view
+        self.deployment_id = deployment_id
+        self.service_name = service_name
         self.user_has_interacted = False
+        self.can_focus = True
+        self.cursor_type = "row"
+        self.show_cursor = True
+        self._pods = []
+        self.border_title = "🔍 [4] Instances"
+
+        self.add_columns(
+            "Instance Name", "Status", "Ready", "CPU", "Memory", "Restarts", "Age"
+        )
+
+    def on_mount(self) -> None:
+        """Initialize the table on mount."""
+        self.styles.border = (theme.border_style, theme.primary)
+        self.styles.background = theme.background
+        self.styles.height = "auto"
+        self.styles.max_height = "50%"
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Handle row selection and open log modal."""
         if event.row_key:
             pod_name = event.row_key.value
             self.user_has_interacted = True
-            if (
-                self.service_view.current_deployment_id
-                and self.service_view.current_service_name
-            ):
-                modal = LogViewerModal(
-                    deployment_id=self.service_view.current_deployment_id,
-                    service_name=self.service_view.current_service_name,
-                    pod_name=pod_name,
-                )
-                self.app.push_screen(modal)
+            modal = LogViewerModal(
+                deployment_id=self.deployment_id,
+                service_name=self.service_name,
+                pod_name=pod_name,
+            )
+            self.app.push_screen(modal)
 
-    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+    def on_focus(self) -> None:
+        """Handle focus event."""
+        border_style, border_color = theme.get_border(focused=True)
+        self.styles.border = (border_style, border_color)
+        self.border_subtitle = "↑↓ Navigate Instances • ↵ Show Logs"
+
+    def on_blur(self) -> None:
+        """Handle blur event."""
+        border_style, border_color = theme.get_border()
+        self.styles.border = (border_style, border_color)
+        self.border_subtitle = ""
+
+    def on_data_table_row_highlighted(self, _: DataTable.RowHighlighted) -> None:
         """Handle row highlight (cursor movement)."""
-        # Mark as interacted when user navigates
         self.user_has_interacted = True
+
+    def update_pods(self, pods: list[PodStatus]) -> None:
+        """Update the table with new pod data."""
+        self.clear()
+        self._pods = pods
+
+        for pod in pods:
+            status_color = get_status_color(pod.phase)
+            status_text = f"[{status_color}]{pod.phase.value}[/{status_color}]"
+
+            ready = f"{pod.ready_containers}/{pod.total_containers}"
+            cpu = pod.cpu_usage or "N/A"
+            memory = pod.memory_usage or "N/A"
+            restarts = str(pod.restart_count) if pod.restart_count > 0 else "0"
+            age = pod.age or "Unknown"
+
+            display_name = pod.name
+            if len(display_name) > 30:
+                display_name = display_name[:27] + "..."
+
+            self.add_row(
+                display_name,
+                status_text,
+                ready,
+                cpu,
+                memory,
+                restarts,
+                age,
+                key=pod.name,
+            )
+
+        # Restore cursor position if user has interacted
+        if self.user_has_interacted and self.cursor_coordinate:
+            try:
+                self.move_cursor(self.cursor_coordinate)
+            except Exception:
+                pass

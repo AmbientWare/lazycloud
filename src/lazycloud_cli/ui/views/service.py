@@ -279,7 +279,6 @@ class ServiceStatusApp(App):
         # Update instances
         pods = self._get_pods_data()
         self._update_instances_table(pods)
-        self.query_one("#instances-title", Label).update(f"🔍 Instances ({len(pods)})")
 
         # Update connection status
         self._update_connection_status("Live updates active")
@@ -292,7 +291,7 @@ class ServiceStatusApp(App):
         if "service" in self._current_status:
             return self._current_status["service"]
         else:
-            # Old format compatibility
+            # Old format compatibility TODO: should remove this?
             services_data = self._current_status.get("services", {})
             if isinstance(services_data, dict):
                 return services_data.get(self.service_name)
@@ -308,7 +307,7 @@ class ServiceStatusApp(App):
         ):
             return self._current_status["pods"]
         else:
-            # Old format compatibility
+            # Old format compatibility TODO: should remove this?
             pods_data = self._current_status.get("pods", {})
             if isinstance(pods_data, dict):
                 return pods_data.get(self.service_name, [])
@@ -324,7 +323,7 @@ class ServiceStatusApp(App):
                 port_str = port.get("port", "")
                 protocol = port.get("protocol", "TCP")
             else:
-                # Handle string format "8000:8000/TCP"
+                # Handle string format "8000:8000/TCP" TODO: should remove this?
                 if "/" in str(port):
                     port_str, protocol = str(port).rsplit("/", 1)
                 else:
@@ -360,7 +359,7 @@ class ServiceStatusApp(App):
         table.clear()
 
         for pod in pods:
-            name = pod.name[-16:]  # Truncate long names
+            name = pod.name[-16:]  # Truncate long names TODO: should remove this?
             ready = pod.ready_containers
             total = pod.total_containers
             ready_str = f"{ready}/{total}"
@@ -388,13 +387,13 @@ class ServiceStatusApp(App):
     def _on_status_update(self, data: dict[str, Any]) -> None:
         """Handle status update from WebSocket."""
         self._current_status = data
-        # WebSocket callbacks are already in the app's thread, so call directly
+        # WebSocket callbacks are already in the app's thread, so call directly TODO: should remove this?
         self._update_display()
 
     def _on_error(self, error: Exception) -> None:
         """Handle WebSocket errors."""
         self._error_message = f"❌ {error}"
-        # WebSocket callbacks are already in the app's thread, so call directly
+        # WebSocket callbacks are already in the app's thread, so call directly TODO: should remove this?
         self._update_display()
 
     async def _connect_websocket(self) -> None:

@@ -39,9 +39,12 @@ class ContentContainer(Container):
         self.current_service_name = None
         self.display_mode = DisplayMode.DEPLOYMENT
         self._border_subtitle_timer = None
-        self.base_title = "Details [3]"
+        self.border_title = "[3] Details"
         self._deployment_view = None
         self._service_view = None
+        self._additional_border_subtitle = None
+        # NOTE: faster reactivity than has_focus
+        self._show_border_subtitle = False
 
     def compose(self) -> ComposeResult:
         """Create the content area."""
@@ -49,15 +52,12 @@ class ContentContainer(Container):
 
     def on_mount(self) -> None:
         """Style the container when mounted."""
-        self.base_title = "Details [3]"
         self._update_border_subtitle()
         self.styles.width = theme.right_width
         self.styles.height = "100%"
         self.styles.border = theme.get_border()
         self.styles.background = theme.background
         self.styles.padding = theme.padding
-
-        # Make the container focusable so it can receive key events
         self.can_focus = True
 
         self._start_border_subtitle_timer()
@@ -66,12 +66,31 @@ class ContentContainer(Container):
         scroll.mount(initial_section)
         initial_section.mount(Static("Select a deployment to view details"))
 
+    def on_focus(self) -> None:
+        """Handle focus event."""
+        self.styles.border = theme.get_border(focused=True)
+        self._show_border_subtitle = True
+        if self.app:
+            self.app.query(
+                "#deployments-container"
+            ).first().styles.border = theme.get_border()
+            self.app.query(
+                "#services-container"
+            ).first().styles.border = theme.get_border()
+
+        self._update_border_subtitle()
+
+    def on_blur(self) -> None:
+        """Handle blur event."""
+        self.styles.border = theme.get_border()
+        self._show_border_subtitle = False
+        self._update_border_subtitle()
+
     async def on_unmount(self) -> None:
         """Clean up when container unmounts."""
         if self._border_subtitle_timer:
             self._border_subtitle_timer.stop()
 
-        # Clean up service view if it exists
         if self._service_view:
             await self._service_view.cleanup()
             self._service_view = None
@@ -85,13 +104,14 @@ class ContentContainer(Container):
 
     def _update_border_subtitle(self) -> None:
         current_time = datetime.now().strftime("%H:%M:%S")
-        self.border_title = self.base_title
+        time_subtitle = f"🕐 {current_time}"
 
-        # Add restart command next to border_subtitle if viewing a service
-        if self.display_mode == DisplayMode.SERVICE:
-            self.border_subtitle = f"r: restart - 🕐 {current_time}"
+        if self._additional_border_subtitle and self._show_border_subtitle:
+            self.border_subtitle = (
+                f"{self._additional_border_subtitle} • {time_subtitle}"
+            )
         else:
-            self.border_subtitle = f"🕐 {current_time}"
+            self.border_subtitle = time_subtitle
 
         self.refresh()
 
@@ -99,15 +119,14 @@ class ContentContainer(Container):
         self.current_deployment_id = deployment_id
         self.current_deployment_name = deployment_name
         self.display_mode = DisplayMode.DEPLOYMENT
-        self.base_title = f"Deployment Details [3] - {deployment_name}"
+        self.border_title = f"[3] Deployment Details - {deployment_name}"
+        self._additional_border_subtitle = None
         self._update_border_subtitle()
 
-        # Clean up previous service view if it exists
         if self._service_view:
             await self._service_view.cleanup()
             self._service_view = None
 
-        # Clear the scroll container
         scroll = self.query_one("#content-scroll", VerticalScroll)
         scroll.remove_children()
 
@@ -130,7 +149,8 @@ class ContentContainer(Container):
         self.current_deployment_id = deployment_id
         self.current_service_name = service.name
         self.display_mode = DisplayMode.SERVICE
-        self.base_title = f"Service Details [3] - {service.name}"
+        self.border_title = f"[3] Service Details - {service.name}"
+        self._additional_border_subtitle = "r: Restart"
         self._update_border_subtitle()
 
         if self._service_view:
@@ -142,9 +162,6 @@ class ContentContainer(Container):
         self._service_view = ServiceDetailsContainer(scroll)
         await self._service_view.render(service, deployment_id, self.run_worker)
 
-        # Focus this container to receive key events
-        self.focus()
-
     async def clear_content(self) -> None:
         if self._service_view:
             await self._service_view.cleanup()
@@ -153,7 +170,8 @@ class ContentContainer(Container):
         self.current_deployment_id = None
         self.current_deployment_name = None
         self.display_mode = DisplayMode.DEPLOYMENT
-        self.base_title = "Details [3]"
+        self.border_title = "[3] Details"
+        self._additional_border_subtitle = None
         self._update_border_subtitle()
 
         scroll = self.query_one("#content-scroll", VerticalScroll)

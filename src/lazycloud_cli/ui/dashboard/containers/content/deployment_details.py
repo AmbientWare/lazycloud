@@ -14,7 +14,7 @@ class DeploymentDetailsContainer:
 
     def render(self, deployment: DeploymentStatus) -> None:
         overview_content = self._build_overview_content(deployment)
-        self._create_section("📦 Deployment Overview", overview_content)
+        self._create_section("📦 Overview", overview_content)
 
         if deployment.services:
             services_content = self._build_services_content(deployment)

@@ -32,7 +32,7 @@ class LazyCloudTheme(BaseModel):
 
     # Border configuration
     border_color: str = "rgb(100,116,139)"
-    border_color_focus: str = "rgb(96,165,250)"
+    border_color_focus: str = "rgb(168,85,247)"
     border_style: str = "round"
     
     # Layout
