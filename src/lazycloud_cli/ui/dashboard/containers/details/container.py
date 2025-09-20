@@ -7,10 +7,10 @@ from textual.reactive import reactive
 from textual.widgets import Static
 
 from lazycloud_cli.ui.dashboard.components import Container, SectionContainer
-from lazycloud_cli.ui.dashboard.containers.content.deployment_details import (
+from lazycloud_cli.ui.dashboard.containers.details.deployment_details import (
     DeploymentDetailsContainer,
 )
-from lazycloud_cli.ui.dashboard.containers.content.service_details import (
+from lazycloud_cli.ui.dashboard.containers.details.service_details import (
     RestartServiceModal,
     ServiceDetailsContainer,
 )

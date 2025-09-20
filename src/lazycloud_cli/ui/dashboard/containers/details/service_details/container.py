@@ -4,10 +4,10 @@ from textual.worker import Worker
 from lazycloud_cli.api import api
 from lazycloud_cli.ui.dashboard.components import Container
 from lazycloud_cli.ui.dashboard.components.section import SectionContainer
-from lazycloud_cli.ui.dashboard.containers.content.service_details.pods_table import (
+from lazycloud_cli.ui.dashboard.containers.details.service_details.pods_table import (
     PodTable,
 )
-from lazycloud_cli.ui.dashboard.containers.content.utils import get_status_color
+from lazycloud_cli.ui.dashboard.containers.details.utils import get_status_color
 from shared.models.helm import HealthCheckValues, HPAValues
 from shared.models.k8s import Resources
 from shared.models.statuses import PodStatus, ServiceStatus

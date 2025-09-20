@@ -2,7 +2,7 @@ from textual.widgets import Static
 
 from lazycloud_cli.ui.dashboard.components import Container
 from lazycloud_cli.ui.dashboard.components.section import SectionContainer
-from lazycloud_cli.ui.dashboard.containers.content.utils import get_status_color
+from lazycloud_cli.ui.dashboard.containers.details.utils import get_status_color
 from shared.models.statuses import DeploymentStatus
 
 
