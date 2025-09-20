@@ -2,7 +2,7 @@ import time
 
 from lazycloud_cli.api.base import BaseAPI
 from shared.models.statuses import TaskStatus
-from shared.models.tasks import TaskStatusResponse
+from shared.responses.tasks import TaskStatusResponse
 
 
 class TasksAPI(BaseAPI):
@@ -11,7 +11,7 @@ class TasksAPI(BaseAPI):
 
     def get_task_status(self, task_id: str) -> TaskStatusResponse:
         """Get the status of a task"""
-        response = self._get(task_id)
+        response = self._get(path=f"/{task_id}")
         return TaskStatusResponse(**response)
 
     def wait_for_task_completion(

@@ -2,13 +2,13 @@ from typing import Any
 
 from lazycloud_cli.api.base import BaseAPI
 from lazycloud_cli.api.tasks import TasksAPI
-from shared.models.tasks import DeploymentTaskStatusResponse
 from shared.requests.deployments import DeploymentCreateRequest
 from shared.responses.deployments import (
     DeploymentListResponse,
     DeploymentResponse,
     DeploymentStatusResponse,
 )
+from shared.responses.tasks import DeploymentTaskStatusResponse
 
 
 class DeploymentsAPI(BaseAPI):
@@ -36,7 +36,7 @@ class DeploymentsAPI(BaseAPI):
 
     def delete_deployment(self, deployment_id: str) -> DeploymentTaskStatusResponse:
         """Delete a deployment."""
-        response_data = self._delete(path=deployment_id)
+        response_data = self._delete(path=f"/{deployment_id}")
         delete_response = DeploymentTaskStatusResponse(**response_data)
 
         #  wait for task to complete
@@ -83,5 +83,5 @@ class DeploymentsAPI(BaseAPI):
 
     def get_deployment_status(self, deployment_id: str) -> DeploymentStatusResponse:
         """Get resource status for a deployment."""
-        response = self._get(path=f"{deployment_id}/status")
+        response = self._get(path=f"/{deployment_id}/status")
         return DeploymentStatusResponse(**response)

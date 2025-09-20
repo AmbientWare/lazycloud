@@ -3,7 +3,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException
 
 from lazycloud_api.prefect_app import get_task_result
-from shared.models.tasks import TaskStatusResponse
+from shared.responses.tasks import TaskStatusResponse
 
 tasks_router = APIRouter(prefix="/tasks", tags=["tasks"])
 

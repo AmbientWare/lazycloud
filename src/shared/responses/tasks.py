@@ -13,3 +13,14 @@ class TaskStatusResponse(BaseModel):
 
 class DeploymentTaskStatusResponse(TaskStatusResponse):
     deployment_id: str
+
+
+class InstanceTaskStatusResponse(TaskStatusResponse):
+    deployment_id: str
+    service_name: str
+    pod_name: str
+
+
+class ServiceTaskStatusResponse(TaskStatusResponse):
+    deployment_id: str
+    service_name: str

@@ -32,7 +32,8 @@ class DeleteInstanceModal(ConfirmModal):
                 pod_name=self.pod_name,
             )
 
-            if response and response.success:
+            if response and response.task_id:
+                # TODO: handle task monitoring
                 # Show success modal after this one closes
                 success_modal = DeleteInstanceSuccessModal(
                     self.service_name, self.pod_name

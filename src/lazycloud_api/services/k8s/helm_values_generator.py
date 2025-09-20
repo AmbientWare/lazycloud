@@ -1,8 +1,3 @@
-"""
-Helm values generator from Docker Compose files.
-Converts compose services to Helm chart values instead of raw Kubernetes manifests.
-"""
-
 from lazycloud_api.config import app_config
 from lazycloud_api.database import db
 from lazycloud_api.database.compose import ComposeDeploymentPydantic

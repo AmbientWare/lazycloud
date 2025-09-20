@@ -42,37 +42,6 @@ class DiffResponse(BaseModel):
     warnings: list[str] | None = None
 
 
-class RestartServiceResult(BaseModel):
-    """Result of a single service restart operation."""
-
-    service: str
-    success: bool
-    message: str
-    resource_type: str
-    resource_name: str
-    output: str | None = None
-    error: str | None = None
-
-
-class RestartResponse(BaseModel):
-    """Response for restart operations."""
-
-    deployment_id: str
-    deployment_name: str
-    service_name: str | None = None  # None for all services
-    success: bool
-    message: str
-    resource_type: str | None = None  # For single service
-    resource_name: str | None = None  # For single service
-    output: str | None = None  # For single service
-    total_services: int | None = None  # For all services
-    successful: int | None = None  # For all services
-    failed: int | None = None  # For all services
-    results: list[RestartServiceResult] | None = (
-        None  # Detailed results for all services
-    )
-
-
 class ValidationResult(BaseModel):
     """Result of a deployment validation operation."""
 

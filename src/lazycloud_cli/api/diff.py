@@ -21,5 +21,5 @@ class DiffAPI(BaseAPI):
             env_keys=env_keys,
         )
 
-        response = self._post(f"{deployment_id}", json=request.model_dump())
+        response = self._post(f"/{deployment_id}", json=request.model_dump())
         return DiffResponse(**response)

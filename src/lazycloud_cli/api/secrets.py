@@ -14,7 +14,7 @@ class SecretsAPI(BaseAPI):
         """Store secrets for a deployment."""
         request = SecretsRequest(secrets_collection=secrets)
         response_data = self._post(
-            f"{deployment_id}",
+            f"/{deployment_id}",
             json=request.model_dump(),
         )
         return SecretsStoredResponse(**response_data)

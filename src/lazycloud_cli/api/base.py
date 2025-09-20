@@ -74,7 +74,7 @@ class BaseAPI:
         json: dict[str, Any] | None = None,
     ) -> Any:
         """Get a resource from the API"""
-        url = self._base_url if not path else f"{self._base_url}/{path}"
+        url = self._base_url if not path else f"{self._base_url}{path}"
         return self._make_request("GET", url, json, params)
 
     def _post(
@@ -84,7 +84,7 @@ class BaseAPI:
         json: dict[str, Any] | None = None,
     ) -> Any:
         """Post a resource to the API"""
-        url = self._base_url if not path else f"{self._base_url}/{path}"
+        url = self._base_url if not path else f"{self._base_url}{path}"
         return self._make_request("POST", url, json, params)
 
     def _put(
@@ -94,7 +94,7 @@ class BaseAPI:
         json: dict[str, Any] | None = None,
     ) -> Any:
         """Put a resource to the API"""
-        url = self._base_url if not path else f"{self._base_url}/{path}"
+        url = self._base_url if not path else f"{self._base_url}{path}"
         return self._make_request("PUT", url, json, params)
 
     def _delete(
@@ -104,7 +104,7 @@ class BaseAPI:
         json: dict[str, Any] | None = None,
     ) -> Any:
         """Delete a resource from the API"""
-        url = self._base_url if not path else f"{self._base_url}/{path}"
+        url = self._base_url if not path else f"{self._base_url}{path}"
         return self._make_request("DELETE", url, json, params)
 
     def _run_with_spinner(
