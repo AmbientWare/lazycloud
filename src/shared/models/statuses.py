@@ -36,16 +36,31 @@ class VolumeStatus(BaseModel):
     """Status information for a volume."""
 
     name: str
-    status: str  # active, pending, error
+    status: str
     mount_path: str | None = None
     size: str | None = None
+
+
+class VolumeStatusSummary(BaseModel):
+    """Simplified volume status for UI display."""
+
+    name: str
+    status: str
 
 
 class NetworkStatus(BaseModel):
     """Status information for a network."""
 
     name: str
-    status: str  # active, pending, error
+    status: str
+    driver: str | None = None
+
+
+class NetworkStatusSummary(BaseModel):
+    """Simplified network status for UI display."""
+
+    name: str
+    status: str
     driver: str | None = None
 
 
@@ -69,29 +84,49 @@ class ServiceStatus(BaseModel):
 
     name: str
     image: str
-    workload_type: WorkloadType  # Deployment, StatefulSet
-    status: KubernetesPhase  # running, pending, stopped, error
+    workload_type: WorkloadType
+    status: KubernetesPhase
     replicas: int = 1
     ready_replicas: int = 0
     pods: list[PodStatus] | None = None
     resources: Resources | None = None
     current_usage: CurrentUsage | None = None
-    ports: list[str] | None = None  # Format: "8080:8080/TCP"
+    ports: list[str] | None = None  # NOTE: Format: "8080:8080/TCP"
     volumes: list[str] | None = None
     hpa: HPAValues | None = None
     healthcheck: HealthCheckValues | None = None
     total_restarts: int = 0
 
 
+class ServiceStatusSummary(BaseModel):
+    """Simplified service status for UI display."""
+
+    name: str
+    status: KubernetesPhase
+    ready_replicas: int
+    total_replicas: int
+    image: str | None = None
+    ports: list[str] | None = None
+    restarts: int = 0
+
+
 class DeploymentStatus(BaseModel):
-    """Status information for a deployment."""
+    """Status information for a deployment - optimized for UI display."""
 
     deployment_id: str
     deployment_name: str
     namespace: str
-    services: list[ServiceStatus]
     status: KubernetesPhase
     ready: bool
     last_updated: datetime
-    volumes: list[VolumeStatus] | None = None
-    networks: list[NetworkStatus] | None = None
+
+    # Summary counts
+    total_services: int
+    ready_services: int
+    total_replicas: int
+    ready_replicas: int
+
+    # NOTE: Only summary data for less data transfer
+    services: list[ServiceStatusSummary]
+    volumes: list[VolumeStatusSummary] | None = None
+    networks: list[NetworkStatusSummary] | None = None

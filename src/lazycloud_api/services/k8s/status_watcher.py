@@ -19,10 +19,11 @@ from shared.models.k8s import (
 from shared.models.statuses import (
     DeploymentStatus,
     KubernetesPhase,
-    NetworkStatus,
+    NetworkStatusSummary,
     PodStatus,
     ServiceStatus,
-    VolumeStatus,
+    ServiceStatusSummary,
+    VolumeStatusSummary,
 )
 
 
@@ -95,6 +96,30 @@ class K8sStatusWatcher:
         """Get the current deployment status with all services."""
         services_list = await self.get_service_statuses_for_deployment()
 
+        # Create service summaries
+        services_summary = []
+        total_replicas = 0
+        ready_replicas = 0
+        ready_services = 0
+
+        for service in services_list:
+            total_replicas += service.replicas
+            ready_replicas += service.ready_replicas
+            if service.ready_replicas == service.replicas:
+                ready_services += 1
+
+            services_summary.append(
+                ServiceStatusSummary(
+                    name=service.name,
+                    status=service.status,
+                    ready_replicas=service.ready_replicas,
+                    total_replicas=service.replicas,
+                    image=service.image,
+                    ports=service.ports,
+                    restarts=service.total_restarts,
+                )
+            )
+
         # Determine overall status
         all_ready = all(s.ready_replicas == s.replicas for s in services_list)
         any_running = any(s.ready_replicas > 0 for s in services_list)
@@ -106,26 +131,24 @@ class K8sStatusWatcher:
         else:
             overall_status = KubernetesPhase.STOPPED
 
-        # Get volumes and networks status
-        volumes = None
+        # Get volumes summaries
+        volumes_summary = None
         if self.helm_values.volumes:
-            volumes = [
-                VolumeStatus(
+            volumes_summary = [
+                VolumeStatusSummary(
                     name=v.name,
                     status="active",  # TODO: Get actual status from K8s
-                    mount_path=v.path if hasattr(v, "path") else None,
-                    size=v.size if hasattr(v, "size") else None,
                 )
                 for v in self.helm_values.volumes
             ]
 
-        networks = None
+        # Get networks summaries
+        networks_summary = None
         if self.helm_values.networks:
-            networks = [
-                NetworkStatus(
+            networks_summary = [
+                NetworkStatusSummary(
                     name=n.name,
                     status="active",  # TODO: Get actual status from K8s
-                    driver=n.driver if hasattr(n, "driver") else None,
                 )
                 for n in self.helm_values.networks
             ]
@@ -136,12 +159,16 @@ class K8sStatusWatcher:
             if "-" in self.namespace
             else self.namespace,
             namespace=self.namespace,
-            services=services_list,
-            volumes=volumes,
-            networks=networks,
             status=overall_status,
             ready=all_ready,
             last_updated=datetime.now(UTC),
+            total_services=len(services_list),
+            ready_services=ready_services,
+            total_replicas=total_replicas,
+            ready_replicas=ready_replicas,
+            services=services_summary,
+            volumes=volumes_summary,
+            networks=networks_summary,
         )
 
     async def _watch_loop(self):

@@ -35,6 +35,8 @@ class DeploymentDetailsContainer:
             f"Deployment Name: {deployment.deployment_name}",
             f"Status:          [{status_color}]{deployment.status.upper()}[/{status_color}]",
             f"Ready:           {'✅ Yes' if deployment.ready else '⏳ No'}",
+            f"Services:        {deployment.ready_services}/{deployment.total_services} ready",
+            f"Replicas:        {deployment.ready_replicas}/{deployment.total_replicas} running",
         ]
 
         if deployment.last_updated:
@@ -48,13 +50,16 @@ class DeploymentDetailsContainer:
         content = []
         for service in deployment.services:
             status_color = get_status_color(service.status)
-            ready_replicas = service.ready_replicas
-            replicas = service.replicas
 
-            content.append(
+            service_line = (
                 f"● {service.name}: [{status_color}]{service.status.upper()}[/{status_color}] "
-                f"({ready_replicas}/{replicas} replicas)"
+                f"({service.ready_replicas}/{service.total_replicas} replicas)"
             )
+
+            if service.restarts > 0:
+                service_line += f" - {service.restarts} restarts"
+
+            content.append(service_line)
         return content
 
     def _build_volumes_content(self, deployment: DeploymentStatus) -> list[str]:
