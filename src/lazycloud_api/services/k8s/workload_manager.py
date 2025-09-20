@@ -30,7 +30,7 @@ class RestartAllResult(BaseModel):
     results: list[RestartResult]
 
 
-class WorkloadOperations:
+class WorkloadManager:
     """Handles Kubernetes workload operations like restart, scale, etc."""
 
     def restart_workload(
@@ -78,13 +78,10 @@ class WorkloadOperations:
 
     def restart_service(self, service: ServiceValues, namespace: str) -> RestartResult:
         """Restart a service based on its configuration."""
-        # Determine resource type
-        resource_type = self._determine_workload_type(service)
 
-        # Get resource name
-        resource_name = service.resourceName
-
-        return self.restart_workload(resource_type, resource_name, namespace)
+        return self.restart_workload(
+            service.workloadType.value.lower(), service.resourceName, namespace
+        )
 
     def restart_all_services(
         self, helm_values: HelmValues, namespace: str
@@ -172,14 +169,12 @@ class WorkloadOperations:
     def _determine_workload_type(self, service: ServiceValues) -> str:
         """Determine the Kubernetes workload type from service configuration."""
         # Explicit workload type
+        logger.info(
+            f"Determining workload type for service {service.name} for workload type {service.workloadType}"
+        )
         workload_type = service.workloadType
         if workload_type in ["statefulset", "deployment", "daemonset"]:
             return workload_type
-
-        # Check if service has volumes (indicates statefulset)
-        volumes = service.volumes
-        if volumes:
-            return WorkloadType.STATEFULSET
 
         # Default to deployment
         return WorkloadType.DEPLOYMENT

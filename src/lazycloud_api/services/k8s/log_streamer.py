@@ -1,7 +1,3 @@
-"""
-Kubernetes log streamer for real-time log updates.
-"""
-
 import asyncio
 from typing import Awaitable, Callable
 
@@ -64,10 +60,12 @@ class K8sLogStreamer:
                 *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
             )
 
-            pod_info = f"pod {self.pod_name}" if self.pod_name else f"service {self.service_name}"
-            logger.info(
-                f"Started log streaming for {pod_info} in {self.namespace}"
+            pod_info = (
+                f"pod {self.pod_name}"
+                if self.pod_name
+                else f"service {self.service_name}"
             )
+            logger.info(f"Started log streaming for {pod_info} in {self.namespace}")
 
             # Read stdout line by line
             if self._process.stdout:
@@ -134,5 +132,7 @@ class K8sLogStreamer:
             except Exception as e:
                 logger.error(f"Error stopping log stream: {e}")
 
-        pod_info = f"pod {self.pod_name}" if self.pod_name else f"service {self.service_name}"
+        pod_info = (
+            f"pod {self.pod_name}" if self.pod_name else f"service {self.service_name}"
+        )
         logger.info(f"Stopped log streaming for {pod_info}")

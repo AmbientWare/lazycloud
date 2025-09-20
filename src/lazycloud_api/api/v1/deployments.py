@@ -18,7 +18,6 @@ from lazycloud_api.services.k8s import create_ns_name
 from lazycloud_api.services.k8s.status_watcher import K8sStatusWatcher
 from shared.models.deployments import DeploymentStates
 from shared.models.statuses import DeploymentStatus, KubernetesPhase, TaskStatus
-from shared.models.tasks import DeploymentTaskStatusResponse
 from shared.requests.deployments import (
     DeploymentCreateRequest,
 )
@@ -27,6 +26,7 @@ from shared.responses.deployments import (
     DeploymentResponse,
     DeploymentStatusResponse,
 )
+from shared.responses.tasks import DeploymentTaskStatusResponse
 
 deployments_router = APIRouter(prefix="/deployments", tags=["deployments"])
 
@@ -147,7 +147,7 @@ async def get_deployment_status(
     return DeploymentStatusResponse(status=deployment_status)
 
 
-@deployments_router.post("/", response_model=DeploymentTaskStatusResponse)
+@deployments_router.post("", response_model=DeploymentTaskStatusResponse)
 async def create_deployment(
     request: DeploymentCreateRequest,
     current_user: UserData = Depends(get_current_active_user),
