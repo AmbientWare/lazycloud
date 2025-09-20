@@ -30,6 +30,3 @@ class TasksAPI(BaseAPI):
 
             # Task still in progress, wait and check again
             time.sleep(poll_interval)
-
-
-tasks_api = TasksAPI()

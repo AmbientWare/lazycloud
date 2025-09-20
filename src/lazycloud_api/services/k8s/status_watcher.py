@@ -1,7 +1,3 @@
-"""
-Kubernetes status watcher for real-time updates.
-"""
-
 import asyncio
 import json
 from datetime import UTC, datetime
@@ -15,10 +11,10 @@ from shared.models.helm import (
     HelmValues,
     ServiceValues,
 )
-from shared.models.kubectl import (
-    KubectlDeployment,
-    KubectlPodList,
-    KubectlStatefulSet,
+from shared.models.k8s import (
+    Deployment,
+    PodList,
+    StatefulSet,
 )
 from shared.models.statuses import KubernetesPhase, PodStatus, ServiceStatus
 from shared.responses.services import ServiceStatusResponse
@@ -208,9 +204,9 @@ class K8sStatusWatcher:
             # Parse using appropriate Pydantic model
             kind = k8s_raw_json.get("kind")
             if kind == "Deployment":
-                k8s_resource = KubectlDeployment(**k8s_raw_json)
+                k8s_resource = Deployment(**k8s_raw_json)
             elif kind == "StatefulSet":
-                k8s_resource = KubectlStatefulSet(**k8s_raw_json)
+                k8s_resource = StatefulSet(**k8s_raw_json)
             else:
                 raise ValueError(f"Unsupported resource type: {kind}")
 
@@ -295,7 +291,7 @@ class K8sStatusWatcher:
                 pods_json = json.loads(stdout.decode())
 
                 # Parse using Pydantic model
-                pod_list = KubectlPodList(**pods_json)
+                pod_list = PodList(**pods_json)
                 pods = []
 
                 for pod in pod_list.items:

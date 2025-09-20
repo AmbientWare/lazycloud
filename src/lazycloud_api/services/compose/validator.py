@@ -9,7 +9,7 @@ from lazycloud_api.services.k8s.generators.converters import (
     sanitize_name,
 )
 from shared.models.compose import ComposeFile
-from shared.models.helm import ValidationError
+from shared.models.validation import ValidationError
 from shared.responses.deployments import ValidationResult
 
 

@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from lazycloud_api.api.security import require_admin
 from lazycloud_api.database import db
 from lazycloud_api.database.secrets import SecretPydantic
-from shared.models.secrets import SecretsRequest
+from shared.requests.secrets import SecretsRequest
 from shared.responses.secrets import SecretsStoredResponse
 
 secrets_router = APIRouter(

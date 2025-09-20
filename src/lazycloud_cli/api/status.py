@@ -1,7 +1,3 @@
-"""
-API client for real-time status operations.
-"""
-
 import json
 from typing import Any, Callable
 
@@ -25,11 +21,9 @@ class StatusAPI(BaseWsAPI):
         async def on_connect(websocket):
             if service_name:
                 msg = {"type": "get_status", "service": service_name}
-                print(f"DEBUG: Sending service-specific status request: {msg}")
                 await websocket.send(json.dumps(msg))
             else:
                 msg = {"type": "get_status"}
-                print(f"DEBUG: Sending general status request: {msg}")
                 await websocket.send(json.dumps(msg))
 
         await self.connect_with_retry(
@@ -41,6 +35,3 @@ class StatusAPI(BaseWsAPI):
         )
 
         return self
-
-
-status_api = StatusAPI()

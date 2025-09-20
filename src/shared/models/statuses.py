@@ -25,8 +25,11 @@ class KubernetesPhase(StrEnum):
     RUNNING = "Running"
     PARTIALLY_RUNNING = "Partially Running"
     PENDING = "Pending"
+    SUCCEEDED = "Succeeded"
+    FAILED = "Failed"
     STOPPED = "Stopped"
     ERROR = "Error"
+    UNKNOWN = "Unknown"
 
 
 class PodStatus(BaseModel):

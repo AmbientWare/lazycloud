@@ -1,7 +1,3 @@
-"""
-API client for logs operations.
-"""
-
 from typing import Any, Callable
 
 from lazycloud_cli.api.base_ws import BaseWsAPI
@@ -32,6 +28,3 @@ class LogsAPI(BaseWsAPI):
             on_error=on_error,
             message_type="log",
         )
-
-
-logs_api = LogsAPI()

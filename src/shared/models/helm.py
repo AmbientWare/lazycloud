@@ -21,12 +21,6 @@ class CurrentUsage(BaseModel):
     memory: str | None = None
 
 
-class VolumeMountExtended(VolumeMount):
-    """Extended volume mount with size for Helm values."""
-
-    size: str = "1Gi"
-
-
 class MetricsValues(BaseModel):
     """Model for metrics/monitoring configuration."""
 
@@ -76,13 +70,6 @@ class HealthCheckValues(BaseModel):
     readinessProbe: ProbeConfig | None = None
 
 
-class PortConfigExtended(PortConfig):
-    """Extended port config for Helm values that supports port ranges."""
-
-    port: int | str
-    target_port: int | str = Field(None, alias="targetPort")
-
-
 class IngressTLS(BaseModel):
     """Model for ingress TLS configuration."""
 
@@ -106,31 +93,6 @@ class ParsedPort(BaseModel):
     target: int | str
     protocol: str = "tcp"
     ip: str | None = None
-
-
-class ValidationError(BaseModel):
-    """Represents a validation error with context."""
-
-    error_type: str
-    message: str
-    service: str | None = None
-    field: str | None = None
-    suggestion: str | None = None
-
-    def __str__(self) -> str:
-        parts = []
-        if self.service:
-            parts.append(f"Service '{self.service}'")
-        if self.field:
-            parts.append(f"field '{self.field}'")
-
-        prefix = " - ".join(parts) + ": " if parts else ""
-        result = f"{prefix}{self.message}"
-
-        if self.suggestion:
-            result += f"\n  Suggestion: {self.suggestion}"
-
-        return result
 
 
 class ImageConfig(BaseModel):
@@ -212,8 +174,8 @@ class ServiceValues(BaseModel):
     serviceName: str | None = None
     command: list[str] | None = None
     environment: dict[str, str] | None = None
-    ports: list[PortConfigExtended] | None = None
-    volumes: list[VolumeMountExtended] | None = None
+    ports: list[PortConfig] | None = None
+    volumes: list[VolumeMount] | None = None
     secrets: list[ServiceSecretMount] | None = None
     restartPolicy: str = RestartPolicy.ALWAYS.value
     replicas: int | None = None

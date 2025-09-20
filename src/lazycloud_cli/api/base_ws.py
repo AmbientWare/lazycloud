@@ -1,7 +1,3 @@
-"""
-Base class for WebSocket API clients.
-"""
-
 import asyncio
 import json
 from typing import Any, Callable

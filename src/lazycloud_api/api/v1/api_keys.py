@@ -1,16 +1,19 @@
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
 
 from lazycloud_api.api.security import require_admin
 from lazycloud_api.database import db
 from lazycloud_api.database.api_keys import (
-    ApiKeyExpirationDays,
     ApiKeyPydantic,
     ApiKeyRole,
 )
 from lazycloud_api.database.utils import (
     generate_api_key,
     generate_api_key_expires_at,
+)
+from shared.requests.api_keys import (
+    CreateApiKeyRequest,
+    DeleteApiKeyRequest,
+    UpdateApiKeyRequest,
 )
 
 api_keys_router = APIRouter(
@@ -34,12 +37,6 @@ async def get_api_keys(
     return api_keys
 
 
-class CreateApiKeyRequest(BaseModel):
-    name: str
-    user_id: str
-    expires_at: ApiKeyExpirationDays
-
-
 @api_keys_router.post("")
 async def create_api_key(
     request: CreateApiKeyRequest,
@@ -57,11 +54,6 @@ async def create_api_key(
         raise HTTPException(status_code=404, detail="Unable to create api key")
 
     return new_api_key
-
-
-class UpdateApiKeyRequest(BaseModel):
-    user_id: str
-    expires_at: ApiKeyExpirationDays
 
 
 @api_keys_router.put("/{api_key_id}")
@@ -84,11 +76,6 @@ async def update_api_key(
         raise HTTPException(status_code=404, detail="Unable to update api key")
 
     return new_api_key
-
-
-class DeleteApiKeyRequest(BaseModel):
-    api_key_id: int | None = None
-    user_id: str | None = None
 
 
 @api_keys_router.delete("")

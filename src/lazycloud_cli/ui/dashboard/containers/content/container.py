@@ -43,9 +43,10 @@ class ContentContainer(Container):
         self.border_title = "[3] Details"
         self._deployment_view = None
         self._service_view = None
-        self._additional_border_subtitle = None
         # NOTE: faster reactivity than has_focus
         self._show_border_subtitle = False
+        self._service_subtitle = "r: Restart"
+        self._logs_subtitle = "4: Instances"
 
     def compose(self) -> ComposeResult:
         """Create the content area."""
@@ -99,14 +100,17 @@ class ContentContainer(Container):
     def _update_border_subtitle(self) -> None:
         current_time = datetime.now().strftime("%H:%M:%S")
         time_subtitle = f"🕐 {current_time}"
+        navigation_subtitle = "1: Deployments • 2: Services • 3: Details"
 
-        if self._additional_border_subtitle and self._show_border_subtitle:
-            self.border_subtitle = (
-                f"{self._additional_border_subtitle} • {time_subtitle}"
-            )
-        else:
-            self.border_subtitle = time_subtitle
+        parts = [navigation_subtitle]
 
+        if self.display_mode == DisplayMode.SERVICE:
+            if self._show_border_subtitle and self._service_subtitle:
+                parts.insert(0, self._service_subtitle)
+            parts.append(self._logs_subtitle)
+
+        parts.append(time_subtitle)
+        self.border_subtitle = " • ".join(parts)
         self.refresh()
 
     async def watch_deployment(self, _old_value, new_value) -> None:
@@ -131,7 +135,6 @@ class ContentContainer(Container):
             return
 
         self.border_title = f"[3] Deployment Details - {self.deployment.name}"
-        self._additional_border_subtitle = None
         self._update_border_subtitle()
 
         if self._service_view:
@@ -157,7 +160,6 @@ class ContentContainer(Container):
             return
 
         self.border_title = f"[3] Service Details - {self.service.name}"
-        self._additional_border_subtitle = "r: Restart"
         self._update_border_subtitle()
 
         if self._service_view:
@@ -179,7 +181,6 @@ class ContentContainer(Container):
             self._service_view = None
 
         self.border_title = "[3] Details"
-        self._additional_border_subtitle = None
         self._update_border_subtitle()
 
         scroll = self.query_one(VerticalScroll)

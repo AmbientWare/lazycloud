@@ -1,5 +1,8 @@
 from textual.widgets import DataTable
 
+from lazycloud_cli.ui.dashboard.containers.content.service_details.delete_instance_modal import (
+    DeleteInstanceModal,
+)
 from lazycloud_cli.ui.dashboard.containers.content.service_details.logs_modal import (
     LogViewerModal,
 )
@@ -11,10 +14,16 @@ from shared.models.statuses import PodStatus
 class PodTable(DataTable):
     """Custom DataTable for pod selection that handles its own events."""
 
+    BINDINGS = [
+        ("d", "delete_instance", "Delete Instance"),
+        ("l", "show_logs", "Show Logs"),
+    ]
+
     def __init__(self, deployment_id: str, service_name: str, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.deployment_id = deployment_id
         self.service_name = service_name
+        self.selected_pod_name = None
         self.user_has_interacted = False
         self.can_focus = True
         self.cursor_type = "row"
@@ -33,6 +42,33 @@ class PodTable(DataTable):
         self.styles.height = "auto"
         self.styles.max_height = "50%"
 
+    def action_delete_instance(self) -> None:
+        """Handle the delete instance action."""
+        # exit for logging purposes
+        if (
+            not self.deployment_id
+            or not self.service_name
+            or not self.selected_pod_name
+        ):
+            return
+
+        modal = DeleteInstanceModal(
+            service_name=self.service_name,
+            deployment_id=self.deployment_id,
+            pod_name=self.selected_pod_name,
+        )
+        self.app.push_screen(modal)
+
+    def action_show_logs(self) -> None:
+        """Handle the show logs action."""
+        if self.selected_pod_name:
+            modal = LogViewerModal(
+                deployment_id=self.deployment_id,
+                service_name=self.service_name,
+                pod_name=self.selected_pod_name,
+            )
+            self.app.push_screen(modal)
+
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Handle row selection and open log modal."""
         if event.row_key:
@@ -49,7 +85,9 @@ class PodTable(DataTable):
         """Handle focus event."""
         border_style, border_color = theme.get_border(focused=True)
         self.styles.border = (border_style, border_color)
-        self.border_subtitle = "↑↓ Navigate Instances • ↵ Show Logs"
+        self.border_subtitle = (
+            "↑↓ Navigate Instances • l: Show Logs • d: Delete Instance"
+        )
 
     def on_blur(self) -> None:
         """Handle blur event."""
@@ -57,9 +95,11 @@ class PodTable(DataTable):
         self.styles.border = (border_style, border_color)
         self.border_subtitle = ""
 
-    def on_data_table_row_highlighted(self, _: DataTable.RowHighlighted) -> None:
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         """Handle row highlight (cursor movement)."""
         self.user_has_interacted = True
+        if event.row_key:
+            self.selected_pod_name = event.row_key.value
 
     def update_pods(self, pods: list[PodStatus]) -> None:
         """Update the table with new pod data."""
