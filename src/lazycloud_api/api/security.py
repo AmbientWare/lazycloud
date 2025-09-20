@@ -1,18 +1,13 @@
 from fastapi import Depends, HTTPException, WebSocket, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel
 
 from lazycloud_api.config import ENVIRONMENT, app_config
 from lazycloud_api.database import db
 from lazycloud_api.database.api_keys import ApiKeyRole
 from lazycloud_api.database.utils import api_key_is_expired
+from shared.models.users import UserData
 
 security = HTTPBearer()
-
-
-class UserData(BaseModel):
-    user_id: str
-    role: ApiKeyRole
 
 
 async def get_current_user(

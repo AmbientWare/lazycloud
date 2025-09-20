@@ -12,8 +12,11 @@ from slowapi.util import get_remote_address
 
 from lazycloud_api.api.v1.api_keys import api_keys_router
 from lazycloud_api.api.v1.deployments import deployments_router
+from lazycloud_api.api.v1.diff import diff_router
 from lazycloud_api.api.v1.general import cli_version_router, health_router
+from lazycloud_api.api.v1.instances import instances_router
 from lazycloud_api.api.v1.secrets import secrets_router
+from lazycloud_api.api.v1.services import services_router
 from lazycloud_api.api.v1.tasks import tasks_router
 from lazycloud_api.api.v1.users import users_router
 from lazycloud_api.api.v1.ws import ws_router
@@ -42,8 +45,8 @@ async def lifespan(app: FastAPI):
 
 # create a fastapi app
 app = FastAPI(
-    title="Machines API",
-    description="API for managing machines",
+    title="LazyCloud API",
+    description="API for managing LazyCloud",
     version="1.0.0",
     openapi_url="/openapi.json",
     docs_url="/docs",
@@ -75,6 +78,9 @@ versionsed_routes.include_router(tasks_router)
 versionsed_routes.include_router(deployments_router)
 versionsed_routes.include_router(ws_router)
 versionsed_routes.include_router(secrets_router)
+versionsed_routes.include_router(services_router)
+versionsed_routes.include_router(instances_router)
+versionsed_routes.include_router(diff_router)
 app.include_router(versionsed_routes)
 
 # include non versioned routes that are not part of the main api

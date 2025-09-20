@@ -1,0 +1,22 @@
+from pydantic import BaseModel, Field
+
+
+class DeploymentCreateRequest(BaseModel):
+    compose_yaml: str = Field(..., description="Docker Compose YAML content")
+    name: str | None = Field(
+        None,
+        description="Unique deployment name for updates",
+        pattern="^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+        max_length=63,
+    )
+    secrets: bool = Field(False, description="Whether to wait for secrets to be stored")
+
+
+class DiffRequest(BaseModel):
+    compose_yaml: str = Field(..., description="New Docker Compose YAML content")
+    deployment_name: str | None = Field(
+        None, description="Deployment name (required when deployment_id is 'new')"
+    )
+    env_keys: list[str] = Field(
+        default_factory=list, description="List of environment variable keys"
+    )

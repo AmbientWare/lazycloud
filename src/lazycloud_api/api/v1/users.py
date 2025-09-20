@@ -1,16 +1,18 @@
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
 from datetime import datetime, timezone
 
-from lazycloud_api.api.security import get_current_active_user, UserData, require_admin
+from fastapi import APIRouter, Depends, HTTPException
+
+from lazycloud_api.api.security import UserData, get_current_active_user, require_admin
 from lazycloud_api.database import db
-from lazycloud_api.database.usage import UsagePydantic
 from lazycloud_api.database.api_keys import (
+    ApiKeyExpirationDays,
     ApiKeyPydantic,
     ApiKeyRole,
-    ApiKeyExpirationDays,
 )
+from lazycloud_api.database.usage import UsagePydantic
 from lazycloud_api.database.utils import generate_api_key, generate_api_key_expires_at
+from shared.requests.users import OnboardingRequest
+from shared.responses.users import OnboardingResponse
 
 users_router = APIRouter(prefix="/users", tags=["users"])
 
@@ -21,14 +23,6 @@ async def current_user(
 ) -> str:
     """Used to return the current user's id. This is typically used when user requests with an api key"""
     return current_user.user_id
-
-
-class OnboardingRequest(BaseModel):
-    user_id: str
-
-
-class OnboardingResponse(BaseModel):
-    success: bool
 
 
 @users_router.post("/onboarding")

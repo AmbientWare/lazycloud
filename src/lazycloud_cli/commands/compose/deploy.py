@@ -308,7 +308,7 @@ def _show_and_confirm_changes(
         compose_data = yaml.safe_load(compose_yaml)
         env_keys = _extract_env_variables(compose_data, env_files_content).keys()
 
-        diff_response = api.deployments.diff_deployment(
+        diff_response = api.diff.get_deployment_diff(
             deployment_id=deployment_id,
             compose_yaml=compose_yaml,
             deployment_name=deployment_name_param,

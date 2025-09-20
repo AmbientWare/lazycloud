@@ -19,6 +19,7 @@ from lazycloud_api.services.k8s.helm_manager import (
     HelmDeploymentConfig,
     HelmManager,
 )
+from lazycloud_api.services.k8s.pod_manager import KubernetesPodManager
 from lazycloud_api.services.k8s.helm_values_generator import HelmValuesGenerator
 from shared.models.deployments import DeploymentStates
 from shared.models.helm import HelmNamespaceValues, NamespaceConfig
@@ -255,3 +256,68 @@ async def destroy_compose_task(deployment_id: str, user_id: str) -> Dict[str, An
             deployment_id, user_id, DeploymentStates.FAILED, "Deletion failed", str(e)
         )
         raise
+
+
+@task(on_completion=[_print_output])
+async def delete_instance_task(
+    deployment_id: str, service_name: str, pod_name: str, user_id: str
+) -> Dict[str, Any]:
+    """Delete a specific instance (pod) in a deployment."""
+    logger.info(
+        f"Starting deletion of instance {pod_name} in deployment {deployment_id} for service {service_name}"
+    )
+
+    # Get the deployment
+    deployment = await db.compose_deployments.aget_by_id(deployment_id)
+    if not deployment:
+        raise Exception(f"Deployment {deployment_id} not found")
+
+    if deployment.user_id != user_id:
+        raise Exception(f"User {user_id} not authorized for deployment {deployment_id}")
+
+    # Validate service exists in deployment
+    helm_values = deployment.helm_values
+    if not helm_values or not helm_values.services:
+        raise Exception("Deployment does not have service configuration")
+
+    service = next((s for s in helm_values.services if s.name == service_name), None)
+    if not service:
+        raise Exception(f"Service '{service_name}' not found in deployment")
+
+    namespace = deployment.namespace
+    resource_name = service.resourceName
+
+    # Initialize pod manager
+    pod_manager = KubernetesPodManager()
+
+    # Verify pod ownership before deletion
+    logger.info(f"Verifying pod {pod_name} belongs to service {service_name}")
+    verification_result = pod_manager.verify_pod_ownership(
+        pod_name=pod_name,
+        namespace=namespace,
+        service_name=service_name,
+        resource_name=resource_name,
+    )
+
+    if not verification_result.success:
+        raise Exception(verification_result.error or "Pod ownership verification failed")
+
+    # Delete the pod
+    logger.info(f"Deleting pod {pod_name} in namespace {namespace}")
+    delete_result = pod_manager.delete_pod(
+        pod_name=pod_name,
+        namespace=namespace,
+        grace_period=30,  # Give 30 seconds for graceful shutdown
+    )
+
+    if not delete_result.success:
+        raise Exception(delete_result.error or "Failed to delete pod")
+
+    logger.info(f"Successfully deleted instance {pod_name}")
+
+    return {
+        "deployment_id": deployment_id,
+        "service_name": service_name,
+        "pod_name": pod_name,
+        "message": f"Successfully deleted instance {pod_name}",
+    }

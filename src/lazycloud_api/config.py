@@ -32,7 +32,7 @@ class AppConfig(BaseModel):
     LOG_LEVEL: str = "DEBUG" if ENV == ENVIRONMENT.DEV else "INFO"
 
     # API Configuration
-    PROJECT_NAME: str = "Machines API"
+    PROJECT_NAME: str = "LazyCloud API"
     PROJECT_VERSION: str = "1.0.0"
     API_VERSION: str = os.getenv("API_VERSION", "/v1")
 

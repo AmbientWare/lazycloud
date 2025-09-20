@@ -1,7 +1,3 @@
-"""
-Pydantic models for Docker Compose v3 files.
-"""
-
 from pydantic import BaseModel, field_validator
 
 from shared.models.k8s import RestartPolicy

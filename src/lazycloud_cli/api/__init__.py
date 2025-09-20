@@ -1,21 +1,27 @@
-from lazycloud_cli.api.deployments import deployments_api
-from lazycloud_cli.api.logs import logs_api
-from lazycloud_cli.api.secrets import secrets_api
-from lazycloud_cli.api.status import status_api
-from lazycloud_cli.api.tasks import tasks_api
-from lazycloud_cli.api.users import users_api
-from lazycloud_cli.api.versions import versions_api
+from lazycloud_cli.api.deployments import DeploymentsAPI
+from lazycloud_cli.api.diff import DiffAPI
+from lazycloud_cli.api.instances import InstancesAPI
+from lazycloud_cli.api.logs import LogsAPI
+from lazycloud_cli.api.secrets import SecretsAPI
+from lazycloud_cli.api.services import ServicesAPI
+from lazycloud_cli.api.status import StatusAPI
+from lazycloud_cli.api.tasks import TasksAPI
+from lazycloud_cli.api.users import UsersAPI
+from lazycloud_cli.api.versions import VersionsAPI
 
 
 class API:
     def __init__(self):
-        self.users = users_api
-        self.tasks = tasks_api
-        self.deployments = deployments_api
-        self.versions = versions_api
-        self.secrets = secrets_api
-        self.logs = logs_api
-        self.status = status_api
+        self.users = UsersAPI()
+        self.tasks = TasksAPI()
+        self.deployments = DeploymentsAPI()
+        self.versions = VersionsAPI()
+        self.secrets = SecretsAPI()
+        self.logs = LogsAPI()
+        self.status = StatusAPI()
+        self.diff = DiffAPI()
+        self.instances = InstancesAPI()
+        self.services = ServicesAPI()
 
 
 api = API()

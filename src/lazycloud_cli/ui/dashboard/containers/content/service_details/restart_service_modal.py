@@ -25,7 +25,7 @@ class RestartServiceModal(ConfirmModal):
     def handle_restart(self):
         """Handle the restart action."""
         try:
-            response = api.deployments.restart_service(
+            response = api.services.restart_service(
                 deployment_id=self.deployment_id,
                 service_name=self.service_name,
             )
