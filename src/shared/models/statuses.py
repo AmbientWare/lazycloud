@@ -32,6 +32,23 @@ class KubernetesPhase(StrEnum):
     UNKNOWN = "Unknown"
 
 
+class VolumeStatus(BaseModel):
+    """Status information for a volume."""
+
+    name: str
+    status: str  # active, pending, error
+    mount_path: str | None = None
+    size: str | None = None
+
+
+class NetworkStatus(BaseModel):
+    """Status information for a network."""
+
+    name: str
+    status: str  # active, pending, error
+    driver: str | None = None
+
+
 class PodStatus(BaseModel):
     """Status information for a single pod/instance."""
 
@@ -73,8 +90,8 @@ class DeploymentStatus(BaseModel):
     deployment_name: str
     namespace: str
     services: list[ServiceStatus]
-    volumes: dict[str, str] | None = None  # volume_name -> status
-    networks: dict[str, str] | None = None  # network_name -> status
-    status: KubernetesPhase  # running, partially running, stopped
+    status: KubernetesPhase
     ready: bool
     last_updated: datetime
+    volumes: list[VolumeStatus] | None = None
+    networks: list[NetworkStatus] | None = None

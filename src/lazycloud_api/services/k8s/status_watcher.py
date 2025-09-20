@@ -1,7 +1,7 @@
 import asyncio
 import json
 from datetime import UTC, datetime
-from typing import Any, Awaitable, Callable
+from typing import Awaitable, Callable
 
 from loguru import logger
 
@@ -16,8 +16,14 @@ from shared.models.k8s import (
     PodList,
     StatefulSet,
 )
-from shared.models.statuses import KubernetesPhase, PodStatus, ServiceStatus
-from shared.responses.services import ServiceStatusResponse
+from shared.models.statuses import (
+    DeploymentStatus,
+    KubernetesPhase,
+    NetworkStatus,
+    PodStatus,
+    ServiceStatus,
+    VolumeStatus,
+)
 
 
 class K8sStatusWatcher:
@@ -28,8 +34,8 @@ class K8sStatusWatcher:
         deployment_id: str,
         namespace: str,
         helm_values: HelmValues,
-        callback: Callable[[dict], None]
-        | Callable[[dict], Awaitable[None]]
+        callback: Callable[[DeploymentStatus], None]
+        | Callable[[DeploymentStatus], Awaitable[None]]
         | None = None,
     ):
         """Initialize the status watcher."""
@@ -39,7 +45,7 @@ class K8sStatusWatcher:
         self.callback = callback
         self._watch_task: asyncio.Task | None = None
         self._running = False
-        self._current_status: dict[str, Any] = {}
+        self._current_status: DeploymentStatus | None = None
 
     async def start(self):
         """Start watching Kubernetes resources."""
@@ -63,7 +69,16 @@ class K8sStatusWatcher:
 
         logger.info(f"Stopped K8s watcher for deployment {self.deployment_id}")
 
-    async def get_service_status(self, service_name: str) -> dict | None:
+    async def get_service_statuses_for_deployment(self) -> list[ServiceStatus]:
+        """Get the status of all services in a deployment."""
+        services_list: list[ServiceStatus] = []
+        for service_config in self.helm_values.services:
+            status = await self._get_service_status(service_config)
+            services_list.append(status)
+
+        return services_list
+
+    async def get_service_status(self, service_name: str) -> ServiceStatus | None:
         """Get the status of a specific service with pod details."""
         # Check if service exists
         for s in self.helm_values.services:
@@ -74,79 +89,60 @@ class K8sStatusWatcher:
             return None
 
         # Get service status (which includes pods)
-        service_status = await self._get_service_status(service)
+        return await self._get_service_status(service)
 
-        # Create response
-        response = ServiceStatusResponse(
+    async def get_deployment_status(self) -> DeploymentStatus:
+        """Get the current deployment status with all services."""
+        services_list = await self.get_service_statuses_for_deployment()
+
+        # Determine overall status
+        all_ready = all(s.ready_replicas == s.replicas for s in services_list)
+        any_running = any(s.ready_replicas > 0 for s in services_list)
+
+        if all_ready:
+            overall_status = KubernetesPhase.RUNNING
+        elif any_running:
+            overall_status = KubernetesPhase.PARTIALLY_RUNNING
+        else:
+            overall_status = KubernetesPhase.STOPPED
+
+        # Get volumes and networks status
+        volumes = None
+        if self.helm_values.volumes:
+            volumes = [
+                VolumeStatus(
+                    name=v.name,
+                    status="active",  # TODO: Get actual status from K8s
+                    mount_path=v.path if hasattr(v, "path") else None,
+                    size=v.size if hasattr(v, "size") else None,
+                )
+                for v in self.helm_values.volumes
+            ]
+
+        networks = None
+        if self.helm_values.networks:
+            networks = [
+                NetworkStatus(
+                    name=n.name,
+                    status="active",  # TODO: Get actual status from K8s
+                    driver=n.driver if hasattr(n, "driver") else None,
+                )
+                for n in self.helm_values.networks
+            ]
+
+        return DeploymentStatus(
             deployment_id=self.deployment_id,
             deployment_name=self.namespace.split("-", 1)[-1]
             if "-" in self.namespace
             else self.namespace,
             namespace=self.namespace,
-            service=service_status,
-            pods=service_status.pods or [],
+            services=services_list,
+            volumes=volumes,
+            networks=networks,
+            status=overall_status,
+            ready=all_ready,
             last_updated=datetime.now(UTC),
         )
-
-        # Convert to dict with JSON-serializable values
-        return response.model_dump(mode="json")
-
-    async def get_current_status(self) -> dict:
-        """Get the current status of all resources."""
-        services_status = {}
-        pods_by_service = {}
-
-        # Process each service
-        for service_config in self.helm_values.services:
-            status = await self._get_service_status(service_config)
-
-            # Store service status as dict
-            services_status[service_config.name] = status.model_dump(mode="json")
-
-            # Store pods if available
-            if status.pods:
-                pods_by_service[service_config.name] = [
-                    pod.model_dump() for pod in status.pods
-                ]
-
-        # Determine overall status
-        all_ready = all(
-            s["ready_replicas"] == s["replicas"] for s in services_status.values()
-        )
-        any_running = any(s["ready_replicas"] > 0 for s in services_status.values())
-
-        if all_ready:
-            overall_status = "running"
-        elif any_running:
-            overall_status = "partially running"
-        else:
-            overall_status = "stopped"
-
-        # Get volumes and networks status (simplified - just mark as active if they exist)
-        volumes = (
-            {v.name: "active" for v in (self.helm_values.volumes or [])}
-            if self.helm_values.volumes
-            else None
-        )
-        networks = (
-            {n.name: "active" for n in (self.helm_values.networks or [])}
-            if self.helm_values.networks
-            else None
-        )
-
-        return {
-            "deployment_id": self.deployment_id,
-            "deployment_name": self.namespace.split("-", 1)[-1]
-            if "-" in self.namespace
-            else self.namespace,
-            "services": services_status,
-            "pods": pods_by_service,
-            "volumes": volumes,
-            "networks": networks,
-            "status": overall_status,
-            "ready": all_ready,
-            "last_updated": datetime.now(UTC).isoformat(),
-        }
 
     async def _watch_loop(self):
         """Main watch loop that monitors for changes."""
@@ -155,7 +151,7 @@ class K8sStatusWatcher:
         while self._running:
             try:
                 # Get current status
-                new_status = await self.get_current_status()
+                new_status = await self.get_deployment_status()
 
                 # Check if status changed
                 if new_status != self._current_status:
@@ -343,10 +339,8 @@ class K8sStatusWatcher:
                         age=age_str,
                         node=pod.spec.scheduler_name or "",
                         ip=pod.status.pod_ip if pod.status else "",
-                        cpu_usage=pod_metrics.get("cpu", "N/A")
-                        if pod_metrics
-                        else "N/A",
-                        memory_usage=pod_metrics.get("memory", "N/A")
+                        cpu_usage=pod_metrics.get("cpu") if pod_metrics else "N/A",
+                        memory_usage=pod_metrics.get("memory")
                         if pod_metrics
                         else "N/A",
                     )
@@ -411,7 +405,7 @@ class K8sStatusWatcher:
             else None,
         )
 
-    async def _get_pod_metrics(self, pod_name: str) -> dict | None:
+    async def _get_pod_metrics(self, pod_name: str) -> dict[str, str] | None:
         """Get resource metrics for a pod."""
         try:
             cmd = [
