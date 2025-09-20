@@ -58,10 +58,10 @@ class DeploymentDetailsContainer:
         return content
 
     def _build_volumes_content(self, deployment: DeploymentStatus) -> list[str]:
-        return [f"● {name} - {status}" for name, status in deployment.volumes.items()]
+        return [f"● {v.name} - {v.status}" for v in deployment.volumes]
 
     def _build_networks_content(self, deployment: DeploymentStatus) -> list[str]:
-        return [f"● {name} - {status}" for name, status in deployment.networks.items()]
+        return [f"● {n.name} - {n.status}" for n in deployment.networks]
 
     def _create_section(self, title: str, content: list[str]) -> None:
         section = SectionContainer(title)

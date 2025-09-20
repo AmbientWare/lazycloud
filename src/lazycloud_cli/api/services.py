@@ -1,5 +1,6 @@
 from lazycloud_cli.api.base import BaseAPI
 from lazycloud_cli.api.tasks import TasksAPI
+from shared.responses.services import ServiceStatusResponse
 from shared.responses.tasks import ServiceTaskStatusResponse
 
 
@@ -7,6 +8,18 @@ class ServicesAPI(BaseAPI):
     def __init__(self):
         super().__init__("services")
         self._tasks = TasksAPI()
+
+    def get_service_statuses(self, deployment_id: str) -> list[ServiceStatusResponse]:
+        """Get the status of all services in a deployment."""
+        response_data = self._get(f"/{deployment_id}")
+        return [ServiceStatusResponse(**data) for data in response_data]
+
+    def get_service_status(
+        self, deployment_id: str, service_name: str
+    ) -> ServiceStatusResponse:
+        """Get the status of a specific service in a deployment."""
+        response_data = self._get(f"/{deployment_id}/{service_name}/status")
+        return ServiceStatusResponse(**response_data)
 
     def restart_service(
         self, deployment_id: str, service_name: str

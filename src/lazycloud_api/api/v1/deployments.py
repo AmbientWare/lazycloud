@@ -17,7 +17,7 @@ from lazycloud_api.services.compose.validator import ComposeValidator
 from lazycloud_api.services.k8s import create_ns_name
 from lazycloud_api.services.k8s.status_watcher import K8sStatusWatcher
 from shared.models.deployments import DeploymentStates
-from shared.models.statuses import DeploymentStatus, KubernetesPhase, TaskStatus
+from shared.models.statuses import TaskStatus
 from shared.requests.deployments import (
     DeploymentCreateRequest,
 )
@@ -111,38 +111,8 @@ async def get_deployment_status(
         helm_values=deployment.helm_values,
     )
 
-    # Get current status from watcher
-    status_dict = await watcher.get_current_status()
-
-    # Get service statuses
-    services_list = []
-    for service_config in deployment.helm_values.services:
-        service_status = await watcher._get_service_status(service_config)
-        services_list.append(service_status)
-
-    # Determine overall deployment status
-    all_ready = all(s.ready_replicas == s.replicas for s in services_list)
-    any_running = any(s.ready_replicas > 0 for s in services_list)
-
-    if all_ready:
-        overall_status = KubernetesPhase.RUNNING
-    elif any_running:
-        overall_status = KubernetesPhase.PENDING  # partially running maps to pending
-    else:
-        overall_status = KubernetesPhase.STOPPED
-
-    # Create deployment status
-    deployment_status = DeploymentStatus(
-        deployment_id=deployment.id,
-        deployment_name=deployment.name,
-        namespace=deployment.namespace,
-        services=services_list,
-        volumes=status_dict.get("volumes"),
-        networks=status_dict.get("networks"),
-        status=overall_status,
-        ready=all_ready,
-        last_updated=deployment.updated_at,
-    )
+    # Get deployment status directly from watcher
+    deployment_status = await watcher.get_deployment_status()
 
     return DeploymentStatusResponse(status=deployment_status)
 

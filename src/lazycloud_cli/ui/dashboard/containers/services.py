@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING
 from textual.app import ComposeResult
 from textual.reactive import reactive
 
+from lazycloud_cli.api import api
 from lazycloud_cli.ui.dashboard.components import Container, ListItemData, ListView
 from lazycloud_cli.ui.dashboard.components.listview import ListItem
 from lazycloud_cli.ui.dashboard.containers.details.container import ContentContainer
@@ -17,6 +18,7 @@ class ServicesContainer(Container):
     """Container for displaying services."""
 
     # Reactive attributes
+    deployment_id: reactive[str | None] = reactive(None)
     services: reactive[list[ServiceStatus] | None] = reactive(None)
     selected_service: reactive[ServiceStatus | None] = reactive(None)
 
@@ -77,10 +79,10 @@ class ServicesContainer(Container):
         self.styles.border = theme.get_border()
         self.border_subtitle = None
 
-    async def watch_services(self, _old_value, new_value) -> None:
+    async def watch_deployment_id(self, _old_value, new_value) -> None:
         """Auto-refresh when services list changes"""
         if new_value is not None and self._list_view:
-            await self.refresh_service_list()
+            await self.refresh_services()
 
     async def watch_selected_service(self, _old_value, new_value) -> None:
         """React when a service is selected - update content"""
@@ -89,28 +91,36 @@ class ServicesContainer(Container):
             content = self.app.query_one(ContentContainer)
             content.service = new_value
 
-    async def refresh_service_list(self) -> None:
+    async def refresh_services(self) -> None:
         """Update the services list for a selected deployment."""
         if not self._list_view:
             return
 
+        # get services from api
+        service_statuses = api.services.get_service_statuses(self.deployment_id)
+
         self._list_view.show_loading("Loading services...")
         try:
             items = []
-            if self.services:
-                for service in self.services:
-                    extra_text = f"{service.ready_replicas}/{service.replicas}"
+            services = []
+            if service_statuses:
+                for status in service_statuses:
+                    services.append(status.service)
+                    extra_text = (
+                        f"{status.service.ready_replicas}/{status.service.replicas}"
+                    )
                     items.append(
                         ListItemData(
-                            id=service.name,
-                            name=service.name,
-                            status=service.status,
+                            id=status.service.name,
+                            name=status.service.name,
+                            status=status.service.status,
                             extra_text=extra_text,
-                            data=service,
+                            data=status.service,
                         )
                     )
 
             self._list_view.update_items(items)
+            self.services = services
 
         except Exception:
             self._list_view.update_items([])

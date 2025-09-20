@@ -1,11 +1,6 @@
-"""Pydantic models for service status responses."""
-
-from datetime import datetime
-from typing import List
-
 from pydantic import BaseModel
 
-from shared.models.statuses import PodStatus, ServiceStatus
+from shared.models.statuses import ServiceStatus
 
 
 class ServiceStatusResponse(BaseModel):
@@ -15,5 +10,3 @@ class ServiceStatusResponse(BaseModel):
     deployment_name: str
     namespace: str
     service: ServiceStatus
-    pods: List[PodStatus]
-    last_updated: datetime

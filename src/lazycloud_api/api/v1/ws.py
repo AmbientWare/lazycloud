@@ -13,6 +13,7 @@ from lazycloud_api.api.security import get_current_active_user_ws
 from lazycloud_api.database import db
 from lazycloud_api.services.k8s.log_streamer import K8sLogStreamer
 from lazycloud_api.services.k8s.status_watcher import K8sStatusWatcher
+from shared.models.statuses import DeploymentStatus
 
 ws_router = APIRouter(prefix="/ws", tags=["websocket"])
 
@@ -22,7 +23,7 @@ connections: Dict[str, Set[WebSocket]] = {}
 watchers: Dict[str, K8sStatusWatcher] = {}
 
 
-async def send_status_update(deployment_id: str, status_data: dict):
+async def send_status_update(deployment_id: str, status_data: DeploymentStatus):
     """Send status update to all connected clients for a deployment."""
     if deployment_id in connections:
         disconnected = set()
@@ -31,7 +32,7 @@ async def send_status_update(deployment_id: str, status_data: dict):
                 await websocket.send_json(
                     {
                         "type": "status_update",
-                        "data": status_data,
+                        "data": status_data.model_dump(mode="json"),
                         "timestamp": datetime.now(UTC).isoformat(),
                     }
                 )
@@ -72,7 +73,7 @@ async def websocket_deployment_status(
         # Start or get existing watcher
         if deployment_id not in watchers:
 
-            async def status_callback(status: dict):
+            async def status_callback(status: DeploymentStatus):
                 await send_status_update(deployment_id, status)
 
             watcher = K8sStatusWatcher(
@@ -101,14 +102,14 @@ async def websocket_deployment_status(
                         service_name = message.get("service")
                         if service_name:
                             # Get service-specific status
-                            status = await watchers[deployment_id].get_service_status(
+                            service_status = await watchers[deployment_id].get_service_status(
                                 service_name
                             )
-                            if status:
+                            if service_status:
                                 await websocket.send_json(
                                     {
-                                        "type": "status_update",
-                                        "data": status,
+                                        "type": "service_status",
+                                        "data": service_status.model_dump(mode="json"),
                                         "timestamp": datetime.now(UTC).isoformat(),
                                     }
                                 )
@@ -122,11 +123,11 @@ async def websocket_deployment_status(
                                 )
                         else:
                             # Get full deployment status
-                            status = await watchers[deployment_id].get_current_status()
+                            status = await watchers[deployment_id].get_deployment_status()
                             await websocket.send_json(
                                 {
                                     "type": "status_update",
-                                    "data": status,
+                                    "data": status.model_dump(mode="json"),
                                     "timestamp": datetime.now(UTC).isoformat(),
                                 }
                             )

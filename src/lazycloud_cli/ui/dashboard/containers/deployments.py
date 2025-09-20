@@ -7,7 +7,7 @@ from lazycloud_cli.ui.dashboard.components.listview import ListItem
 from lazycloud_cli.ui.dashboard.containers.details.container import ContentContainer
 from lazycloud_cli.ui.dashboard.containers.services import ServicesContainer
 from lazycloud_cli.ui.dashboard.theme import theme
-from shared.models.statuses import DeploymentStatus, ServiceStatus
+from shared.models.statuses import DeploymentStatus
 from shared.responses.deployments import DeploymentResponse
 
 
@@ -17,7 +17,6 @@ class DeploymentsContainer(Container):
     # Reactive attributes
     selected_deployment: reactive[DeploymentResponse | None] = reactive(None)
     deployment_status: reactive[DeploymentStatus | None] = reactive(None)
-    services: reactive[list[ServiceStatus] | None] = reactive(None)
 
     BINDINGS = [
         ("up", "cursor_up", "Move up"),
@@ -73,7 +72,6 @@ class DeploymentsContainer(Container):
                             item.item_data.id
                         )
                         self.deployment_status = status.status
-                        self.services = status.status.services
 
     def on_blur(self) -> None:
         """Handle blur event."""
@@ -88,12 +86,9 @@ class DeploymentsContainer(Container):
             content.deployment = new_value
             content.deployment_status = self.deployment_status
 
-    async def watch_services(self, old_value, new_value) -> None:
-        """React when services list changes - update services container"""
-        if new_value is not None:
             # Update the services container
             services = self.app.query_one(ServicesContainer)
-            services.services = new_value
+            services.deployment_id = new_value.id
 
     async def load_deployments(self) -> None:
         """Fetch and display deployments from API."""
@@ -133,8 +128,6 @@ class DeploymentsContainer(Container):
         # get status associated with the deployment
         status = api.deployments.get_deployment_status(item_data.id)
         self.deployment_status = status.status
-        # update the services
-        self.services = status.status.services
 
     def _handle_highlight(self, item_data: ListItemData) -> None:
         """Handle deployment highlight (arrow navigation)."""
@@ -144,8 +137,6 @@ class DeploymentsContainer(Container):
             # get status associated with the deployment
             status = api.deployments.get_deployment_status(item_data.id)
             self.deployment_status = status.status
-            # update the services
-            self.services = status.status.services
 
     def action_cursor_up(self) -> None:
         """Move cursor up in the list."""
