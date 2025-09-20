@@ -1,12 +1,12 @@
 from textual.widgets import DataTable
 
-from lazycloud_cli.ui.dashboard.containers.content.service_details.delete_instance_modal import (
+from lazycloud_cli.ui.dashboard.containers.details.service_details.delete_instance_modal import (
     DeleteInstanceModal,
 )
-from lazycloud_cli.ui.dashboard.containers.content.service_details.logs_modal import (
+from lazycloud_cli.ui.dashboard.containers.details.service_details.logs_modal import (
     LogViewerModal,
 )
-from lazycloud_cli.ui.dashboard.containers.content.utils import get_status_color
+from lazycloud_cli.ui.dashboard.containers.details.utils import get_status_color
 from lazycloud_cli.ui.dashboard.theme import theme
 from shared.models.statuses import PodStatus
 
