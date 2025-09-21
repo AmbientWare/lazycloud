@@ -11,7 +11,6 @@ from lazycloud_cli.ui.dashboard.containers.details.deployment_details import (
     DeploymentDetailsContainer,
 )
 from lazycloud_cli.ui.dashboard.containers.details.service_details import (
-    RestartServiceModal,
     ServiceDetailsContainer,
 )
 from lazycloud_cli.ui.dashboard.theme import theme
@@ -33,10 +32,6 @@ class ContentContainer(Container):
     service: reactive[ServiceStatus | None] = reactive(None)
     display_mode: reactive[str] = reactive(DisplayMode.DEPLOYMENT)
 
-    BINDINGS = [
-        ("r", "restart_service", "Restart Service"),
-    ]
-
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._border_subtitle_timer = None
@@ -45,7 +40,7 @@ class ContentContainer(Container):
         self._service_view = None
         # NOTE: faster reactivity than has_focus
         self._show_border_subtitle = False
-        self._service_subtitle = "r: Restart"
+        self._service_subtitle = "r: Restart Service"
         self._logs_subtitle = "4: Instances"
 
     def compose(self) -> ComposeResult:
@@ -105,8 +100,7 @@ class ContentContainer(Container):
         parts = [navigation_subtitle]
 
         if self.display_mode == DisplayMode.SERVICE:
-            if self._show_border_subtitle and self._service_subtitle:
-                parts.insert(0, self._service_subtitle)
+            parts.insert(0, self._service_subtitle)
             parts.append(self._logs_subtitle)
 
         parts.append(time_subtitle)
@@ -192,15 +186,3 @@ class ContentContainer(Container):
         initial_section = SectionContainer("Overview")
         scroll.mount(initial_section)
         initial_section.mount(Static("Select a deployment to view details"))
-
-    def action_restart_service(self) -> None:
-        """Handle the restart service action."""
-        if not self.service or not self.deployment:
-            return
-
-        # Show confirmation modal
-        modal = RestartServiceModal(
-            service_name=self.service.name,
-            deployment_id=self.deployment.id,
-        )
-        self.app.push_screen(modal)

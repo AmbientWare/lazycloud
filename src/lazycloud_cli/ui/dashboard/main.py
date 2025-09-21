@@ -7,6 +7,9 @@ from lazycloud_cli.ui.dashboard.containers import (
     DisplayMode,
     ServicesContainer,
 )
+from lazycloud_cli.ui.dashboard.containers.details.service_details import (
+    RestartServiceModal,
+)
 from lazycloud_cli.ui.dashboard.theme import theme
 
 
@@ -15,6 +18,7 @@ class DashboardApp(App):
 
     BINDINGS = [
         ("q", "quit", "Quit"),
+        ("r", "restart_service", "Restart Service"),
         ("1", "switch_to_deployments", "Deployments"),
         ("2", "switch_to_services", "Services"),
         ("3", "switch_to_content", "Content"),
@@ -45,6 +49,23 @@ class DashboardApp(App):
 
             # Main content container
             yield ContentContainer(id="main-container")
+
+    def action_restart_service(self) -> None:
+        """Handle the restart service action."""
+        content_container = self.query_one(ContentContainer)
+        if (
+            content_container.display_mode == DisplayMode.SERVICE
+            and not content_container.service
+            and not content_container.deployment
+        ):
+            return
+
+        # Show confirmation modal
+        modal = RestartServiceModal(
+            service_name=content_container.service.name,
+            deployment_id=content_container.deployment.id,
+        )
+        self.app.push_screen(modal)
 
     def action_switch_to_deployments(self) -> None:
         """Switch to deployments section."""

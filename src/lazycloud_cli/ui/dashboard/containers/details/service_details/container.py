@@ -133,7 +133,7 @@ class ServiceDetailsContainer(Container):
         status_color = get_status_color(service.status)
 
         content = [
-            f"Name:         {service.name}, {self.deployment_id}",
+            f"Name:         {service.name}",
             f"Status:       [{status_color}]{service.status.upper()}[/{status_color}]",
             f"Image:        {service.image}",
             f"Replicas:     {service.ready_replicas}/{service.replicas}",
