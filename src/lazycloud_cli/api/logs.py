@@ -11,16 +11,15 @@ class LogsAPI(BaseWsAPI):
         self,
         deployment_id: str,
         service_name: str,
+        pod_name: str,
         tail: int,
         on_message: Callable[[dict[str, Any]], None],
         on_error: Callable[[Exception], None] | None = None,
-        pod_name: str | None = None,
     ) -> None:
         """Stream logs from a service"""
-        url_path = f"/deployments/{deployment_id}/logs/{service_name}?tail={tail}"
-
-        if pod_name:
-            url_path += f"&pod={pod_name}"
+        url_path = (
+            f"/deployments/{deployment_id}/logs/{service_name}/{pod_name}?tail={tail}"
+        )
 
         await self.connect_with_retry(
             url_path=url_path,

@@ -1,5 +1,3 @@
-from datetime import UTC, datetime
-
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
 
@@ -9,7 +7,7 @@ from lazycloud_api.prefect_app.services import (
     restart_all_services_task,
     restart_service_task,
 )
-from lazycloud_api.services.k8s.status_watcher import K8sStatusWatcher
+from lazycloud_api.services.k8s.status_watcher import StatusWatcher
 from shared.models.statuses import TaskStatus
 from shared.responses.services import ServiceStatusResponse
 from shared.responses.tasks import ServiceTaskStatusResponse
@@ -37,7 +35,7 @@ async def get_service_statuses_for_deployment(
         raise HTTPException(status_code=404, detail="Deployment not found")
 
     # Create watcher and get service status
-    watcher = K8sStatusWatcher(
+    watcher = StatusWatcher(
         deployment_id=deployment_id,
         namespace=deployment.namespace,
         helm_values=deployment.helm_values,
@@ -80,7 +78,7 @@ async def get_service_status(
         raise HTTPException(status_code=404, detail="Deployment not found")
 
     # Create watcher and get service status
-    watcher = K8sStatusWatcher(
+    watcher = StatusWatcher(
         deployment_id=deployment_id,
         namespace=deployment.namespace,
         helm_values=deployment.helm_values,
@@ -98,7 +96,6 @@ async def get_service_status(
         deployment_name=deployment.name,
         namespace=deployment.namespace,
         service=service_status,
-        last_updated=datetime.now(UTC),
     )
 
 

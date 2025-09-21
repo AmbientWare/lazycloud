@@ -1,3 +1,5 @@
+from datetime import UTC
+
 from lazycloud_cli.api.base import BaseAPI
 from lazycloud_cli.api.tasks import TasksAPI
 from shared.responses.services import ServiceStatusResponse
@@ -12,14 +14,23 @@ class ServicesAPI(BaseAPI):
     def get_service_statuses(self, deployment_id: str) -> list[ServiceStatusResponse]:
         """Get the status of all services in a deployment."""
         response_data = self._get(f"/{deployment_id}")
-        return [ServiceStatusResponse(**data) for data in response_data]
+        statuses = [ServiceStatusResponse(**data) for data in response_data]
+        for status in statuses:
+            status.service.last_checked = status.service.last_checked.replace(
+                tzinfo=UTC
+            ).astimezone()
+        return statuses
 
     def get_service_status(
         self, deployment_id: str, service_name: str
     ) -> ServiceStatusResponse:
         """Get the status of a specific service in a deployment."""
         response_data = self._get(f"/{deployment_id}/{service_name}/status")
-        return ServiceStatusResponse(**response_data)
+        status = ServiceStatusResponse(**response_data)
+        status.service.last_checked = status.service.last_checked.replace(
+            tzinfo=UTC
+        ).astimezone()
+        return status
 
     def restart_service(
         self, deployment_id: str, service_name: str
