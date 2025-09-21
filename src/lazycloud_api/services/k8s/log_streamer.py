@@ -1,10 +1,10 @@
 import asyncio
-from typing import Awaitable, Callable
+from typing import AsyncGenerator
 
 from loguru import logger
 
 
-class K8sLogStreamer:
+class LogStreamer:
     """Streams logs from Kubernetes pods."""
 
     def __init__(
@@ -12,7 +12,6 @@ class K8sLogStreamer:
         deployment_id: str,
         namespace: str,
         service_name: str,
-        callback: Callable[[str], None] | Callable[[str], Awaitable[None]],
         follow: bool = True,
         tail_lines: int = 100,
         pod_name: str | None = None,
@@ -21,15 +20,14 @@ class K8sLogStreamer:
         self.deployment_id = deployment_id
         self.namespace = namespace
         self.service_name = service_name
-        self.callback = callback
         self.follow = follow
         self.tail_lines = tail_lines
         self.pod_name = pod_name
         self._process: asyncio.subprocess.Process | None = None
         self._running = False
 
-    async def start(self):
-        """Start streaming logs from kubectl."""
+    async def stream(self) -> AsyncGenerator[str, None]:
+        """Stream logs from kubectl"""
         if self._running:
             return
 
@@ -77,12 +75,7 @@ class K8sLogStreamer:
                     # Decode and strip line
                     log_line = line.decode("utf-8").rstrip()
                     if log_line:
-                        # Call the callback with the log line
-                        if asyncio.iscoroutinefunction(self.callback):
-                            await self.callback(log_line)
-
-                        else:
-                            self.callback(log_line)
+                        yield log_line
 
             # Check for any errors
             if self._process.stderr:
@@ -90,11 +83,7 @@ class K8sLogStreamer:
                 if stderr:
                     error_msg = stderr.decode("utf-8").strip()
                     logger.error(f"kubectl logs error: {error_msg}")
-                    if asyncio.iscoroutinefunction(self.callback):
-                        await self.callback(f"ERROR: {error_msg}")
-
-                    else:
-                        self.callback(f"ERROR: {error_msg}")
+                    yield f"ERROR: {error_msg}"
 
         except asyncio.CancelledError:
             logger.info(f"Log streaming cancelled for {self.service_name}")
@@ -103,16 +92,7 @@ class K8sLogStreamer:
             logger.error(f"Error streaming logs: {e}")
             # Only send error if we're still running (connection not closed)
             if self._running:
-                try:
-                    if asyncio.iscoroutinefunction(self.callback):
-                        await self.callback(f"ERROR: Failed to stream logs: {str(e)}")
-
-                    else:
-                        self.callback(f"ERROR: Failed to stream logs: {str(e)}")
-
-                except Exception:
-                    # Ignore errors when sending error message (connection might be closed)
-                    pass
+                yield f"ERROR: Failed to stream logs: {str(e)}"
 
         finally:
             self._running = False

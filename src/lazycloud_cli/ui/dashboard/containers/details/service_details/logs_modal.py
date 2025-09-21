@@ -51,6 +51,12 @@ class LogViewerModal(ContentModal):
         def on_log_message(data: dict) -> None:
             """Handle incoming log messages."""
             if self._logs_widget:
+                # Handle error messages from the server
+                if data.get("type") == "error":
+                    error_msg = data.get("data", {}).get("message", "Unknown error")
+                    self._logs_widget.write(f"[red]Error: {error_msg}[/red]")
+                    return
+
                 log_line = data.get("line", "")
                 if log_line:
                     # Check if user has scrolled up
@@ -68,19 +74,38 @@ class LogViewerModal(ContentModal):
         def on_log_error(error: Exception) -> None:
             """Handle log stream errors."""
             if self._logs_widget:
-                self._logs_widget.write(f"[red]Log stream error: {str(error)}[/red]")
+                # Check if it's a pod not found error
+                error_msg = str(error)
+                if (
+                    "not found" in error_msg.lower()
+                    or "does not exist" in error_msg.lower()
+                ):
+                    self._logs_widget.write(
+                        f"[yellow]Pod '{self.pod_name}' not found or has been deleted[/yellow]"
+                    )
+                else:
+                    self._logs_widget.write(f"[red]Log stream error: {error_msg}[/red]")
 
         if self._logs_widget:
             self._logs_widget.clear()
             self._logs_widget.write(
-                f"[green]Connected to log stream for pod: {self.pod_name}[/green]\n"
+                f"[green]Connecting to log stream for pod: {self.pod_name}[/green]\n"
             )
 
-        await api.logs.stream_logs(
-            deployment_id=self.deployment_id,
-            service_name=self.service_name,
-            tail=100,
-            on_message=on_log_message,
-            on_error=on_log_error,
-            pod_name=self.pod_name,
-        )
+        try:
+            await api.logs.stream_logs(
+                deployment_id=self.deployment_id,
+                service_name=self.service_name,
+                tail=100,
+                on_message=on_log_message,
+                on_error=on_log_error,
+                pod_name=self.pod_name,
+            )
+        except Exception as e:
+            if self._logs_widget:
+                if "not found" in str(e).lower():
+                    self._logs_widget.write(
+                        f"[yellow]Pod '{self.pod_name}' not found or has been deleted[/yellow]"
+                    )
+                else:
+                    self._logs_widget.write(f"[red]Failed to connect: {str(e)}[/red]")

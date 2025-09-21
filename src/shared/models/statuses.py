@@ -96,6 +96,7 @@ class ServiceStatus(BaseModel):
     hpa: HPAValues | None = None
     healthcheck: HealthCheckValues | None = None
     total_restarts: int = 0
+    last_checked: datetime
 
 
 class ServiceStatusSummary(BaseModel):
@@ -118,7 +119,7 @@ class DeploymentStatus(BaseModel):
     namespace: str
     status: KubernetesPhase
     ready: bool
-    last_updated: datetime
+    last_checked: datetime
 
     # Summary counts
     total_services: int

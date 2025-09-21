@@ -1,3 +1,4 @@
+from datetime import UTC
 from typing import Any
 
 from lazycloud_cli.api.base import BaseAPI
@@ -84,4 +85,8 @@ class DeploymentsAPI(BaseAPI):
     def get_deployment_status(self, deployment_id: str) -> DeploymentStatusResponse:
         """Get resource status for a deployment."""
         response = self._get(path=f"/{deployment_id}/status")
-        return DeploymentStatusResponse(**response)
+        status = DeploymentStatusResponse(**response)
+        status.status.last_checked = status.status.last_checked.replace(
+            tzinfo=UTC
+        ).astimezone()
+        return status

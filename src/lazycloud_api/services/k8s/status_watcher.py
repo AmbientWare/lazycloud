@@ -1,7 +1,6 @@
 import asyncio
 import json
 from datetime import UTC, datetime
-from typing import Awaitable, Callable
 
 from loguru import logger
 
@@ -27,7 +26,7 @@ from shared.models.statuses import (
 )
 
 
-class K8sStatusWatcher:
+class StatusWatcher:
     """Watches Kubernetes resources and provides real-time status updates."""
 
     def __init__(
@@ -35,40 +34,11 @@ class K8sStatusWatcher:
         deployment_id: str,
         namespace: str,
         helm_values: HelmValues,
-        callback: Callable[[DeploymentStatus], None]
-        | Callable[[DeploymentStatus], Awaitable[None]]
-        | None = None,
     ):
         """Initialize the status watcher."""
         self.deployment_id = deployment_id
         self.namespace = namespace
         self.helm_values = helm_values
-        self.callback = callback
-        self._watch_task: asyncio.Task | None = None
-        self._running = False
-        self._current_status: DeploymentStatus | None = None
-
-    async def start(self):
-        """Start watching Kubernetes resources."""
-        if self._running:
-            return
-
-        self._running = True
-        self._watch_task = asyncio.create_task(self._watch_loop())
-        logger.info(f"Started K8s watcher for deployment {self.deployment_id}")
-
-    async def stop(self):
-        """Stop watching Kubernetes resources."""
-        self._running = False
-        if self._watch_task:
-            self._watch_task.cancel()
-            try:
-                await self._watch_task
-
-            except asyncio.CancelledError:
-                pass
-
-        logger.info(f"Stopped K8s watcher for deployment {self.deployment_id}")
 
     async def get_service_statuses_for_deployment(self) -> list[ServiceStatus]:
         """Get the status of all services in a deployment."""
@@ -81,7 +51,6 @@ class K8sStatusWatcher:
 
     async def get_service_status(self, service_name: str) -> ServiceStatus | None:
         """Get the status of a specific service with pod details."""
-        # Check if service exists
         for s in self.helm_values.services:
             if s.name == service_name:
                 service = s
@@ -89,7 +58,6 @@ class K8sStatusWatcher:
         else:
             return None
 
-        # Get service status (which includes pods)
         return await self._get_service_status(service)
 
     async def get_deployment_status(self) -> DeploymentStatus:
@@ -161,7 +129,7 @@ class K8sStatusWatcher:
             namespace=self.namespace,
             status=overall_status,
             ready=all_ready,
-            last_updated=datetime.now(UTC),
+            last_checked=datetime.now(UTC),
             total_services=len(services_list),
             ready_services=ready_services,
             total_replicas=total_replicas,
@@ -171,41 +139,12 @@ class K8sStatusWatcher:
             networks=networks_summary,
         )
 
-    async def _watch_loop(self):
-        """Main watch loop that monitors for changes."""
-        poll_interval = 2  # seconds
-
-        while self._running:
-            try:
-                # Get current status
-                new_status = await self.get_deployment_status()
-
-                # Check if status changed
-                if new_status != self._current_status:
-                    self._current_status = new_status
-                    if self.callback:
-                        if asyncio.iscoroutinefunction(self.callback):
-                            await self.callback(new_status)
-                        else:
-                            self.callback(new_status)
-
-                # Wait before next check
-                await asyncio.sleep(poll_interval)
-
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"Error in watch loop: {e}")
-                await asyncio.sleep(poll_interval)
-
     async def _get_service_status(self, service: ServiceValues) -> ServiceStatus:
         """Get status for a specific service."""
-        # Default values
         replicas = service.replicas or 1
         k8s_healthcheck = None
         resources = None
 
-        # Get status from kubectl
         try:
             cmd = [
                 "kubectl",
@@ -224,7 +163,6 @@ class K8sStatusWatcher:
             stdout, _ = await proc.communicate()
             k8s_raw_json = json.loads(stdout.decode())
 
-            # Parse using appropriate Pydantic model
             kind = k8s_raw_json.get("kind")
             if kind == "Deployment":
                 k8s_resource = Deployment(**k8s_raw_json)
@@ -235,18 +173,15 @@ class K8sStatusWatcher:
 
             replicas = k8s_resource.spec.replicas or 1
 
-            # Find matching container
             k8s_healthcheck = None
             for container in k8s_resource.spec.template.spec.containers:
                 if container.name == service.name:
-                    # Get health checks if present
                     if container.liveness_probe or container.readiness_probe:
                         k8s_healthcheck = HealthCheckValues(
                             enabled=True,
                             livenessProbe=container.liveness_probe,
                             readinessProbe=container.readiness_probe,
                         )
-                    # Get resources if present
                     resources = container.resources
                     break
 
@@ -284,15 +219,13 @@ class K8sStatusWatcher:
             hpa=service.hpa,
             healthcheck=k8s_healthcheck,
             total_restarts=sum(pod.restart_count for pod in pods) if pods else 0,
+            last_checked=datetime.now(UTC),
         )
 
     async def _get_service_pods(self, service_config: ServiceValues) -> list[PodStatus]:
         """Get pod details for a specific service."""
-        # Get resource name
-        resource_name = service_config.resourceName
 
         try:
-            # Get pods for this service
             cmd = [
                 "kubectl",
                 "get",
@@ -300,7 +233,7 @@ class K8sStatusWatcher:
                 "-n",
                 self.namespace,
                 "-l",
-                f"app.kubernetes.io/name={resource_name}",
+                f"app.kubernetes.io/name={service_config.resourceName}",
                 "-o",
                 "json",
             ]
@@ -313,7 +246,6 @@ class K8sStatusWatcher:
             if proc.returncode == 0:
                 pods_json = json.loads(stdout.decode())
 
-                # Parse using Pydantic model
                 pod_list = PodList(**pods_json)
                 pods = []
 

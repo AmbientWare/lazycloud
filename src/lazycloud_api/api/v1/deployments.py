@@ -15,7 +15,7 @@ from lazycloud_api.prefect_app.compose import (
 from lazycloud_api.services.compose.parser import ComposeParser
 from lazycloud_api.services.compose.validator import ComposeValidator
 from lazycloud_api.services.k8s import create_ns_name
-from lazycloud_api.services.k8s.status_watcher import K8sStatusWatcher
+from lazycloud_api.services.k8s.status_watcher import StatusWatcher
 from shared.models.deployments import DeploymentStates
 from shared.models.statuses import TaskStatus
 from shared.requests.deployments import (
@@ -105,7 +105,7 @@ async def get_deployment_status(
     if not deployment:
         raise HTTPException(status_code=404, detail="Deployment not found")
 
-    watcher = K8sStatusWatcher(
+    watcher = StatusWatcher(
         deployment_id=deployment_id,
         namespace=deployment.namespace,
         helm_values=deployment.helm_values,

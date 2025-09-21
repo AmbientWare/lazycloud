@@ -107,10 +107,7 @@ class BaseWsAPI:
 
                         if data.get("type") == message_type:
                             on_message(data.get("data", {}))
-                        elif (
-                            data.get("type") == "status_update"
-                            and message_type == "status_update"
-                        ):
+                        elif data.get("type") == "status" and message_type == "status":
                             on_message(data.get("data", {}))
                         elif data.get("type") == "error":
                             if on_error:

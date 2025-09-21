@@ -1,3 +1,6 @@
+from textual.app import ComposeResult
+from textual.containers import VerticalScroll
+from textual.reactive import reactive
 from textual.widgets import Static
 from textual.worker import Worker
 
@@ -13,32 +16,69 @@ from shared.models.k8s import Resources
 from shared.models.statuses import PodStatus, ServiceStatus
 
 
-class ServiceDetailsContainer:
+class ServiceDetailsContainer(Container):
     """Handles service-specific UI rendering and updates."""
 
-    def __init__(self, parent_container: Container):
-        self.parent = parent_container
+    # Reactive properties
+    service_status: reactive[ServiceStatus | None] = reactive(None)
+    deployment_id: reactive[str | None] = reactive(None)
+    service_name: reactive[str | None] = reactive(None)
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
         self._overview_widget: Static | None = None
         self._pods_table: PodTable | None = None
         self._ws_task: Worker | None = None
-        self.current_deployment_id: str | None = None
-        self.current_service_name: str | None = None
+        self._scroll: VerticalScroll | None = None
 
-    async def render(
-        self,
-        service: ServiceStatus,
-        deployment_id: str,
-        run_worker_fn,
-    ) -> None:
-        """Render service details in the parent container"""
-        self.current_deployment_id = deployment_id
-        self.current_service_name = service.name
-        self.run_worker_fn = run_worker_fn
-        self._pods = []
+    def compose(self) -> ComposeResult:
+        """Create the initial UI structure."""
+        self._scroll = VerticalScroll(id="service-details-scroll")
+        yield self._scroll
+
+    def on_mount(self) -> None:
+        """Start WebSocket connection when mounted."""
+        # Defer initial render until after the widget tree is complete
+        if self.service_status:
+            self.call_after_refresh(self._render_initial_content)
+
+    def _render_initial_content(self) -> None:
+        """Render initial content after widget tree is ready."""
+        if self.service_status and self._scroll and self._scroll.is_mounted:
+            self._render_sections(self.service_status)
+
+    async def on_unmount(self) -> None:
+        """Clean up when unmounting."""
+        await self.cleanup()
+
+    async def watch_service_status(self, old_value, new_value) -> None:
+        """React to service status changes."""
+        # Only render on updates, not initial set
+        if new_value and self.is_mounted and old_value is not None:
+            self._render_sections(new_value)
+
+    async def watch_service_name(self, old_value, new_value) -> None:
+        """React to service name changes."""
+        if new_value and new_value != old_value:
+            # Clean up old connection first
+            await self.cleanup()
+            self._start_websocket()
+
+    def _start_websocket(self) -> None:
+        """Start WebSocket connection for real-time updates."""
+        if self.deployment_id and self.service_name and not self._ws_task:
+            # start new task only if not already running
+            self._ws_task = self.run_worker(self._connect_service_websocket())
+
+    def _render_sections(self, service: ServiceStatus) -> None:
+        """Render all sections with the service data."""
+        if not self._scroll:
+            return
+        self._scroll.remove_children()
 
         overview_content = self._build_overview_content(service)
         overview_section = SectionContainer("📦 Overview")
-        self.parent.mount(overview_section)
+        self._scroll.mount(overview_section)
         self._overview_widget = Static("\n".join(overview_content).strip(), markup=True)
         overview_section.mount(self._overview_widget)
 
@@ -59,11 +99,9 @@ class ServiceDetailsContainer:
         autoscaling_content = self._build_autoscaling_content(service.hpa)
         self._create_section("🔄 Auto-scaling", autoscaling_content)
 
-        self._pods_table = self._create_pods_table(deployment_id, service.name)
+        self._pods_table = self._create_pods_table(self.deployment_id, service.name)
         if service.pods:
             self._pods_table.update_pods(service.pods)
-
-        self._ws_task = run_worker_fn(self._connect_service_websocket())
 
     def update_overview(self, service: ServiceStatus) -> None:
         """Update the overview widget with new service data."""
@@ -87,7 +125,7 @@ class ServiceDetailsContainer:
             self._ws_task.cancel()
             self._ws_task = None
 
-        if api.status:
+        if api.status and api.status.is_connected():
             await api.status.disconnect()
 
     def _build_overview_content(self, service: ServiceStatus) -> list[str]:
@@ -95,7 +133,7 @@ class ServiceDetailsContainer:
         status_color = get_status_color(service.status)
 
         content = [
-            f"Name:         {service.name}",
+            f"Name:         {service.name}, {self.deployment_id}",
             f"Status:       [{status_color}]{service.status.upper()}[/{status_color}]",
             f"Image:        {service.image}",
             f"Replicas:     {service.ready_replicas}/{service.replicas}",
@@ -106,6 +144,11 @@ class ServiceDetailsContainer:
                 content.append(f"CPU Usage:    {service.current_usage.cpu}")
             if service.current_usage.memory:
                 content.append(f"Memory Usage: {service.current_usage.memory}")
+
+        if service.last_checked:
+            content.append(
+                f"Last Checked: {service.last_checked.strftime('%Y-%m-%d %H:%M:%S')}"
+            )
 
         return content
 
@@ -200,51 +243,54 @@ class ServiceDetailsContainer:
 
     def _create_section(self, title: str, content: list[str]) -> None:
         """Create a section with content in the parent container."""
+        if not self._scroll:
+            return
         section = SectionContainer(title)
-        self.parent.mount(section)
+        self._scroll.mount(section)
 
         text_content = "\n".join(content).strip()
         widget = Static(text_content, markup=True)
         section.mount(widget)
 
-    def _create_pods_table(self, deployment_id: str, service_name: str) -> PodTable:
+    def _create_pods_table(
+        self, deployment_id: str | None, service_name: str | None
+    ) -> PodTable:
         """Create a data table for instances."""
+        if not self._scroll:
+            return None
         table = PodTable(
-            deployment_id=deployment_id,
-            service_name=service_name,
+            deployment_id=deployment_id or "",
+            service_name=service_name or "",
             show_header=True,
             zebra_stripes=True,
             cursor_type="row",
         )
-        self.parent.mount(table)
+        self._scroll.mount(table)
         return table
 
     async def _connect_service_websocket(self) -> None:
         """Connect to WebSocket for real-time service updates."""
-        if not self.current_deployment_id or not self.current_service_name:
+        if not self.deployment_id or not self.service_name:
             return
 
         try:
 
-            def on_message(data: dict) -> None:
+            def on_update(data: ServiceStatus) -> None:
                 """Handle incoming WebSocket messages."""
-                if "service" in data:
-                    service_data = data["service"]
-                    if isinstance(service_data, dict):
-                        service = ServiceStatus(**service_data)
-                        self.update_overview(service)
+                # Use call_later to ensure UI updates happen on the main thread
+                self.app.call_later(self.update_overview, data)
 
-                        if service.pods:
-                            self.update_pods_table(service.pods)
+                if data.pods:
+                    self.app.call_later(self.update_pods_table, data.pods)
 
             def on_error(_: Exception) -> None:
                 """Handle WebSocket errors."""
                 pass
 
             await api.status.stream_service_status(
-                deployment_id=self.current_deployment_id,
-                service_name=self.current_service_name,
-                on_message=on_message,
+                deployment_id=self.deployment_id,
+                service_name=self.service_name,
+                on_update=on_update,
                 on_error=on_error,
             )
 

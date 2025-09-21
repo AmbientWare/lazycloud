@@ -144,10 +144,12 @@ class ContentContainer(Container):
         scroll = self.query_one(VerticalScroll)
         scroll.remove_children()
 
-        # only fetch the deployment status if the deployment is not already loaded
         try:
-            self._deployment_view = DeploymentDetailsContainer(scroll)
-            self._deployment_view.render(self.deployment_status)
+            self._deployment_view = DeploymentDetailsContainer()
+            scroll.mount(self._deployment_view)
+            # Set properties after mounting to avoid reactive triggers before mount
+            self._deployment_view.deployment_id = self.deployment.id
+            self._deployment_view.deployment_status = self.deployment_status
 
         except Exception as e:
             error_widget = Static(
@@ -164,16 +166,17 @@ class ContentContainer(Container):
 
         if self._service_view:
             await self._service_view.cleanup()
+            self._service_view = None
 
         scroll = self.query_one(VerticalScroll)
         scroll.remove_children()
 
-        self._service_view = ServiceDetailsContainer(scroll)
-        await self._service_view.render(
-            self.service,
-            self.deployment.id,
-            self.run_worker,
-        )
+        self._service_view = ServiceDetailsContainer()
+        scroll.mount(self._service_view)
+        # Set properties after mounting to avoid reactive triggers before mount
+        self._service_view.deployment_id = self.deployment.id
+        self._service_view.service_name = self.service.name
+        self._service_view.service_status = self.service
 
     async def clear_content(self) -> None:
         if self._service_view:
