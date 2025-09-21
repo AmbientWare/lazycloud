@@ -32,7 +32,7 @@ class RestartServiceModal(ConfirmModal):
 
             if response and response.task_id:
                 # TODO: handle task monitoring
-                # Show success modal after this one closes
+                self.dismiss(True)
                 success_modal = RestartSuccessModal(self.service_name)
                 self.app.push_screen(success_modal)
                 return True
