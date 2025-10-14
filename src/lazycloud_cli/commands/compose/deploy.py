@@ -1,4 +1,5 @@
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 import typer
@@ -44,7 +45,14 @@ def deploy(
     compose_data = yaml.safe_load(compose_yaml)
     env_files_content = _read_env_files(compose_data, compose_file_path.parent)
 
-    # Check for existing deployment and show diff before building
+    # Generate timestamp for built images
+    timestamp = _generate_build_timestamp()
+    _apply_build_timestamps(compose_data, timestamp)
+
+    # Regenerate YAML with timestamped images
+    compose_yaml = yaml.dump(compose_data, default_flow_style=False)
+
+    # Check for existing deployment and show diff
     existing_deployment = _get_existing_deployment(deployment_name)
 
     # Always show changes/preview for non-dry-run deployments
@@ -150,6 +158,27 @@ def _read_env_files(compose_data: dict, base_path: Path) -> dict[str, str]:
     return env_files_content
 
 
+def _generate_build_timestamp() -> str:
+    """Generate a unique timestamp for build tags."""
+    now = datetime.now(UTC)
+    return f"{now.strftime('%Y%m%d-%H%M%S')}-{now.microsecond // 1000:03d}"
+
+
+def _apply_build_timestamps(compose_data: dict, timestamp: str) -> None:
+    """Apply timestamp tags to all services with build sections."""
+    for service_name, service_config in compose_data.get("services", {}).items():
+        if "build" in service_config:
+            # Get original image and replace tag with timestamp
+            original_image = service_config.get("image", f"{service_name}:latest")
+            if ":" in original_image:
+                image_base = original_image.rsplit(":", 1)[0]
+            else:
+                image_base = original_image
+
+            # Update with timestamped image
+            service_config["image"] = f"{image_base}:{timestamp}"
+
+
 def _extract_env_variables(
     compose_data: dict, env_files_content: dict
 ) -> dict[str, str]:
@@ -199,7 +228,7 @@ def _extract_env_variables(
 def _handle_builds(
     compose_data: dict, compose_file_path: Path, deployment_name: str, yes: bool = False
 ) -> str:
-    """Handle building and pushing images if needed."""
+    """Handle building and pushing images if needed"""
     view = DeployView(console)
     services_to_build = []
 
@@ -209,10 +238,13 @@ def _handle_builds(
             if isinstance(build_config, str):
                 build_config = {"context": build_config}
 
+            # Image already has timestamp from _apply_build_timestamps()
+            image_name = service_config.get("image", f"{service_name}:latest")
+
             services_to_build.append(
                 {
                     "service_name": service_name,
-                    "image_name": service_config.get("image", f"{service_name}:latest"),
+                    "image_name": image_name,
                     "context": build_config.get("context", "."),
                     "dockerfile": build_config.get("dockerfile", "Dockerfile"),
                 }
@@ -260,15 +292,6 @@ def _handle_builds(
                 if not registry.push_image(build_info["image_name"]):
                     build_status.update_service(i, TaskStatus.ERROR, "Push failed")
                     raise typer.Exit(1)
-
-                if registry.credentials and registry.credentials.repository:
-                    full_repo = registry.credentials.repository
-                    if "/" in full_repo:
-                        image_with_tag = full_repo.split("/")[-1]
-                        service_config = compose_data["services"][
-                            build_info["service_name"]
-                        ]
-                        service_config["image"] = image_with_tag
 
                 build_status.update_service(i, TaskStatus.COMPLETED, "Ready")
 
