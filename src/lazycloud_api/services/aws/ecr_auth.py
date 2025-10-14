@@ -1,6 +1,6 @@
 import base64
 import json
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 import boto3
 from botocore.config import Config
@@ -23,7 +23,7 @@ class ECRAuthService:
         base_role_arn: str,
         endpoint_url: str | None = None,
         ttl_seconds: int = 900,  # 15 minutes default
-        pull_policy: str = "IfNotPresent",
+        pull_policy: str = "Always",  # Always pull for built images
     ):
         # Use config values if not provided
         self.account_id = account_id
@@ -223,10 +223,6 @@ class ECRAuthService:
         tag = "latest"
         if ":" in repo_name:
             repo_name, tag = repo_name.split(":", 1)
-
-        # generate a timestamp tag so that kubernetes will pull the latest image
-        timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-        tag = timestamp
 
         # Ensure repository exists (without tag)
         full_repo_name = await self.ensure_repository(

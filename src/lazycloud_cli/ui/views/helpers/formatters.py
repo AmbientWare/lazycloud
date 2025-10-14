@@ -49,13 +49,21 @@ def format_ports_list(ports: list[Any] | None, max_display: int = 3) -> str:
 
 def format_image_change(old_image: str | None, new_image: str | None) -> str:
     """Format image change, highlighting tag changes."""
-    # first format old iamge
+    # Parse old image safely
+    if old_image and ":" in old_image:
+        old_base, old_tag = old_image.rsplit(":", 1)
+    else:
+        old_base, old_tag = old_image, None
 
-    old_base, old_tag = old_image.rsplit(":", 1) if old_image else (None, None)
-    new_base, new_tag = new_image.rsplit(":", 1) if new_image else (None, None)
+    # Parse new image safely
+    if new_image and ":" in new_image:
+        new_base, new_tag = new_image.rsplit(":", 1)
+    else:
+        new_base, new_tag = new_image, None
 
-    old_str = f"{old_base}:{old_tag}" if old_base and old_tag else old_image
-    new_str = f"{new_base}:{new_tag}" if new_base and new_tag else new_image
+    # Format output
+    old_str = f"{old_base}:{old_tag}" if old_base and old_tag else (old_base or "None")
+    new_str = f"{new_base}:{new_tag}" if new_base and new_tag else (new_base or "None")
 
     return f"{old_str} → {new_str}"
 
