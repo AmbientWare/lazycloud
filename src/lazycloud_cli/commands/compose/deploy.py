@@ -261,6 +261,15 @@ def _handle_builds(
                     build_status.update_service(i, TaskStatus.ERROR, "Push failed")
                     raise typer.Exit(1)
 
+                if registry.credentials and registry.credentials.repository:
+                    full_repo = registry.credentials.repository
+                    if "/" in full_repo:
+                        image_with_tag = full_repo.split("/")[-1]
+                        service_config = compose_data["services"][
+                            build_info["service_name"]
+                        ]
+                        service_config["image"] = image_with_tag
+
                 build_status.update_service(i, TaskStatus.COMPLETED, "Ready")
 
     finally:

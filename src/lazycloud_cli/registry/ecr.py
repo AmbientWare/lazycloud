@@ -42,7 +42,6 @@ class ECRRegistry(BaseRegistry):
             "localhost" in self.credentials.registry_url
             or "localstack" in self.credentials.registry_url
         ):
-            print("Skipping Docker login for LocalStack")
             return True
 
         try:
@@ -104,21 +103,11 @@ class ECRRegistry(BaseRegistry):
 
     def push_image(self, image_name: str) -> bool:
         """Push image to ECR."""
-        # Ensure we have credentials
         if not self.credentials:
-            self.credentials = self.get_upload_credentials(repo_name=image_name)
-            if not self.docker_login():
-                return False
+            raise RuntimeError(
+                "Must call build_image before push_image to establish credentials"
+            )
 
-        # If the image was built with a different name, tag it
-        if image_name != self.credentials.repository:
-            tag_cmd = ["docker", "tag", image_name, self.credentials.repository]
-            try:
-                subprocess.run(tag_cmd, check=True, capture_output=True, text=True)
-            except subprocess.CalledProcessError:
-                return False
-
-        # Push to ECR
         push_cmd = ["docker", "push", self.credentials.repository]
         try:
             _ = subprocess.run(push_cmd, check=True, capture_output=True, text=True)

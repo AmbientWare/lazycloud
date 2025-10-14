@@ -153,8 +153,6 @@ class HelmValuesGenerator:
                 deployment_name=self.deployment.name,
                 image_name=image_info.repository,
             )
-        else:
-            image_info.pullPolicy = "IfNotPresent"
 
         service_values = ServiceValues(
             replicas=service.deploy.replicas,
