@@ -97,6 +97,7 @@ class ComposeService(BaseModel):
     deploy: DeployConfig = DeployConfig()
     healthcheck: HealthCheck = HealthCheck()
     scaling: ScalingConfig = ScalingConfig()
+    grace_period_seconds: int | None = None  # Kubernetes terminationGracePeriodSeconds
 
 
 class ComposeNetwork(BaseModel):

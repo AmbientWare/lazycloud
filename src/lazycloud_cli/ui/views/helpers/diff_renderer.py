@@ -183,6 +183,10 @@ def format_service_details(details: dict[str, Any]) -> str:
     if details.get("healthcheck"):
         parts.append(f"Health check: {format_healthcheck(details['healthcheck'])}")
 
+    # Graceful shutdown period
+    if details.get("grace_period_seconds"):
+        parts.append(f"Shutdown: {details['grace_period_seconds']}s")
+
     # Command
     if details.get("command"):
         parts.append(f"Command: {format_command(details['command'])}")
@@ -205,6 +209,7 @@ def format_service_modifications(changes: dict[str, Any]) -> str:
         "deploy",
         "scaling",
         "healthcheck",
+        "grace_period_seconds",
     ]
 
     for field in priority_fields:
@@ -228,6 +233,10 @@ def format_field_change(field: str, change: Any) -> str | None:
             return f"Ports: {format_ports_list(change.from_value)} → {format_ports_list(change.to_value)}"
         elif field == "command":
             return f"Command: {format_command(change.from_value)} → {format_command(change.to_value)}"
+        elif field == "grace_period_seconds":
+            from_val = f"{change.from_value}s" if change.from_value else "default"
+            to_val = f"{change.to_value}s" if change.to_value else "default"
+            return f"Shutdown grace period: {from_val} → {to_val}"
         else:
             return f"{field.title()}: {format_value_summary(change.from_value)} → {format_value_summary(change.to_value)}"
 
