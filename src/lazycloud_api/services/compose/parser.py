@@ -22,6 +22,18 @@ def _get_int(scaling_labels, key, default=None):
     return int(scaling_labels[key]) if key in scaling_labels else default
 
 
+def _should_skip_service(service_config: dict[str, Any]) -> bool:
+    """Check if a service should be skipped from deployment.
+
+    Returns True if the service has lazycloud.skip: "true" in its labels.
+    """
+    labels = service_config.get("labels", {})
+    if isinstance(labels, dict):
+        skip_value = labels.get("lazycloud.skip", "false")
+        return str(skip_value).lower() == "true"
+    return False
+
+
 class ComposeParser:
     """Parser for Docker Compose v3 files. NOTE: right now we only support > v3 files."""
 
@@ -50,21 +62,34 @@ class ComposeParser:
             if network_config is not None
         ]
 
-        # Parse services
+        # Parse services (excluding those marked with lazycloud.skip)
         services = [
             ComposeParser._parse_service(
                 service_name, service_config, networks, volumes
             )
             for service_name, service_config in data.get("services", {}).items()
-            if service_config is not None
+            if service_config is not None and not _should_skip_service(service_config)
         ]
+
+        # Filter networks and volumes to only include those used by non-skipped services
+        used_networks = set()
+        used_volumes = set()
+
+        for service in services:
+            if service.networks:
+                used_networks.update(net.name for net in service.networks)
+            if service.volumes:
+                used_volumes.update(vol.source for vol in service.volumes if vol.source)
+
+        filtered_networks = [net for net in networks if net.name in used_networks]
+        filtered_volumes = [vol for vol in volumes if vol.name in used_volumes]
 
         # Create ComposeFile with user context
         compose_file = ComposeFile(
             version=version,
             services=services,
-            networks=networks,
-            volumes=volumes,
+            networks=filtered_networks,
+            volumes=filtered_volumes,
         )
 
         return compose_file
