@@ -277,6 +277,10 @@ class HelmValuesGenerator:
         pod_security_context = generate_pod_security_context_values(has_volumes)
         service_values.podSecurityContext = pod_security_context
 
+        # Add graceful shutdown period if specified
+        if service.grace_period_seconds is not None:
+            service_values.terminationGracePeriodSeconds = service.grace_period_seconds
+
         return service_values, self._secrets if self._secrets else None
 
     def _map_restart_policy(self, deploy_config: DeployConfig | None) -> str:

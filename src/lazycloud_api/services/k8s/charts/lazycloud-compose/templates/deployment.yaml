@@ -102,6 +102,9 @@ spec:
         {{- else }}
         {{- toYaml $.Values.podSecurityContext | nindent 8 }}
         {{- end }}
+      {{- if $service.terminationGracePeriodSeconds }}
+      terminationGracePeriodSeconds: {{ $service.terminationGracePeriodSeconds }}
+      {{- end }}
       containers:
         - name: {{ $service.name }}
           securityContext:

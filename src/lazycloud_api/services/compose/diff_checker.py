@@ -98,7 +98,14 @@ class ComposeDiffChecker:
         changes = {}
 
         # Compare simple fields
-        simple_fields = ["image", "command", "entrypoint", "working_dir", "user"]
+        simple_fields = [
+            "image",
+            "command",
+            "entrypoint",
+            "working_dir",
+            "user",
+            "grace_period_seconds",
+        ]
         for field in simple_fields:
             current_val = getattr(current, field, None)
             new_val = getattr(new, field, None)
@@ -130,7 +137,9 @@ class ComposeDiffChecker:
 
         # Compare nested models - show all changes including defaults
         if current.deploy != new.deploy:
-            deploy_changes = self._compare_models(current.deploy, new.deploy, include_defaults=True)
+            deploy_changes = self._compare_models(
+                current.deploy, new.deploy, include_defaults=True
+            )
             if deploy_changes:
                 changes["deploy"] = deploy_changes
 
@@ -147,7 +156,10 @@ class ComposeDiffChecker:
         return changes if changes else None
 
     def _compare_models(
-        self, current: BaseModel | None, new: BaseModel | None, include_defaults: bool = False
+        self,
+        current: BaseModel | None,
+        new: BaseModel | None,
+        include_defaults: bool = False,
     ) -> ModificationDict | None:
         """Generic comparison for Pydantic models.
 
@@ -164,7 +176,9 @@ class ComposeDiffChecker:
         if current is None:
             if new:
                 # Model added - show what was added
-                new_dict = new.model_dump(exclude_defaults=not include_defaults, exclude_none=True)
+                new_dict = new.model_dump(
+                    exclude_defaults=not include_defaults, exclude_none=True
+                )
                 if new_dict or include_defaults:
                     return FieldChange(from_value=None, to_value=new_dict)
             return None
@@ -172,7 +186,9 @@ class ComposeDiffChecker:
         if new is None:
             if current:
                 # Model removed - show what was removed
-                current_dict = current.model_dump(exclude_defaults=not include_defaults, exclude_none=True)
+                current_dict = current.model_dump(
+                    exclude_defaults=not include_defaults, exclude_none=True
+                )
                 if current_dict or include_defaults:
                     return FieldChange(from_value=current_dict, to_value=None)
             return None
@@ -276,9 +292,21 @@ class ComposeDiffChecker:
         if service.volumes:
             result["volumes"] = [self._volume_to_string(v) for v in service.volumes]
 
-        # Only show replicas if not 1
-        if data.get("deploy", {}).get("replicas", 1) != 1:
-            result["replicas"] = data["deploy"]["replicas"]
+        # Add graceful shutdown period if specified
+        if service.grace_period_seconds is not None:
+            result["grace_period_seconds"] = service.grace_period_seconds
+
+        # Add deploy config if it has non-default values
+        if "deploy" in data:
+            result["deploy"] = data["deploy"]
+
+        # Add scaling config if enabled
+        if service.scaling and service.scaling.enabled:
+            result["scaling"] = data.get("scaling", {})
+
+        # Add healthcheck if defined
+        if "healthcheck" in data:
+            result["healthcheck"] = data["healthcheck"]
 
         return result
 

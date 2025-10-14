@@ -37,8 +37,6 @@ class ECRRegistry(BaseRegistry):
         if not self.credentials:
             return False
 
-        print(f"Registry URL: {self.credentials.registry_url}")
-
         # No need to login when running with local development
         if (
             "localhost" in self.credentials.registry_url
@@ -64,9 +62,7 @@ class ECRRegistry(BaseRegistry):
                 check=True,
             )
             return login_result.returncode == 0
-        except subprocess.CalledProcessError as e:
-            print(f"Docker login failed: {e.stderr}")
-            print(f"Command: {e.cmd}")
+        except subprocess.CalledProcessError:
             return False
 
     def build_image(
@@ -103,22 +99,19 @@ class ECRRegistry(BaseRegistry):
         try:
             _ = subprocess.run(build_cmd, check=True, capture_output=True, text=True)
             return True
-        except subprocess.CalledProcessError as e:
-            print(f"Build failed: {e.stderr}")
+        except subprocess.CalledProcessError:
             return False
 
     def push_image(self, image_name: str) -> bool:
         """Push image to ECR."""
         # Ensure we have credentials
         if not self.credentials:
-            print(f"Getting upload credentials for {image_name}")
             self.credentials = self.get_upload_credentials(repo_name=image_name)
             if not self.docker_login():
                 return False
 
         # If the image was built with a different name, tag it
         if image_name != self.credentials.repository:
-            print(f"Tagging image {image_name} with {self.credentials.repository}")
             tag_cmd = ["docker", "tag", image_name, self.credentials.repository]
             try:
                 subprocess.run(tag_cmd, check=True, capture_output=True, text=True)
@@ -127,16 +120,10 @@ class ECRRegistry(BaseRegistry):
 
         # Push to ECR
         push_cmd = ["docker", "push", self.credentials.repository]
-        print(f"Pushing image: {self.credentials.repository}")
         try:
-            result = subprocess.run(
-                push_cmd, check=True, capture_output=True, text=True
-            )
-            print(f"Push output: {result.stdout}")
+            _ = subprocess.run(push_cmd, check=True, capture_output=True, text=True)
             return True
-        except subprocess.CalledProcessError as e:
-            print(f"Push failed: {e.stderr}")
-            print(f"Push stdout: {e.stdout}")
+        except subprocess.CalledProcessError:
             return False
 
     def get_image_url(self, image_name: str) -> str:

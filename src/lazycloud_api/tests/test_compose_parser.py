@@ -338,3 +338,86 @@ class TestComposeParser:
         assert result.networks[0].name == "shared"
         assert len(result.volumes) == 1
         assert result.volumes[0].name == "shared-data"
+
+    def test_graceful_shutdown_label(self, compose_parser):
+        """Test that lazycloud.graceful-shutdown label is parsed correctly."""
+        compose_dict = {
+            "version": "3.8",
+            "services": {
+                "postgres": {
+                    "image": "postgres:17",
+                    "labels": {"lazycloud.graceful-shutdown": "120"},
+                },
+            },
+        }
+
+        result = compose_parser.parse_dict(compose_dict)
+
+        assert len(result.services) == 1
+        assert result.services[0].grace_period_seconds == 120
+
+    def test_graceful_shutdown_not_specified(self, compose_parser):
+        """Test that grace period is None when not specified."""
+        compose_dict = {
+            "version": "3.8",
+            "services": {
+                "web": {
+                    "image": "nginx:latest",
+                },
+            },
+        }
+
+        result = compose_parser.parse_dict(compose_dict)
+
+        assert len(result.services) == 1
+        assert result.services[0].grace_period_seconds is None
+
+    def test_graceful_shutdown_invalid_value(self, compose_parser):
+        """Test that invalid grace period values are ignored."""
+        compose_dict = {
+            "version": "3.8",
+            "services": {
+                "web": {
+                    "image": "nginx:latest",
+                    "labels": {"lazycloud.graceful-shutdown": "not-a-number"},
+                },
+            },
+        }
+
+        result = compose_parser.parse_dict(compose_dict)
+
+        assert len(result.services) == 1
+        # Invalid value should be ignored, defaulting to None
+        assert result.services[0].grace_period_seconds is None
+
+    def test_graceful_shutdown_multiple_services(self, compose_parser):
+        """Test grace period with multiple services having different values."""
+        compose_dict = {
+            "version": "3.8",
+            "services": {
+                "postgres": {
+                    "image": "postgres:17",
+                    "labels": {"lazycloud.graceful-shutdown": "180"},
+                },
+                "redis": {
+                    "image": "redis:latest",
+                    "labels": {"lazycloud.graceful-shutdown": "60"},
+                },
+                "web": {
+                    "image": "nginx:latest",
+                    # No grace period specified
+                },
+            },
+        }
+
+        result = compose_parser.parse_dict(compose_dict)
+
+        assert len(result.services) == 3
+
+        postgres = next(s for s in result.services if s.name == "postgres")
+        redis = next(s for s in result.services if s.name == "redis")
+        web = next(s for s in result.services if s.name == "web")
+
+        assert postgres.grace_period_seconds == 180
+        assert redis.grace_period_seconds == 60
+        assert web.grace_period_seconds is None

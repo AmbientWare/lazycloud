@@ -117,6 +117,9 @@ class ComposeParser:
 
         healthcheck = ComposeParser._parse_healthcheck(config.get("healthcheck", {}))
 
+        # Parse graceful shutdown period from labels
+        grace_period = ComposeParser._parse_grace_period(config.get("labels", {}))
+
         # Parse command - convert list to string if needed
         command = config.get("command")
         if isinstance(command, list):
@@ -133,6 +136,7 @@ class ComposeParser:
             deploy=deploy,
             healthcheck=healthcheck,
             scaling=scaling or ScalingConfig(),
+            grace_period_seconds=grace_period,
         )
 
     @staticmethod
@@ -273,6 +277,29 @@ class ComposeParser:
             cpu=scaling_labels.get("lazycloud.scaling.cpu"),
             memory=scaling_labels.get("lazycloud.scaling.memory"),
         )
+
+    @staticmethod
+    def _parse_grace_period(labels: dict) -> int | None:
+        """Parse graceful shutdown period from labels.
+
+        Returns the value of lazycloud.graceful-shutdown label as an integer,
+        or None if not specified.
+        """
+        if not isinstance(labels, dict):
+            return None
+
+        grace_period_value = labels.get("lazycloud.graceful-shutdown")
+        if grace_period_value is None:
+            return None
+
+        try:
+            return int(grace_period_value)
+        except (ValueError, TypeError):
+            logger.warning(
+                f"Invalid lazycloud.graceful-shutdown value: {grace_period_value}. "
+                "Must be an integer (seconds). Ignoring."
+            )
+            return None
 
     @staticmethod
     def _parse_healthcheck(healthcheck_config: dict) -> HealthCheck:

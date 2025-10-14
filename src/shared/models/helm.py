@@ -199,6 +199,7 @@ class ServiceValues(BaseModel):
     networks: list[ServiceNetwork] | None = None
     securityContext: SecurityContext | None = None
     podSecurityContext: PodSecurityContext | None = None
+    terminationGracePeriodSeconds: int | None = None
 
 
 class NamespaceConfig(BaseModel):
