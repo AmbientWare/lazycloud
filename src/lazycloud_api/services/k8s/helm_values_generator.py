@@ -1,6 +1,6 @@
-from lazycloud_api.config import app_config
 from lazycloud_api.database import db
 from lazycloud_api.database.compose import ComposeDeploymentPydantic
+from lazycloud_api.services.aws import ecr_auth_service
 from lazycloud_api.services.compose.validator import ComposeValidator
 from lazycloud_api.services.k8s.generators.configuration import (
     generate_healthcheck_values,
@@ -144,13 +144,17 @@ class HelmValuesGenerator:
         if not service.image:
             raise ValueError(f"Service {service.name} has no image")
 
-        # Parse image
         image_info = parse_image(service.image)
 
-        # Apply registry configuration to image
-        registry = app_config.registry
-        image_info.repository = registry.format_image(image_info.repository)
-        image_info.pullPolicy = registry.pull_policy
+        if service.build is not None:
+            image_info.pullPolicy = ecr_auth_service.get_pull_policy()
+            image_info.repository = ecr_auth_service.get_repository_url(
+                user_id=self.deployment.user_id,
+                deployment_name=self.deployment.name,
+                image_name=image_info.repository,
+            )
+        else:
+            image_info.pullPolicy = "IfNotPresent"
 
         service_values = ServiceValues(
             replicas=service.deploy.replicas,

@@ -1,7 +1,3 @@
-"""
-Deploy command for Docker Compose applications.
-"""
-
 import time
 from pathlib import Path
 
@@ -13,7 +9,7 @@ from rich.live import Live
 from lazycloud_cli.api import api
 from lazycloud_cli.config import config
 from lazycloud_cli.lazycloud_file import LazyCloudFile
-from lazycloud_cli.registry import create_registry
+from lazycloud_cli.registry import RegistryType, create_registry
 from lazycloud_cli.ui.views import DeployView
 from shared.models.secrets import SecretCollection
 from shared.models.statuses import TaskStatus
@@ -96,7 +92,7 @@ def deploy(
         secrets = None
 
     # Handle image building AFTER confirmation
-    compose_yaml = _handle_builds(compose_data, compose_file_path, yes)
+    compose_yaml = _handle_builds(compose_data, compose_file_path, deployment_name, yes)
 
     # Deploy
     _deploy(
@@ -201,7 +197,7 @@ def _extract_env_variables(
 
 
 def _handle_builds(
-    compose_data: dict, compose_file_path: Path, yes: bool = False
+    compose_data: dict, compose_file_path: Path, deployment_name: str, yes: bool = False
 ) -> str:
     """Handle building and pushing images if needed."""
     view = DeployView(console)
@@ -226,7 +222,9 @@ def _handle_builds(
         return yaml.dump(compose_data, default_flow_style=False)
 
     # Build and push images
-    registry = create_registry(config.registry_url)
+    registry = create_registry(
+        RegistryType(config.registry_type), deployment_name=deployment_name
+    )
 
     # Create build status tracker (don't print the build info card separately)
     build_status = view.show_build_status(services_to_build)
@@ -264,11 +262,6 @@ def _handle_builds(
                     raise typer.Exit(1)
 
                 build_status.update_service(i, TaskStatus.COMPLETED, "Ready")
-                # Update image in compose data
-                service_config = compose_data["services"][build_info["service_name"]]
-                service_config["image"] = registry.get_image_url(
-                    build_info["image_name"]
-                )
 
     finally:
         registry.cleanup()

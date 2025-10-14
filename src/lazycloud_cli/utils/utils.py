@@ -5,6 +5,11 @@ from lazycloud_cli.api import api
 from lazycloud_cli.lazycloud_file import LazyCloudFile
 
 
+def format_image_name(image: str) -> str:
+    """Get the image name from the image string."""
+    return image.split("/")[-1] if "/" in image else image
+
+
 def get_current_deployment_name() -> str | None:
     """Get the deployment name from the current directory's lazycloud.yaml file.
 

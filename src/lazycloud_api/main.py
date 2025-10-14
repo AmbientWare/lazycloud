@@ -15,6 +15,7 @@ from lazycloud_api.api.v1.deployments import deployments_router
 from lazycloud_api.api.v1.diff import diff_router
 from lazycloud_api.api.v1.general import cli_version_router, health_router
 from lazycloud_api.api.v1.instances import instances_router
+from lazycloud_api.api.v1.registry import router as registry_router
 from lazycloud_api.api.v1.secrets import secrets_router
 from lazycloud_api.api.v1.services import services_router
 from lazycloud_api.api.v1.tasks import tasks_router
@@ -81,6 +82,7 @@ versionsed_routes.include_router(secrets_router)
 versionsed_routes.include_router(services_router)
 versionsed_routes.include_router(instances_router)
 versionsed_routes.include_router(diff_router)
+versionsed_routes.include_router(registry_router)
 app.include_router(versionsed_routes)
 
 # include non versioned routes that are not part of the main api

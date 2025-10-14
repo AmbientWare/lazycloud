@@ -89,6 +89,7 @@ class ComposeService(BaseModel):
 
     name: str
     image: str
+    build: dict | str | None = None
     command: str | list[str] | None = None
     ports: list[ComposePort] | None = None
     volumes: list[ServiceVolume] | None = None

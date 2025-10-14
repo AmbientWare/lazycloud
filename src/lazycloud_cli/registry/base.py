@@ -1,7 +1,3 @@
-"""
-Base registry interface for different registry implementations.
-"""
-
 from abc import ABC, abstractmethod
 from pathlib import Path
 
@@ -9,8 +5,8 @@ from pathlib import Path
 class BaseRegistry(ABC):
     """Base class for registry implementations."""
 
-    def __init__(self, registry_url: str):
-        self.registry_url = registry_url
+    def __init__(self, deployment_name: str):
+        self.deployment_name = deployment_name
 
     @abstractmethod
     def setup(self) -> bool:

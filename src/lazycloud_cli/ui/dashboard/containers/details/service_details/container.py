@@ -11,6 +11,7 @@ from lazycloud_cli.ui.dashboard.containers.details.service_details.pods_table im
     PodTable,
 )
 from lazycloud_cli.ui.dashboard.containers.details.utils import get_status_color
+from lazycloud_cli.utils.utils import format_image_name
 from shared.models.helm import HealthCheckValues, HPAValues
 from shared.models.k8s import Resources
 from shared.models.statuses import PodStatus, ServiceStatus
@@ -135,7 +136,7 @@ class ServiceDetailsContainer(Container):
         content = [
             f"Name:         {service.name}",
             f"Status:       [{status_color}]{service.status.upper()}[/{status_color}]",
-            f"Image:        {service.image}",
+            f"Image:        {format_image_name(service.image)}",
             f"Replicas:     {service.ready_replicas}/{service.replicas}",
         ]
 
@@ -157,13 +158,7 @@ class ServiceDetailsContainer(Container):
         if not ports:
             return ["No ports exposed"]
 
-        content = []
-        for port in ports:
-            port_str = (
-                f"● {port.get('port', 'unknown')} ({port.get('protocol', 'TCP')})"
-            )
-            content.append(port_str)
-        return content
+        return [f"● {port}" for port in ports]
 
     def _build_resources_content(self, resources: Resources) -> list[str]:
         """Build service resources section content."""

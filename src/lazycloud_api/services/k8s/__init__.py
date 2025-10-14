@@ -1,4 +1,5 @@
 import pathlib
+
 from pydantic import BaseModel
 
 
@@ -19,10 +20,10 @@ def get_chart_paths() -> Charts:
 
 
 def create_ns_name(user_id: str) -> str:
-    namespace = f"lc-{user_id}"
+    namespace = f"lc-{user_id}".lower()
 
     return namespace
 
 
 def create_release_name(deployment_id: str, user_id: str) -> str:
-    return f"lc-{deployment_id}-{user_id}"
+    return f"lc-{deployment_id}-{user_id}".lower()

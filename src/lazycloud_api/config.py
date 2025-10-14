@@ -7,9 +7,6 @@ import dotenv
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from lazycloud_api.registry.base import BaseRegistryConfig
-from lazycloud_api.registry.factory import create_registry_config
-
 # we load the environment variables from the .env file first so we can use them in rest of the app
 dotenv.load_dotenv()
 
@@ -36,25 +33,14 @@ class AppConfig(BaseModel):
     PROJECT_VERSION: str = "1.0.0"
     API_VERSION: str = os.getenv("API_VERSION", "/v1")
 
-    # Pricing Configuration
-    LAZYCLOUD_UPCHARGE: float = float(os.getenv("LAZYCLOUD_UPCHARGE", 0))
-    VOLUME_PRICE: float = float(os.getenv("VOLUME_PRICE", 0))
-    DEDICATED_IPV4_PRICE: float = float(os.getenv("DEDICATED_IPV4_PRICE", 0))
-    DATA_EGRESS_PRICE: float = float(os.getenv("DATA_EGRESS_PRICE", 0))
-
-    # Fly.io Configuration
-    FLY_API_TOKEN: str = os.getenv("FLY_API_TOKEN", "")
-    FLY_ORG_NAME: str = os.getenv("FLY_ORG_NAME", "")
-
     # AWS Configuration
+    AWS_ACCOUNT_ID: str = os.getenv("AWS_ACCOUNT_ID", "")
     AWS_ACCESS_KEY_ID: str = os.getenv("AWS_ACCESS_KEY_ID", "")
     AWS_SECRET_ACCESS_KEY: str = os.getenv("AWS_SECRET_ACCESS_KEY", "")
     AWS_REGION: str = os.getenv("AWS_REGION", "")
     AWS_ROUTE53_ZONES: dict[str, str] = json.loads(os.getenv("AWS_ROUTE53_ZONES", "{}"))
-
-    # Stripe Configuration
-    STRIPE_SECRET_KEY: str = os.getenv("STRIPE_SECRET_KEY", "")
-    STRIPE_PUBLISHABLE_KEY: str = os.getenv("STRIPE_PUBLISHABLE_KEY", "")
+    AWS_ENDPOINT_URL: str = os.getenv("AWS_ENDPOINT_URL", None)
+    AWS_ECR_BASE_ROLE_ARN: str = os.getenv("AWS_ECR_BASE_ROLE_ARN", "")
 
     # Database Configurations
     DB_SECRET_KEY: str = os.getenv("DB_SECRET_KEY", "")
@@ -69,37 +55,16 @@ class AppConfig(BaseModel):
     REGISTRY_PASSWORD: str | None = os.getenv("REGISTRY_PASSWORD", None)
     REGISTRY_REGION: str | None = os.getenv("REGISTRY_REGION", None)
 
-    @property
-    def registry(self) -> BaseRegistryConfig:
-        """Get registry configuration based on type."""
-        kwargs = {}
-
-        if self.REGISTRY_URL:
-            kwargs["registry_url"] = self.REGISTRY_URL
-        if self.REGISTRY_USERNAME:
-            kwargs["username"] = self.REGISTRY_USERNAME
-        if self.REGISTRY_PASSWORD:
-            kwargs["password"] = self.REGISTRY_PASSWORD
-        if self.REGISTRY_REGION:
-            kwargs["region"] = self.REGISTRY_REGION
-
-        return create_registry_config(self.REGISTRY_TYPE, **kwargs)
-
     # Required Environment Variables
     required_env_vars: List[str] = [
         "ADMIN_API_KEY",
-        "LAZYCLOUD_UPCHARGE",
-        "VOLUME_PRICE",
-        "DEDICATED_IPV4_PRICE",
-        "DATA_EGRESS_PRICE",
-        "FLY_API_TOKEN",
-        "FLY_ORG_NAME",
         "REDIS_URL",
+        "AWS_ACCOUNT_ID",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_ECR_BASE_ROLE_ARN",
         "AWS_SECRET_ACCESS_KEY",
         "AWS_REGION",
         "AWS_ROUTE53_ZONES",
-        "STRIPE_SECRET_KEY",
-        "STRIPE_PUBLISHABLE_KEY",
         "DB_SECRET_KEY",
     ]
 

@@ -12,7 +12,8 @@ class ECRRegistryConfig(BaseRegistryConfig):
     @property
     def pull_policy(self) -> str:
         """Standard pull policy for ECR."""
-        return "IfNotPresent"
+        # NOTE: maybe change this in the future
+        return "Always"
 
     @property
     def registry_prefix(self) -> str:

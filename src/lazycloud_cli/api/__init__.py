@@ -2,6 +2,7 @@ from lazycloud_cli.api.deployments import DeploymentsAPI
 from lazycloud_cli.api.diff import DiffAPI
 from lazycloud_cli.api.instances import InstancesAPI
 from lazycloud_cli.api.logs import LogsAPI
+from lazycloud_cli.api.registry import RegistryAPI
 from lazycloud_cli.api.secrets import SecretsAPI
 from lazycloud_cli.api.services import ServicesAPI
 from lazycloud_cli.api.status import StatusAPI
@@ -22,6 +23,7 @@ class API:
         self.diff = DiffAPI()
         self.instances = InstancesAPI()
         self.services = ServicesAPI()
+        self.registry = RegistryAPI()
 
 
 api = API()

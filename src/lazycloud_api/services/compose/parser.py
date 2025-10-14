@@ -100,6 +100,7 @@ class ComposeParser:
         return ComposeService(
             name=service_name,
             image=config.get("image"),
+            build=config.get("build"),
             command=command,
             ports=ports or None,
             volumes=service_volumes or None,
@@ -291,19 +292,39 @@ class ComposeParser:
             parts = port_part.split(":")
             if len(parts) == 1:
                 # Just target port (e.g., "80" or "80/udp")
+                # Handle port ranges (e.g., "4510-4559")
+                if "-" in parts[0]:
+                    # For ranges, just use the first port
+                    port_num = int(parts[0].split("-")[0])
+                else:
+                    port_num = int(parts[0])
                 return ComposePort(
-                    published=int(parts[0]), target=int(parts[0]), protocol=protocol
+                    published=port_num, target=port_num, protocol=protocol
                 )
 
-            elif len(parts) == 2:
-                # host:target format (e.g., "8080:80" or "8080:80/udp")
-                # We only care about the target port for Kubernetes
+            elif len(parts) >= 2:
+                # Take the last two parts for host:target
+                # This handles both "8080:80" and "127.0.0.1:8080:80"
+                host_port = parts[-2] if len(parts) > 2 else parts[0]
+                target_port = parts[-1]
+
+                # Handle port ranges
+                if "-" in host_port:
+                    host_port = int(host_port.split("-")[0])
+                else:
+                    host_port = int(host_port)
+
+                if "-" in target_port:
+                    target_port = int(target_port.split("-")[0])
+                else:
+                    target_port = int(target_port)
+
                 return ComposePort(
-                    published=int(parts[0]), target=int(parts[1]), protocol=protocol
+                    published=host_port, target=target_port, protocol=protocol
                 )
 
             else:
-                # Invalid format
+                # Should never reach here
                 return None
 
         except ValueError:
