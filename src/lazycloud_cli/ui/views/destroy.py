@@ -1,11 +1,14 @@
+from datetime import datetime
 from typing import Any, Dict
 
 from rich.console import Console
+from rich.live import Live
+from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.table import Table
 from rich.text import Text
 
 from lazycloud_cli.ui.components.card import Card
 from lazycloud_cli.ui.components.confirmation import DestructiveConfirmationDialog
-from lazycloud_cli.ui.components.progress import SpinnerProgress
 from lazycloud_cli.ui.theme import theme
 
 
@@ -99,16 +102,75 @@ class DestroyView:
 
         return dialog.show(self.console)
 
-    def show_progress(self, deployment_name: str) -> SpinnerProgress:
-        """Show destruction progress.
+    def show_progress(self, deployment_name: str):
+        """Show destruction progress with elapsed time.
 
         Args:
             deployment_name: Name of deployment being destroyed
 
         Returns:
-            SpinnerProgress instance for updates
+            Context manager for progress display
         """
-        return SpinnerProgress(f"Destroying deployment '{deployment_name}'...")
+
+        class DestroyRenderable:
+            """Custom renderable that updates with elapsed time."""
+
+            def __init__(self, deployment_name):
+                self.deployment_name = deployment_name
+                self.start_time = datetime.now()
+                self.progress = Progress(
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    transient=False,
+                )
+                self.task_id = self.progress.add_task(
+                    "Removing all services and resources..."
+                )
+
+            def __rich__(self):
+                """Rich protocol - called each time the display updates."""
+                # Create a table for layout
+                table = Table.grid(padding=0)
+                table.add_column()
+
+                # Add spinner and message row
+                table.add_row(self.progress)
+
+                # Add elapsed time row
+                elapsed = int((datetime.now() - self.start_time).total_seconds())
+                elapsed_text = Text(
+                    f"Elapsed time: {elapsed}s", style=theme.text_secondary
+                )
+                table.add_row(elapsed_text)
+
+                return Card(
+                    content=table,
+                    title=f"💀 Destroying '{self.deployment_name}'",
+                    border_style=theme.border_warning,
+                )
+
+        class ProgressContext:
+            def __init__(self, console, name):
+                self.console = console
+                self.deployment_name = name
+                self.live = None
+                self.renderable = None
+
+            def __enter__(self):
+                self.renderable = DestroyRenderable(self.deployment_name)
+                self.live = Live(
+                    self.renderable, console=self.console, refresh_per_second=4
+                )
+                self.live.start()
+                return self
+
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                if self.live:
+                    self.live.stop()
+                if self.renderable:
+                    self.renderable.progress.stop()
+
+        return ProgressContext(self.console, deployment_name)
 
     def show_success(self, deployment_name: str):
         """Show successful destruction message."""

@@ -53,7 +53,7 @@ def destroy(
             view.show_cancelled()
             return
 
-        # Delete via API with progress
+        # Delete via API with simple progress display
         with view.show_progress(deployment.name):
             delete_response = api.deployments.delete_deployment(
                 deployment_id=deployment.id
