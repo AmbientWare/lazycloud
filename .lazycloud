@@ -1,2 +1,0 @@
-deployment_name: lazycloud
-compose_file: docker-compose.yml
