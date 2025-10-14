@@ -4,14 +4,26 @@ from pydantic import BaseModel, Field
 
 from shared.models.k8s import (
     PodSecurityContext,
-    PortConfig,
     ProbeConfig,
+    Protocol,
     Resources,
     RestartPolicy,
     SecurityContext,
     VolumeMount,
     WorkloadType,
 )
+
+
+class PortConfig(BaseModel):
+    """Port configuration for Helm values and service definitions."""
+
+    name: str | None = None
+    port: int | str  # Service port
+    target_port: int | str | None = Field(
+        None, alias="targetPort"
+    )  # Container/pod port
+    protocol: Protocol = Protocol.TCP
+    node_port: int | None = Field(None, alias="nodePort")
 
 
 class CurrentUsage(BaseModel):

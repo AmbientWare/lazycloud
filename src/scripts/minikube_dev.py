@@ -26,8 +26,7 @@ MINIKUBE_ADDONS = [
     "storage-provisioner",
     "default-storageclass",
     "metrics-server",
-    "registry",
-    "gvisor",  # Enable gVisor runtime for enhanced security between containers and hosts
+    "gvisor",
 ]
 
 STORAGE_CLASS_YAML = """
@@ -143,34 +142,53 @@ def verify_gvisor_runtime() -> None:
         console.print("[yellow]⚠ Could not verify gVisor RuntimeClass[/yellow]")
 
 
-def get_registry_info() -> tuple[bool, str]:
-    """Get Minikube registry information."""
-    try:
-        # Check if registry addon is enabled
-        result = run_command(["minikube", "addons", "list"], check=False)
-        if "registry" not in result.stdout or "enabled" not in result.stdout:
-            return False, ""
+def configure_localstack_registry_dns() -> None:
+    """Configure minikube to resolve LocalStack registry hostname."""
+    console.print("🔧 [bold]Configuring LocalStack registry DNS...[/bold]")
 
-        # Get registry service info
+    try:
+        # Get LocalStack container IP on the lazycloud network
         result = run_command(
             [
-                "kubectl",
-                "get",
-                "service",
-                "-n",
-                "kube-system",
-                "registry",
-                "--no-headers",
+                "docker",
+                "inspect",
+                "lazycloud-localstack",
+                "--format={{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
             ],
+            check=True,
+        )
+        localstack_ip = result.stdout.strip()
+
+        if not localstack_ip:
+            console.print("[yellow]⚠ Could not find LocalStack container IP[/yellow]")
+            return
+
+        console.print(f"  LocalStack IP: {localstack_ip}")
+
+        # Add hosts entry in minikube to resolve the registry hostname to LocalStack IP
+        registry_hostname = "000000000000.dkr.ecr.us-east-1.localhost"
+        run_command(
+            [
+                "minikube",
+                "ssh",
+                f"echo '{localstack_ip} {registry_hostname}' | sudo tee -a /etc/hosts",
+            ],
+            check=True,
+        )
+
+        # Restart containerd to pick up the changes
+        run_command(
+            ["minikube", "ssh", "sudo systemctl restart containerd"],
             check=False,
         )
-        if result.returncode == 0 and result.stdout.strip():
-            # Registry is available at localhost:5000 when using minikube
-            return True, "localhost:5000"
 
-        return False, ""
-    except subprocess.CalledProcessError:
-        return False, ""
+        console.print("[green]✓ LocalStack registry DNS configured[/green]")
+        console.print(f"  Registry hostname: {registry_hostname}:4566")
+        console.print(f"  Resolves to: {localstack_ip} (LocalStack container)")
+
+    except subprocess.CalledProcessError as e:
+        console.print("[yellow]⚠ Failed to configure LocalStack registry DNS[/yellow]")
+        console.print(f"[yellow]  Error: {e}[/yellow]")
 
 
 def show_cluster_info() -> None:
@@ -187,10 +205,6 @@ def show_cluster_info() -> None:
         )
         node_count = len([n for n in nodes_result.stdout.strip().split("\n") if n])
 
-        # Get registry info
-        registry_enabled, registry_url = get_registry_info()
-        registry_status = f"✅ {registry_url}" if registry_enabled else "❌ Not enabled"
-
         # Check gVisor status
         gvisor_result = run_command(
             ["kubectl", "get", "runtimeclass", "gvisor"], check=False
@@ -202,17 +216,8 @@ def show_cluster_info() -> None:
         info_text = f"""
 Storage Classes: {storage_count} found
 Nodes: {node_count} ready
-Registry: {registry_status}
 gVisor Runtime: {gvisor_status}
 Sample Compose: /tmp/test-compose.yml
-"""
-
-        if registry_enabled:
-            info_text += f"""
-💡 To use the registry with LazyCloud:
-   1. Tag your image: docker tag myimage:latest {registry_url}/myimage:latest
-   2. Push to registry: docker push {registry_url}/myimage:latest
-   3. Use in compose: image: {registry_url}/myimage:latest
 """
 
         # Add gVisor note if enabled
@@ -262,6 +267,7 @@ def start_minikube(
                 [
                     "minikube",
                     "start",
+                    "--network=lazycloud",
                     f"--memory={memory}",
                     f"--cpus={cpus}",
                     f"--disk-size={disk_size}",
@@ -269,6 +275,7 @@ def start_minikube(
                     "--container-runtime=containerd",  # Required for gVisor
                     "--docker-opt",
                     "containerd=/var/run/containerd/containerd.sock",
+                    "--insecure-registry=000000000000.dkr.ecr.us-east-1.localhost:4566",
                 ]
             )
             console.print("[green]✓ Minikube cluster started successfully[/green]")
@@ -294,6 +301,7 @@ def start_minikube(
     setup_storage_class()
     setup_test_namespace()
     verify_gvisor_runtime()
+    configure_localstack_registry_dns()
 
     # Show results
     show_cluster_info()

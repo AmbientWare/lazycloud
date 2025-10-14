@@ -19,6 +19,7 @@ from lazycloud_cli.ui.views.helpers.formatters import (
     format_value_summary,
     format_volume_list,
 )
+from lazycloud_cli.utils.utils import format_image_name
 from shared.models.diffs import ComposeDiff, EnvVarChanges, FieldChange, ResourceSection
 
 
@@ -156,7 +157,7 @@ def format_service_details(details: dict[str, Any]) -> str:
 
     # Image (most important)
     if details.get("image"):
-        parts.append(f"Image: {details['image']}")
+        parts.append(f"Image: {format_image_name(details['image'])}")
 
     # Ports
     if details.get("ports"):

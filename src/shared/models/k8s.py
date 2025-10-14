@@ -45,14 +45,14 @@ class Resources(BaseModel):
     requests: ResourceRequirements | None = None
 
 
-class PortConfig(BaseModel):
-    """Port configuration."""
+class ContainerPort(BaseModel):
+    """Container port configuration as returned by Kubernetes API."""
 
     name: str | None = None
-    port: int | str
-    target_port: int | str | None = Field(None, alias="targetPort")
+    containerPort: int | str
+    hostPort: int | None = None
+    hostIP: str | None = None
     protocol: Protocol = Protocol.TCP
-    node_port: int | None = Field(None, alias="nodePort")
 
 
 class HttpGetProbe(BaseModel):
@@ -182,7 +182,7 @@ class Container(BaseModel):
     resources: Resources | None = None
     env: list[EnvVar] | None = None
     env_from: list[EnvFromSource] | None = Field(None, alias="envFrom")
-    ports: list[PortConfig] | None = None
+    ports: list[ContainerPort] | None = None
     volume_mounts: list[VolumeMount] | None = Field(None, alias="volumeMounts")
     liveness_probe: ProbeConfig | None = Field(None, alias="livenessProbe")
     readiness_probe: ProbeConfig | None = Field(None, alias="readinessProbe")

@@ -1,32 +1,33 @@
 networks:
-  # NOTE: normamally we would use this, but we are using host cause its easier with minikube
   lazycloud:
     external: true
 
-# create volumes for the databases
 volumes:
   pg-data:
   redis-data:
   prefect-data:
   prefect-task-storage:
-
+  localstack-data:
+  
 x-database-environment: &lazycloud-databases
-  DATABASE_URL: postgresql+asyncpg://lc_dev:password@localhost:5432/postgres
-  REDIS_URL: redis://localhost:6379
+  DATABASE_URL: postgresql+asyncpg://lc_dev:password@postgres:5432/postgres
+  REDIS_URL: redis://redis:6379
 
 services:
   api:
+    networks:
+      - lazycloud
     image: lazycloud-api:latest
     build:
       context: .
       dockerfile: Dockerfile
       target: api
+    links:
+      - "localstack:localhost.localstack.cloud"
     volumes:
-      # this allows for hot reloading
       - ./src/lazycloud_api:/src/lazycloud_api
-      # Mount the actual kubeconfig
-      - ~/.kube/config:/root/.kube/config:ro
-      - ~/.minikube:/home/${USER}/.minikube:ro
+      - "${HOME}/.kube/config:/root/.kube/config:ro"
+      - "${HOME}/.minikube:/home/${USER}/.minikube:ro"
       - ./src/shared:/src/shared
       - prefect-task-storage:/task-storage
     env_file:
@@ -34,12 +35,20 @@ services:
     environment:
       <<: *lazycloud-databases
       KUBECONFIG: /root/.kube/config
-      PREFECT_API_URL: http://localhost:4200/api
+      PREFECT_API_URL: http://prefect-server:4200/api
       PREFECT_LOGGING_LOG_PRINTS: "true"
       PREFECT_LOCAL_STORAGE_PATH: /task-storage
       PREFECT_RESULTS_PERSIST_BY_DEFAULT: "true"
-    network_mode: host
+      # AWS Configuration (defaults to LocalStack for dev)
+      AWS_ACCOUNT_ID: "000000000000"
+      AWS_ENDPOINT_URL: http://localstack:4566
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_REGION: us-east-1
+      AWS_ECR_BASE_ROLE_ARN: arn:aws:iam::000000000000:role/LazyCloudECRBaseRole
     command: [ "uv", "run", "python", "main.py", "--debug", "--workers", "1" ]
+    ports:
+      - 8000:8000
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
       interval: 30s
@@ -47,6 +56,8 @@ services:
       retries: 3
     restart: unless-stopped
     depends_on:
+      localstack:
+        condition: service_healthy
       postgres:
         condition: service_healthy
       redis:
@@ -56,7 +67,8 @@ services:
 
   prefect-server:
     image: prefecthq/prefect:3-latest
-    network_mode: host
+    networks:
+      - lazycloud
     command: ["prefect", "server", "start"]
     volumes:
       - prefect-data:/root/.prefect
@@ -66,7 +78,8 @@ services:
 
   postgres:
     image: postgres:17
-    network_mode: host
+    networks:
+      - lazycloud
     environment:
       POSTGRES_USER: lc_dev
       POSTGRES_PASSWORD: password
@@ -85,11 +98,49 @@ services:
 
   redis:
     image: redis:latest
-    network_mode: host
+    networks:
+      - lazycloud
     volumes:
       - redis-data:/data
     healthcheck:
       test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  localstack:
+    image: localstack/localstack-pro:latest
+    container_name: lazycloud-localstack
+    networks:
+      lazycloud:
+        aliases:
+          # NOTE: this is the registry url for the localstack registry
+          - 000000000000.dkr.ecr.us-east-1.localhost
+    ports:
+      - "127.0.0.1:4566:4566"
+      - "127.0.0.1:4510-4559:4510-4559"
+    env_file:
+      - .env
+    environment:
+      - DEBUG=0
+      - DOCKER_HOST=unix:///var/run/docker.sock
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_DEFAULT_REGION=us-east-1
+      - AWS_ENDPOINT_URL=http://localstack:4566
+      # EKS configuration
+      - EKS_LOADBALANCER_PORT=8081
+      # NOTE: minikube is used becuase it has built in gvisor runtimeclass
+      - EKS_K8S_PROVIDER=local
+      - LOCALSTACK_HOST=localhost
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+      - "./scripts/setup_localstack_iam.sh:/etc/localstack/init/ready.d/setup_iam.sh"
+      - "./scripts/setup_eks_cluster.sh:/etc/localstack/init/ready.d/setup_eks_cluster.sh"
+      - localstack-data:/var/lib/localstack
+      - "${HOME}/.kube/config:/root/.kube/config:ro"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
       interval: 10s
       timeout: 5s
       retries: 5

@@ -1,8 +1,3 @@
-"""
-Workload-related functionality for Helm values generation.
-Handles image parsing, workload type detection, and resource management.
-"""
-
 from lazycloud_api.services.k8s.generators.converters import (
     convert_cpu_value,
     convert_memory_value,

@@ -10,7 +10,7 @@ class CLIConfig(BaseSettings):
     # API Configuration
     api_base_url: str = "http://localhost:8000"
     api_version: str = "v1"
-    registry_url: str = "localhost:5000"
+    registry_type: str = "ecr"
 
     # Private attributes for api key management
     _api_keys: dict[str, str] = PrivateAttr(default_factory=dict)
