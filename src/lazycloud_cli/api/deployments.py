@@ -47,9 +47,15 @@ class DeploymentsAPI(BaseAPI):
         delete_response = DeploymentTaskStatusResponse(**response_data)
 
         # Stream task completion (no polling!)
-        await self._tasks.wait_for_task_completion(delete_response.task_id)
+        final_status = await self._tasks.stream_task_status(delete_response.task_id)
 
-        return delete_response
+        # Return updated response with final status
+        return DeploymentTaskStatusResponse(
+            task_id=delete_response.task_id,
+            deployment_id=delete_response.deployment_id,
+            status=final_status.status,
+            message=final_status.message,
+        )
 
     def get_deployment(
         self, deployment_id: str | None = None, name: str | None = None

@@ -1,7 +1,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
+from sse_starlette.sse import EventSourceResponse
 
 from lazycloud_api.api.v1.streaming_utils import create_sse_stream
 from lazycloud_api.prefect_app import get_task_result
@@ -33,12 +33,11 @@ async def stream_task_status(task_id: UUID):
     """Stream real-time task status updates."""
     monitor = TaskMonitor(task_id=task_id, callback=None)
 
-    return StreamingResponse(
+    return EventSourceResponse(
         create_sse_stream(
             monitor,
             event_type="status",
             format_data=lambda data: {"status": data[0].value, "message": data[1]},
             stream_id=f"task/{task_id}",
-        ),
-        media_type="text/event-stream",
+        )
     )

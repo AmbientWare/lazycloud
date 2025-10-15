@@ -14,7 +14,7 @@ class TasksAPI(BaseAPI):
         response = self._get(path=f"/{task_id}")
         return TaskStatusResponse(**response)
 
-    async def _stream_status(self, task_id: str) -> TaskStatusResponse:
+    async def stream_task_status(self, task_id: str) -> TaskStatusResponse:
         """Stream task updates until completion or failure."""
         result = None
 
@@ -34,7 +34,7 @@ class TasksAPI(BaseAPI):
             result = TaskStatusResponse(
                 task_id=task_id,
                 status=TaskStatus.ERROR,
-                error=str(error),
+                message=str(error),
             )
 
         await self._sse_client.stream(
@@ -45,14 +45,5 @@ class TasksAPI(BaseAPI):
         return result or TaskStatusResponse(
             task_id=task_id,
             status=TaskStatus.ERROR,
-            error="Stream ended without result",
+            message="Stream ended without result",
         )
-
-    async def stream_task_status(self, task_id: str) -> TaskStatusResponse:
-        """Stream task updates until completion or failure."""
-        return await self._stream_status(task_id)
-
-    async def wait_for_task_completion(self, task_id: str) -> None:
-        """Stream task updates until completion or failure."""
-        # NOTE: the tasks api will close the stream when the task is completed or failed
-        await self._stream_status(task_id)
