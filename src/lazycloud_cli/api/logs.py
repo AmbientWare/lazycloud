@@ -1,11 +1,13 @@
 from typing import Any, Callable
 
-from lazycloud_cli.api.base_ws import BaseWsAPI
+from lazycloud_cli.api.base_sse import SSEClient
 
 
-class LogsAPI(BaseWsAPI):
+class LogsAPI:
+    """API for streaming real-time service logs."""
+
     def __init__(self):
-        super().__init__()
+        self._client = SSEClient()
 
     async def stream_logs(
         self,
@@ -16,14 +18,22 @@ class LogsAPI(BaseWsAPI):
         on_message: Callable[[dict[str, Any]], None],
         on_error: Callable[[Exception], None] | None = None,
     ) -> None:
-        """Stream logs from a service"""
-        url_path = (
-            f"/deployments/{deployment_id}/logs/{service_name}/{pod_name}?tail={tail}"
+        """Stream logs from a service pod."""
+
+        def handle_event(event_type: str, data: dict) -> None:
+            if event_type == "log":
+                on_message(data)
+
+        await self._client.stream(
+            path=f"/deployments/{deployment_id}/services/{service_name}/pods/{pod_name}/logs/stream?tail={tail}",
+            on_event=handle_event,
+            on_error=on_error,
         )
 
-        await self.connect_with_retry(
-            url_path=url_path,
-            on_message=on_message,
-            on_error=on_error,
-            message_type="log",
-        )
+    async def disconnect(self):
+        """Disconnect active streams."""
+        await self._client.disconnect()
+
+    def is_connected(self) -> bool:
+        """Check if connected to a stream."""
+        return self._client.is_connected()

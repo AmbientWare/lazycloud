@@ -1,30 +1,32 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from loguru import logger
 
 from lazycloud_api.api.security import UserData, get_current_active_user
+from lazycloud_api.api.v1.streaming_utils import create_sse_stream, format_sse
 from lazycloud_api.database import db
 from lazycloud_api.prefect_app.services import (
     restart_all_services_task,
     restart_service_task,
 )
 from lazycloud_api.services.k8s.status_watcher import StatusWatcher
+from lazycloud_api.services.monitoring import LogMonitor, ServiceMonitor
 from shared.models.statuses import TaskStatus
 from shared.responses.services import ServiceStatusResponse
 from shared.responses.tasks import ServiceTaskStatusResponse
 
-services_router = APIRouter(prefix="/services", tags=["services"])
+router = APIRouter()
 
 
-@services_router.get(
-    "/{deployment_id}",
+@router.get(
+    "/{deployment_id}/services",
     response_model=list[ServiceStatusResponse],
 )
-async def get_service_statuses_for_deployment(
+async def list_services(
     deployment_id: str,
     current_user: UserData = Depends(get_current_active_user),
 ) -> list[ServiceStatusResponse]:
     """Get the status of all services within a deployment."""
-    # Get deployment from database
     deployment = await db.compose_deployments.afind_one(
         {
             "id": deployment_id,
@@ -34,7 +36,6 @@ async def get_service_statuses_for_deployment(
     if not deployment:
         raise HTTPException(status_code=404, detail="Deployment not found")
 
-    # Create watcher and get service status
     watcher = StatusWatcher(
         deployment_id=deployment_id,
         namespace=deployment.namespace,
@@ -43,7 +44,7 @@ async def get_service_statuses_for_deployment(
 
     service_statuses = await watcher.get_service_statuses_for_deployment()
 
-    response_data = [
+    return [
         ServiceStatusResponse(
             service=service,
             deployment_id=deployment_id,
@@ -53,11 +54,9 @@ async def get_service_statuses_for_deployment(
         for service in service_statuses
     ]
 
-    return response_data
 
-
-@services_router.get(
-    "/{deployment_id}/{service_name}/status",
+@router.get(
+    "/{deployment_id}/services/{service_name}/status",
     response_model=ServiceStatusResponse,
 )
 async def get_service_status(
@@ -66,7 +65,6 @@ async def get_service_status(
     current_user: UserData = Depends(get_current_active_user),
 ) -> ServiceStatusResponse:
     """Get the status of a specific service within a deployment."""
-    # Get deployment from database
     deployment = await db.compose_deployments.afind_one(
         {
             "id": deployment_id,
@@ -77,7 +75,6 @@ async def get_service_status(
     if not deployment:
         raise HTTPException(status_code=404, detail="Deployment not found")
 
-    # Create watcher and get service status
     watcher = StatusWatcher(
         deployment_id=deployment_id,
         namespace=deployment.namespace,
@@ -99,8 +96,9 @@ async def get_service_status(
     )
 
 
-@services_router.post(
-    "/restart/{deployment_id}", response_model=ServiceTaskStatusResponse
+@router.post(
+    "/{deployment_id}/services/restart",
+    response_model=ServiceTaskStatusResponse,
 )
 async def restart_all_services(
     deployment_id: str,
@@ -108,7 +106,6 @@ async def restart_all_services(
 ) -> ServiceTaskStatusResponse:
     """Restart all services within a deployment."""
     try:
-        # Submit task to restart all services
         task_future = restart_all_services_task.delay(
             deployment_id=deployment_id,
             user_id=current_user.user_id,
@@ -119,7 +116,7 @@ async def restart_all_services(
             status=TaskStatus.PENDING,
             message="Restart all services task submitted",
             deployment_id=deployment_id,
-            service_name=None,  # None indicates all services
+            service_name=None,
         )
 
     except Exception as e:
@@ -129,8 +126,8 @@ async def restart_all_services(
         )
 
 
-@services_router.post(
-    "/restart/{deployment_id}/{service_name}",
+@router.post(
+    "/{deployment_id}/services/{service_name}/restart",
     response_model=ServiceTaskStatusResponse,
 )
 async def restart_service(
@@ -140,7 +137,6 @@ async def restart_service(
 ) -> ServiceTaskStatusResponse:
     """Restart a specific service within a deployment."""
     try:
-        # Submit task to restart the service
         task_future = restart_service_task.delay(
             deployment_id=deployment_id,
             service_name=service_name,
@@ -160,3 +156,77 @@ async def restart_service(
         raise HTTPException(
             status_code=500, detail="Failed to submit restart service task"
         )
+
+
+# Streaming endpoints
+
+
+@router.get("/{deployment_id}/services/{service_name}/status/stream")
+async def stream_service_status(
+    deployment_id: str,
+    service_name: str,
+    current_user: UserData = Depends(get_current_active_user),
+):
+    """Stream real-time service status updates."""
+    deployment = await db.compose_deployments.aget_by_id(deployment_id)
+    if not deployment or deployment.user_id != current_user.user_id:
+        return StreamingResponse(
+            iter([format_sse("error", {"message": "Unauthorized"})]),
+            media_type="text/event-stream",
+            status_code=401,
+        )
+
+    monitor = ServiceMonitor(
+        deployment_id=deployment_id,
+        service_name=service_name,
+        namespace=deployment.namespace,
+        helm_values=deployment.helm_values,
+        callback=None,
+    )
+
+    return StreamingResponse(
+        create_sse_stream(
+            monitor,
+            event_type="status",
+            format_data=lambda status: {"data": status.model_dump(mode="json")},
+            stream_id=f"service/{deployment_id}/{service_name}",
+        ),
+        media_type="text/event-stream",
+    )
+
+
+@router.get("/{deployment_id}/services/{service_name}/pods/{pod_name}/logs/stream")
+async def stream_service_logs(
+    deployment_id: str,
+    service_name: str,
+    pod_name: str,
+    current_user: UserData = Depends(get_current_active_user),
+    tail: int = Query(100),
+):
+    """Stream real-time service logs."""
+    deployment = await db.compose_deployments.aget_by_id(deployment_id)
+    if not deployment or deployment.user_id != current_user.user_id:
+        return StreamingResponse(
+            iter([format_sse("error", {"message": "Unauthorized"})]),
+            media_type="text/event-stream",
+            status_code=401,
+        )
+
+    monitor = LogMonitor(
+        deployment_id=deployment_id,
+        namespace=deployment.namespace,
+        service_name=service_name,
+        pod_name=pod_name,
+        tail_lines=tail,
+        callback=None,
+    )
+
+    return StreamingResponse(
+        create_sse_stream(
+            monitor,
+            event_type="log",
+            format_data=lambda line: {"service": service_name, "line": line},
+            stream_id=f"logs/{deployment_id}/{service_name}/{pod_name}",
+        ),
+        media_type="text/event-stream",
+    )

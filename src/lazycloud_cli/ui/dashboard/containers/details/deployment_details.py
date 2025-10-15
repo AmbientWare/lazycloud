@@ -168,8 +168,6 @@ class DeploymentDetailsContainer(Container):
 
     def update_deployment(self, deployment: DeploymentStatus) -> None:
         """Update all sections with new deployment data."""
-        self.deployment_status = deployment
-
         # Update overview
         if self._overview_widget:
             overview_content = self._build_overview_content(deployment)

@@ -8,12 +8,13 @@ from shared.responses.tasks import ServiceTaskStatusResponse
 
 class ServicesAPI(BaseAPI):
     def __init__(self):
-        super().__init__("services")
+        # NOTE: services are nested under deployments
+        super().__init__("deployments")
         self._tasks = TasksAPI()
 
     def get_service_statuses(self, deployment_id: str) -> list[ServiceStatusResponse]:
         """Get the status of all services in a deployment."""
-        response_data = self._get(f"/{deployment_id}")
+        response_data = self._get(f"/{deployment_id}/services")
         statuses = [ServiceStatusResponse(**data) for data in response_data]
         for status in statuses:
             status.service.last_checked = status.service.last_checked.replace(
@@ -25,7 +26,7 @@ class ServicesAPI(BaseAPI):
         self, deployment_id: str, service_name: str
     ) -> ServiceStatusResponse:
         """Get the status of a specific service in a deployment."""
-        response_data = self._get(f"/{deployment_id}/{service_name}/status")
+        response_data = self._get(f"/{deployment_id}/services/{service_name}/status")
         status = ServiceStatusResponse(**response_data)
         status.service.last_checked = status.service.last_checked.replace(
             tzinfo=UTC
@@ -36,10 +37,10 @@ class ServicesAPI(BaseAPI):
         self, deployment_id: str, service_name: str
     ) -> ServiceTaskStatusResponse:
         """Restart a specific service in a deployment."""
-        response_data = self._post(f"/restart/{deployment_id}/{service_name}")
+        response_data = self._post(f"/{deployment_id}/services/{service_name}/restart")
         return ServiceTaskStatusResponse(**response_data)
 
     def restart_all_services(self, deployment_id: str) -> ServiceTaskStatusResponse:
         """Restart all services in a deployment."""
-        response_data = self._post(f"/restart/{deployment_id}")
+        response_data = self._post(f"/{deployment_id}/services/restart")
         return ServiceTaskStatusResponse(**response_data)
