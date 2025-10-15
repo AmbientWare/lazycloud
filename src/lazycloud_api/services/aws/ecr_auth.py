@@ -241,7 +241,7 @@ class ECRAuthService:
                 registry_url=registry_url,
                 username="AWS",
                 password="localstack-token",  # LocalStack accepts any password
-                repository=repository_url,
+                repository=f"{repository_url}:{tag}",
                 expires_at=datetime.now(timezone.utc)
                 + timedelta(seconds=self.ttl_seconds),
             )
