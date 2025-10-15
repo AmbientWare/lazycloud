@@ -11,16 +11,16 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
 from lazycloud_api.api.v1.api_keys import api_keys_router
-from lazycloud_api.api.v1.deployments import deployments_router
+from lazycloud_api.api.v1.deployments import router as deployments_router
 from lazycloud_api.api.v1.diff import diff_router
 from lazycloud_api.api.v1.general import cli_version_router, health_router
 from lazycloud_api.api.v1.instances import instances_router
 from lazycloud_api.api.v1.registry import router as registry_router
 from lazycloud_api.api.v1.secrets import secrets_router
-from lazycloud_api.api.v1.services import services_router
+
+# Services routes now under deployments module
 from lazycloud_api.api.v1.tasks import tasks_router
 from lazycloud_api.api.v1.users import users_router
-from lazycloud_api.api.v1.ws import ws_router
 from lazycloud_api.config import app_config
 from lazycloud_api.database.crud import create_tables, update_admin_api_keys
 from lazycloud_api.log_config import setup_logger
@@ -77,9 +77,7 @@ versionsed_routes.include_router(users_router)
 versionsed_routes.include_router(api_keys_router)
 versionsed_routes.include_router(tasks_router)
 versionsed_routes.include_router(deployments_router)
-versionsed_routes.include_router(ws_router)
 versionsed_routes.include_router(secrets_router)
-versionsed_routes.include_router(services_router)
 versionsed_routes.include_router(instances_router)
 versionsed_routes.include_router(diff_router)
 versionsed_routes.include_router(registry_router)

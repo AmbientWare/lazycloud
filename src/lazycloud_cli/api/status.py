@@ -1,43 +1,39 @@
-import json
 from datetime import UTC
 from typing import Callable
 
-from lazycloud_cli.api.base_ws import BaseWsAPI
+from lazycloud_cli.api.base_sse import SSEClient
 from shared.models.statuses import DeploymentStatus, ServiceStatus
 
 
-class StatusAPI(BaseWsAPI):
+class StatusAPI:
+    """API for streaming real-time status updates."""
+
     def __init__(self):
-        super().__init__()
+        self._client = SSEClient()
 
     async def stream_deployment_status(
         self,
         deployment_id: str,
         on_update: Callable[[DeploymentStatus], None],
         on_error: Callable[[Exception], None] | None = None,
-    ) -> "StatusAPI":
-        """Stream real-time deployment status updates."""
-        url_path = f"/deployments/{deployment_id}/status"
+    ) -> None:
+        """Stream deployment status updates."""
 
-        async def on_connect(websocket):
-            msg = {"type": "get_status"}
-            await websocket.send(json.dumps(msg))
+        def handle_event(event_type: str, data: dict) -> None:
+            if event_type == "status":
+                status_data = data.get("data", {})
+                status = DeploymentStatus(**status_data)
+                # Convert UTC time to local timezone
+                status.last_checked = status.last_checked.replace(
+                    tzinfo=UTC
+                ).astimezone()
+                on_update(status)
 
-        def _on_message(data: dict) -> None:
-            status = DeploymentStatus(**data)
-            # NOTE: time from api is in UTC, convert to local
-            status.last_checked = status.last_checked.replace(tzinfo=UTC).astimezone()
-            on_update(status)
-
-        await self.connect_with_retry(
-            url_path=url_path,
-            on_connect=on_connect,
-            on_message=_on_message,
+        await self._client.stream(
+            path=f"/deployments/{deployment_id}/status/stream",
+            on_event=handle_event,
             on_error=on_error,
-            message_type="status",
         )
-
-        return self
 
     async def stream_service_status(
         self,
@@ -45,26 +41,29 @@ class StatusAPI(BaseWsAPI):
         service_name: str,
         on_update: Callable[[ServiceStatus], None],
         on_error: Callable[[Exception], None] | None = None,
-    ) -> "StatusAPI":
-        """Stream real-time service status updates."""
-        url_path = f"/services/{deployment_id}/{service_name}/status"
+    ) -> None:
+        """Stream service status updates."""
 
-        async def on_connect(websocket):
-            msg = {"type": "get_status"}
-            await websocket.send(json.dumps(msg))
+        def handle_event(event_type: str, data: dict) -> None:
+            if event_type == "status":
+                status_data = data.get("data", {})
+                status = ServiceStatus(**status_data)
+                # Convert UTC time to local timezone
+                status.last_checked = status.last_checked.replace(
+                    tzinfo=UTC
+                ).astimezone()
+                on_update(status)
 
-        def _on_message(data: dict) -> None:
-            status = ServiceStatus(**data)
-            # NOTE: time from api is in UTC, convert to local
-            status.last_checked = status.last_checked.replace(tzinfo=UTC).astimezone()
-            on_update(status)
-
-        await self.connect_with_retry(
-            url_path=url_path,
-            on_connect=on_connect,
-            on_message=_on_message,
+        await self._client.stream(
+            path=f"/deployments/{deployment_id}/services/{service_name}/status/stream",
+            on_event=handle_event,
             on_error=on_error,
-            message_type="status",
         )
 
-        return self
+    async def disconnect(self):
+        """Disconnect active streams."""
+        await self._client.disconnect()
+
+    def is_connected(self) -> bool:
+        """Check if connected to a stream."""
+        return self._client.is_connected()
