@@ -1,5 +1,6 @@
 from lazycloud_api.services.monitoring.deployment_monitor import DeploymentMonitor
 from lazycloud_api.services.monitoring.log_monitor import LogMonitor
 from lazycloud_api.services.monitoring.service_monitor import ServiceMonitor
+from lazycloud_api.services.monitoring.task_monitor import TaskMonitor
 
-__all__ = ["DeploymentMonitor", "LogMonitor", "ServiceMonitor"]
+__all__ = ["DeploymentMonitor", "LogMonitor", "ServiceMonitor", "TaskMonitor"]

@@ -9,7 +9,7 @@ from shared.responses.deployments import (
     DeploymentResponse,
     DeploymentStatusResponse,
 )
-from shared.responses.tasks import DeploymentTaskStatusResponse
+from shared.responses.tasks import DeploymentTaskStatusResponse, TaskStatusResponse
 
 
 class DeploymentsAPI(BaseAPI):
@@ -31,21 +31,25 @@ class DeploymentsAPI(BaseAPI):
 
         # Make the initial request
         response_data = self._post("", json=request.model_dump())
+        create_response = DeploymentTaskStatusResponse(**response_data)
 
-        # Return the task response
-        return DeploymentTaskStatusResponse(**response_data)
+        return create_response
 
-    def delete_deployment(self, deployment_id: str) -> DeploymentTaskStatusResponse:
-        """Delete a deployment."""
+    async def wait_for_deployment(self, task_id: str) -> TaskStatusResponse:
+        """Wait for deployment task to complete via streaming."""
+        return await self._tasks.stream_task_status(task_id)
+
+    async def delete_deployment(
+        self, deployment_id: str
+    ) -> DeploymentTaskStatusResponse:
+        """Delete a deployment with streaming task updates."""
         response_data = self._delete(path=f"/{deployment_id}")
         delete_response = DeploymentTaskStatusResponse(**response_data)
 
-        #  wait for task to complete
-        final_task_response = self._tasks.wait_for_task_completion(
-            delete_response.task_id
-        )
+        # Stream task completion (no polling!)
+        await self._tasks.wait_for_task_completion(delete_response.task_id)
 
-        return final_task_response
+        return delete_response
 
     def get_deployment(
         self, deployment_id: str | None = None, name: str | None = None

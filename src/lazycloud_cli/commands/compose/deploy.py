@@ -1,4 +1,4 @@
-import time
+import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -433,6 +433,8 @@ def _deploy(
             creation_progress.update_status(
                 "creating", "Sending configuration to server..."
             )
+
+            # Create deployment (sync - just returns task ID)
             task_response = api.deployments.create_deployment(
                 compose_yaml=compose_yaml,
                 name=deployment_name,
@@ -443,60 +445,44 @@ def _deploy(
                 creation_progress.update_status(
                     "failed", "Failed to create deployment task"
                 )
-                time.sleep(1)
                 raise Exception("Failed to create deployment task")
 
-            # Store secrets if we have any
+            # Store secrets if we have any (BEFORE waiting for task!)
             if secrets:
                 try:
                     api.secrets.store_secrets(task_response.deployment_id, secrets)
-
                 except Exception as e:
-                    view.show_error(f"Failed to store secrets: {e}")
-                    raise typer.Exit(1)
+                    raise Exception(f"Failed to store secrets: {e}")
 
-            # Poll task status
+            # NOW wait for task completion via streaming
             creation_progress.update_status(
                 "creating", "Processing deployment request..."
             )
-            start_time = time.time()
 
-            # convert timeout to seconds
-            timeout = timeout * 60
+            # Get the final task status from the stream
+            final_status = asyncio.run(
+                api.deployments.wait_for_deployment(task_response.task_id)
+            )
 
-            while True:
-                # Check timeout
-                if time.time() - start_time > timeout:
-                    creation_progress.update_status("failed", "Deployment timed out")
-                    raise Exception("Deployment creation timed out")
-
-                # Get task status
-                task_status = api.tasks.get_task_status(task_response.task_id)
-
-                if task_status.status == TaskStatus.COMPLETED:
-                    creation_progress.update_status(
-                        TaskStatus.COMPLETED, "Deployment created successfully!"
-                    )
-                    break
-                elif task_status.status == TaskStatus.ERROR:
-                    error_msg = getattr(task_status, "error", "Task failed")
-                    creation_progress.update_status("failed", error_msg)
-                    raise Exception(f"Deployment failed: {error_msg}")
-                elif task_status.status == TaskStatus.PENDING:
-                    creation_progress.update_status(
-                        "creating", "Deployment in progress..."
-                    )
-
-                time.sleep(1)
-
-        if task_status and not task_status.status == TaskStatus.COMPLETED:
-            view.show_error(f"Deployment failed: {task_status.message}")
-            raise typer.Exit(1)
+            # Update UI based on actual status
+            if final_status.status == TaskStatus.COMPLETED:
+                creation_progress.update_status(
+                    TaskStatus.COMPLETED, "Deployment created successfully!"
+                )
+            elif final_status.status == TaskStatus.ERROR:
+                error_msg = final_status.error or final_status.message or "Task failed"
+                creation_progress.update_status("failed", error_msg)
+                raise Exception(f"Deployment failed: {error_msg}")
+            else:
+                creation_progress.update_status(
+                    "failed", f"Unexpected status: {final_status.status}"
+                )
+                raise Exception(f"Deployment ended with status: {final_status.status}")
 
         # Show final success message
         view.show_summary(
             deployment_name=deployment_name,
-            status=task_status.status,
+            status=final_status.status,
             duration=0,
             message="View deployment in the dashboard with 'lazycloud dashboard'",
         )
