@@ -10,6 +10,7 @@ from lazycloud_api.services.monitoring import (
     DeploymentMonitor,
     LogMonitor,
     ServiceMonitor,
+    TaskMonitor,
 )
 
 
@@ -19,7 +20,7 @@ def format_sse(event: str, data: dict) -> str:
 
 
 async def create_sse_stream(
-    monitor: DeploymentMonitor | ServiceMonitor | LogMonitor,
+    monitor: DeploymentMonitor | ServiceMonitor | LogMonitor | TaskMonitor,
     event_type: str,
     format_data: Callable,
     stream_id: str,
@@ -33,7 +34,7 @@ async def create_sse_stream(
         await monitor.start()
         logger.info(f"SSE connected: {stream_id}")
 
-        while True:
+        while monitor._running:
             try:
                 data = await asyncio.wait_for(queue.get(), timeout=30.0)
                 yield format_sse(event_type, format_data(data))

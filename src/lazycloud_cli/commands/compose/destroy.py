@@ -1,3 +1,5 @@
+import asyncio
+
 import typer
 from rich.console import Console
 
@@ -53,10 +55,10 @@ def destroy(
             view.show_cancelled()
             return
 
-        # Delete via API with simple progress display
+        # Delete via API with streaming (no polling!)
         with view.show_progress(deployment.name):
-            delete_response = api.deployments.delete_deployment(
-                deployment_id=deployment.id
+            delete_response = asyncio.run(
+                api.deployments.delete_deployment(deployment_id=deployment.id)
             )
 
         if delete_response.status == TaskStatus.COMPLETED:
