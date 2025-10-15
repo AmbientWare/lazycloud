@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import StreamingResponse
 from loguru import logger
+from sse_starlette.sse import EventSourceResponse
 
 from lazycloud_api.api.security import UserData, get_current_active_user
-from lazycloud_api.api.v1.streaming_utils import create_sse_stream, format_sse
+from lazycloud_api.api.v1.streaming_utils import create_sse_stream
 from lazycloud_api.database import db
 from lazycloud_api.prefect_app.services import (
     restart_all_services_task,
@@ -170,11 +170,7 @@ async def stream_service_status(
     """Stream real-time service status updates."""
     deployment = await db.compose_deployments.aget_by_id(deployment_id)
     if not deployment or deployment.user_id != current_user.user_id:
-        return StreamingResponse(
-            iter([format_sse("error", {"message": "Unauthorized"})]),
-            media_type="text/event-stream",
-            status_code=401,
-        )
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
     monitor = ServiceMonitor(
         deployment_id=deployment_id,
@@ -184,14 +180,13 @@ async def stream_service_status(
         callback=None,
     )
 
-    return StreamingResponse(
+    return EventSourceResponse(
         create_sse_stream(
             monitor,
             event_type="status",
             format_data=lambda status: {"data": status.model_dump(mode="json")},
             stream_id=f"service/{deployment_id}/{service_name}",
-        ),
-        media_type="text/event-stream",
+        )
     )
 
 
@@ -206,11 +201,7 @@ async def stream_service_logs(
     """Stream real-time service logs."""
     deployment = await db.compose_deployments.aget_by_id(deployment_id)
     if not deployment or deployment.user_id != current_user.user_id:
-        return StreamingResponse(
-            iter([format_sse("error", {"message": "Unauthorized"})]),
-            media_type="text/event-stream",
-            status_code=401,
-        )
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
     monitor = LogMonitor(
         deployment_id=deployment_id,
@@ -221,12 +212,11 @@ async def stream_service_logs(
         callback=None,
     )
 
-    return StreamingResponse(
+    return EventSourceResponse(
         create_sse_stream(
             monitor,
             event_type="log",
             format_data=lambda line: {"service": service_name, "line": line},
             stream_id=f"logs/{deployment_id}/{service_name}/{pod_name}",
-        ),
-        media_type="text/event-stream",
+        )
     )

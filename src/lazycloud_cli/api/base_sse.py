@@ -3,6 +3,7 @@ import json
 from typing import Any, Callable
 
 import httpx
+from httpx_sse import aconnect_sse
 
 from lazycloud_cli.config import config
 
@@ -58,8 +59,7 @@ class SSEClient:
         on_event: Callable[[str, dict[str, Any]], None],
         on_error: Callable[[Exception], None] | None = None,
     ) -> None:
-        """Core SSE streaming implementation."""
-        response = None
+        """Core SSE streaming implementation using httpx-sse."""
         try:
             self._running = True
 
@@ -72,56 +72,34 @@ class SSEClient:
 
             # Create streaming connection
             self._client = httpx.AsyncClient(timeout=httpx.Timeout(None, connect=10.0))
-            request = self._client.build_request("GET", url, headers=headers)
-            response = await self._client.send(request, stream=True)
 
-            if response.status_code != 200:
-                error_msg = f"HTTP {response.status_code}"
-                try:
-                    error_data = await response.aread()
-                    error_msg = f"{error_msg}: {error_data.decode()}"
-                except Exception:
-                    pass
-                raise Exception(error_msg)
+            # Use httpx-sse to handle SSE protocol
+            async with aconnect_sse(
+                self._client, "GET", url, headers=headers
+            ) as event_source:
+                async for sse in event_source.aiter_sse():
+                    if not self._running:
+                        break
 
-            # Parse SSE stream
-            current_event = None
-            current_data = []
-
-            async for line in response.aiter_lines():
-                if not self._running:
-                    break
-
-                line = line.strip()
-
-                # Empty line = end of event
-                if not line:
-                    if current_data:
-                        data_str = "\n".join(current_data)
+                    # Handle error events
+                    if sse.event == "error":
                         try:
-                            data = json.loads(data_str)
-                            if current_event == "error":
-                                if on_error:
-                                    on_error(
-                                        Exception(data.get("message", "Unknown error"))
-                                    )
-                            else:
-                                on_event(current_event or "message", data)
+                            data = json.loads(sse.data)
+                            if on_error:
+                                on_error(
+                                    Exception(data.get("message", "Unknown error"))
+                                )
+                        except json.JSONDecodeError:
+                            if on_error:
+                                on_error(Exception("Invalid error data"))
+                    else:
+                        # Handle regular events
+                        try:
+                            data = json.loads(sse.data)
+                            on_event(sse.event or "message", data)
                         except json.JSONDecodeError as e:
                             if on_error:
                                 on_error(Exception(f"Invalid JSON in SSE data: {e}"))
-
-                    current_event = None
-                    current_data = []
-                    continue
-
-                # Parse SSE fields
-                if line.startswith(":"):
-                    continue  # Comment/keepalive
-                elif line.startswith("event:"):
-                    current_event = line[6:].strip()
-                elif line.startswith("data:"):
-                    current_data.append(line[5:].strip())
 
         except Exception as e:
             if on_error:
@@ -130,9 +108,6 @@ class SSEClient:
 
         finally:
             self._running = False
-            if response:
-                await response.aclose()
-
             if self._client:
                 await self._client.aclose()
                 self._client = None

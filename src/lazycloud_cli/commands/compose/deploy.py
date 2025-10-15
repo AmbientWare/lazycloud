@@ -470,7 +470,7 @@ def _deploy(
                     TaskStatus.COMPLETED, "Deployment created successfully!"
                 )
             elif final_status.status == TaskStatus.ERROR:
-                error_msg = final_status.error or final_status.message or "Task failed"
+                error_msg = final_status.message or "Task failed"
                 creation_progress.update_status("failed", error_msg)
                 raise Exception(f"Deployment failed: {error_msg}")
             else:
