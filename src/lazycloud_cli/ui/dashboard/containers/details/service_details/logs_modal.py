@@ -24,7 +24,7 @@ class LogViewerModal(ContentModal):
         self.service_name = service_name
         self.pod_name = pod_name
         self._logs_widget: RichLog | None = None
-        self._ws_task: Worker | None = None
+        self._stream_task: Worker | None = None
 
     def compose_body(self) -> ComposeResult:
         """Create the logs widget."""
@@ -36,17 +36,17 @@ class LogViewerModal(ContentModal):
         super().on_mount()
         self._logs_widget.styles.height = "1fr"
         self._logs_widget.write("[dim]Connecting to log stream...[/dim]")
-        self._ws_task = self.run_worker(self._connect_logs_stream())
+        self._stream_task = self.run_worker(self._connect_logs_stream())
 
     async def on_unmount(self) -> None:
         """Clean up when modal closes."""
-        if self._ws_task:
-            self._ws_task.cancel()
+        if self._stream_task:
+            self._stream_task.cancel()
         if api.logs and api.logs.is_connected():
             await api.logs.disconnect()
 
     async def _connect_logs_stream(self) -> None:
-        """Connect to the logs WebSocket stream."""
+        """Connect to the logs SSE stream."""
 
         def on_log_message(data: dict) -> None:
             """Handle incoming log messages."""

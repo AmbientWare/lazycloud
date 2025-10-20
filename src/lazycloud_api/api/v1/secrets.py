@@ -44,7 +44,6 @@ async def store_secrets(
         SecretPydantic(
             deployment_id=str(deployment.id),
             secrets=secret_data,
-            user_id=deployment.user_id,
         )
     )
 

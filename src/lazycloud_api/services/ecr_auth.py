@@ -56,16 +56,16 @@ class ECRAuthService:
         self.sts_client = boto3.client("sts", **client_kwargs)
         self.ecr_client = boto3.client("ecr", **client_kwargs)
 
-    def get_deployment_namespace(self, user_id: str, deployment_name: str) -> str:
-        """Get the full namespace for a deployment (e.g., 'lc-user-admin/deployment-myapp')"""
-        user_namespace = create_ns_name(user_id)
-        return f"{user_namespace}/deployment-{deployment_name}".lower()
+    def get_deployment_namespace(self, workspace_id: str, deployment_name: str) -> str:
+        """Get the full namespace for a deployment (e.g., 'lc-<workspace_id>/deployment-<deployment_name>')"""
+        namespace = create_ns_name(workspace_id)
+        return f"{namespace}/deployment-{deployment_name}".lower()
 
     def get_repository_path(
-        self, user_id: str, deployment_name: str, image_name: str
+        self, workspace_id: str, deployment_name: str, image_name: str
     ) -> str:
-        """Get the full repository path without registry (e.g., 'lc-user-admin/deployment-myapp/nginx')"""
-        namespace = self.get_deployment_namespace(user_id, deployment_name)
+        """Get the full repository path without registry (e.g., 'lc-<workspace_id>/deployment-<deployment_name>/<image_name>')"""
+        namespace = self.get_deployment_namespace(workspace_id, deployment_name)
         return f"{namespace}/{image_name}".lower()
 
     def get_pull_policy(self) -> str:
@@ -73,7 +73,7 @@ class ECRAuthService:
         return self.pull_policy
 
     def generate_session_policy(
-        self, user_id: str, deployment_name: str, repo_name: str
+        self, workspace_id: str, deployment_name: str, repo_name: str
     ) -> str:
         """Generate a session policy that restricts access to a specific tenant's repos"""
         policy = {
@@ -92,7 +92,7 @@ class ECRAuthService:
                         "ecr:DescribeImages",
                         "ecr:GetAuthorizationToken",
                     ],
-                    "Resource": f"arn:aws:ecr:{self.region}:{self.account_id}:repository/{self.get_repository_path(user_id, deployment_name, repo_name)}/*",
+                    "Resource": f"arn:aws:ecr:{self.region}:{self.account_id}:repository/{self.get_repository_path(workspace_id, deployment_name, repo_name)}/*",
                 },
                 {
                     "Effect": "Allow",
@@ -105,7 +105,7 @@ class ECRAuthService:
         return json.dumps(policy)
 
     async def ensure_repository(
-        self, user_id: str, deployment_name: str, repo_name: str
+        self, workspace_id: str, deployment_name: str, repo_name: str
     ) -> str:
         """Ensure ECR repository exists for tenant (lazy creation)"""
         # Strip tag if present (e.g., "myapp:latest" -> "myapp")
@@ -113,7 +113,9 @@ class ECRAuthService:
             repo_name = repo_name.split(":")[0]
 
         # Get the full repository path
-        full_repo_name = self.get_repository_path(user_id, deployment_name, repo_name)
+        full_repo_name = self.get_repository_path(
+            workspace_id, deployment_name, repo_name
+        )
 
         try:
             # Check if repository exists
@@ -130,7 +132,7 @@ class ECRAuthService:
                         imageScanningConfiguration={"scanOnPush": True},
                         imageTagMutability="MUTABLE",  # Allow dev tags to be overwritten
                         tags=[
-                            {"Key": "tenant", "Value": user_id},
+                            {"Key": "tenant", "Value": workspace_id},
                             {"Key": "managed-by", "Value": "lazycloud"},
                         ],
                     )
@@ -198,17 +200,19 @@ class ECRAuthService:
             return f"{self.account_id}.dkr.ecr.{self.region}.amazonaws.com"
 
     def get_repository_url(
-        self, user_id: str, deployment_name: str, image_name: str
+        self, workspace_id: str, deployment_name: str, image_name: str
     ) -> str:
         """Get the full repository URL for an image."""
         registry_url = self.get_registry_url()
-        repository_path = self.get_repository_path(user_id, deployment_name, image_name)
+        repository_path = self.get_repository_path(
+            workspace_id, deployment_name, image_name
+        )
         url = f"{registry_url}/{repository_path}"
         return url
 
     async def get_upload_credentials(
         self,
-        user_id: str,
+        workspace_id: str,
         deployment_name: str,
         repo_name: str,
         session_name: str | None = None,
@@ -217,7 +221,7 @@ class ECRAuthService:
 
         # Generate session name if not provided
         if session_name is None:
-            session_name = create_release_name(deployment_name, user_id)
+            session_name = create_release_name(workspace_id, deployment_name)
 
         # Save the tag if present before ensuring repository
         tag = "latest"
@@ -226,7 +230,7 @@ class ECRAuthService:
 
         # Ensure repository exists (without tag)
         full_repo_name = await self.ensure_repository(
-            user_id, deployment_name, repo_name
+            workspace_id, deployment_name, repo_name
         )
 
         # For LocalStack/custom endpoints, return simplified credentials
@@ -234,7 +238,7 @@ class ECRAuthService:
             # get_registry_url() already returns localhost for LocalStack
             registry_url = self.get_registry_url()
             repository_url = self.get_repository_url(
-                user_id, deployment_name, repo_name
+                workspace_id, deployment_name, repo_name
             )
 
             return ECRCredentials(
@@ -248,7 +252,7 @@ class ECRAuthService:
 
         # Real AWS: Use STS AssumeRole with session policy
         session_policy = self.generate_session_policy(
-            user_id, deployment_name, repo_name
+            workspace_id, deployment_name, repo_name
         )
 
         try:

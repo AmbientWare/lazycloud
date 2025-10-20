@@ -21,7 +21,7 @@ class DeploymentDetailsContainer(Container):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._status_api: StatusAPI | None = None
-        self._ws_task: Worker | None = None
+        self._stream_task: Worker | None = None
         self._scroll: VerticalScroll | None = None
 
         # Store widget references for updates
@@ -36,10 +36,10 @@ class DeploymentDetailsContainer(Container):
         yield self._scroll
 
     def on_mount(self) -> None:
-        """Start WebSocket connection when mounted."""
-        # Start WebSocket for updates
+        """Start SSE stream connection when mounted."""
+        # Start SSE stream for updates
         if self.deployment_id:
-            self._start_websocket()
+            self._start_stream()
 
         # Defer initial render until after the widget tree is complete
         if self.deployment_status:
@@ -63,15 +63,15 @@ class DeploymentDetailsContainer(Container):
     async def watch_deployment_id(self, old_value, new_value) -> None:
         """React to deployment ID changes."""
         if new_value and new_value != old_value:
-            # Cancel existing WebSocket if any
+            # Cancel existing SSE stream if any
             await self.cleanup()
-            # Start new WebSocket connection
-            self._start_websocket()
+            # Start new SSE stream connection
+            self._start_stream()
 
-    def _start_websocket(self) -> None:
-        """Start WebSocket connection for real-time updates."""
+    def _start_stream(self) -> None:
+        """Start SSE stream connection for real-time updates."""
         if self.deployment_id:
-            self._ws_task = self.run_worker(self._connect_deployment_websocket())
+            self._stream_task = self.run_worker(self._connect_deployment_stream())
 
     def _render_sections(self, deployment: DeploymentStatus) -> None:
         """Render all sections with the deployment data."""
@@ -189,17 +189,17 @@ class DeploymentDetailsContainer(Container):
             self._networks_widget.update("\n".join(networks_content).strip())
 
     async def cleanup(self) -> None:
-        """Clean up WebSocket connections and tasks."""
-        if self._ws_task:
-            self._ws_task.cancel()
-            self._ws_task = None
+        """Clean up SSE stream connections and tasks."""
+        if self._stream_task:
+            self._stream_task.cancel()
+            self._stream_task = None
 
         if self._status_api:
             await self._status_api.disconnect()
             self._status_api = None
 
-    async def _connect_deployment_websocket(self) -> None:
-        """Connect to WebSocket for real-time deployment updates."""
+    async def _connect_deployment_stream(self) -> None:
+        """Connect to SSE stream for real-time deployment updates."""
         if not self.deployment_id:
             return
 
@@ -213,7 +213,7 @@ class DeploymentDetailsContainer(Container):
                     self.app.call_later(self.update_deployment, status)
 
             def on_error(_: Exception) -> None:
-                """Handle WebSocket errors."""
+                """Handle SSE stream errors."""
                 pass
 
             await self._status_api.stream_deployment_status(

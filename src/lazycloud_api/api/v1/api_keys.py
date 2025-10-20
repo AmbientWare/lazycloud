@@ -17,9 +17,6 @@ api_keys_router = APIRouter(
 )
 
 
-# NOTE: Api keys access is limited to admins. This allows us to keep track of authenticated users without a users db table.
-
-
 @api_keys_router.get("")
 async def get_api_keys(
     user_id: str | None = None,
@@ -102,7 +99,6 @@ async def update_api_key(
 async def delete_api_keys(
     api_key_id: str | None = None,
     clerk_id: str | None = None,
-    _=Depends(require_admin),
 ) -> list[ApiKeyPydantic]:
     """
     If user_id is provided, delete all api keys for the user.

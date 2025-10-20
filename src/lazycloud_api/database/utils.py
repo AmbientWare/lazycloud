@@ -38,3 +38,34 @@ def api_key_is_expired(expires_at: datetime) -> bool:
         return True
 
     return False
+
+
+def validate_workspace_name(name: str) -> str:
+    """Validate and normalize a workspace name"""
+    # Strip whitespace
+    name = name.strip()
+
+    # Check length
+    if not name:
+        raise ValueError("Workspace name cannot be empty")
+    if len(name) > 100:
+        raise ValueError("Workspace name must be 100 characters or less")
+
+    # Check that it contains at least one alphanumeric character
+    if not any(c.isalnum() for c in name):
+        raise ValueError("Workspace name must contain at least one letter or number")
+
+    # Prevent excessive consecutive spaces
+    if "  " in name:
+        raise ValueError("Workspace name cannot contain consecutive spaces")
+
+    # Check for allowed characters using built-in methods
+    allowed_chars = set(
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -_'()."
+    )
+    if not all(c in allowed_chars for c in name):
+        raise ValueError(
+            "Workspace name can only contain letters, numbers, spaces, and basic punctuation (- _ ' . ( ))"
+        )
+
+    return name

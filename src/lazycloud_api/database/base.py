@@ -6,7 +6,7 @@ from typing import Annotated, Generic, Type, TypeVar
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ConfigDict
 from pydantic.functional_validators import BeforeValidator
-from sqlalchemy import DateTime, ForeignKey, orm
+from sqlalchemy import DateTime, orm
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.future import select
 from sqlalchemy.orm import Mapped, mapped_column
@@ -26,7 +26,7 @@ def uuid_to_str(v):
 UUIDStr = Annotated[str, BeforeValidator(uuid_to_str)]
 
 
-class IdTable(Base):
+class BaseTable(Base):
     __abstract__ = True
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -48,18 +48,7 @@ class IdTable(Base):
         return pydantic_class.model_validate(self)
 
 
-class BaseTable(IdTable):
-    """Base class for all SQLAlchemy models"""
-
-    __abstract__ = True
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="CASCADE"),
-        index=True,
-    )
-
-
-class IdModel(PydanticBaseModel):
+class BaseDbPydanticModel(PydanticBaseModel):
     """Base class for all Pydantic models with an id"""
 
     id: UUIDStr | None = None
@@ -69,13 +58,7 @@ class IdModel(PydanticBaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-class BaseModel(IdModel):
-    """Base class for all Pydantic models"""
-
-    user_id: UUIDStr | None = None
-
-
-basePydanticType = TypeVar("basePydanticType", bound=BaseModel)
+basePydanticType = TypeVar("basePydanticType", bound=BaseDbPydanticModel)
 baseDbType = TypeVar("baseDbType", bound=BaseTable)
 
 

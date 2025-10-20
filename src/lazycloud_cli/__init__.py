@@ -1,6 +1,6 @@
 # Import modules to register their commands
-import lazycloud_cli.commands.auth
 import lazycloud_cli.commands.compose  # noqa: F401
+import lazycloud_cli.commands.workspace  # noqa: F401
 from lazycloud_cli.commands import main_cli
 from lazycloud_cli.utils import validate_cli_version
 

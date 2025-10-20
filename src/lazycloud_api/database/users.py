@@ -4,10 +4,11 @@ from typing import TYPE_CHECKING, List
 from sqlalchemy import String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from lazycloud_api.database.base import DatabaseService, IdModel, IdTable
+from lazycloud_api.database.base import BaseDbPydanticModel, BaseTable, DatabaseService
 
 if TYPE_CHECKING:
     from lazycloud_api.database.api_keys import ApiKeyTable
+    from lazycloud_api.database.user_workspaces import UserWorkspaceTable
 
 
 class UserStatus(StrEnum):
@@ -23,7 +24,7 @@ class UserRole(StrEnum):
     USER = "user"
 
 
-class UserTable(IdTable):
+class UserTable(BaseTable):
     """SQLAlchemy model for a user account"""
 
     __tablename__ = "users"
@@ -40,9 +41,16 @@ class UserTable(IdTable):
         cascade="all, delete-orphan",
         lazy="selectin",
     )
+    # Relationships - using Association Object pattern (SQLAlchemy 2.0 best practice)
+    user_workspaces: Mapped[List["UserWorkspaceTable"]] = relationship(
+        "UserWorkspaceTable",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
 
 
-class UserPydantic(IdModel):
+class UserPydantic(BaseDbPydanticModel):
     """Pydantic model for a user account"""
 
     clerk_id: str

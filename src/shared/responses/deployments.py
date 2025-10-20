@@ -11,7 +11,7 @@ class DeploymentResponse(BaseModel):
     """Response for a deployment."""
 
     id: str
-    user_id: str
+    workspace_id: str
     name: str
     namespace: str
     state: DeploymentStates

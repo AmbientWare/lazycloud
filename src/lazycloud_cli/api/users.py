@@ -1,4 +1,5 @@
 from lazycloud_cli.api.base import BaseAPI
+from shared.responses.users import CurrentUserResponse
 
 
 class UsersAPI(BaseAPI):
@@ -8,11 +9,8 @@ class UsersAPI(BaseAPI):
     def get_user_id(self) -> str | None:
         """Get the user ID"""
         try:
-            response = self._get(path="/id")
-            if isinstance(response, dict) and "user_id" in response:
-                return response["user_id"]
-            # Handle legacy response format
-            return response if isinstance(response, str) else None
+            response: CurrentUserResponse = self._get(path="/current")
+            return response.id
 
-        except Exception:
-            return None
+        except Exception as e:
+            raise e

@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import typer
@@ -86,7 +87,28 @@ def cleanup_existing_cluster() -> None:
             console.print("🛑 [bold]Stopping existing cluster...[/bold]")
             run_command(["minikube", "stop"], check=False)
 
-        run_command(["minikube", "delete"], check=False)
+        # Delete with --purge to remove all profiles and cached data
+        run_command(["minikube", "delete", "--all", "--purge"], check=False)
+
+        # Force cleanup of any stale minikube containers on the lazycloud network
+        console.print("🧹 [bold]Cleaning up network connections...[/bold]")
+        result = run_command(
+            ["docker", "ps", "-aq", "--filter", "name=minikube"], check=False
+        )
+        if result.stdout.strip():
+            container_ids = result.stdout.strip().split("\n")
+            for container_id in container_ids:
+                run_command(["docker", "rm", "-f", container_id], check=False)
+
+        # Also remove minikube config directory to clear cached IP assignments
+        minikube_config = Path.home() / ".minikube"
+        if minikube_config.exists():
+            shutil.rmtree(minikube_config, ignore_errors=True)
+            console.print("  Cleared minikube configuration cache")
+
+        # Wait a moment for Docker to release IPs
+        time.sleep(3)
+
         console.print("[green]✓ Existing cluster deleted[/green]")
     except subprocess.CalledProcessError:
         console.print("[yellow]⚠ Cluster deletion had issues (continuing)[/yellow]")
@@ -143,48 +165,79 @@ def verify_gvisor_runtime() -> None:
 
 
 def configure_localstack_registry_dns() -> None:
-    """Configure minikube to resolve LocalStack registry hostname."""
+    """Configure minikube to resolve LocalStack registry hostname.
+
+    Uses Docker network alias - LocalStack is accessible via the alias on the
+    shared 'lazycloud' network. Minikube node and pods can resolve it via Docker's DNS.
+    We add an /etc/hosts entry in the minikube node for reliability.
+    """
     console.print("🔧 [bold]Configuring LocalStack registry DNS...[/bold]")
 
     try:
-        # Get LocalStack container IP on the lazycloud network
-        result = run_command(
-            [
-                "docker",
-                "inspect",
-                "lazycloud-localstack",
-                "--format={{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
-            ],
-            check=True,
-        )
-        localstack_ip = result.stdout.strip()
-
-        if not localstack_ip:
-            console.print("[yellow]⚠ Could not find LocalStack container IP[/yellow]")
-            return
-
-        console.print(f"  LocalStack IP: {localstack_ip}")
-
-        # Add hosts entry in minikube to resolve the registry hostname to LocalStack IP
+        # Verify LocalStack is accessible on the network
         registry_hostname = "000000000000.dkr.ecr.us-east-1.localhost"
-        run_command(
+
+        # Test DNS resolution from minikube node
+        result = run_command(
             [
                 "minikube",
                 "ssh",
-                f"echo '{localstack_ip} {registry_hostname}' | sudo tee -a /etc/hosts",
+                f"getent hosts {registry_hostname} || echo 'DNS resolution failed'",
             ],
-            check=True,
-        )
-
-        # Restart containerd to pick up the changes
-        run_command(
-            ["minikube", "ssh", "sudo systemctl restart containerd"],
             check=False,
         )
 
-        console.print("[green]✓ LocalStack registry DNS configured[/green]")
-        console.print(f"  Registry hostname: {registry_hostname}:4566")
-        console.print(f"  Resolves to: {localstack_ip} (LocalStack container)")
+        if "DNS resolution failed" in result.stdout or result.returncode != 0:
+            # DNS not working, add manual entry
+            console.print(
+                "  Docker DNS resolution failed, adding manual /etc/hosts entry..."
+            )
+
+            # Get LocalStack container IP on the lazycloud network
+            ip_result = run_command(
+                [
+                    "docker",
+                    "inspect",
+                    "lazycloud-localstack",
+                    "--format={{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+                ],
+                check=True,
+            )
+            localstack_ip = ip_result.stdout.strip()
+
+            if not localstack_ip:
+                console.print(
+                    "[yellow]⚠ Could not find LocalStack container IP[/yellow]"
+                )
+                return
+
+            console.print(f"  LocalStack IP: {localstack_ip}")
+
+            # Add hosts entry
+            run_command(
+                [
+                    "minikube",
+                    "ssh",
+                    f"echo '{localstack_ip} {registry_hostname}' | sudo tee -a /etc/hosts",
+                ],
+                check=True,
+            )
+
+            # Restart containerd to pick up the changes
+            run_command(
+                ["minikube", "ssh", "sudo systemctl restart containerd"],
+                check=False,
+            )
+
+            console.print(
+                "[green]✓ LocalStack registry DNS configured (manual /etc/hosts)[/green]"
+            )
+        else:
+            console.print(
+                "[green]✓ LocalStack registry DNS working (via Docker network)[/green]"
+            )
+
+        console.print(f"  Registry: {registry_hostname}:4566")
 
     except subprocess.CalledProcessError as e:
         console.print("[yellow]⚠ Failed to configure LocalStack registry DNS[/yellow]")

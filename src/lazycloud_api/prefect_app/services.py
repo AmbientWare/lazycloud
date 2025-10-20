@@ -6,21 +6,14 @@ from lazycloud_api.services.k8s.workload_manager import WorkloadManager
 
 
 @task
-async def restart_service_task(
-    deployment_id: str, service_name: str, user_id: str
-) -> None:
+async def restart_service_task(deployment_id: str, service_name: str) -> None:
     """Restart a specific service within a deployment."""
     logger.info(
         f"Starting restart of service {service_name} in deployment {deployment_id}"
     )
 
     # Get deployment from database
-    deployment = await db.compose_deployments.afind_one(
-        {
-            "id": deployment_id,
-            "user_id": user_id,
-        }
-    )
+    deployment = await db.compose_deployments.aget_by_id(deployment_id)
 
     if not deployment:
         raise Exception(f"Deployment {deployment_id} not found")
@@ -47,17 +40,12 @@ async def restart_service_task(
 
 
 @task
-async def restart_all_services_task(deployment_id: str, user_id: str) -> None:
+async def restart_all_services_task(deployment_id: str) -> None:
     """Restart all services within a deployment."""
     logger.info(f"Starting restart of all services in deployment {deployment_id}")
 
     # Get deployment from database
-    deployment = await db.compose_deployments.afind_one(
-        {
-            "id": deployment_id,
-            "user_id": user_id,
-        }
-    )
+    deployment = await db.compose_deployments.aget_by_id(deployment_id)
 
     if not deployment:
         raise Exception(f"Deployment {deployment_id} not found")

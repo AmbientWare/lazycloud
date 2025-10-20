@@ -1,5 +1,5 @@
 from rich.console import Console
-from rich.prompt import Confirm
+from rich.prompt import Confirm, Prompt
 from rich.text import Text
 
 from lazycloud_cli.ui.components.card import Card
@@ -76,10 +76,15 @@ class ConfirmationDialog:
         question_style = "bold red" if self.danger else "bold yellow"
 
         # Ask for confirmation
-        return Confirm.ask(
+        result = Confirm.ask(
             f"[{question_style}]{self.question}[/{question_style}]",
             default=self.default,
         )
+
+        # Print a newline after confirmation for better spacing
+        console.print()
+
+        return result
 
 
 class DestructiveConfirmationDialog(ConfirmationDialog):
@@ -121,6 +126,91 @@ class DestructiveConfirmationDialog(ConfirmationDialog):
             danger=True,
             default=False,
         )
+
+
+class StringValidationConfirmationDialog:
+    """Confirmation dialog that requires typing the resource name to confirm."""
+
+    def __init__(
+        self,
+        resource_type: str,
+        resource_name: str,
+        consequences: list[str] | None = None,
+        custom_warning: str | None = None,
+    ):
+        """Initialize string validation confirmation dialog.
+
+        Args:
+            resource_type: Type of resource (e.g., "workspace", "deployment")
+            resource_name: Name of the resource that must be typed to confirm
+            consequences: List of consequences of the action
+            custom_warning: Custom warning message
+        """
+        self.resource_type = resource_type
+        self.resource_name = resource_name
+        self.consequences = consequences or [
+            f"The {resource_type} will be permanently deleted",
+            "All associated resources will be removed",
+            "This action cannot be undone",
+        ]
+        self.warning = custom_warning or "This action cannot be undone!"
+        self.title = f"🚨 Confirm {resource_type.title()} Deletion"
+
+    def _create_card(self) -> Card:
+        """Create the confirmation details card."""
+        content = Text()
+
+        # Add consequences as bullet points
+        for loc, consequence in enumerate(self.consequences):
+            content.append("• ", style=theme.text_secondary)
+            content.append(f"{consequence}", style=theme.text_primary)
+            if not loc == len(self.consequences) - 1:
+                content.append("\n")
+
+        # Add warning message
+        if self.warning:
+            content.append("\n")
+            content.append(self.warning, style=theme.error)
+
+        return Card(
+            content=content,
+            title=self.title,
+            border_style=theme.border_error,
+        )
+
+    def show(self, console: Console) -> bool:
+        """Show the confirmation dialog and return the user's choice.
+
+        Args:
+            console: Rich console instance
+
+        Returns:
+            True if confirmed (typed correctly), False otherwise
+        """
+        # Show the details card
+        card = self._create_card()
+        console.print(card)
+
+        # Prompt for string validation
+        console.print()
+        console.print(
+            f"[bold red]To confirm, type the {self.resource_type} name:[/bold red] [bold]{self.resource_name}[/bold]"
+        )
+
+        user_input = Prompt.ask("[bold yellow]>>[/bold yellow]")
+
+        # Print newline for spacing
+        console.print()
+
+        # Validate input
+        if user_input.strip() == self.resource_name:
+            return True
+        else:
+            console.print(
+                f"[{theme.error}]✗ Name doesn't match. Deletion cancelled.[/{theme.error}]"
+            )
+            console.print()
+            return False
 
 
 class SimpleConfirmationDialog(ConfirmationDialog):

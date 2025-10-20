@@ -74,18 +74,18 @@ class HelmValuesGenerator:
         # Generate global values with user context
         global_values = GlobalValues(
             deploymentId=self.deployment.id,
-            userId=self.deployment.user_id,
+            workspaceId=str(self.deployment.workspace_id),
             managedBy="lazycloud",
             createdBy="lazycloud-api",
             runtimeClassName="gvisor",
             labels={
                 "lazycloud.io/deployment-id": self.deployment.id,
-                "lazycloud.io/user-id": self.deployment.user_id,
+                "lazycloud.io/workspace-id": str(self.deployment.workspace_id),
                 "lazycloud.io/managed-by": "lazycloud",
             },
             annotations={
                 "lazycloud.io/deployment-id": self.deployment.id,
-                "lazycloud.io/user-id": self.deployment.user_id,
+                "lazycloud.io/workspace-id": str(self.deployment.workspace_id),
                 "lazycloud.io/created-by": "lazycloud-api",
             },
         )
@@ -149,7 +149,7 @@ class HelmValuesGenerator:
         if service.build is not None:
             image_info.pullPolicy = ecr_auth_service.get_pull_policy()
             image_info.repository = ecr_auth_service.get_repository_url(
-                user_id=self.deployment.user_id,
+                workspace_id=str(self.deployment.workspace_id),
                 deployment_name=self.deployment.name,
                 image_name=image_info.repository,
             )
@@ -164,12 +164,12 @@ class HelmValuesGenerator:
             image=image_info,
             resourceName=service.name,
             labels={
-                "lazycloud.io/user-id": self.deployment.user_id,
+                "lazycloud.io/workspace-id": str(self.deployment.workspace_id),
                 "lazycloud.io/service": service.name,
                 "lazycloud.io/managed-by": "lazycloud",
             },
             annotations={
-                "lazycloud.io/user-id": self.deployment.user_id,
+                "lazycloud.io/workspace-id": str(self.deployment.workspace_id),
                 "lazycloud.io/created-by": "lazycloud-api",
             },
         )
@@ -313,11 +313,11 @@ class HelmValuesGenerator:
             size="1Gi",  # Note: in cloud this will be EFS, size is ignored
             accessModes=["ReadWriteOnce"],
             labels={
-                "lazycloud.io/user-id": self.deployment.user_id,
+                "lazycloud.io/workspace-id": str(self.deployment.workspace_id),
                 "lazycloud.io/managed-by": "lazycloud",
             },
             annotations={
-                "lazycloud.io/user-id": self.deployment.user_id,
+                "lazycloud.io/workspace-id": str(self.deployment.workspace_id),
                 "lazycloud.io/created-by": "lazycloud-api",
             },
         )

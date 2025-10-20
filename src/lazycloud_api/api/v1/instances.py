@@ -67,7 +67,6 @@ async def delete_instance(
             deployment_id=deployment_id,
             service_name=service_name,
             pod_name=pod_name,
-            user_id=current_user.user_id,
         )
 
         return InstanceTaskStatusResponse(

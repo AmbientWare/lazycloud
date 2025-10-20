@@ -1,10 +1,11 @@
 import typer
 
-from lazycloud_cli.commands.auth import auth_app
 from lazycloud_cli.commands.compose.deploy import deploy
 from lazycloud_cli.commands.compose.destroy import destroy
 from lazycloud_cli.commands.compose.init import init_deployment
 from lazycloud_cli.commands.dashboard import dashboard
+from lazycloud_cli.commands.login import login
+from lazycloud_cli.commands.workspace import workspace_app
 
 # Create the main app
 main_cli = typer.Typer(
@@ -13,16 +14,8 @@ main_cli = typer.Typer(
     add_completion=False,
 )
 
-# Create service sub-app
-service_app = typer.Typer(
-    name="service",
-    help="Service management commands",
-    add_completion=False,
-)
-
 # Add command modules to the main app
-main_cli.add_typer(auth_app, name="auth")
-main_cli.add_typer(service_app, name="service")
+main_cli.add_typer(workspace_app, name="workspace")
 
 # Add top-level shortcuts for compose commands
 main_cli.command("init", help="Initialize a LazyCloud deployment configuration")(
@@ -30,6 +23,9 @@ main_cli.command("init", help="Initialize a LazyCloud deployment configuration")
 )
 main_cli.command("deploy", help="Deploy or update a Docker Compose application")(deploy)
 main_cli.command("destroy", help="Destroy a deployment")(destroy)
+
+# Add authentication command
+main_cli.command("login", help="Login with your LazyCloud API key")(login)
 
 # Add dashboard command to main app
 main_cli.command("dashboard", help="Launch the LazyCloud dashboard")(dashboard)
