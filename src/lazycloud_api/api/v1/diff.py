@@ -36,7 +36,7 @@ async def get_deployment_diff(
 
     else:
         deployment = await db.compose_deployments.aget_by_id(deployment_id)
-        if not deployment or deployment.user_id != current_user.id:
+        if not deployment:
             raise HTTPException(status_code=404, detail="Deployment not found")
 
     # Parse new compose file

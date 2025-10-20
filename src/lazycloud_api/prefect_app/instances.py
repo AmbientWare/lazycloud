@@ -7,7 +7,7 @@ from lazycloud_api.services.k8s.pod_manager import KubernetesPodManager
 
 @task
 async def delete_instance_task(
-    deployment_id: str, service_name: str, pod_name: str, user_id: str
+    deployment_id: str, service_name: str, pod_name: str
 ) -> None:
     """Delete a specific instance (pod) in a deployment."""
     logger.info(
@@ -18,9 +18,6 @@ async def delete_instance_task(
     deployment = await db.compose_deployments.aget_by_id(deployment_id)
     if not deployment:
         raise Exception(f"Deployment {deployment_id} not found")
-
-    if deployment.user_id != user_id:
-        raise Exception(f"User {user_id} not authorized for deployment {deployment_id}")
 
     # Validate service exists in deployment
     helm_values = deployment.helm_values
@@ -47,9 +44,17 @@ async def delete_instance_task(
     )
 
     if not verification_result.success:
-        raise Exception(
-            verification_result.error or "Pod ownership verification failed"
-        )
+        # If pod doesn't exist, that's fine - deletion goal already achieved
+        if "does not exist" in (verification_result.error or "").lower():
+            logger.info(
+                f"Pod {pod_name} does not exist - deletion goal already achieved"
+            )
+            return
+        else:
+            # Other verification errors (e.g., wrong ownership) are real errors
+            raise Exception(
+                verification_result.error or "Pod ownership verification failed"
+            )
 
     # Delete the pod
     logger.info(f"Deleting pod {pod_name} in namespace {namespace}")

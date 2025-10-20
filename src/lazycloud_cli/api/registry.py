@@ -1,4 +1,5 @@
 from lazycloud_cli.api.base import BaseAPI
+from lazycloud_cli.config import config
 from shared.requests.registry import UploadIntentRequest
 from shared.responses.registry import UploadIntentResponse
 
@@ -11,7 +12,9 @@ class RegistryAPI(BaseAPI):
         self, deployment_name: str, repo_name: str, session_name: str | None = None
     ) -> UploadIntentResponse:
         """Get upload intent for a repository in a deployment."""
+
         request = UploadIntentRequest(
+            workspace_id=config.active_workspace_id,
             deployment_name=deployment_name,
             repo_name=repo_name,
             session_name=session_name,

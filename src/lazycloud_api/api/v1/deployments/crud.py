@@ -2,9 +2,15 @@ import yaml
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
 
+from lazycloud_api.api.dependencies import (
+    get_deployment_with_access,
+    get_deployment_with_admin_access,
+    require_workspace_member,
+)
 from lazycloud_api.api.security import get_current_active_user
 from lazycloud_api.database import db
 from lazycloud_api.database.compose import ComposeDeploymentPydantic
+from lazycloud_api.database.user_workspaces import WorkspaceRole
 from lazycloud_api.database.users import UserPydantic
 from lazycloud_api.prefect_app.compose import deploy_compose_task, destroy_compose_task
 from lazycloud_api.services.compose.parser import ComposeParser
@@ -26,15 +32,17 @@ router = APIRouter()
 
 @router.get("", response_model=DeploymentListResponse)
 async def list_deployments(
+    workspace_id: str,
     skip: int = 0,
     limit: int = 100,
     status: str | None = None,
     deployment_id: str | None = None,
     name: str | None = None,
     current_user: UserPydantic = Depends(get_current_active_user),
+    _: None = Depends(require_workspace_member),
 ) -> DeploymentListResponse:
     """List compose deployments."""
-    filters = {"user_id": current_user.id}
+    filters = {"workspace_id": workspace_id}
     if status:
         filters["status"] = status
     if deployment_id:
@@ -50,7 +58,7 @@ async def list_deployments(
         deployment_responses = [
             DeploymentResponse(
                 id=deployment.id,
-                user_id=deployment.user_id,
+                workspace_id=str(deployment.workspace_id),
                 name=deployment.name,
                 namespace=deployment.namespace,
                 state=deployment.state,
@@ -77,22 +85,11 @@ async def list_deployments(
 
 @router.get("/{deployment_id}/status", response_model=DeploymentStatusResponse)
 async def get_deployment_status(
-    deployment_id: str,
-    current_user: UserPydantic = Depends(get_current_active_user),
+    deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_access),
 ) -> DeploymentStatusResponse:
     """Get resource status for a deployment."""
-    deployment = await db.compose_deployments.afind_one(
-        {
-            "id": deployment_id,
-            "user_id": current_user.id,
-        }
-    )
-
-    if not deployment:
-        raise HTTPException(status_code=404, detail="Deployment not found")
-
     watcher = StatusWatcher(
-        deployment_id=deployment_id,
+        deployment_id=str(deployment.id),
         namespace=deployment.namespace,
         helm_values=deployment.helm_values,
     )
@@ -108,9 +105,20 @@ async def create_deployment(
     current_user: UserPydantic = Depends(get_current_active_user),
 ) -> DeploymentTaskStatusResponse:
     """Create a new compose deployment."""
+    # make sure to check workspace permissions
+    membership = await db.user_workspaces.aget_by_user_and_workspace(
+        current_user.id, request.workspace_id
+    )
+    if not membership:
+        raise HTTPException(404, "Workspace not found")
+
+    # only owners and admins can create deployments
+    if membership.role not in [WorkspaceRole.OWNER, WorkspaceRole.ADMIN]:
+        raise HTTPException(403, "Admin or owner role required")
+
     try:
         compose_data = yaml.safe_load(request.compose_yaml)
-        namespace = create_ns_name(current_user.id)
+        namespace = create_ns_name(request.workspace_id)
         compose_file = ComposeParser.parse_dict(compose_data)
 
         validator = ComposeValidator()
@@ -124,7 +132,7 @@ async def create_deployment(
         deployment = None
         if request.name:
             filters = {
-                "user_id": current_user.user_id,
+                "workspace_id": request.workspace_id,
                 "name": request.name,
             }
             deployment = await db.compose_deployments.afind_one(filters=filters)
@@ -136,7 +144,7 @@ async def create_deployment(
             deployment = await db.compose_deployments.aupdate(deployment)
         else:
             deployment_data = ComposeDeploymentPydantic(
-                user_id=current_user.user_id,
+                workspace_id=request.workspace_id,
                 name=request.name,
                 namespace=namespace,
                 compose_yaml=request.compose_yaml,
@@ -171,30 +179,24 @@ async def create_deployment(
 
 @router.delete("/{deployment_id}", response_model=DeploymentTaskStatusResponse)
 async def delete_deployment(
-    deployment_id: str,
+    deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_admin_access),
     current_user: UserPydantic = Depends(get_current_active_user),
 ) -> DeploymentTaskStatusResponse:
     """Delete a deployment."""
     try:
-        deployment = await db.compose_deployments.aget_by_id(deployment_id)
-
-        if not deployment or deployment.user_id != current_user.id:
-            raise HTTPException(status_code=404, detail="Deployment not found")
-
         await db.compose_deployments.update_status(
-            deployment_id, DeploymentStates.DEPLOYING, "Deletion initiated"
+            str(deployment.id), DeploymentStates.DEPLOYING, "Deletion initiated"
         )
 
         task_future = destroy_compose_task.delay(
-            deployment_id=deployment_id,
-            user_id=current_user.id,
+            deployment_id=str(deployment.id),
         )
 
         return DeploymentTaskStatusResponse(
             task_id=task_future.task_run_id,
             status=TaskStatus.PENDING,
             message="Deletion task queued",
-            deployment_id=deployment_id,
+            deployment_id=str(deployment.id),
         )
 
     except HTTPException:

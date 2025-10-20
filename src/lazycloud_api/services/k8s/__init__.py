@@ -19,11 +19,11 @@ def get_chart_paths() -> Charts:
     return Charts(compose=compose_chart, namespace=namespace_chart)
 
 
-def create_ns_name(user_id: str) -> str:
-    namespace = f"lc-{user_id}".lower()
+def create_ns_name(workspace_id: str) -> str:
+    namespace = f"lc-{workspace_id}".lower()
 
     return namespace
 
 
-def create_release_name(deployment_id: str, user_id: str) -> str:
-    return f"lc-{deployment_id}-{user_id}".lower()
+def create_release_name(workspace_id: str, deployment_name: str) -> str:
+    return f"lc-{workspace_id}-{deployment_name}".lower()

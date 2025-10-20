@@ -5,7 +5,9 @@ import nest_asyncio
 from lazycloud_api.database.api_keys import ApiKeyService
 from lazycloud_api.database.compose import ComposeDeploymentService
 from lazycloud_api.database.secrets import SecretService
+from lazycloud_api.database.user_workspaces import UserWorkspaceService
 from lazycloud_api.database.users import UserService
+from lazycloud_api.database.workspaces import WorkspaceService
 
 nest_asyncio.apply()
 
@@ -16,6 +18,8 @@ class Database:
     users: UserService
     compose_deployments: ComposeDeploymentService
     secrets: SecretService
+    workspaces: WorkspaceService
+    user_workspaces: UserWorkspaceService
 
 
 db = Database(
@@ -23,6 +27,8 @@ db = Database(
     users=UserService(),
     compose_deployments=ComposeDeploymentService(),
     secrets=SecretService(),
+    workspaces=WorkspaceService(),
+    user_workspaces=UserWorkspaceService(),
 )
 
 __all__ = ["db"]

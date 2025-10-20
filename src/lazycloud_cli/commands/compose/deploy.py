@@ -390,6 +390,7 @@ def _run_validation(
     try:
         task_response = api.deployments.create_deployment(
             compose_yaml=compose_yaml,
+            workspace_id=config.active_workspace_id,
             name=deployment_name,
         )
 
@@ -437,6 +438,7 @@ def _deploy(
             # Create deployment (sync - just returns task ID)
             task_response = api.deployments.create_deployment(
                 compose_yaml=compose_yaml,
+                workspace_id=config.active_workspace_id,
                 name=deployment_name,
                 secrets=bool(secrets),
             )

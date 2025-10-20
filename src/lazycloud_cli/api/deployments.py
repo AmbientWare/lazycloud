@@ -3,6 +3,7 @@ from typing import Any
 
 from lazycloud_cli.api.base import BaseAPI
 from lazycloud_cli.api.tasks import TasksAPI
+from lazycloud_cli.config import config
 from shared.requests.deployments import DeploymentCreateRequest
 from shared.responses.deployments import (
     DeploymentListResponse,
@@ -20,13 +21,17 @@ class DeploymentsAPI(BaseAPI):
     def create_deployment(
         self,
         compose_yaml: str,
+        workspace_id: str,
         name: str | None = None,
         secrets: bool = False,
     ) -> DeploymentTaskStatusResponse:
         """Create a deployment and return the task response."""
 
         request = DeploymentCreateRequest(
-            compose_yaml=compose_yaml, name=name, secrets=secrets
+            compose_yaml=compose_yaml,
+            workspace_id=workspace_id,
+            name=name,
+            secrets=secrets,
         )
 
         # Make the initial request
@@ -58,13 +63,21 @@ class DeploymentsAPI(BaseAPI):
         )
 
     def get_deployment(
-        self, deployment_id: str | None = None, name: str | None = None
+        self,
+        deployment_id: str | None = None,
+        name: str | None = None,
+        workspace_id: str | None = None,
     ) -> DeploymentResponse | None:
         """Get a specific deployment by ID."""
+        # Use provided workspace_id or fall back to active workspace
+        ws_id = workspace_id or config.active_workspace_id
+
         if deployment_id:
-            response = self._get(path=f"?deployment_id={deployment_id}")
+            response = self._get(
+                path=f"?workspace_id={ws_id}&deployment_id={deployment_id}"
+            )
         elif name:
-            response = self._get(path=f"?name={name}")
+            response = self._get(path=f"?workspace_id={ws_id}&name={name}")
         else:
             raise ValueError("Either deployment_id or name must be provided")
 
@@ -78,12 +91,16 @@ class DeploymentsAPI(BaseAPI):
 
     def list_deployments(
         self,
+        workspace_id: str | None = None,
         status: str | None = None,
         limit: int = 10,
         namespace: str | None = None,
     ) -> DeploymentListResponse:
         """List compose deployments."""
-        params: dict[str, Any] = {"limit": limit}
+        # Use provided workspace_id or fall back to active workspace
+        ws_id = workspace_id or config.active_workspace_id
+
+        params: dict[str, Any] = {"limit": limit, "workspace_id": ws_id}
         if status:
             params["status"] = status
         if namespace:

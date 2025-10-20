@@ -118,8 +118,8 @@ class ImageConfig(BaseModel):
 class GlobalValues(BaseModel):
     """Model for global Helm values."""
 
-    deploymentId: str | None = None
-    userId: str
+    deploymentId: str
+    workspaceId: str
     managedBy: str = "lazycloud"
     createdBy: str = "lazycloud-api"
     runtimeClassName: str = "gvisor"
@@ -220,7 +220,8 @@ class HelmValues(BaseModel):
     """Model for the complete Helm values structure."""
 
     global_values: GlobalValues = Field(
-        default_factory=lambda: GlobalValues(userId=""), alias="global"
+        default_factory=lambda: GlobalValues(deploymentId="", workspaceId=""),
+        alias="global",
     )
     services: list[ServiceValues] = []
     networks: list[NetworkValues] = []

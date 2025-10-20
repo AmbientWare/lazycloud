@@ -2,6 +2,7 @@ from textual.app import ComposeResult
 from textual.reactive import reactive
 
 from lazycloud_cli.api import api
+from lazycloud_cli.config import config
 from lazycloud_cli.ui.dashboard.components import Container, ListItemData, ListView
 from lazycloud_cli.ui.dashboard.components.listview import ListItem
 from lazycloud_cli.ui.dashboard.containers.details.container import ContentContainer
@@ -28,6 +29,7 @@ class DeploymentsContainer(Container):
         super().__init__(**kwargs)
         self._list_view = None
         self.border_title = "[1] Deployments"
+        self.workspace_id = config.active_workspace_id
 
     def compose(self) -> ComposeResult:
         """Create the deployments widget."""
@@ -98,7 +100,7 @@ class DeploymentsContainer(Container):
         self._list_view.show_loading("Loading deployments...")
 
         try:
-            response = api.deployments.list_deployments()
+            response = api.deployments.list_deployments(workspace_id=self.workspace_id)
 
             items = []
             if response.deployments:

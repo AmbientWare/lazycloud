@@ -8,6 +8,12 @@ from lazycloud_api.database.api_keys import (
 )
 from lazycloud_api.database.base import Base
 from lazycloud_api.database.session import session_manager
+from lazycloud_api.database.user_workspaces import (
+    UserWorkspacePydantic,
+    UserWorkspaceService,
+    UserWorkspaceStatus,
+    WorkspaceRole,
+)
 from lazycloud_api.database.users import (
     UserPydantic,
     UserRole,
@@ -15,6 +21,7 @@ from lazycloud_api.database.users import (
     UserStatus,
 )
 from lazycloud_api.database.utils import api_key_is_expired, generate_api_key_expires_at
+from lazycloud_api.database.workspaces import WorkspacePydantic, WorkspaceService
 
 
 async def create_tables():
@@ -35,6 +42,32 @@ async def update_admin_api_keys():
             status=UserStatus.ACTIVE,
         )
         user = await user_service.acreate(user)
+
+    # ensure admin user has a personal workspace
+    workspace_service = WorkspaceService()
+    personal_workspace = await workspace_service.aget_personal_workspace(user.id)
+    if not personal_workspace:
+        print("Creating personal workspace for admin user...")
+        personal_workspace = WorkspacePydantic(
+            name="Personal",
+            is_personal=True,
+        )
+        personal_workspace = await workspace_service.acreate(personal_workspace)
+
+        # link admin user to their personal workspace as owner
+        user_workspace_service = UserWorkspaceService()
+        user_workspace_membership = UserWorkspacePydantic(
+            user_id=user.id,
+            workspace_id=personal_workspace.id,
+            role=WorkspaceRole.OWNER,
+            status=UserWorkspaceStatus.ACTIVE,
+        )
+        await user_workspace_service.acreate(user_workspace_membership)
+        print(f"Personal workspace created for admin user: {personal_workspace.id}")
+    else:
+        print(
+            f"Personal workspace already exists for admin user: {personal_workspace.id}"
+        )
 
     # check if the admin api key exists
     admin_api_keys = await api_key_service.aget_by_user_id(user_id=user.id)

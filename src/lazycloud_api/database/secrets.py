@@ -9,7 +9,12 @@ from sqlalchemy.future import select
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from lazycloud_api.config import app_config
-from lazycloud_api.database.base import BaseModel, BaseTable, DatabaseService, UUIDStr
+from lazycloud_api.database.base import (
+    BaseDbPydanticModel,
+    BaseTable,
+    DatabaseService,
+    UUIDStr,
+)
 
 if TYPE_CHECKING:
     from lazycloud_api.database.compose import ComposeDeploymentTable
@@ -51,14 +56,14 @@ class SecretTable(BaseTable):
     )
 
 
-class SecretEncryptedPydantic(BaseModel):
+class SecretEncryptedPydantic(BaseDbPydanticModel):
     """Pydantic model for encrypted deployment secrets (database storage)"""
 
     deployment_id: UUIDStr
     secrets: str  # Encrypted JSON string
 
 
-class SecretPydantic(BaseModel):
+class SecretPydantic(BaseDbPydanticModel):
     """Pydantic model for deployment secrets"""
 
     deployment_id: UUIDStr
@@ -86,7 +91,6 @@ class SecretService(DatabaseService[SecretTable, SecretEncryptedPydantic]):
                     id=str(db_secret.id),
                     deployment_id=str(db_secret.deployment_id),
                     secrets=decrypted_secrets,
-                    user_id=db_secret.user_id,
                     created_at=db_secret.created_at,
                     updated_at=db_secret.updated_at,
                 )
@@ -105,7 +109,6 @@ class SecretService(DatabaseService[SecretTable, SecretEncryptedPydantic]):
         encrypted_model = SecretEncryptedPydantic(
             deployment_id=db_secrets.deployment_id,
             secrets=_encrypt_secrets(db_secrets.secrets),
-            user_id=db_secrets.user_id,
         )
 
         if existing:

@@ -16,7 +16,8 @@ x-database-environment: &lazycloud-databases
 services:
   api:
     networks:
-      - lazycloud
+      lazycloud:
+        ipv4_address: 172.20.0.10
     image: lazycloud-api:latest
     build:
       context: .
@@ -27,7 +28,7 @@ services:
     volumes:
       - ./src/lazycloud_api:/src/lazycloud_api
       - "${HOME}/.kube/config:/root/.kube/config:ro"
-      - "${HOME}/.minikube:/home/${USER}/.minikube:ro"
+      - "${HOME}/.minikube:${HOME}/.minikube:ro"
       - ./src/shared:/src/shared
       - prefect-task-storage:/task-storage
     env_file:
@@ -68,7 +69,8 @@ services:
   prefect-server:
     image: prefecthq/prefect:3-latest
     networks:
-      - lazycloud
+      lazycloud:
+        ipv4_address: 172.20.0.11
     command: ["prefect", "server", "start"]
     volumes:
       - prefect-data:/root/.prefect
@@ -79,7 +81,8 @@ services:
   postgres:
     image: postgres:17
     networks:
-      - lazycloud
+      lazycloud:
+        ipv4_address: 172.20.0.12
     environment:
       POSTGRES_USER: lc_dev
       POSTGRES_PASSWORD: password
@@ -99,7 +102,8 @@ services:
   redis:
     image: redis:latest
     networks:
-      - lazycloud
+      lazycloud:
+        ipv4_address: 172.20.0.13
     volumes:
       - redis-data:/data
     healthcheck:
@@ -113,6 +117,7 @@ services:
     container_name: lazycloud-localstack
     networks:
       lazycloud:
+        ipv4_address: 172.20.0.14
         aliases:
           # NOTE: this is the registry url for the localstack registry
           - 000000000000.dkr.ecr.us-east-1.localhost

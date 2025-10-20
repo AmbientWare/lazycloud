@@ -25,14 +25,13 @@ charts = get_chart_paths()
 
 async def _update_deployment_state(
     deployment_id: str,
-    user_id: str,
     state: DeploymentStates,
     message: str | None = None,
 ) -> None:
     """Update deployment status in database."""
     try:
         deployment = await db.compose_deployments.aget_by_id(deployment_id)
-        if deployment and deployment.user_id == user_id:
+        if deployment:
             deployment.state = state
             if message:
                 deployment.status_message = message[:500]  # Truncate to fit
@@ -84,13 +83,12 @@ async def deploy_compose_task(
     # Update status to deploying
     await _update_deployment_state(
         deployment_id,
-        deployment.user_id,
         DeploymentStates.DEPLOYING,
         "Starting deployment",
     )
 
     # Extract deployment info from helm values
-    name = create_release_name(deployment_id, deployment.user_id)
+    name = create_release_name(deployment.workspace_id, deployment.name)
     namespace = deployment.namespace
 
     # Initialize Helm manager
@@ -104,7 +102,7 @@ async def deploy_compose_task(
                 name=namespace,
                 labels={
                     "lazycloud.io/managed": "true",
-                    "lazycloud.io/user-id": deployment.user_id,
+                    "lazycloud.io/workspace-id": str(deployment.workspace_id),
                 },
             )
         )
@@ -155,7 +153,6 @@ async def deploy_compose_task(
         # Update status to deployed (deployment is initiated, not necessarily ready)
         await _update_deployment_state(
             deployment_id,
-            deployment.user_id,
             DeploymentStates.DEPLOYED,
             f"Deployment initiated successfully (revision: {app_result.revision})",
         )
@@ -164,7 +161,6 @@ async def deploy_compose_task(
         logger.error(f"Deployment {deployment_id} failed: {str(e)}")
         await _update_deployment_state(
             deployment_id,
-            deployment.user_id,
             DeploymentStates.FAILED,
             "Deployment failed",
         )
@@ -180,7 +176,7 @@ async def deploy_compose_task(
 
 
 @task
-async def destroy_compose_task(deployment_id: str, user_id: str) -> None:
+async def destroy_compose_task(deployment_id: str) -> None:
     """Destroy a Docker Compose deployment from Kubernetes."""
     logger.info(f"Starting destruction of deployment {deployment_id}")
 
@@ -191,12 +187,12 @@ async def destroy_compose_task(deployment_id: str, user_id: str) -> None:
 
     # Update status to deleting
     await _update_deployment_state(
-        deployment_id, user_id, DeploymentStates.DELETING, "Starting deletion"
+        deployment_id, DeploymentStates.DELETING, "Starting deletion"
     )
 
     # Initialize Helm manager
     helm_manager = HelmManager()
-    name = create_release_name(deployment_id, user_id)
+    name = create_release_name(deployment.workspace_id, deployment.name)
     namespace = deployment.namespace
 
     if not name:
@@ -225,6 +221,6 @@ async def destroy_compose_task(deployment_id: str, user_id: str) -> None:
     except Exception as e:
         logger.error(f"Destruction of deployment {deployment_id} failed: {str(e)}")
         await _update_deployment_state(
-            deployment_id, user_id, DeploymentStates.FAILED, "Deletion failed", str(e)
+            deployment_id, DeploymentStates.FAILED, "Deletion failed", str(e)
         )
         raise

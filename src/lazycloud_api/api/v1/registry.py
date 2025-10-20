@@ -23,7 +23,7 @@ async def get_upload_intent(
         )
 
         credentials = await ecr_auth_service.get_upload_credentials(
-            user_id=current_user.id,
+            workspace_id=request.workspace_id,
             deployment_name=request.deployment_name,
             repo_name=request.repo_name,
             session_name=request.session_name,  # Optional, will be auto-generated if None

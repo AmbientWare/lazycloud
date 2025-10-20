@@ -8,7 +8,9 @@ from rich.table import Table
 from rich.text import Text
 
 from lazycloud_cli.ui.components.card import Card
-from lazycloud_cli.ui.components.confirmation import DestructiveConfirmationDialog
+from lazycloud_cli.ui.components.confirmation import (
+    StringValidationConfirmationDialog,
+)
 from lazycloud_cli.ui.theme import theme
 
 
@@ -87,8 +89,8 @@ class DestroyView:
         if force:
             return True
 
-        # Use the destructive confirmation dialog
-        dialog = DestructiveConfirmationDialog(
+        # Use the string validation confirmation dialog
+        dialog = StringValidationConfirmationDialog(
             resource_type="deployment",
             resource_name=deployment_name,
             consequences=[

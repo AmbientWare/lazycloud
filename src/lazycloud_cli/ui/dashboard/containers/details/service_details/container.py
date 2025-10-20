@@ -1,3 +1,6 @@
+import asyncio
+
+from loguru import logger
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.reactive import reactive
@@ -29,7 +32,7 @@ class ServiceDetailsContainer(Container):
         super().__init__(**kwargs)
         self._overview_widget: Static | None = None
         self._pods_table: PodTable | None = None
-        self._ws_task: Worker | None = None
+        self._stream_task: Worker | None = None
         self._scroll: VerticalScroll | None = None
 
     def compose(self) -> ComposeResult:
@@ -38,7 +41,7 @@ class ServiceDetailsContainer(Container):
         yield self._scroll
 
     def on_mount(self) -> None:
-        """Start WebSocket connection when mounted."""
+        """Start SSE stream connection when mounted."""
         # Defer initial render until after the widget tree is complete
         if self.service_status:
             self.call_after_refresh(self._render_initial_content)
@@ -63,13 +66,15 @@ class ServiceDetailsContainer(Container):
         if new_value and new_value != old_value:
             # Clean up old connection first
             await self.cleanup()
-            self._start_websocket()
+            self._start_stream()
 
-    def _start_websocket(self) -> None:
-        """Start WebSocket connection for real-time updates."""
-        if self.deployment_id and self.service_name and not self._ws_task:
+    def _start_stream(self) -> None:
+        """Start SSE stream connection for real-time updates."""
+        if self.deployment_id and self.service_name and not self._stream_task:
             # start new task only if not already running
-            self._ws_task = self.run_worker(self._connect_service_websocket())
+            self._stream_task = self.run_worker(
+                self._connect_service_stream(), exclusive=True
+            )
 
     def _render_sections(self, service: ServiceStatus) -> None:
         """Render all sections with the service data."""
@@ -121,10 +126,10 @@ class ServiceDetailsContainer(Container):
             self._pods_table.focus()
 
     async def cleanup(self) -> None:
-        """Clean up WebSocket connections and tasks."""
-        if self._ws_task:
-            self._ws_task.cancel()
-            self._ws_task = None
+        """Clean up SSE stream connections and tasks."""
+        if self._stream_task:
+            self._stream_task.cancel()
+            self._stream_task = None
 
         if api.status and api.status.is_connected():
             await api.status.disconnect()
@@ -263,31 +268,56 @@ class ServiceDetailsContainer(Container):
         self._scroll.mount(table)
         return table
 
-    async def _connect_service_websocket(self) -> None:
-        """Connect to WebSocket for real-time service updates."""
+    async def _connect_service_stream(self) -> None:
+        """Connect to SSE stream for real-time service updates."""
         if not self.deployment_id or not self.service_name:
             return
 
-        try:
+        max_reconnect_attempts = 5
+        reconnect_delay = 3  # seconds
 
-            def on_update(data: ServiceStatus) -> None:
-                """Handle incoming WebSocket messages."""
-                # Use call_later to ensure UI updates happen on the main thread
-                self.app.call_later(self.update_overview, data)
+        for attempt in range(max_reconnect_attempts):
+            try:
 
-                if data.pods:
-                    self.app.call_later(self.update_pods_table, data.pods)
+                def on_update(data: ServiceStatus) -> None:
+                    """Handle incoming SSE events."""
+                    # Use call_later to ensure UI updates happen on the main thread
+                    self.app.call_later(self.update_overview, data)
 
-            def on_error(_: Exception) -> None:
-                """Handle WebSocket errors."""
-                pass
+                    if data.pods:
+                        self.app.call_later(self.update_pods_table, data.pods)
 
-            await api.status.stream_service_status(
-                deployment_id=self.deployment_id,
-                service_name=self.service_name,
-                on_update=on_update,
-                on_error=on_error,
-            )
+                def on_error(error: Exception) -> None:
+                    """Handle SSE stream errors."""
+                    logger.warning(
+                        f"SSE stream error for service {self.service_name}: {error}"
+                    )
 
-        except Exception:
-            pass
+                await api.status.stream_service_status(
+                    deployment_id=self.deployment_id,
+                    service_name=self.service_name,
+                    on_update=on_update,
+                    on_error=on_error,
+                )
+
+                # If we get here, stream ended normally (not an error)
+                logger.info(
+                    f"SSE stream ended normally for service {self.service_name}"
+                )
+                break
+
+            except Exception as e:
+                logger.error(
+                    f"SSE stream connection failed for service {self.service_name} "
+                    f"(attempt {attempt + 1}/{max_reconnect_attempts}): {e}"
+                )
+
+                # Only reconnect if still mounted and not on last attempt
+                if attempt < max_reconnect_attempts - 1 and self.is_mounted:
+                    logger.info(f"Reconnecting to SSE stream in {reconnect_delay}s...")
+                    await asyncio.sleep(reconnect_delay)
+                else:
+                    logger.error(
+                        f"Failed to maintain SSE connection for service {self.service_name}"
+                    )
+                    break

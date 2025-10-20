@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field
 
 class DeploymentCreateRequest(BaseModel):
     compose_yaml: str = Field(..., description="Docker Compose YAML content")
+    workspace_id: str = Field(..., description="Workspace ID")
     name: str | None = Field(
         None,
         description="Unique deployment name for updates",

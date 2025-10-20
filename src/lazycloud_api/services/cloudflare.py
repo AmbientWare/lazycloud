@@ -5,8 +5,6 @@ from typing import Any
 import httpx
 from loguru import logger
 
-from lazycloud_api.config import app_config
-
 
 class CloudflareAPIError(Exception):
     """Custom exception for Cloudflare API errors"""
@@ -22,11 +20,11 @@ class CloudflareAPIError(Exception):
 class CloudflareService:
     """Service for managing Cloudflare SSL for SaaS custom hostnames"""
 
-    def __init__(self):
+    def __init__(self, api_key: str, zone_id: str, account_id: str):
         self._base_url = "https://api.cloudflare.com/client/v4"
-        self._api_key = app_config.CLOUDFLARE_API_KEY
-        self._zone_id = app_config.CLOUDFLARE_ZONE_ID
-        self._account_id = app_config.CLOUDFLARE_ACCOUNT_ID
+        self._api_key = api_key
+        self._zone_id = zone_id
+        self._account_id = account_id
         self._client: httpx.AsyncClient | None = None
 
     def _get_client(self) -> httpx.AsyncClient:
