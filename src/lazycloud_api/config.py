@@ -42,11 +42,20 @@ class AppConfig(BaseModel):
     AWS_ENDPOINT_URL: str = os.getenv("AWS_ENDPOINT_URL", None)
     AWS_ECR_BASE_ROLE_ARN: str = os.getenv("AWS_ECR_BASE_ROLE_ARN", "")
 
+    # Cloudflare Configuration
+    CLOUDFLARE_API_KEY: str = os.getenv("CLOUDFLARE_API_KEY", "")
+    CLOUDFLARE_ZONE_ID: str = os.getenv("CLOUDFLARE_ZONE_ID", "")
+    CLOUDFLARE_ACCOUNT_ID: str = os.getenv("CLOUDFLARE_ACCOUNT_ID", "")
+
     # Database Configurations
     DB_SECRET_KEY: str = os.getenv("DB_SECRET_KEY", "")
     DATABASE_URL: str = os.getenv("DATABASE_URL", "")
     DATABASE_POOL_URL: str = os.getenv("DATABASE_POOL_URL", "")
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379")
+
+    # JWT Configuration
+    JWT_SECRET: str = os.getenv("JWT_SECRET", "secret-key")
+    JWT_ALGORITHM: str = os.getenv("JWT_ALGORITHM", "HS256")
 
     # Registry Configuration
     REGISTRY_TYPE: str = os.getenv("REGISTRY_TYPE", "docker_hub")

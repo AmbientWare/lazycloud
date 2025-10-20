@@ -1,16 +1,16 @@
 import asyncio
 from datetime import datetime
-from enum import IntEnum, StrEnum
+from enum import IntEnum
+from typing import TYPE_CHECKING
 
-from sqlalchemy import Column, DateTime, String
+from sqlalchemy import DateTime, Index, String, UniqueConstraint
 from sqlalchemy.future import select
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from lazycloud_api.database.base import BaseModel, BaseTable, DatabaseService
 
-
-class ApiKeyRole(StrEnum):
-    ADMIN = "admin"
-    USER = "user"
+if TYPE_CHECKING:
+    from lazycloud_api.database.users import UserTable
 
 
 class ApiKeyExpirationMinutes(IntEnum):
@@ -37,10 +37,20 @@ class ApiKeyTable(BaseTable):
 
     __tablename__ = "api_keys"
 
-    name = Column(String, nullable=False, unique=True, index=True)
-    value = Column(String, nullable=False, unique=True, index=True)
-    role = Column(String, nullable=False)
-    expires_at = Column(DateTime(timezone=True), nullable=False)
+    name: Mapped[str] = mapped_column(String, index=True)
+    value: Mapped[str] = mapped_column(String, unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "name", name="uq_user_api_key_name"),
+        Index("ix_api_keys_user_id_name", "user_id", "name"),
+    )
+
+    user: Mapped["UserTable"] = relationship(
+        "UserTable",
+        back_populates="api_keys",
+        lazy="joined",
+    )
 
 
 class ApiKeyPydantic(BaseModel):
@@ -49,7 +59,6 @@ class ApiKeyPydantic(BaseModel):
     name: str
     value: str
     expires_at: datetime
-    role: ApiKeyRole
 
 
 class ApiKeyService(DatabaseService[ApiKeyTable, ApiKeyPydantic]):
@@ -57,6 +66,14 @@ class ApiKeyService(DatabaseService[ApiKeyTable, ApiKeyPydantic]):
 
     def __init__(self):
         super().__init__(ApiKeyTable, ApiKeyPydantic)
+
+    async def aget_by_user_id(self, user_id: str) -> list[ApiKeyPydantic]:
+        """Get a api key by reference id"""
+        async with self._session_manager.get_session() as session:
+            query = select(ApiKeyTable).where(ApiKeyTable.user_id == user_id)
+            result = await session.execute(query)
+            api_keys = result.scalars().all()
+            return [self._to_pydantic(api_key) for api_key in api_keys]
 
     async def auser_by_value(self, value: str) -> str | None:
         """Get a user by value"""

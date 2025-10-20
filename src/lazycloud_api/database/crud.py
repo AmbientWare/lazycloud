@@ -1,16 +1,20 @@
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 
-from lazycloud_api.database.session import session_manager
-from lazycloud_api.database.base import Base
 from lazycloud_api.config import app_config
-from lazycloud_api.database.utils import generate_api_key_expires_at, api_key_is_expired
 from lazycloud_api.database.api_keys import (
-    ApiKeyService,
-    ApiKeyPydantic,
-    ApiKeyRole,
     ApiKeyExpirationDays,
+    ApiKeyPydantic,
+    ApiKeyService,
 )
-from lazycloud_api.database.usage import UsageService, UsagePydantic, UsageStatus
+from lazycloud_api.database.base import Base
+from lazycloud_api.database.session import session_manager
+from lazycloud_api.database.users import (
+    UserPydantic,
+    UserRole,
+    UserService,
+    UserStatus,
+)
+from lazycloud_api.database.utils import api_key_is_expired, generate_api_key_expires_at
 
 
 async def create_tables():
@@ -21,26 +25,25 @@ async def create_tables():
 async def update_admin_api_keys():
     api_key_service = ApiKeyService()
 
-    # check if we have a usage record
-    usage_service = UsageService()
-    usage_record = await usage_service.afind_one(filters={"user_id": "admin"})
-    if not usage_record:
-        await usage_service.acreate(
-            UsagePydantic(
-                user_id="admin",
-                balance=0,
-                status=UsageStatus.ACTIVE,
-            )
+    # check if we have an admin user
+    user_service = UserService()
+    user = await user_service.aget_by_clerk_id(clerk_id="lzy_admin")
+    if not user:
+        user = UserPydantic(
+            clerk_id="lzy_admin",
+            role=UserRole.ADMIN,
+            status=UserStatus.ACTIVE,
         )
+        user = await user_service.acreate(user)
 
     # check if the admin api key exists
-    admin_api_keys = await api_key_service.afind(filters={"user_id": "admin"})
+    admin_api_keys = await api_key_service.aget_by_user_id(user_id=user.id)
     api_key_exists = False
     if admin_api_keys and len(admin_api_keys) > 0:
         # delete api keys if they are expired
         for api_key in admin_api_keys:
             if (
-                api_key.id
+                api_key.user_id == user.id
                 and api_key.updated_at
                 and api_key.value != app_config.ADMIN_API_KEY
             ):
@@ -71,15 +74,14 @@ async def update_admin_api_keys():
         return
 
     api_key = ApiKeyPydantic(
-        name="admin-api-key",
-        user_id="admin",
+        name="lzy_admin_api_key",
+        user_id=user.id,
         value=app_config.ADMIN_API_KEY,
         expires_at=generate_api_key_expires_at(
             ApiKeyExpirationDays.THREE_HUNDRED_SIXTY_FIVE_DAYS
         ),
-        role=ApiKeyRole.ADMIN,
     )
 
     new_api_key = await api_key_service.acreate(api_key)
-    if new_api_key and new_api_key.id:
+    if new_api_key and new_api_key.user_id == user.id:
         print(f"New admin api key created: {new_api_key.value}")

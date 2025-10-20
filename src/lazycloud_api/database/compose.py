@@ -1,13 +1,10 @@
-"""
-Database models for Docker Compose deployments.
-"""
-
 from datetime import datetime
+from typing import TYPE_CHECKING, List
 
 from sqlalchemy import (
     JSON,
-    Column,
     DateTime,
+    Index,
     String,
     Text,
     UniqueConstraint,
@@ -15,10 +12,14 @@ from sqlalchemy import (
 from sqlalchemy import (
     Enum as SQLAEnum,
 )
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from lazycloud_api.database.base import BaseModel, BaseTable, DatabaseService
 from shared.models.deployments import DeploymentStates
 from shared.models.helm import HelmValues
+
+if TYPE_CHECKING:
+    from lazycloud_api.database.secrets import SecretTable
 
 
 class ComposeDeploymentTable(BaseTable):
@@ -26,19 +27,29 @@ class ComposeDeploymentTable(BaseTable):
 
     __tablename__ = "compose_deployments"
 
-    name = Column(String, nullable=True, index=True)
-    namespace = Column(String, nullable=False)
-    compose_yaml = Column(Text, nullable=False)
-    helm_values = Column(JSON, nullable=True)
-    state = Column(
+    name: Mapped[str | None] = mapped_column(String, index=True)
+    namespace: Mapped[str] = mapped_column(String)
+    compose_yaml: Mapped[str] = mapped_column(Text)
+    helm_values: Mapped[dict | None] = mapped_column(JSON)
+    state: Mapped[DeploymentStates] = mapped_column(
         SQLAEnum(DeploymentStates), default=DeploymentStates.PENDING, index=True
     )
-    status_message = Column(Text, nullable=True)
-    deployed_at = Column(DateTime(timezone=True), nullable=True)
+    status_message: Mapped[str | None] = mapped_column(Text)
+    deployed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # Unique constraint to ensure one deployment per name per user
     __table_args__ = (
         UniqueConstraint("user_id", "name", name="uq_user_deployment_name"),
+        Index("ix_compose_deployments_user_id_name", "user_id", "name"),
+    )
+
+    # Relationships
+    secrets: Mapped[List["SecretTable"]] = relationship(
+        "SecretTable",
+        back_populates="deployment",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        lazy="selectin",
     )
 
 

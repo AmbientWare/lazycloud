@@ -2,9 +2,10 @@ import yaml
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
 
-from lazycloud_api.api.security import UserData, get_current_active_user
+from lazycloud_api.api.security import get_current_active_user
 from lazycloud_api.database import db
 from lazycloud_api.database.compose import ComposeDeploymentPydantic
+from lazycloud_api.database.users import UserPydantic
 from lazycloud_api.prefect_app.compose import deploy_compose_task, destroy_compose_task
 from lazycloud_api.services.compose.parser import ComposeParser
 from lazycloud_api.services.compose.validator import ComposeValidator
@@ -30,19 +31,19 @@ async def list_deployments(
     status: str | None = None,
     deployment_id: str | None = None,
     name: str | None = None,
-    current_user: UserData = Depends(get_current_active_user),
+    current_user: UserPydantic = Depends(get_current_active_user),
 ) -> DeploymentListResponse:
     """List compose deployments."""
-    search_params = {"user_id": current_user.user_id}
+    filters = {"user_id": current_user.id}
     if status:
-        search_params["status"] = status
+        filters["status"] = status
     if deployment_id:
-        search_params["id"] = deployment_id
+        filters["id"] = deployment_id
     if name:
-        search_params["name"] = name
+        filters["name"] = name
 
     try:
-        deployments = await db.compose_deployments.afind(search_params)
+        deployments = await db.compose_deployments.afind(filters=filters)
         total = len(deployments)
         paginated_deployments = deployments[skip : skip + limit]
 
@@ -77,13 +78,13 @@ async def list_deployments(
 @router.get("/{deployment_id}/status", response_model=DeploymentStatusResponse)
 async def get_deployment_status(
     deployment_id: str,
-    current_user: UserData = Depends(get_current_active_user),
+    current_user: UserPydantic = Depends(get_current_active_user),
 ) -> DeploymentStatusResponse:
     """Get resource status for a deployment."""
     deployment = await db.compose_deployments.afind_one(
         {
             "id": deployment_id,
-            "user_id": current_user.user_id,
+            "user_id": current_user.id,
         }
     )
 
@@ -104,12 +105,12 @@ async def get_deployment_status(
 @router.post("", response_model=DeploymentTaskStatusResponse)
 async def create_deployment(
     request: DeploymentCreateRequest,
-    current_user: UserData = Depends(get_current_active_user),
+    current_user: UserPydantic = Depends(get_current_active_user),
 ) -> DeploymentTaskStatusResponse:
     """Create a new compose deployment."""
     try:
         compose_data = yaml.safe_load(request.compose_yaml)
-        namespace = create_ns_name(current_user.user_id)
+        namespace = create_ns_name(current_user.id)
         compose_file = ComposeParser.parse_dict(compose_data)
 
         validator = ComposeValidator()
@@ -171,13 +172,13 @@ async def create_deployment(
 @router.delete("/{deployment_id}", response_model=DeploymentTaskStatusResponse)
 async def delete_deployment(
     deployment_id: str,
-    current_user: UserData = Depends(get_current_active_user),
+    current_user: UserPydantic = Depends(get_current_active_user),
 ) -> DeploymentTaskStatusResponse:
     """Delete a deployment."""
     try:
         deployment = await db.compose_deployments.aget_by_id(deployment_id)
 
-        if not deployment or deployment.user_id != current_user.user_id:
+        if not deployment or deployment.user_id != current_user.id:
             raise HTTPException(status_code=404, detail="Deployment not found")
 
         await db.compose_deployments.update_status(
@@ -186,7 +187,7 @@ async def delete_deployment(
 
         task_future = destroy_compose_task.delay(
             deployment_id=deployment_id,
-            user_id=current_user.user_id,
+            user_id=current_user.id,
         )
 
         return DeploymentTaskStatusResponse(

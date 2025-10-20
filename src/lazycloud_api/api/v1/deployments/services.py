@@ -2,9 +2,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
 from sse_starlette.sse import EventSourceResponse
 
-from lazycloud_api.api.security import UserData, get_current_active_user
+from lazycloud_api.api.security import get_current_active_user
 from lazycloud_api.api.v1.streaming_utils import create_sse_stream
 from lazycloud_api.database import db
+from lazycloud_api.database.users import UserPydantic
 from lazycloud_api.prefect_app.services import (
     restart_all_services_task,
     restart_service_task,
@@ -24,13 +25,13 @@ router = APIRouter()
 )
 async def list_services(
     deployment_id: str,
-    current_user: UserData = Depends(get_current_active_user),
+    current_user: UserPydantic = Depends(get_current_active_user),
 ) -> list[ServiceStatusResponse]:
     """Get the status of all services within a deployment."""
     deployment = await db.compose_deployments.afind_one(
         {
             "id": deployment_id,
-            "user_id": current_user.user_id,
+            "user_id": current_user.id,
         }
     )
     if not deployment:
@@ -62,13 +63,13 @@ async def list_services(
 async def get_service_status(
     deployment_id: str,
     service_name: str,
-    current_user: UserData = Depends(get_current_active_user),
+    current_user: UserPydantic = Depends(get_current_active_user),
 ) -> ServiceStatusResponse:
     """Get the status of a specific service within a deployment."""
     deployment = await db.compose_deployments.afind_one(
         {
             "id": deployment_id,
-            "user_id": current_user.user_id,
+            "user_id": current_user.id,
         }
     )
 
@@ -102,13 +103,13 @@ async def get_service_status(
 )
 async def restart_all_services(
     deployment_id: str,
-    current_user: UserData = Depends(get_current_active_user),
+    current_user: UserPydantic = Depends(get_current_active_user),
 ) -> ServiceTaskStatusResponse:
     """Restart all services within a deployment."""
     try:
         task_future = restart_all_services_task.delay(
             deployment_id=deployment_id,
-            user_id=current_user.user_id,
+            user_id=current_user.id,
         )
 
         return ServiceTaskStatusResponse(
@@ -133,14 +134,14 @@ async def restart_all_services(
 async def restart_service(
     deployment_id: str,
     service_name: str,
-    current_user: UserData = Depends(get_current_active_user),
+    current_user: UserPydantic = Depends(get_current_active_user),
 ) -> ServiceTaskStatusResponse:
     """Restart a specific service within a deployment."""
     try:
         task_future = restart_service_task.delay(
             deployment_id=deployment_id,
             service_name=service_name,
-            user_id=current_user.user_id,
+            user_id=current_user.id,
         )
 
         return ServiceTaskStatusResponse(
@@ -165,11 +166,11 @@ async def restart_service(
 async def stream_service_status(
     deployment_id: str,
     service_name: str,
-    current_user: UserData = Depends(get_current_active_user),
+    current_user: UserPydantic = Depends(get_current_active_user),
 ):
     """Stream real-time service status updates."""
     deployment = await db.compose_deployments.aget_by_id(deployment_id)
-    if not deployment or deployment.user_id != current_user.user_id:
+    if not deployment or deployment.user_id != current_user.id:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     monitor = ServiceMonitor(
@@ -195,7 +196,7 @@ async def stream_service_logs(
     deployment_id: str,
     service_name: str,
     pod_name: str,
-    current_user: UserData = Depends(get_current_active_user),
+    current_user: UserPydantic = Depends(get_current_active_user),
     tail: int = Query(100),
 ):
     """Stream real-time service logs."""

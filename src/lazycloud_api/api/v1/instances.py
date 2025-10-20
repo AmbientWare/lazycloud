@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
 
-from lazycloud_api.api.security import UserData, get_current_active_user
+from lazycloud_api.api.security import get_current_active_user
 from lazycloud_api.database import db
+from lazycloud_api.database.users import UserPydantic
 from lazycloud_api.prefect_app.instances import delete_instance_task
 from shared.models.deployments import DeploymentStates
 from shared.models.statuses import TaskStatus
@@ -18,7 +19,7 @@ async def delete_instance(
     deployment_id: str,
     service_name: str,
     pod_name: str,
-    current_user: UserData = Depends(get_current_active_user),
+    current_user: UserPydantic = Depends(get_current_active_user),
 ) -> InstanceTaskStatusResponse:
     """Delete a specific instance in a deployment."""
     try:
@@ -26,7 +27,7 @@ async def delete_instance(
         deployment = await db.compose_deployments.afind_one(
             {
                 "id": deployment_id,
-                "user_id": current_user.user_id,
+                "user_id": current_user.id,
             }
         )
 
