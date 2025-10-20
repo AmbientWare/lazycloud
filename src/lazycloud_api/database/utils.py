@@ -27,8 +27,6 @@ def generate_api_key_expires_at(
 
         return datetime.now(timezone.utc) + timedelta(days=expiration.value)
 
-    raise ValueError(f"Invalid expiration type: {type(expiration)}")
-
 
 def api_key_is_expired(expires_at: datetime) -> bool:
     """Check if the api key is expired"""

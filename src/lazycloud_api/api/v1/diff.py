@@ -2,8 +2,9 @@ import yaml
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
 
-from lazycloud_api.api.security import UserData, get_current_active_user
+from lazycloud_api.api.security import get_current_active_user
 from lazycloud_api.database import db
+from lazycloud_api.database.users import UserPydantic
 from lazycloud_api.services.compose.diff_checker import ComposeDiffChecker
 from lazycloud_api.services.compose.parser import ComposeParser
 from lazycloud_api.services.compose.validator import ComposeValidator
@@ -19,7 +20,7 @@ diff_router = APIRouter(prefix="/diff", tags=["diff"])
 async def get_deployment_diff(
     deployment_id: str,
     request: DiffRequest,
-    current_user: UserData = Depends(get_current_active_user),
+    current_user: UserPydantic = Depends(get_current_active_user),
 ) -> DiffResponse:
     """Compare current deployment with proposed changes."""
     # Special case: deployment_id == "new" means this is a new deployment
@@ -35,13 +36,8 @@ async def get_deployment_diff(
 
     else:
         deployment = await db.compose_deployments.aget_by_id(deployment_id)
-        if not deployment or deployment.user_id != current_user.user_id:
+        if not deployment or deployment.user_id != current_user.id:
             raise HTTPException(status_code=404, detail="Deployment not found")
-
-    # Get user's UUID from usage table
-    user_usage = await db.usage.afind_one(filters={"user_id": current_user.user_id})
-    if not user_usage or not user_usage.uuid:
-        raise HTTPException(status_code=400, detail="User usage record not found")
 
     # Parse new compose file
     compose_data = yaml.safe_load(request.compose_yaml)
@@ -52,7 +48,7 @@ async def get_deployment_diff(
     validation_result = validator.validate_to_result(compose_file)
 
     # Determine namespace
-    namespace = create_ns_name(current_user.user_id)
+    namespace = create_ns_name(current_user.id)
 
     # Handle environment variable diff
     env_var_changes = None

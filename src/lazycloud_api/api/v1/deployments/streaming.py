@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sse_starlette.sse import EventSourceResponse
 
-from lazycloud_api.api.security import UserData, get_current_active_user
+from lazycloud_api.api.security import get_current_active_user
 from lazycloud_api.api.v1.streaming_utils import create_sse_stream
 from lazycloud_api.database import db
+from lazycloud_api.database.users import UserPydantic
 from lazycloud_api.services.monitoring import DeploymentMonitor
 
 router = APIRouter()
@@ -12,11 +13,11 @@ router = APIRouter()
 @router.get("/{deployment_id}/status/stream")
 async def stream_deployment_status(
     deployment_id: str,
-    current_user: UserData = Depends(get_current_active_user),
+    current_user: UserPydantic = Depends(get_current_active_user),
 ):
     """Stream real-time deployment status updates."""
     deployment = await db.compose_deployments.aget_by_id(deployment_id)
-    if not deployment or deployment.user_id != current_user.user_id:
+    if not deployment or deployment.user_id != current_user.id:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     monitor = DeploymentMonitor(

@@ -1,6 +1,6 @@
 from lazycloud_api.database import db
 from lazycloud_api.database.compose import ComposeDeploymentPydantic
-from lazycloud_api.services.aws import ecr_auth_service
+from lazycloud_api.services import ecr_auth_service
 from lazycloud_api.services.compose.validator import ComposeValidator
 from lazycloud_api.services.k8s.generators.configuration import (
     generate_healthcheck_values,

@@ -1,22 +1,54 @@
+import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jwt import exceptions as jwt_exceptions
 
 from lazycloud_api.config import ENVIRONMENT, app_config
 from lazycloud_api.database import db
-from lazycloud_api.database.api_keys import ApiKeyRole
+from lazycloud_api.database.users import (
+    UserPydantic,
+    UserRole,
+    UserStatus,
+)
 from lazycloud_api.database.utils import api_key_is_expired
-from shared.models.users import UserData
 
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 
 
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
-) -> UserData:
-    if app_config.ENV.value == ENVIRONMENT.DEV.value and not credentials.credentials:
-        return UserData(user_id="admin", role=ApiKeyRole.ADMIN)
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+) -> UserPydantic:
+    # Dev mode bypass
+    if app_config.ENV.value == ENVIRONMENT.DEV.value and (
+        credentials is None or not credentials.credentials
+    ):
+        user = await db.users.aget_by_clerk_id(clerk_id="lzy_admin")
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Dev mode: admin user not found",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        return user
 
-    api_key = credentials.credentials
+    if not credentials or not credentials.credentials:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing authentication credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    token = credentials.credentials
+
+    # Check if token is an API key (starts with sk_) or JWT
+    if token.startswith("sk_"):
+        return await _authenticate_api_key(token)
+    else:
+        return await _authenticate_jwt(token)
+
+
+async def _authenticate_api_key(api_key: str) -> UserPydantic:
+    """Authenticate using API key (sk_ prefix)"""
     db_api_key = await db.api_keys.afind_one(filters={"value": api_key})
 
     if not db_api_key or api_key_is_expired(db_api_key.expires_at):
@@ -26,44 +58,76 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    return UserData(user_id=db_api_key.user_id, role=db_api_key.role)
+    user = await db.users.aget_by_id(id=db_api_key.user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    return user
+
+
+async def _authenticate_jwt(token: str) -> UserPydantic:
+    """Authenticate using JWT token"""
+    try:
+        # Decode JWT - exp (expiration) is automatically validated
+        payload = jwt.decode(
+            token,
+            app_config.JWT_SECRET,
+            algorithms=[app_config.JWT_ALGORITHM or "HS256"],
+        )
+
+        # Get user ID from 'sub' (subject) claim
+        clerk_id = payload.get("sub")
+        if not clerk_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token: missing subject",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        user = await db.users.aget_by_clerk_id(clerk_id=clerk_id)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User not found",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        return user
+
+    except jwt_exceptions.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has expired",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except jwt_exceptions.InvalidTokenError as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Invalid token: {str(e)}",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 
 async def get_current_active_user(
-    current_user: UserData = Depends(get_current_user),
-) -> UserData:
+    current_user: UserPydantic = Depends(get_current_user),
+) -> UserPydantic:
+    if current_user.status != UserStatus.ACTIVE:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User account is not active",
+        )
     return current_user
 
 
-async def get_user_usage_uuid(
-    current_user: UserData = Depends(get_current_user),
-) -> str:
-    usage = await db.usage.afind_one(filters={"user_id": current_user.user_id})
-    if not usage or usage.uuid is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Usage not found"
-        )
-
-    return usage.uuid
-
-
-async def require_admin(current_user: UserData = Depends(get_current_user)) -> UserData:
-    if current_user.role != ApiKeyRole.ADMIN:
+async def require_admin(
+    current_user: UserPydantic = Depends(get_current_user),
+) -> UserPydantic:
+    if current_user.role != UserRole.ADMIN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Not enough permissions"
         )
     return current_user
-
-
-async def check_user_id_request(user_id: str | None, current_user: UserData) -> str:
-    if user_id:
-        if not await require_admin(current_user):
-            # only admins can delete file systems for other users
-            raise HTTPException(
-                status_code=403,
-                detail="You are not authorized to delete file systems for other users",
-            )
-
-        return user_id
-
-    return current_user.user_id

@@ -1,13 +1,18 @@
 import asyncio
 import json
+from typing import TYPE_CHECKING
 
 from cryptography.fernet import Fernet
-from sqlalchemy import Column, ForeignKey, Text
+from sqlalchemy import ForeignKey, Text
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.future import select
-from sqlalchemy.orm import relationship, backref
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from lazycloud_api.config import app_config
 from lazycloud_api.database.base import BaseModel, BaseTable, DatabaseService, UUIDStr
+
+if TYPE_CHECKING:
+    from lazycloud_api.database.compose import ComposeDeploymentTable
 
 FERNET = Fernet(app_config.DB_SECRET_KEY.encode())
 
@@ -30,19 +35,19 @@ class SecretTable(BaseTable):
 
     __tablename__ = "secrets"
 
-    deployment_id = Column(
+    deployment_id: Mapped[UUID] = mapped_column(
         ForeignKey("compose_deployments.id", ondelete="CASCADE"),
-        nullable=False,
         unique=True,
         index=True,
     )
     # Encrypted JSON string
-    secrets = Column(Text, nullable=False)
+    secrets: Mapped[str] = mapped_column(Text)
 
     # relationships
-    deployment = relationship(
-        "ComposeDeploymentTable", 
-        backref=backref("secrets", cascade="all, delete-orphan", passive_deletes=True)
+    deployment: Mapped["ComposeDeploymentTable"] = relationship(
+        "ComposeDeploymentTable",
+        back_populates="secrets",
+        lazy="joined",
     )
 
 

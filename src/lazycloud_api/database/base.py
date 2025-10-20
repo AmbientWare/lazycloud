@@ -6,9 +6,10 @@ from typing import Annotated, Generic, Type, TypeVar
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ConfigDict
 from pydantic.functional_validators import BeforeValidator
-from sqlalchemy import Column, DateTime, String, orm
+from sqlalchemy import DateTime, ForeignKey, orm
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.future import select
+from sqlalchemy.orm import Mapped, mapped_column
 
 from lazycloud_api.database.session import session_manager
 
@@ -25,17 +26,16 @@ def uuid_to_str(v):
 UUIDStr = Annotated[str, BeforeValidator(uuid_to_str)]
 
 
-class BaseTable(Base):
-    """Base class for all SQLAlchemy models"""
-
+class IdTable(Base):
     __abstract__ = True
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
-    user_id = Column(String, nullable=False, index=True)
-    created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    updated_at = Column(
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
@@ -48,15 +48,31 @@ class BaseTable(Base):
         return pydantic_class.model_validate(self)
 
 
-class BaseModel(PydanticBaseModel):
-    """Base class for all Pydantic models"""
+class BaseTable(IdTable):
+    """Base class for all SQLAlchemy models"""
+
+    __abstract__ = True
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        index=True,
+    )
+
+
+class IdModel(PydanticBaseModel):
+    """Base class for all Pydantic models with an id"""
+
+    id: UUIDStr | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
-    id: UUIDStr | None = None
-    user_id: str
-    created_at: datetime | None = None
-    updated_at: datetime | None = None
+
+class BaseModel(IdModel):
+    """Base class for all Pydantic models"""
+
+    user_id: UUIDStr | None = None
 
 
 basePydanticType = TypeVar("basePydanticType", bound=BaseModel)
