@@ -15,6 +15,16 @@ async def collect_workspace_usage_for_hour(
     workspace_id: str, start_time: datetime, end_time: datetime
 ) -> dict:
     try:
+        # Check Prometheus health before attempting collection
+        if not await metrics_service.health_check():
+            logger.error("Prometheus is not healthy, skipping usage collection")
+            return {
+                "workspace_id": workspace_id,
+                "hour": start_time.hour,
+                "success": False,
+                "error": "Prometheus unhealthy",
+            }
+
         namespace = create_ns_name(workspace_id)
 
         # Get detailed breakdown from Prometheus
@@ -73,9 +83,20 @@ async def collect_workspace_daily_usage(
     workspace_id: str, day_start: datetime, day_end: datetime
 ) -> dict:
     try:
+        # Check Prometheus health before attempting collection
+        if not await metrics_service.health_check():
+            logger.error("Prometheus is not healthy, skipping daily usage collection")
+            return {
+                "workspace_id": workspace_id,
+                "date": str(day_start.date()),
+                "success": False,
+                "error": "Prometheus unhealthy",
+            }
+
         namespace = create_ns_name(workspace_id)
 
-        # Query Prometheus for the full day
+        # Query Prometheus for the full day with larger step size to reduce memory usage
+        # Using 5m steps instead of 60s reduces data points by 5x
         breakdown = await metrics_service.get_namespace_breakdown(
             namespace, day_start, day_end
         )
@@ -234,16 +255,64 @@ async def forward_for_billing_flow():
 async def spawn_usage_collection_flows():
     """Spawn usage collection flows"""
     # spawn collect_hourly_usage_flow for all workspaces
+    results = []
     for workspace in await db.workspaces.aget_all():
-        await collect_hourly_usage_flow(str(workspace.id))
+        result = await collect_hourly_usage_flow(str(workspace.id))
+        results.append(result)
+
+    # Monitor collection failures
+    failed_count = sum(1 for r in results if not r.get("success", False))
+    total_count = len(results)
+
+    if failed_count > 0:
+        logger.warning(
+            f"Usage collection completed with {failed_count}/{total_count} failures"
+        )
+
+    # Alert if failure rate is high
+    if total_count > 0 and failed_count / total_count > 0.3:
+        logger.critical(
+            f"HIGH FAILURE RATE in usage collection: {failed_count}/{total_count} "
+            f"({failed_count / total_count * 100:.1f}%) workspaces failed"
+        )
+
+    return {
+        "total": total_count,
+        "failed": failed_count,
+        "success": total_count - failed_count,
+    }
 
 
 @flow(log_prints=True)
 async def spawn_backfill_daily_usage_flows():
     """Spawn backfill daily usage flows"""
     # spawn backfill_daily_usage_flow for all workspaces
+    results = []
     for workspace in await db.workspaces.aget_all():
-        await backfill_daily_usage_flow(str(workspace.id))
+        result = await backfill_daily_usage_flow(str(workspace.id))
+        results.append(result)
+
+    # Monitor backfill failures
+    failed_count = sum(1 for r in results if not r.get("daily_success", False))
+    total_count = len(results)
+
+    if failed_count > 0:
+        logger.warning(
+            f"Daily backfill completed with {failed_count}/{total_count} failures"
+        )
+
+    # Alert if failure rate is high
+    if total_count > 0 and failed_count / total_count > 0.3:
+        logger.critical(
+            f"HIGH FAILURE RATE in daily backfill: {failed_count}/{total_count} "
+            f"({failed_count / total_count * 100:.1f}%) workspaces failed"
+        )
+
+    return {
+        "total": total_count,
+        "failed": failed_count,
+        "success": total_count - failed_count,
+    }
 
 
 # define deployments for the flows that can be called by other flows
@@ -259,7 +328,7 @@ backfill_daily_usage_deployment = backfill_daily_usage_flow.to_deployment(
 
 spawn_usage_collection_deployment = spawn_usage_collection_flows.to_deployment(
     name="spawn-usage-collection",
-    cron="5 * * * *",
+    cron="15 * * * *",
 )
 
 spawn_backfill_daily_usage_deployment = spawn_backfill_daily_usage_flows.to_deployment(

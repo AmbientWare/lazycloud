@@ -97,6 +97,18 @@ class UsageBreakdownTable(BaseTable):
         "UsageRecordTable", back_populates="breakdowns"
     )
 
+    __table_args__ = (Index("ix_usage_breakdown_service", "service_name"),)
+
+
+class UsageBreakdownPydantic(BaseDbPydanticModel):
+    """Pydantic model for usage breakdown."""
+
+    usage_record_id: UUIDStr
+    service_name: str
+    cpu_core_seconds: float
+    memory_gb_seconds: float
+    pod_count: int
+
 
 class UsageRecordPydantic(BaseDbPydanticModel):
     """Pydantic model for usage record."""
@@ -110,16 +122,7 @@ class UsageRecordPydantic(BaseDbPydanticModel):
     storage_gb_hours: float
     reported_to_billing: bool
     reported_at: datetime | None = None
-
-
-class UsageBreakdownPydantic(BaseDbPydanticModel):
-    """Pydantic model for usage breakdown."""
-
-    usage_record_id: UUIDStr
-    service_name: str
-    cpu_core_seconds: float
-    memory_gb_seconds: float
-    pod_count: int
+    breakdowns: list[UsageBreakdownPydantic] = []
 
 
 class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
