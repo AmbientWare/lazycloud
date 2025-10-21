@@ -300,10 +300,6 @@ class ServiceDetailsContainer(Container):
                     on_error=on_error,
                 )
 
-                # If we get here, stream ended normally (not an error)
-                logger.info(
-                    f"SSE stream ended normally for service {self.service_name}"
-                )
                 break
 
             except Exception as e:

@@ -79,6 +79,10 @@ class ServicesContainer(Container):
         self.styles.border = theme.get_border()
         self.border_subtitle = None
 
+    def on_click(self) -> None:
+        """Handle mouse clicks - switch to services view."""
+        self.app.action_switch_to_services()
+
     async def watch_deployment_id(self, _old_value, new_value) -> None:
         """Auto-refresh when services list changes"""
         if new_value is not None and self._list_view:

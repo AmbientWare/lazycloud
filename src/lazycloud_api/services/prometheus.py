@@ -78,8 +78,8 @@ class PrometheusMetricsService:
                 rate(
                     container_cpu_usage_seconds_total{{
                         namespace="{namespace}",
-                        container!="",
-                        container!="POD"
+                        name!="",
+                        name!="POD"
                     }}[5m]
                 )
             )
@@ -100,7 +100,7 @@ class PrometheusMetricsService:
         total = 0.0
         count = 0
         for series in values:
-            for timestamp, value in series.get("values", []):
+            for _, value in series.get("values", []):
                 try:
                     total += float(value)
                     count += 1
@@ -127,8 +127,8 @@ class PrometheusMetricsService:
             sum(
                 container_memory_working_set_bytes{{
                     namespace="{namespace}",
-                    container!="",
-                    container!="POD"
+                    name!="",
+                    name!="POD"
                 }}
             )
         '''
@@ -213,28 +213,26 @@ class PrometheusMetricsService:
         return gb_hours
 
     async def get_pod_metrics(self, namespace: str, pod_name: str) -> PodMetrics:
-        # CPU query
         cpu_query = f'''
             sum(
                 rate(
                     container_cpu_usage_seconds_total{{
                         namespace="{namespace}",
                         pod="{pod_name}",
-                        container!="",
-                        container!="POD"
+                        name!="",
+                        name!="POD"
                     }}[5m]
                 )
             )
         '''
 
-        # Memory query
         memory_query = f'''
             sum(
                 container_memory_working_set_bytes{{
                     namespace="{namespace}",
                     pod="{pod_name}",
-                    container!="",
-                    container!="POD"
+                    name!="",
+                    name!="POD"
                 }}
             )
         '''
@@ -274,8 +272,8 @@ class PrometheusMetricsService:
                 rate(
                     container_cpu_usage_seconds_total{{
                         namespace="{namespace}",
-                        container!="",
-                        container!="POD"
+                        name!="",
+                        name!="POD"
                     }}[5m]
                 )
             )
@@ -285,8 +283,8 @@ class PrometheusMetricsService:
             sum(
                 container_memory_working_set_bytes{{
                     namespace="{namespace}",
-                    container!="",
-                    container!="POD"
+                    name!="",
+                    name!="POD"
                 }}
             )
         '''
@@ -386,26 +384,24 @@ class PrometheusMetricsService:
         duration_seconds: float,
     ) -> dict[str, ServiceUsage]:
         """Get resource usage grouped by service label."""
-        # CPU by service
         cpu_query = f'''
             sum by (label_lazycloud_io_service) (
                 rate(
                     container_cpu_usage_seconds_total{{
                         namespace="{namespace}",
-                        container!="",
-                        container!="POD"
+                        name!="",
+                        name!="POD"
                     }}[5m]
                 )
             )
         '''
 
-        # Memory by service
         memory_query = f'''
             sum by (label_lazycloud_io_service) (
                 container_memory_working_set_bytes{{
                     namespace="{namespace}",
-                    container!="",
-                    container!="POD"
+                    name!="",
+                    name!="POD"
                 }}
             )
         '''
@@ -497,26 +493,24 @@ class PrometheusMetricsService:
         duration_seconds: float,
     ) -> list[PodUsage]:
         """Get resource usage for individual pods."""
-        # CPU by pod
         cpu_query = f'''
             sum by (pod, label_lazycloud_io_service) (
                 rate(
                     container_cpu_usage_seconds_total{{
                         namespace="{namespace}",
-                        container!="",
-                        container!="POD"
+                        name!="",
+                        name!="POD"
                     }}[5m]
                 )
             )
         '''
 
-        # Memory by pod
         memory_query = f'''
             sum by (pod, label_lazycloud_io_service) (
                 container_memory_working_set_bytes{{
                     namespace="{namespace}",
-                    container!="",
-                    container!="POD"
+                    name!="",
+                    name!="POD"
                 }}
             )
         '''

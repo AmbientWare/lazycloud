@@ -248,6 +248,10 @@ def setup_monitoring_stack() -> None:
                 "prometheus.prometheusSpec.podMonitorSelectorNilUsesHelmValues=false",
                 "--set",
                 "grafana.enabled=true",
+                "--set",
+                "prometheus.service.type=NodePort",
+                "--set",
+                "prometheus.service.nodePort=30090",
                 "--wait",
                 "--timeout=10m",
             ]
@@ -257,8 +261,9 @@ def setup_monitoring_stack() -> None:
 
         # Show access instructions
         console.print("\n[blue]Access instructions:[/blue]")
+        console.print("  Prometheus (NodePort): $(minikube ip):30090")
         console.print(
-            "  Prometheus: kubectl port-forward -n monitoring svc/prometheus-kube-prometheus-prometheus 9090:9090"
+            "  Prometheus (Port-forward): kubectl port-forward -n monitoring svc/prometheus-kube-prometheus-prometheus 9090:9090"
         )
         console.print(
             "  Grafana: kubectl port-forward -n monitoring svc/prometheus-grafana 3000:80"
