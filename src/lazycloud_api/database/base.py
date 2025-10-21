@@ -81,6 +81,14 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
 
         return db_model.to_pydantic(self.pydantic_model_class)
 
+    async def aget_all(self) -> list[basePydanticType]:
+        """Get all model instances"""
+        async with self._session_manager.get_session() as session:
+            query = select(self.db_model_class)
+            result = await session.execute(query)
+            db_models = list(result.scalars().all())
+            return [self._to_pydantic(db_model) for db_model in db_models]
+
     async def aget_by_id(self, id: str) -> basePydanticType | None:
         """Get a model instance by id"""
         async with self._session_manager.get_session() as session:

@@ -45,4 +45,7 @@ WORKDIR /src/lazycloud_api
 
 # Second stage - api
 FROM builder AS api
-CMD [ "uv", "run", "python", "main.py"]
+CMD [ "uv", "run", "--no-sync", "python", "main.py"]
+
+FROM builder AS prefect-worker
+CMD [ "uv", "run", "--no-sync", "python", "worker.py"]
