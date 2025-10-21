@@ -64,6 +64,14 @@ class AppConfig(BaseModel):
     REGISTRY_PASSWORD: str | None = os.getenv("REGISTRY_PASSWORD", None)
     REGISTRY_REGION: str | None = os.getenv("REGISTRY_REGION", None)
 
+    # Monitoring Configuration
+    PROMETHEUS_URL: str = os.getenv("PROMETHEUS_URL", "http://localhost:9090")
+
+    # Usage Tracking Configuration
+    USAGE_COLLECTION_INTERVAL_HOURS: int = int(
+        os.getenv("USAGE_COLLECTION_INTERVAL_HOURS", "1")
+    )
+
     # Required Environment Variables
     required_env_vars: List[str] = [
         "ADMIN_API_KEY",

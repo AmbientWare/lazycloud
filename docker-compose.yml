@@ -47,6 +47,8 @@ services:
       AWS_SECRET_ACCESS_KEY: test
       AWS_REGION: us-east-1
       AWS_ECR_BASE_ROLE_ARN: arn:aws:iam::000000000000:role/LazyCloudECRBaseRole
+      # Monitoring Configuration
+      PROMETHEUS_URL: http://host.docker.internal:9090
     command: [ "uv", "run", "python", "main.py", "--debug", "--workers", "1" ]
     ports:
       - 8000:8000
@@ -66,23 +68,65 @@ services:
       prefect-server:
         condition: service_started
 
+  prefect-worker:
+    networks:
+      lazycloud:
+        ipv4_address: 172.20.0.11
+    image: lazycloud-worker:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: prefect-worker
+    volumes:
+      - ./src/lazycloud_api:/src/lazycloud_api
+      - "${HOME}/.kube/config:/root/.kube/config:ro"
+      - "${HOME}/.minikube:${HOME}/.minikube:ro"
+      - ./src/shared:/src/shared
+      - prefect-task-storage:/task-storage
+    env_file:
+      - .env
+    environment:
+      <<: *lazycloud-databases
+      KUBECONFIG: /root/.kube/config
+      PREFECT_API_URL: http://prefect-server:4200/api
+      PREFECT_LOGGING_LOG_PRINTS: "true"
+      PREFECT_LOCAL_STORAGE_PATH: /task-storage
+      PREFECT_RESULTS_PERSIST_BY_DEFAULT: "true"
+      # AWS Configuration (defaults to LocalStack for dev)
+      AWS_ACCOUNT_ID: "000000000000"
+      AWS_ENDPOINT_URL: http://localstack:4566
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_REGION: us-east-1
+      AWS_ECR_BASE_ROLE_ARN: arn:aws:iam::000000000000:role/LazyCloudECRBaseRole
+      # Monitoring Configuration
+      PROMETHEUS_URL: http://host.docker.internal:9090
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      prefect-server:
+        condition: service_started
+
   prefect-server:
     image: prefecthq/prefect:3-latest
     networks:
       lazycloud:
-        ipv4_address: 172.20.0.11
+        ipv4_address: 172.20.0.12
     command: ["prefect", "server", "start"]
     volumes:
       - prefect-data:/root/.prefect
     environment:
       # Allow connections from other containers
       PREFECT_SERVER_API_HOST: 0.0.0.0
+    ports:
+      - 4200:4200
 
   postgres:
     image: postgres:17
     networks:
       lazycloud:
-        ipv4_address: 172.20.0.12
+        ipv4_address: 172.20.0.13
     environment:
       POSTGRES_USER: lc_dev
       POSTGRES_PASSWORD: password
@@ -103,7 +147,7 @@ services:
     image: redis:latest
     networks:
       lazycloud:
-        ipv4_address: 172.20.0.13
+        ipv4_address: 172.20.0.14
     volumes:
       - redis-data:/data
     healthcheck:
@@ -117,7 +161,7 @@ services:
     container_name: lazycloud-localstack
     networks:
       lazycloud:
-        ipv4_address: 172.20.0.14
+        ipv4_address: 172.20.0.15
         aliases:
           # NOTE: this is the registry url for the localstack registry
           - 000000000000.dkr.ecr.us-east-1.localhost

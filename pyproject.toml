@@ -24,7 +24,7 @@ dependencies = [
     "nest-asyncio>=1.6.0",
     "pandas>=2.2.3",
     "petname>=2.6",
-    "prefect>=3.4.17",
+    "prefect>=3.4.24",
     "psycopg2-binary>=2.9.10",
     "pydantic-settings>=2.9.1",
     "pyjwt>=2.10.1",
@@ -54,7 +54,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/lazycloud_api", "src/lazycloud_cli", "src/scripts"]
+packages = ["src/lazycloud_api", "src/lazycloud_cli", "src/scripts", "minikube"]
 
 [dependency-groups]
 dev = [
