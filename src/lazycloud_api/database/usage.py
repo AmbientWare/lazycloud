@@ -138,7 +138,7 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
         storage_gb_hours: float,
         record_type: UsageRecordType = UsageRecordType.HOURLY,
     ) -> UsageRecordPydantic:
-        async with session_manager.session() as session:
+        async with session_manager.get_session() as session:
             # Check if record exists
             result = await session.execute(
                 select(UsageRecordTable)
@@ -182,7 +182,7 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
         memory_gb_seconds: float,
         pod_count: int,
     ) -> UsageBreakdownPydantic:
-        async with session_manager.session() as session:
+        async with session_manager.get_session() as session:
             # Check if breakdown exists
             result = await session.execute(
                 select(UsageBreakdownTable)
@@ -220,7 +220,7 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
         end_date: datetime,
         record_type: UsageRecordType | None = None,
     ) -> list[UsageRecordPydantic]:
-        async with session_manager.session() as session:
+        async with session_manager.get_session() as session:
             query = (
                 select(UsageRecordTable)
                 .where(UsageRecordTable.workspace_id == workspace_id)
@@ -237,7 +237,7 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
             return [record.to_pydantic(UsageRecordPydantic) for record in records]
 
     async def get_unreported_usage(self) -> list[UsageRecordPydantic]:
-        async with session_manager.session() as session:
+        async with session_manager.get_session() as session:
             result = await session.execute(
                 select(UsageRecordTable)
                 .where(UsageRecordTable.record_type == UsageRecordType.DAILY.value)
@@ -251,7 +251,7 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
     async def mark_as_reported(
         self, usage_record_id: uuid.UUID, reported_at: datetime
     ) -> None:
-        async with session_manager.session() as session:
+        async with session_manager.get_session() as session:
             result = await session.execute(
                 select(UsageRecordTable).where(UsageRecordTable.id == usage_record_id)
             )

@@ -80,6 +80,10 @@ class DeploymentsContainer(Container):
         self.styles.border = theme.get_border()
         self.border_subtitle = None
 
+    def on_click(self) -> None:
+        """Handle mouse clicks - switch to deployments view."""
+        self.app.action_switch_to_deployments()
+
     async def watch_selected_deployment(self, old_value, new_value) -> None:
         """React when deployment is selected - update content container"""
         if new_value:
