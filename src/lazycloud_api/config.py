@@ -101,6 +101,9 @@ class AppConfig(BaseModel):
         elif not self.IS_WORKER and not self.DATABASE_URL:
             raise ValueError("DATABASE_URL is required when IS_WORKER is false")
 
+        if not self.PROMETHEUS_URL:
+            raise ValueError("PROMETHEUS_URL is required")
+
         return self
 
 

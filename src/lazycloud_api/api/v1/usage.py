@@ -97,8 +97,32 @@ async def get_workspace_usage_breakdown(
             end_date=end_date,
         )
 
-        # TODO: Implement service aggregation from breakdown records
+        # Aggregate breakdowns by service from all records
         by_service: dict[str, ServiceBreakdownItem] = {}
+
+        for record in records:
+            # Breakdowns are always present (loaded via joinedload, may be empty list)
+            for breakdown in record.breakdowns:
+                service_name = breakdown.service_name
+
+                if service_name not in by_service:
+                    by_service[service_name] = ServiceBreakdownItem(
+                        cpu_core_hours=0.0,
+                        memory_gb_hours=0.0,
+                        pod_count=0,
+                    )
+
+                # Aggregate usage (convert seconds to hours)
+                by_service[service_name].cpu_core_hours += (
+                    breakdown.cpu_core_seconds / 3600
+                )
+                by_service[service_name].memory_gb_hours += (
+                    breakdown.memory_gb_seconds / 3600
+                )
+                # Use max pod count across all records for this service
+                by_service[service_name].pod_count = max(
+                    by_service[service_name].pod_count, breakdown.pod_count
+                )
 
         total_cpu = sum(r.cpu_core_seconds for r in records)
         total_memory = sum(r.memory_gb_seconds for r in records)

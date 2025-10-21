@@ -252,6 +252,10 @@ def setup_monitoring_stack() -> None:
                 "prometheus.service.type=NodePort",
                 "--set",
                 "prometheus.service.nodePort=30090",
+                "--set",
+                "prometheus.prometheusSpec.retention=90d",
+                "--set",
+                "prometheus.prometheusSpec.retentionSize=50GB",
                 "--wait",
                 "--timeout=10m",
             ]

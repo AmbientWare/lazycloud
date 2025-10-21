@@ -1,8 +1,10 @@
+from asyncio import Semaphore
 from datetime import datetime, timezone
 from typing import Any
 
 import httpx
 from loguru import logger
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 from shared.models.metrics import (
     NamespaceBreakdown,
@@ -14,14 +16,23 @@ from shared.models.metrics import (
     UsageTotals,
 )
 
+# Maximum number of concurrent Prometheus queries to prevent overwhelming the server
+MAX_CONCURRENT_PROMETHEUS_QUERIES = 10
+
 
 class PrometheusMetricsService:
     def __init__(self, prometheus_url: str):
         self.base_url = prometheus_url.rstrip("/")
         self.api_url = f"{self.base_url}/api/v1"
+        self._semaphore = Semaphore(MAX_CONCURRENT_PROMETHEUS_QUERIES)
 
+    @retry(
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=1, min=4, max=60),
+        reraise=True,
+    )
     async def _query(self, query: str) -> dict[str, Any]:
-        try:
+        async with self._semaphore:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.get(
                     f"{self.api_url}/query", params={"query": query}
@@ -31,17 +42,21 @@ class PrometheusMetricsService:
 
                 if data.get("status") != "success":
                     logger.error(f"Prometheus query failed: {data}")
-                    return {}
+                    raise Exception(
+                        f"Prometheus query failed with status: {data.get('status')}"
+                    )
 
                 return data.get("data", {})
-        except Exception as e:
-            logger.error(f"Error querying Prometheus: {e}")
-            return {}
 
+    @retry(
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=1, min=4, max=60),
+        reraise=True,
+    )
     async def _query_range(
         self, query: str, start_time: datetime, end_time: datetime, step: str = "60s"
     ) -> dict[str, Any]:
-        try:
+        async with self._semaphore:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.get(
                     f"{self.api_url}/query_range",
@@ -57,12 +72,11 @@ class PrometheusMetricsService:
 
                 if data.get("status") != "success":
                     logger.error(f"Prometheus range query failed: {data}")
-                    return {}
+                    raise Exception(
+                        f"Prometheus range query failed with status: {data.get('status')}"
+                    )
 
                 return data.get("data", {})
-        except Exception as e:
-            logger.error(f"Error querying Prometheus range: {e}")
-            return {}
 
     async def get_cpu_usage(
         self, namespace: str, start_time: datetime, end_time: datetime
