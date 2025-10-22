@@ -12,7 +12,8 @@ from lazycloud_api.prefect_app.services import (
 )
 from lazycloud_api.prefect_app.usage_collector import (
     forward_for_billing_deployment,
-    spawn_backfill_daily_usage_deployment,
+    mark_workspaces_for_backfill_deployment,
+    process_incomplete_usage_deployment,
     spawn_usage_collection_deployment,
 )
 from lazycloud_api.prefect_app.utils import get_task_result
@@ -33,7 +34,8 @@ def serve_deployments():
     """Serve Prefect cron tasks."""
     flow_serve(
         spawn_usage_collection_deployment,
-        spawn_backfill_daily_usage_deployment,
+        mark_workspaces_for_backfill_deployment,
+        process_incomplete_usage_deployment,
         forward_for_billing_deployment,
     )
 

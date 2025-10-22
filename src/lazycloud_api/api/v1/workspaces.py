@@ -9,7 +9,7 @@ from lazycloud_api.database.user_workspaces import (
 )
 from lazycloud_api.database.users import UserPydantic
 from lazycloud_api.database.utils import validate_workspace_name
-from lazycloud_api.database.workspaces import WorkspacePydantic
+from lazycloud_api.database.workspaces import WorkspacePydantic, WorkspaceStatus
 from shared.requests.workspaces import (
     CreateWorkspaceRequest,
     InviteUserRequest,
@@ -340,7 +340,17 @@ async def delete_workspace(
     if workspace.is_personal:
         raise HTTPException(status_code=400, detail="Cannot delete personal workspace")
 
-    # Delete the workspace (cascade will handle members and deployments)
-    await db.workspaces.adelete(workspace_id)
+    # get all deployments in the workspace
+    deployments = await db.compose_deployments.afind({"workspace_id": workspace_id})
+    if len(deployments) > 0:
+        # delete all deployments for the workspace
+        await db.compose_deployments.adelete_bulk(
+            [deployment.id for deployment in deployments]
+        )
+
+    # set workspace status to deleted
+    workspace = await db.workspaces.aupdate_status(
+        workspace_id, WorkspaceStatus.DELETED
+    )
 
     return WorkspaceSuccessResponse(success=True)

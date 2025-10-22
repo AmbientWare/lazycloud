@@ -1,6 +1,8 @@
+from datetime import UTC, datetime
+from enum import StrEnum
 from typing import TYPE_CHECKING, List
 
-from sqlalchemy import Boolean, String
+from sqlalchemy import Boolean, DateTime, String, update
 from sqlalchemy.future import select
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -16,6 +18,14 @@ if TYPE_CHECKING:
     from lazycloud_api.database.compose import ComposeDeploymentTable
 
 
+class WorkspaceStatus(StrEnum):
+    """Status of a workspace"""
+
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+    DELETED = "deleted"
+
+
 class WorkspaceTable(BaseTable):
     """SQLAlchemy model for a workspace"""
 
@@ -23,6 +33,10 @@ class WorkspaceTable(BaseTable):
 
     name: Mapped[str] = mapped_column(String)
     is_personal: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    status: Mapped[str] = mapped_column(String, default=WorkspaceStatus.ACTIVE.value)
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
 
     # Relationships - using Association Object pattern (SQLAlchemy 2.0 best practice)
     user_workspaces: Mapped[List["UserWorkspaceTable"]] = relationship(
@@ -44,6 +58,8 @@ class WorkspacePydantic(BaseDbPydanticModel):
 
     name: str
     is_personal: bool = False
+    status: WorkspaceStatus = WorkspaceStatus.ACTIVE
+    deleted_at: datetime | None = None
 
 
 class WorkspaceService(DatabaseService[WorkspaceTable, WorkspacePydantic]):
@@ -116,3 +132,63 @@ class WorkspaceService(DatabaseService[WorkspaceTable, WorkspacePydantic]):
         )
 
         return (demoted, promoted)
+
+    async def aupdate_status(
+        self, workspace_id: str, status: WorkspaceStatus
+    ) -> WorkspacePydantic | None:
+        """Update the status of a workspace"""
+        async with self._session_manager.get_session() as session:
+            update_values = {"status": status.value}
+            if status == WorkspaceStatus.DELETED:
+                update_values["deleted_at"] = datetime.now(UTC)
+
+            stmt = (
+                update(WorkspaceTable)
+                .where(WorkspaceTable.id == workspace_id)
+                .values(**update_values)
+                .returning(WorkspaceTable)
+            )
+            result = await session.execute(stmt)
+            await session.commit()
+
+            updated_workspace = result.scalar_one_or_none()
+            return self._to_pydantic(updated_workspace)
+
+    async def aget_active_workspaces(self) -> list[WorkspacePydantic]:
+        """Get all active workspaces"""
+        return await self.afind({"status": WorkspaceStatus.ACTIVE.value})
+
+    async def aget_active_workspaces_before(
+        self, before_date: datetime
+    ) -> list[WorkspacePydantic]:
+        """Get all active workspaces created before a specific date"""
+        async with self._session_manager.get_session() as session:
+            query = (
+                select(WorkspaceTable)
+                .where(WorkspaceTable.status == WorkspaceStatus.ACTIVE.value)
+                .where(WorkspaceTable.created_at < before_date)
+            )
+            result = await session.execute(query)
+            workspaces = result.scalars().all()
+            return [self._to_pydantic(ws) for ws in workspaces]
+
+    async def aget_deleted_in_range(
+        self, start_date: datetime, end_date: datetime
+    ) -> list[WorkspacePydantic]:
+        """Get all workspaces deleted within a date range (inclusive)"""
+        async with self._session_manager.get_session() as session:
+            from sqlalchemy import and_
+
+            query = (
+                select(WorkspaceTable)
+                .where(WorkspaceTable.status == WorkspaceStatus.DELETED.value)
+                .where(
+                    and_(
+                        WorkspaceTable.deleted_at >= start_date,
+                        WorkspaceTable.deleted_at <= end_date,
+                    )
+                )
+            )
+            result = await session.execute(query)
+            workspaces = result.scalars().all()
+            return [self._to_pydantic(ws) for ws in workspaces]

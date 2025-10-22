@@ -1,8 +1,8 @@
 """init
 
-Revision ID: 92142cbd3aa4
+Revision ID: c6d85fde62c4
 Revises: 
-Create Date: 2025-10-21 05:42:25.096215
+Create Date: 2025-10-22 02:16:41.404179
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '92142cbd3aa4'
+revision: str = 'c6d85fde62c4'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -34,11 +34,14 @@ def upgrade() -> None:
     op.create_table('workspaces',
     sa.Column('name', sa.String(), nullable=False),
     sa.Column('is_personal', sa.Boolean(), nullable=False),
+    sa.Column('status', sa.String(), nullable=False),
+    sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
+    op.create_index(op.f('ix_workspaces_deleted_at'), 'workspaces', ['deleted_at'], unique=False)
     op.create_index(op.f('ix_workspaces_is_personal'), 'workspaces', ['is_personal'], unique=False)
     op.create_table('api_keys',
     sa.Column('name', sa.String(), nullable=False),
@@ -78,22 +81,21 @@ def upgrade() -> None:
     op.create_table('usage_records',
     sa.Column('workspace_id', sa.UUID(), nullable=False),
     sa.Column('record_type', sa.String(), nullable=False),
+    sa.Column('status', sa.String(), nullable=False),
     sa.Column('collection_start', sa.DateTime(timezone=True), nullable=False),
     sa.Column('collection_end', sa.DateTime(timezone=True), nullable=False),
     sa.Column('cpu_core_seconds', sa.Float(), nullable=False),
     sa.Column('memory_gb_seconds', sa.Float(), nullable=False),
     sa.Column('storage_gb_hours', sa.Float(), nullable=False),
-    sa.Column('reported_to_billing', sa.Boolean(), nullable=False),
-    sa.Column('reported_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.ForeignKeyConstraint(['workspace_id'], ['workspaces.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_index('ix_usage_records_billing', 'usage_records', ['record_type', 'reported_to_billing', 'collection_end'], unique=False)
     op.create_index(op.f('ix_usage_records_collection_start'), 'usage_records', ['collection_start'], unique=False)
     op.create_index(op.f('ix_usage_records_record_type'), 'usage_records', ['record_type'], unique=False)
+    op.create_index('ix_usage_records_status', 'usage_records', ['status', 'record_type', 'collection_end'], unique=False)
     op.create_index('ix_usage_records_workspace_dates', 'usage_records', ['workspace_id', 'collection_start'], unique=False)
     op.create_index(op.f('ix_usage_records_workspace_id'), 'usage_records', ['workspace_id'], unique=False)
     op.create_index('ix_usage_records_workspace_type', 'usage_records', ['workspace_id', 'record_type'], unique=False)
@@ -152,9 +154,9 @@ def downgrade() -> None:
     op.drop_index('ix_usage_records_workspace_type', table_name='usage_records')
     op.drop_index(op.f('ix_usage_records_workspace_id'), table_name='usage_records')
     op.drop_index('ix_usage_records_workspace_dates', table_name='usage_records')
+    op.drop_index('ix_usage_records_status', table_name='usage_records')
     op.drop_index(op.f('ix_usage_records_record_type'), table_name='usage_records')
     op.drop_index(op.f('ix_usage_records_collection_start'), table_name='usage_records')
-    op.drop_index('ix_usage_records_billing', table_name='usage_records')
     op.drop_table('usage_records')
     op.drop_index('ix_compose_deployments_workspace_id_name', table_name='compose_deployments')
     op.drop_index(op.f('ix_compose_deployments_state'), table_name='compose_deployments')
@@ -166,6 +168,7 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_api_keys_name'), table_name='api_keys')
     op.drop_table('api_keys')
     op.drop_index(op.f('ix_workspaces_is_personal'), table_name='workspaces')
+    op.drop_index(op.f('ix_workspaces_deleted_at'), table_name='workspaces')
     op.drop_table('workspaces')
     op.drop_table('users')
     # ### end Alembic commands ###

@@ -1,4 +1,3 @@
-import asyncio
 import uuid
 from datetime import datetime, timezone
 from typing import Annotated, Generic, Type, TypeVar
@@ -6,7 +5,7 @@ from typing import Annotated, Generic, Type, TypeVar
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ConfigDict
 from pydantic.functional_validators import BeforeValidator
-from sqlalchemy import DateTime, orm
+from sqlalchemy import DateTime, delete, orm, update
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.future import select
 from sqlalchemy.orm import Mapped, mapped_column
@@ -97,10 +96,6 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
             db_model = result.scalar_one_or_none()
             return self._to_pydantic(db_model)
 
-    def get_by_id(self, id: str) -> basePydanticType | None:
-        """Get a model instance by id"""
-        return asyncio.run(self.aget_by_id(id))
-
     async def aget_by_user_id(self, user_id: str) -> list[basePydanticType]:
         """Get all model instances by user id"""
         async with self._session_manager.get_session() as session:
@@ -110,10 +105,6 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
             result = await session.execute(query)
             db_models = list(result.scalars().all())
             return [model.to_pydantic(self.pydantic_model_class) for model in db_models]
-
-    def get_by_user_id(self, user_id: str) -> list[basePydanticType]:
-        """Get all model instances by user id"""
-        return asyncio.run(self.aget_by_user_id(user_id))
 
     async def acreate(self, model: basePydanticType) -> basePydanticType:
         """Create a new model instance"""
@@ -127,51 +118,41 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
             await session.refresh(db_model)
             return db_model.to_pydantic(self.pydantic_model_class)
 
-    def create(self, model: basePydanticType) -> basePydanticType:
-        """Create a new model instance"""
-        return asyncio.run(self.acreate(model))
-
     async def aupdate(self, model: basePydanticType) -> basePydanticType | None:
         """Update an existing model instance"""
         async with self._session_manager.get_session() as session:
-            query = select(self.db_model_class).where(
-                self.db_model_class.id == model.id
-            )
-            result = await session.execute(query)
-            db_model = result.scalar_one_or_none()
-            if db_model:
-                for key, value in model.model_dump().items():
-                    setattr(db_model, key, value)
-                await session.commit()
-                await session.refresh(db_model)
-                return db_model.to_pydantic(self.pydantic_model_class)
-            return None
+            # Exclude id, created_at from updates as they shouldn't change
+            update_data = model.model_dump(exclude={"id", "created_at"})
 
-    def update(self, model: basePydanticType) -> basePydanticType | None:
-        """Update an existing model instance"""
-        return asyncio.run(self.aupdate(model))
+            stmt = (
+                update(self.db_model_class)
+                .where(self.db_model_class.id == model.id)
+                .values(**update_data)
+                .returning(self.db_model_class)
+            )
+            result = await session.execute(stmt)
+            await session.commit()
+
+            updated_model = result.scalar_one_or_none()
+            return self._to_pydantic(updated_model)
 
     async def adelete(self, id: str) -> None:
         """Delete a model instance"""
         async with self._session_manager.get_session() as session:
-            query = select(self.db_model_class).where(self.db_model_class.id == id)
-            result = await session.execute(query)
-            db_model = result.scalar_one_or_none()
-            if db_model:
-                await session.delete(db_model)
-                await session.commit()
+            stmt = delete(self.db_model_class).where(self.db_model_class.id == id)
+            await session.execute(stmt)
+            await session.commit()
 
-    def delete(self, id: str) -> None:
-        """Delete a model instance"""
-        return asyncio.run(self.adelete(id))
+    async def adelete_bulk(self, ids: list[str]) -> None:
+        """Delete multiple model instances"""
+        async with self._session_manager.get_session() as session:
+            stmt = delete(self.db_model_class).where(self.db_model_class.id.in_(ids))
+            await session.execute(stmt)
+            await session.commit()
 
     async def aexists(self, id: str) -> bool:
         """Check if a model instance exists"""
         return await self.aget_by_id(id) is not None
-
-    def exists(self, id: str) -> bool:
-        """Check if a model instance exists"""
-        return asyncio.run(self.aexists(id))
 
     async def afind(self, filters: dict) -> list[basePydanticType]:
         """Find models matching the filters"""
@@ -196,15 +177,7 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
             db_models = list(result.scalars().all())
             return [model.to_pydantic(self.pydantic_model_class) for model in db_models]
 
-    def find(self, filters: dict) -> list[basePydanticType]:
-        """Find models matching the filters"""
-        return asyncio.run(self.afind(filters))
-
     async def afind_one(self, filters: dict) -> basePydanticType | None:
         """Find a single model matching the filters"""
         results = await self.afind(filters)
         return results[0] if results else None
-
-    def find_one(self, filters: dict) -> basePydanticType | None:
-        """Find a single model matching the filters"""
-        return asyncio.run(self.afind_one(filters))
