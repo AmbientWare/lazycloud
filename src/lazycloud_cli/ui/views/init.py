@@ -6,6 +6,7 @@ from rich.text import Text
 from lazycloud_cli.ui.colors import Colors
 from lazycloud_cli.ui.components.card import Card
 from lazycloud_cli.ui.components.confirmation import SimpleConfirmationDialog
+from lazycloud_cli.ui.components.info_cards import ErrorCard
 from lazycloud_cli.ui.components.section import Section
 
 
@@ -55,20 +56,6 @@ class InitConfigCard(Card):
         )
 
 
-class ValidationErrorCard(Card):
-    """Card for displaying validation errors."""
-
-    def __init__(self, error_message: str):
-        """Initialize validation error card."""
-        content = Text(f"{error_message}", style=Colors.Ansi.error)
-
-        super().__init__(
-            content=content,
-            title="Validation Error",
-            border_style=Colors.Ansi.error,
-        )
-
-
 class InitView:
     """Main view orchestrator for the init command."""
 
@@ -100,7 +87,7 @@ class InitView:
 
     def show_validation_error(self, error_message: str):
         """Show deployment name validation error."""
-        card = ValidationErrorCard(error_message)
+        card = ErrorCard(message=error_message, title="Validation Error")
         self.console.print(card)
 
     def show_no_compose_files(self) -> str:
@@ -198,11 +185,7 @@ class InitView:
 
     def show_error(self, message: str):
         """Show general error message."""
-        card = Card(
-            content=Text(f"❌ {message}", style=Colors.Ansi.error),
-            title="Error",
-            border_style=Colors.Ansi.error,
-        )
+        card = ErrorCard(message=message, title="Error")
         self.console.print(card)
 
     def show_info(self, message: str):

@@ -1,21 +1,21 @@
 class Colors:
     # Hex colors - for Textual dashboard
     class Hex:
-        accent = "#8dd4e0"
+        accent = "#7fc4cf"
         text = "#d8dee9"
         text_muted = "#4c566a"
         text_dim = "#3b4252"
 
-        background = "#2e3440"
-        surface = "#3b4252"
+        background = "#000000"
+        surface = "#1a1a1a"
         border = "#4c566a"
 
-        primary = "#8dd4e0"
-        secondary = "#6a8dc8"
-        success = "#a8d088"
-        warning = "#f0d478"
-        error = "#d85060"
-        info = "#6a8dc8"
+        primary = "#ffffff"
+        secondary = "#7fc4cf"
+        success = "#5cd85c"
+        warning = "#f7d66e"
+        error = "#ff6666"
+        info = "#7fc4cf"
 
     # ANSI names - for Rich CLI
     class Ansi:
@@ -28,12 +28,12 @@ class Colors:
         surface = "default"
         border = "bright_black"
 
-        primary = "cyan"
-        secondary = "blue"
+        primary = "default"
+        secondary = "cyan"
         success = "green"
         warning = "yellow"
         error = "red"
-        info = "blue"
+        info = "bright_blue"
 
     accent = Hex.accent
     text = Hex.text

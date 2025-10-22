@@ -7,6 +7,11 @@ from lazycloud_cli.api import api
 from lazycloud_cli.config import config
 from lazycloud_cli.ui.colors import Colors
 from lazycloud_cli.ui.components.card import Card
+from lazycloud_cli.ui.components.info_cards import (
+    ActionProgressCard,
+    ErrorCard,
+    SuccessDetailsCard,
+)
 
 app = typer.Typer(help="Login with API key")
 console = Console()
@@ -38,19 +43,14 @@ def login():
         )
 
         if not api_key or not api_key.strip():
-            error_card = Card(
-                content=Text("API key cannot be empty", style=Colors.Ansi.error),
-                title="🔑 Invalid Input",
-                border_style=Colors.Ansi.error,
+            error_card = ErrorCard(
+                message="API key cannot be empty", title="🔑 Invalid Input"
             )
             console.print(error_card)
             raise typer.Exit(1)
 
         # Validate the API key
-        validating_card = Card(
-            content=Text("🔍 Validating API key...", style=Colors.Ansi.info),
-            border_style=Colors.Ansi.info,
-        )
+        validating_card = ActionProgressCard(action="Validating API key", icon="🔍")
         console.print(validating_card)
 
         # Store the API key temporarily to test it
@@ -68,14 +68,9 @@ def login():
                     break
 
             if not personal_workspace:
-                error_card = Card(
-                    content=Text(
-                        "Could not find personal workspace.\n\n"
-                        "Please contact support if this issue persists.",
-                        style=Colors.Ansi.error,
-                    ),
+                error_card = ErrorCard(
+                    message="Could not find personal workspace.\n\nPlease contact support if this issue persists.",
                     title="🔑 Configuration Error",
-                    border_style=Colors.Ansi.error,
                 )
                 console.print(error_card)
                 # Clean up the key before exiting
@@ -88,23 +83,13 @@ def login():
             )
 
             # Show success
-            success_content = Text()
-            success_content.append(
-                "✓ Successfully logged in!\n\n", style=Colors.Ansi.success
-            )
-            success_content.append(
-                f"Active workspace: {personal_workspace['name']}\n",
-                style=Colors.Ansi.text_muted,
-            )
-            success_content.append(
-                f"Role: {personal_workspace.get('role', 'unknown')}",
-                style=Colors.Ansi.text_muted,
-            )
-
-            success_card = Card(
-                content=success_content,
+            success_card = SuccessDetailsCard(
                 title="🔑 Login Successful",
-                border_style=Colors.Ansi.success,
+                message="Successfully logged in!",
+                details={
+                    "Active workspace": personal_workspace["name"],
+                    "Role": personal_workspace.get("role", "unknown"),
+                },
             )
             console.print(success_card)
 
@@ -115,15 +100,10 @@ def login():
             # If validation fails, remove the key
             config.remove_api_key("default")
 
-            error_card = Card(
-                content=Text(
-                    f"The API key is invalid or could not connect to the server.\n\n"
-                    f"Error: {e}\n\n"
-                    "Please check the key and try again.",
-                    style=Colors.Ansi.error,
-                ),
+            error_card = ErrorCard(
+                message=f"The API key is invalid or could not connect to the server.\n\nError: {e}",
                 title="🔑 Invalid API Key",
-                border_style=Colors.Ansi.error,
+                suggestion="Please check the key and try again.",
             )
             console.print(error_card)
             raise typer.Exit(1)
@@ -131,10 +111,6 @@ def login():
     except typer.Exit:
         raise
     except Exception as e:
-        error_card = Card(
-            content=Text(f"Login failed: {e}", style=Colors.Ansi.error),
-            title="🔑 Error",
-            border_style=Colors.Ansi.error,
-        )
+        error_card = ErrorCard(message=f"Login failed: {e}", title="🔑 Error")
         console.print(error_card)
         raise typer.Exit(1)
