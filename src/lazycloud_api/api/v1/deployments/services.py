@@ -7,7 +7,10 @@ from lazycloud_api.api.dependencies import (
     get_deployment_with_admin_access,
 )
 from lazycloud_api.api.security import get_current_active_user
-from lazycloud_api.api.v1.streaming_utils import create_sse_stream
+from lazycloud_api.api.v1.streaming_utils import (
+    create_sse_stream_direct,
+    create_sse_stream_with_subscription,
+)
 from lazycloud_api.database.compose import ComposeDeploymentPydantic
 from lazycloud_api.database.users import UserPydantic
 from lazycloud_api.prefect_app.services import (
@@ -15,7 +18,9 @@ from lazycloud_api.prefect_app.services import (
     restart_service_task,
 )
 from lazycloud_api.services.k8s.status_watcher import StatusWatcher
-from lazycloud_api.services.monitoring import LogMonitor, ServiceMonitor
+from lazycloud_api.services.monitoring import LogMonitor
+from lazycloud_api.services.monitoring.monitor_config import ServiceMonitorConfig
+from shared.models.monitoring import StreamEventType
 from shared.models.statuses import TaskStatus
 from shared.responses.services import ServiceStatusResponse
 from shared.responses.tasks import ServiceTaskStatusResponse
@@ -150,18 +155,17 @@ async def stream_service_status(
     service_name: str = "",
 ):
     """Stream real-time service status updates."""
-    monitor = ServiceMonitor(
+    config = ServiceMonitorConfig(
         deployment_id=str(deployment.id),
         service_name=service_name,
         namespace=deployment.namespace,
         helm_values=deployment.helm_values,
-        callback=None,
     )
 
     return EventSourceResponse(
-        create_sse_stream(
-            monitor,
-            event_type="status",
+        create_sse_stream_with_subscription(
+            config=config,
+            event_type=StreamEventType.STATUS,
             format_data=lambda status: {"data": status.model_dump(mode="json")},
             stream_id=f"service/{deployment.id}/{service_name}",
         )
@@ -186,9 +190,9 @@ async def stream_service_logs(
     )
 
     return EventSourceResponse(
-        create_sse_stream(
+        create_sse_stream_direct(
             monitor,
-            event_type="log",
+            event_type=StreamEventType.LOG,
             format_data=lambda line: {"service": service_name, "line": line},
             stream_id=f"logs/{deployment.id}/{service_name}/{pod_name}",
         )

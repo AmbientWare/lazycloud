@@ -18,17 +18,44 @@ class BaseMonitor(ABC, Generic[T]):
     ):
         self._name = name
         self._detail = detail
-        self._callback = callback
+        self._callbacks: list[Callable[[T], None]] = []
+        if callback:
+            self._callbacks.append(callback)
 
         # State
         self._latest_result: T | None = None
         self._running = False
         self._watch_task: asyncio.Task | None = None
+        self._callback_lock = asyncio.Lock()
 
     @abstractmethod
     async def _task(self):
         """Abstract method to be implemented by subclasses"""
         pass
+
+    async def add_callback(self, callback: Callable[[T], None]) -> None:
+        """Add a callback to be notified of status updates."""
+        async with self._callback_lock:
+            if callback not in self._callbacks:
+                self._callbacks.append(callback)
+                logger.debug(
+                    f"Added callback to {self._name} {self._detail}. "
+                    f"Total subscribers: {len(self._callbacks)}"
+                )
+
+    async def remove_callback(self, callback: Callable[[T], None]) -> None:
+        """Remove a callback from notifications."""
+        async with self._callback_lock:
+            if callback in self._callbacks:
+                self._callbacks.remove(callback)
+                logger.debug(
+                    f"Removed callback from {self._name} {self._detail}. "
+                    f"Remaining subscribers: {len(self._callbacks)}"
+                )
+
+    def has_subscribers(self) -> bool:
+        """Check if this monitor has any active subscribers."""
+        return len(self._callbacks) > 0
 
     async def start(self):
         """Start monitoring deployment status"""
@@ -58,11 +85,7 @@ class BaseMonitor(ABC, Generic[T]):
 
                 if task_result != self._latest_result:
                     self._latest_result = task_result
-                    if self._callback:
-                        if asyncio.iscoroutinefunction(self._callback):
-                            await self._callback(task_result)
-                        else:
-                            self._callback(task_result)
+                    await self._emit(task_result)
 
                 await asyncio.sleep(POLL_INTERVAL)
 
@@ -73,6 +96,20 @@ class BaseMonitor(ABC, Generic[T]):
                 logger.error(f"Error in watch loop: {e}")
                 await asyncio.sleep(POLL_INTERVAL)
 
+    async def _emit(self, data: T):
+        """Emit data to all registered callbacks."""
+        async with self._callback_lock:
+            callbacks = self._callbacks.copy()
+
+        for callback in callbacks:
+            try:
+                if asyncio.iscoroutinefunction(callback):
+                    await callback(data)
+                else:
+                    callback(data)
+            except Exception as e:
+                logger.error(f"Error in callback for {self._name} {self._detail}: {e}")
+
 
 class BaseGenerativeMonitor(ABC, Generic[T]):
     """Base class for monitors that generate continuous streams of data"""
@@ -82,9 +119,12 @@ class BaseGenerativeMonitor(ABC, Generic[T]):
     ):
         self._name = name
         self._detail = detail
-        self._callback = callback
+        self._callbacks: list[Callable[[T], None]] = []
+        if callback:
+            self._callbacks.append(callback)
         self._running = False
         self._stream_task: asyncio.Task | None = None
+        self._callback_lock = asyncio.Lock()
 
     @abstractmethod
     async def _stream(self):
@@ -99,13 +139,43 @@ class BaseGenerativeMonitor(ABC, Generic[T]):
         """
         pass
 
+    async def add_callback(self, callback: Callable[[T], None]) -> None:
+        """Add a callback to be notified of status updates."""
+        async with self._callback_lock:
+            if callback not in self._callbacks:
+                self._callbacks.append(callback)
+                logger.debug(
+                    f"Added callback to {self._name} {self._detail}. "
+                    f"Total subscribers: {len(self._callbacks)}"
+                )
+
+    async def remove_callback(self, callback: Callable[[T], None]) -> None:
+        """Remove a callback from notifications."""
+        async with self._callback_lock:
+            if callback in self._callbacks:
+                self._callbacks.remove(callback)
+                logger.debug(
+                    f"Removed callback from {self._name} {self._detail}. "
+                    f"Remaining subscribers: {len(self._callbacks)}"
+                )
+
+    def has_subscribers(self) -> bool:
+        """Check if this monitor has any active subscribers."""
+        return len(self._callbacks) > 0
+
     async def _emit(self, data: T):
-        """Emit data to the callback."""
-        if self._callback:
-            if asyncio.iscoroutinefunction(self._callback):
-                await self._callback(data)
-            else:
-                self._callback(data)
+        """Emit data to all registered callbacks."""
+        async with self._callback_lock:
+            callbacks = self._callbacks.copy()
+
+        for callback in callbacks:
+            try:
+                if asyncio.iscoroutinefunction(callback):
+                    await callback(data)
+                else:
+                    callback(data)
+            except Exception as e:
+                logger.error(f"Error in callback for {self._name} {self._detail}: {e}")
 
     async def start(self):
         """Start the generative monitor."""
@@ -145,8 +215,8 @@ class BaseGenerativeMonitor(ABC, Generic[T]):
             logger.debug(f"{self._name} stream task cancelled")
         except Exception as e:
             logger.error(f"Error in {self._name} stream: {e}")
-            # Emit error to callback if still running
-            if self._running and self._callback:
+            # Emit error to callbacks if still running
+            if self._running and self.has_subscribers():
                 try:
                     await self._emit(f"ERROR: Stream failed: {str(e)}")  # type: ignore
                 except Exception:

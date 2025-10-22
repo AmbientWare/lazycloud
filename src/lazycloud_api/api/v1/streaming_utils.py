@@ -4,56 +4,103 @@ from typing import Callable
 
 from loguru import logger
 
-from lazycloud_api.services.monitoring import (
-    DeploymentMonitor,
-    LogMonitor,
-    ServiceMonitor,
-    TaskMonitor,
-)
+from lazycloud_api.services.monitoring import LogMonitor, get_subscription_manager
+from lazycloud_api.services.monitoring.monitor_config import MonitorConfig
+from shared.models.monitoring import StreamEventType
+
+# NOTE: maybe make this configurable?
+# For status/task streams (low frequency, critical data)
+STATUS_QUEUE_SIZE = 100
+# For log streams (high frequency, less critical)
+LOG_QUEUE_SIZE = 50
 
 
-async def create_sse_stream(
-    monitor: DeploymentMonitor | ServiceMonitor | LogMonitor | TaskMonitor,
-    event_type: str,
+async def _sse_event_loop(
+    queue: asyncio.Queue,
+    event_type: StreamEventType,
+    format_data: Callable,
+    stream_id: str,
+    should_continue: Callable[[], bool] | None = None,
+):
+    """
+    Common SSE event streaming logic.
+
+    Args:
+        queue: Queue to read data from
+        event_type: SSE event type
+        format_data: Function to format data for JSON serialization
+        stream_id: Stream identifier for logging
+        should_continue: Optional function to check if streaming should continue
+
+    Yields:
+        Dict objects for sse-starlette EventSourceResponse
+    """
+    while should_continue is None or should_continue():
+        try:
+            data = await asyncio.wait_for(queue.get(), timeout=30.0)
+            yield {"event": event_type, "data": json.dumps(format_data(data))}
+
+            if should_continue and not should_continue():
+                logger.info(f"Stream condition ended for {stream_id}")
+                break
+
+        except asyncio.TimeoutError:
+            yield {"comment": "keepalive"}
+            if should_continue and not should_continue():
+                logger.info(f"Stream condition ended during keepalive for {stream_id}")
+                break
+
+        except Exception as e:
+            logger.error(
+                f"SSE data processing error for {stream_id}: {e}", exc_info=True
+            )
+            yield {"event": "error", "data": json.dumps({"message": str(e)})}
+
+
+async def create_sse_stream_with_subscription(
+    config: MonitorConfig,
+    event_type: StreamEventType,
     format_data: Callable,
     stream_id: str,
 ):
-    """Generic SSE stream generator for monitors.
+    """
+    Generic SSE stream generator using subscription manager.
 
     Yields dict objects for sse-starlette EventSourceResponse.
     Dict keys: "event", "data", "id", "retry", "comment"
     """
+    subscription_manager = get_subscription_manager()
+    monitor_key = None
+    subscription_id = None
+    queue: asyncio.Queue = asyncio.Queue(maxsize=STATUS_QUEUE_SIZE)
+
+    def callback(data):
+        """Callback to receive data from shared monitor."""
+        try:
+            queue.put_nowait(data)
+        except asyncio.QueueFull:
+            logger.warning(f"Queue full for {stream_id}, dropping data")
+
     try:
-        queue: asyncio.Queue = asyncio.Queue()
-        # Access private attribute since there's no property setter
-        monitor._callback = lambda data: queue.put_nowait(data)
+        # Subscribe to monitor
+        monitor_key, subscription_id = await subscription_manager.subscribe(
+            config=config,
+            callback=callback,
+        )
+        logger.info(f"SSE connected: {stream_id} (subscription: {subscription_id})")
 
-        await monitor.start()
-        logger.info(f"SSE connected: {stream_id}")
-
-        while monitor._running:
-            try:
-                data = await asyncio.wait_for(queue.get(), timeout=30.0)
-                # sse-starlette requires data to be JSON-encoded string
-                yield {"event": event_type, "data": json.dumps(format_data(data))}
-
-                # Check if monitor stopped after processing data
-                if not monitor._running:
-                    logger.info(f"SSE monitor stopped, closing stream: {stream_id}")
-                    break
-
-            except asyncio.TimeoutError:
-                yield {"comment": "keepalive"}
-                # Check if monitor is still running after timeout
-                if not monitor._running:
-                    logger.info(f"SSE monitor stopped during keepalive: {stream_id}")
-                    break
-            except Exception as e:
-                logger.error(
-                    f"SSE data processing error for {stream_id}: {e}", exc_info=True
-                )
-                # sse-starlette requires data to be JSON-encoded string
-                yield {"event": "error", "data": json.dumps({"message": str(e)})}
+        # Stream data using common event loop
+        # Check if monitor is still running to handle terminal states (e.g., task completion)
+        async for event in _sse_event_loop(
+            queue,
+            event_type,
+            format_data,
+            stream_id,
+            should_continue=lambda: subscription_manager.is_monitor_running(
+                monitor_key
+            ),
+        ):
+            yield event
 
     except asyncio.CancelledError:
         logger.info(f"SSE cancelled: {stream_id}")
@@ -62,5 +109,54 @@ async def create_sse_stream(
         logger.error(f"SSE fatal error for {stream_id}: {e}", exc_info=True)
         yield {"event": "error", "data": json.dumps({"message": str(e)})}
     finally:
+        # Unsubscribe from monitor
+        if monitor_key is not None and subscription_id is not None:
+            await subscription_manager.unsubscribe(monitor_key, subscription_id)
+        logger.info(f"SSE disconnected: {stream_id}")
+
+
+async def create_sse_stream_direct(
+    monitor: LogMonitor,
+    event_type: StreamEventType,
+    format_data: Callable,
+    stream_id: str,
+):
+    """
+    Direct SSE stream generator for per-connection monitors.
+
+    Used for LogMonitor which has unique per-pod/tail parameters that make
+    sharing monitors impractical.
+
+    Yields dict objects for sse-starlette EventSourceResponse.
+    Dict keys: "event", "data", "id", "retry", "comment"
+    """
+    queue: asyncio.Queue = asyncio.Queue(maxsize=LOG_QUEUE_SIZE)
+
+    def callback(data):
+        """Callback to receive data from monitor."""
+        try:
+            queue.put_nowait(data)
+        except asyncio.QueueFull:
+            logger.warning(f"Queue full for {stream_id}, dropping data")
+
+    try:
+        await monitor.add_callback(callback)
+        await monitor.start()
+        logger.info(f"SSE connected: {stream_id}")
+
+        # Stream data using common event loop with monitor running check
+        async for event in _sse_event_loop(
+            queue, event_type, format_data, stream_id, lambda: monitor._running
+        ):
+            yield event
+
+    except asyncio.CancelledError:
+        logger.info(f"SSE cancelled: {stream_id}")
+        raise
+    except Exception as e:
+        logger.error(f"SSE fatal error for {stream_id}: {e}", exc_info=True)
+        yield {"event": "error", "data": json.dumps({"message": str(e)})}
+    finally:
+        await monitor.remove_callback(callback)
         await monitor.stop()
         logger.info(f"SSE disconnected: {stream_id}")
