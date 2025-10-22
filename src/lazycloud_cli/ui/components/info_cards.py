@@ -6,7 +6,7 @@ from lazycloud_cli.ui.components.card import Card
 
 
 class InfoCard(Card):
-    """Informational message card with icon."""
+    """Informational message card with icon"""
 
     def __init__(self, message: str, title: str | None = None):
         """Initialize info card"""
@@ -21,15 +21,10 @@ class InfoCard(Card):
 
 
 class BuildInfoCard(Card):
-    """Card for build-related messages."""
+    """Card for build-related messages"""
 
     def __init__(self, service_name: str, action: str = "Building"):
-        """Initialize build info card.
-
-        Args:
-            service_name: Name of the service
-            action: Current action (Building, Pushing, etc.)
-        """
+        """Initialize build info card"""
         content = Text()
         content.append("🔨  ", style=Colors.Ansi.info)
         content.append(f"{action} ", style=Colors.Ansi.text)
@@ -46,7 +41,7 @@ class SuccessCard(Card):
     """Success message card."""
 
     def __init__(self, message: str, title: str | None = None):
-        """Initialize success card."""
+        """Initialize success card"""
         content = Text()
         content.append("✅  ", style=Colors.Ansi.success)
         content.append(message, style=Colors.Ansi.success)
@@ -62,7 +57,7 @@ class WarningCard(Card):
     """Warning message card."""
 
     def __init__(self, message: str, title: str | None = None):
-        """Initialize warning card."""
+        """Initialize warning card"""
         content = Text()
         content.append("⚠️  ", style=Colors.Ansi.warning)
         content.append(message, style=Colors.Ansi.warning)
@@ -83,7 +78,7 @@ class ErrorCard(Card):
         title: str | None = None,
         suggestion: str | None = None,
     ):
-        """Initialize error card."""
+        """Initialize error card"""
         content = Text()
         content.append("❌  ", style=Colors.Ansi.error)
         content.append(message, style=Colors.Ansi.error)
@@ -104,12 +99,7 @@ class StatusMessageCard(Card):
     """Compact status message card for inline updates."""
 
     def __init__(self, message: str, status: str = "info"):
-        """Initialize status message card.
-
-        Args:
-            message: The message to display
-            status: Status type (info, success, warning, error)
-        """
+        """Initialize status message card"""
         # Choose icon and style based on status
         if status == "success":
             icon = "✅"
@@ -142,13 +132,7 @@ class DeploymentActionCard(Card):
     """Card for deployment actions like creating, updating, etc."""
 
     def __init__(self, action: str, deployment_name: str, details: str | None = None):
-        """Initialize deployment action card.
-
-        Args:
-            action: The action being performed (Creating, Updating, etc.)
-            deployment_name: Name of the deployment
-            details: Optional additional details
-        """
+        """Initialize deployment action card"""
         content = Group()
 
         # Main message
@@ -169,3 +153,52 @@ class DeploymentActionCard(Card):
             content=content,
             border_style=Colors.Ansi.info,
         )
+
+
+class SuccessDetailsCard(Card):
+    """Success card with key-value details."""
+
+    def __init__(
+        self,
+        title: str,
+        message: str,
+        details: dict[str, str] | None = None,
+        icon: str = "✓",
+    ):
+        """Initialize success details card"""
+        content = Text()
+        content.append(f"{icon} {message}\n\n", style=Colors.Ansi.success)
+
+        if details:
+            for key, value in details.items():
+                content.append(f"  {key}: ", style=Colors.Ansi.text_muted)
+                content.append(f"{value}\n", style=Colors.Ansi.primary)
+
+        super().__init__(
+            content=content,
+            title=title,
+            border_style=Colors.Ansi.success,
+        )
+
+
+class NotFoundCard(ErrorCard):
+    """Standard not found error card."""
+
+    def __init__(self, resource_type: str, resource_name: str, icon: str = ""):
+        """Initialize not found card"""
+        title = f"{icon} Not Found" if icon else "Not Found"
+        message = f"{resource_type} '{resource_name}' not found"
+        super().__init__(message=message, title=title)
+
+
+class ActionProgressCard(InfoCard):
+    """Card showing action in progress."""
+
+    def __init__(self, action: str, resource_name: str = "", icon: str = ""):
+        """Initialize action progress card"""
+        title = f"{icon} {action}" if icon else action
+        if resource_name:
+            message = f"{action} '{resource_name}'..."
+        else:
+            message = f"{action}..."
+        super().__init__(message=message, title=title)

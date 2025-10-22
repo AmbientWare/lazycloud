@@ -339,9 +339,9 @@ class BuildProgress:
             expand=True,
         )
         table.add_column("Service", style=Colors.Ansi.primary, width=20)
-        table.add_column("Image", style=Colors.Ansi.text_secondary, overflow="ellipsis")
-        table.add_column("Status", style=Colors.Ansi.text_primary, width=15)
-        table.add_column("Details", style=Colors.Ansi.text_secondary)
+        table.add_column("Image", style=Colors.Ansi.text_muted, overflow="ellipsis")
+        table.add_column("Status", style=Colors.Ansi.text_muted, width=15)
+        table.add_column("Details", style=Colors.Ansi.text_muted)
 
         for i, service in enumerate(self.services):
             status = self.statuses[i]
@@ -349,14 +349,14 @@ class BuildProgress:
 
             # Status display with appropriate style
             status_styles = {
-                TaskStatus.PENDING: Colors.Ansi.text_secondary,
+                TaskStatus.PENDING: Colors.Ansi.text_muted,
                 TaskStatus.COMPLETED: Colors.Ansi.success,
                 TaskStatus.ERROR: Colors.Ansi.error,
             }
 
             status_display = Text(
                 status.replace("_", " ").title(),
-                style=status_styles.get(status, Colors.Ansi.text_secondary),
+                style=status_styles.get(status, Colors.Ansi.text_muted),
             )
 
             table.add_row(
@@ -367,7 +367,7 @@ class BuildProgress:
         duration = int((datetime.now() - self.start_time).total_seconds())
         if duration > 0:
             table.add_row(
-                "", "", "", Text(f"Time: {duration}s", style=Colors.Ansi.text_secondary)
+                "", "", "", Text(f"Time: {duration}s", style=Colors.Ansi.text_muted)
             )
 
         # Determine border style

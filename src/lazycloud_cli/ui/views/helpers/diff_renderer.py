@@ -47,8 +47,8 @@ def create_services_card(services: ResourceSection) -> Card | None:
 
     table = Table(show_header=True, header_style="bold", box=None)
     table.add_column("Service", style=Colors.Ansi.primary)
-    table.add_column("Change", style=Colors.Ansi.text_secondary)
-    table.add_column("Details", style=Colors.Ansi.text_secondary, overflow="fold")
+    table.add_column("Change", style=Colors.Ansi.text_muted)
+    table.add_column("Details", style=Colors.Ansi.text_muted, overflow="fold")
 
     # Add added services
     for svc in services.added:
@@ -71,7 +71,7 @@ def create_services_card(services: ResourceSection) -> Card | None:
     return Card(
         content=table,
         title=f"🐳 Service Changes ({count})",
-        border_style=Colors.Ansi.border,
+        border_style=Colors.Ansi.info,
     )
 
 

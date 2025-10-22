@@ -8,6 +8,13 @@ from lazycloud_cli.ui.components.card import Card
 from lazycloud_cli.ui.components.confirmation import (
     StringValidationConfirmationDialog,
 )
+from lazycloud_cli.ui.components.info_cards import (
+    ActionProgressCard,
+    ErrorCard,
+    NotFoundCard,
+    SuccessDetailsCard,
+    WarningCard,
+)
 
 
 class WorkspaceView:
@@ -19,54 +26,35 @@ class WorkspaceView:
 
     def show_creating(self, name: str):
         """Show workspace creation in progress."""
-        card = Card(
-            content=Text(f"Creating workspace '{name}'...", style=Colors.Ansi.info),
-            title="🗂️ Creating Workspace",
-            border_style=Colors.Ansi.info,
+        card = ActionProgressCard(
+            action="Creating workspace", resource_name=name, icon="🗂️"
         )
         self.console.print(card)
 
     def show_created(self, workspace: Dict[str, Any]):
         """Show successful workspace creation."""
-        content = Text()
-        content.append(
-            "✓ Workspace created successfully!\n\n", style=Colors.Ansi.success
-        )
-        content.append("  Name: ", style=Colors.Ansi.text_muted)
-        content.append(f"{workspace.get('name', '')}", style=Colors.Ansi.primary)
-
-        card = Card(
-            content=content,
+        card = SuccessDetailsCard(
             title="🗂️ Workspace Created",
-            border_style=Colors.Ansi.success,
+            message="Workspace created successfully!",
+            details={"Name": workspace.get("name", "")},
         )
         self.console.print(card)
 
     def show_activated(self, workspace: Dict[str, Any]):
         """Show successful workspace activation."""
-        content = Text()
-        content.append("✓ Workspace activated!\n\n", style=Colors.Ansi.success)
-        content.append("  Name: ", style=Colors.Ansi.text_muted)
-        content.append(f"{workspace.get('name', '')}\n", style=Colors.Ansi.primary)
-        content.append("  Role: ", style=Colors.Ansi.text_muted)
-        content.append(
-            f"{workspace.get('role', 'unknown')}", style=Colors.Ansi.text_muted
-        )
-
-        card = Card(
-            content=content,
+        card = SuccessDetailsCard(
             title="🗂️ Active Workspace",
-            border_style=Colors.Ansi.success,
+            message="Workspace activated!",
+            details={
+                "Name": workspace.get("name", ""),
+                "Role": workspace.get("role", "unknown"),
+            },
         )
         self.console.print(card)
 
     def show_not_found(self, name: str):
         """Show workspace not found error."""
-        card = Card(
-            content=Text(f"Workspace '{name}' not found", style=Colors.Ansi.error),
-            title="🗂️ Not Found",
-            border_style=Colors.Ansi.error,
-        )
+        card = NotFoundCard(resource_type="Workspace", resource_name=name, icon="🗂️")
         self.console.print(card)
 
     def show_personal_cannot_remove(self):
@@ -109,27 +97,15 @@ class WorkspaceView:
 
     def show_removed(self, workspace_name: str):
         """Show successful workspace removal."""
-        card = Card(
-            content=Text(
-                f"Workspace '{workspace_name}' has been successfully removed.\n\n"
-                "All associated resources have been deleted.",
-                style=Colors.Ansi.success,
-            ),
+        card = SuccessDetailsCard(
             title="🗂️ Workspace Removed",
-            border_style=Colors.Ansi.success,
+            message=f"Workspace '{workspace_name}' has been successfully removed.\n\nAll associated resources have been deleted.",
         )
         self.console.print(card)
 
     def show_cancelled(self):
         """Show cancellation message."""
-        card = Card(
-            content=Text(
-                "Operation cancelled.",
-                style=Colors.Ansi.warning,
-            ),
-            title="🗂️ Cancelled",
-            border_style=Colors.Ansi.warning,
-        )
+        card = WarningCard(message="Operation cancelled.", title="🗂️ Cancelled")
         self.console.print(card)
 
     def show_error(self, message: str, suggestion: str | None = None):
@@ -139,17 +115,5 @@ class WorkspaceView:
             message: The error message
             suggestion: Optional suggestion for fixing the error
         """
-        content = Text()
-        content.append(f"{message}", style=Colors.Ansi.error)
-
-        if suggestion:
-            content.append("\n\n", style="")
-            content.append("Suggestion: ", style=f"bold {Colors.Ansi.info}")
-            content.append(suggestion, style=Colors.Ansi.text_muted)
-
-        card = Card(
-            content=content,
-            title="🗂️ Error",
-            border_style=Colors.Ansi.error,
-        )
+        card = ErrorCard(message=message, title="🗂️ Error", suggestion=suggestion)
         self.console.print(card)
