@@ -1,4 +1,5 @@
 from datetime import datetime
+from pathlib import Path
 
 from rich.console import Console
 from rich.prompt import Prompt
@@ -24,6 +25,48 @@ from lazycloud_cli.ui.views.helpers.diff_renderer import (
 from shared.models.secrets import SecretCollection
 from shared.models.statuses import TaskStatus
 from shared.responses.deployments import DiffResponse
+
+
+def _find_env_file(project_dir: Path) -> Path | None:
+    """Check if .env file exists in project directory."""
+    env_file = project_dir / ".env"
+    return env_file if env_file.exists() else None
+
+
+def _parse_env_file(file_path: Path) -> dict[str, str | None]:
+    """Parse .env file into a dictionary"""
+    env_vars = {}
+
+    try:
+        with open(file_path, "r") as f:
+            for _, line in enumerate(f, 1):
+                line = line.strip()
+                # Skip empty lines and comments
+                if not line or line.startswith("#"):
+                    continue
+
+                # Parse KEY=value format
+                if "=" in line:
+                    key, value = line.split("=", 1)
+                    key = key.strip()
+                    value = value.strip()
+
+                    # Remove quotes if present
+                    if value and value[0] in ('"', "'") and value[-1] == value[0]:
+                        value = value[1:-1]
+
+                    # Store None for empty values
+                    env_vars[key] = value if value else None
+    except FileNotFoundError:
+        # Return empty dict, caller will show error
+        pass
+    except Exception as e:
+        # Log parsing error but continue
+        Console().print(
+            f"[yellow]Warning: Error parsing {file_path.name}: {e}[/yellow]"
+        )
+
+    return env_vars
 
 
 class DeployView:
@@ -279,39 +322,160 @@ class DeployView:
         progress.add_step("Finalizing deployment")
         return progress
 
-    def collect_secrets(self, env_vars: SecretCollection) -> SecretCollection:
-        """Collect secret values for environment variables from user."""
-        if env_vars.added:
-            self.console.print(
-                InfoCard(
-                    title="🔐 New Environment Variables",
-                    message=(
-                        f"Found {len(env_vars.added)} new environment variables that need values.\n\n"
-                        "Please enter the values for each variable.\n"
-                        "These will be encrypted and stored securely.\n\n"
-                        "Press Enter to use the default value shown in brackets."
-                    ),
+    def collect_secrets(
+        self, env_vars: SecretCollection, project_dir: Path | None = None
+    ) -> SecretCollection:
+        """Collect secret values for environment variables from user"""
+        if not env_vars.added:
+            return env_vars
+
+        # Check for .env file
+        env_file = None
+        if project_dir:
+            env_file = _find_env_file(project_dir)
+
+        # Ask if user wants to import from .env file
+        dialog = SimpleConfirmationDialog(
+            action="import values from a .env file",
+            details=[
+                f"Detected {len(env_vars.added)} environment variable(s)",
+                "These will be encrypted and stored securely",
+            ],
+            title="🔐 Environment Variables Detected",
+        )
+        import_from_file = dialog.show(self.console)
+
+        loaded_keys = set()
+        if import_from_file:
+            # Prompt for file path with default if .env exists
+            if env_file:
+                file_path_str = Prompt.ask(
+                    Text("Path to .env file", style=Colors.Ansi.text_muted),
+                    default=str(env_file),
                 )
+            else:
+                file_path_str = Prompt.ask(
+                    Text("Path to .env file", style=Colors.Ansi.text_muted),
+                    default=".env",
+                )
+
+            file_path = Path(file_path_str)
+
+            # Parse the file
+            if file_path.exists():
+                env_file_vars = _parse_env_file(file_path)
+
+                # Load matching variables and track which ones we loaded
+                for key in list(env_vars.added.keys()):
+                    if key in env_file_vars and env_file_vars[key] is not None:
+                        env_vars.added[key] = env_file_vars[key]
+                        loaded_keys.add(key)
+
+                if loaded_keys:
+                    self.show_info(
+                        f"Loaded {len(loaded_keys)} of {len(env_vars.added)} variables from {file_path.name}",
+                        title="Import Successful",
+                    )
+                else:
+                    self.show_warning(
+                        f"No matching variables found in {file_path.name}"
+                    )
+            else:
+                self.show_error(f"File not found: {file_path}")
+
+            # Collect remaining variables manually (ones that weren't loaded from file)
+            remaining_vars = {
+                k: v for k, v in env_vars.added.items() if k not in loaded_keys
+            }
+        else:
+            # User said no to importing - all variables need manual entry or will be skipped
+            remaining_vars = env_vars.added.copy()
+
+        if remaining_vars:
+            # Ask if they want to manually enter remaining variables
+            if import_from_file and loaded_keys:
+                # Some were loaded, show what's missing
+                details = [
+                    f"{len(remaining_vars)} variable(s) were not found in the file",
+                    f"Missing: {', '.join(remaining_vars.keys())}",
+                ]
+            else:
+                # No file imported, just show count
+                var_list = ", ".join(list(remaining_vars.keys())[:5])
+                if len(remaining_vars) > 5:
+                    var_list += f" and {len(remaining_vars) - 5} more..."
+                details = [
+                    f"{len(remaining_vars)} variable(s) need values",
+                    f"Variables: {var_list}",
+                ]
+
+            dialog = SimpleConfirmationDialog(
+                action="enter these values manually",
+                details=details,
+                title="🔐 Environment Variables",
             )
+            enter_manually = dialog.show(self.console)
 
-            # Collect value for each env var
-            for key, default_value in env_vars.added.items():
-                self.console.print(
-                    Text(f"Variable: {key}", style=f"bold {Colors.Ansi.primary}")
+            if enter_manually:
+                for key, default_value in remaining_vars.items():
+                    self.console.print(
+                        Text(f"Variable: {key}", style=f"bold {Colors.Ansi.primary}")
+                    )
+
+                    # Only show default if it has a real value (not None)
+                    if default_value:
+                        value = Prompt.ask(
+                            Text("Value", style=Colors.Ansi.text_muted),
+                            default=default_value,
+                            show_default=True,
+                        )
+                    else:
+                        value = Prompt.ask(
+                            Text(
+                                "Value (or press Enter to skip)",
+                                style=Colors.Ansi.text_muted,
+                            ),
+                        )
+
+                    # If empty, confirm skip
+                    if not value:
+                        dialog = SimpleConfirmationDialog(
+                            action="skip this variable",
+                            details=[f"Variable '{key}' will not be set"],
+                            title="⚠️ Confirm Skip",
+                        )
+                        skip = dialog.show(self.console)
+                        if skip:
+                            env_vars.added[key] = None
+                            continue
+                        # Re-prompt if they don't want to skip
+                        value = Prompt.ask(
+                            Text("Value", style=Colors.Ansi.text_muted),
+                        )
+
+                    env_vars.added[key] = value if value else None
+            else:
+                # User declined manual entry - remove these variables
+                for key in remaining_vars.keys():
+                    env_vars.added[key] = None  # Mark as None so they get filtered out
+
+                self.show_warning(
+                    f"Skipping {len(remaining_vars)} variables. You can add them later via the dashboard or by redeploying."
                 )
 
-                value = Prompt.ask(
-                    Text("Value", style=Colors.Ansi.text_muted),
-                    default=default_value if default_value else None,
-                    show_default=True,
-                )
+        # Filter out empty/None values - only upload secrets that have actual values
+        env_vars.added = {
+            k: v for k, v in env_vars.added.items() if v is not None and v.strip() != ""
+        }
 
-                env_vars.added[key] = value if value else default_value
-
+        # Final confirmation
+        if env_vars.added:
             self.show_info(
                 f"Collected values for {len(env_vars.added)} environment variables",
                 title="Secrets Collection Complete",
             )
+        else:
+            self.show_warning("No secret values collected. Skipping secrets upload.")
 
         return env_vars
 

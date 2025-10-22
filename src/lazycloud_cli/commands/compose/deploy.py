@@ -93,7 +93,9 @@ def deploy(
     # Collect secrets from user (unless dry run or auto-yes)
     has_secrets = bool(secrets.added or secrets.removed)
     if has_secrets and not yes:
-        secrets = view.collect_secrets(secrets)
+        secrets = view.collect_secrets(secrets, project_dir=compose_file_path.parent)
+        # Re-check after collection - user might have skipped some
+        has_secrets = bool(secrets.added or secrets.removed)
 
     elif has_secrets and yes:
         # dont update secrets if auto-yes
@@ -181,8 +183,8 @@ def _apply_build_timestamps(compose_data: dict, timestamp: str) -> None:
 
 def _extract_env_variables(
     compose_data: dict, env_files_content: dict
-) -> dict[str, str]:
-    """Extract all environment variables from compose data and env files."""
+) -> dict[str, str | None]:
+    """Extract all environment variables from compose data and env files"""
     all_env_vars = {}
 
     # First, parse env files
@@ -203,7 +205,8 @@ def _extract_env_variables(
                 if value and value[0] in ('"', "'") and value[-1] == value[0]:
                     value = value[1:-1]
 
-                all_env_vars[key] = value
+                # Store None for empty values
+                all_env_vars[key] = value if value else None
 
     # Then, add environment variables from services
     for _, service_config in compose_data.get("services", {}).items():
@@ -211,16 +214,35 @@ def _extract_env_variables(
 
         if isinstance(env_config, dict):
             for key, value in env_config.items():
-                # Convert to string and handle None/null values
-                all_env_vars[key] = str(value) if value is not None else ""
+                if value is None:
+                    all_env_vars[key] = None
+                else:
+                    str_value = str(value)
+                    # Check if it's a placeholder like ${VAR} or $VAR
+                    if str_value.startswith("${") and str_value.endswith("}"):
+                        all_env_vars[key] = None
+                    elif str_value.startswith("$"):
+                        all_env_vars[key] = None
+                    elif str_value == "":
+                        all_env_vars[key] = None
+                    else:
+                        all_env_vars[key] = str_value
         elif isinstance(env_config, list):
             for env_var in env_config:
                 if "=" in env_var:
                     key, value = env_var.split("=", 1)
-                    all_env_vars[key] = value
+                    # Check if it's a placeholder
+                    if value.startswith("${") and value.endswith("}"):
+                        all_env_vars[key] = None
+                    elif value.startswith("$"):
+                        all_env_vars[key] = None
+                    elif value == "":
+                        all_env_vars[key] = None
+                    else:
+                        all_env_vars[key] = value
                 else:
                     # Environment variable without value
-                    all_env_vars[env_var] = ""
+                    all_env_vars[env_var] = None
 
     return all_env_vars
 

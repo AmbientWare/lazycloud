@@ -192,7 +192,6 @@ class StringValidationConfirmationDialog:
         console.print(card)
 
         # Prompt for string validation
-        console.print()
         console.print(
             f"[bold red]To confirm, type the {self.resource_type} name:[/bold red] [bold]{self.resource_name}[/bold]"
         )
