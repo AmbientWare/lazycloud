@@ -42,6 +42,10 @@ class ServiceDetailsContainer(Container):
 
     def on_mount(self) -> None:
         """Start SSE stream connection when mounted."""
+        # Start the SSE stream for real-time updates
+        if self.deployment_id and self.service_name:
+            self._start_stream()
+
         # Defer initial render until after the widget tree is complete
         if self.service_status:
             self.call_after_refresh(self._render_initial_content)
@@ -70,8 +74,12 @@ class ServiceDetailsContainer(Container):
 
     def _start_stream(self) -> None:
         """Start SSE stream connection for real-time updates."""
-        if self.deployment_id and self.service_name and not self._stream_task:
-            # start new task only if not already running
+        if self.deployment_id and self.service_name:
+            # Cancel existing stream if any
+            if self._stream_task and not self._stream_task.is_finished:
+                self._stream_task.cancel()
+
+            # Start new stream worker
             self._stream_task = self.run_worker(
                 self._connect_service_stream(), exclusive=True
             )
@@ -127,12 +135,10 @@ class ServiceDetailsContainer(Container):
 
     async def cleanup(self) -> None:
         """Clean up SSE stream connections and tasks."""
-        if self._stream_task:
+        if self._stream_task and not self._stream_task.is_finished:
             self._stream_task.cancel()
-            self._stream_task = None
-
-        if api.status and api.status.is_connected():
-            await api.status.disconnect()
+            self._stream_task.wait()
+        self._stream_task = None
 
     def _build_overview_content(self, service: ServiceStatus) -> list[str]:
         """Build service overview section content."""
