@@ -7,7 +7,7 @@ from lazycloud_cli.api import api
 from lazycloud_cli.ui.dashboard.components import Container, ListItemData, ListView
 from lazycloud_cli.ui.dashboard.components.listview import ListItem
 from lazycloud_cli.ui.dashboard.containers.details.container import ContentContainer
-from lazycloud_cli.ui.dashboard.theme import theme
+from lazycloud_cli.ui.dashboard.theme import Layout
 from shared.models.statuses import ServiceStatus
 
 if TYPE_CHECKING:
@@ -31,7 +31,7 @@ class ServicesContainer(Container):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._list_view = None
-        self.border_title = "[2] Services"
+        self.border_title = "🔧 [2] Services"
 
     def compose(self) -> ComposeResult:
         """Create the services list"""
@@ -44,10 +44,8 @@ class ServicesContainer(Container):
 
     def on_mount(self) -> None:
         """Style the container when mounted"""
-        self.styles.height = theme.vertical_split
-        self.styles.border = theme.get_border()
-        self.styles.background = theme.background
-        self.styles.padding = theme.padding
+        self.styles.height = Layout.vertical_split
+        self.styles.padding = Layout.padding
         self.can_focus = True
         # set empty message after mount
         if self._list_view:
@@ -55,7 +53,6 @@ class ServicesContainer(Container):
 
     def on_focus(self) -> None:
         """Handle focus event."""
-        self.styles.border = theme.get_border(focused=True)
         self.border_subtitle = "↑↓ Navigate • ↵ Select"
 
         # Ensure an item is highlighted in the list
@@ -76,7 +73,6 @@ class ServicesContainer(Container):
 
     def on_blur(self) -> None:
         """Handle blur event."""
-        self.styles.border = theme.get_border()
         self.border_subtitle = None
 
     def on_click(self) -> None:

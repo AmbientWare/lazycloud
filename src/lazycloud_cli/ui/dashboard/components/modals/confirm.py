@@ -5,7 +5,7 @@ from textual.containers import Vertical
 from textual.widgets import Static
 
 from lazycloud_cli.ui.dashboard.components.modals.base import BaseModalScreen
-from lazycloud_cli.ui.dashboard.theme import theme
+from lazycloud_cli.ui.dashboard.theme import Borders
 
 
 class ConfirmModal(BaseModalScreen):
@@ -14,6 +14,7 @@ class ConfirmModal(BaseModalScreen):
     BINDINGS = [
         ("y", "confirm", "Yes"),
         ("n", "cancel", "No"),
+        ("q", "cancel", "Cancel"),
         ("escape", "cancel", "Cancel"),
     ]
 
@@ -24,7 +25,6 @@ class ConfirmModal(BaseModalScreen):
         on_confirm: Callable | None = None,
         on_cancel: Callable | None = None,
         icon: str = "❓",
-        border_color: str | None = None,
     ):
         """Initialize the confirm modal.
 
@@ -34,7 +34,6 @@ class ConfirmModal(BaseModalScreen):
             on_confirm: Callback function to execute on confirmation
             on_cancel: Callback function to execute on cancellation
             icon: Icon to display in the title (default: ❓)
-            border_color: Border color from theme (default: theme.warning)
         """
         super().__init__()
         self.title = title
@@ -42,7 +41,6 @@ class ConfirmModal(BaseModalScreen):
         self.on_confirm_callback = on_confirm
         self.on_cancel_callback = on_cancel
         self.icon = icon
-        self.border_color = border_color or theme.warning
 
     def compose(self) -> ComposeResult:
         """Create the modal layout."""
@@ -52,8 +50,7 @@ class ConfirmModal(BaseModalScreen):
                 id="confirm-header",
             )
             yield Static(
-                f"{self.message}\n\n"
-                f"Press [bold green]Y[/bold green] to confirm or [bold red]N[/bold red] to cancel",
+                f"{self.message}",
                 id="confirm-message",
             )
 
@@ -68,8 +65,9 @@ class ConfirmModal(BaseModalScreen):
         modal.styles.height = "auto"
         modal.styles.max_height = 20
         modal.styles.padding = 2
-        modal.styles.background = theme.background
-        modal.styles.border = (theme.border_style, self.border_color)
+        # Override CSS default with warning color for confirm modals
+        modal.styles.border = Borders.warning
+        modal.border_subtitle = "y: Confirm • n/q: Cancel"
 
         # Style header
         header = self.query_one("#confirm-header")

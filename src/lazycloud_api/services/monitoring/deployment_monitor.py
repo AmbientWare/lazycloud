@@ -14,6 +14,7 @@ class DeploymentMonitor(BaseMonitor[DeploymentStatus]):
     def __init__(
         self,
         deployment_id: str,
+        deployment_name: str,
         namespace: str,
         helm_values: HelmValues,
         callback: Callable[[DeploymentStatus], None],
@@ -22,7 +23,10 @@ class DeploymentMonitor(BaseMonitor[DeploymentStatus]):
         self.deployment_id = deployment_id
         self.namespace = namespace
         self.helm_values = helm_values
-        self.status_watcher = StatusWatcher(deployment_id, namespace, helm_values)
+        self.deployment_name = deployment_name
+        self.status_watcher = StatusWatcher(
+            deployment_id, namespace, helm_values, deployment_name
+        )
 
     async def _task(self) -> DeploymentStatus:
         return await self.status_watcher.get_deployment_status()

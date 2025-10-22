@@ -7,7 +7,7 @@ from lazycloud_cli.ui.dashboard.components import Container, ListItemData, ListV
 from lazycloud_cli.ui.dashboard.components.listview import ListItem
 from lazycloud_cli.ui.dashboard.containers.details.container import ContentContainer
 from lazycloud_cli.ui.dashboard.containers.services import ServicesContainer
-from lazycloud_cli.ui.dashboard.theme import theme
+from lazycloud_cli.ui.dashboard.theme import Layout
 from shared.models.statuses import DeploymentStatus
 from shared.responses.deployments import DeploymentResponse
 
@@ -28,7 +28,7 @@ class DeploymentsContainer(Container):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._list_view = None
-        self.border_title = "[1] Deployments"
+        self.border_title = "🚀 [1] Deployments"
         self.workspace_id = config.active_workspace_id
 
     def compose(self) -> ComposeResult:
@@ -43,10 +43,8 @@ class DeploymentsContainer(Container):
 
     async def on_mount(self) -> None:
         """Style the container when mounted and load deployments."""
-        self.styles.height = theme.vertical_split
-        self.styles.border = theme.get_border()
-        self.styles.background = theme.background
-        self.styles.padding = theme.padding
+        self.styles.height = Layout.vertical_split
+        self.styles.padding = Layout.padding
         self.can_focus = True
 
         # Load deployments after mounting
@@ -54,7 +52,6 @@ class DeploymentsContainer(Container):
 
     def on_focus(self) -> None:
         """Handle focus event."""
-        self.styles.border = theme.get_border(focused=True)
         self.border_subtitle = "↑↓ Navigate • ↵ Select"
 
         # Ensure an item is highlighted in the list
@@ -77,7 +74,6 @@ class DeploymentsContainer(Container):
 
     def on_blur(self) -> None:
         """Handle blur event."""
-        self.styles.border = theme.get_border()
         self.border_subtitle = None
 
     def on_click(self) -> None:

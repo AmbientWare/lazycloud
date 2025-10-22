@@ -1,8 +1,8 @@
 from rich.console import Group
 from rich.text import Text
 
+from lazycloud_cli.ui.colors import Colors
 from lazycloud_cli.ui.components.card import Card
-from lazycloud_cli.ui.theme import theme
 
 
 class InfoCard(Card):
@@ -11,12 +11,12 @@ class InfoCard(Card):
     def __init__(self, message: str, title: str | None = None):
         """Initialize info card"""
         content = Text()
-        content.append(message, style=theme.text_primary)
+        content.append(message, style=Colors.Ansi.text)
 
         super().__init__(
             content=content,
             title=title,
-            border_style=theme.border_info,
+            border_style=Colors.Ansi.info,
         )
 
 
@@ -31,14 +31,14 @@ class BuildInfoCard(Card):
             action: Current action (Building, Pushing, etc.)
         """
         content = Text()
-        content.append("🔨  ", style=theme.info)
-        content.append(f"{action} ", style=theme.text_primary)
-        content.append(service_name, style=f"{theme.primary} bold")
-        content.append("...", style=theme.text_primary)
+        content.append("🔨  ", style=Colors.Ansi.info)
+        content.append(f"{action} ", style=Colors.Ansi.text)
+        content.append(service_name, style=f"{Colors.Ansi.primary} bold")
+        content.append("...", style=Colors.Ansi.text)
 
         super().__init__(
             content=content,
-            border_style=theme.border_info,
+            border_style=Colors.Ansi.info,
         )
 
 
@@ -48,13 +48,13 @@ class SuccessCard(Card):
     def __init__(self, message: str, title: str | None = None):
         """Initialize success card."""
         content = Text()
-        content.append("✅  ", style=theme.success)
-        content.append(message, style=theme.success)
+        content.append("✅  ", style=Colors.Ansi.success)
+        content.append(message, style=Colors.Ansi.success)
 
         super().__init__(
             content=content,
             title=title,
-            border_style=theme.border_success,
+            border_style=Colors.Ansi.success,
         )
 
 
@@ -64,13 +64,13 @@ class WarningCard(Card):
     def __init__(self, message: str, title: str | None = None):
         """Initialize warning card."""
         content = Text()
-        content.append("⚠️  ", style=theme.warning)
-        content.append(message, style=theme.warning)
+        content.append("⚠️  ", style=Colors.Ansi.warning)
+        content.append(message, style=Colors.Ansi.warning)
 
         super().__init__(
             content=content,
             title=title,
-            border_style=theme.border_warning,
+            border_style=Colors.Ansi.warning,
         )
 
 
@@ -85,18 +85,18 @@ class ErrorCard(Card):
     ):
         """Initialize error card."""
         content = Text()
-        content.append("❌  ", style=theme.error)
-        content.append(message, style=theme.error)
+        content.append("❌  ", style=Colors.Ansi.error)
+        content.append(message, style=Colors.Ansi.error)
 
         if suggestion:
             content.append("\n\n")
-            content.append("💡  ", style=theme.warning)
-            content.append(suggestion, style=theme.warning)
+            content.append("💡  ", style=Colors.Ansi.warning)
+            content.append(suggestion, style=Colors.Ansi.warning)
 
         super().__init__(
             content=content,
             title=title or "Error",
-            border_style=theme.border_error,
+            border_style=Colors.Ansi.error,
         )
 
 
@@ -113,24 +113,24 @@ class StatusMessageCard(Card):
         # Choose icon and style based on status
         if status == "success":
             icon = "✅"
-            style = theme.success
-            border = theme.border_success
+            style = Colors.Ansi.success
+            border = Colors.Ansi.success
         elif status == "warning":
             icon = "⚠️"
-            style = theme.warning
-            border = theme.border_warning
+            style = Colors.Ansi.warning
+            border = Colors.Ansi.warning
         elif status == "error":
             icon = "❌"
-            style = theme.error
-            border = theme.border_error
+            style = Colors.Ansi.error
+            border = Colors.Ansi.error
         else:
             icon = "ℹ️"
-            style = theme.info
-            border = theme.border_info
+            style = Colors.Ansi.info
+            border = Colors.Ansi.info
 
         content = Text()
         content.append(f"{icon}  ", style=style)
-        content.append(message, style=theme.text_primary)
+        content.append(message, style=Colors.Ansi.text)
 
         super().__init__(
             content=content,
@@ -153,19 +153,19 @@ class DeploymentActionCard(Card):
 
         # Main message
         main_text = Text()
-        main_text.append("🚀  ", style=theme.info)
-        main_text.append(f"{action} deployment ", style=theme.text_primary)
-        main_text.append(f"'{deployment_name}'", style=f"{theme.primary} bold")
+        main_text.append("🚀  ", style=Colors.Ansi.info)
+        main_text.append(f"{action} deployment ", style=Colors.Ansi.text)
+        main_text.append(f"'{deployment_name}'", style=f"{Colors.Ansi.primary} bold")
 
         parts = [main_text]
 
         if details:
-            detail_text = Text(details, style=theme.text_secondary)
+            detail_text = Text(details, style=Colors.Ansi.text_muted)
             parts.append(detail_text)
 
         content = Group(*parts)
 
         super().__init__(
             content=content,
-            border_style=theme.border_info,
+            border_style=Colors.Ansi.info,
         )

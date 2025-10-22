@@ -10,14 +10,17 @@ from lazycloud_cli.ui.dashboard.containers import (
 from lazycloud_cli.ui.dashboard.containers.details.service_details import (
     RestartServiceModal,
 )
-from lazycloud_cli.ui.dashboard.theme import theme
+from lazycloud_cli.ui.dashboard.theme import Layout, lazycloud_theme
 
 
 class DashboardApp(App):
     """Main dashboard application"""
 
+    CSS_PATH = "styles.tcss"
+    ENABLE_COMMAND_PALETTE = False
+
     BINDINGS = [
-        ("q", "quit", "Quit"),
+        ("ctrl+c", "quit", "Quit"),
         ("r", "restart_service", "Restart Service"),
         ("1", "switch_to_deployments", "Deployments"),
         ("2", "switch_to_services", "Services"),
@@ -26,7 +29,11 @@ class DashboardApp(App):
     ]
 
     def on_mount(self) -> None:
-        self.screen.styles.background = theme.background
+        """Setup the layout once the app is mounted"""
+        # Register and activate theme
+        self.register_theme(lazycloud_theme)
+        self.theme = "lazycloud"
+
         self.set_focus(self.query_one(DeploymentsContainer))
 
     def compose(self) -> ComposeResult:
@@ -35,12 +42,12 @@ class DashboardApp(App):
         layout.styles.layout = "horizontal"
         layout.styles.width = "100%"
         layout.styles.height = "100%"
-        layout.styles.padding = theme.padding
+        layout.styles.padding = Layout.padding
 
         with layout:
             # Left column with deployments and services
             left_column = Vertical(id="left-column")
-            left_column.styles.width = theme.left_width
+            left_column.styles.width = Layout.left_width
             left_column.styles.height = "100%"
 
             with left_column:
@@ -69,11 +76,7 @@ class DashboardApp(App):
 
     def action_switch_to_deployments(self) -> None:
         """Switch to deployments section."""
-        # Reset all borders to primary
-        self._reset_borders()
-        # focus on the deployments container and change border
         deployments_container = self.query_one(DeploymentsContainer)
-        deployments_container.styles.border = theme.get_border(focused=True)
         self.set_focus(deployments_container)
 
         # get the main content container and set the mode to deployment
@@ -82,11 +85,7 @@ class DashboardApp(App):
 
     def action_switch_to_services(self) -> None:
         """Switch to services section."""
-        # reset all borders to primary
-        self._reset_borders()
-        # focus on the services container
         services_container = self.query_one(ServicesContainer)
-        services_container.styles.border = theme.get_border(focused=True)
         self.set_focus(services_container)
 
         # get the main content container and set the mode to service
@@ -95,18 +94,8 @@ class DashboardApp(App):
 
     def action_switch_to_content(self) -> None:
         """Switch to content section."""
-        # reset all borders to primary
-        self._reset_borders()
-        # focus on the main content container
         content_container = self.query_one(ContentContainer)
-        content_container.styles.border = theme.get_border(focused=True)
         self.set_focus(content_container)
-
-    def _reset_borders(self) -> None:
-        """Reset all container borders to primary color"""
-        self.query_one(DeploymentsContainer).styles.border = theme.get_border()
-        self.query_one(ServicesContainer).styles.border = theme.get_border()
-        self.query_one(ContentContainer).styles.border = theme.get_border()
 
     def action_focus_instances(self) -> None:
         """Focus the instances table if it exists."""

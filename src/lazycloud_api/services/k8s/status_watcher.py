@@ -34,11 +34,13 @@ class StatusWatcher:
         deployment_id: str,
         namespace: str,
         helm_values: HelmValues,
+        deployment_name: str | None = None,
     ):
         """Initialize the status watcher."""
         self.deployment_id = deployment_id
         self.namespace = namespace
         self.helm_values = helm_values
+        self.deployment_name = deployment_name
 
     async def get_service_statuses_for_deployment(self) -> list[ServiceStatus]:
         """Get the status of all services in a deployment."""
@@ -123,9 +125,7 @@ class StatusWatcher:
 
         return DeploymentStatus(
             deployment_id=self.deployment_id,
-            deployment_name=self.namespace.split("-", 1)[-1]
-            if "-" in self.namespace
-            else self.namespace,
+            deployment_name=self.deployment_name,
             namespace=self.namespace,
             status=overall_status,
             ready=all_ready,

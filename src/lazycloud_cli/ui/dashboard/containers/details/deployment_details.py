@@ -1,17 +1,17 @@
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.reactive import reactive
+from textual.widget import Widget
 from textual.widgets import Static
 from textual.worker import Worker
 
 from lazycloud_cli.api.status import StatusAPI
-from lazycloud_cli.ui.dashboard.components import Container
 from lazycloud_cli.ui.dashboard.components.section import SectionContainer
 from lazycloud_cli.ui.dashboard.containers.details.utils import get_status_color
 from shared.models.statuses import DeploymentStatus
 
 
-class DeploymentDetailsContainer(Container):
+class DeploymentDetailsContainer(Widget):
     """Handles deployment-specific UI rendering with real-time updates."""
 
     # Reactive properties
@@ -86,7 +86,7 @@ class DeploymentDetailsContainer(Container):
 
         # Overview section
         overview_content = self._build_overview_content(deployment)
-        overview_section = SectionContainer("📦 Overview")
+        overview_section = SectionContainer("📊 Overview")
         self._scroll.mount(overview_section)
         self._overview_widget = Static("\n".join(overview_content).strip(), markup=True)
         overview_section.mount(self._overview_widget)

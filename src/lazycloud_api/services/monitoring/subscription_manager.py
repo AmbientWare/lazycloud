@@ -117,6 +117,7 @@ class SubscriptionManager:
         if isinstance(config, DeploymentMonitorConfig):
             return DeploymentMonitor(
                 deployment_id=config.deployment_id,
+                deployment_name=config.deployment_name,
                 namespace=config.namespace,
                 helm_values=config.helm_values,
                 callback=None,  # Callbacks will be added via add_callback
@@ -124,6 +125,7 @@ class SubscriptionManager:
         elif isinstance(config, ServiceMonitorConfig):
             return ServiceMonitor(
                 deployment_id=config.deployment_id,
+                deployment_name=config.deployment_name,
                 service_name=config.service_name,
                 namespace=config.namespace,
                 helm_values=config.helm_values,

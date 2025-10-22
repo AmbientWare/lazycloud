@@ -1,71 +1,60 @@
-"""
-LazyCloud Dashboard Theme - Lazygit/Lazydocker inspired.
-"""
-
 from typing import Tuple
 
-from pydantic import BaseModel
+from textual.theme import Theme
+
+from lazycloud_cli.ui.colors import Colors
 
 
-class LazyCloudTheme(BaseModel):
-    """LazyCloud Dashboard Theme Configuration - Modern terminal aesthetic."""
+# Layout constants
+class Layout:
+    """Layout configuration constants."""
 
-    # Primary colors (LazyCloud light blue)
-    primary: str = "rgb(96,165,250)"
-    primary_bright: str = "rgb(147,197,253)"
-
-    # Base colors
-    background: str = "black"
-    surface: str = "rgb(17,24,39)"
-
-    # Text colors
-    text: str = "rgb(229,231,235)"
-    text_dim: str = "rgb(107,114,128)"
-    text_accent: str = "rgb(96,165,250)"
-
-    # Status colors
-    success: str = "rgb(52,211,153)"
-    warning: str = "rgb(251,191,36)"
-    info: str = "rgb(147,197,253)"
-    error: str = "rgb(248,113,113)"
-    muted: str = "rgb(75,85,99)"
-
-    # Border configuration
-    border_color: str = "rgb(100,116,139)"
-    border_color_focus: str = "rgb(168,85,247)"
-    border_style: str = "round"
-    
-    # Layout
-    padding: int = 1
-    left_width: str = "25%"
-    right_width: str = "75%"
-    vertical_split: str = "50%"
-    
-    def get_border(self, focused: bool = False) -> Tuple[str, str]:
-        """Get border style tuple (style, color)."""
-        color = self.border_color_focus if focused else self.border_color
-        return (self.border_style, color)
-    
-    def get_status_color(self, status: str) -> str:
-        """Get appropriate color for a status string."""
-        status_lower = status.lower()
-        
-        # Success states
-        if any(word in status_lower for word in ["ready", "active", "healthy", "success", "running"]):
-            return self.success
-        # Warning states
-        elif any(word in status_lower for word in ["pending", "waiting", "warning"]):
-            return self.warning
-        # Info states
-        elif any(word in status_lower for word in ["deploying", "updating", "creating"]):
-            return self.info
-        # Error states
-        elif any(word in status_lower for word in ["error", "failed", "unhealthy", "stopped"]):
-            return self.error
-        # Unknown
-        else:
-            return self.muted
+    padding = 1
+    left_width = "25%"
+    right_width = "75%"
+    vertical_split = "50%"
+    border_style = "round"
 
 
-# Default theme instance
-theme = LazyCloudTheme()
+class Borders:
+    """Reusable border style tuples."""
+
+    default = (Layout.border_style, Colors.border)
+    focus = (Layout.border_style, Colors.accent)
+    success = (Layout.border_style, Colors.success)
+    warning = (Layout.border_style, Colors.warning)
+    error = (Layout.border_style, Colors.error)
+
+
+# Neutral grey theme inspired by Nord
+lazycloud_theme = Theme(
+    name="lazycloud",
+    primary=Colors.border,
+    secondary=Colors.secondary,
+    accent=Colors.accent,
+    foreground=Colors.text,
+    success=Colors.success,
+    warning=Colors.warning,
+    error=Colors.error,
+    surface=Colors.surface,
+    panel=Colors.surface,
+    dark=True,
+    variables={
+        "border": Colors.border,
+        "border-blurred": Colors.text_muted,
+        "block-cursor-text-style": "none",
+        "block-cursor-background": Colors.secondary,
+        "footer-key-foreground": Colors.accent,
+        "input-selection-background": f"{Colors.secondary} 35%",
+    },
+)
+
+
+# Border helper for programmatic styling
+def get_border(focused: bool = False) -> Tuple[str, str]:
+    """Get border style tuple (style, color).
+
+    Args:
+        focused: If True, returns accent color. If False, returns default border.
+    """
+    return Borders.focus if focused else Borders.default

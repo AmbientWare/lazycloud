@@ -6,8 +6,8 @@ from typing import Any
 from rich.table import Table
 from rich.text import Text
 
+from lazycloud_cli.ui.colors import Colors
 from lazycloud_cli.ui.components.card import Card
-from lazycloud_cli.ui.theme import theme
 from lazycloud_cli.ui.views.helpers.formatters import (
     format_command,
     format_deploy_config,
@@ -34,9 +34,9 @@ class ChangeDisplay:
 
 # Change type display configurations
 CHANGE_DISPLAYS = {
-    "added": ChangeDisplay("➕", theme.success, "Added"),
-    "modified": ChangeDisplay("🔄", theme.warning, "Modified"),
-    "removed": ChangeDisplay("➖", theme.error, "Removed"),
+    "added": ChangeDisplay("➕", Colors.Ansi.success, "Added"),
+    "modified": ChangeDisplay("🔄", Colors.Ansi.warning, "Modified"),
+    "removed": ChangeDisplay("➖", Colors.Ansi.error, "Removed"),
 }
 
 
@@ -46,32 +46,32 @@ def create_services_card(services: ResourceSection) -> Card | None:
         return None
 
     table = Table(show_header=True, header_style="bold", box=None)
-    table.add_column("Service", style=theme.primary)
-    table.add_column("Change", style=theme.text_secondary)
-    table.add_column("Details", style=theme.text_secondary, overflow="fold")
+    table.add_column("Service", style=Colors.Ansi.primary)
+    table.add_column("Change", style=Colors.Ansi.text_secondary)
+    table.add_column("Details", style=Colors.Ansi.text_secondary, overflow="fold")
 
     # Add added services
     for svc in services.added:
         name = svc.get("name", "unknown") if isinstance(svc, dict) else "unknown"
         details = format_resource_details(svc, "service")
-        table.add_row(name, Text("Added", style=theme.success), details)
+        table.add_row(name, Text("Added", style=Colors.Ansi.success), details)
 
     # Add modified services
     for name, changes in services.modified.items():
         changes_str = format_service_modifications(changes)
-        table.add_row(name, Text("Modified", style=theme.warning), changes_str)
+        table.add_row(name, Text("Modified", style=Colors.Ansi.warning), changes_str)
 
     # Add removed services
     for svc in services.removed:
         name = svc.get("name", "unknown") if isinstance(svc, dict) else "unknown"
         image = svc.get("image", "") if isinstance(svc, dict) else ""
-        table.add_row(name, Text("Removed", style=theme.error), image)
+        table.add_row(name, Text("Removed", style=Colors.Ansi.error), image)
 
     count = len(services.added) + len(services.modified) + len(services.removed)
     return Card(
         content=table,
         title=f"🐳 Service Changes ({count})",
-        border_style=theme.border_default,
+        border_style=Colors.Ansi.border,
     )
 
 
@@ -81,28 +81,28 @@ def create_volumes_card(volumes: ResourceSection) -> Card | None:
         return None
 
     table = Table(show_header=True, header_style="bold", box=None)
-    table.add_column("Volume", style=theme.primary)
-    table.add_column("Change", style=theme.text_secondary)
+    table.add_column("Volume", style=Colors.Ansi.primary)
+    table.add_column("Change", style=Colors.Ansi.text_muted)
 
     # Add added volumes
     for vol in volumes.added:
         name = vol.get("name", "unknown") if isinstance(vol, dict) else "unknown"
-        table.add_row(name, Text("Added", style=theme.success))
+        table.add_row(name, Text("Added", style=Colors.Ansi.success))
 
     # Add modified volumes
     for name, _ in volumes.modified.items():
-        table.add_row(name, Text("Modified", style=theme.warning))
+        table.add_row(name, Text("Modified", style=Colors.Ansi.warning))
 
     # Add removed volumes
     for vol in volumes.removed:
         name = vol.get("name", "unknown") if isinstance(vol, dict) else "unknown"
-        table.add_row(name, Text("Removed", style=theme.error))
+        table.add_row(name, Text("Removed", style=Colors.Ansi.error))
 
     count = len(volumes.added) + len(volumes.modified) + len(volumes.removed)
     return Card(
         content=table,
         title=f"💾 Volume Changes ({count})",
-        border_style=theme.border_default,
+        border_style=Colors.Ansi.border,
     )
 
 
@@ -112,31 +112,31 @@ def create_networks_card(networks: ResourceSection) -> Card | None:
         return None
 
     table = Table(show_header=True, header_style="bold", box=None)
-    table.add_column("Network", style=theme.primary)
-    table.add_column("Change", style=theme.text_secondary)
-    table.add_column("Type", style=theme.text_secondary)
+    table.add_column("Network", style=Colors.Ansi.primary)
+    table.add_column("Change", style=Colors.Ansi.text_muted)
+    table.add_column("Type", style=Colors.Ansi.text_muted)
 
     # Add added networks
     for net in networks.added:
         name = net.get("name", "unknown") if isinstance(net, dict) else "unknown"
         external = net.get("external", False) if isinstance(net, dict) else False
         net_type = "External" if external else "Internal"
-        table.add_row(name, Text("Added", style=theme.success), net_type)
+        table.add_row(name, Text("Added", style=Colors.Ansi.success), net_type)
 
     # Add modified networks
     for name, _ in networks.modified.items():
-        table.add_row(name, Text("Modified", style=theme.warning), "")
+        table.add_row(name, Text("Modified", style=Colors.Ansi.warning), "")
 
     # Add removed networks
     for net in networks.removed:
         name = net.get("name", "unknown") if isinstance(net, dict) else "unknown"
-        table.add_row(name, Text("Removed", style=theme.error), "")
+        table.add_row(name, Text("Removed", style=Colors.Ansi.error), "")
 
     count = len(networks.added) + len(networks.modified) + len(networks.removed)
     return Card(
         content=table,
         title=f"🌐 Network Changes ({count})",
-        border_style=theme.border_default,
+        border_style=Colors.Ansi.border,
     )
 
 
@@ -290,15 +290,15 @@ def create_env_var_card(env_changes: EnvVarChanges) -> Card | None:
         return None
 
     table = Table(show_header=True, header_style="bold", box=None)
-    table.add_column("Variable", style=theme.primary)
-    table.add_column("Change", style=theme.text_secondary)
-    table.add_column("Notes", style=theme.text_secondary)
+    table.add_column("Variable", style=Colors.Ansi.primary)
+    table.add_column("Change", style=Colors.Ansi.text_muted)
+    table.add_column("Notes", style=Colors.Ansi.text_muted)
 
     # Add added variables
     for var in env_changes.added:
         table.add_row(
             var,
-            Text("Added", style=theme.success),
+            Text("Added", style=Colors.Ansi.success),
             "Will be collected during deployment",
         )
 
@@ -306,7 +306,7 @@ def create_env_var_card(env_changes: EnvVarChanges) -> Card | None:
     for var in env_changes.removed:
         table.add_row(
             var,
-            Text("Removed", style=theme.error),
+            Text("Removed", style=Colors.Ansi.error),
             "Will be removed from secrets",
         )
 
@@ -314,5 +314,5 @@ def create_env_var_card(env_changes: EnvVarChanges) -> Card | None:
     return Card(
         content=table,
         title=f"🔐 Environment Variable Changes ({count})",
-        border_style=theme.border_default,
+        border_style=Colors.Ansi.border,
     )

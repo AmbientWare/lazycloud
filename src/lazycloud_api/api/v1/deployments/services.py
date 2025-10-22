@@ -160,6 +160,7 @@ async def stream_service_status(
         service_name=service_name,
         namespace=deployment.namespace,
         helm_values=deployment.helm_values,
+        deployment_name=deployment.name,
     )
 
     return EventSourceResponse(

@@ -1,8 +1,6 @@
 from textual.containers import Container
 from textual.screen import ModalScreen
 
-from lazycloud_cli.ui.dashboard.theme import theme
-
 
 class ModalContainer(Container):
     """A styled container for modal content."""
@@ -12,12 +10,10 @@ class ModalContainer(Container):
         self.modal_title = title
 
     def on_mount(self) -> None:
-        """Apply theme-based styling."""
+        """Apply styling."""
         self.styles.width = "auto"
         self.styles.height = "auto"
         self.styles.padding = 2
-        self.styles.background = theme.background
-        self.styles.border = (theme.border_style, theme.primary)
 
 
 class BaseModalScreen(ModalScreen):

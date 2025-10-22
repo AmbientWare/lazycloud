@@ -1,6 +1,5 @@
 from lazycloud_cli.api import api
 from lazycloud_cli.ui.dashboard.components import ConfirmModal, SuccessModal
-from lazycloud_cli.ui.dashboard.theme import theme
 
 
 class RestartServiceModal(ConfirmModal):
@@ -15,11 +14,10 @@ class RestartServiceModal(ConfirmModal):
             message=(
                 f"Are you sure you want to restart this service?\n\n"
                 f"Service: [bold]{service_name}[/bold]\n"
-                f"[dim]All pods will be restarted[/dim]"
+                f"[dim]All instances will be restarted[/dim]"
             ),
             on_confirm=self.handle_restart,
             icon="🔄",
-            border_color=theme.warning,
         )
 
     def handle_restart(self):
@@ -55,5 +53,4 @@ class RestartSuccessModal(SuccessModal):
                 f"[dim]The service will restart shortly.[/dim]"
             ),
             icon="✓",
-            border_color=theme.success,
         )
