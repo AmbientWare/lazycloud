@@ -87,7 +87,7 @@ class ComposeDiffChecker:
                     modified[name] = changes
 
         logger.info(
-            f"Service comparison results: Added: {added}, Modified: {modified}, Removed: {removed}"
+            f"Service comparison results: Added: {len(added)}, Modified: {len(modified)}, Removed: {len(removed)}"
         )
         return ResourceSection(added=added, modified=modified, removed=removed)
 
@@ -249,7 +249,7 @@ class ComposeDiffChecker:
         # Volumes typically don't have properties to modify
         modified = {}
         logger.info(
-            f"Volume comparison results: Added: {added}, Modified: {modified}, Removed: {removed}"
+            f"Volume comparison results: Added: {len(added)}, Modified: {len(modified)}, Removed: {len(removed)}"
         )
 
         return ResourceSection(added=added, modified=modified, removed=removed)
@@ -268,7 +268,7 @@ class ComposeDiffChecker:
         # Networks typically don't have properties to modify
         modified = {}
         logger.info(
-            f"Network comparison results: Added: {added}, Modified: {modified}, Removed: {removed}"
+            f"Network comparison results: Added: {len(added)}, Modified: {len(modified)}, Removed: {len(removed)}"
         )
 
         return ResourceSection(added=added, modified=modified, removed=removed)

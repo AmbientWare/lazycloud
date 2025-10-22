@@ -71,7 +71,12 @@ class DeploymentDetailsContainer(Container):
     def _start_stream(self) -> None:
         """Start SSE stream connection for real-time updates."""
         if self.deployment_id:
-            self._stream_task = self.run_worker(self._connect_deployment_stream())
+            if self._stream_task and not self._stream_task.is_finished:
+                self._stream_task.cancel()
+
+            self._stream_task = self.run_worker(
+                self._connect_deployment_stream(), exclusive=True
+            )
 
     def _render_sections(self, deployment: DeploymentStatus) -> None:
         """Render all sections with the deployment data."""
@@ -190,9 +195,10 @@ class DeploymentDetailsContainer(Container):
 
     async def cleanup(self) -> None:
         """Clean up SSE stream connections and tasks."""
-        if self._stream_task:
+        if self._stream_task and not self._stream_task.is_finished:
             self._stream_task.cancel()
-            self._stream_task = None
+            self._stream_task.wait()
+        self._stream_task = None
 
         if self._status_api:
             await self._status_api.disconnect()

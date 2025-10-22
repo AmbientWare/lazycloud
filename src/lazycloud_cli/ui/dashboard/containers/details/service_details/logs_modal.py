@@ -36,14 +36,25 @@ class LogViewerModal(ContentModal):
         super().on_mount()
         self._logs_widget.styles.height = "1fr"
         self._logs_widget.write("[dim]Connecting to log stream...[/dim]")
-        self._stream_task = self.run_worker(self._connect_logs_stream())
+        self._start_stream()
 
     async def on_unmount(self) -> None:
         """Clean up when modal closes."""
-        if self._stream_task:
+        await self.cleanup()
+
+    def _start_stream(self) -> None:
+        """Start SSE stream connection for log updates."""
+        if self._stream_task and not self._stream_task.is_finished:
             self._stream_task.cancel()
-        if api.logs and api.logs.is_connected():
-            await api.logs.disconnect()
+
+        self._stream_task = self.run_worker(self._connect_logs_stream(), exclusive=True)
+
+    async def cleanup(self) -> None:
+        """Clean up SSE stream connections and tasks."""
+        if self._stream_task and not self._stream_task.is_finished:
+            self._stream_task.cancel()
+            self._stream_task.wait()
+        self._stream_task = None
 
     async def _connect_logs_stream(self) -> None:
         """Connect to the logs SSE stream."""
