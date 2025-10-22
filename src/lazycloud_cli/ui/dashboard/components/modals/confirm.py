@@ -5,7 +5,6 @@ from textual.containers import Vertical
 from textual.widgets import Static
 
 from lazycloud_cli.ui.dashboard.components.modals.base import BaseModalScreen
-from lazycloud_cli.ui.dashboard.theme import Borders
 
 
 class ConfirmModal(BaseModalScreen):
@@ -55,29 +54,10 @@ class ConfirmModal(BaseModalScreen):
             )
 
     def on_mount(self) -> None:
-        """Apply theme-based styling using Python."""
-        # Call parent on_mount
+        """Set border subtitle."""
         super().on_mount()
-
-        # Style the modal container
         modal = self.query_one("#confirm-modal")
-        modal.styles.width = 60
-        modal.styles.height = "auto"
-        modal.styles.max_height = 20
-        modal.styles.padding = 2
-        # Override CSS default with warning color for confirm modals
-        modal.styles.border = Borders.warning
         modal.border_subtitle = "y: Confirm • n/q: Cancel"
-
-        # Style header
-        header = self.query_one("#confirm-header")
-        header.styles.text_align = "center"
-        header.styles.margin = (0, 0, 1, 0)
-
-        # Style message
-        message = self.query_one("#confirm-message")
-        message.styles.text_align = "center"
-        message.styles.margin = (1, 2, 1, 2)
 
     def action_confirm(self) -> None:
         """Handle confirmation action."""

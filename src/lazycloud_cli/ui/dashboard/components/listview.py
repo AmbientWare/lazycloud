@@ -6,8 +6,6 @@ from textual.widgets import Label as TextualLabel
 from textual.widgets import ListItem as TextualListItem
 from textual.widgets import ListView as TextualListView
 
-from lazycloud_cli.ui.colors import Colors
-
 
 @dataclass
 class ListItemData:
@@ -17,7 +15,7 @@ class ListItemData:
     name: str
     status: str | None = None
     extra_text: str | None = None
-    data: Any | None = None  # Store any additional data
+    data: Any | None = None
 
 
 class ListItem(TextualListItem):
@@ -34,20 +32,21 @@ class ListItem(TextualListItem):
             status_symbol = "●"  # Filled circle for better visibility
             dot = TextualLabel(status_symbol)
             dot.styles.width = 2
-            # Color the dot based on status
+
+            # Add CSS class based on status
             status_lower = self.item_data.status.lower()
             if (
                 "running" in status_lower
                 or "ready" in status_lower
                 or "active" in status_lower
             ):
-                dot.styles.color = Colors.Hex.success
+                dot.add_class("status-running")
             elif "pending" in status_lower or "waiting" in status_lower:
-                dot.styles.color = Colors.Hex.warning
+                dot.add_class("status-pending")
             elif "error" in status_lower or "failed" in status_lower:
-                dot.styles.color = Colors.Hex.error
+                dot.add_class("status-error")
             else:
-                dot.styles.color = Colors.Hex.accent
+                dot.add_class("status-pending")  # Default to warning/pending color
             yield dot
 
         # Item name with ellipsis truncation
@@ -55,7 +54,7 @@ class ListItem(TextualListItem):
         name.styles.width = "1fr"
         name.styles.overflow = "ellipsis"
         name.styles.text_overflow = "ellipsis"
-        name.styles.color = Colors.Hex.text  # Primary text color
+        name.add_class("text-primary")
         yield name
 
         # Extra text on the right (e.g., replicas count) - dimmed
@@ -63,7 +62,7 @@ class ListItem(TextualListItem):
             extra = TextualLabel(self.item_data.extra_text)
             extra.styles.width = 8
             extra.styles.text_align = "right"
-            extra.styles.color = Colors.Hex.text_muted  # Dimmed text
+            extra.add_class("text-muted")
             yield extra
 
     def on_mount(self) -> None:
@@ -90,11 +89,10 @@ class ListView(TextualListView):
         self._on_highlight = on_highlight
         self._empty_message = empty_message
         self._items = items or []
-        self._last_index = 0  # Track last selected index
+        self._last_index = 0
 
     def on_mount(self) -> None:
         """Apply consistent styling and render items on mount."""
-        # Let Textual's theme handle background for transparency support
         self.styles.border = None
         self.styles.padding = 0
         self.styles.scrollbar_size = 1
@@ -134,7 +132,6 @@ class ListView(TextualListView):
         """Show a loading message."""
         self.clear()
         self.loading = True
-        # message parameter is used by the loading indicator widget
 
     def hide_loading(self) -> None:
         """Hide the loading indicator."""

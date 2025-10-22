@@ -3,12 +3,9 @@ from textual.containers import Vertical
 from textual.widgets import Static
 
 from lazycloud_cli.ui.dashboard.components.modals.base import BaseModalScreen
-from lazycloud_cli.ui.dashboard.theme import Borders
 
 
 class SuccessModal(BaseModalScreen):
-    """Reusable success modal component."""
-
     BINDINGS = [
         ("enter", "dismiss", "Close"),
         ("q", "dismiss", "Close"),
@@ -30,7 +27,7 @@ class SuccessModal(BaseModalScreen):
         """Create the modal layout."""
         with Vertical(id="success-modal"):
             yield Static(
-                f"[bold green]{self.icon} {self.title}[/bold green]",
+                f"[bold]{self.icon} {self.title}[/bold]",
                 id="success-header",
             )
             yield Static(
@@ -39,23 +36,10 @@ class SuccessModal(BaseModalScreen):
             )
 
     def on_mount(self) -> None:
-        """Apply theme-based styling using Python."""
+        """Set border subtitle."""
         super().on_mount()
         modal = self.query_one("#success-modal")
-        modal.styles.width = 60
-        modal.styles.height = "auto"
-        modal.styles.max_height = 15
-        modal.styles.padding = 2
-        modal.styles.border = Borders.success
         modal.border_subtitle = "Enter/q: Close"
-
-        header = self.query_one("#success-header")
-        header.styles.text_align = "center"
-        header.styles.margin = (0, 0, 1, 0)
-
-        message = self.query_one("#success-message")
-        message.styles.text_align = "center"
-        message.styles.margin = (1, 2, 1, 2)
 
     def action_dismiss(self) -> None:
         """Dismiss the success modal."""

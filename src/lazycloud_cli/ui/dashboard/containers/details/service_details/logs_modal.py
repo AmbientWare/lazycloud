@@ -4,22 +4,19 @@ from textual.worker import Worker
 
 from lazycloud_cli.api import api
 from lazycloud_cli.ui.dashboard.components import ContentModal
-from lazycloud_cli.ui.dashboard.theme import Borders
 
 
 class LogViewerModal(ContentModal):
-    """A modal screen for viewing container logs."""
-
     def __init__(self, deployment_id: str, service_name: str, pod_name: str):
         display_name = pod_name if len(pod_name) <= 60 else pod_name[:57] + "..."
 
         super().__init__(
-            title="",  # No centered title - using border title instead
+            title="",
             subtitle="",
             icon="",
             modal_width="95%",
             modal_height="90%",
-            border_style=Borders.focus,  # Use accent color border
+            border_class="modal-focus",
         )
 
         self.deployment_id = deployment_id
