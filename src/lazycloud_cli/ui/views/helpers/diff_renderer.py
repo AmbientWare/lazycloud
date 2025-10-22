@@ -102,7 +102,7 @@ def create_volumes_card(volumes: ResourceSection) -> Card | None:
     return Card(
         content=table,
         title=f"💾 Volume Changes ({count})",
-        border_style=Colors.Ansi.border,
+        border_style=Colors.Ansi.info,
     )
 
 
@@ -136,7 +136,7 @@ def create_networks_card(networks: ResourceSection) -> Card | None:
     return Card(
         content=table,
         title=f"🌐 Network Changes ({count})",
-        border_style=Colors.Ansi.border,
+        border_style=Colors.Ansi.info,
     )
 
 
@@ -314,5 +314,5 @@ def create_env_var_card(env_changes: EnvVarChanges) -> Card | None:
     return Card(
         content=table,
         title=f"🔐 Environment Variable Changes ({count})",
-        border_style=Colors.Ansi.border,
+        border_style=Colors.Ansi.info,
     )
