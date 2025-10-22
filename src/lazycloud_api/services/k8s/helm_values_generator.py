@@ -1,5 +1,5 @@
-from lazycloud_api.database import db
 from lazycloud_api.database.compose import ComposeDeploymentPydantic
+from lazycloud_api.database.secrets import SecretPydantic
 from lazycloud_api.services import ecr_auth_service
 from lazycloud_api.services.compose.validator import ComposeValidator
 from lazycloud_api.services.k8s.generators.configuration import (
@@ -48,18 +48,9 @@ from shared.models.helm import (
 class HelmValuesGenerator:
     """Generates Helm chart values from Docker Compose configurations."""
 
-    def __init__(self, deployment: ComposeDeploymentPydantic):
+    def __init__(self, deployment: ComposeDeploymentPydantic, secrets: SecretPydantic):
         self.deployment = deployment
-        self._secrets = self._load_secrets()
-
-    def _load_secrets(self) -> dict[str, str] | None:
-        """Load secrets from database if deployment_id is available."""
-        if self.deployment.id:
-            secret = db.secrets.get_secret(self.deployment.id)
-            if secret:
-                return secret.secrets
-
-        return None
+        self._secrets = secrets.secrets if secrets else {}
 
     def generate_values(self, compose: ComposeFile) -> tuple[HelmValues, list[str]]:
         """Generate Helm values from a compose file."""

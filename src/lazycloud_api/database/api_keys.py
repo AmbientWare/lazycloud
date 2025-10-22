@@ -1,4 +1,3 @@
-import asyncio
 import uuid
 from datetime import datetime
 from enum import IntEnum
@@ -99,7 +98,3 @@ class ApiKeyService(DatabaseService[ApiKeyTable, ApiKeyPydantic]):
                 return api_key_pydantic.user_id
 
             return None
-
-    def user_by_value(self, value: str) -> str | None:
-        """Get a user by value"""
-        return asyncio.run(self.auser_by_value(value))

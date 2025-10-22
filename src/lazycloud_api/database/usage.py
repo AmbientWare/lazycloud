@@ -4,7 +4,6 @@ from enum import StrEnum
 
 from sqlalchemy import (
     UUID,
-    Boolean,
     DateTime,
     Float,
     ForeignKey,
@@ -31,6 +30,15 @@ class UsageRecordType(StrEnum):
     DAILY = "daily"
 
 
+class UsageRecordStatus(StrEnum):
+    """Status of usage record in billing workflow."""
+
+    DRAFT = "draft"  # Collecting, may still change
+    INCOMPLETE = "incomplete"  # Missing some hourly data, needs retry
+    FINALIZED = "finalized"  # Ready for billing
+    REPORTED = "reported"  # Sent to billing system
+
+
 class UsageRecordTable(BaseTable):
     """Stores periodic usage snapshots for billing at workspace level"""
 
@@ -42,6 +50,7 @@ class UsageRecordTable(BaseTable):
     record_type: Mapped[str] = mapped_column(
         String, default=UsageRecordType.HOURLY.value, index=True
     )
+    status: Mapped[str] = mapped_column(String, default=UsageRecordStatus.DRAFT.value)
     collection_start: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), index=True
     )
@@ -49,12 +58,6 @@ class UsageRecordTable(BaseTable):
     cpu_core_seconds: Mapped[float] = mapped_column(Float, default=0.0)
     memory_gb_seconds: Mapped[float] = mapped_column(Float, default=0.0)
     storage_gb_hours: Mapped[float] = mapped_column(Float, default=0.0)
-
-    # Billing fields (only used for DAILY records)
-    reported_to_billing: Mapped[bool] = mapped_column(Boolean, default=False)
-    reported_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
 
     # Relationships
     breakdowns: Mapped[list["UsageBreakdownTable"]] = relationship(
@@ -68,12 +71,7 @@ class UsageRecordTable(BaseTable):
     __table_args__ = (
         Index("ix_usage_records_workspace_dates", "workspace_id", "collection_start"),
         Index("ix_usage_records_workspace_type", "workspace_id", "record_type"),
-        Index(
-            "ix_usage_records_billing",
-            "record_type",
-            "reported_to_billing",
-            "collection_end",
-        ),
+        Index("ix_usage_records_status", "status", "record_type", "collection_end"),
     )
 
 
@@ -97,8 +95,6 @@ class UsageBreakdownTable(BaseTable):
         "UsageRecordTable", back_populates="breakdowns"
     )
 
-    __table_args__ = (Index("ix_usage_breakdown_service", "service_name"),)
-
 
 class UsageBreakdownPydantic(BaseDbPydanticModel):
     """Pydantic model for usage breakdown."""
@@ -115,13 +111,12 @@ class UsageRecordPydantic(BaseDbPydanticModel):
 
     workspace_id: UUIDStr
     record_type: str
+    status: UsageRecordStatus
     collection_start: datetime
     collection_end: datetime
     cpu_core_seconds: float
     memory_gb_seconds: float
     storage_gb_hours: float
-    reported_to_billing: bool
-    reported_at: datetime | None = None
     breakdowns: list[UsageBreakdownPydantic] = []
 
 
@@ -140,6 +135,7 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
         memory_gb_seconds: float,
         storage_gb_hours: float,
         record_type: UsageRecordType = UsageRecordType.HOURLY,
+        status: UsageRecordStatus = UsageRecordStatus.DRAFT,
     ) -> UsageRecordPydantic:
         async with session_manager.get_session() as session:
             # Check if record exists
@@ -157,6 +153,7 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
                 existing_record.cpu_core_seconds = cpu_core_seconds
                 existing_record.memory_gb_seconds = memory_gb_seconds
                 existing_record.storage_gb_hours = storage_gb_hours
+                existing_record.status = status.value
                 await session.commit()
                 await session.refresh(existing_record)
                 return existing_record.to_pydantic(UsageRecordPydantic)
@@ -165,12 +162,12 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
                 usage_record = UsageRecordTable(
                     workspace_id=workspace_id,
                     record_type=record_type.value,
+                    status=status.value,
                     collection_start=collection_start,
                     collection_end=collection_end,
                     cpu_core_seconds=cpu_core_seconds,
                     memory_gb_seconds=memory_gb_seconds,
                     storage_gb_hours=storage_gb_hours,
-                    reported_to_billing=False,
                 )
                 session.add(usage_record)
                 await session.commit()
@@ -239,27 +236,50 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
             records = result.scalars().all()
             return [record.to_pydantic(UsageRecordPydantic) for record in records]
 
-    async def get_unreported_usage(self) -> list[UsageRecordPydantic]:
+    async def get_finalized_usage(self) -> list[UsageRecordPydantic]:
+        """Get DAILY usage records that are finalized and ready for billing."""
         async with session_manager.get_session() as session:
             result = await session.execute(
                 select(UsageRecordTable)
                 .where(UsageRecordTable.record_type == UsageRecordType.DAILY.value)
-                .where(UsageRecordTable.reported_to_billing == False)  # noqa: E712
+                .where(UsageRecordTable.status == UsageRecordStatus.FINALIZED.value)
                 .order_by(UsageRecordTable.collection_end)
                 .options(joinedload(UsageRecordTable.breakdowns))
             )
             records = result.scalars().all()
             return [record.to_pydantic(UsageRecordPydantic) for record in records]
 
-    async def mark_as_reported(
-        self, usage_record_id: uuid.UUID, reported_at: datetime
-    ) -> None:
+    async def mark_as_reported(self, usage_record_id: uuid.UUID) -> None:
+        """Mark a usage record as reported to billing system."""
         async with session_manager.get_session() as session:
             result = await session.execute(
                 select(UsageRecordTable).where(UsageRecordTable.id == usage_record_id)
             )
             record = result.scalar_one_or_none()
             if record:
-                record.reported_to_billing = True
-                record.reported_at = reported_at
+                record.status = UsageRecordStatus.REPORTED.value
                 await session.commit()
+
+    async def finalize_record(self, usage_record_id: uuid.UUID) -> None:
+        """Mark a usage record as finalized and ready for billing."""
+        async with session_manager.get_session() as session:
+            result = await session.execute(
+                select(UsageRecordTable).where(UsageRecordTable.id == usage_record_id)
+            )
+            record = result.scalar_one_or_none()
+            if record:
+                record.status = UsageRecordStatus.FINALIZED.value
+                await session.commit()
+
+    async def get_incomplete_usage(self) -> list[UsageRecordPydantic]:
+        """Get DAILY usage records that are incomplete and need retry."""
+        async with session_manager.get_session() as session:
+            result = await session.execute(
+                select(UsageRecordTable)
+                .where(UsageRecordTable.record_type == UsageRecordType.DAILY.value)
+                .where(UsageRecordTable.status == UsageRecordStatus.INCOMPLETE.value)
+                .order_by(UsageRecordTable.collection_end)
+                .options(joinedload(UsageRecordTable.breakdowns))
+            )
+            records = result.scalars().all()
+            return [UsageRecordPydantic.model_validate(record) for record in records]

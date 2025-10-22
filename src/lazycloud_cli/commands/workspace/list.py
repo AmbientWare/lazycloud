@@ -44,7 +44,7 @@ def list():
 
         card = Card(
             content=table,
-            title="🗂️ Workspaces",
+            title="🗂️  Workspaces",
             subtitle=f"{len(workspaces)} workspace{'s' if len(workspaces) != 1 else ''} configured",
             border_style=theme.border_primary,
         )

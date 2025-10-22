@@ -76,7 +76,8 @@ async def deploy_compose_task(
     compose_file = ComposeParser.parse_dict(compose_data)
 
     # get the helm values with deployment_id to load secrets
-    helm_generator = HelmValuesGenerator(deployment)
+    secrets = await db.secrets.aget_secret(deployment_id)
+    helm_generator = HelmValuesGenerator(deployment, secrets)
     helm_values, _ = helm_generator.generate_values(compose_file)
     deployment.helm_values = helm_values
 

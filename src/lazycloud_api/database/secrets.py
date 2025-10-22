@@ -1,4 +1,3 @@
-import asyncio
 import json
 from typing import TYPE_CHECKING
 
@@ -97,10 +96,6 @@ class SecretService(DatabaseService[SecretTable, SecretEncryptedPydantic]):
 
             return None
 
-    def get_secret(self, deployment_id: str) -> SecretPydantic | None:
-        """Get a secret by deployment id"""
-        return asyncio.run(self.aget_secret(deployment_id))
-
     async def aupdate_or_create(self, db_secrets: SecretPydantic) -> SecretPydantic:
         """Update existing secrets or create new ones"""
         existing = await self.aget_secret(db_secrets.deployment_id)
@@ -126,7 +121,3 @@ class SecretService(DatabaseService[SecretTable, SecretEncryptedPydantic]):
 
         # Return the properly decrypted version
         return await self.aget_secret(db_secrets.deployment_id)
-
-    def update_or_create(self, db_secrets: SecretPydantic) -> SecretPydantic:
-        """Update existing secrets or create new ones"""
-        return asyncio.run(self.aupdate_or_create(db_secrets))
