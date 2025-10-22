@@ -4,36 +4,48 @@ from textual.worker import Worker
 
 from lazycloud_cli.api import api
 from lazycloud_cli.ui.dashboard.components import ContentModal
-from lazycloud_cli.ui.dashboard.theme import theme
+from lazycloud_cli.ui.dashboard.theme import Borders
 
 
 class LogViewerModal(ContentModal):
-    """A modal screen for viewing pod logs."""
+    """A modal screen for viewing container logs."""
 
     def __init__(self, deployment_id: str, service_name: str, pod_name: str):
-        display_name = pod_name if len(pod_name) <= 50 else pod_name[:47] + "..."
+        display_name = pod_name if len(pod_name) <= 60 else pod_name[:57] + "..."
 
         super().__init__(
-            title=f"Logs: {display_name}",
-            subtitle="(Press ESC or Q to close)",
-            icon="📜",
-            border_color=theme.info,
+            title="",  # No centered title - using border title instead
+            subtitle="",
+            icon="",
+            modal_width="95%",
+            modal_height="90%",
+            border_style=Borders.focus,  # Use accent color border
         )
 
         self.deployment_id = deployment_id
         self.service_name = service_name
         self.pod_name = pod_name
+        self.display_name = display_name
         self._logs_widget: RichLog | None = None
         self._stream_task: Worker | None = None
 
     def compose_body(self) -> ComposeResult:
         """Create the logs widget."""
         self._logs_widget = RichLog(highlight=True, markup=True, auto_scroll=True)
+        self._logs_widget.styles.background = "transparent"
+        self._logs_widget.styles.border = None
+        self._logs_widget.styles.padding = 0
         yield self._logs_widget
 
     def on_mount(self) -> None:
         """Start log streaming when modal opens."""
         super().on_mount()
+
+        # Set title and subtitle on the modal container
+        container = self.query_one("#content-modal-container")
+        container.border_title = f"📄 Instance Logs: {self.display_name}"
+        container.border_subtitle = "q: Close"
+
         self._logs_widget.styles.height = "1fr"
         self._logs_widget.write("[dim]Connecting to log stream...[/dim]")
         self._start_stream()
@@ -85,14 +97,14 @@ class LogViewerModal(ContentModal):
         def on_log_error(error: Exception) -> None:
             """Handle log stream errors."""
             if self._logs_widget:
-                # Check if it's a pod not found error
+                # Check if it's a container not found error
                 error_msg = str(error)
                 if (
                     "not found" in error_msg.lower()
                     or "does not exist" in error_msg.lower()
                 ):
                     self._logs_widget.write(
-                        f"[yellow]Pod '{self.pod_name}' not found or has been deleted[/yellow]"
+                        f"[yellow]Instance '{self.pod_name}' not found or has been deleted[/yellow]"
                     )
                 else:
                     self._logs_widget.write(f"[red]Log stream error: {error_msg}[/red]")
@@ -100,7 +112,7 @@ class LogViewerModal(ContentModal):
         if self._logs_widget:
             self._logs_widget.clear()
             self._logs_widget.write(
-                f"[green]Connecting to log stream for pod: {self.pod_name}[/green]\n"
+                f"[green]Connecting to log stream for instance: {self.pod_name}[/green]\n"
             )
 
         try:
@@ -116,7 +128,7 @@ class LogViewerModal(ContentModal):
             if self._logs_widget:
                 if "not found" in str(e).lower():
                     self._logs_widget.write(
-                        f"[yellow]Pod '{self.pod_name}' not found or has been deleted[/yellow]"
+                        f"[yellow]Container '{self.pod_name}' not found or has been deleted[/yellow]"
                     )
                 else:
                     self._logs_widget.write(f"[red]Failed to connect: {str(e)}[/red]")

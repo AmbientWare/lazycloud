@@ -3,12 +3,12 @@ from rich.prompt import Prompt
 from rich.table import Table
 from rich.text import Text
 
+from lazycloud_cli.ui.colors import Colors
 from lazycloud_cli.ui.components.card import Card
 from lazycloud_cli.ui.components.confirmation import (
     DestructiveConfirmationDialog,
     SimpleConfirmationDialog,
 )
-from lazycloud_cli.ui.theme import theme
 
 
 class ApiKeyListCard(Card):
@@ -17,14 +17,14 @@ class ApiKeyListCard(Card):
     def __init__(self, keys: dict[str, str], active_key: str | None = None):
         """Initialize API key list card."""
         if not keys:
-            content = Text("No API keys configured", style=theme.text_secondary)
+            content = Text("No API keys configured", style=Colors.Ansi.text_muted)
         else:
             table = Table(
-                show_header=True, header_style=f"bold {theme.primary}", box=None
+                show_header=True, header_style=f"bold {Colors.Ansi.primary}", box=None
             )
-            table.add_column("Name", style=theme.primary)
-            table.add_column("Key", style=theme.text_secondary)
-            table.add_column("Status", style=theme.success)
+            table.add_column("Name", style=Colors.Ansi.primary)
+            table.add_column("Key", style=Colors.Ansi.text_muted)
+            table.add_column("Status", style=Colors.Ansi.success)
 
             for name, value in keys.items():
                 # Mask the key value for security
@@ -40,7 +40,7 @@ class ApiKeyListCard(Card):
             content=content,
             title="🔑 API Keys",
             subtitle=f"{len(keys)} keys configured" if keys else None,
-            border_style=theme.border_primary,
+            border_style=Colors.Ansi.primary,
         )
 
 
@@ -50,19 +50,19 @@ class ApiKeyDetailsCard(Card):
     def __init__(self, name: str, value: str, is_active: bool = False):
         """Initialize API key details card."""
         table = Table(show_header=False, box=None)
-        table.add_column("Property", style=theme.primary)
+        table.add_column("Property", style=Colors.Ansi.primary)
         table.add_column("Value")
 
         table.add_row("🔑 Name", name)
         table.add_row("📝 Value", value[:12] + "..." if len(value) > 12 else value)
 
         if is_active:
-            table.add_row("✅ Status", Text("Active", style=theme.success))
+            table.add_row("✅ Status", Text("Active", style=Colors.Ansi.success))
 
         super().__init__(
             content=table,
             title="API Key Details",
-            border_style=theme.border_success if is_active else theme.border_primary,
+            border_style=Colors.Ansi.success if is_active else Colors.Ansi.primary,
         )
 
 
@@ -84,10 +84,10 @@ class AuthView:
                 "No API keys configured.\n\n"
                 "Add your first API key with:\n"
                 "  lazycloud auth add <name>",
-                style=theme.text_secondary,
+                style=Colors.Ansi.text_muted,
             ),
             title="🔑 No API Keys",
-            border_style=theme.border_warning,
+            border_style=Colors.Ansi.warning,
         )
         self.console.print(card)
 
@@ -114,16 +114,16 @@ class AuthView:
                 "You can find your API key at:\n"
                 "  • https://lazycloud.dev/settings/api-keys\n\n"
                 "The key will be hidden as you type for security.",
-                style=theme.text_secondary,
+                style=Colors.Ansi.text_muted,
             ),
             title="🔑 API Key Required",
-            border_style=theme.border_info,
+            border_style=Colors.Ansi.info,
         )
         self.console.print(card)
 
         # Now prompt with a clearer message
         return Prompt.ask(
-            Text("API Key", style=f"bold {theme.primary}"),
+            Text("API Key", style=f"bold {Colors.Ansi.primary}"),
             password=True,
             show_default=False,
         )
@@ -131,8 +131,8 @@ class AuthView:
     def show_validating_key(self):
         """Show that we're validating the API key."""
         card = Card(
-            content=Text("🔍 Validating API key...", style=theme.info),
-            border_style=theme.border_info,
+            content=Text("🔍 Validating API key...", style=Colors.Ansi.info),
+            border_style=Colors.Ansi.info,
         )
         self.console.print(card)
 
@@ -141,34 +141,38 @@ class AuthView:
         card = Card(
             content=Text(
                 "The API key is invalid.\n\nPlease check the key and try again.",
-                style=theme.error,
+                style=Colors.Ansi.error,
             ),
             title="🔑 Invalid API Key",
-            border_style=theme.border_error,
+            border_style=Colors.Ansi.error,
         )
         self.console.print(card)
 
     def show_key_added(self, name: str, set_active: bool = False):
         """Show successful key addition."""
         content = Text()
-        content.append(f"Successfully added API key '{name}'\n", style=theme.success)
+        content.append(
+            f"Successfully added API key '{name}'\n", style=Colors.Ansi.success
+        )
 
         if set_active:
-            content.append(f"\nSet '{name}' as the active API key", style=theme.info)
+            content.append(
+                f"\nSet '{name}' as the active API key", style=Colors.Ansi.info
+            )
 
         card = Card(
             content=content,
             title="🔑 API Key Added",
-            border_style=theme.border_success,
+            border_style=Colors.Ansi.success,
         )
         self.console.print(card)
 
     def show_key_not_found(self, name: str):
         """Show API key not found error."""
         card = Card(
-            content=Text(f"API key '{name}' not found", style=theme.error),
+            content=Text(f"API key '{name}' not found", style=Colors.Ansi.error),
             title="🔑 Key Not Found",
-            border_style=theme.border_error,
+            border_style=Colors.Ansi.error,
         )
         self.console.print(card)
 
@@ -178,10 +182,10 @@ class AuthView:
             content=Text(
                 f"Set '{name}' as the active API key\n\n"
                 "All API requests will now use this key.",
-                style=theme.success,
+                style=Colors.Ansi.success,
             ),
             title="🔑 Active Key Updated",
-            border_style=theme.border_success,
+            border_style=Colors.Ansi.success,
         )
         self.console.print(card)
 
@@ -200,29 +204,29 @@ class AuthView:
     def show_key_removed(self, name: str):
         """Show successful key removal."""
         card = Card(
-            content=Text(f"Removed API key '{name}'", style=theme.success),
+            content=Text(f"Removed API key '{name}'", style=Colors.Ansi.success),
             title="🔑 API Key Removed",
-            border_style=theme.border_success,
+            border_style=Colors.Ansi.success,
         )
         self.console.print(card)
 
     def show_error(self, message: str):
         """Show general error message."""
         card = Card(
-            content=Text(f"{message}", style=theme.error),
+            content=Text(f"{message}", style=Colors.Ansi.error),
             title="🔑 Error",
-            border_style=theme.border_error,
+            border_style=Colors.Ansi.error,
         )
         self.console.print(card)
 
     def show_info(self, message: str):
         """Show informational message."""
-        self.console.print(Text(f"{message}", style=theme.info))
+        self.console.print(Text(f"{message}", style=Colors.Ansi.info))
 
     def show_success(self, message: str):
         """Show success message."""
         card = Card(
-            content=Text(f"{message}", style=theme.success),
-            border_style=theme.border_success,
+            content=Text(f"{message}", style=Colors.Ansi.success),
+            border_style=Colors.Ansi.success,
         )
         self.console.print(card)

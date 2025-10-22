@@ -4,11 +4,11 @@ from loguru import logger
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.reactive import reactive
+from textual.widget import Widget
 from textual.widgets import Static
 from textual.worker import Worker
 
 from lazycloud_cli.api import api
-from lazycloud_cli.ui.dashboard.components import Container
 from lazycloud_cli.ui.dashboard.components.section import SectionContainer
 from lazycloud_cli.ui.dashboard.containers.details.service_details.pods_table import (
     PodTable,
@@ -20,7 +20,7 @@ from shared.models.k8s import Resources
 from shared.models.statuses import PodStatus, ServiceStatus
 
 
-class ServiceDetailsContainer(Container):
+class ServiceDetailsContainer(Widget):
     """Handles service-specific UI rendering and updates."""
 
     # Reactive properties
@@ -91,7 +91,7 @@ class ServiceDetailsContainer(Container):
         self._scroll.remove_children()
 
         overview_content = self._build_overview_content(service)
-        overview_section = SectionContainer("📦 Overview")
+        overview_section = SectionContainer("📊 Overview")
         self._scroll.mount(overview_section)
         self._overview_widget = Static("\n".join(overview_content).strip(), markup=True)
         overview_section.mount(self._overview_widget)

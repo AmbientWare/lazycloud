@@ -7,11 +7,11 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 from rich.text import Text
 
+from lazycloud_cli.ui.colors import Colors
 from lazycloud_cli.ui.components.card import Card
 from lazycloud_cli.ui.components.confirmation import (
     StringValidationConfirmationDialog,
 )
-from lazycloud_cli.ui.theme import theme
 
 
 class DestroyTargetCard(Card):
@@ -20,23 +20,23 @@ class DestroyTargetCard(Card):
     def __init__(self, deployment: Dict[str, Any]):
         """Initialize destroy target card."""
         content = Text()
-        content.append("You are about to destroy:\n\n", style=theme.warning)
-        content.append("  Deployment: ", style=theme.text_secondary)
-        content.append(f"{deployment['name']}\n", style=f"{theme.highlight} bold")
+        content.append("You are about to destroy:\n\n", style=Colors.Ansi.warning)
+        content.append("  Deployment: ", style=Colors.Ansi.text_muted)
+        content.append(f"{deployment['name']}\n", style=f"{Colors.Ansi.primary} bold")
 
         if deployment.get("services_count"):
-            content.append("  Services:   ", style=theme.text_secondary)
+            content.append("  Services:   ", style=Colors.Ansi.text_muted)
             content.append(
-                f"{deployment['services_count']} services\n", style=theme.warning
+                f"{deployment['services_count']} services\n", style=Colors.Ansi.warning
             )
 
-        content.append("\n", style=f"{theme.error} bold")
-        content.append("This action cannot be undone!", style=theme.error)
+        content.append("\n", style=f"{Colors.Ansi.error} bold")
+        content.append("This action cannot be undone!", style=Colors.Ansi.error)
 
         super().__init__(
             content=content,
             title="🚨 Destruction Target",
-            border_style=theme.border_error,
+            border_style=Colors.Ansi.error,
         )
 
 
@@ -46,17 +46,17 @@ class DestroyConfirmationCard(Card):
     def __init__(self, deployment_name: str):
         """Initialize confirmation card."""
         content = Text()
-        content.append("This will permanently delete:\n\n", style=theme.warning)
-        content.append("  • All deployed services\n", style=theme.text_secondary)
-        content.append("  • All running containers\n", style=theme.text_secondary)
-        content.append("  • All configuration data\n", style=theme.text_secondary)
-        content.append("  • All persistent storage\n", style=theme.text_secondary)
-        content.append("  • All network configurations\n", style=theme.text_secondary)
+        content.append("This will permanently delete:\n\n", style=Colors.Ansi.warning)
+        content.append("  • All deployed services\n", style=Colors.Ansi.text_muted)
+        content.append("  • All running containers\n", style=Colors.Ansi.text_muted)
+        content.append("  • All configuration data\n", style=Colors.Ansi.text_muted)
+        content.append("  • All persistent storage\n", style=Colors.Ansi.text_muted)
+        content.append("  • All network configurations\n", style=Colors.Ansi.text_muted)
 
         super().__init__(
             content=content,
             title="⚠️  Confirm Destruction",
-            border_style=theme.border_warning,
+            border_style=Colors.Ansi.warning,
         )
 
 
@@ -141,14 +141,14 @@ class DestroyView:
                 # Add elapsed time row
                 elapsed = int((datetime.now() - self.start_time).total_seconds())
                 elapsed_text = Text(
-                    f"Elapsed time: {elapsed}s", style=theme.text_secondary
+                    f"Elapsed time: {elapsed}s", style=Colors.Ansi.text_muted
                 )
                 table.add_row(elapsed_text)
 
                 return Card(
                     content=table,
                     title=f"💀 Destroying '{self.deployment_name}'",
-                    border_style=theme.border_warning,
+                    border_style=Colors.Ansi.warning,
                 )
 
         class ProgressContext:
@@ -180,10 +180,10 @@ class DestroyView:
             content=Text(
                 f"Deployment '{deployment_name}' has been successfully destroyed!\n\n"
                 "All associated resources have been removed.",
-                style=theme.success,
+                style=Colors.Ansi.success,
             ),
             title="💀 Destruction Complete",
-            border_style=theme.border_success,
+            border_style=Colors.Ansi.success,
         )
         self.console.print(card)
 
@@ -192,18 +192,18 @@ class DestroyView:
         card = Card(
             content=Text(
                 "🛑 Destruction cancelled.\n\nYour deployment is safe!",
-                style=theme.warning,
+                style=Colors.Ansi.warning,
             ),
             title="🛑 Cancelled",
-            border_style=theme.border_warning,
+            border_style=Colors.Ansi.warning,
         )
         self.console.print(card)
 
     def show_error(self, message: str):
         """Show error message."""
         card = Card(
-            content=Text(f"{message}", style=theme.error),
+            content=Text(f"{message}", style=Colors.Ansi.error),
             title="💀 Destruction Failed",
-            border_style=theme.border_error,
+            border_style=Colors.Ansi.error,
         )
         self.console.print(card)

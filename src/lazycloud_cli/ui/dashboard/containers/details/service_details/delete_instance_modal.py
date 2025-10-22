@@ -1,6 +1,5 @@
 from lazycloud_cli.api import api
 from lazycloud_cli.ui.dashboard.components import ConfirmModal, SuccessModal
-from lazycloud_cli.ui.dashboard.theme import theme
 
 
 class DeleteInstanceModal(ConfirmModal):
@@ -20,7 +19,6 @@ class DeleteInstanceModal(ConfirmModal):
             ),
             on_confirm=self.handle_delete,
             icon="🔄",
-            border_color=theme.warning,
         )
 
     def handle_delete(self):
@@ -60,5 +58,4 @@ class DeleteInstanceSuccessModal(SuccessModal):
                 f"[dim]The instance will delete shortly.[/dim]"
             ),
             icon="✓",
-            border_color=theme.success,
         )

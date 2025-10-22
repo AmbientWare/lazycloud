@@ -3,7 +3,7 @@ from textual.containers import Vertical
 from textual.widgets import Static
 
 from lazycloud_cli.ui.dashboard.components.modals.base import BaseModalScreen
-from lazycloud_cli.ui.dashboard.theme import theme
+from lazycloud_cli.ui.dashboard.theme import Borders
 
 
 class SuccessModal(BaseModalScreen):
@@ -11,6 +11,7 @@ class SuccessModal(BaseModalScreen):
 
     BINDINGS = [
         ("enter", "dismiss", "Close"),
+        ("q", "dismiss", "Close"),
         ("escape", "dismiss", "Close"),
     ]
 
@@ -19,13 +20,11 @@ class SuccessModal(BaseModalScreen):
         title: str,
         message: str,
         icon: str = "✓",
-        border_color: str | None = None,
     ):
         super().__init__()
         self.title = title
         self.message = message
         self.icon = icon
-        self.border_color = border_color or theme.success
 
     def compose(self) -> ComposeResult:
         """Create the modal layout."""
@@ -35,7 +34,7 @@ class SuccessModal(BaseModalScreen):
                 id="success-header",
             )
             yield Static(
-                f"{self.message}\n\n[dim]Press Enter to close.[/dim]",
+                f"{self.message}",
                 id="success-message",
             )
 
@@ -47,8 +46,8 @@ class SuccessModal(BaseModalScreen):
         modal.styles.height = "auto"
         modal.styles.max_height = 15
         modal.styles.padding = 2
-        modal.styles.background = theme.background
-        modal.styles.border = (theme.border_style, self.border_color)
+        modal.styles.border = Borders.success
+        modal.border_subtitle = "Enter/q: Close"
 
         header = self.query_one("#success-header")
         header.styles.text_align = "center"

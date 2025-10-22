@@ -7,7 +7,6 @@ from lazycloud_cli.ui.dashboard.containers.details.service_details.logs_modal im
     LogViewerModal,
 )
 from lazycloud_cli.ui.dashboard.containers.details.utils import get_status_color
-from lazycloud_cli.ui.dashboard.theme import theme
 from shared.models.statuses import PodStatus
 
 
@@ -37,10 +36,10 @@ class PodTable(DataTable):
 
     def on_mount(self) -> None:
         """Initialize the table on mount."""
-        self.styles.border = (theme.border_style, theme.primary)
-        self.styles.background = theme.background
         self.styles.height = "auto"
         self.styles.max_height = "50%"
+        self.zebra_stripes = False
+        self.show_row_labels = False
 
     def action_delete_instance(self) -> None:
         """Handle the delete instance action."""
@@ -83,16 +82,12 @@ class PodTable(DataTable):
 
     def on_focus(self) -> None:
         """Handle focus event."""
-        border_style, border_color = theme.get_border(focused=True)
-        self.styles.border = (border_style, border_color)
         self.border_subtitle = (
             "↑↓ Navigate Instances • l: Show Logs • d: Delete Instance"
         )
 
     def on_blur(self) -> None:
         """Handle blur event."""
-        border_style, border_color = theme.get_border()
-        self.styles.border = (border_style, border_color)
         self.border_subtitle = ""
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:

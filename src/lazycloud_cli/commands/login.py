@@ -5,8 +5,8 @@ from rich.text import Text
 
 from lazycloud_cli.api import api
 from lazycloud_cli.config import config
+from lazycloud_cli.ui.colors import Colors
 from lazycloud_cli.ui.components.card import Card
-from lazycloud_cli.ui.theme import theme
 
 app = typer.Typer(help="Login with API key")
 console = Console()
@@ -23,33 +23,33 @@ def login():
                 "You can find your API key at:\n"
                 "  • https://lazycloud.dev/settings/api-keys\n\n"
                 "The key will be hidden as you type for security.",
-                style=theme.text_secondary,
+                style=Colors.Ansi.text_muted,
             ),
             title="🔑 API Key Required",
-            border_style=theme.border_info,
+            border_style=Colors.Ansi.info,
         )
         console.print(info_card)
 
         # Prompt for API key
         api_key = Prompt.ask(
-            Text("API Key", style=f"bold {theme.primary}"),
+            Text("API Key", style=f"bold {Colors.Ansi.primary}"),
             password=True,
             show_default=False,
         )
 
         if not api_key or not api_key.strip():
             error_card = Card(
-                content=Text("API key cannot be empty", style=theme.error),
+                content=Text("API key cannot be empty", style=Colors.Ansi.error),
                 title="🔑 Invalid Input",
-                border_style=theme.border_error,
+                border_style=Colors.Ansi.error,
             )
             console.print(error_card)
             raise typer.Exit(1)
 
         # Validate the API key
         validating_card = Card(
-            content=Text("🔍 Validating API key...", style=theme.info),
-            border_style=theme.border_info,
+            content=Text("🔍 Validating API key...", style=Colors.Ansi.info),
+            border_style=Colors.Ansi.info,
         )
         console.print(validating_card)
 
@@ -72,10 +72,10 @@ def login():
                     content=Text(
                         "Could not find personal workspace.\n\n"
                         "Please contact support if this issue persists.",
-                        style=theme.error,
+                        style=Colors.Ansi.error,
                     ),
                     title="🔑 Configuration Error",
-                    border_style=theme.border_error,
+                    border_style=Colors.Ansi.error,
                 )
                 console.print(error_card)
                 # Clean up the key before exiting
@@ -89,20 +89,22 @@ def login():
 
             # Show success
             success_content = Text()
-            success_content.append("✓ Successfully logged in!\n\n", style=theme.success)
+            success_content.append(
+                "✓ Successfully logged in!\n\n", style=Colors.Ansi.success
+            )
             success_content.append(
                 f"Active workspace: {personal_workspace['name']}\n",
-                style=theme.text_secondary,
+                style=Colors.Ansi.text_muted,
             )
             success_content.append(
                 f"Role: {personal_workspace.get('role', 'unknown')}",
-                style=theme.text_secondary,
+                style=Colors.Ansi.text_muted,
             )
 
             success_card = Card(
                 content=success_content,
                 title="🔑 Login Successful",
-                border_style=theme.border_success,
+                border_style=Colors.Ansi.success,
             )
             console.print(success_card)
 
@@ -118,10 +120,10 @@ def login():
                     f"The API key is invalid or could not connect to the server.\n\n"
                     f"Error: {e}\n\n"
                     "Please check the key and try again.",
-                    style=theme.error,
+                    style=Colors.Ansi.error,
                 ),
                 title="🔑 Invalid API Key",
-                border_style=theme.border_error,
+                border_style=Colors.Ansi.error,
             )
             console.print(error_card)
             raise typer.Exit(1)
@@ -130,9 +132,9 @@ def login():
         raise
     except Exception as e:
         error_card = Card(
-            content=Text(f"Login failed: {e}", style=theme.error),
+            content=Text(f"Login failed: {e}", style=Colors.Ansi.error),
             title="🔑 Error",
-            border_style=theme.border_error,
+            border_style=Colors.Ansi.error,
         )
         console.print(error_card)
         raise typer.Exit(1)

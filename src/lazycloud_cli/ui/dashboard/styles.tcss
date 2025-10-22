@@ -1,0 +1,89 @@
+/* Dashboard Styles */
+
+/* Main container borders */
+DeploymentsContainer,
+ServicesContainer,
+ContentContainer {
+    border: round $primary;
+}
+
+/* Focused main containers get accent color border */
+DeploymentsContainer:focus,
+ServicesContainer:focus,
+ContentContainer:focus {
+    border: round $accent;
+}
+
+/* Section containers - subtle styling with accent titles */
+SectionContainer {
+    border: round $primary;
+    padding: 0 1;
+    height: auto;
+    border-title-color: $accent;  /* Accent color for section titles */
+}
+
+/* Data tables */
+DataTable {
+    border: round $primary;
+    background: transparent;
+    height: auto;
+}
+
+DataTable:focus {
+    border: round $accent;
+    border-title-color: $accent;
+}
+
+/* DataTable rows - very subtle highlighting */
+DataTable > .datatable--cursor {
+    background: $accent 15%;  /* Lighter highlight */
+    text-style: none;
+}
+
+DataTable > .datatable--hover {
+    background: $accent 10%;  /* Even lighter hover */
+}
+
+/* DataTable headers - accent color with underline separator */
+DataTable > .datatable--header {
+    background: transparent;  /* No background on headers */
+    color: $accent;
+    text-style: bold;
+    border-bottom: solid $primary;
+}
+
+/* Row separators */
+DataTable > .datatable--even,
+DataTable > .datatable--odd {
+    background: transparent;
+    border-bottom: solid $primary;
+}
+
+/* Modal containers */
+ModalContainer {
+    border: round $primary;
+}
+
+/* Ensure ListViews have transparent backgrounds */
+ListView {
+    background: transparent;
+    border: none;
+}
+
+/* ListItem styling - default transparent, highlighted with accent */
+ListItem {
+    background: transparent;
+}
+
+ListItem:hover {
+    background: $accent 20%;
+}
+
+ListItem.-highlight {
+    background: $accent 30%;
+}
+
+/* Add subtle accent to container titles */
+Container > .container--title {
+    color: $accent;
+}

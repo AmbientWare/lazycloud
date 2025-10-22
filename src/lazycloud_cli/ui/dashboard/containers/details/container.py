@@ -6,6 +6,7 @@ from textual.containers import VerticalScroll
 from textual.reactive import reactive
 from textual.widgets import Static
 
+from lazycloud_cli.config import config
 from lazycloud_cli.ui.dashboard.components import Container, SectionContainer
 from lazycloud_cli.ui.dashboard.containers.details.deployment_details import (
     DeploymentDetailsContainer,
@@ -13,7 +14,7 @@ from lazycloud_cli.ui.dashboard.containers.details.deployment_details import (
 from lazycloud_cli.ui.dashboard.containers.details.service_details import (
     ServiceDetailsContainer,
 )
-from lazycloud_cli.ui.dashboard.theme import theme
+from lazycloud_cli.ui.dashboard.theme import Layout
 from shared.models.statuses import DeploymentStatus, ServiceStatus
 from shared.responses.deployments import DeploymentResponse
 
@@ -35,13 +36,22 @@ class ContentContainer(Container):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._border_subtitle_timer = None
-        self.border_title = "[3] Details"
+        self.border_title = self._get_border_title("📋 [3] Details")
         self._deployment_view = None
         self._service_view = None
         # NOTE: faster reactivity than has_focus
         self._show_border_subtitle = False
         self._service_subtitle = "r: Restart Service"
         self._logs_subtitle = "4: Instances"
+
+    def _get_border_title(self, title: str) -> str:
+        """Add workspace name to border title."""
+        try:
+            workspace_name = config.active_workspace_name
+            return f"{title} │ Workspace: {workspace_name}"
+        except ValueError:
+            # No active workspace set
+            return title
 
     def compose(self) -> ComposeResult:
         """Create the content area."""
@@ -50,11 +60,9 @@ class ContentContainer(Container):
     def on_mount(self) -> None:
         """Style the container when mounted."""
         self._update_border_subtitle()
-        self.styles.width = theme.right_width
+        self.styles.width = Layout.right_width
         self.styles.height = "100%"
-        self.styles.border = theme.get_border()
-        self.styles.background = theme.background
-        self.styles.padding = theme.padding
+        self.styles.padding = Layout.padding
         self.can_focus = True
 
         self._start_border_subtitle_timer()
@@ -65,14 +73,11 @@ class ContentContainer(Container):
 
     def on_focus(self) -> None:
         """Handle focus event."""
-        self.styles.border = theme.get_border(focused=True)
         self._show_border_subtitle = True
-
         self._update_border_subtitle()
 
     def on_blur(self) -> None:
         """Handle blur event."""
-        self.styles.border = theme.get_border()
         self._show_border_subtitle = False
         self._update_border_subtitle()
 
@@ -128,7 +133,9 @@ class ContentContainer(Container):
         if not self.deployment:
             return
 
-        self.border_title = f"[3] Deployment Details - {self.deployment.name}"
+        self.border_title = self._get_border_title(
+            f"📋 [3] Deployment Details - {self.deployment.name}"
+        )
         self._update_border_subtitle()
 
         if self._service_view:
@@ -155,7 +162,9 @@ class ContentContainer(Container):
         if not self.service or not self.deployment:
             return
 
-        self.border_title = f"[3] Service Details - {self.service.name}"
+        self.border_title = self._get_border_title(
+            f"📋 [3] Service Details - {self.service.name}"
+        )
         self._update_border_subtitle()
 
         if self._service_view:
@@ -177,7 +186,7 @@ class ContentContainer(Container):
             await self._service_view.cleanup()
             self._service_view = None
 
-        self.border_title = "[3] Details"
+        self.border_title = self._get_border_title("📋 [3] Details")
         self._update_border_subtitle()
 
         scroll = self.query_one(VerticalScroll)

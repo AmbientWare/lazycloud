@@ -35,6 +35,7 @@ class DeploymentMonitorConfig(MonitorConfigBase):
     """Configuration for a deployment monitor."""
 
     deployment_id: str
+    deployment_name: str
     namespace: str
     helm_values: HelmValues
 
@@ -52,6 +53,7 @@ class ServiceMonitorConfig(MonitorConfigBase):
     """Configuration for a service monitor."""
 
     deployment_id: str
+    deployment_name: str
     service_name: str
     namespace: str
     helm_values: HelmValues

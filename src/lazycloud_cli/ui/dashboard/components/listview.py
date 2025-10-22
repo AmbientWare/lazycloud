@@ -6,7 +6,7 @@ from textual.widgets import Label as TextualLabel
 from textual.widgets import ListItem as TextualListItem
 from textual.widgets import ListView as TextualListView
 
-from lazycloud_cli.ui.dashboard.theme import theme
+from lazycloud_cli.ui.colors import Colors
 
 
 @dataclass
@@ -31,10 +31,23 @@ class ListItem(TextualListItem):
         """Create the list item layout."""
         # Status dot if status provided
         if self.item_data.status:
-            status_symbol = "○"
+            status_symbol = "●"  # Filled circle for better visibility
             dot = TextualLabel(status_symbol)
             dot.styles.width = 2
-            dot.styles.color = theme.get_status_color(self.item_data.status)
+            # Color the dot based on status
+            status_lower = self.item_data.status.lower()
+            if (
+                "running" in status_lower
+                or "ready" in status_lower
+                or "active" in status_lower
+            ):
+                dot.styles.color = Colors.Hex.success
+            elif "pending" in status_lower or "waiting" in status_lower:
+                dot.styles.color = Colors.Hex.warning
+            elif "error" in status_lower or "failed" in status_lower:
+                dot.styles.color = Colors.Hex.error
+            else:
+                dot.styles.color = Colors.Hex.accent
             yield dot
 
         # Item name with ellipsis truncation
@@ -42,14 +55,15 @@ class ListItem(TextualListItem):
         name.styles.width = "1fr"
         name.styles.overflow = "ellipsis"
         name.styles.text_overflow = "ellipsis"
+        name.styles.color = Colors.Hex.text  # Primary text color
         yield name
 
-        # Extra text on the right (e.g., replicas count)
+        # Extra text on the right (e.g., replicas count) - dimmed
         if self.item_data.extra_text:
             extra = TextualLabel(self.item_data.extra_text)
             extra.styles.width = 8
             extra.styles.text_align = "right"
-            extra.styles.color = theme.text_dim
+            extra.styles.color = Colors.Hex.text_muted  # Dimmed text
             yield extra
 
     def on_mount(self) -> None:
@@ -80,7 +94,7 @@ class ListView(TextualListView):
 
     def on_mount(self) -> None:
         """Apply consistent styling and render items on mount."""
-        self.styles.background = theme.background
+        # Let Textual's theme handle background for transparency support
         self.styles.border = None
         self.styles.padding = 0
         self.styles.scrollbar_size = 1

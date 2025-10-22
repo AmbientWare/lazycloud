@@ -2,8 +2,8 @@ from rich.console import Console
 from rich.prompt import Confirm, Prompt
 from rich.text import Text
 
+from lazycloud_cli.ui.colors import Colors
 from lazycloud_cli.ui.components.card import Card
-from lazycloud_cli.ui.theme import theme
 
 
 class ConfirmationDialog:
@@ -32,8 +32,8 @@ class ConfirmationDialog:
         # Add details as bullet points
         if self.details:
             for loc, detail in enumerate(self.details):
-                content.append("• ", style=theme.text_secondary)
-                content.append(f"{detail}", style=theme.text_primary)
+                content.append("• ", style=Colors.Ansi.text_muted)
+                content.append(f"{detail}", style=Colors.Ansi.text)
                 if not loc == len(self.details) - 1:
                     content.append("\n")
 
@@ -41,16 +41,16 @@ class ConfirmationDialog:
         if self.warning_message:
             if self.details:
                 content.append("\n")
-            style = theme.warning if not self.danger else theme.error
+            style = Colors.Ansi.warning if not self.danger else Colors.Ansi.error
             content.append(self.warning_message, style=style)
 
         # Determine border style
         border_style = (
-            theme.border_error
+            Colors.Ansi.error
             if self.danger
-            else theme.border_warning
+            else Colors.Ansi.warning
             if self.warning_message
-            else theme.border_primary
+            else Colors.Ansi.primary
         )
 
         return Card(
@@ -162,20 +162,20 @@ class StringValidationConfirmationDialog:
 
         # Add consequences as bullet points
         for loc, consequence in enumerate(self.consequences):
-            content.append("• ", style=theme.text_secondary)
-            content.append(f"{consequence}", style=theme.text_primary)
+            content.append("• ", style=Colors.Ansi.text_muted)
+            content.append(f"{consequence}", style=Colors.Ansi.text)
             if not loc == len(self.consequences) - 1:
                 content.append("\n")
 
         # Add warning message
         if self.warning:
             content.append("\n")
-            content.append(self.warning, style=theme.error)
+            content.append(self.warning, style=Colors.Ansi.error)
 
         return Card(
             content=content,
             title=self.title,
-            border_style=theme.border_error,
+            border_style=Colors.Ansi.error,
         )
 
     def show(self, console: Console) -> bool:
@@ -207,7 +207,7 @@ class StringValidationConfirmationDialog:
             return True
         else:
             console.print(
-                f"[{theme.error}]✗ Name doesn't match. Deletion cancelled.[/{theme.error}]"
+                f"[{Colors.Ansi.error}]✗ Name doesn't match. Deletion cancelled.[/{Colors.Ansi.error}]"
             )
             console.print()
             return False

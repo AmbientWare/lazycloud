@@ -57,7 +57,7 @@ class LogStreamer:
 
             if process.returncode != 0:
                 # Pod doesn't exist
-                return False, "Pod not found"
+                return False, "Instance not found"
 
             phase = stdout.decode("utf-8").strip()
 
@@ -65,9 +65,9 @@ class LogStreamer:
             if phase in ["Running", "Succeeded", "Failed"]:
                 return True, None
             elif phase == "Pending":
-                return True, "Pod is still starting up"
+                return True, "Instance is still starting up"
             else:
-                return True, f"Pod is in {phase} state"
+                return True, f"Instance is in {phase} state"
 
         except Exception as e:
             logger.error(f"Error checking pod status: {e}")
@@ -89,12 +89,12 @@ class LogStreamer:
                 exists, reason = await self._check_pod_exists()
 
                 if not exists:
-                    yield f"INFO: Waiting for pod to be created... (attempt {attempt + 1}/{max_retries})"
+                    yield f"INFO: Waiting for instance to be created... (attempt {attempt + 1}/{max_retries})"
                     if attempt < max_retries - 1:
                         await asyncio.sleep(retry_delay)
                         continue
                     else:
-                        yield "ERROR: Pod not found after waiting. It may have been deleted or failed to start."
+                        yield "ERROR: Instance not found after waiting. It may have been deleted or failed to start."
                         self._running = False
                         return
                 elif reason:

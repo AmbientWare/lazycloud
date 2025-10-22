@@ -7,6 +7,7 @@ from rich.prompt import Prompt
 from rich.table import Table
 from rich.text import Text
 
+from lazycloud_cli.ui.colors import Colors
 from lazycloud_cli.ui.components import (
     Card,
     CardGroup,
@@ -18,7 +19,6 @@ from lazycloud_cli.ui.components import (
     SuccessCard,
     WarningCard,
 )
-from lazycloud_cli.ui.theme import theme
 from lazycloud_cli.ui.views.helpers.diff_renderer import (
     create_diff_cards,
     create_env_var_card,
@@ -38,7 +38,7 @@ class DeployView:
     def show_configuration(self, deployment_name: str, compose_file: str) -> None:
         """Show deployment configuration."""
         table = Table(show_header=False, box=None)
-        table.add_column("Property", style=theme.primary)
+        table.add_column("Property", style=Colors.Ansi.primary)
         table.add_column("Value")
 
         table.add_row("Deployment", deployment_name)
@@ -47,7 +47,7 @@ class DeployView:
         card = Card(
             content=table,
             title="🛠️  Deployment Configuration",
-            border_style=theme.border_primary,
+            border_style=Colors.Ansi.primary,
         )
         self.console.print(card)
 
@@ -57,7 +57,7 @@ class DeployView:
             return
 
         table = Table(show_header=True, box=None)
-        table.add_column("Service", style=theme.primary)
+        table.add_column("Service", style=Colors.Ansi.primary)
         table.add_column("Image")
         table.add_column("Context")
 
@@ -72,7 +72,7 @@ class DeployView:
             content=table,
             title="🏗️  Services to Build",
             subtitle=f"{len(services_to_build)} services",
-            border_style=theme.border_warning,
+            border_style=Colors.Ansi.warning,
         )
         self.console.print(card)
 
@@ -86,12 +86,12 @@ class DeployView:
 
             error_parts = []
             for error in errors:
-                error_parts.append(Text(f"• {error}", style=theme.error))
+                error_parts.append(Text(f"• {error}", style=Colors.Ansi.error))
 
             card = Card(
                 content=Group(*error_parts),
                 title="❌ Validation Errors",
-                border_style=theme.border_error,
+                border_style=Colors.Ansi.error,
             )
             self.console.print(card)
 
@@ -101,12 +101,12 @@ class DeployView:
 
             warning_parts = []
             for warning in warnings:
-                warning_parts.append(Text(f"• {warning}", style=theme.warning))
+                warning_parts.append(Text(f"• {warning}", style=Colors.Ansi.warning))
 
             card = Card(
                 content=Group(*warning_parts),
                 title="⚠️ Validation Warnings",
-                border_style=theme.border_warning,
+                border_style=Colors.Ansi.warning,
             )
             self.console.print(card)
 
@@ -138,7 +138,7 @@ class DeployView:
         status_badge = DeploymentStatusBadge(status)
 
         table = Table(show_header=False, box=None)
-        table.add_column("Property", style=theme.primary)
+        table.add_column("Property", style=Colors.Ansi.primary)
         table.add_column("Value")
 
         table.add_row("Deployment", deployment_name)
@@ -150,17 +150,17 @@ class DeployView:
             table.add_row("Duration", f"{minutes}m {seconds}s")
 
         if message:
-            table.add_row("Message", Text(message, style=theme.text_secondary))
+            table.add_row("Message", Text(message, style=Colors.Ansi.text_muted))
 
         # Create card with table content
         if status.lower() == "deployed":
-            border_style = theme.border_success
+            border_style = Colors.Ansi.success
             title = "✅  Deployment Successful"
         elif status.lower() == "failed":
-            border_style = theme.border_error
+            border_style = Colors.Ansi.error
             title = "❌  Deployment Failed"
         else:
-            border_style = theme.border_warning
+            border_style = Colors.Ansi.warning
             title = "⚠️  Deployment Status"
 
         card = Card(
@@ -229,10 +229,10 @@ class DeployView:
         """Show no changes detected message."""
         dialog = Card(
             content=Text(
-                "We can still build and deploy anyway", style=theme.text_secondary
+                "We can still build and deploy anyway", style=Colors.Ansi.text_muted
             ),
             title="No Changes Detected",
-            border_style=theme.border_warning,
+            border_style=Colors.Ansi.warning,
         )
         self.console.print(dialog)
 
@@ -295,11 +295,11 @@ class DeployView:
             # Collect value for each env var
             for key, default_value in env_vars.added.items():
                 self.console.print(
-                    Text(f"Variable: {key}", style=f"bold {theme.primary}")
+                    Text(f"Variable: {key}", style=f"bold {Colors.Ansi.primary}")
                 )
 
                 value = Prompt.ask(
-                    Text("Value", style=theme.text_secondary),
+                    Text("Value", style=Colors.Ansi.text_muted),
                     default=default_value if default_value else None,
                     show_default=True,
                 )
@@ -334,14 +334,14 @@ class BuildProgress:
         """Render the current build status."""
         table = Table(
             show_header=True,
-            header_style=f"bold {theme.primary}",
+            header_style=f"bold {Colors.Ansi.primary}",
             box=None,
             expand=True,
         )
-        table.add_column("Service", style=theme.primary, width=20)
-        table.add_column("Image", style=theme.text_secondary, overflow="ellipsis")
-        table.add_column("Status", style=theme.text_primary, width=15)
-        table.add_column("Details", style=theme.text_secondary)
+        table.add_column("Service", style=Colors.Ansi.primary, width=20)
+        table.add_column("Image", style=Colors.Ansi.text_secondary, overflow="ellipsis")
+        table.add_column("Status", style=Colors.Ansi.text_primary, width=15)
+        table.add_column("Details", style=Colors.Ansi.text_secondary)
 
         for i, service in enumerate(self.services):
             status = self.statuses[i]
@@ -349,14 +349,14 @@ class BuildProgress:
 
             # Status display with appropriate style
             status_styles = {
-                TaskStatus.PENDING: theme.text_secondary,
-                TaskStatus.COMPLETED: theme.success,
-                TaskStatus.ERROR: theme.error,
+                TaskStatus.PENDING: Colors.Ansi.text_secondary,
+                TaskStatus.COMPLETED: Colors.Ansi.success,
+                TaskStatus.ERROR: Colors.Ansi.error,
             }
 
             status_display = Text(
                 status.replace("_", " ").title(),
-                style=status_styles.get(status, theme.text_secondary),
+                style=status_styles.get(status, Colors.Ansi.text_secondary),
             )
 
             table.add_row(
@@ -367,18 +367,18 @@ class BuildProgress:
         duration = int((datetime.now() - self.start_time).total_seconds())
         if duration > 0:
             table.add_row(
-                "", "", "", Text(f"Time: {duration}s", style=theme.text_secondary)
+                "", "", "", Text(f"Time: {duration}s", style=Colors.Ansi.text_secondary)
             )
 
         # Determine border style
         if any(s == TaskStatus.ERROR for s in self.statuses):
-            border_style = theme.border_error
+            border_style = Colors.Ansi.error
         elif all(
             s in [TaskStatus.COMPLETED, TaskStatus.PENDING] for s in self.statuses
         ):
-            border_style = theme.border_success
+            border_style = Colors.Ansi.success
         else:
-            border_style = theme.border_info
+            border_style = Colors.Ansi.info
 
         return Card(
             content=table,
