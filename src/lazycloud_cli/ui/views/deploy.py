@@ -1,5 +1,3 @@
-"""Deploy command view components - simplified version."""
-
 from datetime import datetime
 
 from rich.console import Console
@@ -152,16 +150,20 @@ class DeployView:
         if message:
             table.add_row("Message", Text(message, style=Colors.Ansi.text_muted))
 
-        # Create card with table content
-        if status.lower() == "deployed":
+        # Create card with table content based on status
+        status_lower = status.lower()
+        if status_lower in ["deployed", "completed", "success"]:
             border_style = Colors.Ansi.success
-            title = "✅  Deployment Successful"
-        elif status.lower() == "failed":
+            title = "✅ Deployment Successful"
+        elif status_lower in ["failed", "error"]:
             border_style = Colors.Ansi.error
-            title = "❌  Deployment Failed"
+            title = "🛑 Deployment Failed"
+        elif status_lower in ["deploying", "pending", "in_progress", "starting"]:
+            border_style = Colors.Ansi.info
+            title = "🚀 Deployment In Progress"
         else:
             border_style = Colors.Ansi.warning
-            title = "⚠️  Deployment Status"
+            title = "⚠️ Deployment Status"
 
         card = Card(
             content=table,
@@ -373,9 +375,7 @@ class BuildProgress:
         # Determine border style
         if any(s == TaskStatus.ERROR for s in self.statuses):
             border_style = Colors.Ansi.error
-        elif all(
-            s in [TaskStatus.COMPLETED, TaskStatus.PENDING] for s in self.statuses
-        ):
+        elif all(s == TaskStatus.COMPLETED for s in self.statuses):
             border_style = Colors.Ansi.success
         else:
             border_style = Colors.Ansi.info

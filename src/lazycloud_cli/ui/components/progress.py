@@ -167,7 +167,8 @@ class DeploymentProgress:
 
         return Panel(
             table,
-            title=f"[bold]Deploying: {self.deployment_name}[/bold]",
+            title=f"[bold]🚀 Deploying: {self.deployment_name}[/bold]",
+            title_align="left",
             border_style="blue",
             box=ROUNDED,
         )
