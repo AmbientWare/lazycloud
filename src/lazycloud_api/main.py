@@ -27,6 +27,10 @@ from lazycloud_api.config import app_config
 from lazycloud_api.database.crud import create_tables, update_admin_api_keys
 from lazycloud_api.log_config import setup_logger
 from lazycloud_api.prefect_app import serve_prefect_tasks
+from lazycloud_api.services.monitoring import (
+    initialize_subscription_manager,
+    shutdown_subscription_manager,
+)
 
 # Setup logging
 setup_logger()
@@ -38,12 +42,21 @@ async def lifespan(app: FastAPI):
     logger.info("Starting up application")
     await create_tables()
     await update_admin_api_keys()
+
+    # Initialize subscription manager for shared monitoring (sse streams)
+    initialize_subscription_manager()
+    logger.info("Subscription manager initialized")
+
     # start the prefect tasks in a separate process
     mp.get_context("spawn")
     mp.Process(target=serve_prefect_tasks).start()
     logger.info("Application startup complete")
     yield
     logger.info("Shutting down application")
+
+    # Shutdown subscription manager
+    await shutdown_subscription_manager()
+    logger.info("Subscription manager shutdown complete")
 
 
 # create a fastapi app
