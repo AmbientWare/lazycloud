@@ -3,7 +3,6 @@ from textual.containers import Container, Vertical
 from textual.widgets import Static
 
 from lazycloud_cli.ui.dashboard.components.modals import BaseModalScreen
-from lazycloud_cli.ui.dashboard.theme import Borders
 
 
 class ContentModal(BaseModalScreen):
@@ -16,7 +15,7 @@ class ContentModal(BaseModalScreen):
         icon: str = "📄",
         modal_width: str = "90%",
         modal_height: str = "85%",
-        border_style: tuple | None = None,
+        border_class: str = "modal-default",
     ):
         """Initialize content modal"""
         super().__init__()
@@ -25,7 +24,7 @@ class ContentModal(BaseModalScreen):
         self.icon = icon
         self.modal_width = modal_width
         self.modal_height = modal_height
-        self.border_style = border_style or Borders.default
+        self.border_class = border_class
 
     def compose(self) -> ComposeResult:
         """Create the modal layout."""
@@ -46,31 +45,11 @@ class ContentModal(BaseModalScreen):
         yield Static("Override compose_body() to add content")
 
     def on_mount(self) -> None:
-        """Apply theme-based styling."""
+        """Apply sizing and add CSS class for border styling."""
         super().on_mount()
 
-        # Style the wrapper
-        wrapper = self.query_one("#modal-wrapper")
-        wrapper.styles.align = ("center", "middle")
-        wrapper.styles.width = "100%"
-        wrapper.styles.height = "100%"
-        wrapper.styles.background = "transparent"
-
-        # Style the container with cleaner border
         container = self.query_one("#content-modal-container")
         container.styles.width = self.modal_width
         container.styles.height = self.modal_height
-        container.styles.padding = 2
-        container.styles.border = self.border_style
-        container.styles.background = "transparent"
 
-        # Style header if it exists
-        try:
-            header = self.query_one("#modal-header")
-            header.styles.dock = "top"
-            header.styles.height = 1
-            header.styles.margin = (0, 0, 1, 0)
-            header.styles.text_align = "center"
-        except Exception:
-            # No header to style
-            pass
+        container.add_class(self.border_class)

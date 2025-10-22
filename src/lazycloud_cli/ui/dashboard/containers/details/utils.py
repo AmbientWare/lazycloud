@@ -1,14 +1,25 @@
-from lazycloud_cli.ui.colors import Colors
 from shared.models.statuses import KubernetesPhase
 
 
-def get_status_color(status: KubernetesPhase) -> str:
-    """Get color for status display using consistent Nord colors."""
+def get_status_class(status: KubernetesPhase) -> str:
+    """Get CSS class for status display in widgets."""
     if status == KubernetesPhase.RUNNING:
-        return Colors.Hex.success  # Nord green
+        return "status-running"
     elif status in (KubernetesPhase.PENDING, KubernetesPhase.PARTIALLY_RUNNING):
-        return Colors.Hex.warning  # Nord yellow
+        return "status-pending"
     elif status == KubernetesPhase.STOPPED:
-        return Colors.Hex.text_dim  # Dimmed grey
+        return "status-stopped"
     else:
-        return Colors.Hex.error  # Nord red
+        return "status-error"
+
+
+def get_status_color(status: KubernetesPhase) -> str:
+    """Get Rich color name for status in markup text"""
+    if status == KubernetesPhase.RUNNING:
+        return "green"
+    elif status in (KubernetesPhase.PENDING, KubernetesPhase.PARTIALLY_RUNNING):
+        return "yellow"
+    elif status == KubernetesPhase.STOPPED:
+        return "bright_black"  # Dimmed/muted
+    else:
+        return "red"
