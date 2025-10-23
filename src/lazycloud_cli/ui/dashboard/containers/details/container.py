@@ -42,7 +42,7 @@ class ContentContainer(Container):
         self._service_view = None
         self._secret_view = None
         self._service_subtitle = "r: Restart Service"
-        self._logs_subtitle = "4: Instances"
+        self._logs_subtitle = "5: Instances"
         self._secrets_table = None
 
     def _get_border_title(self, title: str) -> str:
