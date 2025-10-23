@@ -1,4 +1,3 @@
-from datetime import datetime
 from enum import StrEnum
 
 from textual.app import ComposeResult
@@ -6,10 +5,14 @@ from textual.containers import VerticalScroll
 from textual.reactive import reactive
 from textual.widgets import Static
 
+from lazycloud_cli.api import api
 from lazycloud_cli.config import config
 from lazycloud_cli.ui.dashboard.components import Container, SectionContainer
 from lazycloud_cli.ui.dashboard.containers.details.deployment_details import (
     DeploymentDetailsContainer,
+)
+from lazycloud_cli.ui.dashboard.containers.details.secret_details.container import (
+    SecretsTable,
 )
 from lazycloud_cli.ui.dashboard.containers.details.service_details import (
     ServiceDetailsContainer,
@@ -22,27 +25,25 @@ from shared.responses.deployments import DeploymentResponse
 class DisplayMode(StrEnum):
     DEPLOYMENT = "deployment"
     SERVICE = "service"
+    SECRET = "secret"
 
 
 class ContentContainer(Container):
-    """Main content container for displaying deployment details."""
-
-    # Reactive attributes
     deployment: reactive[DeploymentResponse | None] = reactive(None)
     deployment_status: reactive[DeploymentStatus | None] = reactive(None)
     service: reactive[ServiceStatus | None] = reactive(None)
+    secret_key: reactive[str | None] = reactive(None)
     display_mode: reactive[str] = reactive(DisplayMode.DEPLOYMENT)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self._border_subtitle_timer = None
-        self.border_title = self._get_border_title("📋 [3] Details")
+        self.border_title = self._get_border_title("📋 [4] Details")
         self._deployment_view = None
         self._service_view = None
-        # NOTE: faster reactivity than has_focus
-        self._show_border_subtitle = False
+        self._secret_view = None
         self._service_subtitle = "r: Restart Service"
         self._logs_subtitle = "4: Instances"
+        self._secrets_table = None
 
     def _get_border_title(self, title: str) -> str:
         """Add workspace name to border title."""
@@ -65,42 +66,19 @@ class ContentContainer(Container):
         self.styles.padding = Layout.padding
         self.can_focus = True
 
-        self._start_border_subtitle_timer()
         scroll = self.query_one(VerticalScroll)
         initial_section = SectionContainer("Overview")
         scroll.mount(initial_section)
         initial_section.mount(Static("Select a deployment to view details"))
 
-    def on_focus(self) -> None:
-        """Handle focus event."""
-        self._show_border_subtitle = True
-        self._update_border_subtitle()
-
-    def on_blur(self) -> None:
-        """Handle blur event."""
-        self._show_border_subtitle = False
-        self._update_border_subtitle()
-
     async def on_unmount(self) -> None:
         """Clean up when container unmounts."""
-        if self._border_subtitle_timer:
-            self._border_subtitle_timer.stop()
-
         if self._service_view:
             await self._service_view.cleanup()
             self._service_view = None
 
-    def _start_border_subtitle_timer(self) -> None:
-        if not self._border_subtitle_timer:
-            self._update_border_subtitle()
-            self._border_subtitle_timer = self.set_interval(
-                1, self._update_border_subtitle
-            )
-
     def _update_border_subtitle(self) -> None:
-        current_time = datetime.now().strftime("%H:%M:%S")
-        time_subtitle = f"🕐 {current_time}"
-        navigation_subtitle = "1: Deployments • 2: Services • 3: Details"
+        navigation_subtitle = "1: Deployments • 2: Services • 3: Secrets • 4: Details"
 
         parts = [navigation_subtitle]
 
@@ -108,9 +86,7 @@ class ContentContainer(Container):
             parts.insert(0, self._service_subtitle)
             parts.append(self._logs_subtitle)
 
-        parts.append(time_subtitle)
         self.border_subtitle = " • ".join(parts)
-        self.refresh()
 
     async def watch_deployment(self, _old_value, new_value) -> None:
         """Auto-refresh when deployment changes"""
@@ -122,19 +98,30 @@ class ContentContainer(Container):
         if new_value and self.display_mode == DisplayMode.SERVICE:
             await self.refresh_service_content()
 
-    async def watch_display_mode(self, _old_value, new_value) -> None:
+    async def watch_secret_key(self, _old_value, new_value) -> None:
+        """Auto-refresh when secret key changes"""
+        if new_value and self.display_mode == DisplayMode.SECRET:
+            await self.refresh_secret_content()
+
+    async def watch_display_mode(self, old_value, new_value) -> None:
         """Switch content based on display mode"""
+        # Only switch if mode actually changed
+        if old_value == new_value:
+            return
+
         if new_value == DisplayMode.DEPLOYMENT and self.deployment:
             await self.refresh_deployment_content()
         elif new_value == DisplayMode.SERVICE and self.service:
             await self.refresh_service_content()
+        elif new_value == DisplayMode.SECRET and self.deployment:
+            await self.refresh_secret_content()
 
     async def refresh_deployment_content(self) -> None:
         if not self.deployment:
             return
 
         self.border_title = self._get_border_title(
-            f"📋 [3] Deployment Details - {self.deployment.name}"
+            f"📋 [4] Deployment Details - {self.deployment.name}"
         )
         self._update_border_subtitle()
 
@@ -163,7 +150,7 @@ class ContentContainer(Container):
             return
 
         self.border_title = self._get_border_title(
-            f"📋 [3] Service Details - {self.service.name}"
+            f"📋 [4] Service Details - {self.service.name}"
         )
         self._update_border_subtitle()
 
@@ -181,12 +168,57 @@ class ContentContainer(Container):
         self._service_view.service_name = self.service.name
         self._service_view.service_status = self.service
 
+    async def refresh_secret_content(self) -> None:
+        """Refresh the secrets view - shows all secrets for the deployment."""
+        if not self.deployment:
+            scroll = self.query_one(VerticalScroll)
+            scroll.remove_children()
+            error_widget = Static("[yellow]Please select a deployment first[/yellow]")
+            scroll.mount(error_widget)
+            return
+
+        self.border_title = self._get_border_title("📋 [4] Secrets")
+        self._update_border_subtitle()
+
+        if self._service_view:
+            await self._service_view.cleanup()
+            self._service_view = None
+
+        scroll = self.query_one(VerticalScroll)
+        scroll.remove_children()
+
+        try:
+            secrets = api.secrets.get_secrets(self.deployment.id)
+
+            if secrets and secrets.secrets:
+                # Create and mount the secrets table
+                self._secrets_table = SecretsTable(
+                    deployment_id=self.deployment.id,
+                    show_header=True,
+                    cursor_type="row",
+                    zebra_stripes=True,
+                )
+                scroll.mount(self._secrets_table)
+                self._secrets_table.update_secrets(secrets.secrets)
+                self._secrets_table.focus()
+            else:
+                section = SectionContainer("No Secrets")
+                scroll.mount(section)
+                section.mount(
+                    Static("[dim]No secrets configured for this deployment[/dim]")
+                )
+
+        except Exception as e:
+            error_section = SectionContainer("Error")
+            scroll.mount(error_section)
+            error_section.mount(Static(f"[red]Failed to load secrets: {e}[/red]"))
+
     async def clear_content(self) -> None:
         if self._service_view:
             await self._service_view.cleanup()
             self._service_view = None
 
-        self.border_title = self._get_border_title("📋 [3] Details")
+        self.border_title = self._get_border_title("📋 [4] Details")
         self._update_border_subtitle()
 
         scroll = self.query_one(VerticalScroll)

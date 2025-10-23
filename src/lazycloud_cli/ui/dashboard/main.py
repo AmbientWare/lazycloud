@@ -5,6 +5,7 @@ from lazycloud_cli.ui.dashboard.containers import (
     ContentContainer,
     DeploymentsContainer,
     DisplayMode,
+    SecretsContainer,
     ServicesContainer,
 )
 from lazycloud_cli.ui.dashboard.containers.details.service_details import (
@@ -21,11 +22,13 @@ class DashboardApp(App):
 
     BINDINGS = [
         ("ctrl+c", "quit", "Quit"),
+        ("escape", "quit", "Quit"),
         ("r", "restart_service", "Restart Service"),
         ("1", "switch_to_deployments", "Deployments"),
         ("2", "switch_to_services", "Services"),
-        ("3", "switch_to_content", "Content"),
-        ("4", "focus_instances", "Focus Instances"),
+        ("3", "switch_to_secrets", "Secrets"),
+        ("4", "switch_to_content", "Content"),
+        ("5", "focus_instances", "Focus Instances"),
     ]
 
     def on_mount(self) -> None:
@@ -53,6 +56,7 @@ class DashboardApp(App):
             with left_column:
                 yield DeploymentsContainer(id="deployments-container")
                 yield ServicesContainer(id="services-container")
+                yield SecretsContainer(id="secrets-container")
 
             # Main content container
             yield ContentContainer(id="main-container")
@@ -96,6 +100,15 @@ class DashboardApp(App):
         """Switch to content section."""
         content_container = self.query_one(ContentContainer)
         self.set_focus(content_container)
+
+    def action_switch_to_secrets(self) -> None:
+        """Switch to secrets section."""
+        secrets_container = self.query_one(SecretsContainer)
+        self.set_focus(secrets_container)
+
+        # Update the main content container display mode
+        main_content_container = self.query_one(ContentContainer)
+        main_content_container.display_mode = DisplayMode.SECRET
 
     def action_focus_instances(self) -> None:
         """Focus the instances table if it exists."""

@@ -13,7 +13,6 @@ class ConfirmModal(BaseModalScreen):
     BINDINGS = [
         ("y", "confirm", "Yes"),
         ("n", "cancel", "No"),
-        ("q", "cancel", "Cancel"),
         ("escape", "cancel", "Cancel"),
     ]
 
@@ -57,7 +56,7 @@ class ConfirmModal(BaseModalScreen):
         """Set border subtitle."""
         super().on_mount()
         modal = self.query_one("#confirm-modal")
-        modal.border_subtitle = "y: Confirm • n/q: Cancel"
+        modal.border_subtitle = "y: Confirm • n/Esc: Cancel"
 
     def action_confirm(self) -> None:
         """Handle confirmation action."""

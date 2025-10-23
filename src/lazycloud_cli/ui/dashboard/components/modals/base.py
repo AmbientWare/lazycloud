@@ -21,7 +21,6 @@ class BaseModalScreen(ModalScreen):
 
     BINDINGS = [
         ("escape", "dismiss", "Close"),
-        ("q", "dismiss", "Close"),
     ]
 
     def on_mount(self) -> None:

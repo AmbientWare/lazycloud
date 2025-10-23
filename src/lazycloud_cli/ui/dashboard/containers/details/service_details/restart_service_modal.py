@@ -1,5 +1,5 @@
 from lazycloud_cli.api import api
-from lazycloud_cli.ui.dashboard.components import ConfirmModal, SuccessModal
+from lazycloud_cli.ui.dashboard.components import ConfirmModal, ErrorModal
 
 
 class RestartServiceModal(ConfirmModal):
@@ -30,27 +30,20 @@ class RestartServiceModal(ConfirmModal):
 
             if response and response.task_id:
                 # TODO: handle task monitoring
-                self.dismiss(True)
-                success_modal = RestartSuccessModal(self.service_name)
-                self.app.push_screen(success_modal)
                 return True
 
+            # Show error modal if response is falsy or no task_id
+            error_modal = ErrorModal(
+                title="Failed to Restart Service",
+                message=f"Could not restart the service.\n\n[dim]Service: {self.service_name}[/dim]\n\n[dim]Please try again.[/dim]",
+            )
+            self.app.push_screen(error_modal)
             return False
 
-        except Exception:
+        except Exception as e:
+            error_modal = ErrorModal(
+                title="Error Restarting Service",
+                message=f"An error occurred while restarting the service:\n\n{str(e)}\n\n[dim]Service: {self.service_name}[/dim]\n\n[dim]Please try again.[/dim]",
+            )
+            self.app.push_screen(error_modal)
             return False
-
-
-class RestartSuccessModal(SuccessModal):
-    """Modal showing restart success."""
-
-    def __init__(self, service_name: str):
-        super().__init__(
-            title="Restart Initiated",
-            message=(
-                f"Service restart has been triggered successfully.\n\n"
-                f"[dim]Service: {service_name}[/dim]\n\n"
-                f"[dim]The service will restart shortly.[/dim]"
-            ),
-            icon="✓",
-        )

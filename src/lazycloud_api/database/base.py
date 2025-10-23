@@ -121,8 +121,9 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
     async def aupdate(self, model: basePydanticType) -> basePydanticType | None:
         """Update an existing model instance"""
         async with self._session_manager.get_session() as session:
-            # Exclude id, created_at from updates as they shouldn't change
-            update_data = model.model_dump(exclude={"id", "created_at"})
+            # exclude some fields if present since they are managed by the database
+            update_data = model.model_dump(exclude={"id", "created_at", "updated_at"})
+            update_data["updated_at"] = datetime.now(timezone.utc)
 
             stmt = (
                 update(self.db_model_class)
