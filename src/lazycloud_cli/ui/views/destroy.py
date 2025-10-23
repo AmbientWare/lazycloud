@@ -191,7 +191,7 @@ class DestroyView:
         """Show cancellation message."""
         card = Card(
             content=Text(
-                "🛑 Destruction cancelled.\n\nYour deployment is safe!",
+                "Destruction cancelled.\n\nYour deployment is safe!",
                 style=Colors.Ansi.warning,
             ),
             title="🛑 Cancelled",

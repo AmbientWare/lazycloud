@@ -83,7 +83,7 @@ async def get_service_status(
 
 
 @services_router.post(
-    "/{service_name}/restart",
+    "/restart",
     response_model=ServiceTaskStatusResponse,
 )
 async def restart_all_services(
@@ -100,7 +100,6 @@ async def restart_all_services(
             status=TaskStatus.PENDING,
             message="Restart all services task submitted",
             deployment_id=str(deployment.id),
-            service_name=None,
         )
 
     except Exception as e:
@@ -130,7 +129,6 @@ async def restart_service(
             status=TaskStatus.PENDING,
             message=f"Restart service {service_name} task submitted",
             deployment_id=deployment.id,
-            service_name=service_name,
         )
 
     except Exception as e:

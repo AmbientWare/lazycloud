@@ -7,6 +7,11 @@ from lazycloud_cli.ui.dashboard.components import ContentModal
 
 
 class LogViewerModal(ContentModal):
+    BINDINGS = [
+        ("j,down", "scroll_down", "Scroll down"),
+        ("k,up", "scroll_up", "Scroll up"),
+    ]
+
     def __init__(self, deployment_id: str, service_name: str, pod_name: str):
         display_name = pod_name if len(pod_name) <= 60 else pod_name[:57] + "..."
 
@@ -41,7 +46,7 @@ class LogViewerModal(ContentModal):
         # Set title and subtitle on the modal container
         container = self.query_one("#content-modal-container")
         container.border_title = f"📄 Instance Logs: {self.display_name}"
-        container.border_subtitle = "Esc: Close"
+        container.border_subtitle = "↑↓/jk/scroll Navigate • Esc: Close"
 
         self._logs_widget.styles.height = "1fr"
         self._logs_widget.write("[dim]Connecting to log stream...[/dim]")
@@ -64,6 +69,16 @@ class LogViewerModal(ContentModal):
             self._stream_task.cancel()
             self._stream_task.wait()
         self._stream_task = None
+
+    def action_scroll_down(self) -> None:
+        """Scroll the logs down."""
+        if self._logs_widget:
+            self._logs_widget.scroll_down()
+
+    def action_scroll_up(self) -> None:
+        """Scroll the logs up."""
+        if self._logs_widget:
+            self._logs_widget.scroll_up()
 
     async def _connect_logs_stream(self) -> None:
         """Connect to the logs SSE stream."""

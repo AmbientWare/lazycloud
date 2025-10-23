@@ -23,4 +23,3 @@ class InstanceTaskStatusResponse(TaskStatusResponse):
 
 class ServiceTaskStatusResponse(TaskStatusResponse):
     deployment_id: str
-    service_name: str
