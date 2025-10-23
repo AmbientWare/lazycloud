@@ -20,6 +20,8 @@ class SecretsTable(DataTable):
         ("e", "edit_secret", "Edit Secret"),
         ("d", "delete_secret", "Delete Secret"),
         ("s", "show_secret", "Show Secret"),
+        ("j,down", "cursor_down", "Move down"),
+        ("k,up", "cursor_up", "Move up"),
     ]
 
     def __init__(self, deployment_id: str, *args, **kwargs):
@@ -39,7 +41,9 @@ class SecretsTable(DataTable):
         self.styles.height = "auto"
         self.zebra_stripes = True
         self.show_row_labels = False
-        self.border_subtitle = "a: Add • s: Show All/Hide All • e: Edit • d: Delete"
+        self.border_subtitle = (
+            "↑↓/jk Navigate • a: Add • s: Show All/Hide All • e: Edit • d: Delete"
+        )
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         """Handle row highlight events."""

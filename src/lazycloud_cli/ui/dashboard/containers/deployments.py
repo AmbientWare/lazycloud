@@ -20,9 +20,8 @@ class DeploymentsContainer(Container):
     deployment_status: reactive[DeploymentStatus | None] = reactive(None)
 
     BINDINGS = [
-        ("up", "cursor_up", "Move up"),
-        ("down", "cursor_down", "Move down"),
-        ("enter", "select_item", "Select"),
+        ("up,k", "cursor_up", "Move up"),
+        ("down,j", "cursor_down", "Move down"),
     ]
 
     def __init__(self, **kwargs):
@@ -50,7 +49,7 @@ class DeploymentsContainer(Container):
 
     def on_focus(self) -> None:
         """Handle focus event."""
-        self.border_subtitle = "↑↓ Navigate • ↵ Select"
+        self.border_subtitle = "↑↓/jk Navigate"
 
         # Ensure an item is highlighted in the list
         if self._list_view:

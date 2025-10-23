@@ -16,6 +16,8 @@ class PodTable(DataTable):
     BINDINGS = [
         ("d", "delete_instance", "Delete Instance"),
         ("l", "show_logs", "Show Logs"),
+        ("j,down", "cursor_down", "Move down"),
+        ("k,up", "cursor_up", "Move up"),
     ]
 
     def __init__(self, deployment_id: str, service_name: str, *args, **kwargs):
@@ -82,9 +84,7 @@ class PodTable(DataTable):
 
     def on_focus(self) -> None:
         """Handle focus event."""
-        self.border_subtitle = (
-            "↑↓ Navigate Instances • l: Show Logs • d: Delete Instance"
-        )
+        self.border_subtitle = "↑↓/jk Navigate • l: Show Logs • d: Delete Instance"
 
     def on_blur(self) -> None:
         """Handle blur event."""
