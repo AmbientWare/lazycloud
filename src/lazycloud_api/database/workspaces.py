@@ -68,7 +68,7 @@ class WorkspaceService(DatabaseService[WorkspaceTable, WorkspacePydantic]):
     def __init__(self):
         super().__init__(WorkspaceTable, WorkspacePydantic)
 
-    async def aget_user_workspaces(
+    async def aget_user_workspaces_with_membership(
         self, user_id: str
     ) -> list[tuple[WorkspacePydantic, UserWorkspacePydantic]]:
         """Get all workspaces for a user with membership info in a single query"""

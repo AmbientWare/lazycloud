@@ -1,5 +1,4 @@
 import uuid
-from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from sqlalchemy import UUID, ForeignKey, String
@@ -11,26 +10,11 @@ from lazycloud_api.database.base import (
     DatabaseService,
     UUIDStr,
 )
+from shared.models.workspaces import UserWorkspaceStatus, WorkspaceRole
 
 if TYPE_CHECKING:
     from lazycloud_api.database.users import UserTable
     from lazycloud_api.database.workspaces import WorkspaceTable
-
-
-class WorkspaceRole(StrEnum):
-    """Role of a user in a workspace"""
-
-    OWNER = "owner"
-    ADMIN = "admin"
-    MEMBER = "member"
-
-
-class UserWorkspaceStatus(StrEnum):
-    """Status of user membership in a workspace"""
-
-    ACTIVE = "active"
-    INVITED = "invited"
-    SUSPENDED = "suspended"
 
 
 class UserWorkspaceTable(BaseTable):

@@ -2,21 +2,21 @@ from fastapi import APIRouter, Depends
 from sse_starlette.sse import EventSourceResponse
 
 from lazycloud_api.api.dependencies import get_deployment_with_access
-from lazycloud_api.api.v1.streaming_utils import create_sse_stream_with_subscription
+from lazycloud_api.api.streaming_utils import create_sse_stream_with_subscription
 from lazycloud_api.database.compose import ComposeDeploymentPydantic
 from lazycloud_api.services.monitoring.monitor_config import DeploymentMonitorConfig
 from shared.models.monitoring import StreamEventType
 
-router = APIRouter()
+statuses_router = APIRouter(prefix="/statuses")
 
 
-@router.get("/{deployment_id}/status/stream")
+@statuses_router.get("/stream")
 async def stream_deployment_status(
     deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_access),
 ):
     """Stream real-time deployment status updates."""
     config = DeploymentMonitorConfig(
-        deployment_id=str(deployment.id),
+        deployment_id=deployment.id,
         namespace=deployment.namespace,
         helm_values=deployment.helm_values,
         deployment_name=deployment.name,

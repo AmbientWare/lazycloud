@@ -18,6 +18,7 @@ class DiffRequest(BaseModel):
     deployment_name: str | None = Field(
         None, description="Deployment name (required when deployment_id is 'new')"
     )
+    workspace_id: str = Field(..., description="Workspace ID")
     env_keys: list[str] = Field(
         default_factory=list, description="List of environment variable keys"
     )

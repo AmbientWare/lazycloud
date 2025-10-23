@@ -26,7 +26,6 @@ class DeleteInstanceModal(ConfirmModal):
         try:
             response = api.instances.delete_instance(
                 deployment_id=self.deployment_id,
-                service_name=self.service_name,
                 pod_name=self.pod_name,
             )
 

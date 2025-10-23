@@ -115,7 +115,6 @@ class LogViewerModal(ContentModal):
         try:
             await api.logs.stream_logs(
                 deployment_id=self.deployment_id,
-                service_name=self.service_name,
                 tail=100,
                 on_message=on_log_message,
                 on_error=on_log_error,

@@ -357,6 +357,7 @@ def _show_and_confirm_changes(
 
         diff_response = api.diff.get_deployment_diff(
             deployment_id=deployment_id,
+            workspace_id=config.active_workspace_id,
             compose_yaml=compose_yaml,
             deployment_name=deployment_name_param,
             env_keys=list(env_keys),
