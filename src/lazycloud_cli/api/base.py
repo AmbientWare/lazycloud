@@ -6,6 +6,14 @@ from lazycloud_cli.api.utils import Spinner, StatusSpinner
 from lazycloud_cli.config import config
 
 
+class APIError(Exception):
+    """Custom exception that preserves HTTP status code from API errors."""
+
+    def __init__(self, message: str, status_code: int | None = None):
+        super().__init__(message)
+        self.status_code = status_code
+
+
 class BaseAPI:
     def __init__(self, url_path: str, use_version: bool = True):
         if use_version:
@@ -62,10 +70,10 @@ class BaseAPI:
                 error_message = (
                     f"HTTP {e.response.status_code}: {e.response.reason_phrase}"
                 )
-            raise Exception(error_message) from e
+            raise APIError(error_message, status_code=e.response.status_code) from e
 
         except Exception as e:
-            raise Exception(str(e)) from e
+            raise APIError(str(e)) from e
 
     def _get(
         self,
@@ -86,6 +94,16 @@ class BaseAPI:
         """Post a resource to the API"""
         url = self._base_url if not path else f"{self._base_url}{path}"
         return self._make_request("POST", url, json, params)
+
+    def _patch(
+        self,
+        path: str = "",
+        params: dict | None = None,
+        json: dict[str, Any] | None = None,
+    ) -> Any:
+        """Patch a resource to the API"""
+        url = self._base_url if not path else f"{self._base_url}{path}"
+        return self._make_request("PATCH", url, json, params)
 
     def _put(
         self,

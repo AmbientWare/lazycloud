@@ -1,5 +1,5 @@
 from lazycloud_cli.api import api
-from lazycloud_cli.ui.dashboard.components import ConfirmModal, SuccessModal
+from lazycloud_cli.ui.dashboard.components import ConfirmModal, ErrorModal
 
 
 class DeleteInstanceModal(ConfirmModal):
@@ -32,30 +32,20 @@ class DeleteInstanceModal(ConfirmModal):
 
             if response and response.task_id:
                 # TODO: handle task monitoring
-                self.dismiss(True)
-                success_modal = DeleteInstanceSuccessModal(
-                    self.service_name, self.pod_name
-                )
-                self.app.push_screen(success_modal)
                 return True
 
+            # Show error modal if response is falsy or no task_id
+            error_modal = ErrorModal(
+                title="Failed to Delete Instance",
+                message=f"Could not delete the instance.\n\n[dim]Service: {self.service_name}[/dim]\n[dim]Instance: {self.pod_name}[/dim]\n\n[dim]Please try again.[/dim]",
+            )
+            self.app.push_screen(error_modal)
             return False
 
-        except Exception:
+        except Exception as e:
+            error_modal = ErrorModal(
+                title="Error Deleting Instance",
+                message=f"An error occurred while deleting the instance:\n\n{str(e)}\n\n[dim]Service: {self.service_name}[/dim]\n[dim]Instance: {self.pod_name}[/dim]\n\n[dim]Please try again.[/dim]",
+            )
+            self.app.push_screen(error_modal)
             return False
-
-
-class DeleteInstanceSuccessModal(SuccessModal):
-    """Modal showing delete instance success."""
-
-    def __init__(self, service_name: str, pod_name: str):
-        super().__init__(
-            title="Delete Instance Initiated",
-            message=(
-                f"Service delete has been triggered successfully.\n\n"
-                f"[dim]Service: {service_name}[/dim]\n\n"
-                f"[dim]Instance: {pod_name}[/dim]\n\n"
-                f"[dim]The instance will delete shortly.[/dim]"
-            ),
-            icon="✓",
-        )

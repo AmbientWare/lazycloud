@@ -1,5 +1,3 @@
-from typing import TYPE_CHECKING
-
 from textual.app import ComposeResult
 from textual.reactive import reactive
 
@@ -7,17 +5,10 @@ from lazycloud_cli.api import api
 from lazycloud_cli.ui.dashboard.components import Container, ListItemData, ListView
 from lazycloud_cli.ui.dashboard.components.listview import ListItem
 from lazycloud_cli.ui.dashboard.containers.details.container import ContentContainer
-from lazycloud_cli.ui.dashboard.theme import Layout
 from shared.models.statuses import ServiceStatus
-
-if TYPE_CHECKING:
-    pass
 
 
 class ServicesContainer(Container):
-    """Container for displaying services."""
-
-    # Reactive attributes
     deployment_id: reactive[str | None] = reactive(None)
     services: reactive[list[ServiceStatus] | None] = reactive(None)
     selected_service: reactive[ServiceStatus | None] = reactive(None)
@@ -44,8 +35,6 @@ class ServicesContainer(Container):
 
     def on_mount(self) -> None:
         """Style the container when mounted"""
-        self.styles.height = Layout.vertical_split
-        self.styles.padding = Layout.padding
         self.can_focus = True
         # set empty message after mount
         if self._list_view:
@@ -87,7 +76,6 @@ class ServicesContainer(Container):
     async def watch_selected_service(self, _old_value, new_value) -> None:
         """React when a service is selected - update content"""
         if new_value:
-            # Import here to avoid circular import
             content = self.app.query_one(ContentContainer)
             content.service = new_value
 

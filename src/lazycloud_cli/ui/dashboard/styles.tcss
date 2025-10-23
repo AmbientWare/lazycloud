@@ -1,16 +1,41 @@
 /* Dashboard Styles */
 
+/* Left column container heights */
+DeploymentsContainer {
+    height: 1fr;
+    padding: 1;
+}
+
+ServicesContainer {
+    height: 1fr;
+    padding: 1;
+}
+
+SecretsContainer {
+    height:5;
+    padding: 1;
+}
+
 /* Main container borders */
 DeploymentsContainer,
+SecretsDeploymentsContainer,
 ServicesContainer,
-ContentContainer {
+ContentContainer,
+SecretsContainer {
     border: round $primary;
 }
 
 /* Focused main containers get accent color border */
 DeploymentsContainer:focus,
+SecretsDeploymentsContainer:focus,
 ServicesContainer:focus,
-ContentContainer:focus {
+ContentContainer:focus,
+SecretsContainer:focus,
+DeploymentsContainer:focus-within,
+SecretsDeploymentsContainer:focus-within,
+ServicesContainer:focus-within,
+ContentContainer:focus-within,
+SecretsContainer:focus-within {
     border: round $accent;
 }
 
@@ -27,6 +52,12 @@ DataTable {
     border: round $primary;
     background: transparent;
     height: auto;
+}
+
+/* Secrets table should fill the container */
+#secrets-table {
+    height: 100%;
+    border: none;
 }
 
 DataTable:focus {
@@ -59,6 +90,11 @@ DataTable > .datatable--odd {
     border-bottom: solid $primary;
 }
 
+/* Modal backdrop with 95% black background */
+ModalScreen {
+    background: black 95%;
+}
+
 /* Modal containers */
 ModalContainer {
     border: round $primary;
@@ -89,7 +125,7 @@ Container > .container--title {
 }
 
 /* Modal styling */
-#success-modal, #confirm-modal {
+#success-modal, #error-modal, #confirm-modal, #input-modal {
     width: 60;
     height: auto;
     max-height: 20;
@@ -100,18 +136,55 @@ Container > .container--title {
     border: round $success;
 }
 
+#error-modal {
+    border: round $error;
+}
+
 #confirm-modal {
     border: round $warning;
 }
 
-#success-header, #confirm-header {
+#input-modal {
+    border: round $accent;
+}
+
+#success-header, #error-header, #confirm-header, #input-header {
     text-align: center;
     margin: 0 0 1 0;
 }
 
-#success-message, #confirm-message {
+#success-message, #error-message, #confirm-message, #input-message {
     text-align: center;
     margin: 1 2;
+}
+
+#input-field {
+    width: 100%;
+    margin: 1 0;
+}
+
+/* View/Edit Secret Modal styling */
+#view-secret-modal {
+    width: 60;
+    height: auto;
+    padding: 2;
+    border: round $primary;
+}
+
+#view-secret-header {
+    text-align: center;
+    margin: 0 0 1 0;
+}
+
+#view-secret-key {
+    text-align: center;
+    margin: 0 0 1 0;
+    color: $accent;
+}
+
+#secret-input {
+    width: 100%;
+    margin: 1 0;
 }
 
 /* Content modal styling */

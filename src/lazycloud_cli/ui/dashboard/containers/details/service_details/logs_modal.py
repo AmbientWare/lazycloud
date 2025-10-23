@@ -41,7 +41,7 @@ class LogViewerModal(ContentModal):
         # Set title and subtitle on the modal container
         container = self.query_one("#content-modal-container")
         container.border_title = f"📄 Instance Logs: {self.display_name}"
-        container.border_subtitle = "q: Close"
+        container.border_subtitle = "Esc: Close"
 
         self._logs_widget.styles.height = "1fr"
         self._logs_widget.write("[dim]Connecting to log stream...[/dim]")

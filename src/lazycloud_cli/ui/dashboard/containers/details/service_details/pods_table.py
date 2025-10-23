@@ -28,7 +28,7 @@ class PodTable(DataTable):
         self.cursor_type = "row"
         self.show_cursor = True
         self._pods = []
-        self.border_title = "🔍 [4] Instances"
+        self.border_title = "🔍 [5] Instances"
 
         self.add_columns(
             "Instance Name", "Status", "Ready", "CPU", "Memory", "Restarts", "Age"

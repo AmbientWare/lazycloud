@@ -6,8 +6,8 @@ from lazycloud_cli.config import config
 from lazycloud_cli.ui.dashboard.components import Container, ListItemData, ListView
 from lazycloud_cli.ui.dashboard.components.listview import ListItem
 from lazycloud_cli.ui.dashboard.containers.details.container import ContentContainer
+from lazycloud_cli.ui.dashboard.containers.secrets import SecretsContainer
 from lazycloud_cli.ui.dashboard.containers.services import ServicesContainer
-from lazycloud_cli.ui.dashboard.theme import Layout
 from shared.models.statuses import DeploymentStatus
 from shared.responses.deployments import DeploymentResponse
 
@@ -43,8 +43,6 @@ class DeploymentsContainer(Container):
 
     async def on_mount(self) -> None:
         """Style the container when mounted and load deployments."""
-        self.styles.height = Layout.vertical_split
-        self.styles.padding = Layout.padding
         self.can_focus = True
 
         # Load deployments after mounting
@@ -91,6 +89,9 @@ class DeploymentsContainer(Container):
             # Update the services container
             services = self.app.query_one(ServicesContainer)
             services.deployment_id = new_value.id
+
+            secrets = self.app.query_one(SecretsContainer)
+            secrets.deployment_id = new_value.id
 
     async def load_deployments(self) -> None:
         """Fetch and display deployments from API."""

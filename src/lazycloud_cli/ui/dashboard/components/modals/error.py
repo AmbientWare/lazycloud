@@ -5,10 +5,11 @@ from textual.widgets import Static
 from lazycloud_cli.ui.dashboard.components.modals.base import BaseModalScreen
 
 
-class SuccessModal(BaseModalScreen):
+class ErrorModal(BaseModalScreen):
+    """Modal for displaying error messages."""
+
     BINDINGS = [
         ("enter", "dismiss", "Close"),
-        ("q", "dismiss", "Close"),
         ("escape", "dismiss", "Close"),
     ]
 
@@ -16,7 +17,7 @@ class SuccessModal(BaseModalScreen):
         self,
         title: str,
         message: str,
-        icon: str = "✓",
+        icon: str = "✗",
     ):
         super().__init__()
         self.title = title
@@ -25,22 +26,22 @@ class SuccessModal(BaseModalScreen):
 
     def compose(self) -> ComposeResult:
         """Create the modal layout."""
-        with Vertical(id="success-modal"):
+        with Vertical(id="error-modal"):
             yield Static(
-                f"[bold]{self.icon} {self.title}[/bold]",
-                id="success-header",
+                f"[bold red]{self.icon} {self.title}[/bold red]",
+                id="error-header",
             )
             yield Static(
                 f"{self.message}",
-                id="success-message",
+                id="error-message",
             )
 
     def on_mount(self) -> None:
         """Set border subtitle."""
         super().on_mount()
-        modal = self.query_one("#success-modal")
-        modal.border_subtitle = "Enter/q: Close"
+        modal = self.query_one("#error-modal")
+        modal.border_subtitle = "Enter/Esc: Close"
 
     def action_dismiss(self) -> None:
-        """Dismiss the success modal."""
+        """Dismiss the error modal."""
         self.dismiss()

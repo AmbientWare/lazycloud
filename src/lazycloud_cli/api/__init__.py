@@ -1,3 +1,4 @@
+from lazycloud_cli.api.base import APIError
 from lazycloud_cli.api.deployments import DeploymentsAPI
 from lazycloud_cli.api.diff import DiffAPI
 from lazycloud_cli.api.instances import InstancesAPI
@@ -30,4 +31,4 @@ class API:
 
 api = API()
 
-__all__ = ["api"]
+__all__ = ["api", "APIError"]

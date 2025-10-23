@@ -1,6 +1,6 @@
 from .container import Container
 from .listview import ListItemData, ListView
-from .modals import ConfirmModal, ContentModal, SuccessModal
+from .modals import ConfirmModal, ContentModal, ErrorModal, InputModal
 from .section import SectionContainer
 
 __all__ = [
@@ -10,5 +10,6 @@ __all__ = [
     "SectionContainer",
     "ConfirmModal",
     "ContentModal",
-    "SuccessModal",
+    "ErrorModal",
+    "InputModal",
 ]

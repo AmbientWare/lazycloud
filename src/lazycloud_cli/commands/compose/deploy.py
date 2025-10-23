@@ -7,7 +7,7 @@ import yaml
 from rich.console import Console
 from rich.live import Live
 
-from lazycloud_cli.api import api
+from lazycloud_cli.api import APIError, api
 from lazycloud_cli.config import config
 from lazycloud_cli.lazycloud_file import LazyCloudFile
 from lazycloud_cli.registry import RegistryType, create_registry
@@ -474,7 +474,19 @@ def _deploy(
             # Store secrets if we have any (BEFORE waiting for task!)
             if secrets:
                 try:
+                    # Try POST first (create new secrets)
                     api.secrets.store_secrets(task_response.deployment_id, secrets)
+                except APIError as e:
+                    # If secrets already exist (409 Conflict), try PATCH to update them
+                    if e.status_code == 409:
+                        try:
+                            api.secrets.update_secrets(
+                                task_response.deployment_id, secrets
+                            )
+                        except Exception as patch_error:
+                            raise Exception(f"Failed to update secrets: {patch_error}")
+                    else:
+                        raise Exception(f"Failed to store secrets: {e}")
                 except Exception as e:
                     raise Exception(f"Failed to store secrets: {e}")
 
