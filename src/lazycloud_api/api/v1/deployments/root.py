@@ -27,10 +27,10 @@ from shared.responses.deployments import (
 )
 from shared.responses.tasks import DeploymentTaskStatusResponse
 
-router = APIRouter()
+deployments_router = APIRouter(prefix="/deployments", tags=["deployments"])
 
 
-@router.get("", response_model=DeploymentListResponse)
+@deployments_router.get("", response_model=DeploymentListResponse)
 async def list_deployments(
     workspace_id: str,
     skip: int = 0,
@@ -83,7 +83,9 @@ async def list_deployments(
         raise HTTPException(status_code=500, detail="Failed to list deployments")
 
 
-@router.get("/{deployment_id}/status", response_model=DeploymentStatusResponse)
+@deployments_router.get(
+    "/{deployment_id}/status", response_model=DeploymentStatusResponse
+)
 async def get_deployment_status(
     deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_access),
 ) -> DeploymentStatusResponse:
@@ -100,7 +102,7 @@ async def get_deployment_status(
     return DeploymentStatusResponse(status=deployment_status)
 
 
-@router.post("", response_model=DeploymentTaskStatusResponse)
+@deployments_router.post("", response_model=DeploymentTaskStatusResponse)
 async def create_deployment(
     request: DeploymentCreateRequest,
     current_user: UserPydantic = Depends(get_current_active_user),
@@ -178,10 +180,12 @@ async def create_deployment(
         raise HTTPException(status_code=500, detail="Failed to create deployment")
 
 
-@router.delete("/{deployment_id}", response_model=DeploymentTaskStatusResponse)
+@deployments_router.delete(
+    "/{deployment_id}", response_model=DeploymentTaskStatusResponse
+)
 async def delete_deployment(
     deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_admin_access),
-    current_user: UserPydantic = Depends(get_current_active_user),
+    _: UserPydantic = Depends(get_current_active_user),
 ) -> DeploymentTaskStatusResponse:
     """Delete a deployment."""
     try:

@@ -1,5 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException
 
+from lazycloud_api.api.dependencies import (
+    get_workspace_with_admin_access,
+    get_workspace_with_any_access,
+)
 from lazycloud_api.api.security import get_current_active_user
 from lazycloud_api.database import db
 from lazycloud_api.database.user_workspaces import (
@@ -30,7 +34,9 @@ async def get_workspaces(
     current_user: UserPydantic = Depends(get_current_active_user),
 ) -> list[WorkspaceResponse]:
     """Get all workspaces the current user has access to"""
-    user_workspaces = await db.workspaces.aget_user_workspaces(current_user.id)
+    user_workspaces = await db.workspaces.aget_user_workspaces_with_membership(
+        current_user.id
+    )
 
     return [
         WorkspaceResponse(
@@ -45,19 +51,12 @@ async def get_workspaces(
 
 @workspaces_router.get("/{workspace_id}")
 async def get_workspace(
-    workspace_id: str,
-    current_user: UserPydantic = Depends(get_current_active_user),
+    workspace_membership: tuple[UserWorkspacePydantic, WorkspacePydantic] = Depends(
+        get_workspace_with_any_access
+    ),
 ) -> WorkspaceResponse:
     """Get a specific workspace by ID"""
-    membership = await db.user_workspaces.aget_by_user_and_workspace(
-        current_user.id, workspace_id
-    )
-    if not membership:
-        raise HTTPException(status_code=404, detail="Workspace not found")
-
-    workspace = await db.workspaces.aget_by_id(workspace_id)
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
+    membership, workspace = workspace_membership
 
     return WorkspaceResponse(
         id=workspace.id,
@@ -108,9 +107,10 @@ async def create_workspace(
 
 @workspaces_router.patch("/{workspace_id}/rename")
 async def rename_workspace(
-    workspace_id: str,
     request: RenameWorkspaceRequest,
-    current_user: UserPydantic = Depends(get_current_active_user),
+    workspace_membership: tuple[UserWorkspacePydantic, WorkspacePydantic] = Depends(
+        get_workspace_with_admin_access
+    ),
 ) -> WorkspaceResponse:
     """Rename a workspace (requires owner role)"""
     try:
@@ -118,18 +118,7 @@ async def rename_workspace(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    membership = await db.user_workspaces.aget_by_user_and_workspace(
-        current_user.id, workspace_id
-    )
-    if not membership:
-        raise HTTPException(status_code=404, detail="Workspace not found")
-
-    if membership.role != WorkspaceRole.OWNER:
-        raise HTTPException(status_code=403, detail="Only owners can rename workspaces")
-
-    workspace = await db.workspaces.aget_by_id(workspace_id)
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
+    membership, workspace = workspace_membership
 
     workspace.name = validated_name
     workspace = await db.workspaces.aupdate(workspace)
@@ -144,26 +133,14 @@ async def rename_workspace(
 
 @workspaces_router.post("/{workspace_id}/invite")
 async def invite_user(
-    workspace_id: str,
     request: InviteUserRequest,
-    current_user: UserPydantic = Depends(get_current_active_user),
+    workspace_membership: tuple[UserWorkspacePydantic, WorkspacePydantic] = Depends(
+        get_workspace_with_admin_access
+    ),
 ) -> WorkspaceMemberResponse:
     """Invite a user to a workspace (requires owner or admin role)"""
     # Check if current user has permission
-    membership = await db.user_workspaces.aget_by_user_and_workspace(
-        current_user.id, workspace_id
-    )
-    if not membership or membership.role not in [
-        WorkspaceRole.OWNER,
-        WorkspaceRole.ADMIN,
-    ]:
-        raise HTTPException(
-            status_code=403, detail="Only owners and admins can invite users"
-        )
-
-    workspace = await db.workspaces.aget_by_id(workspace_id)
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
+    _, workspace = workspace_membership
 
     if workspace.is_personal:
         raise HTTPException(
@@ -177,7 +154,7 @@ async def invite_user(
 
     # Check if user is already a member
     existing_membership = await db.user_workspaces.aget_by_user_and_workspace(
-        request.user_id, workspace_id
+        request.user_id, workspace.id
     )
     if existing_membership:
         raise HTTPException(status_code=400, detail="User is already a member")
@@ -189,7 +166,7 @@ async def invite_user(
     # Create invitation
     new_membership = UserWorkspacePydantic(
         user_id=request.user_id,
-        workspace_id=workspace_id,
+        workspace_id=workspace.id,
         role=request.role,
         status=UserWorkspaceStatus.INVITED,
     )
@@ -204,19 +181,16 @@ async def invite_user(
 
 @workspaces_router.get("/{workspace_id}/members")
 async def get_workspace_members(
-    workspace_id: str,
-    current_user: UserPydantic = Depends(get_current_active_user),
+    workspace_membership: tuple[UserWorkspacePydantic, WorkspacePydantic] = Depends(
+        get_workspace_with_any_access
+    ),
 ) -> list[WorkspaceMemberResponse]:
     """Get all members of a workspace"""
     # Check if user has access
-    membership = await db.user_workspaces.aget_by_user_and_workspace(
-        current_user.id, workspace_id
-    )
-    if not membership:
-        raise HTTPException(status_code=404, detail="Workspace not found")
+    _, workspace = workspace_membership
 
     # Get all members
-    members = await db.user_workspaces.aget_workspace_members(workspace_id)
+    members = await db.user_workspaces.aget_workspace_members(workspace.id)
 
     return [
         WorkspaceMemberResponse(
@@ -230,27 +204,18 @@ async def get_workspace_members(
 
 @workspaces_router.patch("/{workspace_id}/members/{user_id}/role")
 async def update_member_role(
-    workspace_id: str,
-    user_id: str,
     request: UpdateMemberRoleRequest,
-    current_user: UserPydantic = Depends(get_current_active_user),
+    workspace_membership: tuple[UserWorkspacePydantic, WorkspacePydantic] = Depends(
+        get_workspace_with_admin_access
+    ),
 ) -> WorkspaceMemberResponse:
     """Update a member's role (requires owner or admin role)"""
     # Check if current user has permission
-    current_membership = await db.user_workspaces.aget_by_user_and_workspace(
-        current_user.id, workspace_id
-    )
-    if not current_membership or current_membership.role not in [
-        WorkspaceRole.OWNER,
-        WorkspaceRole.ADMIN,
-    ]:
-        raise HTTPException(
-            status_code=403, detail="Only owners and admins can update roles"
-        )
+    _, workspace = workspace_membership
 
     # Get target member
     target_membership = await db.user_workspaces.aget_by_user_and_workspace(
-        user_id, workspace_id
+        request.user_id, workspace.id
     )
     if not target_membership:
         raise HTTPException(status_code=404, detail="User is not a member")
@@ -282,26 +247,18 @@ async def update_member_role(
 
 @workspaces_router.delete("/{workspace_id}/members/{user_id}")
 async def remove_member(
-    workspace_id: str,
     user_id: str,
-    current_user: UserPydantic = Depends(get_current_active_user),
+    workspace_membership: tuple[UserWorkspacePydantic, WorkspacePydantic] = Depends(
+        get_workspace_with_admin_access
+    ),
 ) -> WorkspaceSuccessResponse:
     """Remove a member from a workspace (requires owner or admin role)"""
     # Check if current user has permission
-    membership = await db.user_workspaces.aget_by_user_and_workspace(
-        current_user.id, workspace_id
-    )
-    if not membership or membership.role not in [
-        WorkspaceRole.OWNER,
-        WorkspaceRole.ADMIN,
-    ]:
-        raise HTTPException(
-            status_code=403, detail="Only owners and admins can remove members"
-        )
+    _, workspace = workspace_membership
 
     # Check if target user is a member
     target_membership = await db.user_workspaces.aget_by_user_and_workspace(
-        user_id, workspace_id
+        user_id, workspace.id
     )
     if not target_membership:
         raise HTTPException(status_code=404, detail="User is not a member")
@@ -318,30 +275,20 @@ async def remove_member(
 
 @workspaces_router.delete("/{workspace_id}")
 async def delete_workspace(
-    workspace_id: str,
-    current_user: UserPydantic = Depends(get_current_active_user),
+    workspace_membership: tuple[UserWorkspacePydantic, WorkspacePydantic] = Depends(
+        get_workspace_with_admin_access
+    ),
 ) -> WorkspaceSuccessResponse:
     """Delete a workspace (requires owner role)"""
     # Check if current user is the owner
-    membership = await db.user_workspaces.aget_by_user_and_workspace(
-        current_user.id, workspace_id
-    )
-    if not membership:
-        raise HTTPException(status_code=404, detail="Workspace not found")
-
-    if membership.role != WorkspaceRole.OWNER:
-        raise HTTPException(status_code=403, detail="Only owners can delete workspaces")
-
-    workspace = await db.workspaces.aget_by_id(workspace_id)
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
+    _, workspace = workspace_membership
 
     # Prevent deleting personal workspaces
     if workspace.is_personal:
         raise HTTPException(status_code=400, detail="Cannot delete personal workspace")
 
     # get all deployments in the workspace
-    deployments = await db.compose_deployments.afind({"workspace_id": workspace_id})
+    deployments = await db.compose_deployments.afind({"workspace_id": workspace.id})
     if len(deployments) > 0:
         # delete all deployments for the workspace
         await db.compose_deployments.adelete_bulk(
@@ -350,7 +297,7 @@ async def delete_workspace(
 
     # set workspace status to deleted
     workspace = await db.workspaces.aupdate_status(
-        workspace_id, WorkspaceStatus.DELETED
+        workspace.id, WorkspaceStatus.DELETED
     )
 
     return WorkspaceSuccessResponse(success=True)

@@ -3,7 +3,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException
 from sse_starlette.sse import EventSourceResponse
 
-from lazycloud_api.api.v1.streaming_utils import create_sse_stream_with_subscription
+from lazycloud_api.api.streaming_utils import create_sse_stream_with_subscription
 from lazycloud_api.prefect_app import get_task_result
 from lazycloud_api.services.monitoring.monitor_config import TaskMonitorConfig
 from shared.models.monitoring import StreamEventType

@@ -12,20 +12,19 @@ class LogsAPI:
     async def stream_logs(
         self,
         deployment_id: str,
-        service_name: str,
         pod_name: str,
         tail: int,
         on_message: Callable[[dict[str, Any]], None],
         on_error: Callable[[Exception], None] | None = None,
     ) -> None:
-        """Stream logs from a service pod."""
+        """Stream logs from a service pod"""
 
         def handle_event(event_type: str, data: dict) -> None:
             if event_type == "log":
                 on_message(data)
 
         await self._client.stream(
-            path=f"/deployments/{deployment_id}/services/{service_name}/pods/{pod_name}/logs/stream?tail={tail}",
+            path=f"/deployments/{deployment_id}/instances/{pod_name}/logs/stream?tail={tail}",
             on_event=handle_event,
             on_error=on_error,
         )

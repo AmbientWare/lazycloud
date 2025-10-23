@@ -10,19 +10,15 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
-from lazycloud_api.api.v1.api_keys import api_keys_router
-from lazycloud_api.api.v1.deployments import router as deployments_router
-from lazycloud_api.api.v1.diff import diff_router
-from lazycloud_api.api.v1.general import cli_version_router, health_router
-from lazycloud_api.api.v1.instances import instances_router
-from lazycloud_api.api.v1.registry import router as registry_router
-from lazycloud_api.api.v1.secrets import secrets_router
-
-# Services routes now under deployments module
-from lazycloud_api.api.v1.tasks import tasks_router
-from lazycloud_api.api.v1.usage import router as usage_router
-from lazycloud_api.api.v1.users import users_router
-from lazycloud_api.api.v1.workspaces import workspaces_router
+from lazycloud_api.api.v1 import (
+    api_keys_router,
+    cli_version_router,
+    deployments_router,
+    health_router,
+    tasks_router,
+    users_router,
+    workspaces_router,
+)
 from lazycloud_api.config import app_config
 from lazycloud_api.database.crud import create_tables, update_admin_api_keys
 from lazycloud_api.log_config import setup_logger
@@ -92,12 +88,7 @@ versionsed_routes.include_router(users_router)
 versionsed_routes.include_router(api_keys_router)
 versionsed_routes.include_router(tasks_router)
 versionsed_routes.include_router(deployments_router)
-versionsed_routes.include_router(secrets_router)
-versionsed_routes.include_router(instances_router)
-versionsed_routes.include_router(diff_router)
-versionsed_routes.include_router(registry_router)
 versionsed_routes.include_router(workspaces_router)
-versionsed_routes.include_router(usage_router)
 app.include_router(versionsed_routes)
 
 # include non versioned routes that are not part of the main api

@@ -1,13 +1,15 @@
-"""Deployments API routes."""
-
-from fastapi import APIRouter
-
-from . import crud, services, streaming
-
-DEPLOYMENTS_PREFIX = "/deployments"
+from .diff import diff_router
+from .instances import instances_router
+from .root import deployments_router
+from .secrets import secrets_router
+from .services import services_router
+from .statuses import statuses_router
 
 # Combine all deployment routes into one router
-router = APIRouter(tags=["deployments"])
-router.include_router(crud.router, prefix=DEPLOYMENTS_PREFIX)
-router.include_router(services.router, prefix=DEPLOYMENTS_PREFIX)
-router.include_router(streaming.router, prefix=DEPLOYMENTS_PREFIX)
+deployments_router.include_router(statuses_router, prefix="/{deployment_id}")
+deployments_router.include_router(diff_router, prefix="/{deployment_id}")
+deployments_router.include_router(instances_router, prefix="/{deployment_id}")
+deployments_router.include_router(secrets_router, prefix="/{deployment_id}")
+deployments_router.include_router(services_router, prefix="/{deployment_id}")
+
+__all__ = ["deployments_router"]

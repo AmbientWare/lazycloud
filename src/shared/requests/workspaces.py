@@ -22,3 +22,4 @@ class InviteUserRequest(BaseModel):
 
 class UpdateMemberRoleRequest(BaseModel):
     role: WorkspaceRole
+    user_id: str
