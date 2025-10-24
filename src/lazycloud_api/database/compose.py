@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, List
 
+from cryptography.fernet import InvalidToken
 from pydantic import field_serializer, field_validator
 from sqlalchemy import (
     UUID,
@@ -25,7 +26,12 @@ from lazycloud_api.database.base import (
     UUIDStr,
 )
 from lazycloud_api.database.user_workspaces import UserWorkspaceTable
-from lazycloud_api.database.utils import decrypt_dict, encrypt_dict
+from lazycloud_api.database.utils import (
+    decrypt_dict,
+    decrypt_string,
+    encrypt_dict,
+    encrypt_string,
+)
 from shared.models.deployments import DeploymentStates
 from shared.models.helm import HelmValues
 
@@ -85,6 +91,29 @@ class ComposeDeploymentPydantic(BaseDbPydanticModel):
     status_message: str | None = None
     deployed_at: datetime | None = None
 
+    @field_validator("compose_yaml", mode="before")
+    @classmethod
+    def decrypt_compose_yaml(cls, value: Any) -> str:
+        """Automatically decrypt compose_yaml when loading from database."""
+        if isinstance(value, str):
+            try:
+                return decrypt_string(value)
+            except InvalidToken:
+                # Not encrypted (migration from old data or new deployment)
+                return value
+            except Exception as e:
+                # Real decryption error (corrupt data, wrong key, etc.)
+                raise ValueError(f"Failed to decrypt compose_yaml: {e}") from e
+        return value
+
+    @field_serializer("compose_yaml", when_used="always")
+    def serialize_compose_yaml(self, value: str) -> str:
+        """Automatically encrypt compose_yaml when dumping for database storage."""
+        try:
+            return encrypt_string(value)
+        except Exception as e:
+            raise ValueError(f"Failed to encrypt compose_yaml: {e}") from e
+
     @field_validator("helm_values", mode="before")
     @classmethod
     def decrypt_helm_values(cls, value: Any) -> HelmValues | None:
@@ -92,10 +121,14 @@ class ComposeDeploymentPydantic(BaseDbPydanticModel):
         if value is None:
             return None
         if isinstance(value, str):
-            # It's encrypted, decrypt it
             try:
                 decrypted_dict = decrypt_dict(value)
                 return HelmValues(**decrypted_dict)
+            except InvalidToken:
+                # Not encrypted - shouldn't happen in normal flow
+                raise ValueError(
+                    "helm_values is not encrypted - possible data corruption"
+                )
             except Exception as e:
                 raise ValueError(f"Failed to decrypt helm_values: {e}") from e
         # Already a HelmValues object or dict

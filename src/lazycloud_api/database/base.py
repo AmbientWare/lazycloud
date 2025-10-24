@@ -3,9 +3,8 @@ from datetime import datetime, timezone
 from typing import Annotated, Generic, Type, TypeVar
 
 from pydantic import BaseModel as PydanticBaseModel
-from pydantic import ConfigDict
 from pydantic.functional_validators import BeforeValidator
-from sqlalchemy import DateTime, delete, orm, update
+from sqlalchemy import DateTime, delete, inspect, orm, update
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.future import select
 from sqlalchemy.orm import Mapped, mapped_column
@@ -43,8 +42,18 @@ class BaseTable(Base):
     def to_pydantic(
         self, pydantic_class: Type["basePydanticType"]
     ) -> "basePydanticType":
-        """Convert the model to a Pydantic model"""
-        return pydantic_class.model_validate(self)
+        """Convert the model to a Pydantic model
+
+        Converts to dict first to ensure all validators run properly.
+        """
+        # Get all column values as dict
+        data = {}
+        mapper = inspect(self.__class__)
+        for column in mapper.columns:
+            data[column.key] = getattr(self, column.key)
+
+        # Validate from dict (this triggers all validators)
+        return pydantic_class.model_validate(data)
 
 
 class BaseDbPydanticModel(PydanticBaseModel):
@@ -53,8 +62,6 @@ class BaseDbPydanticModel(PydanticBaseModel):
     id: UUIDStr | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
-
-    model_config = ConfigDict(from_attributes=True)
 
 
 basePydanticType = TypeVar("basePydanticType", bound=BaseDbPydanticModel)
