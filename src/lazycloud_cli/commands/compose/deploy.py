@@ -12,6 +12,11 @@ from lazycloud_cli.config import config
 from lazycloud_cli.lazycloud_file import LazyCloudFile
 from lazycloud_cli.registry import RegistryType, create_registry
 from lazycloud_cli.ui.views import DeployView
+from lazycloud_cli.ui.views.helpers.env_helpers import (
+    ImportMethod,
+    count_collected_secrets,
+    update_diff_with_collected_secrets,
+)
 from shared.models.secrets import Secret, SecretCollection, SecretSource
 from shared.models.statuses import TaskStatus
 from shared.requests.deployments import DiffType
@@ -23,6 +28,11 @@ console = Console()
 def deploy(
     yes: bool = typer.Option(False, "-y", "--yes", help="Skip confirmation prompt"),
     warnings: bool = typer.Option(False, "--warnings", help="Show validation warnings"),
+    env: str = typer.Option(
+        None,
+        "--env",
+        help="Source for environment variables: path to .env file or 'shell'",
+    ),
 ):
     """Deploy or update a Docker Compose application."""
     view = DeployView(console)
@@ -35,7 +45,7 @@ def deploy(
         view.show_error(f"Configuration error: {e}")
         raise typer.Exit(1)
 
-    # Show deployment configuration using view
+    # Show deployment configuration
     view.show_configuration(
         deployment_name=deployment_name,
         compose_file=str(compose_file_path),
@@ -65,24 +75,16 @@ def deploy(
     compose_yaml = yaml.dump(compose_data, default_flow_style=False)
 
     try:
-        # Check for existing deployment and show diff
+        # Check for existing deployment and get diff (don't confirm yet)
         existing_deployment = _get_existing_deployment(deployment_name)
 
-        # Always show changes/preview for non-dry-run deployments
-        diff_response = None
-        # Show diff/preview for both new and existing deployments
-        diff_result = _show_and_confirm_changes(
+        # Get diff response to know what changed
+        diff_response = _get_deployment_diff(
             existing_deployment,
             deployment_name,
             compose_yaml,
             env_files_content,
-            yes,
-            warnings,
         )
-        if not diff_result:
-            return  # No changes or cancelled
-
-        diff_response = diff_result
 
     except Exception as e:
         view.show_error(f"Error validating deployment: {e}")
@@ -91,56 +93,44 @@ def deploy(
     # Extract environment variables for secrets collection
     all_env_vars = _extract_env_variables(compose_data, env_files_content)
 
-    # Determine which secrets to collect based on diff
-    secrets = SecretCollection(added=[], removed=[])
-    if diff_response and diff_response.env_var_changes:
-        # Only collect values for added variables
-        added_secrets = []
-        for key in diff_response.env_var_changes.added:
-            if key in all_env_vars:
-                added_secrets.append(
-                    Secret(
-                        key=key,
-                        value=all_env_vars[key] or "",
-                        source=SecretSource.COMPOSE,
-                    )
-                )
-        secrets.added = added_secrets
+    # Determine which secrets to collect based on diff (unless --env none)
+    secrets = _prepare_secrets_for_collection(env, diff_response, all_env_vars)
 
-        # Only collect values for removed variables
-        removed_secrets = []
-        for key in diff_response.env_var_changes.removed:
-            removed_secrets.append(
-                Secret(
-                    key=key,
-                    value="",  # Value not needed for removal
-                    source=SecretSource.COMPOSE,
-                )
-            )
-        secrets.removed = removed_secrets
-
-    else:
-        # For new deployments or if no diff, collect all
-        added_secrets = [
-            Secret(
-                key=key,
-                value=value or "",
-                source=SecretSource.COMPOSE,
-            )
-            for key, value in all_env_vars.items()
-        ]
-        secrets = SecretCollection(added=added_secrets, removed=[])
-
-    # Collect secrets from user (unless dry run or auto-yes)
+    # Collect secrets from user (unless --env none)
     has_secrets = bool(secrets.added or secrets.removed)
-    if has_secrets and not yes:
-        secrets = view.collect_secrets(secrets, project_dir=compose_file_path.parent)
+    if has_secrets:
+        total_to_collect = len(secrets.added)
+
+        secrets = view.collect_secrets(
+            secrets,
+            project_dir=compose_file_path.parent,
+            env_source=env,
+            skip_prompts=yes or bool(env),
+        )
+
+        # Show collection summary
+        collected_count = count_collected_secrets(secrets)
+        if collected_count > 0 or total_to_collect > 0:
+            view.show_collection_summary(collected_count, total_to_collect)
+
         # Re-check after collection - user might have skipped some
         has_secrets = bool(secrets.added or secrets.removed)
 
-    elif has_secrets and yes:
-        # dont update secrets if auto-yes
-        secrets = None
+    # Update diff response to reflect what was actually collected
+    update_diff_with_collected_secrets(diff_response, secrets, env)
+
+    # Now show diff and get confirmation
+    try:
+        _show_diff_and_confirm(
+            diff_response,
+            deployment_name,
+            yes,
+            warnings,
+            _get_env_source_display(env),
+        )
+    except Exception as e:
+        view.show_error(f"Error during confirmation: {e}")
+        raise typer.Exit(1)
 
     try:
         # Handle image building AFTER confirmation
@@ -164,6 +154,7 @@ def deploy(
     except typer.Exit:
         # Re-raise typer.Exit from deployment failures
         raise
+
     except Exception as e:
         view.show_error(f"Deployment stage failed: {e}")
         raise typer.Exit(1)
@@ -236,10 +227,69 @@ def _apply_build_timestamps(compose_data: dict, timestamp: str) -> None:
             service_config["image"] = f"{image_base}:{timestamp}"
 
 
+def _prepare_secrets_for_collection(
+    env: str | None,
+    diff_response: DiffResponse | None,
+    all_env_vars: dict[str, str | None],
+) -> SecretCollection:
+    """Prepare secrets for collection based on diff and env source."""
+    # Skip collection if user explicitly chose 'none'
+    if env and env.lower() == ImportMethod.NONE:
+        return SecretCollection(added=[], removed=[])
+
+    if diff_response and diff_response.env_var_changes:
+        # Update deployment - collect only changed variables
+        added_secrets = [
+            Secret(
+                key=key,
+                value=all_env_vars[key] or "",
+                source=SecretSource.COMPOSE,
+            )
+            for key in diff_response.env_var_changes.added
+            if key in all_env_vars
+        ]
+
+        removed_secrets = [
+            Secret(
+                key=key,
+                value="",  # Empty value for removal
+                source=SecretSource.COMPOSE,
+            )
+            for key in diff_response.env_var_changes.removed
+        ]
+
+        return SecretCollection(added=added_secrets, removed=removed_secrets)
+    else:
+        # New deployment - collect all variables
+        added_secrets = [
+            Secret(
+                key=key,
+                value=value or "",
+                source=SecretSource.COMPOSE,
+            )
+            for key, value in all_env_vars.items()
+        ]
+        return SecretCollection(added=added_secrets, removed=[])
+
+
+def _get_env_source_display(env: str | None) -> str:
+    """Get human-readable env source description for UI display."""
+    if not env:
+        return "interactive input"
+
+    env_lower = env.lower()
+    if env_lower == ImportMethod.SHELL:
+        return "shell environment"
+    elif env_lower == ImportMethod.NONE:
+        return "none (skipped)"
+    else:
+        return f"file: {env}"
+
+
 def _extract_env_variables(
     compose_data: dict, env_files_content: dict
 ) -> dict[str, str | None]:
-    """Extract all environment variables from compose data and env files"""
+    """Extract all environment variables from compose data and env files."""
     all_env_vars = {}
 
     # First, parse env files
@@ -389,17 +439,13 @@ def _get_existing_deployment(deployment_name: str):
         return None
 
 
-def _show_and_confirm_changes(
+def _get_deployment_diff(
     existing_deployment,
     deployment_name: str,
     compose_yaml: str,
     env_files_content: dict[str, str],
-    yes: bool,
-    warnings: bool,
 ) -> DiffResponse | None:
-    """Show diff and get confirmation for changes. Returns DiffResponse to proceed, None to cancel."""
-    view = DeployView(console)
-
+    """Get deployment diff without showing or confirming. Returns DiffResponse or None."""
     # Determine diff type based on whether deployment exists
     diff_type = DiffType.EXISTING if existing_deployment else DiffType.NEW
 
@@ -416,6 +462,25 @@ def _show_and_confirm_changes(
             env_keys=list(env_keys),
         )
 
+        return diff_response
+
+    except Exception as e:
+        view = DeployView(console)
+        view.show_warning(f"Could not generate diff: {e}")
+        return None
+
+
+def _show_diff_and_confirm(
+    diff_response: DiffResponse | None,
+    deployment_name: str,
+    yes: bool,
+    warnings: bool,
+    env_source_info: str | None = None,
+) -> None:
+    """Show diff and get confirmation for deployment."""
+    view = DeployView(console)
+
+    if diff_response:
         # Show diff using view components
         has_changes = view.show_diff(diff_response, show_warnings=warnings)
 
@@ -426,35 +491,17 @@ def _show_and_confirm_changes(
             view.show_error("Cannot proceed due to errors")
             raise typer.Exit(1)
 
-        if not yes:
-            # Show confirmation using view
-            confirmed = view.confirm_deployment(
-                deployment_name=deployment_name,
-            )
+    if not yes:
+        # Show confirmation using view
+        confirmed = view.confirm_deployment(
+            deployment_name=deployment_name,
+            default=False,
+            env_source_info=env_source_info,
+        )
 
-            if not confirmed:
-                view.show_cancelled()
-                raise typer.Exit(0)
-
-        return diff_response
-
-    except typer.Exit:
-        # Re-raise Exit exceptions (they should not be caught)
-        raise
-
-    except Exception as e:
-        view.show_warning(f"Could not generate diff: {e}")
-        # Ask for confirmation anyway
-        if not yes:
-            message = (
-                "Continue with deployment anyway?"
-                if existing_deployment
-                else "Create deployment anyway?"
-            )
-            if not view.confirm_continue(message):
-                view.show_cancelled()
-                raise typer.Exit(0)
-        return diff_response
+        if not confirmed:
+            view.show_cancelled()
+            raise typer.Exit(0)
 
 
 def _deploy(

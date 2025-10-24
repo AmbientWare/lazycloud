@@ -4,6 +4,7 @@ from pathlib import Path
 import typer
 from rich.console import Console
 from rich.prompt import Prompt
+from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
 
@@ -23,51 +24,20 @@ from lazycloud_cli.ui.views.helpers.diff_renderer import (
     create_diff_cards,
     create_env_var_card,
 )
+from lazycloud_cli.ui.views.helpers.env_helpers import (
+    ImportMethod,
+    create_env_vars_detected_card,
+    filter_secrets_with_values,
+    find_env_file,
+    get_remaining_vars,
+    handle_missing_vars_prompt,
+    load_from_env_file,
+    load_from_shell_env,
+    mark_secrets_as_empty,
+)
 from shared.models.secrets import SecretCollection
 from shared.models.statuses import TaskStatus
 from shared.responses.deployments import DiffResponse
-
-
-def _find_env_file(project_dir: Path) -> Path | None:
-    """Check if .env file exists in project directory."""
-    env_file = project_dir / ".env"
-    return env_file if env_file.exists() else None
-
-
-def _parse_env_file(file_path: Path) -> dict[str, str | None]:
-    """Parse .env file into a dictionary"""
-    env_vars = {}
-
-    try:
-        with open(file_path, "r") as f:
-            for _, line in enumerate(f, 1):
-                line = line.strip()
-                # Skip empty lines and comments
-                if not line or line.startswith("#"):
-                    continue
-
-                # Parse KEY=value format
-                if "=" in line:
-                    key, value = line.split("=", 1)
-                    key = key.strip()
-                    value = value.strip()
-
-                    # Remove quotes if present
-                    if value and value[0] in ('"', "'") and value[-1] == value[0]:
-                        value = value[1:-1]
-
-                    # Store None for empty values
-                    env_vars[key] = value if value else None
-    except FileNotFoundError:
-        # Return empty dict, caller will show error
-        pass
-    except Exception as e:
-        # Log parsing error but continue
-        Console().print(
-            f"[yellow]Warning: Error parsing {file_path.name}: {e}[/yellow]"
-        )
-
-    return env_vars
 
 
 class DeployView:
@@ -226,6 +196,16 @@ class DeployView:
         """Show informational message."""
         self.console.print(InfoCard(title=title, message=message))
 
+    def show_collection_summary(self, collected: int, total: int) -> None:
+        """Show summary of environment variable collection."""
+        if collected == total:
+            message = f"Collected all {collected} environment variable(s)"
+        else:
+            skipped = total - collected
+            message = f"Collected {collected}/{total} variable(s) ({skipped} skipped)"
+
+        self.show_info(message, title="Collection Summary")
+
     def show_warning(self, message: str) -> None:
         """Show warning message."""
         self.console.print(WarningCard(title="Warning", message=message))
@@ -262,6 +242,11 @@ class DeployView:
                 cards.append(env_card)
 
         if cards:
+            # Show header before diff
+            self.console.print()
+            self.console.print(Rule("DEPLOYMENT CHANGES", style=Colors.Ansi.primary))
+            self.console.print()
+
             card_group = CardGroup(cards=cards, spacing=1)
             self.console.print(card_group)
 
@@ -282,17 +267,28 @@ class DeployView:
         )
         self.console.print(dialog)
 
-    def confirm_deployment(self, deployment_name: str) -> bool:
+    def confirm_deployment(
+        self,
+        deployment_name: str,
+        default: bool = True,
+        env_source_info: str | None = None,
+    ) -> bool:
         """Show deployment confirmation prompt."""
+        details = [
+            "The deployment will be created/updated",
+            "Services will be started in the cluster",
+            "Resources will be allocated as configured",
+        ]
+
+        if env_source_info:
+            details.append(f"Environment variables from: {env_source_info}")
+
         dialog = SimpleConfirmationDialog(
             action=f"deploy '{deployment_name}'",
-            details=[
-                "The deployment will be created/updated",
-                "Services will be started in the cluster",
-                "Resources will be allocated as configured",
-            ],
+            details=details,
             title="🚀 Confirm Deployment",
         )
+        dialog.default = default
         return dialog.show(self.console)
 
     def confirm_continue(self, message: str) -> bool:
@@ -324,9 +320,13 @@ class DeployView:
         return progress
 
     def collect_secrets(
-        self, env_vars: SecretCollection, project_dir: Path | None = None
+        self,
+        env_vars: SecretCollection,
+        project_dir: Path | None = None,
+        env_source: str | None = None,
+        skip_prompts: bool = False,
     ) -> SecretCollection:
-        """Collect secret values for environment variables from user"""
+        """Collect secret values for environment variables from user."""
         if not env_vars.added:
             return env_vars
 
@@ -335,86 +335,99 @@ class DeployView:
         # Check for .env file
         env_file = None
         if project_dir:
-            env_file = _find_env_file(project_dir)
+            env_file = find_env_file(project_dir)
 
-        # ALWAYS ask if user wants to import from .env file
-        dialog = SimpleConfirmationDialog(
-            action="import values from a .env file",
-            details=[
-                f"Detected {len(secrets_dict)} environment variable(s)",
-                "These will be encrypted and stored securely",
-            ],
-            title="🔐 Environment Variables Detected",
-        )
-        import_from_file = dialog.show(self.console)
+        # Determine source: use provided or ask user
+        import_method: ImportMethod
+        env_file_path: Path | None = None
+
+        if env_source:
+            # Check if it's 'shell', 'none', or a file path
+            if env_source.lower() == ImportMethod.SHELL:
+                import_method = ImportMethod.SHELL
+            elif env_source.lower() == ImportMethod.NONE:
+                import_method = ImportMethod.NONE
+            else:
+                # Treat as file path
+                import_method = ImportMethod.FILE
+                env_file_path = Path(env_source)
+                if not env_file_path.is_absolute():
+                    env_file_path = Path.cwd() / env_file_path
+        else:
+            # Ask user to choose source
+            card = create_env_vars_detected_card(len(secrets_dict))
+            self.console.print(card)
+
+            choice = Prompt.ask(
+                Text("Import from", style=Colors.Ansi.text_muted),
+                choices=["file", "shell", "none"],
+                default="file",
+            )
+            import_method = ImportMethod(choice)
 
         loaded_keys = set()
 
-        if not import_from_file:
-            # User said NO to importing - ask if they want to deploy anyway
-            var_list = ", ".join(list(secrets_dict.keys())[:5])
-            if len(secrets_dict) > 5:
-                var_list += f" and {len(secrets_dict) - 5} more..."
+        if import_method == ImportMethod.SHELL:
+            self.console.print()
+            # Import from shell environment variables
+            loaded_keys = load_from_shell_env(secrets_dict)
 
-            dialog = SimpleConfirmationDialog(
-                action="deploy with missing environment variables",
-                details=[
-                    f"{len(secrets_dict)} variable(s) will not be set",
-                    f"Missing: {var_list}",
-                    "You can add them later via the dashboard or by redeploying",
-                ],
-                title="⚠️ Deploy Anyway?",
-                border_style=Colors.Ansi.warning,
-            )
-            dialog.default = False
-            deploy_anyway = dialog.show(self.console)
-
-            if not deploy_anyway:
-                raise typer.Exit(0)
-
-            # Mark all as empty to skip them
-            for key in secrets_dict.keys():
-                secrets_dict[key].value = ""
-
-        else:
-            # User said YES to importing
-            # Prompt for file path with default if .env exists
-            if env_file:
-                # Show relative path from current directory
-                try:
-                    relative_path = env_file.relative_to(Path.cwd())
-                    default_path = str(relative_path)
-                except ValueError:
-                    # If can't make relative (different drive on Windows), use name only
-                    default_path = env_file.name
-
-                file_path_str = Prompt.ask(
-                    Text("Path to .env file", style=Colors.Ansi.text_muted),
-                    default=default_path,
+            if loaded_keys:
+                self.show_info(
+                    f"Loaded {len(loaded_keys)} of {len(secrets_dict)} variables from shell environment",
+                    title="Import Successful",
                 )
             else:
-                file_path_str = Prompt.ask(
-                    Text("Path to .env file", style=Colors.Ansi.text_muted),
-                    default=".env",
-                )
+                self.show_warning("No matching variables found in shell environment")
 
-            # add space for formatting
-            self.console.print()
+            # Check for remaining missing variables after import
+            remaining_vars = get_remaining_vars(secrets_dict, loaded_keys)
 
-            file_path = Path(file_path_str)
-            # Resolve relative to current directory
-            if not file_path.is_absolute():
-                file_path = Path.cwd() / file_path
+            if remaining_vars:
+                if not handle_missing_vars_prompt(
+                    self.console, remaining_vars, "shell environment", skip_prompts
+                ):
+                    raise typer.Exit(0)
 
-            # Parse the file
+                mark_secrets_as_empty(secrets_dict, set(remaining_vars.keys()))
+
+        elif import_method == ImportMethod.FILE:
+            # User chose to import from file
+            if env_file_path:
+                # File path provided via --env-source flag
+                file_path = env_file_path
+            else:
+                # Prompt for file path with default if .env exists
+                if env_file:
+                    # Show relative path from current directory
+                    try:
+                        relative_path = env_file.relative_to(Path.cwd())
+                        default_path = str(relative_path)
+                    except ValueError:
+                        # If can't make relative (different drive on Windows), use name only
+                        default_path = env_file.name
+
+                    file_path_str = Prompt.ask(
+                        Text("Path to .env file", style=Colors.Ansi.text_muted),
+                        default=default_path,
+                    )
+                else:
+                    file_path_str = Prompt.ask(
+                        Text("Path to .env file", style=Colors.Ansi.text_muted),
+                        default=".env",
+                    )
+
+                # add space for formatting
+                self.console.print()
+
+                file_path = Path(file_path_str)
+                # Resolve relative to current directory
+                if not file_path.is_absolute():
+                    file_path = Path.cwd() / file_path
+
+            # Parse the file and load values
             if file_path.exists():
-                env_file_vars = _parse_env_file(file_path)
-
-                # Load matching variables and track which ones we loaded
-                for key in list(secrets_dict.keys()):
-                    if key in env_file_vars and env_file_vars[key] is not None:
-                        secrets_dict[key].value = env_file_vars[key]
-                        loaded_keys.add(key)
+                loaded_keys = load_from_env_file(secrets_dict, file_path)
 
                 if loaded_keys:
                     self.show_info(
@@ -429,50 +442,35 @@ class DeployView:
                 self.show_error(f"File not found: {file_path}")
 
             # Check for remaining missing variables after import
-            remaining_vars = {
-                key: secret.value
-                for key, secret in secrets_dict.items()
-                if key not in loaded_keys
-            }
+            remaining_vars = get_remaining_vars(secrets_dict, loaded_keys)
 
             if remaining_vars:
-                # Ask if they want to deploy anyway with missing vars
-                dialog = SimpleConfirmationDialog(
-                    action="deploy with missing environment variables",
-                    details=[
-                        f"{len(remaining_vars)} variable(s) were not found in the file",
-                        f"Missing: {', '.join(list(remaining_vars.keys()))}",
-                        "You can add them later via the dashboard or by redeploying",
-                    ],
-                    title="⚠️ Deploy Anyway?",
-                    border_style=Colors.Ansi.warning,
-                )
-                dialog.default = False
-                deploy_anyway = dialog.show(self.console)
-
-                if not deploy_anyway:
+                if not handle_missing_vars_prompt(
+                    self.console, remaining_vars, "file", skip_prompts
+                ):
                     raise typer.Exit(0)
 
-                # Mark remaining as empty to skip them
-                for key in remaining_vars.keys():
-                    secrets_dict[key].value = ""
+                mark_secrets_as_empty(secrets_dict, set(remaining_vars.keys()))
+
+        else:
+            # User chose 'none' or no valid import method
+            self.console.print()
+
+            # Show truncated list for large number of vars
+            var_list = ", ".join(list(secrets_dict.keys())[:5])
+            if len(secrets_dict) > 5:
+                var_list += f" and {len(secrets_dict) - 5} more..."
+
+            remaining_vars_display = {var_list: ""}
+            if not handle_missing_vars_prompt(
+                self.console, remaining_vars_display, "user input", skip_prompts
+            ):
+                raise typer.Exit(0)
+
+            mark_secrets_as_empty(secrets_dict, set(secrets_dict.keys()))
 
         # Filter out empty values - only keep secrets that have actual values
-        filtered_secrets = [
-            secret
-            for secret in secrets_dict.values()
-            if secret.value and secret.value.strip() != ""
-        ]
-        env_vars.added = filtered_secrets
-
-        # Final confirmation
-        if env_vars.added:
-            self.show_info(
-                f"Collected values for {len(env_vars.added)} environment variables",
-                title="Secrets Collection Complete",
-            )
-        else:
-            self.show_warning("No secret values collected. Skipping secrets upload.")
+        env_vars.added = filter_secrets_with_values(secrets_dict)
 
         return env_vars
 

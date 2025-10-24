@@ -299,7 +299,7 @@ def create_env_var_card(env_changes: EnvVarChanges) -> Card | None:
         table.add_row(
             var,
             Text("Added", style=Colors.Ansi.success),
-            "Will be collected during deployment",
+            "Will be added to deployment",
         )
 
     # Add removed variables
@@ -307,7 +307,7 @@ def create_env_var_card(env_changes: EnvVarChanges) -> Card | None:
         table.add_row(
             var,
             Text("Removed", style=Colors.Ansi.error),
-            "Will be removed from secrets",
+            "Will be removed from deployment",
         )
 
     # Add user-managed variables (no changes, just informational)
