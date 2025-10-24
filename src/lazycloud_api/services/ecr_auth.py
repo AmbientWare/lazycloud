@@ -189,6 +189,47 @@ class ECRAuthService:
 
         return full_repo_name
 
+    async def delete_deployment_repositories(
+        self, workspace_id: str, deployment_name: str
+    ) -> list[str]:
+        """Delete all ECR repositories for a deployment.
+
+        Finds and deletes all repositories matching the pattern:
+        lc-<workspace_id>/deployment-<deployment_name>/*
+
+        Returns list of deleted repository names.
+        """
+        prefix = self.get_deployment_namespace(workspace_id, deployment_name)
+        deleted_repos = []
+
+        try:
+            # List all repositories
+            paginator = self.ecr_client.get_paginator("describe_repositories")
+
+            for page in paginator.paginate():
+                for repo in page.get("repositories", []):
+                    repo_name = repo["repositoryName"]
+
+                    # Check if repository belongs to this deployment
+                    if repo_name.startswith(prefix + "/"):
+                        try:
+                            self.ecr_client.delete_repository(
+                                repositoryName=repo_name,
+                                force=True,  # Delete even if images exist
+                            )
+                            deleted_repos.append(repo_name)
+                            logger.info(f"Deleted ECR repository: {repo_name}")
+                        except ClientError as e:
+                            # Log but don't fail - repository might already be deleted
+                            logger.warning(
+                                f"Failed to delete repository {repo_name}: {e}"
+                            )
+
+        except ClientError as e:
+            logger.error(f"Failed to list repositories for cleanup: {e}")
+
+        return deleted_repos
+
     def get_registry_url(self) -> str:
         """Get the registry URL based on environment (LocalStack or AWS)"""
         if self.is_localstack:

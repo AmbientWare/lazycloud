@@ -7,6 +7,7 @@ from loguru import logger
 from prefect import task
 
 from lazycloud_api.database import db
+from lazycloud_api.services import ecr_auth_service
 from lazycloud_api.services.compose.parser import ComposeParser
 from lazycloud_api.services.k8s import (
     create_release_name,
@@ -233,7 +234,23 @@ async def destroy_compose_task(deployment_id: str) -> None:
                 f"Failed to destroy namespace resources: {namespace_result.error}"
             )
 
-        # Step 3: Delete deployment from database
+        # Step 3: Clean up ECR repositories
+        logger.info(f"Cleaning up ECR repositories for deployment {deployment.name}")
+        try:
+            deleted_repos = await ecr_auth_service.delete_deployment_repositories(
+                str(deployment.workspace_id), deployment.name
+            )
+            if deleted_repos:
+                logger.info(
+                    f"Deleted {len(deleted_repos)} ECR repositories: {deleted_repos}"
+                )
+            else:
+                logger.info("No ECR repositories found to delete")
+        except Exception as ecr_error:
+            # ECR cleanup is non-fatal - log warning but continue
+            logger.warning(f"ECR cleanup failed (continuing): {ecr_error}")
+
+        # Step 4: Delete deployment from database
         await db.compose_deployments.adelete(deployment_id)
 
         logger.info(f"Successfully destroyed deployment {deployment_id}")
