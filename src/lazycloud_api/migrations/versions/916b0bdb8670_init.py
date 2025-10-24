@@ -1,8 +1,8 @@
 """init
 
-Revision ID: c6d85fde62c4
+Revision ID: 916b0bdb8670
 Revises: 
-Create Date: 2025-10-22 02:16:41.404179
+Create Date: 2025-10-24 04:41:34.732101
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = 'c6d85fde62c4'
+revision: str = '916b0bdb8670'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -64,7 +64,7 @@ def upgrade() -> None:
     sa.Column('namespace', sa.String(), nullable=False),
     sa.Column('compose_yaml', sa.Text(), nullable=False),
     sa.Column('helm_values', sa.JSON(), nullable=True),
-    sa.Column('state', sa.Enum('PENDING', 'DEPLOYING', 'DEPLOYED', 'FAILED', 'DELETING', name='deploymentstates'), nullable=False),
+    sa.Column('state', sa.Enum('PENDING', 'DEPLOYING', 'DEPLOYED', 'FAILED', 'DELETING', 'DELETED', name='deploymentstates'), nullable=False),
     sa.Column('status_message', sa.Text(), nullable=True),
     sa.Column('deployed_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('workspace_id', sa.UUID(), nullable=False),
@@ -115,14 +115,19 @@ def upgrade() -> None:
     op.create_index(op.f('ix_user_workspaces_status'), 'user_workspaces', ['status'], unique=False)
     op.create_table('secrets',
     sa.Column('deployment_id', sa.UUID(), nullable=False),
-    sa.Column('secrets', sa.Text(), nullable=False),
+    sa.Column('key', sa.String(), nullable=False),
+    sa.Column('value', sa.Text(), nullable=False),
+    sa.Column('source', sa.Enum('COMPOSE', 'USER', name='secretsource'), nullable=False),
+    sa.Column('state', sa.Enum('AWAITING_DEPLOYMENT', 'DEPLOYED', name='secretstate'), nullable=False),
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.ForeignKeyConstraint(['deployment_id'], ['compose_deployments.id'], ondelete='CASCADE'),
-    sa.PrimaryKeyConstraint('id')
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('deployment_id', 'key', name='uq_deployment_secret_key')
     )
-    op.create_index(op.f('ix_secrets_deployment_id'), 'secrets', ['deployment_id'], unique=True)
+    op.create_index(op.f('ix_secrets_deployment_id'), 'secrets', ['deployment_id'], unique=False)
+    op.create_index(op.f('ix_secrets_key'), 'secrets', ['key'], unique=False)
     op.create_table('usage_breakdown',
     sa.Column('usage_record_id', sa.UUID(), nullable=False),
     sa.Column('service_name', sa.String(), nullable=False),
@@ -146,6 +151,7 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_usage_breakdown_usage_record_id'), table_name='usage_breakdown')
     op.drop_index(op.f('ix_usage_breakdown_service_name'), table_name='usage_breakdown')
     op.drop_table('usage_breakdown')
+    op.drop_index(op.f('ix_secrets_key'), table_name='secrets')
     op.drop_index(op.f('ix_secrets_deployment_id'), table_name='secrets')
     op.drop_table('secrets')
     op.drop_index(op.f('ix_user_workspaces_status'), table_name='user_workspaces')

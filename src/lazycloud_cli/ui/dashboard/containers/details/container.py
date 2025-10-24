@@ -67,6 +67,9 @@ class ContentContainer(Container):
         self.can_focus = True
 
         scroll = self.query_one(VerticalScroll)
+        scroll.styles.width = "100%"
+        scroll.styles.height = "100%"
+
         initial_section = SectionContainer("Overview")
         scroll.mount(initial_section)
         initial_section.mount(Static("Select a deployment to view details"))
@@ -188,9 +191,9 @@ class ContentContainer(Container):
         scroll.remove_children()
 
         try:
-            secrets = api.secrets.get_secrets(self.deployment.id)
+            secrets_response = api.secrets.get_secrets(self.deployment.id)
 
-            if secrets and secrets.secrets:
+            if secrets_response and secrets_response.secrets:
                 # Create and mount the secrets table
                 self._secrets_table = SecretsTable(
                     deployment_id=self.deployment.id,
@@ -199,7 +202,7 @@ class ContentContainer(Container):
                     zebra_stripes=True,
                 )
                 scroll.mount(self._secrets_table)
-                self._secrets_table.update_secrets(secrets.secrets)
+                self._secrets_table.update_secrets(secrets_response.secrets)
                 self._secrets_table.focus()
             else:
                 section = SectionContainer("No Secrets")

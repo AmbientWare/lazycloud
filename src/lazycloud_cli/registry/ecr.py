@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Optional
 
 from lazycloud_cli.api import api
-from lazycloud_cli.registry.base import BaseRegistry
+from lazycloud_cli.registry.base import BaseRegistry, RegistryResponse
 from shared.responses.registry import UploadIntentResponse
 
 
@@ -14,9 +14,9 @@ class ECRRegistry(BaseRegistry):
         super().__init__(deployment_name)
         self.credentials: Optional[UploadIntentResponse] = None
 
-    def setup(self) -> bool:
+    def setup(self) -> RegistryResponse:
         """Set up ECR authentication."""
-        return True
+        return RegistryResponse(success=True, error_message="")
 
     def get_upload_credentials(self, repo_name: str) -> UploadIntentResponse:
         """Get temporary ECR push credentials from the API."""
@@ -32,17 +32,19 @@ class ECRRegistry(BaseRegistry):
         except Exception as e:
             raise RuntimeError(f"Failed to get ECR credentials: {e}")
 
-    def docker_login(self) -> bool:
+    def docker_login(self) -> RegistryResponse:
         """Authenticate Docker with ECR."""
         if not self.credentials:
-            return False
+            return RegistryResponse(
+                success=False, error_message="No credentials available"
+            )
 
         # No need to login when running with local development
         if (
             "localhost" in self.credentials.registry_url
             or "localstack" in self.credentials.registry_url
         ):
-            return True
+            return RegistryResponse(success=True, error_message="")
 
         try:
             # Use the password from credentials to login with docker
@@ -60,27 +62,42 @@ class ECRRegistry(BaseRegistry):
                 text=True,
                 check=True,
             )
-            return login_result.returncode == 0
-        except subprocess.CalledProcessError:
-            return False
+            return RegistryResponse(
+                success=login_result.returncode == 0, error_message=""
+            )
+        except subprocess.CalledProcessError as e:
+            error_msg = e.stderr if e.stderr else str(e)
+            return RegistryResponse(
+                success=False, error_message=f"Docker login failed: {error_msg}"
+            )
 
     def build_image(
         self, image_name: str, context: Path, dockerfile: str = "Dockerfile"
-    ) -> bool:
+    ) -> RegistryResponse:
         """Build a Docker image."""
         dockerfile_path = context / dockerfile
 
         if not context.exists():
-            return False
+            return RegistryResponse(
+                success=False,
+                error_message=f"Build context directory not found: {context}",
+            )
 
         if not dockerfile_path.exists():
-            return False
+            return RegistryResponse(
+                success=False, error_message=f"Dockerfile not found: {dockerfile_path}"
+            )
 
         # Get credentials first to know the repository URL
         if not self.credentials:
-            self.credentials = self.get_upload_credentials(repo_name=image_name)
-            if not self.docker_login():
-                return False
+            try:
+                self.credentials = self.get_upload_credentials(repo_name=image_name)
+            except Exception as e:
+                return RegistryResponse(success=False, error_message=str(e))
+
+            login_response = self.docker_login()
+            if not login_response.success:
+                return login_response
 
         # Build with the full ECR repository URL
         full_image_url = self.get_image_url(image_name)
@@ -97,23 +114,32 @@ class ECRRegistry(BaseRegistry):
 
         try:
             _ = subprocess.run(build_cmd, check=True, capture_output=True, text=True)
-            return True
-        except subprocess.CalledProcessError:
-            return False
+            return RegistryResponse(success=True, error_message="")
+        except subprocess.CalledProcessError as e:
+            # Extract useful error message from stderr
+            error_output = e.stderr if e.stderr else e.stdout if e.stdout else str(e)
+            return RegistryResponse(
+                success=False, error_message=f"Docker build failed:\n{error_output}"
+            )
 
-    def push_image(self, image_name: str) -> bool:
+    def push_image(self, image_name: str) -> RegistryResponse:
         """Push image to ECR."""
         if not self.credentials:
-            raise RuntimeError(
-                "Must call build_image before push_image to establish credentials"
+            return RegistryResponse(
+                success=False,
+                error_message="Must call build_image before push_image to establish credentials",
             )
 
         push_cmd = ["docker", "push", self.credentials.repository]
         try:
             _ = subprocess.run(push_cmd, check=True, capture_output=True, text=True)
-            return True
-        except subprocess.CalledProcessError:
-            return False
+            return RegistryResponse(success=True, error_message="")
+        except subprocess.CalledProcessError as e:
+            # Extract useful error message from stderr
+            error_output = e.stderr if e.stderr else e.stdout if e.stdout else str(e)
+            return RegistryResponse(
+                success=False, error_message=f"Docker push failed:\n{error_output}"
+            )
 
     def get_image_url(self, image_name: str) -> str:
         """Get the full registry URL for an image."""

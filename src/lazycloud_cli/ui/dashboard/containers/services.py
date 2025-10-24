@@ -83,11 +83,10 @@ class ServicesContainer(Container):
         if not self._list_view:
             return
 
-        # get services from api
-        service_statuses = api.services.get_service_statuses(self.deployment_id)
-
         self._list_view.show_loading("Loading services...")
         try:
+            service_statuses = api.services.get_service_statuses(self.deployment_id)
+
             items = []
             services = []
             if service_statuses:
@@ -109,7 +108,8 @@ class ServicesContainer(Container):
             self._list_view.update_items(items)
             self.services = services
 
-        except Exception:
+        except Exception as e:
+            self.log.error(f"Failed to load services: {e}")
             self._list_view.update_items([])
             self._list_view.show_empty_message()
 

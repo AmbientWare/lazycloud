@@ -329,6 +329,8 @@ class DeployView:
         if not env_vars.added:
             return env_vars
 
+        secrets_dict = {secret.key: secret for secret in env_vars.added}
+
         # Check for .env file
         env_file = None
         if project_dir:
@@ -338,7 +340,7 @@ class DeployView:
         dialog = SimpleConfirmationDialog(
             action="import values from a .env file",
             details=[
-                f"Detected {len(env_vars.added)} environment variable(s)",
+                f"Detected {len(secrets_dict)} environment variable(s)",
                 "These will be encrypted and stored securely",
             ],
             title="🔐 Environment Variables Detected",
@@ -366,14 +368,14 @@ class DeployView:
                 env_file_vars = _parse_env_file(file_path)
 
                 # Load matching variables and track which ones we loaded
-                for key in list(env_vars.added.keys()):
+                for key in list(secrets_dict.keys()):
                     if key in env_file_vars and env_file_vars[key] is not None:
-                        env_vars.added[key] = env_file_vars[key]
+                        secrets_dict[key].value = env_file_vars[key]
                         loaded_keys.add(key)
 
                 if loaded_keys:
                     self.show_info(
-                        f"Loaded {len(loaded_keys)} of {len(env_vars.added)} variables from {file_path.name}",
+                        f"Loaded {len(loaded_keys)} of {len(secrets_dict)} variables from {file_path.name}",
                         title="Import Successful",
                     )
                 else:
@@ -383,13 +385,15 @@ class DeployView:
             else:
                 self.show_error(f"File not found: {file_path}")
 
-            # Collect remaining variables manually (ones that weren't loaded from file)
+            # Collect remaining variables manually
             remaining_vars = {
-                k: v for k, v in env_vars.added.items() if k not in loaded_keys
+                key: secret.value
+                for key, secret in secrets_dict.items()
+                if key not in loaded_keys
             }
         else:
-            # User said no to importing - all variables need manual entry or will be skipped
-            remaining_vars = env_vars.added.copy()
+            # User said no to importing
+            remaining_vars = {key: secret.value for key, secret in secrets_dict.items()}
 
         if remaining_vars:
             # Ask if they want to manually enter remaining variables
@@ -446,27 +450,32 @@ class DeployView:
                         )
                         skip = dialog.show(self.console)
                         if skip:
-                            env_vars.added[key] = None
+                            secrets_dict[
+                                key
+                            ].value = ""  # Empty string to mark for filtering
                             continue
                         # Re-prompt if they don't want to skip
                         value = Prompt.ask(
                             Text("Value", style=Colors.Ansi.text_muted),
                         )
 
-                    env_vars.added[key] = value if value else None
+                    secrets_dict[key].value = value if value else ""
             else:
-                # User declined manual entry - remove these variables
+                # User declined manual entry - mark these for removal
                 for key in remaining_vars.keys():
-                    env_vars.added[key] = None  # Mark as None so they get filtered out
+                    secrets_dict[key].value = ""  # Empty string to mark for filtering
 
                 self.show_warning(
                     f"Skipping {len(remaining_vars)} variables. You can add them later via the dashboard or by redeploying."
                 )
 
-        # Filter out empty/None values - only upload secrets that have actual values
-        env_vars.added = {
-            k: v for k, v in env_vars.added.items() if v is not None and v.strip() != ""
-        }
+        # Filter out empty values - only keep secrets that have actual values
+        filtered_secrets = [
+            secret
+            for secret in secrets_dict.values()
+            if secret.value and secret.value.strip() != ""
+        ]
+        env_vars.added = filtered_secrets
 
         # Final confirmation
         if env_vars.added:

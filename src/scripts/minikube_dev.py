@@ -69,6 +69,29 @@ def start_minikube(
                 ]
             )
             console.print("[green]✓ Minikube cluster started successfully[/green]")
+
+            # Create Docker-friendly kubeconfig with embedded certificates
+            console.print("🔧 [bold]Creating Docker-friendly kubeconfig...[/bold]")
+            try:
+                kube_dir = Path.home() / ".kube"
+                kube_dir.mkdir(exist_ok=True)
+
+                # Write to config-docker file
+                result = subprocess.run(
+                    ["kubectl", "config", "view", "--flatten", "--minify"],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                (kube_dir / "config-docker").write_text(result.stdout)
+                console.print(
+                    "[green]✓ Docker-friendly kubeconfig created at ~/.kube/config-docker[/green]"
+                )
+            except Exception as e:
+                console.print(
+                    f"[yellow]⚠ Could not create Docker kubeconfig: {e}[/yellow]"
+                )
+
         except subprocess.CalledProcessError:
             console.print("[red]❌ Failed to start Minikube[/red]")
             raise typer.Exit(1)

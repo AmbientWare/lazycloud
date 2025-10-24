@@ -7,6 +7,7 @@ from lazycloud_api.database.compose import ComposeDeploymentPydantic
 from lazycloud_api.database.secrets import SecretPydantic
 from lazycloud_api.database.user_workspaces import WorkspaceRole
 from lazycloud_api.database.users import UserPydantic
+from shared.models.secrets import Secret, SecretState
 from shared.requests.secrets import SecretsRequest
 from shared.responses.secrets import SecretsResponse, SecretsStoredResponse
 
@@ -41,18 +42,19 @@ async def get_secrets(
     deployment: ComposeDeploymentPydantic = Depends(_require_admin_for_secret_values),
 ) -> SecretsResponse:
     """Get secrets for a deployment"""
-    secrets = await db.secrets.aget_secret(deployment.id)
-    if not secrets:
-        raise HTTPException(404, "Secrets not found")
+    secrets = await db.secrets.aget_secrets(deployment.id)
 
-    # Mask values unless user requested and has permission to see them
-    masked_secrets = (
-        secrets.secrets
-        if show_values
-        else {key: "● ● ● ● ● ● ● ●" for key in secrets.secrets.keys()}
-    )
+    response_secrets = [
+        Secret(
+            key=secret.key,
+            value=secret.value if show_values else "● ● ● ● ● ● ● ●",
+            source=secret.source,
+            state=secret.state,
+        )
+        for secret in secrets
+    ]
 
-    return SecretsResponse(secrets=masked_secrets)
+    return SecretsResponse(secrets=response_secrets)
 
 
 @secrets_router.get("/value/{key}")
@@ -61,11 +63,11 @@ async def get_secret_value(
     deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_admin_access),
 ) -> str:
     """Get a secret value for a deployment."""
-    secrets = await db.secrets.aget_secret(deployment.id)
-    if not secrets:
-        raise HTTPException(status_code=404, detail="Secrets not found")
+    secret = await db.secrets.aget_secret_by_key(deployment.id, key)
+    if not secret:
+        raise HTTPException(status_code=404, detail=f"Secret '{key}' not found")
 
-    return str(secrets.secrets.get(key, ""))
+    return secret.value
 
 
 @secrets_router.post("")
@@ -74,69 +76,92 @@ async def store_secrets(
     deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_admin_access),
 ) -> SecretsStoredResponse:
     """Create secrets for a deployment"""
-    # Check if secrets already exist - post should fail if they do
-    current_secrets = await db.secrets.aget_secret(deployment.id)
-    if current_secrets:
+    secrets = request.secrets
+
+    if not secrets:
+        return SecretsStoredResponse(deployment_id=deployment.id, secrets_count=0)
+
+    # Check if any secrets already exist (single query)
+    existing_secrets = await db.secrets.aget_secrets(deployment.id)
+    existing_keys = {secret.key for secret in existing_secrets}
+
+    # Find duplicates
+    new_keys = [secret.key for secret in secrets]
+    duplicates = existing_keys.intersection(new_keys)
+    if duplicates:
         raise HTTPException(
             status_code=409,
-            detail="Secrets already exist for this deployment. Use PATCH to update.",
+            detail=f"Secrets already exist: {', '.join(sorted(duplicates))}. Use PATCH to update or remove them.",
         )
 
-    to_store = request.secrets_collection.added or {}
-    secret_data = {}
-
-    for key, value in to_store.items():
-        secret_data[key] = value
-
-    # Create new secrets
-    await db.secrets.aupdate_or_create(
+    # Bulk create all secrets
+    secrets_to_create = [
         SecretPydantic(
             deployment_id=deployment.id,
-            secrets=secret_data,
+            key=secret.key,
+            value=secret.value,
+            source=secret.source,
+            state=SecretState.AWAITING_DEPLOYMENT,
         )
-    )
+        for secret in secrets
+    ]
+
+    await db.secrets.acreate_bulk(secrets_to_create)
 
     return SecretsStoredResponse(
-        deployment_id=deployment.id, secrets_count=len(secret_data)
+        deployment_id=deployment.id, secrets_count=len(secrets_to_create)
     )
 
 
 @secrets_router.patch("")
-async def patch_secrets(
+async def update_secrets(
     request: SecretsRequest,
     deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_admin_access),
 ) -> SecretsStoredResponse:
-    """Partially update secrets for a deployment. Fails if secrets don't exist."""
-    to_store = request.secrets_collection.added or {}
-    to_remove = request.secrets_collection.removed or []
+    """Update existing secrets for a deployment. Does not create new secrets."""
+    secrets = request.secrets
 
-    # Check if secrets exist - patch should fail if they don't
-    current_secrets = await db.secrets.aget_secret(deployment.id)
-    if not current_secrets:
-        raise HTTPException(
-            status_code=404,
-            detail="Secrets not found for deployment. Use POST to create.",
-        )
-
-    secret_data = current_secrets.secrets
-
-    # add or update secrets
-    for key, value in to_store.items():
-        secret_data[key] = value
-
-    # remove secrets
-    for key in to_remove:
-        if key in secret_data:
-            del secret_data[key]
-
-    # Update existing secrets
-    await db.secrets.aupdate_or_create(
-        SecretPydantic(
+    # Update existing secrets only (fail if not found)
+    for secret in secrets:
+        updated = await db.secrets.aupdate_by_key(
             deployment_id=deployment.id,
-            secrets=secret_data,
+            key=secret.key,
+            value=secret.value,
+            source=secret.source,
+            state=SecretState.AWAITING_DEPLOYMENT,
         )
-    )
+        if not updated:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Secret '{secret.key}' not found. Use POST to create new secrets.",
+            )
+
+    # Get final count of secrets
+    remaining_secrets = await db.secrets.aget_secrets(deployment.id)
 
     return SecretsStoredResponse(
-        deployment_id=deployment.id, secrets_count=len(secret_data)
+        deployment_id=deployment.id, secrets_count=len(remaining_secrets)
     )
+
+
+@secrets_router.delete("")
+async def delete_secrets(
+    request: SecretsRequest,
+    deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_admin_access),
+) -> SecretsStoredResponse:
+    """Delete existing secrets for a deployment"""
+    secrets = request.secrets
+
+    if not secrets:
+        return SecretsStoredResponse(deployment_id=deployment.id, secrets_count=0)
+
+    # Delete existing secrets
+    for secret in secrets:
+        deleted = await db.secrets.adelete_secret_by_key(deployment.id, secret.key)
+        if not deleted:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Secret '{secret.key}' not found.",
+            )
+
+    return SecretsStoredResponse(deployment_id=deployment.id, secrets_count=0)

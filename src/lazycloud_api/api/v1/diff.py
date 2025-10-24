@@ -1,42 +1,56 @@
 import yaml
-from fastapi import APIRouter, Body, Depends
+from fastapi import APIRouter, Body, Depends, HTTPException
 from loguru import logger
 
 from lazycloud_api.api.dependencies import (
     get_current_active_user,
-    get_deployment_with_admin_access,
     require_workspace_admin,
 )
 from lazycloud_api.database import db
+from lazycloud_api.database.compose import ComposeDeploymentPydantic
 from lazycloud_api.database.users import UserPydantic
 from lazycloud_api.services.compose.diff_checker import ComposeDiffChecker
 from lazycloud_api.services.compose.parser import ComposeParser
 from lazycloud_api.services.compose.validator import ComposeValidator
 from lazycloud_api.services.k8s import create_ns_name
 from shared.models.diffs import EnvVarChanges
-from shared.requests.deployments import DiffRequest
+from shared.models.secrets import SecretSource
+from shared.requests.deployments import DiffRequest, DiffType
 from shared.responses.deployments import DiffResponse
 
 diff_router = APIRouter(prefix="/diff")
 
 
-async def _new_deployment_or_check_workspace(
-    deployment_id: str,
+async def _get_deployment_or_verify_workspace(
     request: DiffRequest,
     current_user: UserPydantic = Depends(get_current_active_user),
 ):
-    """Get deployment for existing, verify workspace access for new."""
-    if deployment_id == "new":
-        await require_workspace_admin(request.workspace_id, current_user)
+    """Get deployment by name for existing, verify workspace access for new."""
+    # Verify workspace access first
+    await require_workspace_admin(request.workspace_id, current_user)
+
+    if request.diff_type == DiffType.NEW:
         return None
 
-    return await get_deployment_with_admin_access(deployment_id, current_user)
+    deployment = await db.compose_deployments.aget_by_name(
+        request.workspace_id, request.deployment_name
+    )
+
+    if not deployment:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Deployment '{request.deployment_name}' not found in workspace",
+        )
+
+    return deployment
 
 
 @diff_router.post("", response_model=DiffResponse)
 async def get_deployment_diff(
     request: DiffRequest = Body(...),
-    deployment=Depends(_new_deployment_or_check_workspace),
+    deployment: ComposeDeploymentPydantic | None = Depends(
+        _get_deployment_or_verify_workspace
+    ),
 ) -> DiffResponse:
     """Compare current deployment with proposed changes."""
 
@@ -54,23 +68,29 @@ async def get_deployment_diff(
 
     # Handle environment variable diff
     env_var_changes = None
-    if deployment and deployment.name != "new":
-        # Get existing secrets from database
-        existing_secret = await db.secrets.aget_secret(deployment.id)
-        existing_keys = (
-            set(existing_secret.secrets.keys()) if existing_secret else set()
-        )
+    if request.diff_type == DiffType.EXISTING:
+        # Existing deployment - compare with current secrets
+        existing_secrets = await db.secrets.aget_secrets(deployment.id)
+
+        existing_keys, user_managed_keys = set(), set()
+        for secret in existing_secrets:
+            if secret.source == SecretSource.COMPOSE:
+                existing_keys.add(secret.key)
+            elif secret.source == SecretSource.USER:
+                user_managed_keys.add(secret.key)
+
         new_keys = set(request.env_keys)
 
         env_var_changes = EnvVarChanges(
             added=sorted(list(new_keys - existing_keys)),
             removed=sorted(list(existing_keys - new_keys)),
             existing=sorted(list(new_keys & existing_keys)),
+            user_managed=sorted(list(user_managed_keys)),
         )
     else:
-        # For new deployments, all keys are "added"
+        # New deployment - all keys are "added"
         env_var_changes = EnvVarChanges(
-            added=sorted(request.env_keys), removed=[], existing=[]
+            added=sorted(request.env_keys), removed=[], existing=[], user_managed=[]
         )
 
     # Get current compose file for comparison

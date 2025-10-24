@@ -6,6 +6,7 @@ from loguru import logger
 from prefect import task
 
 from lazycloud_api.database import db
+from lazycloud_api.database.secrets import SecretEncryptedPydantic
 from lazycloud_api.services.compose.parser import ComposeParser
 from lazycloud_api.services.k8s import (
     create_release_name,
@@ -19,6 +20,7 @@ from lazycloud_api.services.k8s.helm_manager import (
 from lazycloud_api.services.k8s.helm_values_generator import HelmValuesGenerator
 from shared.models.deployments import DeploymentStates
 from shared.models.helm import HelmNamespaceValues, NamespaceConfig
+from shared.models.secrets import SecretState
 
 charts = get_chart_paths()
 
@@ -45,13 +47,14 @@ async def _wait_for_secrets(deployment_id: str, timeout: int = 10) -> None:
     """Wait for secrets to be stored for a deployment."""
     # attempt to get the secrets from the database
     start_time = time.time()
+    secrets = []
     while time.time() - start_time < timeout:
         await asyncio.sleep(1)
-        secrets = await db.secrets.aget_secret(deployment_id)
-        if secrets and secrets.secrets:  # type: ignore
+        secrets = await db.secrets.aget_secrets(deployment_id)
+        if secrets:
             break
 
-    if not secrets or not secrets.secrets:
+    if not secrets:
         raise Exception(f"Secrets not found for deployment {deployment_id}")
 
 
@@ -76,7 +79,7 @@ async def deploy_compose_task(
     compose_file = ComposeParser.parse_dict(compose_data)
 
     # get the helm values with deployment_id to load secrets
-    secrets = await db.secrets.aget_secret(deployment_id)
+    secrets = await db.secrets.aget_secrets(deployment_id)
     helm_generator = HelmValuesGenerator(deployment, secrets)
     helm_values, _ = helm_generator.generate_values(compose_file)
     deployment.helm_values = helm_values
@@ -158,6 +161,11 @@ async def deploy_compose_task(
             f"Deployment initiated successfully (revision: {app_result.revision})",
         )
 
+        # update the secrets state to deployed
+        for secret in secrets:
+            secret.state = SecretState.DEPLOYED
+            await db.secrets.aupdate(SecretEncryptedPydantic(**secret.model_dump()))
+
     except Exception as e:
         logger.error(f"Deployment {deployment_id} failed: {str(e)}")
         await _update_deployment_state(
@@ -165,6 +173,11 @@ async def deploy_compose_task(
             DeploymentStates.FAILED,
             "Deployment failed",
         )
+
+        # update the secrets state back to awaiting deployment on failure
+        for secret in secrets:
+            secret.state = SecretState.AWAITING_DEPLOYMENT
+            await db.secrets.aupdate(SecretEncryptedPydantic(**secret.model_dump()))
 
         # Attempt cleanup on failure
         try:

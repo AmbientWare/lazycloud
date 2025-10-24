@@ -159,6 +159,21 @@ class CLIConfig(BaseSettings):
         self._active_workspace_name = None
         self._save_config()
 
+    def check_authentication(self) -> tuple[bool, str]:
+        """Check if user is properly authenticated and configured."""
+        # Check for API key
+        if not self._active_api_key:
+            return False, "Not logged in. Please run 'lazycloud login' first."
+
+        if not self._api_keys.get(self._active_api_key):
+            return False, "API key not found. Please run 'lazycloud login' again."
+
+        # Check for workspace configuration
+        if not self._active_workspace_id:
+            return False, "No workspace configured. Please run 'lazycloud login' again."
+
+        return True, ""
+
 
 # Global config instance
 config = CLIConfig()

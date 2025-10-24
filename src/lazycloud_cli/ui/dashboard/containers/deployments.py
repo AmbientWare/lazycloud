@@ -2,9 +2,11 @@ from textual.app import ComposeResult
 from textual.reactive import reactive
 
 from lazycloud_cli.api import api
+from lazycloud_cli.api.base import APIError
 from lazycloud_cli.config import config
 from lazycloud_cli.ui.dashboard.components import Container, ListItemData, ListView
 from lazycloud_cli.ui.dashboard.components.listview import ListItem
+from lazycloud_cli.ui.dashboard.components.modals import ErrorModal
 from lazycloud_cli.ui.dashboard.containers.details.container import ContentContainer
 from lazycloud_cli.ui.dashboard.containers.secrets import SecretsContainer
 from lazycloud_cli.ui.dashboard.containers.services import ServicesContainer
@@ -64,10 +66,14 @@ class DeploymentsContainer(Container):
                     if self.selected_deployment != item.item_data.data:
                         self.selected_deployment = item.item_data.data
                         # get status associated with the deployment
-                        status = api.deployments.get_deployment_status(
-                            item.item_data.id
-                        )
-                        self.deployment_status = status.status
+                        try:
+                            status = api.deployments.get_deployment_status(
+                                item.item_data.id
+                            )
+                            self.deployment_status = status.status
+                        except Exception as e:
+                            self.log.error(f"Failed to get deployment status: {e}")
+                            # Skip status update but don't crash
 
     def on_blur(self) -> None:
         """Handle blur event."""
@@ -116,7 +122,48 @@ class DeploymentsContainer(Container):
 
             self._list_view.update_items(items)
 
-        except Exception:
+        except APIError as e:
+            self._list_view.update_items([])
+            self._list_view.hide_loading()
+
+            # Show appropriate error message based on status code
+            if e.status_code == 401:
+                error_modal = ErrorModal(
+                    title="Authentication Failed",
+                    message="Your session has expired or is invalid.\n\nPlease run 'lazycloud login' again.",
+                    icon="🔒",
+                )
+            elif e.status_code and 500 <= e.status_code < 600:
+                error_modal = ErrorModal(
+                    title="Server Error",
+                    message=f"The server encountered an error:\n\n{str(e)}\n\nPlease try again later.",
+                    icon="⚠️",
+                )
+            else:
+                error_modal = ErrorModal(
+                    title="Failed to Load Deployments",
+                    message=f"Could not load deployments:\n\n{str(e)}",
+                    icon="⚠️",
+                )
+
+            self.app.push_screen(error_modal)
+            return
+
+        except ConnectionError:
+            self._list_view.update_items([])
+            self._list_view.hide_loading()
+
+            error_modal = ErrorModal(
+                title="Connection Error",
+                message=f"Cannot connect to server at {config.api_base_url}\n\nPlease check your network connection.",
+                icon="🌐",
+            )
+            self.app.push_screen(error_modal)
+            return
+
+        except Exception as e:
+            # Log unexpected errors but show empty state
+            self.log.error(f"Unexpected error loading deployments: {e}")
             self._list_view.update_items([])
             self._list_view.show_empty_message()
 
@@ -128,8 +175,12 @@ class DeploymentsContainer(Container):
         # Update our own reactive state
         self.selected_deployment = item_data.data
         # get status associated with the deployment
-        status = api.deployments.get_deployment_status(item_data.id)
-        self.deployment_status = status.status
+        try:
+            status = api.deployments.get_deployment_status(item_data.id)
+            self.deployment_status = status.status
+        except Exception as e:
+            self.log.error(f"Failed to get deployment status: {e}")
+            # Skip status update but don't crash
 
     def _handle_highlight(self, item_data: ListItemData) -> None:
         """Handle deployment highlight (arrow navigation)."""
@@ -137,8 +188,12 @@ class DeploymentsContainer(Container):
         if self.selected_deployment != item_data.data:
             self.selected_deployment = item_data.data
             # get status associated with the deployment
-            status = api.deployments.get_deployment_status(item_data.id)
-            self.deployment_status = status.status
+            try:
+                status = api.deployments.get_deployment_status(item_data.id)
+                self.deployment_status = status.status
+            except Exception as e:
+                self.log.error(f"Failed to get deployment status: {e}")
+                # Skip status update but don't crash
 
     def action_cursor_up(self) -> None:
         """Move cursor up in the list."""

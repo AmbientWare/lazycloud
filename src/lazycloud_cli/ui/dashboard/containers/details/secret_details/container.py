@@ -7,9 +7,7 @@ from lazycloud_cli.ui.dashboard.containers.details.secret_details.secrets_modals
     DeleteSecretModal,
     EditSecretModal,
 )
-
-# Maximum length for displaying secret values before truncating
-MAX_DISPLAY_LENGTH = 25
+from shared.models.secrets import Secret, SecretState
 
 
 class SecretsTable(DataTable):
@@ -34,12 +32,10 @@ class SecretsTable(DataTable):
         self._secrets = {}
         self._showing_values = False
 
-        self.add_columns("Secret Name", "Value")
+        self.add_columns("Secret Name", "State", "Value")
 
     def on_mount(self) -> None:
         """Initialize the table on mount."""
-        self.styles.height = "auto"
-        self.zebra_stripes = True
         self.show_row_labels = False
         self.border_subtitle = (
             "↑↓/jk Navigate • a: Add • s: Show All/Hide All • e: Edit • d: Delete"
@@ -53,25 +49,34 @@ class SecretsTable(DataTable):
                 self.selected_secret_key = self._secret_keys[row_index]
 
     def update_secrets(
-        self, secrets: dict[str, str], preserve_cursor: bool = False
+        self, secrets: list[Secret], preserve_cursor: bool = False
     ) -> None:
         """Update the table with new secrets data."""
-        self._secrets = secrets
-        self._secret_keys = sorted(secrets.keys())
+        # Store secrets and build lookup structures
+        self._secrets = {secret.key: secret for secret in secrets}
+        self._secret_keys = sorted(self._secrets.keys())
 
         # Remember current cursor position if preserving
         current_row = self.cursor_row if preserve_cursor else 0
+
+        # Clear existing rows
         self.clear()
 
-        # Add rows - values are either masked or actual depending on what was fetched
+        # Add rows with actual content (no padding needed)
         for idx, key in enumerate(self._secret_keys):
-            value = secrets[key]
-            # Truncate long values when showing actual values
-            if self._showing_values and len(value) > MAX_DISPLAY_LENGTH:
-                display_value = f"{value[: MAX_DISPLAY_LENGTH - 3]}..."
+            secret = self._secrets[key]
+            display_value = secret.value if self._showing_values else "••••••••"
+
+            if secret.state:
+                state_display = (
+                    "[yellow]○[/yellow]"
+                    if secret.state == SecretState.AWAITING_DEPLOYMENT
+                    else "[green]●[/green]"
+                )
             else:
-                display_value = value
-            self.add_row(key, display_value, key=str(idx))
+                state_display = "[dim]?[/dim]"
+
+            self.add_row(key, state_display, display_value, key=str(idx))
 
         # Restore cursor position or select first row
         if self.row_count > 0:
@@ -94,7 +99,7 @@ class SecretsTable(DataTable):
                             secrets_response.secrets, preserve_cursor=True
                         )
                     else:
-                        self.update_secrets({}, preserve_cursor=True)
+                        self.update_secrets([], preserve_cursor=True)
                 except Exception:
                     pass
 
@@ -111,7 +116,7 @@ class SecretsTable(DataTable):
             if secrets_response and secrets_response.secrets:
                 self.update_secrets(secrets_response.secrets, preserve_cursor=True)
             else:
-                self.update_secrets({}, preserve_cursor=True)
+                self.update_secrets([], preserve_cursor=True)
         except Exception as e:
             self.app.notify(f"Failed to fetch secrets: {e}", severity="error")
             self._showing_values = not self._showing_values
@@ -121,9 +126,14 @@ class SecretsTable(DataTable):
         if not self.selected_secret_key:
             return
 
+        # Get the secret object to preserve its source
+        secret = self._secrets.get(self.selected_secret_key)
+        if not secret:
+            return
+
         # Get the current value - if showing values, use cached, otherwise fetch
         if self._showing_values:
-            current_value = self._secrets.get(self.selected_secret_key, "")
+            current_value = secret.value
         else:
             try:
                 current_value = api.secrets.get_secret_value(
@@ -136,6 +146,7 @@ class SecretsTable(DataTable):
             deployment_id=self.deployment_id,
             secret_key=self.selected_secret_key,
             current_value=current_value,
+            source=secret.source,
         )
 
         def on_edit(result):
@@ -150,7 +161,7 @@ class SecretsTable(DataTable):
                             secrets_response.secrets, preserve_cursor=True
                         )
                     else:
-                        self.update_secrets({}, preserve_cursor=True)
+                        self.update_secrets([], preserve_cursor=True)
                 except Exception:
                     pass
 
@@ -161,9 +172,15 @@ class SecretsTable(DataTable):
         if not self.selected_secret_key:
             return
 
+        # Get the secret object to preserve its source
+        secret = self._secrets.get(self.selected_secret_key)
+        if not secret:
+            return
+
         modal = DeleteSecretModal(
             deployment_id=self.deployment_id,
             secret_key=self.selected_secret_key,
+            source=secret.source,
         )
 
         def on_delete(result):
@@ -178,7 +195,7 @@ class SecretsTable(DataTable):
                             secrets_response.secrets, preserve_cursor=True
                         )
                     else:
-                        self.update_secrets({}, preserve_cursor=True)
+                        self.update_secrets([], preserve_cursor=True)
                 except Exception:
                     pass
 

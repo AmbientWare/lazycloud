@@ -118,6 +118,26 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
             await session.refresh(db_model)
             return db_model.to_pydantic(self.pydantic_model_class)
 
+    async def acreate_bulk(
+        self, models: list[basePydanticType]
+    ) -> list[basePydanticType]:
+        """Create multiple model instances"""
+        async with self._session_manager.get_session() as session:
+            db_models = [
+                self.db_model_class(
+                    **model.model_dump(exclude={"id", "created_at", "updated_at"})
+                )
+                for model in models
+            ]
+            session.add_all(db_models)
+            await session.flush()
+            await session.commit()
+
+            for db_model in db_models:
+                await session.refresh(db_model)
+
+            return [self._to_pydantic(model) for model in db_models]
+
     async def aupdate(self, model: basePydanticType) -> basePydanticType | None:
         """Update an existing model instance"""
         async with self._session_manager.get_session() as session:

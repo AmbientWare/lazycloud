@@ -12,7 +12,7 @@ from sqlalchemy import (
     String,
     select,
 )
-from sqlalchemy.orm import Mapped, joinedload, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from lazycloud_api.database.base import (
     BaseDbPydanticModel,
@@ -227,7 +227,6 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
                 .where(UsageRecordTable.collection_start >= start_date)
                 .where(UsageRecordTable.collection_end <= end_date)
                 .order_by(UsageRecordTable.collection_start)
-                .options(joinedload(UsageRecordTable.breakdowns))
             )
             if record_type:
                 query = query.where(UsageRecordTable.record_type == record_type.value)
@@ -244,7 +243,6 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
                 .where(UsageRecordTable.record_type == UsageRecordType.DAILY.value)
                 .where(UsageRecordTable.status == UsageRecordStatus.FINALIZED.value)
                 .order_by(UsageRecordTable.collection_end)
-                .options(joinedload(UsageRecordTable.breakdowns))
             )
             records = result.scalars().all()
             return [record.to_pydantic(UsageRecordPydantic) for record in records]
@@ -279,7 +277,6 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
                 .where(UsageRecordTable.record_type == UsageRecordType.DAILY.value)
                 .where(UsageRecordTable.status == UsageRecordStatus.INCOMPLETE.value)
                 .order_by(UsageRecordTable.collection_end)
-                .options(joinedload(UsageRecordTable.breakdowns))
             )
             records = result.scalars().all()
             return [UsageRecordPydantic.model_validate(record) for record in records]

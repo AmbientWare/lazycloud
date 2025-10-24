@@ -1,10 +1,29 @@
+import json
 import secrets
 from datetime import datetime, timedelta, timezone
 
+from cryptography.fernet import Fernet
+
+from lazycloud_api.config import app_config
 from lazycloud_api.database.api_keys import (
     ApiKeyExpirationDays,
     ApiKeyExpirationMinutes,
 )
+
+FERNET = Fernet(app_config.DB_SECRET_KEY.encode())
+
+
+def encrypt(secrets_dict: dict[str, str]) -> str:
+    """Encrypt a secrets dictionary for storage."""
+    json_str = json.dumps(secrets_dict)
+    encrypted_bytes = FERNET.encrypt(json_str.encode("utf-8"))
+    return encrypted_bytes.decode("utf-8")
+
+
+def decrypt(encrypted_str: str) -> dict[str, str]:
+    """Decrypt stored secrets back to dictionary."""
+    decrypted_bytes = FERNET.decrypt(encrypted_str.encode("utf-8"))
+    return json.loads(decrypted_bytes.decode("utf-8"))
 
 
 def generate_api_key():
