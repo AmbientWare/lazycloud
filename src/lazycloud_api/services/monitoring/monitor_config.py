@@ -1,5 +1,3 @@
-"""Monitor configuration classes for type-safe subscription parameters."""
-
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from uuid import UUID
@@ -82,5 +80,29 @@ class TaskMonitorConfig(MonitorConfigBase):
         return "task"
 
 
+@dataclass(frozen=True)
+class LogMonitorConfig(MonitorConfigBase):
+    """Configuration for a log monitor."""
+
+    deployment_id: str
+    namespace: str
+    service_name: str
+    pod_name: str
+    tail_lines: int = 100
+
+    def get_key(self) -> str:
+        """Generate unique key for this monitor"""
+        return f"logs|{self.deployment_id}|{self.namespace}|{self.pod_name}|{self.tail_lines}"
+
+    def get_monitor_type(self) -> str:
+        """Get monitor type string."""
+        return "logs"
+
+
 # Type alias for all monitor configs (for type hints)
-MonitorConfig = DeploymentMonitorConfig | ServiceMonitorConfig | TaskMonitorConfig
+MonitorConfig = (
+    DeploymentMonitorConfig
+    | ServiceMonitorConfig
+    | TaskMonitorConfig
+    | LogMonitorConfig
+)

@@ -10,7 +10,7 @@ from shared.models.monitoring import StreamEventType
 
 # NOTE: maybe make this configurable?
 STATUS_QUEUE_SIZE = 100
-LOG_QUEUE_SIZE = 150
+LOG_QUEUE_SIZE = 500
 
 
 async def _sse_event_loop(
