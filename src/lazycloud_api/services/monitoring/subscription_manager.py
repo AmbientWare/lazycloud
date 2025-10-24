@@ -7,8 +7,10 @@ from loguru import logger
 
 from lazycloud_api.services.monitoring.base import BaseMonitor
 from lazycloud_api.services.monitoring.deployment_monitor import DeploymentMonitor
+from lazycloud_api.services.monitoring.log_monitor import LogMonitor
 from lazycloud_api.services.monitoring.monitor_config import (
     DeploymentMonitorConfig,
+    LogMonitorConfig,
     MonitorConfig,
     ServiceMonitorConfig,
     TaskMonitorConfig,
@@ -134,6 +136,15 @@ class SubscriptionManager:
         elif isinstance(config, TaskMonitorConfig):
             return TaskMonitor(
                 task_id=config.task_id,
+                callback=None,  # Callbacks will be added via add_callback
+            )
+        elif isinstance(config, LogMonitorConfig):
+            return LogMonitor(
+                deployment_id=config.deployment_id,
+                namespace=config.namespace,
+                service_name=config.service_name,
+                pod_name=config.pod_name,
+                tail_lines=config.tail_lines,
                 callback=None,  # Callbacks will be added via add_callback
             )
         else:
