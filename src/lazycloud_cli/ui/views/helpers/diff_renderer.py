@@ -280,13 +280,13 @@ def create_diff_cards(diff: ComposeDiff) -> list[Card]:
     return cards
 
 
-# Helper functions no longer needed with new structure
-# The logic is now directly in create_diff_cards
-
-
 def create_env_var_card(env_changes: EnvVarChanges) -> Card | None:
     """Create card for environment variable changes."""
-    if not env_changes or (not env_changes.added and not env_changes.removed):
+    if not env_changes or (
+        not env_changes.added
+        and not env_changes.removed
+        and not env_changes.user_managed
+    ):
         return None
 
     table = Table(show_header=True, header_style="bold", box=None)
@@ -310,9 +310,33 @@ def create_env_var_card(env_changes: EnvVarChanges) -> Card | None:
             "Will be removed from secrets",
         )
 
+    # Add user-managed variables (no changes, just informational)
+    if env_changes.user_managed:
+        if env_changes.added or env_changes.removed:
+            table.add_row("", "", "")  # Empty row for spacing
+
+        for var in env_changes.user_managed:
+            table.add_row(
+                var,
+                Text("User-Managed", style=Colors.Ansi.info),
+                "Added via dashboard, no changes",
+            )
+
     count = len(env_changes.added) + len(env_changes.removed)
+    user_managed_count = (
+        len(env_changes.user_managed) if env_changes.user_managed else 0
+    )
+
+    # Update title based on what's shown
+    if count > 0 and user_managed_count > 0:
+        title = f"🔐 Environment Variables ({count} changes, {user_managed_count} user-managed)"
+    elif count > 0:
+        title = f"🔐 Environment Variable Changes ({count})"
+    else:
+        title = f"🔐 User-Managed Environment Variables ({user_managed_count})"
+
     return Card(
         content=table,
-        title=f"🔐 Environment Variable Changes ({count})",
+        title=title,
         border_style=Colors.Ansi.info,
     )

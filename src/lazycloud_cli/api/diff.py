@@ -1,28 +1,28 @@
 from lazycloud_cli.api.base import BaseAPI
-from shared.requests.deployments import DiffRequest
+from shared.requests.deployments import DiffRequest, DiffType
 from shared.responses.deployments import DiffResponse
 
 
 class DiffAPI(BaseAPI):
     def __init__(self):
-        super().__init__("deployments")
+        super().__init__("diff")
 
     def get_deployment_diff(
         self,
-        deployment_id: str,
+        diff_type: DiffType,
         workspace_id: str,
+        deployment_name: str,
         compose_yaml: str,
-        deployment_name: str | None = None,
         env_keys: list[str] | None = None,
     ) -> DiffResponse:
-        """Get diff between current deployment and new compose file."""
+        """Get diff for a deployment by name."""
         request = DiffRequest(
-            compose_yaml=compose_yaml,
-            deployment_name=deployment_name,
+            diff_type=diff_type,
             workspace_id=workspace_id,
-            env_keys=env_keys,
+            deployment_name=deployment_name,
+            compose_yaml=compose_yaml,
+            env_keys=env_keys or [],
         )
 
-        # New REST structure: /deployments/{deployment_id}/diff
-        response = self._post(f"/{deployment_id}/diff", json=request.model_dump())
+        response = self._post("", json=request.model_dump())
         return DiffResponse(**response)

@@ -12,8 +12,9 @@ from lazycloud_cli.config import config
 from lazycloud_cli.lazycloud_file import LazyCloudFile
 from lazycloud_cli.registry import RegistryType, create_registry
 from lazycloud_cli.ui.views import DeployView
-from shared.models.secrets import SecretCollection
+from shared.models.secrets import Secret, SecretCollection, SecretSource
 from shared.models.statuses import TaskStatus
+from shared.requests.deployments import DiffType
 from shared.responses.deployments import DiffResponse
 
 console = Console()
@@ -22,16 +23,17 @@ console = Console()
 def deploy(
     yes: bool = typer.Option(False, "-y", "--yes", help="Skip confirmation prompt"),
     warnings: bool = typer.Option(False, "--warnings", help="Show validation warnings"),
-    timeout: int = typer.Option(
-        5, "--timeout", "-t", help="Deployment timeout in minutes"
-    ),
 ):
     """Deploy or update a Docker Compose application."""
     view = DeployView(console)
 
-    # Load configuration
-    lazycloud_file, lazycloud_config, compose_file_path = _load_configuration(view)
-    deployment_name = lazycloud_config.deployment_name
+    try:
+        # Load configuration
+        _, lazycloud_config, compose_file_path = _load_configuration(view)
+        deployment_name = lazycloud_config.deployment_name
+    except Exception as e:
+        view.show_error(f"Configuration error: {e}")
+        raise typer.Exit(1)
 
     # Show deployment configuration using view
     view.show_configuration(
@@ -39,11 +41,21 @@ def deploy(
         compose_file=str(compose_file_path),
     )
 
-    # Read compose file and env files
-    with open(compose_file_path, "r") as f:
-        compose_yaml = f.read()
-    compose_data = yaml.safe_load(compose_yaml)
-    env_files_content = _read_env_files(compose_data, compose_file_path.parent)
+    try:
+        # Read compose file and env files
+        with open(compose_file_path, "r") as f:
+            compose_yaml = f.read()
+        compose_data = yaml.safe_load(compose_yaml)
+        env_files_content = _read_env_files(compose_data, compose_file_path.parent)
+    except FileNotFoundError as e:
+        view.show_error(f"File not found: {e}")
+        raise typer.Exit(1)
+    except yaml.YAMLError as e:
+        view.show_error(f"Invalid YAML in compose file: {e}")
+        raise typer.Exit(1)
+    except Exception as e:
+        view.show_error(f"Error reading compose file: {e}")
+        raise typer.Exit(1)
 
     # Generate timestamp for built images
     timestamp = _generate_build_timestamp()
@@ -52,43 +64,72 @@ def deploy(
     # Regenerate YAML with timestamped images
     compose_yaml = yaml.dump(compose_data, default_flow_style=False)
 
-    # Check for existing deployment and show diff
-    existing_deployment = _get_existing_deployment(deployment_name)
+    try:
+        # Check for existing deployment and show diff
+        existing_deployment = _get_existing_deployment(deployment_name)
 
-    # Always show changes/preview for non-dry-run deployments
-    diff_response = None
-    # Show diff/preview for both new and existing deployments
-    diff_result = _show_and_confirm_changes(
-        existing_deployment,
-        deployment_name,
-        compose_yaml,
-        env_files_content,
-        yes,
-        warnings,
-    )
-    if not diff_result:
-        return  # No changes or user cancelled
+        # Always show changes/preview for non-dry-run deployments
+        diff_response = None
+        # Show diff/preview for both new and existing deployments
+        diff_result = _show_and_confirm_changes(
+            existing_deployment,
+            deployment_name,
+            compose_yaml,
+            env_files_content,
+            yes,
+            warnings,
+        )
+        if not diff_result:
+            return  # No changes or cancelled
 
-    diff_response = diff_result
+        diff_response = diff_result
+
+    except Exception as e:
+        view.show_error(f"Error validating deployment: {e}")
+        raise typer.Exit(1)
 
     # Extract environment variables for secrets collection
     all_env_vars = _extract_env_variables(compose_data, env_files_content)
 
     # Determine which secrets to collect based on diff
-    secrets = SecretCollection(added={}, removed=[])
+    secrets = SecretCollection(added=[], removed=[])
     if diff_response and diff_response.env_var_changes:
         # Only collect values for added variables
+        added_secrets = []
         for key in diff_response.env_var_changes.added:
             if key in all_env_vars:
-                secrets.added[key] = all_env_vars[key]
+                added_secrets.append(
+                    Secret(
+                        key=key,
+                        value=all_env_vars[key] or "",
+                        source=SecretSource.COMPOSE,
+                    )
+                )
+        secrets.added = added_secrets
 
         # Only collect values for removed variables
+        removed_secrets = []
         for key in diff_response.env_var_changes.removed:
-            secrets.removed.append(key)
+            removed_secrets.append(
+                Secret(
+                    key=key,
+                    value="",  # Value not needed for removal
+                    source=SecretSource.COMPOSE,
+                )
+            )
+        secrets.removed = removed_secrets
 
     else:
         # For new deployments or if no diff, collect all
-        secrets = SecretCollection(added=all_env_vars, removed=[])
+        added_secrets = [
+            Secret(
+                key=key,
+                value=value or "",
+                source=SecretSource.COMPOSE,
+            )
+            for key, value in all_env_vars.items()
+        ]
+        secrets = SecretCollection(added=added_secrets, removed=[])
 
     # Collect secrets from user (unless dry run or auto-yes)
     has_secrets = bool(secrets.added or secrets.removed)
@@ -101,17 +142,31 @@ def deploy(
         # dont update secrets if auto-yes
         secrets = None
 
-    # Handle image building AFTER confirmation
-    compose_yaml = _handle_builds(compose_data, compose_file_path, deployment_name, yes)
+    try:
+        # Handle image building AFTER confirmation
+        compose_yaml = _handle_builds(
+            compose_data, compose_file_path, deployment_name, yes
+        )
+    except typer.Exit:
+        # Re-raise typer.Exit from build failures
+        raise
+    except Exception as e:
+        view.show_error(f"Build stage failed: {e}")
+        raise typer.Exit(1)
 
     # Deploy
-    _deploy(
-        deployment_name,
-        compose_yaml,
-        lazycloud_file,
-        timeout,
-        secrets=secrets if has_secrets else None,
-    )
+    try:
+        _deploy(
+            deployment_name,
+            compose_yaml,
+            secrets=secrets if has_secrets else None,
+        )
+    except typer.Exit:
+        # Re-raise typer.Exit from deployment failures
+        raise
+    except Exception as e:
+        view.show_error(f"Deployment stage failed: {e}")
+        raise typer.Exit(1)
 
 
 def _load_configuration(view: DeployView):
@@ -283,42 +338,44 @@ def _handle_builds(
     # Create build status tracker (don't print the build info card separately)
     build_status = view.show_build_status(services_to_build)
 
-    try:
-        # Use regular Live display for build status
-        with Live(
-            build_status, console=console, refresh_per_second=4, auto_refresh=True
-        ):
-            if not registry.setup():
+    with Live(build_status, console=console, refresh_per_second=4, auto_refresh=True):
+        setup_response = registry.setup()
+        if not setup_response.success:
+            view.show_error(f"Registry setup failed: {setup_response.error_message}")
+            raise typer.Exit(1)
+
+        for i, build_info in enumerate(services_to_build):
+            # Update status to building
+            build_status.update_service(
+                i, "building", f"Building {build_info['image_name']}"
+            )
+
+            context_path = compose_file_path.parent / build_info["context"]
+
+            build_response = registry.build_image(
+                build_info["image_name"], context_path, build_info["dockerfile"]
+            )
+
+            if not build_response.success:
+                build_status.update_service(i, TaskStatus.ERROR, "Build failed")
+                view.show_error(
+                    f"Failed to build {build_info['service_name']}:\n\n{build_response.error_message}"
+                )
                 raise typer.Exit(1)
 
-            for i, build_info in enumerate(services_to_build):
-                # Update status to building
-                build_status.update_service(
-                    i, "building", f"Building {build_info['image_name']}"
+            # Update status to pushing
+            build_status.update_service(i, TaskStatus.PENDING, "Pushing to registry")
+
+            push_response = registry.push_image(build_info["image_name"])
+
+            if not push_response.success:
+                build_status.update_service(i, TaskStatus.ERROR, "Push failed")
+                view.show_error(
+                    f"Failed to push {build_info['service_name']}:\n\n{push_response.error_message}"
                 )
+                raise typer.Exit(1)
 
-                context_path = compose_file_path.parent / build_info["context"]
-
-                if not registry.build_image(
-                    build_info["image_name"], context_path, build_info["dockerfile"]
-                ):
-                    build_status.update_service(i, TaskStatus.ERROR, "Build failed")
-                    view.show_error(f"Failed to build {build_info['service_name']}")
-                    raise typer.Exit(1)
-
-                # Update status to pushing
-                build_status.update_service(
-                    i, TaskStatus.PENDING, "Pushing to registry"
-                )
-
-                if not registry.push_image(build_info["image_name"]):
-                    build_status.update_service(i, TaskStatus.ERROR, "Push failed")
-                    raise typer.Exit(1)
-
-                build_status.update_service(i, TaskStatus.COMPLETED, "Ready")
-
-    finally:
-        registry.cleanup()
+            build_status.update_service(i, TaskStatus.COMPLETED, "Ready")
 
     return yaml.dump(compose_data, default_flow_style=False)
 
@@ -343,12 +400,8 @@ def _show_and_confirm_changes(
     """Show diff and get confirmation for changes. Returns DiffResponse to proceed, None to cancel."""
     view = DeployView(console)
 
-    if existing_deployment:
-        deployment_id = existing_deployment.id
-        deployment_name_param = None
-    else:
-        deployment_id = "new"
-        deployment_name_param = deployment_name
+    # Determine diff type based on whether deployment exists
+    diff_type = DiffType.EXISTING if existing_deployment else DiffType.NEW
 
     try:
         # Extract env keys from compose for diff
@@ -356,10 +409,10 @@ def _show_and_confirm_changes(
         env_keys = _extract_env_variables(compose_data, env_files_content).keys()
 
         diff_response = api.diff.get_deployment_diff(
-            deployment_id=deployment_id,
+            diff_type=diff_type,
             workspace_id=config.active_workspace_id,
+            deployment_name=deployment_name,
             compose_yaml=compose_yaml,
-            deployment_name=deployment_name_param,
             env_keys=list(env_keys),
         )
 
@@ -404,44 +457,9 @@ def _show_and_confirm_changes(
         return diff_response
 
 
-def _run_validation(
-    deployment_name: str, compose_yaml: str, env_files_content: dict, warnings: bool
-):
-    """Run validation in dry-run mode."""
-    view = DeployView(console)
-
-    try:
-        task_response = api.deployments.create_deployment(
-            compose_yaml=compose_yaml,
-            workspace_id=config.active_workspace_id,
-            name=deployment_name,
-        )
-
-        if task_response:
-            view.show_summary(
-                deployment_name=deployment_name,
-                status=task_response.status,
-                duration=0,
-                message=task_response.message,
-            )
-        else:
-            view.show_summary(
-                deployment_name=deployment_name,
-                status=task_response.status,
-                duration=0,
-                message=task_response.message,
-            )
-
-    except Exception as e:
-        view.show_error(f"Validation failed: {e}")
-        raise typer.Exit(1)
-
-
 def _deploy(
     deployment_name: str,
     compose_yaml: str,
-    lazycloud_file: LazyCloudFile,
-    timeout: int = 5,
     secrets: SecretCollection | None = None,
 ):
     """Perform the actual deployment."""
@@ -453,53 +471,103 @@ def _deploy(
     try:
         # Show the card while creating deployment
         with Live(creation_progress, console=console, refresh_per_second=4):
-            # Create the deployment and get task ID
+            # Create the deployment
             creation_progress.update_status(
                 "creating", "Sending configuration to server..."
             )
 
-            # Create deployment (sync - just returns task ID)
-            task_response = api.deployments.create_deployment(
-                compose_yaml=compose_yaml,
-                workspace_id=config.active_workspace_id,
-                name=deployment_name,
-                secrets=bool(secrets),
-            )
-
-            if not task_response or not task_response.task_id:
-                creation_progress.update_status(
-                    "failed", "Failed to create deployment task"
+            try:
+                # Create deployment
+                task_response = api.deployments.create_deployment(
+                    compose_yaml=compose_yaml,
+                    workspace_id=config.active_workspace_id,
+                    name=deployment_name,
+                    secrets=bool(secrets),
                 )
-                raise Exception("Failed to create deployment task")
+
+                if not task_response or not task_response.task_id:
+                    creation_progress.update_status(
+                        "failed", "Failed to create deployment task"
+                    )
+                    raise Exception("Server did not return a task ID")
+            except APIError as e:
+                creation_progress.update_status("failed", "API request failed")
+                if e.status_code == 401:
+                    raise Exception(
+                        "Authentication failed. Please run 'lazycloud login'"
+                    )
+                elif e.status_code and 500 <= e.status_code < 600:
+                    raise Exception(f"Server error: {e}")
+                else:
+                    raise Exception(f"API error: {e}")
+            except Exception as e:
+                creation_progress.update_status("failed", "Request failed")
+                raise Exception(f"Failed to create deployment: {e}")
 
             # Store secrets if we have any (BEFORE waiting for task!)
             if secrets:
                 try:
-                    # Try POST first (create new secrets)
-                    api.secrets.store_secrets(task_response.deployment_id, secrets)
-                except APIError as e:
-                    # If secrets already exist (409 Conflict), try PATCH to update them
-                    if e.status_code == 409:
+                    creation_progress.update_status(
+                        "creating", "Storing environment variables..."
+                    )
+
+                    # Handle new secrets (from diff's "added" list - these should all be new)
+                    if secrets.added:
                         try:
-                            api.secrets.update_secrets(
-                                task_response.deployment_id, secrets
+                            # Create new secrets - these keys are brand new per the diff
+                            api.secrets.store_secrets(
+                                task_response.deployment_id, secrets.added
                             )
-                        except Exception as patch_error:
-                            raise Exception(f"Failed to update secrets: {patch_error}")
-                    else:
-                        raise Exception(f"Failed to store secrets: {e}")
+                        except APIError as e:
+                            creation_progress.update_status(
+                                "failed", "Failed to create secrets"
+                            )
+                            if e.status_code == 409:
+                                raise Exception(
+                                    f"Secrets already exist (unexpected): {e}\n"
+                                    "The diff indicated these are new keys, but they already exist."
+                                )
+                            else:
+                                raise Exception(f"Failed to create secrets: {e}")
+
+                    # Handle removed secrets
+                    if secrets.removed:
+                        try:
+                            api.secrets.delete_secrets(
+                                task_response.deployment_id, secrets.removed
+                            )
+                        except Exception as delete_error:
+                            creation_progress.update_status(
+                                "failed", "Failed to delete secrets"
+                            )
+                            raise Exception(f"Failed to delete secrets: {delete_error}")
+
                 except Exception as e:
-                    raise Exception(f"Failed to store secrets: {e}")
+                    if "Failed to" not in str(
+                        e
+                    ):  # Don't double-wrap our own exceptions
+                        creation_progress.update_status(
+                            "failed", "Failed to manage secrets"
+                        )
+                        raise Exception(f"Failed to manage secrets: {e}")
+                    else:
+                        raise
 
             # NOW wait for task completion via streaming
             creation_progress.update_status(
                 "creating", "Processing deployment request..."
             )
 
-            # Get the final task status from the stream
-            final_status = asyncio.run(
-                api.deployments.wait_for_deployment(task_response.task_id)
-            )
+            try:
+                # Get the final task status from the stream
+                final_status = asyncio.run(
+                    api.deployments.wait_for_deployment(task_response.task_id)
+                )
+            except Exception as e:
+                creation_progress.update_status(
+                    "failed", "Failed to monitor deployment"
+                )
+                raise Exception(f"Error monitoring deployment: {e}")
 
             # Update UI based on actual status
             if final_status.status == TaskStatus.COMPLETED:
@@ -509,12 +577,14 @@ def _deploy(
             elif final_status.status == TaskStatus.ERROR:
                 error_msg = final_status.message or "Task failed"
                 creation_progress.update_status("failed", error_msg)
-                raise Exception(f"Deployment failed: {error_msg}")
+                raise Exception(f"Deployment task failed: {error_msg}")
             else:
                 creation_progress.update_status(
                     "failed", f"Unexpected status: {final_status.status}"
                 )
-                raise Exception(f"Deployment ended with status: {final_status.status}")
+                raise Exception(
+                    f"Deployment ended with unexpected status: {final_status.status}"
+                )
 
         # Show final success message
         view.show_summary(
@@ -524,7 +594,8 @@ def _deploy(
             message="View deployment in the dashboard with 'lazycloud dashboard'",
         )
 
+    except typer.Exit:
+        raise
     except Exception as e:
-        # The error was already shown in the progress card, just exit
-        view.show_error(f"Deployment failed: {e}")
+        view.show_error(str(e))
         raise typer.Exit(1)

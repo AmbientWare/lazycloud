@@ -43,6 +43,8 @@ dependencies = [
 
 [project.scripts]
 lazycloud = "lazycloud_cli.main:main_cli"
+cli-console = "scripts.dev_tools:textual_console"
+cli-dashboard = "scripts.dev_tools:cli_dashboard"
 mk-help = "scripts.minikube_dev:help"
 mk-up = "scripts.minikube_dev:main"
 mk-down = "scripts.minikube_dev:main_down"
@@ -60,4 +62,5 @@ packages = ["src/lazycloud_api", "src/lazycloud_cli", "src/scripts", "minikube"]
 dev = [
     "pytest>=8.4.1",
     "pytest-cov>=6.2.1",
+    "textual-dev>=1.8.0",
 ]

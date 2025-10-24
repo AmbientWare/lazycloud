@@ -1,11 +1,6 @@
-from textual.app import ComposeResult
-from textual.containers import Vertical
-from textual.widgets import Input, Static
-
 from lazycloud_cli.api import api
 from lazycloud_cli.ui.dashboard.components import ConfirmModal, ErrorModal, InputModal
-from lazycloud_cli.ui.dashboard.components.modals.base import BaseModalScreen
-from shared.models.secrets import SecretCollection
+from shared.models.secrets import Secret, SecretSource
 
 
 class AddSecretModal(InputModal):
@@ -59,15 +54,16 @@ class AddSecretModal(InputModal):
 
         try:
             # Create a SecretCollection with the new secret
-            secret_collection = SecretCollection(
-                added={self._variable_name: variable_value},
-                removed=[],
+            secret = Secret(
+                key=self._variable_name,
+                value=variable_value,
+                source=SecretSource.USER,
             )
 
-            # Call the API to update
-            response = api.secrets.update_secrets(
+            # Call the API to create the new secret
+            response = api.secrets.store_secrets(
                 deployment_id=self.deployment_id,
-                secrets=secret_collection,
+                secrets=[secret],
             )
 
             if response:
@@ -93,9 +89,16 @@ class AddSecretModal(InputModal):
 class EditSecretModal(InputModal):
     """Simple modal for editing a secret value."""
 
-    def __init__(self, deployment_id: str, secret_key: str, current_value: str):
+    def __init__(
+        self,
+        deployment_id: str,
+        secret_key: str,
+        current_value: str,
+        source: SecretSource = SecretSource.USER,
+    ):
         self.deployment_id = deployment_id
         self.secret_key = secret_key
+        self.source = source
 
         super().__init__(
             title=f"Edit Secret: {secret_key}",
@@ -103,7 +106,7 @@ class EditSecretModal(InputModal):
             placeholder="Enter value...",
             initial_value=current_value,
             on_confirm=self.handle_edit,
-            icon="✏️",
+            icon="✏️ ",  # extra space needed for alignment
             password=False,
         )
 
@@ -116,16 +119,17 @@ class EditSecretModal(InputModal):
             return False
 
         try:
-            # Create a SecretCollection with the updated value
-            secret_collection = SecretCollection(
-                added={self.secret_key: new_value},
-                removed=[],
+            # Create secret with the updated value
+            secret = Secret(
+                key=self.secret_key,
+                value=new_value,
+                source=self.source,
             )
 
             # Call the API to update
             response = api.secrets.update_secrets(
                 deployment_id=self.deployment_id,
-                secrets=secret_collection,
+                secrets=[secret],
             )
 
             if response:
@@ -148,131 +152,18 @@ class EditSecretModal(InputModal):
             return False
 
 
-class UpdateSecretModal(BaseModalScreen):
-    """Modal for viewing/updating a secret value."""
-
-    BINDINGS = [
-        ("e", "enable_edit", "Edit"),
-        ("escape", "dismiss", "Cancel"),
-    ]
-
-    def __init__(self, deployment_id: str, secret_key: str, current_value: str = ""):
-        super().__init__()
-        self.deployment_id = deployment_id
-        self.secret_key = secret_key
-        self.current_value = current_value
-        self._edit_mode = False
-
-    def compose(self) -> ComposeResult:
-        """Create the modal layout."""
-        with Vertical(id="view-secret-modal"):
-            yield Static(
-                "[bold]🔐 View Secret[/bold]",
-                id="view-secret-header",
-            )
-            yield Static(
-                f"Variable: [bold]{self.secret_key}[/bold]",
-                id="view-secret-key",
-            )
-            yield Input(
-                value=self.current_value,
-                placeholder="Secret value...",
-                id="secret-input",
-            )
-
-    def on_mount(self) -> None:
-        """Set up the modal when mounted."""
-        super().on_mount()
-        modal = self.query_one("#view-secret-modal")
-        modal.border_subtitle = "e: Edit • Esc: Close"
-
-        # Make input read-only by default
-        input_field = self.query_one("#secret-input", Input)
-        input_field.disabled = True
-
-    def action_enable_edit(self) -> None:
-        """Enable edit mode."""
-        if self._edit_mode:
-            # Already in edit mode, try to submit
-            self._submit()
-        else:
-            # Enter edit mode
-            self._edit_mode = True
-            input_field = self.query_one("#secret-input", Input)
-            input_field.disabled = False
-            input_field.focus()
-
-            # Update header and subtitle
-            header = self.query_one("#view-secret-header")
-            header.update("[bold]🔐 Edit Secret[/bold]")
-
-            modal = self.query_one("#view-secret-modal")
-            modal.border_subtitle = "Enter: Save • Esc: Cancel"
-
-            # Add enter binding for submit
-            self.BINDINGS = [
-                ("enter", "submit", "Save"),
-                ("escape", "dismiss", "Cancel"),
-            ]
-
-    def action_submit(self) -> None:
-        """Submit the changes."""
-        self._submit()
-
-    def _submit(self) -> None:
-        """Handle the update action."""
-        input_field = self.query_one("#secret-input", Input)
-        new_value = input_field.value.strip()
-
-        # If empty or unchanged, just close
-        if not new_value or new_value == self.current_value:
-            self.dismiss(False)
-            return
-
-        try:
-            # Create a SecretCollection with the updated value
-            secret_collection = SecretCollection(
-                added={self.secret_key: new_value},
-                removed=[],
-            )
-
-            # Call the API to update
-            response = api.secrets.update_secrets(
-                deployment_id=self.deployment_id,
-                secrets=secret_collection,
-            )
-
-            if response:
-                self.dismiss(True)
-                return
-
-            # Show error modal if response is falsy
-            error_modal = ErrorModal(
-                title="Failed to Update Secret",
-                message="Could not update the environment variable.\n\n[dim]Please try again.[/dim]",
-            )
-            self.app.push_screen(error_modal)
-            self.dismiss(False)
-
-        except Exception as e:
-            error_modal = ErrorModal(
-                title="Error Updating Secret",
-                message=f"An error occurred while updating the secret:\n\n{str(e)}\n\n[dim]Please try again.[/dim]",
-            )
-            self.app.push_screen(error_modal)
-            self.dismiss(False)
-
-    def action_dismiss(self) -> None:
-        """Dismiss the modal."""
-        self.dismiss(False)
-
-
 class DeleteSecretModal(ConfirmModal):
     """Modal for confirming secret deletion."""
 
-    def __init__(self, deployment_id: str, secret_key: str):
+    def __init__(
+        self,
+        deployment_id: str,
+        secret_key: str,
+        source: SecretSource = SecretSource.USER,
+    ):
         self.deployment_id = deployment_id
         self.secret_key = secret_key
+        self.source = source
 
         super().__init__(
             title="Delete Secret",
@@ -288,16 +179,16 @@ class DeleteSecretModal(ConfirmModal):
     def handle_delete(self) -> bool:
         """Handle the delete action."""
         try:
-            # Create a SecretCollection with the secret to remove
-            secret_collection = SecretCollection(
-                added={},
-                removed=[self.secret_key],
+            # Create secret to remove
+            secret_to_remove = Secret(
+                key=self.secret_key,
+                value="",
+                source=self.source,
             )
 
-            # Call the API to update (remove the secret)
-            response = api.secrets.update_secrets(
+            response = api.secrets.delete_secrets(
                 deployment_id=self.deployment_id,
-                secrets=secret_collection,
+                secrets=[secret_to_remove],
             )
 
             if response:

@@ -71,3 +71,4 @@ class EnvVarChanges(BaseModel):
     added: list[str] = []
     removed: list[str] = []
     existing: list[str] = []
+    user_managed: list[str] = []

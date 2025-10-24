@@ -1,3 +1,5 @@
+from enum import StrEnum
+
 from pydantic import BaseModel, Field
 
 
@@ -13,12 +15,16 @@ class DeploymentCreateRequest(BaseModel):
     secrets: bool = Field(False, description="Whether to wait for secrets to be stored")
 
 
+class DiffType(StrEnum):
+    NEW = "new"
+    EXISTING = "existing"
+
+
 class DiffRequest(BaseModel):
-    compose_yaml: str = Field(..., description="New Docker Compose YAML content")
-    deployment_name: str | None = Field(
-        None, description="Deployment name (required when deployment_id is 'new')"
-    )
+    diff_type: DiffType = Field(..., description="Type of diff to perform")
     workspace_id: str = Field(..., description="Workspace ID")
+    deployment_name: str = Field(..., description="Deployment name")
+    compose_yaml: str = Field(..., description="New Docker Compose YAML content")
     env_keys: list[str] = Field(
         default_factory=list, description="List of environment variable keys"
     )

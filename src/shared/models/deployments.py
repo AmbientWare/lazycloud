@@ -9,3 +9,4 @@ class DeploymentStates(StrEnum):
     DEPLOYED = "deployed"
     FAILED = "failed"
     DELETING = "deleting"
+    DELETED = "deleted"

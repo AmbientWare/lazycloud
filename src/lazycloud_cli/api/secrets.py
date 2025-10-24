@@ -1,5 +1,5 @@
 from lazycloud_cli.api.base import BaseAPI
-from shared.models.secrets import SecretCollection
+from shared.models.secrets import Secret
 from shared.requests.secrets import SecretsRequest
 from shared.responses.secrets import SecretsResponse, SecretsStoredResponse
 
@@ -21,23 +21,34 @@ class SecretsAPI(BaseAPI):
         return self._get(f"/{deployment_id}/secrets/value/{key}")
 
     def update_secrets(
-        self, deployment_id: str, secrets: SecretCollection
+        self, deployment_id: str, secrets: list[Secret]
     ) -> SecretsStoredResponse:
-        """Update secrets for a deployment."""
-        request = SecretsRequest(secrets_collection=secrets)
+        """Update existing secrets for a deployment"""
+        request_data = SecretsRequest(secrets=secrets)
         response_data = self._patch(
             f"/{deployment_id}/secrets",
-            json=request.model_dump(),
+            json=request_data.model_dump(),
+        )
+        return SecretsStoredResponse(**response_data)
+
+    def delete_secrets(
+        self, deployment_id: str, secrets: list[Secret]
+    ) -> SecretsStoredResponse:
+        """Delete existing secrets for a deployment"""
+        request_data = SecretsRequest(secrets=secrets)
+        response_data = self._delete(
+            f"/{deployment_id}/secrets",
+            json=request_data.model_dump(),
         )
         return SecretsStoredResponse(**response_data)
 
     def store_secrets(
-        self, deployment_id: str, secrets: SecretCollection
+        self, deployment_id: str, secrets: list[Secret]
     ) -> SecretsStoredResponse:
-        """Store secrets for a deployment."""
-        request = SecretsRequest(secrets_collection=secrets)
+        """Create new secrets for a deployment"""
+        request_data = SecretsRequest(secrets=secrets)
         response_data = self._post(
             f"/{deployment_id}/secrets",
-            json=request.model_dump(),
+            json=request_data.model_dump(),
         )
         return SecretsStoredResponse(**response_data)

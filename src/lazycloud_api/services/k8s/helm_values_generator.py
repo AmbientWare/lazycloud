@@ -48,9 +48,13 @@ from shared.models.helm import (
 class HelmValuesGenerator:
     """Generates Helm chart values from Docker Compose configurations."""
 
-    def __init__(self, deployment: ComposeDeploymentPydantic, secrets: SecretPydantic):
+    def __init__(
+        self, deployment: ComposeDeploymentPydantic, secrets: list[SecretPydantic]
+    ):
         self.deployment = deployment
-        self._secrets = secrets.secrets if secrets else {}
+        self._secrets = (
+            {secret.key: secret.value for secret in secrets} if secrets else {}
+        )
 
     def generate_values(self, compose: ComposeFile) -> tuple[HelmValues, list[str]]:
         """Generate Helm values from a compose file."""

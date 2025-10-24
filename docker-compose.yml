@@ -32,8 +32,8 @@ x-shared-environment: &lazycloud-shared-environment
 
 x-shared-volumes: &lazycloud-shared-volumes
   - ./src/lazycloud_api:/src/lazycloud_api
-  - "${HOME}/.kube/config:/root/.kube/config:ro"
-  - "${HOME}/.minikube:${HOME}/.minikube:ro"
+  - "${HOME}/.kube/config-docker:/root/.kube/config:ro"
+  - "${HOME}/.minikube:/root/.minikube:ro"
   - ./src/shared:/src/shared
   - prefect-task-storage:/task-storage
 
@@ -173,7 +173,7 @@ services:
       - "./scripts/setup_localstack_iam.sh:/etc/localstack/init/ready.d/setup_iam.sh"
       - "./scripts/setup_eks_cluster.sh:/etc/localstack/init/ready.d/setup_eks_cluster.sh"
       - localstack-data:/var/lib/localstack
-      - "${HOME}/.kube/config:/root/.kube/config:ro"
+      - "${HOME}/.kube/config-docker:/root/.kube/config:ro"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
       interval: 10s

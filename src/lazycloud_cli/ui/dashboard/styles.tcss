@@ -65,14 +65,14 @@ DataTable:focus {
     border-title-color: $accent;
 }
 
-/* DataTable rows - very subtle highlighting */
+/* DataTable rows - visible highlighting */
 DataTable > .datatable--cursor {
-    background: $accent 15%;  /* Lighter highlight */
+    background: $accent 40%;  /* More visible highlight */
     text-style: none;
 }
 
 DataTable > .datatable--hover {
-    background: $accent 10%;  /* Even lighter hover */
+    background: $accent 25%;  /* Lighter hover */
 }
 
 /* DataTable headers - accent color with underline separator */
@@ -90,9 +90,9 @@ DataTable > .datatable--odd {
     border-bottom: solid $primary;
 }
 
-/* Modal backdrop with 95% black background */
+/* Modal backdrop with full opacity to prevent emoji bleed-through */
 ModalScreen {
-    background: black 95%;
+    background: $surface;
 }
 
 /* Modal containers */

@@ -1,5 +1,6 @@
 from .api_keys import api_keys_router
 from .deployments import deployments_router
+from .diff import diff_router
 from .general import cli_version_router, health_router
 from .tasks import tasks_router
 from .users import users_router
@@ -13,4 +14,5 @@ __all__ = [
     "workspaces_router",
     "deployments_router",
     "api_keys_router",
+    "diff_router",
 ]
