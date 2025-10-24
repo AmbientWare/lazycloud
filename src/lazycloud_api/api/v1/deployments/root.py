@@ -141,7 +141,20 @@ async def create_deployment(
             deployment = await db.compose_deployments.afind_one(filters=filters)
 
         if deployment:
-            deployment.compose_yaml = request.compose_yaml
+            # Block if deployment is in progress
+            active_states = [
+                DeploymentStates.PENDING,
+                DeploymentStates.DEPLOYING,
+                DeploymentStates.DELETING,
+            ]
+            if deployment.pending_compose_yaml and deployment.state in active_states:
+                raise HTTPException(
+                    409,
+                    "Deployment is currently in progress. Please wait for it to complete.",
+                )
+
+            # Store new compose in pending_compose_yaml instead of overwriting
+            deployment.pending_compose_yaml = request.compose_yaml
             deployment.state = DeploymentStates.PENDING
             deployment.status_message = "Update queued"
             deployment = await db.compose_deployments.aupdate(deployment)
@@ -190,7 +203,7 @@ async def delete_deployment(
     """Delete a deployment."""
     try:
         await db.compose_deployments.update_status(
-            str(deployment.id), DeploymentStates.DEPLOYING, "Deletion initiated"
+            str(deployment.id), DeploymentStates.DELETING, "Deletion initiated"
         )
 
         task_future = destroy_compose_task.delay(

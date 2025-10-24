@@ -86,7 +86,9 @@ class WorkspaceService(DatabaseService[WorkspaceTable, WorkspacePydantic]):
             return [
                 (
                     self._to_pydantic(workspace),
-                    UserWorkspacePydantic.model_validate(membership),
+                    UserWorkspacePydantic.model_validate(
+                        membership, from_attributes=True
+                    ),
                 )
                 for workspace, membership in rows
             ]
