@@ -115,7 +115,6 @@ class DeploymentsContainer(Container):
                         ListItemData(
                             id=deployment.id,
                             name=deployment.name,
-                            status=deployment.state,
                             data=deployment,
                         )
                     )
@@ -183,7 +182,16 @@ class DeploymentsContainer(Container):
             # Skip status update but don't crash
 
     def _handle_highlight(self, item_data: ListItemData) -> None:
-        """Handle deployment highlight (arrow navigation)."""
+        """Handle deployment highlight with api requestdebouncing."""
+        self._selection_timer = self.handle_debounce(
+            self._selection_timer,
+            lambda: self._fetch_deployment_status(item_data),
+        )
+
+    def _fetch_deployment_status(self, item_data: ListItemData) -> None:
+        """Fetch deployment status after debounce delay."""
+        self._selection_timer = None
+
         # Only update content if the highlight actually changed to a different item
         if self.selected_deployment != item_data.data:
             self.selected_deployment = item_data.data

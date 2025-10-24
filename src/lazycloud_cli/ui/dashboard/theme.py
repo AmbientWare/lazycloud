@@ -1,6 +1,28 @@
+from enum import StrEnum
+
 from textual.theme import Theme
 
 from lazycloud_cli.ui.colors import Colors
+
+
+class Icons(StrEnum):
+    """Icons configuration constants."""
+
+    ROCKET = "🚀"
+    WRENCH = "🔧"
+    KEY = "🔐"
+    FILE = "📄"
+    COMPUTER = "🖥️"
+
+
+class Symbols(StrEnum):
+    """Symbols configuration constants."""
+
+    BULLET = "•"
+    TARGET = "⦿"
+    WARNING = "⚠"
+    CHECKMARK = "✔"
+    RIGHT_TRIANGLE = "▶"
 
 
 class Layout:
