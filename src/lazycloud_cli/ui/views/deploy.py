@@ -1,6 +1,7 @@
 from datetime import datetime
 from pathlib import Path
 
+import typer
 from rich.console import Console
 from rich.prompt import Prompt
 from rich.table import Table
@@ -336,7 +337,7 @@ class DeployView:
         if project_dir:
             env_file = _find_env_file(project_dir)
 
-        # Ask if user wants to import from .env file
+        # ALWAYS ask if user wants to import from .env file
         dialog = SimpleConfirmationDialog(
             action="import values from a .env file",
             details=[
@@ -348,12 +349,48 @@ class DeployView:
         import_from_file = dialog.show(self.console)
 
         loaded_keys = set()
-        if import_from_file:
+
+        if not import_from_file:
+            # User said NO to importing - ask if they want to deploy anyway
+            var_list = ", ".join(list(secrets_dict.keys())[:5])
+            if len(secrets_dict) > 5:
+                var_list += f" and {len(secrets_dict) - 5} more..."
+
+            dialog = SimpleConfirmationDialog(
+                action="deploy with missing environment variables",
+                details=[
+                    f"{len(secrets_dict)} variable(s) will not be set",
+                    f"Missing: {var_list}",
+                    "You can add them later via the dashboard or by redeploying",
+                ],
+                title="⚠️ Deploy Anyway?",
+                border_style=Colors.Ansi.warning,
+            )
+            dialog.default = False
+            deploy_anyway = dialog.show(self.console)
+
+            if not deploy_anyway:
+                raise typer.Exit(0)
+
+            # Mark all as empty to skip them
+            for key in secrets_dict.keys():
+                secrets_dict[key].value = ""
+
+        else:
+            # User said YES to importing
             # Prompt for file path with default if .env exists
             if env_file:
+                # Show relative path from current directory
+                try:
+                    relative_path = env_file.relative_to(Path.cwd())
+                    default_path = str(relative_path)
+                except ValueError:
+                    # If can't make relative (different drive on Windows), use name only
+                    default_path = env_file.name
+
                 file_path_str = Prompt.ask(
                     Text("Path to .env file", style=Colors.Ansi.text_muted),
-                    default=str(env_file),
+                    default=default_path,
                 )
             else:
                 file_path_str = Prompt.ask(
@@ -361,7 +398,13 @@ class DeployView:
                     default=".env",
                 )
 
+            # add space for formatting
+            self.console.print()
+
             file_path = Path(file_path_str)
+            # Resolve relative to current directory
+            if not file_path.is_absolute():
+                file_path = Path.cwd() / file_path
 
             # Parse the file
             if file_path.exists():
@@ -385,89 +428,34 @@ class DeployView:
             else:
                 self.show_error(f"File not found: {file_path}")
 
-            # Collect remaining variables manually
+            # Check for remaining missing variables after import
             remaining_vars = {
                 key: secret.value
                 for key, secret in secrets_dict.items()
                 if key not in loaded_keys
             }
-        else:
-            # User said no to importing
-            remaining_vars = {key: secret.value for key, secret in secrets_dict.items()}
 
-        if remaining_vars:
-            # Ask if they want to manually enter remaining variables
-            if import_from_file and loaded_keys:
-                # Some were loaded, show what's missing
-                details = [
-                    f"{len(remaining_vars)} variable(s) were not found in the file",
-                    f"Missing: {', '.join(remaining_vars.keys())}",
-                ]
-            else:
-                # No file imported, just show count
-                var_list = ", ".join(list(remaining_vars.keys())[:5])
-                if len(remaining_vars) > 5:
-                    var_list += f" and {len(remaining_vars) - 5} more..."
-                details = [
-                    f"{len(remaining_vars)} variable(s) need values",
-                    f"Variables: {var_list}",
-                ]
-
-            dialog = SimpleConfirmationDialog(
-                action="enter these values manually",
-                details=details,
-                title="🔐 Environment Variables",
-            )
-            enter_manually = dialog.show(self.console)
-
-            if enter_manually:
-                for key, default_value in remaining_vars.items():
-                    self.console.print(
-                        Text(f"Variable: {key}", style=f"bold {Colors.Ansi.primary}")
-                    )
-
-                    # Only show default if it has a real value (not None)
-                    if default_value:
-                        value = Prompt.ask(
-                            Text("Value", style=Colors.Ansi.text_muted),
-                            default=default_value,
-                            show_default=True,
-                        )
-                    else:
-                        value = Prompt.ask(
-                            Text(
-                                "Value (or press Enter to skip)",
-                                style=Colors.Ansi.text_muted,
-                            ),
-                        )
-
-                    # If empty, confirm skip
-                    if not value:
-                        dialog = SimpleConfirmationDialog(
-                            action="skip this variable",
-                            details=[f"Variable '{key}' will not be set"],
-                            title="⚠️ Confirm Skip",
-                        )
-                        skip = dialog.show(self.console)
-                        if skip:
-                            secrets_dict[
-                                key
-                            ].value = ""  # Empty string to mark for filtering
-                            continue
-                        # Re-prompt if they don't want to skip
-                        value = Prompt.ask(
-                            Text("Value", style=Colors.Ansi.text_muted),
-                        )
-
-                    secrets_dict[key].value = value if value else ""
-            else:
-                # User declined manual entry - mark these for removal
-                for key in remaining_vars.keys():
-                    secrets_dict[key].value = ""  # Empty string to mark for filtering
-
-                self.show_warning(
-                    f"Skipping {len(remaining_vars)} variables. You can add them later via the dashboard or by redeploying."
+            if remaining_vars:
+                # Ask if they want to deploy anyway with missing vars
+                dialog = SimpleConfirmationDialog(
+                    action="deploy with missing environment variables",
+                    details=[
+                        f"{len(remaining_vars)} variable(s) were not found in the file",
+                        f"Missing: {', '.join(list(remaining_vars.keys()))}",
+                        "You can add them later via the dashboard or by redeploying",
+                    ],
+                    title="⚠️ Deploy Anyway?",
+                    border_style=Colors.Ansi.warning,
                 )
+                dialog.default = False
+                deploy_anyway = dialog.show(self.console)
+
+                if not deploy_anyway:
+                    raise typer.Exit(0)
+
+                # Mark remaining as empty to skip them
+                for key in remaining_vars.keys():
+                    secrets_dict[key].value = ""
 
         # Filter out empty values - only keep secrets that have actual values
         filtered_secrets = [
