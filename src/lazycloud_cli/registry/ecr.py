@@ -13,6 +13,7 @@ class ECRRegistry(BaseRegistry):
     def __init__(self, deployment_name: str):
         super().__init__(deployment_name)
         self.credentials: Optional[UploadIntentResponse] = None
+        self._logged_in: bool = False
 
     def setup(self) -> RegistryResponse:
         """Set up ECR authentication."""
@@ -88,16 +89,18 @@ class ECRRegistry(BaseRegistry):
                 success=False, error_message=f"Dockerfile not found: {dockerfile_path}"
             )
 
-        # Get credentials first to know the repository URL
-        if not self.credentials:
-            try:
-                self.credentials = self.get_upload_credentials(repo_name=image_name)
-            except Exception as e:
-                return RegistryResponse(success=False, error_message=str(e))
+        # Always get credentials for each image to ensure ECR repository creation
+        try:
+            self.credentials = self.get_upload_credentials(repo_name=image_name)
+        except Exception as e:
+            return RegistryResponse(success=False, error_message=str(e))
 
+        # Only login once (registry URL is same for all images in deployment)
+        if not self._logged_in:
             login_response = self.docker_login()
             if not login_response.success:
                 return login_response
+            self._logged_in = True
 
         # Build with the full ECR repository URL
         full_image_url = self.get_image_url(image_name)
