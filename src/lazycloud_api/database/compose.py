@@ -1,9 +1,9 @@
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING, Any, List
 
+from pydantic import field_serializer, field_validator
 from sqlalchemy import (
-    JSON,
     UUID,
     DateTime,
     ForeignKey,
@@ -25,6 +25,7 @@ from lazycloud_api.database.base import (
     UUIDStr,
 )
 from lazycloud_api.database.user_workspaces import UserWorkspaceTable
+from lazycloud_api.database.utils import decrypt_dict, encrypt_dict
 from shared.models.deployments import DeploymentStates
 from shared.models.helm import HelmValues
 
@@ -41,7 +42,7 @@ class ComposeDeploymentTable(BaseTable):
     name: Mapped[str | None] = mapped_column(String, index=True)
     namespace: Mapped[str] = mapped_column(String)
     compose_yaml: Mapped[str] = mapped_column(Text)
-    helm_values: Mapped[dict | None] = mapped_column(JSON)
+    helm_values: Mapped[str | None] = mapped_column(Text)
     state: Mapped[DeploymentStates] = mapped_column(
         SQLAEnum(DeploymentStates), default=DeploymentStates.PENDING, index=True
     )
@@ -73,7 +74,7 @@ class ComposeDeploymentTable(BaseTable):
 
 
 class ComposeDeploymentPydantic(BaseDbPydanticModel):
-    """Pydantic model for a compose deployment."""
+    """Pydantic model for a compose deployment with automatic encryption/decryption."""
 
     name: str | None = None
     workspace_id: UUIDStr
@@ -84,11 +85,45 @@ class ComposeDeploymentPydantic(BaseDbPydanticModel):
     status_message: str | None = None
     deployed_at: datetime | None = None
 
+    @field_validator("helm_values", mode="before")
+    @classmethod
+    def decrypt_helm_values(cls, value: Any) -> HelmValues | None:
+        """Automatically decrypt helm_values when loading from database."""
+        if value is None:
+            return None
+        if isinstance(value, str):
+            # It's encrypted, decrypt it
+            try:
+                decrypted_dict = decrypt_dict(value)
+                return HelmValues(**decrypted_dict)
+            except Exception as e:
+                raise ValueError(f"Failed to decrypt helm_values: {e}") from e
+        # Already a HelmValues object or dict
+        return value
+
+    @field_serializer("helm_values", when_used="always")
+    def serialize_helm_values(self, value: HelmValues | None) -> str | None:
+        """Automatically encrypt helm_values when dumping for database storage."""
+        if value is None:
+            return None
+        if isinstance(value, HelmValues):
+            # Encrypt it
+            try:
+                helm_dict = value.model_dump(by_alias=True)
+                return encrypt_dict(helm_dict)
+            except Exception as e:
+                raise ValueError(f"Failed to encrypt helm_values: {e}") from e
+        # Already encrypted string
+        return value
+
 
 class ComposeDeploymentService(
     DatabaseService[ComposeDeploymentTable, ComposeDeploymentPydantic]
 ):
-    """Service layer for compose deployment operations."""
+    """Service layer for compose deployment operations.
+
+    Encryption/decryption is handled automatically by Pydantic validators/serializers.
+    """
 
     def __init__(self):
         super().__init__(ComposeDeploymentTable, ComposeDeploymentPydantic)
@@ -133,11 +168,7 @@ class ComposeDeploymentService(
     async def aget_with_workspace_access(
         self, deployment_id: str, user_id: str
     ) -> tuple[ComposeDeploymentPydantic | None, str | None]:
-        """Get deployment and user's workspace role in a single JOIN query
-
-        Returns:
-            Tuple of (deployment, role) or (None, None) if not found or no access
-        """
+        """Get deployment and user's workspace role"""
         async with self._session_manager.get_session() as session:
             query = (
                 select(ComposeDeploymentTable, UserWorkspaceTable.role)
@@ -157,4 +188,5 @@ class ComposeDeploymentService(
                 return None, None
 
             deployment, role = row
-            return self._to_pydantic(deployment), role
+            deployment_pydantic = self._to_pydantic(deployment)
+            return deployment_pydantic, role
