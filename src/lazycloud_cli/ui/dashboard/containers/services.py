@@ -92,15 +92,10 @@ class ServicesContainer(Container):
             if service_statuses:
                 for status in service_statuses:
                     services.append(status.service)
-                    extra_text = (
-                        f"{status.service.ready_replicas}/{status.service.replicas}"
-                    )
                     items.append(
                         ListItemData(
                             id=status.service.name,
                             name=status.service.name,
-                            status=status.service.status,
-                            extra_text=extra_text,
                             data=status.service,
                         )
                     )
@@ -122,7 +117,16 @@ class ServicesContainer(Container):
             self.selected_service = item_data.data
 
     def _handle_highlight(self, item_data: ListItemData) -> None:
-        """Handle service highlight (arrow navigation)."""
+        """Handle service highlight with api requestdebouncing."""
+        self._selection_timer = self.handle_debounce(
+            self._selection_timer,
+            lambda: self._update_selected_service(item_data),
+        )
+
+    def _update_selected_service(self, item_data: ListItemData) -> None:
+        """Fetch service status after debounce delay."""
+        self._selection_timer = None
+
         if item_data.data and isinstance(item_data.data, ServiceStatus):
             self.selected_service = item_data.data
 

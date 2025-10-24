@@ -5,7 +5,7 @@ from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.reactive import reactive
 from textual.widget import Widget
-from textual.widgets import Static
+from textual.widgets import LoadingIndicator, Static
 from textual.worker import Worker
 
 from lazycloud_cli.api import api
@@ -14,6 +14,7 @@ from lazycloud_cli.ui.dashboard.containers.details.service_details.pods_table im
     PodTable,
 )
 from lazycloud_cli.ui.dashboard.containers.details.utils import get_status_color
+from lazycloud_cli.ui.dashboard.theme import Symbols
 from lazycloud_cli.utils.utils import format_image_name
 from shared.models.helm import HealthCheckValues, HPAValues
 from shared.models.k8s import Resources
@@ -42,18 +43,14 @@ class ServiceDetailsContainer(Widget):
 
     def on_mount(self) -> None:
         """Start SSE stream connection when mounted."""
-        # Start the SSE stream for real-time updates
+        self.call_after_refresh(self._show_loading)
         if self.deployment_id and self.service_name:
             self._start_stream()
 
-        # Defer initial render until after the widget tree is complete
-        if self.service_status:
-            self.call_after_refresh(self._render_initial_content)
-
-    def _render_initial_content(self) -> None:
-        """Render initial content after widget tree is ready."""
-        if self.service_status and self._scroll and self._scroll.is_mounted:
-            self._render_sections(self.service_status)
+    def _show_loading(self) -> None:
+        """Show loading indicator after widget is fully mounted."""
+        if self._scroll and self._scroll.is_mounted:
+            self._scroll.mount(LoadingIndicator())
 
     async def on_unmount(self) -> None:
         """Clean up when unmounting."""
@@ -119,9 +116,12 @@ class ServiceDetailsContainer(Widget):
 
     def update_overview(self, service: ServiceStatus) -> None:
         """Update the overview widget with new service data."""
-        if self._overview_widget:
-            overview_content = self._build_overview_content(service)
-            self._overview_widget.update("\n".join(overview_content).strip())
+        if self._overview_widget is None:
+            self._render_sections(service)
+            return
+
+        overview_content = self._build_overview_content(service)
+        self._overview_widget.update("\n".join(overview_content).strip())
 
     def update_pods_table(self, pods: list[PodStatus]) -> None:
         """Update the pods table with new data."""
@@ -169,7 +169,7 @@ class ServiceDetailsContainer(Widget):
         if not ports:
             return ["No ports exposed"]
 
-        return [f"● {port}" for port in ports]
+        return [f"{Symbols.BULLET} {port}" for port in ports]
 
     def _build_resources_content(self, resources: Resources) -> list[str]:
         """Build service resources section content."""

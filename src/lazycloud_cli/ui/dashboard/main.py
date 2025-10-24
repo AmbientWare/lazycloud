@@ -102,13 +102,15 @@ class DashboardApp(App):
         self.set_focus(content_container)
 
     def action_switch_to_secrets(self) -> None:
-        """Switch to secrets section."""
-        secrets_container = self.query_one(SecretsContainer)
-        self.set_focus(secrets_container)
-
-        # Update the main content container display mode
+        """Switch to secrets section - focuses secrets table in [4]."""
         main_content_container = self.query_one(ContentContainer)
         main_content_container.display_mode = DisplayMode.SECRET
+
+        # Focus the secrets table if it exists, otherwise the content container
+        if main_content_container._secrets_table:
+            self.set_focus(main_content_container._secrets_table)
+        else:
+            self.set_focus(main_content_container)
 
     def action_focus_instances(self) -> None:
         """Focus the instances table if it exists."""
