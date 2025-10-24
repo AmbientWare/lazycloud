@@ -7,10 +7,10 @@ from lazycloud_api.database.compose import ComposeDeploymentPydantic
 from lazycloud_api.services.monitoring.monitor_config import DeploymentMonitorConfig
 from shared.models.monitoring import StreamEventType
 
-statuses_router = APIRouter(prefix="/statuses")
+status_router = APIRouter(prefix="/status")
 
 
-@statuses_router.get("/stream")
+@status_router.get("/stream")
 async def stream_deployment_status(
     deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_access),
 ):

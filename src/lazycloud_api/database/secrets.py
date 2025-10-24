@@ -1,5 +1,6 @@
 from typing import TYPE_CHECKING, Any
 
+from cryptography.fernet import InvalidToken
 from pydantic import field_serializer, field_validator
 from sqlalchemy import Enum, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
@@ -61,13 +62,14 @@ class SecretPydantic(BaseDbPydanticModel):
     def decrypt_value(cls, value: Any) -> str:
         """Automatically decrypt value when loading from database."""
         if isinstance(value, str):
-            # Try to decrypt - if it fails, might already be decrypted
             try:
                 return decrypt_string(value)
-            except Exception:
-                # If decryption fails, assume it's already plaintext
-                # This handles cases where we're creating new secrets
+            except InvalidToken:
+                # Not encrypted (migration or new secret creation)
                 return value
+            except Exception as e:
+                # Real decryption error
+                raise ValueError(f"Failed to decrypt secret value: {e}") from e
         return value
 
     @field_serializer("value", when_used="always")
