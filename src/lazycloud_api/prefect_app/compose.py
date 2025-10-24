@@ -1,5 +1,6 @@
 import asyncio
 import time
+from datetime import UTC, datetime
 
 import yaml
 from loguru import logger
@@ -73,8 +74,9 @@ async def deploy_compose_task(
     if not deployment:
         raise Exception(f"Deployment {deployment_id} not found")
 
-    # Parse the compose YAML
-    compose_data = yaml.safe_load(deployment.compose_yaml)
+    # Parse the compose YAML (use pending if available, otherwise use current)
+    compose_yaml = deployment.pending_compose_yaml or deployment.compose_yaml
+    compose_data = yaml.safe_load(compose_yaml)
     compose_file = ComposeParser.parse_dict(compose_data)
 
     # get the helm values with deployment_id to load secrets
@@ -150,15 +152,20 @@ async def deploy_compose_task(
             if not app_result.success:
                 raise Exception(f"Failed to deploy application: {app_result.error}")
 
-        # we have finished and can udpate the deployment helm values
-        await db.compose_deployments.aupdate(deployment)
+        # Promote pending_compose_yaml to compose_yaml after successful deployment
+        if deployment.pending_compose_yaml:
+            deployment.compose_yaml = deployment.pending_compose_yaml
+            deployment.pending_compose_yaml = None
 
-        # Update status to deployed (deployment is initiated, not necessarily ready)
-        await _update_deployment_state(
-            deployment_id,
-            DeploymentStates.DEPLOYED,
-            f"Deployment initiated successfully (revision: {app_result.revision})",
+        # Update state, message, and timestamp in one go
+        deployment.state = DeploymentStates.DEPLOYED
+        deployment.status_message = (
+            f"Deployment initiated successfully (revision: {app_result.revision})"
         )
+        deployment.deployed_at = datetime.now(UTC)
+
+        # Single database update with all changes
+        await db.compose_deployments.aupdate(deployment)
 
         # update the secrets state to deployed
         for secret in secrets:
@@ -234,6 +241,6 @@ async def destroy_compose_task(deployment_id: str) -> None:
     except Exception as e:
         logger.error(f"Destruction of deployment {deployment_id} failed: {str(e)}")
         await _update_deployment_state(
-            deployment_id, DeploymentStates.FAILED, "Deletion failed", str(e)
+            deployment_id, DeploymentStates.FAILED, f"Deletion failed: {str(e)}"
         )
         raise

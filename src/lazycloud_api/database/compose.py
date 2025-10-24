@@ -48,6 +48,7 @@ class ComposeDeploymentTable(BaseTable):
     name: Mapped[str | None] = mapped_column(String, index=True)
     namespace: Mapped[str] = mapped_column(String)
     compose_yaml: Mapped[str] = mapped_column(Text)
+    pending_compose_yaml: Mapped[str | None] = mapped_column(Text)
     helm_values: Mapped[str | None] = mapped_column(Text)
     state: Mapped[DeploymentStates] = mapped_column(
         SQLAEnum(DeploymentStates), default=DeploymentStates.PENDING, index=True
@@ -86,15 +87,18 @@ class ComposeDeploymentPydantic(BaseDbPydanticModel):
     workspace_id: UUIDStr
     namespace: str
     compose_yaml: str
+    pending_compose_yaml: str | None = None
     helm_values: HelmValues | None = None
     state: DeploymentStates = DeploymentStates.PENDING
     status_message: str | None = None
     deployed_at: datetime | None = None
 
-    @field_validator("compose_yaml", mode="before")
+    @field_validator("compose_yaml", "pending_compose_yaml", mode="before")
     @classmethod
-    def decrypt_compose_yaml(cls, value: Any) -> str:
-        """Automatically decrypt compose_yaml when loading from database."""
+    def decrypt_compose_fields(cls, value: Any) -> str | None:
+        """Automatically decrypt compose fields when loading from database."""
+        if value is None:
+            return None
         if isinstance(value, str):
             try:
                 return decrypt_string(value)
@@ -103,16 +107,18 @@ class ComposeDeploymentPydantic(BaseDbPydanticModel):
                 return value
             except Exception as e:
                 # Real decryption error (corrupt data, wrong key, etc.)
-                raise ValueError(f"Failed to decrypt compose_yaml: {e}") from e
+                raise ValueError(f"Failed to decrypt compose field: {e}") from e
         return value
 
-    @field_serializer("compose_yaml", when_used="always")
-    def serialize_compose_yaml(self, value: str) -> str:
-        """Automatically encrypt compose_yaml when dumping for database storage."""
+    @field_serializer("compose_yaml", "pending_compose_yaml", when_used="always")
+    def serialize_compose_fields(self, value: str | None) -> str | None:
+        """Automatically encrypt compose fields when dumping for database storage."""
+        if value is None:
+            return None
         try:
             return encrypt_string(value)
         except Exception as e:
-            raise ValueError(f"Failed to encrypt compose_yaml: {e}") from e
+            raise ValueError(f"Failed to encrypt compose field: {e}") from e
 
     @field_validator("helm_values", mode="before")
     @classmethod
@@ -153,10 +159,7 @@ class ComposeDeploymentPydantic(BaseDbPydanticModel):
 class ComposeDeploymentService(
     DatabaseService[ComposeDeploymentTable, ComposeDeploymentPydantic]
 ):
-    """Service layer for compose deployment operations.
-
-    Encryption/decryption is handled automatically by Pydantic validators/serializers.
-    """
+    """Service layer for compose deployment operations"""
 
     def __init__(self):
         super().__init__(ComposeDeploymentTable, ComposeDeploymentPydantic)
