@@ -17,6 +17,7 @@ class ConfirmationDialog:
         warning_message: str | None = None,
         danger: bool = False,
         default: bool = False,
+        border_style: str | None = None,
     ):
         self.title = title
         self.question = question
@@ -24,6 +25,7 @@ class ConfirmationDialog:
         self.warning_message = warning_message
         self.danger = danger
         self.default = default
+        self.border_style = border_style
 
     def _create_card(self) -> Card:
         """Create the confirmation details card."""
@@ -44,14 +46,17 @@ class ConfirmationDialog:
             style = Colors.Ansi.warning if not self.danger else Colors.Ansi.error
             content.append(self.warning_message, style=style)
 
-        # Determine border style
-        border_style = (
-            Colors.Ansi.error
-            if self.danger
-            else Colors.Ansi.warning
-            if self.warning_message
-            else Colors.Ansi.primary
-        )
+        # Determine border style - use custom if provided, otherwise auto-determine
+        if self.border_style:
+            border_style = self.border_style
+        else:
+            border_style = (
+                Colors.Ansi.error
+                if self.danger
+                else Colors.Ansi.warning
+                if self.warning_message
+                else Colors.Ansi.primary
+            )
 
         return Card(
             content=content,
@@ -220,6 +225,7 @@ class SimpleConfirmationDialog(ConfirmationDialog):
         action: str,
         details: list[str] | None = None,
         title: str | None = None,
+        border_style: str | None = None,
     ):
         dialog_title = title or "Confirmation Required"
         question = f"Do you want to {action}?"
@@ -230,6 +236,7 @@ class SimpleConfirmationDialog(ConfirmationDialog):
             details=details,
             danger=False,
             default=True,
+            border_style=border_style,
         )
 
 
