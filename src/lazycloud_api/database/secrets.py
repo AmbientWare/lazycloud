@@ -1,5 +1,6 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+from pydantic import field_serializer, field_validator
 from sqlalchemy import Enum, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.future import select
@@ -11,6 +12,7 @@ from lazycloud_api.database.base import (
     DatabaseService,
     UUIDStr,
 )
+from lazycloud_api.database.utils import decrypt_string, encrypt_string
 from shared.models.secrets import SecretSource, SecretState
 
 if TYPE_CHECKING:
@@ -45,18 +47,8 @@ class SecretTable(BaseTable):
     )
 
 
-class SecretEncryptedPydantic(BaseDbPydanticModel):
-    """Pydantic model for encrypted deployment secrets (database storage)"""
-
-    deployment_id: UUIDStr
-    key: str
-    value: str
-    source: SecretSource
-    state: SecretState
-
-
 class SecretPydantic(BaseDbPydanticModel):
-    """Pydantic model for deployment secrets"""
+    """Pydantic model for deployment secrets with automatic encryption/decryption."""
 
     deployment_id: UUIDStr
     key: str
@@ -64,17 +56,43 @@ class SecretPydantic(BaseDbPydanticModel):
     source: SecretSource
     state: SecretState
 
+    @field_validator("value", mode="before")
+    @classmethod
+    def decrypt_value(cls, value: Any) -> str:
+        """Automatically decrypt value when loading from database."""
+        if isinstance(value, str):
+            # Try to decrypt - if it fails, might already be decrypted
+            try:
+                return decrypt_string(value)
+            except Exception:
+                # If decryption fails, assume it's already plaintext
+                # This handles cases where we're creating new secrets
+                return value
+        return value
 
-class SecretService(DatabaseService[SecretTable, SecretEncryptedPydantic]):
-    """Service layer for secret operations"""
+    @field_serializer("value", when_used="always")
+    def serialize_value(self, value: str) -> str:
+        """Automatically encrypt value when dumping for database storage."""
+        # Always encrypt when serializing for storage
+        try:
+            return encrypt_string(value)
+        except Exception as e:
+            raise ValueError(f"Failed to encrypt secret value: {e}") from e
+
+
+class SecretService(DatabaseService[SecretTable, SecretPydantic]):
+    """Service layer for secret operations.
+
+    Encryption/decryption is handled automatically by Pydantic validators/serializers.
+    """
 
     def __init__(self):
-        super().__init__(SecretTable, SecretEncryptedPydantic)
+        super().__init__(SecretTable, SecretPydantic)
 
     async def aget_secrets(
         self, deployment_id: str, source: SecretSource | None = None
     ) -> list[SecretPydantic]:
-        """Get a secret by deployment id"""
+        """Get secrets by deployment id."""
         async with self._session_manager.get_session() as session:
             query = select(SecretTable).where(
                 SecretTable.deployment_id == deployment_id
@@ -89,7 +107,7 @@ class SecretService(DatabaseService[SecretTable, SecretEncryptedPydantic]):
     async def aget_secret_by_key(
         self, deployment_id: str, key: str
     ) -> SecretPydantic | None:
-        """Get a single secret by deployment_id and key"""
+        """Get a single secret by deployment_id and key."""
         async with self._session_manager.get_session() as session:
             query = select(SecretTable).where(
                 SecretTable.deployment_id == deployment_id,
@@ -112,8 +130,8 @@ class SecretService(DatabaseService[SecretTable, SecretEncryptedPydantic]):
         if not existing:
             return None
 
-        # Create encrypted version for database storage with the existing ID
-        encrypted_model = SecretEncryptedPydantic(
+        # Create updated model
+        updated_secret = SecretPydantic(
             id=existing.id,
             deployment_id=deployment_id,
             key=key,
@@ -122,8 +140,7 @@ class SecretService(DatabaseService[SecretTable, SecretEncryptedPydantic]):
             state=state,
         )
 
-        await self.aupdate(encrypted_model)
-        return await self.aget_secret_by_key(deployment_id, key)
+        return await self.aupdate(updated_secret)
 
     async def adelete_secret_by_key(self, deployment_id: str, key: str) -> bool:
         """Delete a single secret by deployment_id and key"""

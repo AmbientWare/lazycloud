@@ -6,7 +6,6 @@ from loguru import logger
 from prefect import task
 
 from lazycloud_api.database import db
-from lazycloud_api.database.secrets import SecretEncryptedPydantic
 from lazycloud_api.services.compose.parser import ComposeParser
 from lazycloud_api.services.k8s import (
     create_release_name,
@@ -164,7 +163,7 @@ async def deploy_compose_task(
         # update the secrets state to deployed
         for secret in secrets:
             secret.state = SecretState.DEPLOYED
-            await db.secrets.aupdate(SecretEncryptedPydantic(**secret.model_dump()))
+            await db.secrets.aupdate(secret)
 
     except Exception as e:
         logger.error(f"Deployment {deployment_id} failed: {str(e)}")
@@ -177,7 +176,7 @@ async def deploy_compose_task(
         # update the secrets state back to awaiting deployment on failure
         for secret in secrets:
             secret.state = SecretState.AWAITING_DEPLOYMENT
-            await db.secrets.aupdate(SecretEncryptedPydantic(**secret.model_dump()))
+            await db.secrets.aupdate(secret)
 
         # Attempt cleanup on failure
         try:

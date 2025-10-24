@@ -9,10 +9,8 @@ from lazycloud_api.services.monitoring.monitor_config import MonitorConfig
 from shared.models.monitoring import StreamEventType
 
 # NOTE: maybe make this configurable?
-# For status/task streams (low frequency, critical data)
 STATUS_QUEUE_SIZE = 100
-# For log streams (high frequency, less critical)
-LOG_QUEUE_SIZE = 50
+LOG_QUEUE_SIZE = 150
 
 
 async def _sse_event_loop(

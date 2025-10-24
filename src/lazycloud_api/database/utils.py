@@ -13,17 +13,23 @@ from lazycloud_api.database.api_keys import (
 FERNET = Fernet(app_config.DB_SECRET_KEY.encode())
 
 
-def encrypt(secrets_dict: dict[str, str]) -> str:
-    """Encrypt a secrets dictionary for storage."""
-    json_str = json.dumps(secrets_dict)
-    encrypted_bytes = FERNET.encrypt(json_str.encode("utf-8"))
+def encrypt_string(value: str) -> str:
+    encrypted_bytes = FERNET.encrypt(value.encode("utf-8"))
     return encrypted_bytes.decode("utf-8")
 
 
-def decrypt(encrypted_str: str) -> dict[str, str]:
-    """Decrypt stored secrets back to dictionary."""
+def decrypt_string(encrypted_str: str) -> str:
     decrypted_bytes = FERNET.decrypt(encrypted_str.encode("utf-8"))
-    return json.loads(decrypted_bytes.decode("utf-8"))
+    return decrypted_bytes.decode("utf-8")
+
+
+def encrypt_dict(secrets_dict: dict[str, str]) -> str:
+    return encrypt_string(json.dumps(secrets_dict))
+
+
+def decrypt_dict(encrypted_str: str) -> dict[str, str]:
+    decrypted_str = decrypt_string(encrypted_str)
+    return json.loads(decrypted_str)
 
 
 def generate_api_key():
