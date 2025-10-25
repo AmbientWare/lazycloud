@@ -1,6 +1,6 @@
 from lazycloud_api.database.compose import ComposeDeploymentPydantic
 from lazycloud_api.database.secrets import SecretPydantic
-from lazycloud_api.services import ecr_auth_service
+from lazycloud_api.services import get_ecr_auth_service
 from lazycloud_api.services.compose.validator import ComposeValidator
 from lazycloud_api.services.k8s.generators.configuration import (
     generate_healthcheck_values,
@@ -135,6 +135,7 @@ class HelmValuesGenerator:
         self, service: ComposeService, compose: ComposeFile
     ) -> tuple[ServiceValues, dict[str, str] | None]:
         """Generate Helm values for a single service."""
+        ecr_auth_service = get_ecr_auth_service()
 
         if not service.image:
             raise ValueError(f"Service {service.name} has no image")

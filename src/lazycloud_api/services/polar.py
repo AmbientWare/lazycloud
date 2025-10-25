@@ -3,7 +3,6 @@ from enum import StrEnum
 from loguru import logger
 from polar_sdk import Polar
 
-from lazycloud_api.config import app_config
 from lazycloud_api.database import db
 from lazycloud_api.database.usage import UsageRecordPydantic
 
@@ -18,16 +17,16 @@ class PolarServer(StrEnum):
 class PolarService:
     """Service for managing billing operations with Polar."""
 
-    def __init__(self):
+    def __init__(self, access_token: str, is_sandbox: bool):
         """Initialize the Polar client."""
-        self.enabled = bool(app_config.POLAR_ACCESS_TOKEN)
-        self.is_sandbox = app_config.IS_POLAR_SANDBOX
+        self.enabled = bool(access_token)
+        self.is_sandbox = is_sandbox
         self.client = None
 
         if self.enabled:
             try:
                 self.client = Polar(
-                    access_token=app_config.POLAR_ACCESS_TOKEN,
+                    access_token=access_token,
                     server=PolarServer.SANDBOX.value
                     if self.is_sandbox
                     else PolarServer.PRODUCTION.value,

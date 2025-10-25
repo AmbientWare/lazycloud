@@ -6,7 +6,7 @@ from prefect import flow, task
 
 from lazycloud_api.database import db
 from lazycloud_api.database.usage import UsageRecordStatus, UsageRecordType
-from lazycloud_api.services import metrics_service, polar_service
+from lazycloud_api.services import get_metrics_service, get_polar_service
 from lazycloud_api.services.k8s import create_ns_name
 
 
@@ -14,6 +14,8 @@ from lazycloud_api.services.k8s import create_ns_name
 async def collect_workspace_usage_for_hour(
     workspace_id: str, start_time: datetime, end_time: datetime
 ) -> dict:
+    metrics_service = get_metrics_service()
+
     try:
         # Check Prometheus health before attempting collection
         if not await metrics_service.health_check():
@@ -305,6 +307,7 @@ async def backfill_daily_usage(
 async def forward_for_billing():
     """Forward finalized usage data to billing service"""
     finalized_usage = await db.usage.get_finalized_usage()
+    polar_service = get_polar_service()
 
     if not finalized_usage:
         logger.info("No finalized usage records to forward")

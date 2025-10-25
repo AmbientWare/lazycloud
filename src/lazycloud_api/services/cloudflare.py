@@ -1,5 +1,3 @@
-import argparse
-import asyncio
 from typing import Any
 
 import httpx
@@ -222,32 +220,3 @@ class CloudflareService:
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Async context manager exit"""
         await self.aclose()
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--domain", "-d", type=str, required=True)
-    parser.add_argument("--action", "-a", type=str, required=True)
-    args = parser.parse_args()
-
-    async def main():
-        cloudflare_service = CloudflareService()
-
-        # Add a domain
-        result = await cloudflare_service.add_saas_domain(domain=args.domain)
-        logger.info(f"Added domain result: {result}")
-
-        # Get domain status
-        status = await cloudflare_service.get_domain_status(domain=args.domain)
-        logger.info(f"Domain status: {status}")
-
-        # Delete domain (if action is delete)
-        if args.action == "delete":
-            delete_result = await cloudflare_service.delete_saas_domain(
-                domain=args.domain
-            )
-            logger.info(f"Deleted domain result: {delete_result}")
-
-        await cloudflare_service.aclose()
-
-    asyncio.run(main())

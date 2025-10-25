@@ -7,7 +7,7 @@ from loguru import logger
 from lazycloud_api.api.dependencies import get_workspace_with_admin_access
 from lazycloud_api.database import db
 from lazycloud_api.database.user_workspaces import UserWorkspacePydantic
-from lazycloud_api.services import metrics_service
+from lazycloud_api.services import PrometheusMetricsService, get_metrics_service
 from lazycloud_api.services.k8s import create_ns_name
 from shared.responses.usage import (
     CurrentUsageData,
@@ -43,6 +43,7 @@ async def get_workspace_usage(
 @usage_router.get("/current")
 async def get_current_usage(
     workspace: UserWorkspacePydantic = Depends(get_workspace_with_admin_access),
+    metrics_service: PrometheusMetricsService = Depends(get_metrics_service),
 ) -> CurrentUsageResponse:
     namespace = create_ns_name(workspace.workspace_id)
 
