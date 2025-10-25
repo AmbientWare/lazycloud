@@ -7,7 +7,7 @@ from loguru import logger
 from prefect import task
 
 from lazycloud_api.database import db
-from lazycloud_api.services import ecr_auth_service
+from lazycloud_api.services import get_ecr_auth_service
 from lazycloud_api.services.compose.parser import ComposeParser
 from lazycloud_api.services.k8s import (
     create_release_name,
@@ -200,6 +200,7 @@ async def deploy_compose_task(
 async def destroy_compose_task(deployment_id: str) -> None:
     """Destroy a Docker Compose deployment from Kubernetes."""
     logger.info(f"Starting destruction of deployment {deployment_id}")
+    ecr_auth_service = get_ecr_auth_service()
 
     # get the deployment
     deployment = await db.compose_deployments.aget_by_id(deployment_id)

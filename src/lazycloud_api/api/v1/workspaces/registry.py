@@ -4,7 +4,7 @@ from loguru import logger
 from lazycloud_api.api.dependencies import get_workspace_with_admin_access
 from lazycloud_api.database.user_workspaces import UserWorkspacePydantic
 from lazycloud_api.database.workspaces import WorkspacePydantic
-from lazycloud_api.services import ecr_auth_service
+from lazycloud_api.services import ECRAuthService, get_ecr_auth_service
 from shared.requests.registry import UploadIntentRequest
 from shared.responses.registry import UploadIntentResponse
 
@@ -17,6 +17,7 @@ async def get_upload_intent(
     workspace_membership: tuple[UserWorkspacePydantic, WorkspacePydantic] = Depends(
         get_workspace_with_admin_access
     ),
+    ecr_auth_service: ECRAuthService = Depends(get_ecr_auth_service),
 ) -> UploadIntentResponse:
     """Get temporary ECR push credentials for a deployment"""
 
