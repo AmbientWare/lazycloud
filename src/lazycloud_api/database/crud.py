@@ -38,6 +38,7 @@ async def update_admin_api_keys():
     if not user:
         user = UserPydantic(
             clerk_id="lzy_admin",
+            polar_id="lzy_admin",
             role=UserRole.ADMIN,
             status=UserStatus.ACTIVE,
         )

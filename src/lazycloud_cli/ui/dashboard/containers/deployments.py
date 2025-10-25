@@ -136,13 +136,13 @@ class DeploymentsContainer(Container):
                 error_modal = ErrorModal(
                     title="Server Error",
                     message=f"The server encountered an error:\n\n{str(e)}\n\nPlease try again later.",
-                    icon="⚠️",
+                    icon="⚠️ ",  # extra space needed for alignment
                 )
             else:
                 error_modal = ErrorModal(
                     title="Failed to Load Deployments",
                     message=f"Could not load deployments:\n\n{str(e)}",
-                    icon="⚠️",
+                    icon="⚠️ ",  # extra space needed for alignment
                 )
 
             self.app.push_screen(error_modal)

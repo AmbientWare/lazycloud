@@ -1,6 +1,7 @@
 from lazycloud_api.config import app_config
 from lazycloud_api.services.cloudflare import CloudflareService
 from lazycloud_api.services.ecr_auth import ECRAuthService
+from lazycloud_api.services.polar import PolarService
 from lazycloud_api.services.prometheus import PrometheusMetricsService
 
 ecr_auth_service = ECRAuthService(
@@ -11,13 +12,21 @@ ecr_auth_service = ECRAuthService(
     base_role_arn=app_config.AWS_ECR_BASE_ROLE_ARN,
     endpoint_url=app_config.AWS_ENDPOINT_URL,
 )
+
+
 cloudflare_service = CloudflareService(
     api_key=app_config.CLOUDFLARE_API_KEY,
     zone_id=app_config.CLOUDFLARE_ZONE_ID,
     account_id=app_config.CLOUDFLARE_ACCOUNT_ID,
 )
+
+
 metrics_service = PrometheusMetricsService(
     prometheus_url=app_config.PROMETHEUS_URL,
 )
 
-__all__ = ["ecr_auth_service", "cloudflare_service", "metrics_service"]
+
+polar_service = PolarService()
+
+
+__all__ = ["ecr_auth_service", "cloudflare_service", "metrics_service", "polar_service"]

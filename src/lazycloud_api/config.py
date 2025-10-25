@@ -72,6 +72,10 @@ class AppConfig(BaseModel):
         os.getenv("USAGE_COLLECTION_INTERVAL_HOURS", "1")
     )
 
+    # Billing Configuration
+    POLAR_ACCESS_TOKEN: str = os.getenv("POLAR_ACCESS_TOKEN", "")
+    IS_POLAR_SANDBOX: bool = os.getenv("IS_POLAR_SANDBOX", "false").lower() == "true"
+
     # Required Environment Variables
     required_env_vars: List[str] = [
         "ADMIN_API_KEY",
