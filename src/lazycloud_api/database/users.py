@@ -31,6 +31,7 @@ class UserTable(BaseTable):
 
     # Clerk user ID
     clerk_id: Mapped[str] = mapped_column(String, unique=True)
+    polar_id: Mapped[str | None] = mapped_column(String, unique=True)
     role: Mapped[str] = mapped_column(String, default=UserRole.USER)
     status: Mapped[str] = mapped_column(String, default=UserStatus.ACTIVE)
 
@@ -54,6 +55,7 @@ class UserPydantic(BaseDbPydanticModel):
     """Pydantic model for a user account"""
 
     clerk_id: str
+    polar_id: str
     role: UserRole
     status: UserStatus
 
@@ -67,4 +69,9 @@ class UserService(DatabaseService[UserTable, UserPydantic]):
     async def aget_by_clerk_id(self, clerk_id: str) -> UserPydantic | None:
         """Get user by Clerk ID"""
         filters = {"clerk_id": clerk_id}
+        return await self.afind_one(filters=filters)
+
+    async def aget_by_polar_id(self, polar_id: str) -> UserPydantic | None:
+        """Get user by Polar ID"""
+        filters = {"polar_id": polar_id}
         return await self.afind_one(filters=filters)

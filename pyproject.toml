@@ -24,6 +24,7 @@ dependencies = [
     "nest-asyncio>=1.6.0",
     "pandas>=2.2.3",
     "petname>=2.6",
+    "polar-sdk>=0.27.3",
     "prefect>=3.4.24",
     "psycopg2-binary>=2.9.10",
     "pydantic-settings>=2.9.1",

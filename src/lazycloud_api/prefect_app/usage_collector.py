@@ -6,7 +6,7 @@ from prefect import flow, task
 
 from lazycloud_api.database import db
 from lazycloud_api.database.usage import UsageRecordStatus, UsageRecordType
-from lazycloud_api.services import metrics_service
+from lazycloud_api.services import metrics_service, polar_service
 from lazycloud_api.services.k8s import create_ns_name
 
 
@@ -315,18 +315,58 @@ async def forward_for_billing():
 
     for usage in finalized_usage:
         try:
-            # TODO: Forward to billing service (e.g., Polar.sh, Stripe)
             logger.info(
                 f"Forwarding usage to billing: workspace={usage.workspace_id}, "
                 f"period={usage.collection_start} to {usage.collection_end}, "
-                f"CPU={usage.cpu_core_seconds / 3600:.2f}h, "
-                f"Memory={usage.memory_gb_seconds / 3600:.2f}GB-h"
+                f"CPU={usage.cpu_core_seconds:.0f}s, "
+                f"Memory={usage.memory_gb_seconds:.0f}GB-s"
             )
 
-            # Mark as reported (changes status from FINALIZED to REPORTED)
-            await db.usage.mark_as_reported(uuid.UUID(usage.id))
-            forwarded += 1
-            logger.info(f"Marked usage as reported: {usage.id}")
+            should_mark_reported = False
+
+            # Get workspace owner's polar_id
+            polar_customer_id = await polar_service.get_workspace_owner_polar_id(
+                str(usage.workspace_id)
+            )
+
+            if not polar_service.enabled:
+                # Polar disabled - mark as reported (graceful degradation)
+                logger.debug(
+                    f"Polar disabled, marking usage {usage.id} as reported without sending"
+                )
+                should_mark_reported = True
+
+            elif not polar_customer_id:
+                # No polar_id - mark as reported (user not configured yet)
+                logger.warning(
+                    f"Skipping Polar billing for workspace {usage.workspace_id}: "
+                    f"owner has no polar_id set. Marking as reported."
+                )
+                should_mark_reported = True
+
+            else:
+                # Send usage data to Polar
+                results = await polar_service.send_workspace_usage(
+                    usage, polar_customer_id
+                )
+
+                # Only mark as reported if ALL events succeeded
+                if all(results.values()):
+                    should_mark_reported = True
+                    logger.info(f"All events sent successfully for usage {usage.id}")
+                else:
+                    logger.error(
+                        f"Failed to send all events for usage {usage.id}: {results}. "
+                        f"Will retry on next run."
+                    )
+
+            # Mark as reported only if delivery confirmed or gracefully skipped
+            if should_mark_reported:
+                await db.usage.mark_as_reported(uuid.UUID(usage.id))
+                forwarded += 1
+                logger.info(f"Marked usage as reported: {usage.id}")
+            else:
+                failed += 1
 
         except Exception as e:
             failed += 1

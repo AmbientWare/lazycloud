@@ -13,6 +13,7 @@ from lazycloud_api.database.user_workspaces import (
     UserWorkspaceTable,
     WorkspaceRole,
 )
+from lazycloud_api.database.users import UserPydantic, UserTable
 
 if TYPE_CHECKING:
     from lazycloud_api.database.compose import ComposeDeploymentTable
@@ -118,6 +119,24 @@ class WorkspaceService(DatabaseService[WorkspaceTable, WorkspacePydantic]):
             }
         )
         return members[0] if members else None
+
+    async def aget_owner_user(self, workspace_id: str) -> UserPydantic | None:
+        """Get the owner user for a workspace in a single query"""
+
+        async with self._session_manager.get_session() as session:
+            query = (
+                select(UserTable)
+                .join(UserWorkspaceTable, UserTable.id == UserWorkspaceTable.user_id)
+                .where(UserWorkspaceTable.workspace_id == workspace_id)
+                .where(UserWorkspaceTable.role == WorkspaceRole.OWNER.value)
+            )
+
+            result = await session.execute(query)
+            user = result.scalar_one_or_none()
+
+            if user:
+                return UserPydantic.model_validate(user, from_attributes=True)
+            return None
 
     async def transfer_ownership(
         self, workspace_id: str, current_owner_id: str, new_owner_id: str
