@@ -23,10 +23,11 @@ class StatusAPI:
             if event_type == "status":
                 status_data = data.get("data", {})
                 status = DeploymentStatus(**status_data)
-                # Convert UTC time to local timezone
+                # Convert UTC times to local timezone
                 status.last_checked = status.last_checked.replace(
                     tzinfo=UTC
                 ).astimezone()
+                status.deployed_at = status.deployed_at.replace(tzinfo=UTC).astimezone()
                 on_update(status)
 
         await self._client.stream(
