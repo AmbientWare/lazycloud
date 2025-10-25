@@ -44,6 +44,7 @@ dependencies = [
 
 [project.scripts]
 lazycloud = "lazycloud_cli.main:main_cli"
+update-billing = "lazycloud_api.billing.update_billing:main"
 cli-console = "scripts.dev_tools:textual_console"
 cli-dashboard = "scripts.dev_tools:cli_dashboard"
 mk-help = "scripts.minikube_dev:help"

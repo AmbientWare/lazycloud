@@ -353,11 +353,11 @@ async def forward_for_billing():
             should_mark_reported = False
 
             # Get workspace owner's polar_id
-            polar_customer_id = await polar_service.get_workspace_owner_polar_id(
+            polar_customer_id = await polar_service.usage.get_workspace_owner_polar_id(
                 str(usage.workspace_id)
             )
 
-            if not polar_service.enabled:
+            if not polar_service.usage.enabled:
                 # Polar disabled - mark as reported (graceful degradation)
                 logger.debug(
                     f"Polar disabled, marking usage {usage.id} as reported without sending"
@@ -374,7 +374,7 @@ async def forward_for_billing():
 
             else:
                 # Send usage data to Polar
-                results = await polar_service.send_workspace_usage(
+                results = await polar_service.usage.send_workspace_usage(
                     usage, polar_customer_id
                 )
 

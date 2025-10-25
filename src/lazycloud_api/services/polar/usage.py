@@ -1,44 +1,19 @@
-from enum import StrEnum
-
 from loguru import logger
 from polar_sdk import Polar
+from polar_sdk.models import EventCreateExternalCustomer, EventsIngest
 
 from lazycloud_api.database import db
 from lazycloud_api.database.usage import UsageRecordPydantic
+from shared.models.billing import METERS_EVENT_MAP, MeterNames
 
 
-class PolarServer(StrEnum):
-    """Polar server environment."""
-
-    SANDBOX = "sandbox"
-    PRODUCTION = "production"
-
-
-class PolarService:
+class PolarUsageModule:
     """Service for managing billing operations with Polar."""
 
-    def __init__(self, access_token: str, is_sandbox: bool):
+    def __init__(self, client: Polar, enabled: bool):
         """Initialize the Polar client."""
-        self.enabled = bool(access_token)
-        self.is_sandbox = is_sandbox
-        self.client = None
-
-        if self.enabled:
-            try:
-                self.client = Polar(
-                    access_token=access_token,
-                    server=PolarServer.SANDBOX.value
-                    if self.is_sandbox
-                    else PolarServer.PRODUCTION.value,
-                )
-                logger.info("Polar billing service initialized")
-            except Exception as e:
-                logger.error(f"Failed to initialize Polar client: {e}")
-                self.enabled = False
-        else:
-            logger.warning(
-                "Polar billing service disabled: POLAR_ACCESS_TOKEN not configured"
-            )
+        self.client = client
+        self.enabled = enabled
 
     async def send_usage_event(
         self,
@@ -47,8 +22,7 @@ class PolarService:
         quantity: float,
         metadata: dict[str, str | float | int],
     ) -> bool:
-        """
-        Send a usage event to Polar"""
+        """Send a usage event to Polar"""
         if not self.enabled:
             logger.debug(
                 f"Polar disabled, skipping event: {event_name} for customer {external_customer_id}"
@@ -64,10 +38,16 @@ class PolarService:
 
         try:
             # Send usage event to Polar
-            self.client.usage.ingest(
-                event=event_name,
-                external_customer_id=external_customer_id,
-                metadata=metadata,
+            self.client.events.ingest(
+                request=EventsIngest(
+                    events=[
+                        EventCreateExternalCustomer(
+                            name=event_name,
+                            external_customer_id=external_customer_id,
+                            metadata=metadata,
+                        )
+                    ]
+                )
             )
 
             logger.info(
@@ -127,7 +107,7 @@ class PolarService:
         }
         results["cpu"] = await self.send_usage_event(
             external_customer_id=polar_customer_id,
-            event_name="cpu_usage",
+            event_name=METERS_EVENT_MAP[MeterNames.CPU_USAGE],
             quantity=cpu_core_hours,
             metadata=cpu_metadata,
         )
@@ -140,7 +120,7 @@ class PolarService:
         }
         results["memory"] = await self.send_usage_event(
             external_customer_id=polar_customer_id,
-            event_name="memory_usage",
+            event_name=METERS_EVENT_MAP[MeterNames.MEMORY_USAGE],
             quantity=memory_gb_hours,
             metadata=memory_metadata,
         )
@@ -154,7 +134,7 @@ class PolarService:
         }
         results["s3_storage"] = await self.send_usage_event(
             external_customer_id=polar_customer_id,
-            event_name="s3_storage_usage",
+            event_name=METERS_EVENT_MAP[MeterNames.NORMAL_STORAGE],
             quantity=s3_gb_hours,
             metadata=s3_storage_metadata,
         )
@@ -168,7 +148,7 @@ class PolarService:
         }
         results["efs_storage"] = await self.send_usage_event(
             external_customer_id=polar_customer_id,
-            event_name="efs_storage_usage",
+            event_name=METERS_EVENT_MAP[MeterNames.HIGH_PERFORMANCE_STORAGE],
             quantity=efs_gb_hours,
             metadata=efs_storage_metadata,
         )
