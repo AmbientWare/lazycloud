@@ -55,7 +55,7 @@ def list():
     except Exception as e:
         error_card = Card(
             content=Text(f"Failed to list workspaces: {e}", style=Colors.Ansi.error),
-            title="🗂️ Error",
+            title="🗂️  Error",
             border_style=Colors.Ansi.error,
         )
         console.print(error_card)
