@@ -73,6 +73,7 @@ class AppConfig(BaseModel):
     )
 
     # Billing Configuration
+    POLAR_ORGANIZATION_ID: str = os.getenv("POLAR_ORGANIZATION_ID", "")
     POLAR_ACCESS_TOKEN: str = os.getenv("POLAR_ACCESS_TOKEN", "")
     IS_POLAR_SANDBOX: bool = os.getenv("IS_POLAR_SANDBOX", "false").lower() == "true"
 

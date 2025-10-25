@@ -1,0 +1,48 @@
+from enum import StrEnum
+
+from loguru import logger
+from polar_sdk import Polar
+
+from .customers import PolarCustomersModule
+from .meters import PolarMetersModule
+from .products import PolarProductsModule
+from .usage import PolarUsageModule
+
+
+class PolarServer(StrEnum):
+    """Polar server environment."""
+
+    SANDBOX = "sandbox"
+    PRODUCTION = "production"
+
+
+class PolarService:
+    """Service for managing billing operations with Polar."""
+
+    def __init__(self, access_token: str, is_sandbox: bool):
+        """Initialize the Polar client."""
+        self.enabled = bool(access_token)
+        self.is_sandbox = is_sandbox
+
+        if self.enabled:
+            try:
+                self.client = Polar(
+                    access_token=access_token,
+                    server=PolarServer.SANDBOX.value
+                    if self.is_sandbox
+                    else PolarServer.PRODUCTION.value,
+                )
+                logger.info("Polar billing service initialized")
+            except Exception as e:
+                logger.error(f"Failed to initialize Polar client: {e}")
+                self.enabled = False
+        else:
+            self.client = None
+            logger.warning(
+                "Polar billing service disabled: POLAR_ACCESS_TOKEN not configured"
+            )
+
+        self.usage = PolarUsageModule(client=self.client, enabled=self.enabled)
+        self.customers = PolarCustomersModule(client=self.client, enabled=self.enabled)
+        self.meters = PolarMetersModule(client=self.client, enabled=self.enabled)
+        self.products = PolarProductsModule(client=self.client, enabled=self.enabled)
