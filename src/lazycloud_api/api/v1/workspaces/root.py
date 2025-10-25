@@ -34,8 +34,9 @@ async def get_workspaces(
     current_user: UserPydantic = Depends(get_current_active_user),
 ) -> list[WorkspaceResponse]:
     """Get all workspaces the current user has access to"""
+    # NOTE: for now we only show active workspaces
     user_workspaces = await db.workspaces.aget_user_workspaces_with_membership(
-        current_user.id
+        current_user.id, status=WorkspaceStatus.ACTIVE
     )
 
     return [

@@ -70,7 +70,7 @@ class WorkspaceService(DatabaseService[WorkspaceTable, WorkspacePydantic]):
         super().__init__(WorkspaceTable, WorkspacePydantic)
 
     async def aget_user_workspaces_with_membership(
-        self, user_id: str
+        self, user_id: str, status: WorkspaceStatus = WorkspaceStatus.ACTIVE
     ) -> list[tuple[WorkspacePydantic, UserWorkspacePydantic]]:
         """Get all workspaces for a user with membership info in a single query"""
 
@@ -79,6 +79,7 @@ class WorkspaceService(DatabaseService[WorkspaceTable, WorkspacePydantic]):
                 select(WorkspaceTable, UserWorkspaceTable)
                 .join(UserWorkspaceTable)
                 .where(UserWorkspaceTable.user_id == user_id)
+                .where(WorkspaceTable.status == status.value)
             )
 
             result = await session.execute(query)

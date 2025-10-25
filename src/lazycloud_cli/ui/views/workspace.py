@@ -27,14 +27,16 @@ class WorkspaceView:
     def show_creating(self, name: str):
         """Show workspace creation in progress."""
         card = ActionProgressCard(
-            action="Creating workspace", resource_name=name, icon="🗂️"
+            action="Creating workspace",
+            resource_name=name,
+            icon="🗂️ ",  # extra space to align with the icon
         )
         self.console.print(card)
 
     def show_created(self, workspace: Dict[str, Any]):
         """Show successful workspace creation."""
         card = SuccessDetailsCard(
-            title="🗂️ Workspace Created",
+            title="🗂️  Workspace Created",  # extra space to align with the icon
             message="Workspace created successfully!",
             details={"Name": workspace.get("name", "")},
         )
@@ -43,7 +45,7 @@ class WorkspaceView:
     def show_activated(self, workspace: Dict[str, Any]):
         """Show successful workspace activation."""
         card = SuccessDetailsCard(
-            title="🗂️ Active Workspace",
+            title="🗂️  Active Workspace",  # extra space to align with the icon
             message="Workspace activated!",
             details={
                 "Name": workspace.get("name", ""),
@@ -54,7 +56,9 @@ class WorkspaceView:
 
     def show_not_found(self, name: str):
         """Show workspace not found error."""
-        card = NotFoundCard(resource_type="Workspace", resource_name=name, icon="🗂️")
+        card = NotFoundCard(
+            resource_type="Workspace", resource_name=name, icon="🗂️ "
+        )  # extra space to align with the icon
         self.console.print(card)
 
     def show_personal_cannot_remove(self):
@@ -65,21 +69,13 @@ class WorkspaceView:
                 "Personal workspaces are permanent and cannot be deleted.",
                 style=Colors.Ansi.error,
             ),
-            title="🗂️ Cannot Remove",
+            title="🗂️  Cannot Remove",  # extra space to align with the icon
             border_style=Colors.Ansi.error,
         )
         self.console.print(card)
 
     def confirm_removal(self, workspace_name: str, force: bool = False) -> bool:
-        """Show confirmation prompt for workspace removal.
-
-        Args:
-            workspace_name: Name of workspace to remove
-            force: Skip confirmation if True
-
-        Returns:
-            True if confirmed, False otherwise
-        """
+        """Show confirmation prompt for workspace removal"""
         if force:
             return True
 
@@ -98,14 +94,17 @@ class WorkspaceView:
     def show_removed(self, workspace_name: str):
         """Show successful workspace removal."""
         card = SuccessDetailsCard(
-            title="🗂️ Workspace Removed",
+            title="🗂️  Workspace Removed",  # extra space to align with the icon
             message=f"Workspace '{workspace_name}' has been successfully removed.\n\nAll associated resources have been deleted.",
         )
         self.console.print(card)
 
     def show_cancelled(self):
         """Show cancellation message."""
-        card = WarningCard(message="Operation cancelled.", title="🗂️ Cancelled")
+        card = WarningCard(
+            message="Operation cancelled.",
+            title="🗂️  Cancelled",  # extra space to align with the icon
+        )
         self.console.print(card)
 
     def show_error(self, message: str, suggestion: str | None = None):
@@ -115,5 +114,9 @@ class WorkspaceView:
             message: The error message
             suggestion: Optional suggestion for fixing the error
         """
-        card = ErrorCard(message=message, title="🗂️ Error", suggestion=suggestion)
+        card = ErrorCard(
+            message=message,
+            title="🗂️  Error",  # extra space to align with the icon
+            suggestion=suggestion,
+        )
         self.console.print(card)
