@@ -8,10 +8,12 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Index,
-    Integer,
     String,
+    UniqueConstraint,
+    func,
     select,
 )
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from lazycloud_api.database.base import (
@@ -58,10 +60,18 @@ class UsageRecordTable(BaseTable):
     cpu_core_seconds: Mapped[float] = mapped_column(Float, default=0.0)
     memory_gb_seconds: Mapped[float] = mapped_column(Float, default=0.0)
     storage_gb_hours: Mapped[float] = mapped_column(Float, default=0.0)
+    s3_gb_hours: Mapped[float] = mapped_column(Float, default=0.0)
+    efs_gb_hours: Mapped[float] = mapped_column(Float, default=0.0)
 
     # Relationships
-    breakdowns: Mapped[list["UsageBreakdownTable"]] = relationship(
-        "UsageBreakdownTable",
+    compute_breakdowns: Mapped[list["ComputeUsageBreakdownTable"]] = relationship(
+        "ComputeUsageBreakdownTable",
+        back_populates="usage_record",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+    storage_breakdowns: Mapped[list["StorageUsageBreakdownTable"]] = relationship(
+        "StorageUsageBreakdownTable",
         back_populates="usage_record",
         cascade="all, delete-orphan",
         lazy="selectin",
@@ -75,35 +85,76 @@ class UsageRecordTable(BaseTable):
     )
 
 
-class UsageBreakdownTable(BaseTable):
-    """Stores detailed service-level breakdown."""
+class ComputeUsageBreakdownTable(BaseTable):
+    """Stores detailed per-pod compute breakdown."""
 
-    __tablename__ = "usage_breakdown"
+    __tablename__ = "compute_usage_breakdown"
 
     usage_record_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("usage_records.id", ondelete="CASCADE"),
         index=True,
     )
-    service_name: Mapped[str] = mapped_column(String, index=True)
+    pod_name: Mapped[str] = mapped_column(String, index=True)
     cpu_core_seconds: Mapped[float] = mapped_column(Float, default=0.0)
     memory_gb_seconds: Mapped[float] = mapped_column(Float, default=0.0)
-    pod_count: Mapped[int] = mapped_column(Integer, default=0)
 
     # Relationship
     usage_record: Mapped["UsageRecordTable"] = relationship(
-        "UsageRecordTable", back_populates="breakdowns"
+        "UsageRecordTable", back_populates="compute_breakdowns"
+    )
+
+    # Unique constraint for efficient upserts
+    __table_args__ = (
+        UniqueConstraint(
+            "usage_record_id", "pod_name", name="uq_compute_breakdown_record_pod"
+        ),
     )
 
 
-class UsageBreakdownPydantic(BaseDbPydanticModel):
-    """Pydantic model for usage breakdown."""
+class StorageUsageBreakdownTable(BaseTable):
+    """Stores detailed per-PVC storage breakdown."""
+
+    __tablename__ = "storage_usage_breakdown"
+
+    usage_record_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("usage_records.id", ondelete="CASCADE"),
+        index=True,
+    )
+    pvc_name: Mapped[str] = mapped_column(String, index=True)
+    storage_class: Mapped[str] = mapped_column(String, index=True)
+    gb_hours: Mapped[float] = mapped_column(Float, default=0.0)
+
+    # Relationship
+    usage_record: Mapped["UsageRecordTable"] = relationship(
+        "UsageRecordTable", back_populates="storage_breakdowns"
+    )
+
+    # Unique constraint for efficient upserts
+    __table_args__ = (
+        UniqueConstraint(
+            "usage_record_id", "pvc_name", name="uq_storage_breakdown_record_pvc"
+        ),
+    )
+
+
+class ComputeUsageBreakdownPydantic(BaseDbPydanticModel):
+    """Pydantic model for compute usage breakdown."""
 
     usage_record_id: UUIDStr
-    service_name: str
+    pod_name: str
     cpu_core_seconds: float
     memory_gb_seconds: float
-    pod_count: int
+
+
+class StorageUsageBreakdownPydantic(BaseDbPydanticModel):
+    """Pydantic model for storage usage breakdown."""
+
+    usage_record_id: UUIDStr
+    pvc_name: str
+    storage_class: str
+    gb_hours: float
 
 
 class UsageRecordPydantic(BaseDbPydanticModel):
@@ -117,7 +168,10 @@ class UsageRecordPydantic(BaseDbPydanticModel):
     cpu_core_seconds: float
     memory_gb_seconds: float
     storage_gb_hours: float
-    breakdowns: list[UsageBreakdownPydantic] = []
+    s3_gb_hours: float
+    efs_gb_hours: float
+    compute_breakdowns: list[ComputeUsageBreakdownPydantic] = []
+    storage_breakdowns: list[StorageUsageBreakdownPydantic] = []
 
 
 class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
@@ -134,6 +188,8 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
         cpu_core_seconds: float,
         memory_gb_seconds: float,
         storage_gb_hours: float,
+        s3_gb_hours: float = 0.0,
+        efs_gb_hours: float = 0.0,
         record_type: UsageRecordType = UsageRecordType.HOURLY,
         status: UsageRecordStatus = UsageRecordStatus.DRAFT,
     ) -> UsageRecordPydantic:
@@ -153,6 +209,8 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
                 existing_record.cpu_core_seconds = cpu_core_seconds
                 existing_record.memory_gb_seconds = memory_gb_seconds
                 existing_record.storage_gb_hours = storage_gb_hours
+                existing_record.s3_gb_hours = s3_gb_hours
+                existing_record.efs_gb_hours = efs_gb_hours
                 existing_record.status = status.value
                 await session.commit()
                 await session.refresh(existing_record)
@@ -168,50 +226,75 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
                     cpu_core_seconds=cpu_core_seconds,
                     memory_gb_seconds=memory_gb_seconds,
                     storage_gb_hours=storage_gb_hours,
+                    s3_gb_hours=s3_gb_hours,
+                    efs_gb_hours=efs_gb_hours,
                 )
                 session.add(usage_record)
                 await session.commit()
                 await session.refresh(usage_record)
                 return usage_record.to_pydantic(UsageRecordPydantic)
 
-    async def upsert_usage_breakdown(
+    async def upsert_compute_breakdown(
         self,
         usage_record_id: uuid.UUID,
-        service_name: str,
+        pod_name: str,
         cpu_core_seconds: float,
         memory_gb_seconds: float,
-        pod_count: int,
-    ) -> UsageBreakdownPydantic:
+    ) -> ComputeUsageBreakdownPydantic:
         async with session_manager.get_session() as session:
-            # Check if breakdown exists
-            result = await session.execute(
-                select(UsageBreakdownTable)
-                .where(UsageBreakdownTable.usage_record_id == usage_record_id)
-                .where(UsageBreakdownTable.service_name == service_name)
+            stmt = insert(ComputeUsageBreakdownTable).values(
+                usage_record_id=usage_record_id,
+                pod_name=pod_name,
+                cpu_core_seconds=cpu_core_seconds,
+                memory_gb_seconds=memory_gb_seconds,
             )
-            existing_breakdown = result.scalar_one_or_none()
 
-            if existing_breakdown:
-                # Update existing breakdown
-                existing_breakdown.cpu_core_seconds = cpu_core_seconds
-                existing_breakdown.memory_gb_seconds = memory_gb_seconds
-                existing_breakdown.pod_count = pod_count
-                await session.commit()
-                await session.refresh(existing_breakdown)
-                return existing_breakdown.to_pydantic(UsageBreakdownPydantic)
-            else:
-                # Create new breakdown
-                breakdown = UsageBreakdownTable(
-                    usage_record_id=usage_record_id,
-                    service_name=service_name,
-                    cpu_core_seconds=cpu_core_seconds,
-                    memory_gb_seconds=memory_gb_seconds,
-                    pod_count=pod_count,
-                )
-                session.add(breakdown)
-                await session.commit()
-                await session.refresh(breakdown)
-                return breakdown.to_pydantic(UsageBreakdownPydantic)
+            # On conflict, update the values
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["usage_record_id", "pod_name"],
+                set_={
+                    "cpu_core_seconds": stmt.excluded.cpu_core_seconds,
+                    "memory_gb_seconds": stmt.excluded.memory_gb_seconds,
+                    "updated_at": func.now(),
+                },
+            ).returning(ComputeUsageBreakdownTable)
+
+            result = await session.execute(stmt)
+            breakdown = result.scalar_one()
+            await session.commit()
+
+            return breakdown.to_pydantic(ComputeUsageBreakdownPydantic)
+
+    async def upsert_storage_breakdown(
+        self,
+        usage_record_id: uuid.UUID,
+        pvc_name: str,
+        storage_class: str,
+        gb_hours: float,
+    ) -> StorageUsageBreakdownPydantic:
+        async with session_manager.get_session() as session:
+            stmt = insert(StorageUsageBreakdownTable).values(
+                usage_record_id=usage_record_id,
+                pvc_name=pvc_name,
+                storage_class=storage_class,
+                gb_hours=gb_hours,
+            )
+
+            # On conflict, update the values
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["usage_record_id", "pvc_name"],
+                set_={
+                    "storage_class": stmt.excluded.storage_class,
+                    "gb_hours": stmt.excluded.gb_hours,
+                    "updated_at": func.now(),
+                },
+            ).returning(StorageUsageBreakdownTable)
+
+            result = await session.execute(stmt)
+            breakdown = result.scalar_one()
+            await session.commit()
+
+            return breakdown.to_pydantic(StorageUsageBreakdownPydantic)
 
     async def get_workspace_usage(
         self,

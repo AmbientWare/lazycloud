@@ -7,6 +7,7 @@ from lazycloud_cli.ui.dashboard.containers.details.service_details.logs_modal im
     LogViewerModal,
 )
 from lazycloud_cli.ui.dashboard.containers.details.utils import get_status_color
+from lazycloud_cli.utils.utils import format_cpu, format_memory
 from shared.models.statuses import PodStatus
 
 
@@ -33,7 +34,13 @@ class PodTable(DataTable):
         self.border_title = "🔍 [5] Instances"
 
         self.add_columns(
-            "Instance Name", "Status", "Ready", "CPU", "Memory", "Restarts", "Age"
+            "Instance Name",
+            "Status",
+            "Ready",
+            "CPU",
+            "Memory",
+            "Restarts",
+            "Age",
         )
 
     def on_mount(self) -> None:
@@ -106,8 +113,18 @@ class PodTable(DataTable):
             status_text = f"[{status_color}]{pod.phase.value}[/{status_color}]"
 
             ready = f"{pod.ready_containers}/{pod.total_containers}"
-            cpu = pod.cpu_usage or "N/A"
-            memory = pod.memory_usage or "N/A"
+
+            # Format CPU and memory using Docker Compose style
+            if pod.cpu_usage and pod.cpu_usage != "N/A":
+                cpu = f"{format_cpu(pod.cpu_usage)} cores"
+            else:
+                cpu = "N/A"
+
+            if pod.memory_usage and pod.memory_usage != "N/A":
+                memory = format_memory(pod.memory_usage)
+            else:
+                memory = "N/A"
+
             restarts = str(pod.restart_count) if pod.restart_count > 0 else "0"
             age = pod.age or "Unknown"
 

@@ -3,7 +3,6 @@ from shared.models.metrics import (
     NamespaceSummary,
     PodMetrics,
     PodUsage,
-    ServiceUsage,
     UsagePeriod,
     UsageTotals,
 )
@@ -19,7 +18,6 @@ __all__ = [
     "NamespaceSummary",
     "PodMetrics",
     "PodUsage",
-    "ServiceUsage",
     "StreamEventType",
     "SubscriptionManagerStats",
     "UsagePeriod",

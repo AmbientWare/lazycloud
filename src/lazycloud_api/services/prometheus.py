@@ -11,7 +11,7 @@ from shared.models.metrics import (
     NamespaceSummary,
     PodMetrics,
     PodUsage,
-    ServiceUsage,
+    StorageUsage,
     UsagePeriod,
     UsageTotals,
 )
@@ -226,6 +226,140 @@ class PrometheusMetricsService:
         logger.debug(f"Storage usage for {namespace}: {gb_hours:.2f} GB-hours")
         return gb_hours
 
+    def _process_storage_result(
+        self, result: dict[str, Any], duration_hours: float
+    ) -> float:
+        """Helper to process storage query result and return GB-hours."""
+        if not result or "result" not in result or not result["result"]:
+            return 0.0
+
+        total_bytes = 0.0
+        count = 0
+        for series in result["result"]:
+            for _, value in series.get("values", []):
+                try:
+                    total_bytes += float(value)
+                    count += 1
+                except (ValueError, TypeError):
+                    continue
+
+        if count == 0:
+            return 0.0
+
+        avg_bytes = total_bytes / count
+        avg_gb = avg_bytes / (1024**3)
+        return avg_gb * duration_hours
+
+    async def get_storage_usage_by_class(
+        self, namespace: str, start_time: datetime, end_time: datetime
+    ) -> dict[str, float]:
+        """Get storage usage split by storage class (s3-sc vs efs-sc) in GB-hours"""
+        duration_hours = (end_time - start_time).total_seconds() / 3600
+
+        # Query for S3 storage
+        s3_query = f'''
+            sum(
+                kubelet_volume_stats_capacity_bytes{{
+                    namespace="{namespace}"
+                }}
+                * on(persistentvolumeclaim, namespace) group_left(storageclass)
+                kube_persistentvolumeclaim_info{{
+                    storageclass="s3-sc",
+                    namespace="{namespace}"
+                }}
+            )
+        '''
+
+        # Query for EFS storage
+        efs_query = f'''
+            sum(
+                kubelet_volume_stats_capacity_bytes{{
+                    namespace="{namespace}"
+                }}
+                * on(persistentvolumeclaim, namespace) group_left(storageclass)
+                kube_persistentvolumeclaim_info{{
+                    storageclass="efs-sc",
+                    namespace="{namespace}"
+                }}
+            )
+        '''
+
+        # Execute both queries concurrently
+        s3_result = await self._query_range(s3_query, start_time, end_time, step="5m")
+        efs_result = await self._query_range(efs_query, start_time, end_time, step="5m")
+
+        # Process results using helper
+        s3_gb_hours = self._process_storage_result(s3_result, duration_hours)
+        efs_gb_hours = self._process_storage_result(efs_result, duration_hours)
+
+        logger.debug(
+            f"Storage usage for {namespace}: S3={s3_gb_hours:.2f} GB-hours, EFS={efs_gb_hours:.2f} GB-hours"
+        )
+        return {"s3": s3_gb_hours, "efs": efs_gb_hours}
+
+    async def get_storage_usage_by_pvc(
+        self, namespace: str, start_time: datetime, end_time: datetime
+    ) -> list[StorageUsage]:
+        """Get storage usage per PVC with storage class."""
+        duration_hours = (end_time - start_time).total_seconds() / 3600
+
+        # Query for all PVCs with their storage classes
+        query = f'''
+            kubelet_volume_stats_capacity_bytes{{
+                namespace="{namespace}"
+            }}
+            * on(persistentvolumeclaim, namespace) group_left(storageclass)
+            kube_persistentvolumeclaim_info{{
+                namespace="{namespace}"
+            }}
+        '''
+
+        result = await self._query_range(query, start_time, end_time, step="5m")
+
+        # Process results grouped by PVC and storage class
+        pvc_usage: dict[tuple[str, str], list[float]] = {}
+
+        if result.get("status") == "success" and result["data"]["result"]:
+            for series in result["data"]["result"]:
+                pvc_name = series["metric"].get("persistentvolumeclaim")
+                storage_class = series["metric"].get("storageclass")
+
+                if not pvc_name or not storage_class:
+                    continue
+
+                key = (pvc_name, storage_class)
+                if key not in pvc_usage:
+                    pvc_usage[key] = []
+
+                # Collect all capacity values
+                for value in series["values"]:
+                    try:
+                        capacity_bytes = float(value[1])
+                        pvc_usage[key].append(capacity_bytes)
+                    except (ValueError, IndexError):
+                        continue
+
+        # Calculate gb_hours for each PVC
+        storage_list = []
+        for (pvc_name, storage_class), capacities in pvc_usage.items():
+            if capacities:
+                avg_bytes = sum(capacities) / len(capacities)
+                avg_gb = avg_bytes / (1024**3)
+                gb_hours = avg_gb * duration_hours
+
+                storage_list.append(
+                    StorageUsage(
+                        pvc_name=pvc_name,
+                        storage_class=storage_class,
+                        gb_hours=gb_hours,
+                    )
+                )
+
+        logger.debug(
+            f"Storage breakdown for {namespace}: {len(storage_list)} PVCs tracked"
+        )
+        return storage_list
+
     async def get_pod_metrics(self, namespace: str, pod_name: str) -> PodMetrics:
         cpu_query = f'''
             sum(
@@ -362,17 +496,19 @@ class PrometheusMetricsService:
         # Get overall totals
         cpu_total = await self.get_cpu_usage(namespace, start_time, end_time)
         memory_total = await self.get_memory_usage(namespace, start_time, end_time)
-        storage_total = await self.get_storage_usage(namespace, start_time, end_time)
-
-        # Get breakdown by service (using lazycloud.io/service label)
-        by_service = await self._get_usage_by_service(
-            namespace, start_time, end_time, duration_seconds
-        )
 
         # Get breakdown by pod
         by_pod = await self._get_usage_by_pod(
             namespace, start_time, end_time, duration_seconds
         )
+
+        # Get breakdown by PVC
+        by_pvc = await self.get_storage_usage_by_pvc(namespace, start_time, end_time)
+
+        # Calculate storage totals from PVC breakdown (eliminates 2 redundant queries)
+        s3_total = sum(pvc.gb_hours for pvc in by_pvc if pvc.storage_class == "s3-sc")
+        efs_total = sum(pvc.gb_hours for pvc in by_pvc if pvc.storage_class == "efs-sc")
+        storage_total = s3_total + efs_total
 
         return NamespaceBreakdown(
             namespace=namespace,
@@ -385,119 +521,12 @@ class PrometheusMetricsService:
                 cpu_core_seconds=cpu_total,
                 memory_gb_seconds=memory_total,
                 storage_gb_hours=storage_total,
+                s3_gb_hours=s3_total,
+                efs_gb_hours=efs_total,
             ),
-            by_service=by_service,
             by_pod=by_pod,
+            by_pvc=by_pvc,
         )
-
-    async def _get_usage_by_service(
-        self,
-        namespace: str,
-        start_time: datetime,
-        end_time: datetime,
-        duration_seconds: float,
-    ) -> dict[str, ServiceUsage]:
-        """Get resource usage grouped by service label."""
-        cpu_query = f'''
-            sum by (label_lazycloud_io_service) (
-                rate(
-                    container_cpu_usage_seconds_total{{
-                        namespace="{namespace}",
-                        name!="",
-                        name!="POD"
-                    }}[5m]
-                )
-            )
-        '''
-
-        memory_query = f'''
-            sum by (label_lazycloud_io_service) (
-                container_memory_working_set_bytes{{
-                    namespace="{namespace}",
-                    name!="",
-                    name!="POD"
-                }}
-            )
-        '''
-
-        cpu_result = await self._query_range(
-            cpu_query, start_time, end_time, step="60s"
-        )
-        memory_result = await self._query_range(
-            memory_query, start_time, end_time, step="60s"
-        )
-
-        services: dict[str, ServiceUsage] = {}
-
-        # Process CPU results
-        if cpu_result and "result" in cpu_result:
-            for series in cpu_result["result"]:
-                service_name = series.get("metric", {}).get(
-                    "label_lazycloud_io_service", "unknown"
-                )
-                if service_name not in services:
-                    services[service_name] = ServiceUsage()
-
-                # Calculate average CPU and multiply by duration
-                total_cpu = 0.0
-                count = 0
-                for _, value in series.get("values", []):
-                    try:
-                        total_cpu += float(value)
-                        count += 1
-                    except (ValueError, TypeError):
-                        continue
-
-                if count > 0:
-                    avg_cpu = total_cpu / count
-                    services[service_name].cpu_core_seconds = avg_cpu * duration_seconds
-
-        # Process memory results
-        if memory_result and "result" in memory_result:
-            for series in memory_result["result"]:
-                service_name = series.get("metric", {}).get(
-                    "label_lazycloud_io_service", "unknown"
-                )
-                if service_name not in services:
-                    services[service_name] = ServiceUsage()
-
-                # Calculate average memory
-                total_bytes = 0.0
-                count = 0
-                for _, value in series.get("values", []):
-                    try:
-                        total_bytes += float(value)
-                        count += 1
-                    except (ValueError, TypeError):
-                        continue
-
-                if count > 0:
-                    avg_bytes = total_bytes / count
-                    avg_gb = avg_bytes / (1024**3)
-                    services[service_name].memory_gb_seconds = avg_gb * duration_seconds
-
-        # Get pod counts per service
-        pod_count_query = f'''
-            count by (label_lazycloud_io_service) (
-                kube_pod_info{{namespace="{namespace}"}}
-            )
-        '''
-        pod_count_result = await self._query(pod_count_query)
-
-        if pod_count_result and "result" in pod_count_result:
-            for series in pod_count_result["result"]:
-                service_name = series.get("metric", {}).get(
-                    "label_lazycloud_io_service", "unknown"
-                )
-                if service_name in services:
-                    try:
-                        services[service_name].pod_count = int(
-                            float(series["value"][1])
-                        )
-                    except (KeyError, ValueError, TypeError, IndexError):
-                        pass
-
-        return services
 
     async def _get_usage_by_pod(
         self,

@@ -90,12 +90,18 @@ class PolarService:
             logger.debug(
                 f"Polar disabled, skipping workspace usage for {usage_record.workspace_id}"
             )
-            return {"cpu": False, "memory": False, "storage": False}
+            return {
+                "cpu": False,
+                "memory": False,
+                "s3_storage": False,
+                "efs_storage": False,
+            }
 
         # Convert to hours for billing (keep raw values for audit trail)
         cpu_core_seconds = usage_record.cpu_core_seconds
         memory_gb_seconds = usage_record.memory_gb_seconds
-        storage_gb_hours = usage_record.storage_gb_hours
+        s3_gb_hours = usage_record.s3_gb_hours
+        efs_gb_hours = usage_record.efs_gb_hours
 
         cpu_core_hours = cpu_core_seconds / 3600
         memory_gb_hours = memory_gb_seconds / 3600
@@ -139,30 +145,46 @@ class PolarService:
             metadata=memory_metadata,
         )
 
-        # Send Storage usage event (in hours)
-        storage_metadata = {
+        # Send S3 Storage usage event
+        s3_storage_metadata = {
             **base_metadata,
-            "quantity": storage_gb_hours,
+            "quantity": s3_gb_hours,
             "unit": "gb_hours",
+            "storage_class": "s3-sc",
         }
-        results["storage"] = await self.send_usage_event(
+        results["s3_storage"] = await self.send_usage_event(
             external_customer_id=polar_customer_id,
-            event_name="storage_usage",
-            quantity=storage_gb_hours,
-            metadata=storage_metadata,
+            event_name="s3_storage_usage",
+            quantity=s3_gb_hours,
+            metadata=s3_storage_metadata,
+        )
+
+        # Send EFS Storage usage event
+        efs_storage_metadata = {
+            **base_metadata,
+            "quantity": efs_gb_hours,
+            "unit": "gb_hours",
+            "storage_class": "efs-sc",
+        }
+        results["efs_storage"] = await self.send_usage_event(
+            external_customer_id=polar_customer_id,
+            event_name="efs_storage_usage",
+            quantity=efs_gb_hours,
+            metadata=efs_storage_metadata,
         )
 
         # Log summary
         success_count = sum(results.values())
-        if success_count == 3:
+        if success_count == 4:
             logger.info(
                 f"Successfully sent all usage events for workspace {usage_record.workspace_id}: "
-                f"CPU={cpu_core_hours:.4f}h, Memory={memory_gb_hours:.4f}GB-h, Storage={storage_gb_hours:.2f}GB-h"
+                f"CPU={cpu_core_hours:.4f}h, Memory={memory_gb_hours:.4f}GB-h, "
+                f"S3={s3_gb_hours:.2f}GB-h, EFS={efs_gb_hours:.2f}GB-h"
             )
         else:
             logger.warning(
-                f"Partial success sending usage for workspace {usage_record.workspace_id}: "
-                f"{success_count}/3 events sent"
+                f"Failed to send some usage events for workspace {usage_record.workspace_id} "
+                f"(sent {success_count}/4): {results}"
             )
 
         return results

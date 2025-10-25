@@ -15,16 +15,18 @@ class PodUsage(BaseModel):
     memory_gb_seconds: float = Field(default=0.0)
 
 
-class ServiceUsage(BaseModel):
-    cpu_core_seconds: float = Field(default=0.0)
-    memory_gb_seconds: float = Field(default=0.0)
-    pod_count: int = Field(default=0)
+class StorageUsage(BaseModel):
+    pvc_name: str
+    storage_class: str
+    gb_hours: float = Field(default=0.0)
 
 
 class UsageTotals(BaseModel):
     cpu_core_seconds: float = Field(default=0.0)
     memory_gb_seconds: float = Field(default=0.0)
     storage_gb_hours: float = Field(default=0.0)
+    s3_gb_hours: float = Field(default=0.0)
+    efs_gb_hours: float = Field(default=0.0)
 
 
 class UsagePeriod(BaseModel):
@@ -45,5 +47,5 @@ class NamespaceBreakdown(BaseModel):
     namespace: str
     period: UsagePeriod
     totals: UsageTotals
-    by_service: dict[str, ServiceUsage]
     by_pod: list[PodUsage]
+    by_pvc: list[StorageUsage] = Field(default_factory=list)

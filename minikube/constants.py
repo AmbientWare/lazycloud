@@ -21,11 +21,27 @@ PROMETHEUS_HELM_REPO_URL = "https://prometheus-community.github.io/helm-charts"
 PROMETHEUS_CHART = "kube-prometheus-stack"
 
 # Storage class YAML definition
-STORAGE_CLASS_YAML = """
+EFS_STORAGE_CLASS_YAML = """
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
   name: efs-sc
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "false"
+provisioner: k8s.io/minikube-hostpath
+parameters:
+  type: Directory
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+reclaimPolicy: Retain
+""".strip()
+
+
+S3_STORAGE_CLASS_YAML = """
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: s3-sc
   annotations:
     storageclass.kubernetes.io/is-default-class: "false"
 provisioner: k8s.io/minikube-hostpath

@@ -95,6 +95,7 @@ async def get_deployment_status(
         namespace=deployment.namespace,
         helm_values=deployment.helm_values,
         deployment_name=deployment.name,
+        deployed_at=deployment.deployed_at,
     )
 
     deployment_status = await watcher.get_deployment_status()

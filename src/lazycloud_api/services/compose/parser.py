@@ -23,10 +23,7 @@ def _get_int(scaling_labels, key, default=None):
 
 
 def _should_skip_service(service_config: dict[str, Any]) -> bool:
-    """Check if a service should be skipped from deployment.
-
-    Returns True if the service has lazycloud.skip: "true" in its labels.
-    """
+    """Check if a service should be skipped from deployment"""
     labels = service_config.get("labels", {})
     if isinstance(labels, dict):
         skip_value = labels.get("lazycloud.skip", "false")
@@ -49,11 +46,20 @@ class ComposeParser:
             )
 
         # Parse volumes
-        volumes = [
-            ComposeParser._parse_volume_definition(volume_config)
-            for volume_config in data.get("volumes", [])
-            if volume_config is not None
-        ]
+        volumes_dict = data.get("volumes", {})
+        volumes = []
+        if volumes_dict:
+            for volume_name, volume_config in volumes_dict.items():
+                # If volume_config is None (simple declaration), use just the name
+                if volume_config is None:
+                    volumes.append(ComposeParser._parse_volume_definition(volume_name))
+                else:
+                    # Add the name to the config dict for parsing
+                    if isinstance(volume_config, dict):
+                        volume_config["name"] = volume_name
+                    volumes.append(
+                        ComposeParser._parse_volume_definition(volume_config)
+                    )
 
         # Parse networks
         networks = [
@@ -433,6 +439,8 @@ class ComposeParser:
         else:
             return ComposeVolume(
                 name=config.get("name"),
+                labels=config.get("labels"),
+                external=config.get("external", False),
             )
 
     def validate_for_k8s(self, compose: ComposeFile) -> list[str]:

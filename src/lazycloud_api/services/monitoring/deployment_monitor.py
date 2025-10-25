@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Callable
 
 from lazycloud_api.services.k8s.status_watcher import StatusWatcher
@@ -17,6 +18,7 @@ class DeploymentMonitor(BaseMonitor[DeploymentStatus]):
         deployment_name: str,
         namespace: str,
         helm_values: HelmValues,
+        deployed_at: datetime,
         callback: Callable[[DeploymentStatus], None],
     ):
         super().__init__("Deployment Monitor", deployment_id, callback)
@@ -24,8 +26,9 @@ class DeploymentMonitor(BaseMonitor[DeploymentStatus]):
         self.namespace = namespace
         self.helm_values = helm_values
         self.deployment_name = deployment_name
+        self.deployed_at = deployed_at
         self.status_watcher = StatusWatcher(
-            deployment_id, namespace, helm_values, deployment_name
+            deployment_id, namespace, helm_values, deployment_name, deployed_at
         )
 
     async def _task(self) -> DeploymentStatus:

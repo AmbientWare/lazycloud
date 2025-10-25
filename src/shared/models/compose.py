@@ -110,6 +110,8 @@ class ComposeVolume(BaseModel):
     """Docker Compose volume definition."""
 
     name: str
+    labels: dict[str, str] | None = None
+    external: bool = False
 
 
 class ComposeFile(BaseModel):

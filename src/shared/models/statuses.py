@@ -32,6 +32,13 @@ class KubernetesPhase(StrEnum):
     UNKNOWN = "Unknown"
 
 
+class StorageType(StrEnum):
+    """Storage class types."""
+
+    NORMAL = "Normal"
+    HIGH_PERFORMANCE = "High Performance"
+
+
 class VolumeStatus(BaseModel):
     """Status information for a volume."""
 
@@ -39,6 +46,7 @@ class VolumeStatus(BaseModel):
     status: str
     mount_path: str | None = None
     size: str | None = None
+    storage_type: StorageType = StorageType.NORMAL
 
 
 class VolumeStatusSummary(BaseModel):
@@ -46,6 +54,7 @@ class VolumeStatusSummary(BaseModel):
 
     name: str
     status: str
+    storage_type: StorageType = StorageType.NORMAL
 
 
 class NetworkStatus(BaseModel):
@@ -120,6 +129,7 @@ class DeploymentStatus(BaseModel):
     status: KubernetesPhase
     ready: bool
     last_checked: datetime
+    deployed_at: datetime
 
     # Summary counts
     total_services: int

@@ -7,8 +7,16 @@ from textual.worker import Worker
 
 from lazycloud_cli.api.status import StatusAPI
 from lazycloud_cli.ui.dashboard.components.section import SectionContainer
+from lazycloud_cli.ui.dashboard.containers.details.deployment_details.networks_table import (
+    NetworksTable,
+)
+from lazycloud_cli.ui.dashboard.containers.details.deployment_details.services_table import (
+    ServicesTable,
+)
+from lazycloud_cli.ui.dashboard.containers.details.deployment_details.volumes_table import (
+    VolumesTable,
+)
 from lazycloud_cli.ui.dashboard.containers.details.utils import get_status_color
-from lazycloud_cli.ui.dashboard.theme import Symbols
 from shared.models.statuses import DeploymentStatus
 
 
@@ -27,9 +35,9 @@ class DeploymentDetailsContainer(Widget):
 
         # Store widget references for updates
         self._overview_widget: Static | None = None
-        self._services_widget: Static | None = None
-        self._volumes_widget: Static | None = None
-        self._networks_widget: Static | None = None
+        self._services_table: ServicesTable | None = None
+        self._volumes_table: VolumesTable | None = None
+        self._networks_table: NetworksTable | None = None
 
     def compose(self) -> ComposeResult:
         """Create the initial UI structure."""
@@ -90,43 +98,44 @@ class DeploymentDetailsContainer(Widget):
 
         # Services section
         if deployment.services:
-            services_content = self._build_services_content(deployment)
             services_section = SectionContainer("🔧 Services")
             self._scroll.mount(services_section)
-            self._services_widget = Static(
-                "\n".join(services_content).strip(), markup=True
-            )
-            services_section.mount(self._services_widget)
+            self._services_table = ServicesTable()
+            services_section.mount(self._services_table)
+            self._services_table.update_services(deployment)
 
         # Volumes section
         if deployment.volumes:
-            volumes_content = self._build_volumes_content(deployment)
             volumes_section = SectionContainer("💾 Volumes")
             self._scroll.mount(volumes_section)
-            self._volumes_widget = Static(
-                "\n".join(volumes_content).strip(), markup=True
-            )
-            volumes_section.mount(self._volumes_widget)
+            self._volumes_table = VolumesTable()
+            volumes_section.mount(self._volumes_table)
+            self._volumes_table.update_volumes(deployment)
 
         # Networks section
         if deployment.networks:
-            networks_content = self._build_networks_content(deployment)
             networks_section = SectionContainer("🌐 Networks")
             self._scroll.mount(networks_section)
-            self._networks_widget = Static(
-                "\n".join(networks_content).strip(), markup=True
-            )
-            networks_section.mount(self._networks_widget)
+            self._networks_table = NetworksTable()
+            networks_section.mount(self._networks_table)
+            self._networks_table.update_networks(deployment)
 
     def _build_overview_content(self, deployment: DeploymentStatus) -> list[str]:
-        status_color = get_status_color(deployment.status)
+        # Use colored status
+        color = get_status_color(deployment.status)
+        status_text = f"[{color}]{deployment.status.upper()}[/{color}]"
 
         content = [
             f"Deployment Name: {deployment.deployment_name}",
-            f"Status:          [{status_color}]{deployment.status.upper()}[/{status_color}]",
+            f"Status:          {status_text}",
             f"Services:        {deployment.ready_services}/{deployment.total_services} ready",
             f"Replicas:        {deployment.ready_replicas}/{deployment.total_replicas} running",
         ]
+
+        if deployment.deployed_at:
+            content.append(
+                f"Deployed At:     {deployment.deployed_at.strftime('%Y-%m-%d %H:%M:%S')}"
+            )
 
         if deployment.last_checked:
             content.append(
@@ -134,38 +143,6 @@ class DeploymentDetailsContainer(Widget):
             )
 
         return content
-
-    def _build_services_content(self, deployment: DeploymentStatus) -> list[str]:
-        content = []
-        for service in deployment.services:
-            status_color = get_status_color(service.status)
-
-            service_line = (
-                f"{Symbols.BULLET} {service.name}: [{status_color}]{service.status.upper()}[/{status_color}] "
-                f"({service.ready_replicas}/{service.total_replicas} replicas)"
-            )
-
-            if service.restarts > 0:
-                service_line += f" {Symbols.BULLET} {service.restarts} restarts"
-
-            content.append(service_line)
-        return content
-
-    def _build_volumes_content(self, deployment: DeploymentStatus) -> list[str]:
-        return [f"{Symbols.BULLET} {v.name} - {v.status}" for v in deployment.volumes]
-
-    def _build_networks_content(self, deployment: DeploymentStatus) -> list[str]:
-        return [f"{Symbols.BULLET} {n.name} - {n.status}" for n in deployment.networks]
-
-    def _create_section(self, title: str, content: list[str]) -> None:
-        if not self._scroll:
-            return
-        section = SectionContainer(title)
-        self._scroll.mount(section)
-
-        text_content = "\n".join(content).strip()
-        widget = Static(text_content, markup=True)
-        section.mount(widget)
 
     def update_deployment(self, deployment: DeploymentStatus) -> None:
         """Update all sections with new deployment data."""
@@ -176,17 +153,14 @@ class DeploymentDetailsContainer(Widget):
         overview_content = self._build_overview_content(deployment)
         self._overview_widget.update("\n".join(overview_content).strip())
 
-        if self._services_widget and deployment.services:
-            services_content = self._build_services_content(deployment)
-            self._services_widget.update("\n".join(services_content).strip())
+        if self._services_table and deployment.services:
+            self._services_table.update_services(deployment)
 
-        if self._volumes_widget and deployment.volumes:
-            volumes_content = self._build_volumes_content(deployment)
-            self._volumes_widget.update("\n".join(volumes_content).strip())
+        if self._volumes_table and deployment.volumes:
+            self._volumes_table.update_volumes(deployment)
 
-        if self._networks_widget and deployment.networks:
-            networks_content = self._build_networks_content(deployment)
-            self._networks_widget.update("\n".join(networks_content).strip())
+        if self._networks_table and deployment.networks:
+            self._networks_table.update_networks(deployment)
 
     async def cleanup(self) -> None:
         """Clean up SSE stream connections and tasks."""

@@ -300,18 +300,31 @@ class HelmValuesGenerator:
         return network_values
 
     def _generate_volume_values(self, volume: ComposeVolume) -> VolumeValues:
-        """Generate Helm values for a volume."""
-        # NOTE: volume parameter is kept for future extensibility (e.g., for size hints)
-        # Currently all volumes get default values
+        """Generate Helm values for a volume"""
+        # Check for high-performance storage label
+        volume_labels = volume.labels or {}
+        use_high_performance = volume_labels.get("lazycloud.storage.hp") == "true"
+
+        # Select storage class based on label
+        storage_class = "efs-sc" if use_high_performance else "s3-sc"
+
+        # Merge user labels with system labels
+        merged_labels = {
+            "lazycloud.io/workspace-id": str(self.deployment.workspace_id),
+            "lazycloud.io/managed-by": "lazycloud",
+        }
+        if volume_labels:
+            merged_labels.update(volume_labels)
+
         volume_values = VolumeValues(
             name=volume.name,
             enabled=True,
-            size="1Gi",  # Note: in cloud this will be EFS, size is ignored
-            accessModes=["ReadWriteOnce"],
-            labels={
-                "lazycloud.io/workspace-id": str(self.deployment.workspace_id),
-                "lazycloud.io/managed-by": "lazycloud",
-            },
+            size="1Gi",  # Note: size is largely ignored efs and s3 csi drivers
+            accessModes=[
+                "ReadWriteMany"
+            ],  # Allow for multi-pod access (similar to docker compose volumes)
+            storageClass=storage_class,
+            labels=merged_labels,
             annotations={
                 "lazycloud.io/workspace-id": str(self.deployment.workspace_id),
                 "lazycloud.io/created-by": "lazycloud-api",
