@@ -1,11 +1,12 @@
 from minikube.constants import (
+    EFS_STORAGE_CLASS_YAML,
     MINIKUBE_ADDONS,
     PROMETHEUS_CHART,
     PROMETHEUS_HELM_REPO,
     PROMETHEUS_HELM_REPO_URL,
     PROMETHEUS_NAMESPACE,
     REQUIRED_TOOLS,
-    STORAGE_CLASS_YAML,
+    S3_STORAGE_CLASS_YAML,
 )
 from minikube.operations import (
     cleanup_existing_cluster,
@@ -26,7 +27,8 @@ __all__ = [
     "PROMETHEUS_HELM_REPO",
     "PROMETHEUS_HELM_REPO_URL",
     "PROMETHEUS_CHART",
-    "STORAGE_CLASS_YAML",
+    "EFS_STORAGE_CLASS_YAML",
+    "S3_STORAGE_CLASS_YAML",
     # Utils
     "run_command",
     "check_prerequisites",

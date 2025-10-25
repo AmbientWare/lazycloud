@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import datetime
 from uuid import UUID
 
 from shared.models.helm import HelmValues
@@ -36,6 +37,7 @@ class DeploymentMonitorConfig(MonitorConfigBase):
     deployment_name: str
     namespace: str
     helm_values: HelmValues
+    deployed_at: datetime
 
     def get_key(self) -> str:
         """Generate unique key for this monitor."""

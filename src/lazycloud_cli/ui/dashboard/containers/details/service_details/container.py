@@ -9,15 +9,18 @@ from textual.widgets import LoadingIndicator, Static
 from textual.worker import Worker
 
 from lazycloud_cli.api import api
+from lazycloud_cli.ui.colors import Colors
 from lazycloud_cli.ui.dashboard.components.section import SectionContainer
 from lazycloud_cli.ui.dashboard.containers.details.service_details.pods_table import (
     PodTable,
 )
+from lazycloud_cli.ui.dashboard.containers.details.service_details.resources_table import (
+    ResourcesTable,
+)
 from lazycloud_cli.ui.dashboard.containers.details.utils import get_status_color
 from lazycloud_cli.ui.dashboard.theme import Symbols
-from lazycloud_cli.utils.utils import format_image_name
+from lazycloud_cli.utils.utils import format_cpu, format_image_name, format_memory
 from shared.models.helm import HealthCheckValues, HPAValues
-from shared.models.k8s import Resources
 from shared.models.statuses import PodStatus, ServiceStatus
 
 
@@ -32,6 +35,7 @@ class ServiceDetailsContainer(Widget):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._overview_widget: Static | None = None
+        self._resources_table: ResourcesTable | None = None
         self._pods_table: PodTable | None = None
         self._stream_task: Worker | None = None
         self._scroll: VerticalScroll | None = None
@@ -100,8 +104,11 @@ class ServiceDetailsContainer(Widget):
         if service.resources and (
             service.resources.limits or service.resources.requests
         ):
-            resources_content = self._build_resources_content(service.resources)
-            self._create_section("💻 Resource Configuration", resources_content)
+            resources_section = SectionContainer("💻 Resource Configuration")
+            self._scroll.mount(resources_section)
+            self._resources_table = ResourcesTable()
+            resources_section.mount(self._resources_table)
+            self._resources_table.update_resources(service.resources)
 
         if service.healthcheck:
             health_content = self._build_health_content(service.healthcheck)
@@ -153,9 +160,11 @@ class ServiceDetailsContainer(Widget):
 
         if service.current_usage:
             if service.current_usage.cpu:
-                content.append(f"CPU Usage:    {service.current_usage.cpu}")
+                formatted_cpu = format_cpu(service.current_usage.cpu)
+                content.append(f"Average CPU:  {formatted_cpu} cores")
             if service.current_usage.memory:
-                content.append(f"Memory Usage: {service.current_usage.memory}")
+                formatted_mem = format_memory(service.current_usage.memory)
+                content.append(f"Average Mem:  {formatted_mem}")
 
         if service.last_checked:
             content.append(
@@ -170,38 +179,6 @@ class ServiceDetailsContainer(Widget):
             return ["No ports exposed"]
 
         return [f"{Symbols.BULLET} {port}" for port in ports]
-
-    def _build_resources_content(self, resources: Resources) -> list[str]:
-        """Build service resources section content."""
-        content = []
-        limits = resources.limits
-        requests = resources.requests
-
-        cpu_line = "CPU:      "
-        if requests and requests.cpu:
-            cpu_line += f"Requests: {requests.cpu}"
-        if limits and limits.cpu:
-            if requests and requests.cpu:
-                cpu_line += f", Limits: {limits.cpu}"
-            else:
-                cpu_line += f"Limits: {limits.cpu}"
-        if cpu_line == "CPU:      ":
-            cpu_line += "Not specified"
-        content.append(cpu_line)
-
-        mem_line = "Memory:   "
-        if requests and requests.memory:
-            mem_line += f"Requests: {requests.memory}"
-        if limits and limits.memory:
-            if requests and requests.memory:
-                mem_line += f", Limits: {limits.memory}"
-            else:
-                mem_line += f"Limits: {limits.memory}"
-        if mem_line == "Memory:   ":
-            mem_line += "Not specified"
-        content.append(mem_line)
-
-        return content
 
     def _build_health_content(self, healthcheck: HealthCheckValues) -> list[str]:
         """Build service health check section content."""
@@ -232,7 +209,7 @@ class ServiceDetailsContainer(Widget):
             return ["Auto-scaling disabled"]
 
         content = [
-            "Status:       [green]Enabled[/green]",
+            f"Status:       [{Colors.Hex.success}]Enabled[/{Colors.Hex.success}]",
             f"Min Replicas: {hpa.minReplicas}",
             f"Max Replicas: {hpa.maxReplicas}",
         ]

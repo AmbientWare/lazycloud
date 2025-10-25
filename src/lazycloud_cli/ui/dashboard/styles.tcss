@@ -1,6 +1,3 @@
-/* Dashboard Styles */
-
-/* Left column container heights */
 DeploymentsContainer {
     height: 1fr;
     padding: 1;
@@ -12,11 +9,10 @@ ServicesContainer {
 }
 
 SecretsContainer {
-    height:5;
+    height: 5;
     padding: 1;
 }
 
-/* Main container borders */
 DeploymentsContainer,
 SecretsDeploymentsContainer,
 ServicesContainer,
@@ -25,7 +21,6 @@ SecretsContainer {
     border: round $primary;
 }
 
-/* Focused main containers get accent color border */
 DeploymentsContainer:focus,
 SecretsDeploymentsContainer:focus,
 ServicesContainer:focus,
@@ -39,25 +34,18 @@ SecretsContainer:focus-within {
     border: round $accent;
 }
 
-/* Section containers - subtle styling with accent titles */
 SectionContainer {
     border: round $primary;
     padding: 0 1;
     height: auto;
-    border-title-color: $accent;  /* Accent color for section titles */
+    border-title-color: $accent;
 }
 
-/* Data tables */
 DataTable {
     border: round $primary;
     background: transparent;
     height: auto;
-}
-
-/* Secrets table should fill the container */
-#secrets-table {
-    height: 100%;
-    border: none;
+    border-title-color: $accent;
 }
 
 DataTable:focus {
@@ -65,48 +53,53 @@ DataTable:focus {
     border-title-color: $accent;
 }
 
-/* DataTable rows - visible highlighting */
 DataTable > .datatable--cursor {
-    background: $accent 40%;  /* More visible highlight */
+    background: $accent 40%;
     text-style: none;
 }
 
 DataTable > .datatable--hover {
-    background: $accent 25%;  /* Lighter hover */
+    background: $accent 25%;
 }
 
-/* DataTable headers - accent color with underline separator */
 DataTable > .datatable--header {
-    background: transparent;  /* No background on headers */
-    color: $accent;
+    background: transparent;
+    color: $primary;
     text-style: bold;
     border-bottom: solid $primary;
 }
 
-/* Row separators */
 DataTable > .datatable--even,
 DataTable > .datatable--odd {
     background: transparent;
     border-bottom: solid $primary;
 }
 
-/* Modal backdrop with full opacity to prevent emoji bleed-through */
+#secrets-table,
+#deployment-services-table,
+#deployment-volumes-table,
+#deployment-networks-table,
+#service-resources-table {
+    border: none;
+}
+
+#secrets-table {
+    height: 100%;
+}
+
 ModalScreen {
     background: $surface;
 }
 
-/* Modal containers */
 ModalContainer {
     border: round $primary;
 }
 
-/* Ensure ListViews have transparent backgrounds */
 ListView {
     background: transparent;
     border: none;
 }
 
-/* ListItem styling - default transparent, highlighted with accent */
 ListItem {
     background: transparent;
 }
@@ -119,12 +112,10 @@ ListItem.-highlight {
     background: $accent 30%;
 }
 
-/* Add subtle accent to container titles */
 Container > .container--title {
     color: $accent;
 }
 
-/* Modal styling */
 #success-modal, #error-modal, #confirm-modal, #input-modal {
     width: 60;
     height: auto;
@@ -163,7 +154,6 @@ Container > .container--title {
     margin: 1 0;
 }
 
-/* View/Edit Secret Modal styling */
 #view-secret-modal {
     width: 60;
     height: auto;
@@ -187,7 +177,6 @@ Container > .container--title {
     margin: 1 0;
 }
 
-/* Content modal styling */
 #modal-wrapper {
     align: center middle;
     width: 100%;
@@ -227,7 +216,6 @@ Container > .container--title {
     text-align: center;
 }
 
-/* Status classes for dynamic status styling */
 .status-running, .status-ready, .status-active {
     color: $success;
 }
@@ -244,7 +232,6 @@ Container > .container--title {
     color: $primary 50%;
 }
 
-/* List item text colors */
 .text-primary {
     color: $foreground;
 }

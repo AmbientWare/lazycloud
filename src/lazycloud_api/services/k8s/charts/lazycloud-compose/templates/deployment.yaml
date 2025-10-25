@@ -68,6 +68,11 @@ spec:
         app.kubernetes.io/name: {{ $service.name }}
         app.kubernetes.io/instance: {{ $.Release.Name }}
         lazycloud.io/service: {{ $service.name }}
+        {{- if $service.networks }}
+        {{- range $network := $service.networks }}
+        lazycloud.io/network.{{ $network.name }}: "true"
+        {{- end }}
+        {{- end }}
         {{- if $.Values.global.labels }}
         {{- toYaml $.Values.global.labels | nindent 8 }}
         {{- end }}

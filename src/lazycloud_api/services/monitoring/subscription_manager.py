@@ -122,6 +122,7 @@ class SubscriptionManager:
                 deployment_name=config.deployment_name,
                 namespace=config.namespace,
                 helm_values=config.helm_values,
+                deployed_at=config.deployed_at,
                 callback=None,  # Callbacks will be added via add_callback
             )
         elif isinstance(config, ServiceMonitorConfig):

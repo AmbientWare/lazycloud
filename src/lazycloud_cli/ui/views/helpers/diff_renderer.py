@@ -21,6 +21,7 @@ from lazycloud_cli.ui.views.helpers.formatters import (
 )
 from lazycloud_cli.utils.utils import format_image_name
 from shared.models.diffs import ComposeDiff, EnvVarChanges, FieldChange, ResourceSection
+from shared.models.statuses import StorageType
 
 
 @dataclass
@@ -83,20 +84,22 @@ def create_volumes_card(volumes: ResourceSection) -> Card | None:
     table = Table(show_header=True, header_style="bold", box=None)
     table.add_column("Volume", style=Colors.Ansi.primary)
     table.add_column("Change", style=Colors.Ansi.text_muted)
+    table.add_column("Details", style=Colors.Ansi.text_muted)
 
     # Add added volumes
     for vol in volumes.added:
         name = vol.get("name", "unknown") if isinstance(vol, dict) else "unknown"
-        table.add_row(name, Text("Added", style=Colors.Ansi.success))
+        table.add_row(name, Text("Added", style=Colors.Ansi.success), "")
 
     # Add modified volumes
-    for name, _ in volumes.modified.items():
-        table.add_row(name, Text("Modified", style=Colors.Ansi.warning))
+    for name, changes in volumes.modified.items():
+        details = _format_volume_changes(changes)
+        table.add_row(name, Text("Modified", style=Colors.Ansi.warning), details)
 
     # Add removed volumes
     for vol in volumes.removed:
         name = vol.get("name", "unknown") if isinstance(vol, dict) else "unknown"
-        table.add_row(name, Text("Removed", style=Colors.Ansi.error))
+        table.add_row(name, Text("Removed", style=Colors.Ansi.error), "")
 
     count = len(volumes.added) + len(volumes.modified) + len(volumes.removed)
     return Card(
@@ -104,6 +107,45 @@ def create_volumes_card(volumes: ResourceSection) -> Card | None:
         title=f"💾 Volume Changes ({count})",
         border_style=Colors.Ansi.info,
     )
+
+
+def _format_volume_changes(changes: dict[str, Any]) -> str:
+    """Format volume changes for display."""
+    parts = []
+
+    # Check for label changes (storage class)
+    if "labels" in changes:
+        label_change = changes["labels"]
+        if isinstance(label_change, FieldChange):
+            old_labels = label_change.from_value or {}
+            new_labels = label_change.to_value or {}
+
+            # Check specifically for storage class changes
+            old_hp = old_labels.get("lazycloud.storage.hp")
+            new_hp = new_labels.get("lazycloud.storage.hp")
+
+            if old_hp != new_hp:
+                old_class = (
+                    StorageType.HIGH_PERFORMANCE
+                    if old_hp == "true"
+                    else StorageType.NORMAL
+                )
+                new_class = (
+                    StorageType.HIGH_PERFORMANCE
+                    if new_hp == "true"
+                    else StorageType.NORMAL
+                )
+                parts.append(f"Storage: {old_class} → {new_class}")
+            elif old_labels != new_labels:
+                parts.append("Labels changed")
+
+    # Check for external flag changes
+    if "external" in changes:
+        ext_change = changes["external"]
+        if isinstance(ext_change, FieldChange):
+            parts.append(f"External: {ext_change.from_value} → {ext_change.to_value}")
+
+    return ", ".join(parts) if parts else "Properties changed"
 
 
 def create_networks_card(networks: ResourceSection) -> Card | None:

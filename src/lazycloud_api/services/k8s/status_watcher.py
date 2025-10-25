@@ -22,6 +22,7 @@ from shared.models.statuses import (
     PodStatus,
     ServiceStatus,
     ServiceStatusSummary,
+    StorageType,
     VolumeStatusSummary,
 )
 
@@ -35,12 +36,14 @@ class StatusWatcher:
         namespace: str,
         helm_values: HelmValues,
         deployment_name: str | None = None,
+        deployed_at: datetime | None = None,
     ):
         """Initialize the status watcher."""
         self.deployment_id = deployment_id
         self.namespace = namespace
         self.helm_values = helm_values
         self.deployment_name = deployment_name
+        self.deployed_at = deployed_at
 
     async def get_service_statuses_for_deployment(self) -> list[ServiceStatus]:
         """Get the status of all services in a deployment."""
@@ -104,13 +107,20 @@ class StatusWatcher:
         # Get volumes summaries
         volumes_summary = None
         if self.helm_values.volumes:
-            volumes_summary = [
-                VolumeStatusSummary(
-                    name=v.name,
-                    status="active",  # TODO: Get actual status from K8s
+            volumes_summary = []
+            for v in self.helm_values.volumes:
+                # Determine storage type from labels
+                storage_type = StorageType.NORMAL
+                if v.labels and v.labels.get("lazycloud.storage.hp") == "true":
+                    storage_type = StorageType.HIGH_PERFORMANCE
+
+                volumes_summary.append(
+                    VolumeStatusSummary(
+                        name=v.name,
+                        status="active",  # TODO: Get actual status from K8s
+                        storage_type=storage_type,
+                    )
                 )
-                for v in self.helm_values.volumes
-            ]
 
         # Get networks summaries
         networks_summary = None
@@ -130,6 +140,7 @@ class StatusWatcher:
             status=overall_status,
             ready=all_ready,
             last_checked=datetime.now(UTC),
+            deployed_at=self.deployed_at,
             total_services=len(services_list),
             ready_services=ready_services,
             total_replicas=total_replicas,

@@ -246,8 +246,33 @@ class ComposeDiffChecker:
         added = [self._volume_to_dict(v) for v in new if v.name not in current_names]
         removed = [self._volume_to_dict(v) for v in current if v.name not in new_names]
 
-        # Volumes typically don't have properties to modify
+        # Check for modifications in existing volumes (labels, external, etc.)
         modified = {}
+        current_by_name = {v.name: v for v in current}
+        new_by_name = {v.name: v for v in new}
+
+        for name in current_names & new_names:
+            current_vol = current_by_name[name]
+            new_vol = new_by_name[name]
+            changes = {}
+
+            # Compare labels (includes storage class changes)
+            if current_vol.labels != new_vol.labels:
+                changes["labels"] = FieldChange(
+                    from_value=current_vol.labels or {},
+                    to_value=new_vol.labels or {},
+                )
+
+            # Compare external flag
+            if current_vol.external != new_vol.external:
+                changes["external"] = FieldChange(
+                    from_value=current_vol.external,
+                    to_value=new_vol.external,
+                )
+
+            if changes:
+                modified[name] = changes
+
         logger.info(
             f"Volume comparison results: Added: {len(added)}, Modified: {len(modified)}, Removed: {len(removed)}"
         )

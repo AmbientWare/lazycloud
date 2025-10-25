@@ -9,11 +9,12 @@ from rich.console import Console
 from rich.panel import Panel
 
 from minikube.constants import (
+    EFS_STORAGE_CLASS_YAML,
     PROMETHEUS_CHART,
     PROMETHEUS_HELM_REPO,
     PROMETHEUS_HELM_REPO_URL,
     PROMETHEUS_NAMESPACE,
-    STORAGE_CLASS_YAML,
+    S3_STORAGE_CLASS_YAML,
 )
 from minikube.utils import is_minikube_running, run_command
 
@@ -59,17 +60,25 @@ def setup_storage_class() -> None:
     """Create EFS-compatible StorageClass."""
     console.print("🔧 [bold]Creating EFS-compatible StorageClass...[/bold]")
 
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-        f.write(STORAGE_CLASS_YAML)
-        temp_file = f.name
+    storage_classes = {
+        "efs": EFS_STORAGE_CLASS_YAML,
+        "s3": S3_STORAGE_CLASS_YAML,
+    }
 
-    try:
-        run_command(["kubectl", "apply", "-f", temp_file])
-        console.print("[green]✓ EFS-compatible StorageClass 'efs-sc' created[/green]")
-    except subprocess.CalledProcessError:
-        console.print("[yellow]⚠ Failed to create storage class (continuing)[/yellow]")
-    finally:
-        os.unlink(temp_file)
+    for name, storage_class in storage_classes.items():
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(storage_class)
+            temp_file = f.name
+
+        try:
+            run_command(["kubectl", "apply", "-f", temp_file])
+            console.print(f"[green]✓ {name} StorageClass created[/green]")
+        except subprocess.CalledProcessError:
+            console.print(
+                f"[yellow]⚠ Failed to create {name} storage class (continuing)[/yellow]"
+            )
+        finally:
+            os.unlink(temp_file)
 
 
 def setup_test_namespace() -> None:
