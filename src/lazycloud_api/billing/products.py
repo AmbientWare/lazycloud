@@ -32,13 +32,14 @@ class ProductDefinition:
     has_free_base: bool
     meter_prices: list[MeterPrice]
     monthly_fee: int | None
+    recurring_interval_count: int = 1
     metadata: dict[str, str] | None = None
 
 
 METER_PRICES = [
     MeterPrice(
         meter_name=MeterNames.CPU_USAGE,
-        unit_amount=15.0,
+        unit_amount=1.0,
     ),
     MeterPrice(
         meter_name=MeterNames.MEMORY_USAGE,
@@ -46,11 +47,11 @@ METER_PRICES = [
     ),
     MeterPrice(
         meter_name=MeterNames.NORMAL_STORAGE,
-        unit_amount=0.023,
+        unit_amount=1.0,
     ),
     MeterPrice(
         meter_name=MeterNames.HIGH_PERFORMANCE_STORAGE,
-        unit_amount=0.041,
+        unit_amount=1.0,
     ),
 ]
 
@@ -59,7 +60,7 @@ METER_PRICES = [
 PRODUCT_DEFINITIONS = [
     ProductDefinition(
         name="Basic",
-        description="Pay-as-you-go pricing and basic features for compute, memory, and storage",
+        description="Basic features and pay-as-you-go pricing for compute, memory, and storage",
         recurring_interval=SubscriptionRecurringInterval.MONTH,
         has_free_base=True,
         monthly_fee=None,
@@ -68,7 +69,7 @@ PRODUCT_DEFINITIONS = [
     ),
     ProductDefinition(
         name="Pro",
-        description="Pay-as-you-go pricing and extended features for small teams and individuals",
+        description="Extended features and pay-as-you-go pricing for small teams and individuals",
         recurring_interval=SubscriptionRecurringInterval.MONTH,
         has_free_base=False,
         monthly_fee=5000,  # $50/month
@@ -77,7 +78,7 @@ PRODUCT_DEFINITIONS = [
     ),
     ProductDefinition(
         name="Enterprise",
-        description="Pay-as-you-go pricing and enterprise-grade features for large teams and organizations",
+        description="Enterprise-grade features and pay-as-you-go pricing for large teams and organizations",
         recurring_interval=SubscriptionRecurringInterval.MONTH,
         has_free_base=False,
         monthly_fee=10000,  # $100/month
@@ -186,6 +187,7 @@ async def setup_products(organization_id: str) -> dict:
                 description=product_def.description,
                 prices=prices,
                 recurring_interval=product_def.recurring_interval,
+                recurring_interval_count=product_def.recurring_interval_count,
                 metadata=product_def.metadata,
             )
 

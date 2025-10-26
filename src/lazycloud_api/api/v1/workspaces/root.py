@@ -78,24 +78,25 @@ async def create_workspace(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    workspace = WorkspacePydantic(
-        name=validated_name,
-        is_personal=False,
-    )
-    workspace = await db.workspaces.acreate(workspace)
-
     try:
-        # Add current user as owner
-        membership = UserWorkspacePydantic(
-            user_id=current_user.id,
-            workspace_id=workspace.id,
-            role=WorkspaceRole.OWNER,
-            status=UserWorkspaceStatus.ACTIVE,
-        )
-        membership = await db.user_workspaces.acreate(membership)
+        # Create workspace and membership in a single transaction
+        async with db.workspaces.transaction() as session:
+            workspace = WorkspacePydantic(
+                name=validated_name,
+                is_personal=False,
+            )
+            workspace = await db.workspaces.acreate(workspace, session=session)
+
+            # Add current user as owner
+            membership = UserWorkspacePydantic(
+                user_id=current_user.id,
+                workspace_id=workspace.id,
+                role=WorkspaceRole.OWNER,
+                status=UserWorkspaceStatus.ACTIVE,
+            )
+            membership = await db.user_workspaces.acreate(membership, session=session)
+
     except Exception:
-        # If membership creation fails, delete the orphaned workspace
-        await db.workspaces.adelete(workspace.id)
         raise HTTPException(status_code=500, detail="Failed to create workspace")
 
     return WorkspaceResponse(

@@ -5,7 +5,7 @@ from loguru import logger
 from polar_sdk.models import Filter, FilterClause, PropertyAggregation
 
 from lazycloud_api.services import get_polar_service
-from shared.models.billing import METERS_EVENT_MAP, MeterNames
+from shared.models.billing import METER_METADATA_FIELDS, USAGE_EVENT_NAME, MeterNames
 
 
 @dataclass
@@ -26,13 +26,13 @@ METER_DEFINITIONS = [
                 FilterClause(
                     property="name",
                     operator=polar_sdk.FilterOperator.EQ,
-                    value=METERS_EVENT_MAP[MeterNames.CPU_USAGE],
+                    value=USAGE_EVENT_NAME,
                 )
             ],
         ),
         aggregation=PropertyAggregation(
             func=polar_sdk.Func.SUM,
-            property="quantity",
+            property=METER_METADATA_FIELDS[MeterNames.CPU_USAGE],
         ),
     ),
     MeterDefinition(
@@ -43,13 +43,13 @@ METER_DEFINITIONS = [
                 FilterClause(
                     property="name",
                     operator=polar_sdk.FilterOperator.EQ,
-                    value=METERS_EVENT_MAP[MeterNames.MEMORY_USAGE],
+                    value=USAGE_EVENT_NAME,
                 )
             ],
         ),
         aggregation=PropertyAggregation(
             func=polar_sdk.Func.SUM,
-            property="quantity",
+            property=METER_METADATA_FIELDS[MeterNames.MEMORY_USAGE],
         ),
     ),
     MeterDefinition(
@@ -60,13 +60,13 @@ METER_DEFINITIONS = [
                 FilterClause(
                     property="name",
                     operator=polar_sdk.FilterOperator.EQ,
-                    value=METERS_EVENT_MAP[MeterNames.NORMAL_STORAGE],
+                    value=USAGE_EVENT_NAME,
                 )
             ],
         ),
         aggregation=PropertyAggregation(
             func=polar_sdk.Func.SUM,
-            property="quantity",
+            property=METER_METADATA_FIELDS[MeterNames.NORMAL_STORAGE],
         ),
     ),
     MeterDefinition(
@@ -77,13 +77,13 @@ METER_DEFINITIONS = [
                 FilterClause(
                     property="name",
                     operator=polar_sdk.FilterOperator.EQ,
-                    value=METERS_EVENT_MAP[MeterNames.HIGH_PERFORMANCE_STORAGE],
+                    value=USAGE_EVENT_NAME,
                 )
             ],
         ),
         aggregation=PropertyAggregation(
             func=polar_sdk.Func.SUM,
-            property="quantity",
+            property=METER_METADATA_FIELDS[MeterNames.HIGH_PERFORMANCE_STORAGE],
         ),
     ),
 ]

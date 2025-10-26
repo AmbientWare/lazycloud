@@ -1,11 +1,13 @@
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Annotated, Generic, Type, TypeVar
+from typing import Annotated, AsyncGenerator, Generic, Type, TypeVar
 
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic.functional_validators import BeforeValidator
 from sqlalchemy import DateTime, delete, inspect, orm, update
 from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -80,6 +82,26 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
         self.pydantic_model_class = pydantic_model_class
         self._session_manager = session_manager
 
+    # TODO: expand other methods to use this function as needed
+    async def _execute_in_session(self, func, session: AsyncSession | None = None):
+        """Execute a function in a session, using provided session or creating new one."""
+        if session:
+            # Use existing session (part of a transaction)
+            return await func(session)
+        else:
+            # Create new session and commit
+            async with self._session_manager.get_session() as new_session:
+                result = await func(new_session)
+                await new_session.commit()
+                return result
+
+    @asynccontextmanager
+    async def transaction(self) -> AsyncGenerator[AsyncSession, None]:
+        """Create a database transaction context."""
+        async with self._session_manager.get_session() as session:
+            async with session.begin():
+                yield session
+
     def _to_pydantic(self, db_model: baseDbType | None) -> basePydanticType | None:
         """Convert SQLAlchemy model to Pydantic model"""
         if db_model is None:
@@ -92,7 +114,7 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
         async with self._session_manager.get_session() as session:
             query = select(self.db_model_class)
             result = await session.execute(query)
-            db_models = list(result.scalars().all())
+            db_models = list[baseDbType](result.scalars().all())
             return [self._to_pydantic(db_model) for db_model in db_models]
 
     async def aget_by_id(self, id: str) -> basePydanticType | None:
@@ -113,17 +135,20 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
             db_models = list(result.scalars().all())
             return [model.to_pydantic(self.pydantic_model_class) for model in db_models]
 
-    async def acreate(self, model: basePydanticType) -> basePydanticType:
+    async def acreate(
+        self, model: basePydanticType, session: AsyncSession | None = None
+    ) -> basePydanticType:
         """Create a new model instance"""
-        async with self._session_manager.get_session() as session:
-            # Exclude id, created_at, and updated_at since they're handled by the database
+
+        async def _create(sess: AsyncSession):
             model_data = model.model_dump(exclude={"id", "created_at", "updated_at"})
             db_model = self.db_model_class(**model_data)
-            session.add(db_model)
-            await session.flush()  # Flush to get the generated ID
-            await session.commit()
-            await session.refresh(db_model)
+            sess.add(db_model)
+            await sess.flush()
+            await sess.refresh(db_model)
             return db_model.to_pydantic(self.pydantic_model_class)
+
+        return await self._execute_in_session(_create, session)
 
     async def acreate_bulk(
         self, models: list[basePydanticType]
