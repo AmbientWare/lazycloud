@@ -76,5 +76,5 @@ class PolarCustomersModule:
             return result
 
         except Exception as e:
-            logger.error(f"Failed to get Polar customer {external_id}: {e}")
+            logger.warning(f"Failed to get Polar customer {external_id}: {e}")
             return None

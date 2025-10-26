@@ -25,6 +25,7 @@ class PolarProductsModule:
         recurring_interval: SubscriptionRecurringInterval,
         metadata: dict[str, str] | None = None,
         description: str | None = None,
+        recurring_interval_count: int = 1,
     ) -> Product | None:
         """Create a new product in Polar"""
         if not self.enabled:
@@ -38,6 +39,7 @@ class PolarProductsModule:
                     name=name,
                     prices=prices,
                     recurring_interval=recurring_interval,
+                    recurring_interval_count=recurring_interval_count,
                     metadata=metadata,
                     description=description,
                 )

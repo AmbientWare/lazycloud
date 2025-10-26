@@ -8,9 +8,13 @@ class MeterNames(StrEnum):
     HIGH_PERFORMANCE_STORAGE = "High Performance Storage"
 
 
-METERS_EVENT_MAP = {
-    MeterNames.CPU_USAGE: "cpu_usage",
-    MeterNames.MEMORY_USAGE: "memory_usage",
-    MeterNames.NORMAL_STORAGE: "s3_storage_usage",
-    MeterNames.HIGH_PERFORMANCE_STORAGE: "efs_storage_usage",
+# Event name for the usage metrics event
+USAGE_EVENT_NAME = "lazycloud-usage"
+
+# Metadata field names for each meter to aggregate on
+METER_METADATA_FIELDS = {
+    MeterNames.CPU_USAGE: "cpu_core_hours",
+    MeterNames.MEMORY_USAGE: "memory_gb_hours",
+    MeterNames.NORMAL_STORAGE: "s3_gb_hours",
+    MeterNames.HIGH_PERFORMANCE_STORAGE: "efs_gb_hours",
 }

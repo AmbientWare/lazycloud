@@ -342,6 +342,8 @@ async def forward_for_billing():
     failed = 0
 
     for usage in finalized_usage:
+        # bill usage to the workspace owner
+        workspace_owner = await db.users.aget_by_id(usage.workspace_id)
         try:
             logger.info(
                 f"Forwarding usage to billing: workspace={usage.workspace_id}, "
@@ -352,11 +354,6 @@ async def forward_for_billing():
 
             should_mark_reported = False
 
-            # Get workspace owner's polar_id
-            polar_customer_id = await polar_service.usage.get_workspace_owner_polar_id(
-                str(usage.workspace_id)
-            )
-
             if not polar_service.usage.enabled:
                 # Polar disabled - mark as reported (graceful degradation)
                 logger.debug(
@@ -364,27 +361,19 @@ async def forward_for_billing():
                 )
                 should_mark_reported = True
 
-            elif not polar_customer_id:
-                # No polar_id - mark as reported (user not configured yet)
-                logger.warning(
-                    f"Skipping Polar billing for workspace {usage.workspace_id}: "
-                    f"owner has no polar_id set. Marking as reported."
-                )
-                should_mark_reported = True
-
             else:
                 # Send usage data to Polar
-                results = await polar_service.usage.send_workspace_usage(
-                    usage, polar_customer_id
+                success = await polar_service.usage.send_workspace_usage(
+                    usage_record=usage, external_customer_id=workspace_owner.clerk_id
                 )
 
-                # Only mark as reported if ALL events succeeded
-                if all(results.values()):
+                # Only mark as reported if event succeeded
+                if success:
                     should_mark_reported = True
-                    logger.info(f"All events sent successfully for usage {usage.id}")
+                    logger.info(f"Usage event sent successfully for usage {usage.id}")
                 else:
                     logger.error(
-                        f"Failed to send all events for usage {usage.id}: {results}. "
+                        f"Failed to send usage event for usage {usage.id}. "
                         f"Will retry on next run."
                     )
 

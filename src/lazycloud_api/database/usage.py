@@ -14,6 +14,7 @@ from sqlalchemy import (
     select,
 )
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from lazycloud_api.database.base import (
@@ -192,10 +193,11 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
         efs_gb_hours: float = 0.0,
         record_type: UsageRecordType = UsageRecordType.HOURLY,
         status: UsageRecordStatus = UsageRecordStatus.DRAFT,
+        session: AsyncSession | None = None,
     ) -> UsageRecordPydantic:
-        async with session_manager.get_session() as session:
+        async def _upsert(sess: AsyncSession):
             # Check if record exists
-            result = await session.execute(
+            result = await sess.execute(
                 select(UsageRecordTable)
                 .where(UsageRecordTable.workspace_id == workspace_id)
                 .where(UsageRecordTable.record_type == record_type.value)
@@ -212,8 +214,8 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
                 existing_record.s3_gb_hours = s3_gb_hours
                 existing_record.efs_gb_hours = efs_gb_hours
                 existing_record.status = status.value
-                await session.commit()
-                await session.refresh(existing_record)
+                await sess.flush()
+                await sess.refresh(existing_record)
                 return existing_record.to_pydantic(UsageRecordPydantic)
             else:
                 # Create new record
@@ -229,10 +231,12 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
                     s3_gb_hours=s3_gb_hours,
                     efs_gb_hours=efs_gb_hours,
                 )
-                session.add(usage_record)
-                await session.commit()
-                await session.refresh(usage_record)
+                sess.add(usage_record)
+                await sess.flush()
+                await sess.refresh(usage_record)
                 return usage_record.to_pydantic(UsageRecordPydantic)
+
+        return await self._execute_in_session(_upsert, session)
 
     async def upsert_compute_breakdown(
         self,
@@ -240,8 +244,9 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
         pod_name: str,
         cpu_core_seconds: float,
         memory_gb_seconds: float,
+        session: AsyncSession | None = None,
     ) -> ComputeUsageBreakdownPydantic:
-        async with session_manager.get_session() as session:
+        async def _upsert(sess: AsyncSession):
             stmt = insert(ComputeUsageBreakdownTable).values(
                 usage_record_id=usage_record_id,
                 pod_name=pod_name,
@@ -259,11 +264,13 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
                 },
             ).returning(ComputeUsageBreakdownTable)
 
-            result = await session.execute(stmt)
+            result = await sess.execute(stmt)
             breakdown = result.scalar_one()
-            await session.commit()
+            await sess.flush()
 
             return breakdown.to_pydantic(ComputeUsageBreakdownPydantic)
+
+        return await self._execute_in_session(_upsert, session)
 
     async def upsert_storage_breakdown(
         self,
@@ -271,8 +278,9 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
         pvc_name: str,
         storage_class: str,
         gb_hours: float,
+        session: AsyncSession | None = None,
     ) -> StorageUsageBreakdownPydantic:
-        async with session_manager.get_session() as session:
+        async def _upsert(sess: AsyncSession):
             stmt = insert(StorageUsageBreakdownTable).values(
                 usage_record_id=usage_record_id,
                 pvc_name=pvc_name,
@@ -290,11 +298,13 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
                 },
             ).returning(StorageUsageBreakdownTable)
 
-            result = await session.execute(stmt)
+            result = await sess.execute(stmt)
             breakdown = result.scalar_one()
-            await session.commit()
+            await sess.flush()
 
             return breakdown.to_pydantic(StorageUsageBreakdownPydantic)
+
+        return await self._execute_in_session(_upsert, session)
 
     async def get_workspace_usage(
         self,
