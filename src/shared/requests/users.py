@@ -2,6 +2,6 @@ from pydantic import BaseModel
 
 
 class OnboardingRequest(BaseModel):
-    user_id: str
+    clerk_id: str
     name: str
     email: str
