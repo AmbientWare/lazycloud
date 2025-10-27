@@ -27,7 +27,7 @@ async def onboard_user(
     """Onboard a new user with proper transaction handling."""
     try:
         await onboarding_service.onboard_user(
-            clerk_id=request.user_id,
+            clerk_id=request.clerk_id,
             name=request.name,
             email=request.email,
         )
