@@ -88,9 +88,7 @@ class WorkspaceService(DatabaseService[WorkspaceTable, WorkspacePydantic]):
             return [
                 (
                     self._to_pydantic(workspace),
-                    UserWorkspacePydantic.model_validate(
-                        membership, from_attributes=True
-                    ),
+                    membership.to_pydantic(UserWorkspacePydantic),
                 )
                 for workspace, membership in rows
             ]
@@ -136,7 +134,7 @@ class WorkspaceService(DatabaseService[WorkspaceTable, WorkspacePydantic]):
             user = result.scalar_one_or_none()
 
             if user:
-                return UserPydantic.model_validate(user, from_attributes=True)
+                return user.to_pydantic(UserPydantic)
             return None
 
     async def transfer_ownership(

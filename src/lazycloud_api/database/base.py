@@ -5,7 +5,7 @@ from typing import Annotated, AsyncGenerator, Generic, Type, TypeVar
 
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic.functional_validators import BeforeValidator
-from sqlalchemy import DateTime, delete, inspect, orm, update
+from sqlalchemy import DateTime, delete, orm, update
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -17,13 +17,13 @@ Base = orm.declarative_base()
 
 
 # Custom type that automatically converts UUID to string
-def uuid_to_str(v):
+def _uuid_to_str(v):
     if isinstance(v, uuid.UUID):
         return str(v)
     return v
 
 
-UUIDStr = Annotated[str, BeforeValidator(uuid_to_str)]
+UUIDStr = Annotated[str, BeforeValidator(_uuid_to_str)]
 
 
 class BaseTable(Base):
@@ -44,18 +44,8 @@ class BaseTable(Base):
     def to_pydantic(
         self, pydantic_class: Type["basePydanticType"]
     ) -> "basePydanticType":
-        """Convert the model to a Pydantic model
-
-        Converts to dict first to ensure all validators run properly.
-        """
-        # Get all column values as dict
-        data = {}
-        mapper = inspect(self.__class__)
-        for column in mapper.columns:
-            data[column.key] = getattr(self, column.key)
-
-        # Validate from dict (this triggers all validators)
-        return pydantic_class.model_validate(data)
+        """Convert the model to a Pydantic model"""
+        return pydantic_class.model_validate(self, from_attributes=True)
 
 
 class BaseDbPydanticModel(PydanticBaseModel):

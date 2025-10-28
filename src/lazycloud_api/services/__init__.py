@@ -5,6 +5,7 @@ from lazycloud_api.services.cloudflare import CloudflareService
 from lazycloud_api.services.ecr_auth import ECRAuthService
 from lazycloud_api.services.polar import PolarService
 from lazycloud_api.services.prometheus import PrometheusMetricsService
+from lazycloud_api.services.usage_service import UsageService
 from lazycloud_api.services.user_onboarding import UserOnboardingService
 
 
@@ -51,15 +52,22 @@ def get_user_onboarding_service() -> UserOnboardingService:
     )
 
 
+@lru_cache(maxsize=1)
+def get_usage_service() -> UsageService:
+    return UsageService()
+
+
 __all__ = [
     "ECRAuthService",
     "CloudflareService",
     "PrometheusMetricsService",
     "PolarService",
     "UserOnboardingService",
+    "UsageService",
     "get_ecr_auth_service",
     "get_cloudflare_service",
     "get_metrics_service",
     "get_polar_service",
     "get_user_onboarding_service",
+    "get_usage_service",
 ]

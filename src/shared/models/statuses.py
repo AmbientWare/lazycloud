@@ -35,8 +35,8 @@ class KubernetesPhase(StrEnum):
 class StorageType(StrEnum):
     """Storage class types."""
 
-    NORMAL = "Normal"
-    HIGH_PERFORMANCE = "High Performance"
+    STANDARD = "Standard"
+    PREMIUM = "Premium"
 
 
 class VolumeStatus(BaseModel):
@@ -46,7 +46,7 @@ class VolumeStatus(BaseModel):
     status: str
     mount_path: str | None = None
     size: str | None = None
-    storage_type: StorageType = StorageType.NORMAL
+    storage_type: StorageType = StorageType.STANDARD
 
 
 class VolumeStatusSummary(BaseModel):
@@ -54,7 +54,7 @@ class VolumeStatusSummary(BaseModel):
 
     name: str
     status: str
-    storage_type: StorageType = StorageType.NORMAL
+    storage_type: StorageType = StorageType.STANDARD
 
 
 class NetworkStatus(BaseModel):

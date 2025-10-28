@@ -110,9 +110,9 @@ class StatusWatcher:
             volumes_summary = []
             for v in self.helm_values.volumes:
                 # Determine storage type from labels
-                storage_type = StorageType.NORMAL
+                storage_type = StorageType.STANDARD
                 if v.labels and v.labels.get("lazycloud.storage.hp") == "true":
-                    storage_type = StorageType.HIGH_PERFORMANCE
+                    storage_type = StorageType.PREMIUM
 
                 volumes_summary.append(
                     VolumeStatusSummary(

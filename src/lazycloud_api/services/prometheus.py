@@ -6,6 +6,7 @@ import httpx
 from loguru import logger
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+from shared.models.billing import STORAGE_CLASS_EFS, STORAGE_CLASS_S3
 from shared.models.metrics import (
     NamespaceBreakdown,
     NamespaceSummary,
@@ -185,10 +186,10 @@ class PrometheusMetricsService:
         """Get storage usage in GB-hours for namespace PVCs"""
         duration_hours = (end_time - start_time).total_seconds() / 3600
 
-        # Query: sum of PVC capacity
+        # Query: sum of actual PVC usage (requires CSI drivers)
         query = f'''
             sum(
-                kubelet_volume_stats_capacity_bytes{{
+                kubelet_volume_stats_used_bytes{{
                     namespace="{namespace}"
                 }}
             )
@@ -256,29 +257,29 @@ class PrometheusMetricsService:
         """Get storage usage split by storage class (s3-sc vs efs-sc) in GB-hours"""
         duration_hours = (end_time - start_time).total_seconds() / 3600
 
-        # Query for S3 storage
+        # Query for S3 storage (actual usage, requires CSI drivers)
         s3_query = f'''
             sum(
-                kubelet_volume_stats_capacity_bytes{{
+                kubelet_volume_stats_used_bytes{{
                     namespace="{namespace}"
                 }}
                 * on(persistentvolumeclaim, namespace) group_left(storageclass)
                 kube_persistentvolumeclaim_info{{
-                    storageclass="s3-sc",
+                    storageclass="{STORAGE_CLASS_S3}",
                     namespace="{namespace}"
                 }}
             )
         '''
 
-        # Query for EFS storage
+        # Query for EFS storage (actual usage, requires CSI drivers)
         efs_query = f'''
             sum(
-                kubelet_volume_stats_capacity_bytes{{
+                kubelet_volume_stats_used_bytes{{
                     namespace="{namespace}"
                 }}
                 * on(persistentvolumeclaim, namespace) group_left(storageclass)
                 kube_persistentvolumeclaim_info{{
-                    storageclass="efs-sc",
+                    storageclass="{STORAGE_CLASS_EFS}",
                     namespace="{namespace}"
                 }}
             )
@@ -300,12 +301,17 @@ class PrometheusMetricsService:
     async def get_storage_usage_by_pvc(
         self, namespace: str, start_time: datetime, end_time: datetime
     ) -> list[StorageUsage]:
-        """Get storage usage per PVC with storage class."""
+        """Get storage usage per PVC with storage class
+
+        TODO: This requires CSI drivers that expose kubelet_volume_stats_used_bytes.
+        Test with EKS and proper EFS/EBS CSI drivers for accurate usage tracking.
+        Without CSI drivers (e.g., Minikube hostpath), this will return empty results.
+        """
         duration_hours = (end_time - start_time).total_seconds() / 3600
 
-        # Query for all PVCs with their storage classes
+        # Query actual disk usage (requires CSI drivers in production)
         query = f'''
-            kubelet_volume_stats_capacity_bytes{{
+            kubelet_volume_stats_used_bytes{{
                 namespace="{namespace}"
             }}
             * on(persistentvolumeclaim, namespace) group_left(storageclass)
@@ -319,8 +325,8 @@ class PrometheusMetricsService:
         # Process results grouped by PVC and storage class
         pvc_usage: dict[tuple[str, str], list[float]] = {}
 
-        if result.get("status") == "success" and result["data"]["result"]:
-            for series in result["data"]["result"]:
+        if result and result.get("result"):
+            for series in result["result"]:
                 pvc_name = series["metric"].get("persistentvolumeclaim")
                 storage_class = series["metric"].get("storageclass")
 
@@ -331,19 +337,25 @@ class PrometheusMetricsService:
                 if key not in pvc_usage:
                     pvc_usage[key] = []
 
-                # Collect all capacity values
+                # Collect all used bytes values
                 for value in series["values"]:
                     try:
-                        capacity_bytes = float(value[1])
-                        pvc_usage[key].append(capacity_bytes)
+                        used_bytes = float(value[1])
+                        pvc_usage[key].append(used_bytes)
                     except (ValueError, IndexError):
                         continue
+        else:
+            logger.warning(
+                f"kubelet_volume_stats_used_bytes not available for {namespace}. "
+                f"This metric requires CSI drivers (e.g., AWS EFS/EBS CSI drivers in EKS). "
+                f"Storage usage data will be unavailable."
+            )
 
         # Calculate gb_hours for each PVC
         storage_list = []
-        for (pvc_name, storage_class), capacities in pvc_usage.items():
-            if capacities:
-                avg_bytes = sum(capacities) / len(capacities)
+        for (pvc_name, storage_class), used_values in pvc_usage.items():
+            if used_values:
+                avg_bytes = sum(used_values) / len(used_values)
                 avg_gb = avg_bytes / (1024**3)
                 gb_hours = avg_gb * duration_hours
 
@@ -439,7 +451,7 @@ class PrometheusMetricsService:
 
         storage_query = f'''
             sum(
-                kubelet_volume_stats_capacity_bytes{{
+                kubelet_volume_stats_used_bytes{{
                     namespace="{namespace}"
                 }}
             )
@@ -506,8 +518,12 @@ class PrometheusMetricsService:
         by_pvc = await self.get_storage_usage_by_pvc(namespace, start_time, end_time)
 
         # Calculate storage totals from PVC breakdown (eliminates 2 redundant queries)
-        s3_total = sum(pvc.gb_hours for pvc in by_pvc if pvc.storage_class == "s3-sc")
-        efs_total = sum(pvc.gb_hours for pvc in by_pvc if pvc.storage_class == "efs-sc")
+        s3_total = sum(
+            pvc.gb_hours for pvc in by_pvc if pvc.storage_class == STORAGE_CLASS_S3
+        )
+        efs_total = sum(
+            pvc.gb_hours for pvc in by_pvc if pvc.storage_class == STORAGE_CLASS_EFS
+        )
         storage_total = s3_total + efs_total
 
         return NamespaceBreakdown(

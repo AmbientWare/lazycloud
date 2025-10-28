@@ -15,7 +15,7 @@ class VolumesTable(DataTable):
         self.can_focus = False
         self.show_cursor = False
         self.zebra_stripes = True
-        self.add_columns("Name", "Status", "Storage Type")
+        self.add_columns("Name", "Status", "Type")
 
     def update_volumes(self, deployment: DeploymentStatus) -> None:
         """Update the table with volume data."""
@@ -28,7 +28,7 @@ class VolumesTable(DataTable):
             # Highlight high performance storage
             storage_text = (
                 f"[{Colors.Hex.warning}]{volume.storage_type}[/{Colors.Hex.warning}]"
-                if volume.storage_type == StorageType.HIGH_PERFORMANCE
+                if volume.storage_type == StorageType.PREMIUM
                 else str(volume.storage_type)
             )
 

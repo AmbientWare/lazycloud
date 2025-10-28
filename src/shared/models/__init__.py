@@ -1,3 +1,9 @@
+from shared.models.billing import (
+    UsageCollectionConfig,
+    UsageCollectionInterval,
+    UsageRecordStatus,
+    UsageRecordType,
+)
 from shared.models.metrics import (
     NamespaceBreakdown,
     NamespaceSummary,
@@ -20,6 +26,10 @@ __all__ = [
     "PodUsage",
     "StreamEventType",
     "SubscriptionManagerStats",
+    "UsageCollectionConfig",
+    "UsageCollectionInterval",
     "UsagePeriod",
+    "UsageRecordStatus",
+    "UsageRecordType",
     "UsageTotals",
 ]

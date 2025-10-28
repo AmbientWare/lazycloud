@@ -5,13 +5,17 @@ from loguru import logger
 from prefect import flow, task
 
 from lazycloud_api.database import db
-from lazycloud_api.database.usage import UsageRecordStatus, UsageRecordType
 from lazycloud_api.services import get_metrics_service, get_polar_service
 from lazycloud_api.services.k8s import create_ns_name
+from shared.models.billing import (
+    UsageCollectionConfig,
+    UsageRecordStatus,
+    UsageRecordType,
+)
 
 
 @task(retries=2, retry_delay_seconds=60)
-async def collect_workspace_usage_for_hour(
+async def collect_workspace_usage_for_interval(
     workspace_id: str, start_time: datetime, end_time: datetime
 ) -> dict:
     metrics_service = get_metrics_service()
@@ -44,7 +48,7 @@ async def collect_workspace_usage_for_hour(
             storage_gb_hours=breakdown.totals.storage_gb_hours,
             s3_gb_hours=breakdown.totals.s3_gb_hours,
             efs_gb_hours=breakdown.totals.efs_gb_hours,
-            record_type=UsageRecordType.HOURLY,
+            record_type=UsageCollectionConfig.get_record_type(),
         )
 
         # Upsert compute breakdowns (per pod)
@@ -95,35 +99,35 @@ async def collect_workspace_daily_usage(
     workspace_id: str, day_start: datetime, day_end: datetime
 ) -> dict:
     try:
-        # Aggregate from hourly records instead of re-querying Prometheus
-        hourly_records = await db.usage.get_workspace_usage(
+        # Aggregate from interval records instead of re-querying Prometheus
+        interval_records = await db.usage.get_workspace_usage(
             workspace_id=uuid.UUID(workspace_id),
             start_date=day_start,
             end_date=day_end,
-            record_type=UsageRecordType.HOURLY,
+            record_type=UsageCollectionConfig.get_record_type(),
         )
 
-        if not hourly_records:
+        if not interval_records:
             logger.warning(
-                f"No hourly records found for {workspace_id} on {day_start.date()}"
+                f"No interval records found for {workspace_id} on {day_start.date()}"
             )
             return {
                 "workspace_id": workspace_id,
                 "date": str(day_start.date()),
                 "success": False,
-                "error": "No hourly records available",
+                "error": "No interval records available",
             }
 
-        # Aggregate totals from hourly records
-        total_cpu = sum(r.cpu_core_seconds for r in hourly_records)
-        total_memory = sum(r.memory_gb_seconds for r in hourly_records)
-        total_storage = sum(r.storage_gb_hours for r in hourly_records)
-        total_s3 = sum(r.s3_gb_hours for r in hourly_records)
-        total_efs = sum(r.efs_gb_hours for r in hourly_records)
+        # Aggregate totals from interval records
+        total_cpu = sum(r.cpu_core_seconds for r in interval_records)
+        total_memory = sum(r.memory_gb_seconds for r in interval_records)
+        total_storage = sum(r.storage_gb_hours for r in interval_records)
+        total_s3 = sum(r.s3_gb_hours for r in interval_records)
+        total_efs = sum(r.efs_gb_hours for r in interval_records)
 
-        # Aggregate compute breakdowns from all hourly records
+        # Aggregate compute breakdowns from all interval records
         compute_aggregates: dict[str, dict[str, float]] = {}
-        for record in hourly_records:
+        for record in interval_records:
             for breakdown in record.compute_breakdowns:
                 if breakdown.pod_name not in compute_aggregates:
                     compute_aggregates[breakdown.pod_name] = {
@@ -137,9 +141,9 @@ async def collect_workspace_daily_usage(
                     breakdown.memory_gb_seconds
                 )
 
-        # Aggregate storage breakdowns from all hourly records
+        # Aggregate storage breakdowns from all interval records
         storage_aggregates: dict[tuple[str, str], float] = {}
-        for record in hourly_records:
+        for record in interval_records:
             for breakdown in record.storage_breakdowns:
                 key = (breakdown.pvc_name, breakdown.storage_class)
                 if key not in storage_aggregates:
@@ -183,7 +187,7 @@ async def collect_workspace_daily_usage(
             f"CPU={total_cpu:.2f}s, "
             f"Mem={total_memory:.2f}GB-s, "
             f"Storage={total_storage:.2f}GB-h "
-            f"(aggregated from {len(hourly_records)} hourly records)"
+            f"(aggregated from {len(interval_records)} interval records)"
         )
 
         return {
@@ -204,20 +208,22 @@ async def collect_workspace_daily_usage(
 
 
 @flow(log_prints=True)
-async def collect_hourly_usage(workspace_id: str) -> dict:
-    """Collect usage for previous hour for a single workspace"""
+async def collect_interval_usage(workspace_id: str) -> dict:
+    """Collect usage for previous interval for a single workspace"""
     now = datetime.now(timezone.utc)
 
-    # Calculate previous hour
-    # At 01:05 or 01:30, we want 00:00-01:00
-    end_time = now.replace(minute=0, second=0, microsecond=0)
-    start_time = end_time - timedelta(hours=1)
+    # Round down to previous interval mark
+    end_time = UsageCollectionConfig.round_time_to_interval(now)
+    start_time = end_time - UsageCollectionConfig.COLLECTION_INTERVAL_TIMEDELTA
 
     logger.info(
-        f"Collecting hourly usage for {workspace_id}: {start_time.hour:02d}:00-{end_time.hour:02d}:00"
+        f"Collecting usage for {workspace_id}: "
+        f"{start_time.strftime('%H:%M')}-{end_time.strftime('%H:%M')}"
     )
 
-    result = await collect_workspace_usage_for_hour(workspace_id, start_time, end_time)
+    result = await collect_workspace_usage_for_interval(
+        workspace_id, start_time, end_time
+    )
 
     return result
 
@@ -247,8 +253,8 @@ async def backfill_daily_usage(
         return {
             "workspace_id": workspace_id,
             "date": str(target_date),
-            "hourly_collected": 0,
-            "hourly_failed": 0,
+            "intervals_collected": 0,
+            "intervals_failed": 0,
             "daily_success": False,
             "error": "Workspace not found",
         }
@@ -271,25 +277,28 @@ async def backfill_daily_usage(
             f"ending backfill at hour {end_hour}"
         )
 
-    # Backfill only the hours the workspace existed
-    hourly_results = []
+    # Backfill only the intervals the workspace existed
+    interval_results = []
     for hour in range(start_hour, end_hour + 1):
-        start_time = datetime.combine(target_date, datetime.min.time()).replace(
-            hour=hour, tzinfo=timezone.utc
-        )
-        end_time = start_time + timedelta(hours=1)
+        for minute in UsageCollectionConfig.get_minute_marks():
+            start_time = datetime.combine(target_date, datetime.min.time()).replace(
+                hour=hour, minute=minute, tzinfo=timezone.utc
+            )
+            end_time = start_time + UsageCollectionConfig.COLLECTION_INTERVAL_TIMEDELTA
 
-        result = await collect_workspace_usage_for_hour(
-            workspace_id, start_time, end_time
-        )
-        hourly_results.append(result)
+            result = await collect_workspace_usage_for_interval(
+                workspace_id, start_time, end_time
+            )
+            interval_results.append(result)
 
-    hourly_collected = sum(1 for r in hourly_results if r["success"])
-    hourly_failed = sum(1 for r in hourly_results if not r["success"])
-    expected_hours = end_hour - start_hour + 1
+    intervals_collected = sum(1 for r in interval_results if r["success"])
+    intervals_failed = sum(1 for r in interval_results if not r["success"])
+    expected_intervals = (
+        end_hour - start_hour + 1
+    ) * UsageCollectionConfig.INTERVALS_PER_HOUR
 
-    # Only aggregate and mark as FINALIZED if we got ALL hourly records
-    if hourly_collected == expected_hours:
+    # Only aggregate and mark as FINALIZED if we got ALL interval records
+    if intervals_collected == expected_intervals:
         daily_result = await collect_workspace_daily_usage(
             workspace_id, day_start, day_end
         )
@@ -297,32 +306,32 @@ async def backfill_daily_usage(
         if daily_result["success"]:
             logger.info(
                 f"Backfill complete for {workspace_id}: "
-                f"{hourly_collected}/{expected_hours} hourly records collected, "
+                f"{intervals_collected}/{expected_intervals} interval records collected, "
                 f"daily record FINALIZED"
             )
             return {
                 "workspace_id": workspace_id,
                 "date": str(target_date),
-                "hourly_collected": hourly_collected,
-                "hourly_failed": hourly_failed,
+                "intervals_collected": intervals_collected,
+                "intervals_failed": intervals_failed,
                 "daily_success": True,
                 "daily_record_id": daily_result["usage_record_id"],
                 "status": "finalized",
             }
 
-    # If we're here, either didn't collect all hours OR daily aggregation failed
+    # If we're here, either didn't collect all intervals OR daily aggregation failed
     # INCOMPLETE record remains in DB for retry
     logger.warning(
         f"Backfill incomplete for {workspace_id}: "
-        f"collected {hourly_collected}/{expected_hours} hourly records, "
+        f"collected {intervals_collected}/{expected_intervals} interval records, "
         f"daily record remains INCOMPLETE"
     )
 
     return {
         "workspace_id": workspace_id,
         "date": str(target_date),
-        "hourly_collected": hourly_collected,
-        "hourly_failed": hourly_failed,
+        "intervals_collected": intervals_collected,
+        "intervals_failed": intervals_failed,
         "daily_success": False,
         "status": "incomplete",
     }
@@ -400,13 +409,14 @@ async def spawn_usage_collection():
     active_workspaces = await db.workspaces.aget_active_workspaces()
 
     logger.info(
-        f"Collecting hourly usage for {len(active_workspaces)} active workspaces"
+        f"Collecting usage for {len(active_workspaces)} active workspaces "
+        f"(interval: {UsageCollectionConfig.COLLECTION_INTERVAL.value} minutes)"
     )
 
-    # Spawn collect_hourly_usage for all active workspaces
+    # Spawn collect_interval_usage for all active workspaces
     results = []
     for workspace in active_workspaces:
-        result = await collect_hourly_usage(str(workspace.id))
+        result = await collect_interval_usage(str(workspace.id))
         results.append(result)
 
     # Monitor collection failures
@@ -577,8 +587,8 @@ async def process_incomplete_usage():
 
 
 # define deployments for the flows that can be called by other flows
-collect_hourly_usage_deployment = collect_hourly_usage.to_deployment(
-    name="collect-hourly-usage",
+collect_interval_usage_deployment = collect_interval_usage.to_deployment(
+    name="collect-interval-usage",
 )
 
 backfill_daily_usage_deployment = backfill_daily_usage.to_deployment(
@@ -589,7 +599,7 @@ backfill_daily_usage_deployment = backfill_daily_usage.to_deployment(
 
 spawn_usage_collection_deployment = spawn_usage_collection.to_deployment(
     name="spawn-usage-collection",
-    cron="15 * * * *",  # Every hour at 15 minutes past the hour
+    cron=UsageCollectionConfig.get_cron_expression(),
 )
 
 mark_workspaces_for_backfill_deployment = mark_workspaces_for_backfill.to_deployment(

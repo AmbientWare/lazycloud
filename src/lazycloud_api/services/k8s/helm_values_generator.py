@@ -26,6 +26,7 @@ from lazycloud_api.services.k8s.generators.workloads import (
     parse_image,
     should_be_statefulset,
 )
+from shared.models.billing import STORAGE_CLASS_EFS, STORAGE_CLASS_S3
 from shared.models.compose import (
     ComposeFile,
     ComposeNetwork,
@@ -306,7 +307,7 @@ class HelmValuesGenerator:
         use_high_performance = volume_labels.get("lazycloud.storage.hp") == "true"
 
         # Select storage class based on label
-        storage_class = "efs-sc" if use_high_performance else "s3-sc"
+        storage_class = STORAGE_CLASS_EFS if use_high_performance else STORAGE_CLASS_S3
 
         # Merge user labels with system labels
         merged_labels = {
