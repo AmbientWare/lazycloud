@@ -1,4 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException
+from datetime import datetime, timedelta, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from loguru import logger
 
 from lazycloud_api.api.dependencies import (
     get_workspace_with_admin_access,
@@ -19,6 +22,13 @@ from shared.requests.workspaces import (
     InviteUserRequest,
     RenameWorkspaceRequest,
     UpdateMemberRoleRequest,
+)
+from shared.responses.usage import (
+    AggregatedDailyUsageResponse,
+    AggregatedUsageResponse,
+    DailyUsageData,
+    UsageMetrics,
+    UsagePeriodInfo,
 )
 from shared.responses.workspaces import (
     WorkspaceMemberResponse,
@@ -303,3 +313,140 @@ async def delete_workspace(
     )
 
     return WorkspaceSuccessResponse(success=True)
+
+
+@workspaces_router.get("/usage/all")
+async def get_aggregated_usage(
+    current_user: UserPydantic = Depends(get_current_active_user),
+    start_date: datetime | None = Query(
+        None, description="Start date (defaults to start of current month)"
+    ),
+    end_date: datetime | None = Query(None, description="End date (defaults to now)"),
+) -> AggregatedUsageResponse:
+    """Get aggregated usage across all user's workspaces"""
+    try:
+        now = datetime.now(timezone.utc)
+        if not start_date:
+            logger.info("No start date provided, using default start of current month")
+            start_date = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        if not end_date:
+            logger.info("No end date provided, using default end of current month")
+            end_date = now
+
+        user_workspaces = await db.workspaces.aget_user_workspaces_with_membership(
+            current_user.id, status=WorkspaceStatus.ACTIVE
+        )
+
+        total_cpu_seconds = 0.0
+        total_memory_seconds = 0.0
+        total_s3_hours = 0.0
+        total_efs_hours = 0.0
+        total_records = 0
+
+        for workspace, _ in user_workspaces:
+            usage_records = await db.usage.get_workspace_usage(
+                workspace_id=workspace.id,
+                start_date=start_date,
+                end_date=end_date,
+            )
+
+            total_cpu_seconds += sum(r.cpu_core_seconds for r in usage_records)
+            total_memory_seconds += sum(r.memory_gb_seconds for r in usage_records)
+            total_s3_hours += sum(r.s3_gb_hours for r in usage_records)
+            total_efs_hours += sum(r.efs_gb_hours for r in usage_records)
+            total_records += len(usage_records)
+
+        return AggregatedUsageResponse(
+            period=UsagePeriodInfo(start=start_date, end=end_date),
+            usage=UsageMetrics(
+                cpu_core_hours=total_cpu_seconds / 3600,
+                memory_gb_hours=total_memory_seconds / 3600,
+                s3_gb_hours=total_s3_hours,
+                efs_gb_hours=total_efs_hours,
+            ),
+            workspace_count=len(user_workspaces),
+            record_count=total_records,
+        )
+
+    except Exception as e:
+        logger.error(f"Error getting aggregated usage: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch aggregated usage: {str(e)}",
+        )
+
+
+@workspaces_router.get("/usage/all/daily")
+async def get_aggregated_daily_usage(
+    current_user: UserPydantic = Depends(get_current_active_user),
+    start_date: datetime | None = Query(
+        None, description="Start date (defaults to start of current month)"
+    ),
+    end_date: datetime | None = Query(None, description="End date (defaults to now)"),
+) -> AggregatedDailyUsageResponse:
+    """Get aggregated daily usage across all user's workspaces"""
+    try:
+        now = datetime.now(timezone.utc)
+        if not start_date:
+            logger.info("No start date provided, using default start of current month")
+            start_date = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        if not end_date:
+            logger.info("No end date provided, using default end of current month")
+            end_date = now
+
+        user_workspaces = await db.workspaces.aget_user_workspaces_with_membership(
+            current_user.id, status=WorkspaceStatus.ACTIVE
+        )
+
+        daily_data: dict[str, DailyUsageData] = {}
+
+        for workspace, _ in user_workspaces:
+            usage_records = await db.usage.get_workspace_usage(
+                workspace_id=workspace.id,
+                start_date=start_date,
+                end_date=end_date,
+            )
+
+            for record in usage_records:
+                day_key = record.collection_start.strftime("%Y-%m-%d")
+                if day_key not in daily_data:
+                    daily_data[day_key] = DailyUsageData(
+                        date=day_key,
+                        cpu_core_hours=0.0,
+                        memory_gb_hours=0.0,
+                        s3_gb_hours=0.0,
+                        efs_gb_hours=0.0,
+                    )
+
+                daily_data[day_key].cpu_core_hours += record.cpu_core_seconds / 3600
+                daily_data[day_key].memory_gb_hours += record.memory_gb_seconds / 3600
+                daily_data[day_key].s3_gb_hours += record.s3_gb_hours
+                daily_data[day_key].efs_gb_hours += record.efs_gb_hours
+
+        current_date = start_date
+        while current_date <= end_date:
+            day_key = current_date.strftime("%Y-%m-%d")
+            if day_key not in daily_data:
+                daily_data[day_key] = DailyUsageData(
+                    date=day_key,
+                    cpu_core_hours=0.0,
+                    memory_gb_hours=0.0,
+                    s3_gb_hours=0.0,
+                    efs_gb_hours=0.0,
+                )
+            current_date += timedelta(days=1)
+
+        sorted_daily = sorted(daily_data.values(), key=lambda x: x.date)
+
+        return AggregatedDailyUsageResponse(
+            period=UsagePeriodInfo(start=start_date, end=end_date),
+            daily_usage=sorted_daily,
+            workspace_count=len(user_workspaces),
+        )
+
+    except Exception as e:
+        logger.error(f"Error getting aggregated daily usage: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch aggregated daily usage: {str(e)}",
+        )

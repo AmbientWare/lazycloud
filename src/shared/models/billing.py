@@ -116,5 +116,5 @@ STORAGE_CLASS_TO_METER: dict[str, str] = {
 # Mapping from storage class to short type names
 STORAGE_CLASS_TO_TYPE: dict[str, str] = {
     STORAGE_CLASS_S3: "Standard",
-    STORAGE_CLASS_EFS: "High Performance",
+    STORAGE_CLASS_EFS: "Performance",
 }
