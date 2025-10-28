@@ -150,6 +150,7 @@ class ObjectMeta(BaseModel):
     resource_version: str | None = Field(None, alias="resourceVersion")
     generation: int | None = None
     creation_timestamp: str | None = Field(None, alias="creationTimestamp")
+    deletion_timestamp: str | None = Field(None, alias="deletionTimestamp")
 
 
 class EnvVar(BaseModel):

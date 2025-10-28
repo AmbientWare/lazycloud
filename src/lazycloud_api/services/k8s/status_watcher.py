@@ -203,11 +203,11 @@ class StatusWatcher:
         pods = await self._get_service_pods(service)
         current_usage = self._calculate_average_usage(pods) if pods else None
 
-        # Determine status based on pod count
+        # Determine status based on actual pod phases
         ready_replicas = (
             len([p for p in pods if p.phase == KubernetesPhase.RUNNING]) if pods else 0
         )
-        status_enum = self._determine_status(ready_replicas, replicas)
+        status_enum = self._determine_status_from_pods(pods, replicas)
 
         # Format ports and volumes
         formatted_ports = [
@@ -299,6 +299,10 @@ class StatusWatcher:
                         }
                         phase = phase_map.get(pod.status.phase, KubernetesPhase.ERROR)
 
+                        # Check if pod is terminating (has deletionTimestamp)
+                        if pod.metadata.deletion_timestamp:
+                            phase = KubernetesPhase.TERMINATING
+
                     # Create PodInfo object
                     pod_info = PodStatus(
                         name=pod.metadata.name,
@@ -341,16 +345,51 @@ class StatusWatcher:
         else:
             return f"{minutes}m"
 
-    def _determine_status(self, ready_replicas: int, replicas: int) -> KubernetesPhase:
-        """Determine service status based on replica counts."""
-        if ready_replicas == replicas and replicas > 0:
-            return KubernetesPhase.RUNNING
-        elif ready_replicas > 0:
-            return KubernetesPhase.PENDING  # partially running
-        elif replicas == 0:
+    def _determine_status_from_pods(
+        self, pods: list[PodStatus], replicas: int
+    ) -> KubernetesPhase:
+        """Determine service status based on actual pod phases."""
+        if replicas == 0:
             return KubernetesPhase.STOPPED
-        else:
+
+        if not pods:
+            # Expected pods but none exist yet - likely just deployed
+            return KubernetesPhase.PENDING
+
+        # Count pods by phase
+        running_count = sum(1 for p in pods if p.phase == KubernetesPhase.RUNNING)
+        pending_count = sum(1 for p in pods if p.phase == KubernetesPhase.PENDING)
+        terminating_count = sum(1 for p in pods if p.phase == KubernetesPhase.TERMINATING)
+        error_count = sum(
+            1 for p in pods if p.phase in [KubernetesPhase.ERROR, KubernetesPhase.FAILED]
+        )
+
+        # If all pods are terminating, service is terminating
+        if terminating_count == len(pods):
+            return KubernetesPhase.TERMINATING
+
+        # If any pods are in error/failed state, service is in error
+        if error_count > 0:
             return KubernetesPhase.ERROR
+
+        # All pods running
+        if running_count == replicas:
+            return KubernetesPhase.RUNNING
+
+        # Some pods running, some pending - partially running
+        if running_count > 0 and pending_count > 0:
+            return KubernetesPhase.PARTIALLY_RUNNING
+
+        # Some pods running but not all expected
+        if running_count > 0:
+            return KubernetesPhase.PARTIALLY_RUNNING
+
+        # All pods pending (starting up)
+        if pending_count > 0:
+            return KubernetesPhase.PENDING
+
+        # Shouldn't reach here, but default to unknown
+        return KubernetesPhase.UNKNOWN
 
     def _calculate_average_usage(self, pods: list[PodStatus]) -> CurrentUsage | None:
         """Calculate average CPU and memory usage from pods."""
