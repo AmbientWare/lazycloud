@@ -1,13 +1,9 @@
-"""
-Dashboard command for LazyCloud CLI.
-"""
-
 import typer
 from rich.console import Console
 
 from lazycloud_cli.config import config
 from lazycloud_cli.ui.components.info_cards import ErrorCard
-from lazycloud_cli.ui.dashboard import run_dashboard
+from lazycloud_cli.ui.textual import run_dashboard
 
 console = Console()
 
