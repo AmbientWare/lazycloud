@@ -28,6 +28,7 @@ class KubernetesPhase(StrEnum):
     SUCCEEDED = "Succeeded"
     FAILED = "Failed"
     STOPPED = "Stopped"
+    TERMINATING = "Terminating"
     ERROR = "Error"
     UNKNOWN = "Unknown"
 
