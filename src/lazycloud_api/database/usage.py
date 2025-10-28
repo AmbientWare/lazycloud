@@ -1,6 +1,5 @@
 import uuid
 from datetime import datetime
-from enum import StrEnum
 
 from sqlalchemy import (
     UUID,
@@ -24,22 +23,11 @@ from lazycloud_api.database.base import (
     UUIDStr,
 )
 from lazycloud_api.database.session import session_manager
-
-
-class UsageRecordType(StrEnum):
-    """Type of usage record for aggregation level."""
-
-    HOURLY = "hourly"
-    DAILY = "daily"
-
-
-class UsageRecordStatus(StrEnum):
-    """Status of usage record in billing workflow."""
-
-    DRAFT = "draft"  # Collecting, may still change
-    INCOMPLETE = "incomplete"  # Missing some hourly data, needs retry
-    FINALIZED = "finalized"  # Ready for billing
-    REPORTED = "reported"  # Sent to billing system
+from shared.models.billing import (
+    UsageCollectionConfig,
+    UsageRecordStatus,
+    UsageRecordType,
+)
 
 
 class UsageRecordTable(BaseTable):
@@ -372,4 +360,24 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
                 .order_by(UsageRecordTable.collection_end)
             )
             records = result.scalars().all()
-            return [UsageRecordPydantic.model_validate(record) for record in records]
+            return [record.to_pydantic(UsageRecordPydantic) for record in records]
+
+    async def get_latest_interval_usage(
+        self, workspace_id: uuid.UUID
+    ) -> UsageRecordPydantic | None:
+        """Get the most recent interval usage record based on current collection config."""
+        async with session_manager.get_session() as session:
+            result = await session.execute(
+                select(UsageRecordTable)
+                .where(UsageRecordTable.workspace_id == workspace_id)
+                .where(
+                    UsageRecordTable.record_type
+                    == UsageCollectionConfig.get_record_type().value
+                )
+                .order_by(UsageRecordTable.collection_end.desc())
+                .limit(1)
+            )
+            record = result.scalar_one_or_none()
+            if record:
+                return record.to_pydantic(UsageRecordPydantic)
+            return None

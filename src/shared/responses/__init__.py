@@ -1,19 +1,19 @@
 from shared.responses.usage import (
-    CurrentUsageData,
-    CurrentUsageResponse,
-    ServiceBreakdownItem,
+    DailyUsageData,
+    DailyUsageResponse,
+    ServiceUsageItem,
     UsageMetrics,
     UsagePeriodInfo,
-    WorkspaceUsageBreakdownResponse,
+    VolumeUsageItem,
     WorkspaceUsageResponse,
 )
 
 __all__ = [
-    "CurrentUsageData",
-    "CurrentUsageResponse",
-    "ServiceBreakdownItem",
+    "DailyUsageData",
+    "DailyUsageResponse",
+    "ServiceUsageItem",
     "UsageMetrics",
     "UsagePeriodInfo",
-    "WorkspaceUsageBreakdownResponse",
+    "VolumeUsageItem",
     "WorkspaceUsageResponse",
 ]

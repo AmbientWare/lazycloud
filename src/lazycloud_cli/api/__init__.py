@@ -10,6 +10,7 @@ from lazycloud_cli.api.status import StatusAPI
 from lazycloud_cli.api.tasks import TasksAPI
 from lazycloud_cli.api.users import UsersAPI
 from lazycloud_cli.api.versions import VersionsAPI
+from lazycloud_cli.api.usage import UsageAPI
 from lazycloud_cli.api.workspaces import WorkspacesAPI
 
 
@@ -27,6 +28,7 @@ class API:
         self.services = ServicesAPI()
         self.registry = RegistryAPI()
         self.workspaces = WorkspacesAPI()
+        self.usage = UsageAPI()
 
 
 api = API()
