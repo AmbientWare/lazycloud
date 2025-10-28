@@ -78,7 +78,7 @@ class UsageOverviewSection(Container):
             f"[bold {accent}]CPU:[/bold {accent}] {usage.usage.cpu_core_hours:.2f} core-hrs  "
             f"[bold {accent}]Memory:[/bold {accent}] {usage.usage.memory_gb_hours:.2f} GB-hrs\n"
             f"[bold {accent}]Standard Storage:[/bold {accent}] {usage.usage.s3_gb_hours:.2f} GB-hrs  "
-            f"[bold {accent}]High Performance Storage:[/bold {accent}] {usage.usage.efs_gb_hours:.2f} GB-hrs\n"
+            f"[bold {accent}]Performance Storage:[/bold {accent}] {usage.usage.efs_gb_hours:.2f} GB-hrs\n"
             f"[dim]Visit {web_url} for detailed breakdown[/dim]"
         )
 

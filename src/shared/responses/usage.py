@@ -55,3 +55,20 @@ class DailyUsageResponse(BaseModel):
     workspace_id: str
     period: UsagePeriodInfo
     daily_usage: list[DailyUsageData]
+
+
+class AggregatedUsageResponse(BaseModel):
+    """Aggregated usage across all user workspaces"""
+
+    period: UsagePeriodInfo
+    usage: UsageMetrics
+    workspace_count: int
+    record_count: int
+
+
+class AggregatedDailyUsageResponse(BaseModel):
+    """Aggregated daily usage across all user workspaces"""
+
+    period: UsagePeriodInfo
+    daily_usage: list[DailyUsageData]
+    workspace_count: int
