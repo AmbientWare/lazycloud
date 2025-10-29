@@ -16,7 +16,7 @@ class TransferOwnershipRequest(BaseModel):
 
 
 class InviteUserRequest(BaseModel):
-    user_id: str
+    email: str
     role: WorkspaceRole = WorkspaceRole.MEMBER
 
 

@@ -149,9 +149,8 @@ async def invite_user(
     workspace_membership: tuple[UserWorkspacePydantic, WorkspacePydantic] = Depends(
         get_workspace_with_admin_access
     ),
-) -> WorkspaceMemberResponse:
+) -> WorkspaceSuccessResponse:
     """Invite a user to a workspace (requires owner or admin role)"""
-    # Check if current user has permission
     _, workspace = workspace_membership
 
     if workspace.is_personal:
@@ -159,36 +158,12 @@ async def invite_user(
             status_code=400, detail="Cannot invite users to personal workspaces"
         )
 
-    # Check if user exists
-    user = await db.users.aget_by_id(request.user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    # Check if user is already a member
-    existing_membership = await db.user_workspaces.aget_by_user_and_workspace(
-        request.user_id, workspace.id
+    # TODO: Send email to user with invite link
+    logger.info(
+        f"Inviting user with email: {request.email} to workspace: {workspace.name} (ID: {workspace.id}) with role: {request.role.value}"
     )
-    if existing_membership:
-        raise HTTPException(status_code=400, detail="User is already a member")
 
-    # make sure requested is not an admin or owner
-    if request.role in [WorkspaceRole.ADMIN, WorkspaceRole.OWNER]:
-        raise HTTPException(status_code=400, detail="Cannot invite admin or owner")
-
-    # Create invitation
-    new_membership = UserWorkspacePydantic(
-        user_id=request.user_id,
-        workspace_id=workspace.id,
-        role=request.role,
-        status=UserWorkspaceStatus.INVITED,
-    )
-    new_membership = await db.user_workspaces.acreate(new_membership)
-
-    return WorkspaceMemberResponse(
-        user_id=new_membership.user_id,
-        role=new_membership.role,
-        status=new_membership.status,
-    )
+    return WorkspaceSuccessResponse(success=True)
 
 
 @workspaces_router.get("/{workspace_id}/members")
@@ -198,19 +173,22 @@ async def get_workspace_members(
     ),
 ) -> list[WorkspaceMemberResponse]:
     """Get all members of a workspace"""
-    # Check if user has access
     _, workspace = workspace_membership
 
-    # Get all members
-    members = await db.user_workspaces.aget_workspace_members(workspace.id)
+    # Get all members with user information
+    members_with_users = await db.user_workspaces.aget_workspace_members_with_users(
+        workspace.id
+    )
 
     return [
         WorkspaceMemberResponse(
             user_id=member.user_id,
+            name=user.name,
+            email=user.email,
             role=member.role,
             status=member.status,
         )
-        for member in members
+        for member, user in members_with_users
     ]
 
 
@@ -222,10 +200,8 @@ async def update_member_role(
     ),
 ) -> WorkspaceMemberResponse:
     """Update a member's role (requires owner or admin role)"""
-    # Check if current user has permission
     _, workspace = workspace_membership
 
-    # Get target member
     target_membership = await db.user_workspaces.aget_by_user_and_workspace(
         request.user_id, workspace.id
     )
@@ -250,8 +226,15 @@ async def update_member_role(
     target_membership.role = request.role
     updated_membership = await db.user_workspaces.aupdate(target_membership)
 
+    # Get user information for response
+    user = await db.users.aget_by_id(request.user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
     return WorkspaceMemberResponse(
         user_id=updated_membership.user_id,
+        name=user.name,
+        email=user.email,
         role=updated_membership.role,
         status=updated_membership.status,
     )

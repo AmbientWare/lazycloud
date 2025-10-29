@@ -2,6 +2,7 @@ import uuid
 from typing import TYPE_CHECKING
 
 from sqlalchemy import UUID, ForeignKey, String
+from sqlalchemy.future import select
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from lazycloud_api.database.base import (
@@ -10,10 +11,10 @@ from lazycloud_api.database.base import (
     DatabaseService,
     UUIDStr,
 )
+from lazycloud_api.database.users import UserPydantic, UserTable
 from shared.models.workspaces import UserWorkspaceStatus, WorkspaceRole
 
 if TYPE_CHECKING:
-    from lazycloud_api.database.users import UserTable
     from lazycloud_api.database.workspaces import WorkspaceTable
 
 
@@ -84,6 +85,24 @@ class UserWorkspaceService(DatabaseService[UserWorkspaceTable, UserWorkspacePyda
     ) -> list[UserWorkspacePydantic]:
         """Get all members of a workspace"""
         return await self.afind({"workspace_id": workspace_id})
+
+    async def aget_workspace_members_with_users(
+        self, workspace_id: str
+    ) -> list[tuple[UserWorkspacePydantic, UserPydantic]]:
+        """Get all members of a workspace with their user information"""
+        async with self._session_manager.get_session() as session:
+            query = (
+                select(UserWorkspaceTable, UserTable)
+                .join(UserTable, UserWorkspaceTable.user_id == UserTable.id)
+                .where(UserWorkspaceTable.workspace_id == workspace_id)
+            )
+            result = await session.execute(query)
+            rows: list[tuple[UserWorkspaceTable, UserTable]] = result.all()
+
+            return [
+                (self._to_pydantic(member), user.to_pydantic(UserPydantic))
+                for member, user in rows
+            ]
 
     async def aupdate_role(
         self, user_id: str, workspace_id: str, role: WorkspaceRole

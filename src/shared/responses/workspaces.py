@@ -11,7 +11,9 @@ class WorkspaceResponse(BaseModel):
 
 
 class WorkspaceMemberResponse(BaseModel):
-    user_id: uuid.UUID
+    user_id: str
+    name: str
+    email: str
     role: str
     status: str
 
