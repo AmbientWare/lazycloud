@@ -5,7 +5,7 @@ from typing import Annotated, AsyncGenerator, Generic, Type, TypeVar
 
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic.functional_validators import BeforeValidator
-from sqlalchemy import DateTime, delete, orm, update
+from sqlalchemy import DateTime, delete, func, orm, update
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -160,10 +160,12 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
 
             return [self._to_pydantic(model) for model in db_models]
 
-    async def aupdate(self, model: basePydanticType) -> basePydanticType | None:
+    async def aupdate(
+        self, model: basePydanticType, session: AsyncSession | None = None
+    ) -> basePydanticType | None:
         """Update an existing model instance"""
-        async with self._session_manager.get_session() as session:
-            # exclude some fields if present since they are managed by the database
+
+        async def _update(sess: AsyncSession):
             update_data = model.model_dump(exclude={"id", "created_at", "updated_at"})
             update_data["updated_at"] = datetime.now(timezone.utc)
 
@@ -173,11 +175,12 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
                 .values(**update_data)
                 .returning(self.db_model_class)
             )
-            result = await session.execute(stmt)
-            await session.commit()
-
+            result = await sess.execute(stmt)
             updated_model = result.scalar_one_or_none()
             return self._to_pydantic(updated_model)
+
+        result = await self._execute_in_session(_update, session)
+        return result
 
     async def adelete(self, id: str) -> None:
         """Delete a model instance"""
@@ -224,3 +227,48 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
         """Find a single model matching the filters"""
         results = await self.afind(filters)
         return results[0] if results else None
+
+    async def afind_paginated(
+        self, filters: dict, skip: int = 0, limit: int = 100
+    ) -> tuple[int, list[basePydanticType]]:
+        """Find models matching filters with pagination and return total count"""
+
+        async with self._session_manager.get_session() as session:
+            base_query = select(self.db_model_class)
+            count_query = select(func.count()).select_from(self.db_model_class)
+
+            for key, value in filters.items():
+                if hasattr(self.db_model_class, key):
+                    if key.endswith("__gte"):
+                        field = key[:-5]
+                        base_query = base_query.where(
+                            getattr(self.db_model_class, field) >= value
+                        )
+                        count_query = count_query.where(
+                            getattr(self.db_model_class, field) >= value
+                        )
+                    elif key.endswith("__lte"):
+                        field = key[:-5]
+                        base_query = base_query.where(
+                            getattr(self.db_model_class, field) <= value
+                        )
+                        count_query = count_query.where(
+                            getattr(self.db_model_class, field) <= value
+                        )
+                    else:
+                        base_query = base_query.where(
+                            getattr(self.db_model_class, key) == value
+                        )
+                        count_query = count_query.where(
+                            getattr(self.db_model_class, key) == value
+                        )
+
+            total_result = await session.execute(count_query)
+            total = total_result.scalar() or 0
+
+            paginated_query = base_query.offset(skip).limit(limit)
+            result = await session.execute(paginated_query)
+            db_models = list(result.scalars().all())
+            return total, [
+                model.to_pydantic(self.pydantic_model_class) for model in db_models
+            ]

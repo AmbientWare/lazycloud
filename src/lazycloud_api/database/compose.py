@@ -17,6 +17,7 @@ from sqlalchemy import (
 from sqlalchemy import (
     Enum as SQLAEnum,
 )
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from lazycloud_api.database.base import (
@@ -200,6 +201,23 @@ class ComposeDeploymentService(
             deployment.status_message = message
 
         return await self.aupdate(deployment)
+
+    async def afind_one_with_lock(
+        self,
+        workspace_id: str,
+        name: str,
+        session: AsyncSession,
+    ) -> ComposeDeploymentPydantic | None:
+        """Find a deployment by workspace and name with row-level lock"""
+        query = (
+            select(ComposeDeploymentTable)
+            .where(ComposeDeploymentTable.workspace_id == workspace_id)
+            .where(ComposeDeploymentTable.name == name)
+            .with_for_update()
+        )
+        result = await session.execute(query)
+        db_model = result.scalar_one_or_none()
+        return self._to_pydantic(db_model)
 
     async def aget_with_workspace_access(
         self, deployment_id: str, user_id: str

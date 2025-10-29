@@ -1,6 +1,7 @@
 import yaml
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
+from sqlalchemy.exc import IntegrityError
 
 from lazycloud_api.api.dependencies import (
     get_deployment_with_access,
@@ -51,9 +52,9 @@ async def list_deployments(
         filters["name"] = name
 
     try:
-        deployments = await db.compose_deployments.afind(filters=filters)
-        total = len(deployments)
-        paginated_deployments = deployments[skip : skip + limit]
+        total, deployments = await db.compose_deployments.afind_paginated(
+            filters=filters, skip=skip, limit=limit
+        )
 
         deployment_responses = [
             DeploymentResponse(
@@ -67,7 +68,7 @@ async def list_deployments(
                 created_at=deployment.created_at,
                 updated_at=deployment.updated_at,
             )
-            for deployment in paginated_deployments
+            for deployment in deployments
             if deployment.id is not None and deployment.name is not None
         ]
 
@@ -135,30 +136,70 @@ async def create_deployment(
 
         deployment = None
         if request.name:
-            filters = {
-                "workspace_id": request.workspace_id,
-                "name": request.name,
-            }
-            deployment = await db.compose_deployments.afind_one(filters=filters)
+            async with db.compose_deployments.transaction() as session:
+                try:
+                    deployment = await db.compose_deployments.afind_one_with_lock(
+                        workspace_id=request.workspace_id,
+                        name=request.name,
+                        session=session,
+                    )
 
-        if deployment:
-            # Block if deployment is in progress
-            active_states = [
-                DeploymentStates.PENDING,
-                DeploymentStates.DEPLOYING,
-                DeploymentStates.DELETING,
-            ]
-            if deployment.pending_compose_yaml and deployment.state in active_states:
-                raise HTTPException(
-                    409,
-                    "Deployment is currently in progress. Please wait for it to complete.",
-                )
+                    if deployment:
+                        active_states = [
+                            DeploymentStates.PENDING,
+                            DeploymentStates.DEPLOYING,
+                            DeploymentStates.DELETING,
+                        ]
+                        if (
+                            deployment.pending_compose_yaml
+                            and deployment.state in active_states
+                        ):
+                            raise HTTPException(
+                                409,
+                                "Deployment is currently in progress. Please wait for it to complete.",
+                            )
 
-            # Store new compose in pending_compose_yaml instead of overwriting
-            deployment.pending_compose_yaml = request.compose_yaml
-            deployment.state = DeploymentStates.PENDING
-            deployment.status_message = "Update queued"
-            deployment = await db.compose_deployments.aupdate(deployment)
+                        deployment.pending_compose_yaml = request.compose_yaml
+                        deployment.state = DeploymentStates.PENDING
+                        deployment.status_message = "Update queued"
+                        deployment = await db.compose_deployments.aupdate(
+                            deployment, session=session
+                        )
+                    else:
+                        deployment_data = ComposeDeploymentPydantic(
+                            workspace_id=request.workspace_id,
+                            name=request.name,
+                            namespace=namespace,
+                            compose_yaml=request.compose_yaml,
+                            state=DeploymentStates.PENDING,
+                            status_message="Deployment queued",
+                        )
+                        deployment = await db.compose_deployments.acreate(
+                            deployment_data, session=session
+                        )
+                except IntegrityError as e:
+                    await session.rollback()
+                    if "uq_workspace_deployment_name" in str(e.orig):
+                        raise HTTPException(
+                            409,
+                            f"Deployment '{request.name}' already exists in this workspace. "
+                            "Another request may have created it concurrently.",
+                        ) from e
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Database constraint violation: {str(e)}",
+                    ) from e
+                except HTTPException:
+                    await session.rollback()
+                    raise
+                except Exception as e:
+                    await session.rollback()
+                    logger.error(
+                        f"Failed to create/update deployment in transaction: {e}"
+                    )
+                    raise HTTPException(
+                        status_code=500, detail="Failed to create deployment"
+                    ) from e
         else:
             deployment_data = ComposeDeploymentPydantic(
                 workspace_id=request.workspace_id,
@@ -168,7 +209,18 @@ async def create_deployment(
                 state=DeploymentStates.PENDING,
                 status_message="Deployment queued",
             )
-            deployment = await db.compose_deployments.acreate(deployment_data)
+            try:
+                deployment = await db.compose_deployments.acreate(deployment_data)
+            except IntegrityError as e:
+                if "uq_workspace_deployment_name" in str(e.orig):
+                    raise HTTPException(
+                        409,
+                        f"Deployment '{request.name}' already exists in this workspace. "
+                        "Another request may have created it concurrently.",
+                    ) from e
+                raise HTTPException(
+                    status_code=500, detail=f"Database constraint violation: {str(e)}"
+                ) from e
 
         if not deployment:
             raise HTTPException(status_code=500, detail="Deployment not found")
@@ -186,11 +238,25 @@ async def create_deployment(
         )
 
     except yaml.YAMLError as e:
+        logger.error(f"Invalid YAML in deployment request: {e}")
         raise HTTPException(status_code=400, detail=f"Invalid YAML: {str(e)}")
     except ValueError as e:
+        logger.error(f"Validation error in deployment request: {e}")
         raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except IntegrityError as e:
+        logger.error(f"Database integrity error creating deployment: {e}")
+        raise HTTPException(
+            status_code=409,
+            detail="Deployment already exists or constraint violation occurred",
+        )
     except Exception as e:
-        logger.error(f"Failed to create deployment: {e}")
+        logger.error(
+            f"Failed to create deployment for workspace {request.workspace_id}, "
+            f"name {request.name}: {e}",
+            exc_info=True,
+        )
         raise HTTPException(status_code=500, detail="Failed to create deployment")
 
 

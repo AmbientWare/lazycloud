@@ -45,11 +45,36 @@ async def lifespan(app: FastAPI):
     logger.info("Subscription manager initialized")
 
     # start the prefect tasks in a separate process
-    mp.get_context("spawn")
-    mp.Process(target=serve_prefect_tasks).start()
+    ctx = mp.get_context("spawn")
+    prefect_worker_process = ctx.Process(target=serve_prefect_tasks, daemon=True)
+    prefect_worker_process.start()
+    app.state.prefect_worker_process = prefect_worker_process
+    logger.info(f"Prefect worker process started with PID {prefect_worker_process.pid}")
+
     logger.info("Application startup complete")
     yield
     logger.info("Shutting down application")
+
+    # Shutdown Prefect worker process
+    if hasattr(app.state, "prefect_worker_process"):
+        worker_process = app.state.prefect_worker_process
+        if worker_process.is_alive():
+            logger.info(
+                f"Terminating Prefect worker process (PID {worker_process.pid})"
+            )
+            worker_process.terminate()
+            worker_process.join(timeout=5)
+            if worker_process.is_alive():
+                logger.warning(
+                    "Prefect worker process did not terminate gracefully, forcing shutdown"
+                )
+                worker_process.kill()
+                worker_process.join(timeout=2)
+            logger.info("Prefect worker process terminated")
+        else:
+            logger.warning(
+                f"Prefect worker process (PID {worker_process.pid}) was not alive"
+            )
 
     # Shutdown subscription manager
     await shutdown_subscription_manager()
