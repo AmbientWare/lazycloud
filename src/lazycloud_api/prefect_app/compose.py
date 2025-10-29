@@ -6,6 +6,7 @@ import yaml
 from loguru import logger
 from prefect import task
 
+from lazycloud_api.config import app_config
 from lazycloud_api.database import db
 from lazycloud_api.services import get_ecr_auth_service
 from lazycloud_api.services.compose.parser import ComposeParser
@@ -44,19 +45,24 @@ async def _update_deployment_state(
         logger.error(f"Failed to update deployment status: {e}")
 
 
-async def _wait_for_secrets(deployment_id: str, timeout: int = 10) -> None:
+async def _wait_for_secrets(deployment_id: str, timeout: int | None = None) -> None:
     """Wait for secrets to be stored for a deployment."""
-    # attempt to get the secrets from the database
+    if timeout is None:
+        timeout = app_config.SECRETS_TIMEOUT_SECONDS
+
     start_time = time.time()
     secrets = []
     while time.time() - start_time < timeout:
         await asyncio.sleep(1)
         secrets = await db.secrets.aget_secrets(deployment_id)
         if secrets:
+            logger.info(f"Found {len(secrets)} secrets for deployment {deployment_id}")
             break
 
     if not secrets:
-        raise Exception(f"Secrets not found for deployment {deployment_id}")
+        raise TimeoutError(
+            f"Secrets not found for deployment {deployment_id} after {timeout} seconds"
+        )
 
 
 @task
@@ -65,19 +71,40 @@ async def deploy_compose_task(
 ) -> None:
     """Deploy a Docker Compose file to Kubernetes using improved Helm management."""
     logger.info(f"Starting deployment {deployment_id}")
+    secrets = []
 
     if wait_for_secrets:
-        # TODO: need some better way to wait for secrets
-        await _wait_for_secrets(deployment_id)
+        try:
+            await _wait_for_secrets(
+                deployment_id, timeout=app_config.SECRETS_TIMEOUT_SECONDS
+            )
+        except TimeoutError as e:
+            logger.error(f"Timeout waiting for secrets: {e}")
+            await _update_deployment_state(
+                deployment_id,
+                DeploymentStates.FAILED,
+                f"Timeout waiting for secrets: {str(e)}",
+            )
+            raise
 
     # get deployment
     deployment = await db.compose_deployments.aget_by_id(deployment_id)
     if not deployment:
-        raise Exception(f"Deployment {deployment_id} not found")
+        raise ValueError(f"Deployment {deployment_id} not found")
 
     # Parse the compose YAML (use pending if available, otherwise use current)
     compose_yaml = deployment.pending_compose_yaml or deployment.compose_yaml
-    compose_data = yaml.safe_load(compose_yaml)
+    try:
+        compose_data = yaml.safe_load(compose_yaml)
+    except yaml.YAMLError as e:
+        logger.error(f"YAML parsing error for deployment {deployment_id}: {e}")
+        await _update_deployment_state(
+            deployment_id,
+            DeploymentStates.FAILED,
+            f"Invalid compose YAML: {str(e)}",
+        )
+        raise ValueError(f"Invalid YAML in deployment: {e}") from e
+
     compose_file = ComposeParser.parse_dict(compose_data)
 
     # get the helm values with deployment_id to load secrets
@@ -131,7 +158,7 @@ async def deploy_compose_task(
 
         # Step 2: Deploy application without waiting
         logger.info(f"Deploying application {name} in namespace {namespace}")
-        app_config = HelmDeploymentConfig(
+        helm_app_config = HelmDeploymentConfig(
             release_name=name,
             namespace=namespace,
             chart_path=str(charts.compose),
@@ -140,15 +167,15 @@ async def deploy_compose_task(
             strategy=DeploymentStrategy.ROLLING_UPDATE,
         )
 
-        app_result = helm_manager.deploy(app_config)
+        app_result = helm_manager.deploy(helm_app_config)
         if not app_result.success:
             # Check if it's a stuck deployment issue
             if app_result.error and (
                 "another operation" in app_result.error or "pending" in app_result.error
             ):
                 logger.warning("Detected stuck deployment, attempting force update")
-                app_config.strategy = DeploymentStrategy.FORCE_UPDATE
-                app_result = helm_manager.deploy(app_config)
+                helm_app_config.strategy = DeploymentStrategy.FORCE_UPDATE
+                app_result = helm_manager.deploy(helm_app_config)
 
             if not app_result.success:
                 raise Exception(f"Failed to deploy application: {app_result.error}")
@@ -169,29 +196,67 @@ async def deploy_compose_task(
         await db.compose_deployments.aupdate(deployment)
 
         # update the secrets state to deployed
-        for secret in secrets:
-            secret.state = SecretState.DEPLOYED
-            await db.secrets.aupdate(secret)
+        if secrets:
+            async with db.secrets.transaction() as session:
+                for secret in secrets:
+                    secret.state = SecretState.DEPLOYED
+                    await db.secrets.aupdate(secret, session=session)
 
-    except Exception as e:
-        logger.error(f"Deployment {deployment_id} failed: {str(e)}")
+    except yaml.YAMLError as e:
+        logger.error(f"YAML parsing error for deployment {deployment_id}: {e}")
         await _update_deployment_state(
             deployment_id,
             DeploymentStates.FAILED,
-            "Deployment failed",
+            f"Invalid compose YAML: {str(e)}",
+        )
+        raise ValueError(f"Invalid YAML in deployment: {e}") from e
+    except ValueError as e:
+        error_type = type(e).__name__
+        logger.error(
+            f"Deployment {deployment_id} failed with {error_type}: {str(e)}",
+            exc_info=True,
+        )
+        await _update_deployment_state(
+            deployment_id,
+            DeploymentStates.FAILED,
+            f"Deployment failed: {error_type} - {str(e)[:200]}",
+        )
+        if secrets:
+            async with db.secrets.transaction() as session:
+                for secret in secrets:
+                    secret.state = SecretState.AWAITING_DEPLOYMENT
+                    await db.secrets.aupdate(secret, session=session)
+        raise
+    except Exception as e:
+        error_type = type(e).__name__
+        logger.error(
+            f"Deployment {deployment_id} failed with {error_type}: {str(e)}",
+            exc_info=True,
+        )
+        await _update_deployment_state(
+            deployment_id,
+            DeploymentStates.FAILED,
+            f"Deployment failed: {error_type} - {str(e)[:200]}",
         )
 
         # update the secrets state back to awaiting deployment on failure
-        for secret in secrets:
-            secret.state = SecretState.AWAITING_DEPLOYMENT
-            await db.secrets.aupdate(secret)
+        if secrets:
+            async with db.secrets.transaction() as session:
+                for secret in secrets:
+                    secret.state = SecretState.AWAITING_DEPLOYMENT
+                    await db.secrets.aupdate(secret, session=session)
 
         # Attempt cleanup on failure
         try:
-            logger.info("Attempting to cleanup failed deployment")
-            helm_manager.destroy(name, "default")
+            if name and namespace and helm_manager:
+                logger.info(
+                    f"Attempting to cleanup failed deployment {name} in namespace {namespace}"
+                )
+                helm_manager.destroy(name, namespace)
         except Exception as cleanup_error:
-            logger.error(f"Cleanup failed: {cleanup_error}")
+            logger.error(
+                f"Cleanup failed for deployment {deployment_id}: {cleanup_error}"
+            )
 
         raise
 
@@ -257,8 +322,14 @@ async def destroy_compose_task(deployment_id: str) -> None:
         logger.info(f"Successfully destroyed deployment {deployment_id}")
 
     except Exception as e:
-        logger.error(f"Destruction of deployment {deployment_id} failed: {str(e)}")
+        error_type = type(e).__name__
+        logger.error(
+            f"Destruction of deployment {deployment_id} failed with {error_type}: {str(e)}",
+            exc_info=True,
+        )
         await _update_deployment_state(
-            deployment_id, DeploymentStates.FAILED, f"Deletion failed: {str(e)}"
+            deployment_id,
+            DeploymentStates.FAILED,
+            f"Deletion failed: {error_type} - {str(e)[:200]}",
         )
         raise

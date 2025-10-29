@@ -77,6 +77,9 @@ class AppConfig(BaseModel):
     POLAR_ACCESS_TOKEN: str = os.getenv("POLAR_ACCESS_TOKEN", "")
     IS_POLAR_SANDBOX: bool = os.getenv("IS_POLAR_SANDBOX", "false").lower() == "true"
 
+    # Secrets Configuration
+    SECRETS_TIMEOUT_SECONDS: int = int(os.getenv("SECRETS_TIMEOUT_SECONDS", "30"))
+
     # Required Environment Variables
     required_env_vars: List[str] = [
         "ADMIN_API_KEY",
