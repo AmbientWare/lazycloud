@@ -11,6 +11,7 @@ class PodMetrics(BaseModel):
 class PodUsage(BaseModel):
     pod: str
     service: str
+    release_name: str | None = None
     cpu_core_seconds: float = Field(default=0.0)
     memory_gb_seconds: float = Field(default=0.0)
 

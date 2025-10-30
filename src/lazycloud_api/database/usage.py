@@ -36,7 +36,7 @@ class UsageRecordTable(BaseTable):
     __tablename__ = "usage_records"
 
     workspace_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+        UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="RESTRICT"), index=True
     )
     record_type: Mapped[str] = mapped_column(
         String, default=UsageRecordType.HOURLY.value, index=True
@@ -84,7 +84,14 @@ class ComputeUsageBreakdownTable(BaseTable):
         ForeignKey("usage_records.id", ondelete="CASCADE"),
         index=True,
     )
+    deployment_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("compose_deployments.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
     pod_name: Mapped[str] = mapped_column(String, index=True)
+    service_name: Mapped[str] = mapped_column(String, index=True)
     cpu_core_seconds: Mapped[float] = mapped_column(Float, default=0.0)
     memory_gb_seconds: Mapped[float] = mapped_column(Float, default=0.0)
 
@@ -111,6 +118,12 @@ class StorageUsageBreakdownTable(BaseTable):
         ForeignKey("usage_records.id", ondelete="CASCADE"),
         index=True,
     )
+    deployment_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("compose_deployments.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
     pvc_name: Mapped[str] = mapped_column(String, index=True)
     storage_class: Mapped[str] = mapped_column(String, index=True)
     gb_hours: Mapped[float] = mapped_column(Float, default=0.0)
@@ -132,7 +145,9 @@ class ComputeUsageBreakdownPydantic(BaseDbPydanticModel):
     """Pydantic model for compute usage breakdown."""
 
     usage_record_id: UUIDStr
+    deployment_id: UUIDStr | None = None
     pod_name: str
+    service_name: str
     cpu_core_seconds: float
     memory_gb_seconds: float
 
@@ -141,6 +156,7 @@ class StorageUsageBreakdownPydantic(BaseDbPydanticModel):
     """Pydantic model for storage usage breakdown."""
 
     usage_record_id: UUIDStr
+    deployment_id: UUIDStr | None = None
     pvc_name: str
     storage_class: str
     gb_hours: float
@@ -232,6 +248,8 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
         pod_name: str,
         cpu_core_seconds: float,
         memory_gb_seconds: float,
+        deployment_id: uuid.UUID | None = None,
+        service_name: str | None = None,
         session: AsyncSession | None = None,
     ) -> ComputeUsageBreakdownPydantic:
         async def _upsert(sess: AsyncSession):
@@ -240,6 +258,8 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
                 pod_name=pod_name,
                 cpu_core_seconds=cpu_core_seconds,
                 memory_gb_seconds=memory_gb_seconds,
+                deployment_id=deployment_id,
+                service_name=service_name or "unknown",
             )
 
             # On conflict, update the values
@@ -248,6 +268,8 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
                 set_={
                     "cpu_core_seconds": stmt.excluded.cpu_core_seconds,
                     "memory_gb_seconds": stmt.excluded.memory_gb_seconds,
+                    "deployment_id": stmt.excluded.deployment_id,
+                    "service_name": stmt.excluded.service_name,
                     "updated_at": func.now(),
                 },
             ).returning(ComputeUsageBreakdownTable)
@@ -266,6 +288,7 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
         pvc_name: str,
         storage_class: str,
         gb_hours: float,
+        deployment_id: uuid.UUID | None = None,
         session: AsyncSession | None = None,
     ) -> StorageUsageBreakdownPydantic:
         async def _upsert(sess: AsyncSession):
@@ -274,6 +297,7 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
                 pvc_name=pvc_name,
                 storage_class=storage_class,
                 gb_hours=gb_hours,
+                deployment_id=deployment_id,
             )
 
             # On conflict, update the values
@@ -282,6 +306,7 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
                 set_={
                     "storage_class": stmt.excluded.storage_class,
                     "gb_hours": stmt.excluded.gb_hours,
+                    "deployment_id": stmt.excluded.deployment_id,
                     "updated_at": func.now(),
                 },
             ).returning(StorageUsageBreakdownTable)

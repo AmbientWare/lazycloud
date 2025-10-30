@@ -5,13 +5,50 @@ from loguru import logger
 from prefect import flow, task
 
 from lazycloud_api.database import db
-from lazycloud_api.services import get_metrics_service, get_polar_service
-from lazycloud_api.services.k8s import create_ns_name
+from lazycloud_api.services import (
+    get_metrics_service,
+    get_polar_service,
+    get_usage_service,
+)
+from lazycloud_api.services.k8s import create_ns_name, create_release_name
 from shared.models.billing import (
     UsageCollectionConfig,
     UsageRecordStatus,
     UsageRecordType,
 )
+
+
+async def _get_deployment_map(workspace_id: str) -> dict[str, uuid.UUID]:
+    """Get mapping of release_name -> deployment_id for active deployments in workspace."""
+    deployment_name_map = (
+        await db.compose_deployments.aget_active_deployments_for_workspace(workspace_id)
+    )
+
+    release_name_map = {}
+    for deployment_name, deployment_id in deployment_name_map.items():
+        release_name = create_release_name(workspace_id, deployment_name)
+        release_name_map[release_name] = deployment_id
+
+    return release_name_map
+
+
+async def _get_pvc_deployment_map(workspace_id: str) -> dict[str, uuid.UUID]:
+    """Get mapping of sanitized PVC name -> deployment_id for active deployments."""
+    deployments = await db.compose_deployments.afind({"workspace_id": workspace_id})
+    usage_service = get_usage_service()
+
+    pvc_map = {}
+    for deployment in deployments:
+        if not deployment.compose_yaml:
+            continue
+
+        volumes = usage_service._parse_deployment_volumes(
+            deployment.compose_yaml, str(deployment.id)
+        )
+        for volume_name in volumes:
+            pvc_map[volume_name] = uuid.UUID(str(deployment.id))
+
+    return pvc_map
 
 
 @task(retries=2, retry_delay_seconds=60)
@@ -51,22 +88,35 @@ async def collect_workspace_usage_for_interval(
             record_type=UsageCollectionConfig.get_record_type(),
         )
 
+        # Get deployment mappings
+        deployment_map = await _get_deployment_map(workspace_id)
+        pvc_deployment_map = await _get_pvc_deployment_map(workspace_id)
+
         # Upsert compute breakdowns (per pod)
         for pod_usage in breakdown.by_pod:
+            deployment_id = None
+            if pod_usage.release_name:
+                deployment_id = deployment_map.get(pod_usage.release_name)
+
             await db.usage.upsert_compute_breakdown(
                 usage_record_id=uuid.UUID(usage_record.id),
                 pod_name=pod_usage.pod,
                 cpu_core_seconds=pod_usage.cpu_core_seconds,
                 memory_gb_seconds=pod_usage.memory_gb_seconds,
+                deployment_id=deployment_id,
+                service_name=pod_usage.service,
             )
 
         # Upsert storage breakdowns (per PVC)
         for storage_usage in breakdown.by_pvc:
+            deployment_id = pvc_deployment_map.get(storage_usage.pvc_name)
+
             await db.usage.upsert_storage_breakdown(
                 usage_record_id=uuid.UUID(usage_record.id),
                 pvc_name=storage_usage.pvc_name,
                 storage_class=storage_usage.storage_class,
                 gb_hours=storage_usage.gb_hours,
+                deployment_id=deployment_id,
             )
 
         logger.debug(

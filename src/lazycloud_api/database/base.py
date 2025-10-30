@@ -99,10 +99,17 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
 
         return db_model.to_pydantic(self.pydantic_model_class)
 
+    def _apply_default_filters(self, query):
+        """Apply default filters (e.g., soft delete) if the model supports them"""
+        if hasattr(self.db_model_class, "deleted_at"):
+            query = query.where(self.db_model_class.deleted_at.is_(None))
+        return query
+
     async def aget_all(self) -> list[basePydanticType]:
         """Get all model instances"""
         async with self._session_manager.get_session() as session:
             query = select(self.db_model_class)
+            query = self._apply_default_filters(query)
             result = await session.execute(query)
             db_models = list[baseDbType](result.scalars().all())
             return [self._to_pydantic(db_model) for db_model in db_models]
@@ -111,6 +118,7 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
         """Get a model instance by id"""
         async with self._session_manager.get_session() as session:
             query = select(self.db_model_class).where(self.db_model_class.id == id)
+            query = self._apply_default_filters(query)
             result = await session.execute(query)
             db_model = result.scalar_one_or_none()
             return self._to_pydantic(db_model)
@@ -121,6 +129,7 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
             query = select(self.db_model_class).where(
                 self.db_model_class.user_id == user_id
             )
+            query = self._apply_default_filters(query)
             result = await session.execute(query)
             db_models = list(result.scalars().all())
             return [model.to_pydantic(self.pydantic_model_class) for model in db_models]
@@ -204,6 +213,7 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
         """Find models matching the filters"""
         async with self._session_manager.get_session() as session:
             query = select(self.db_model_class)
+            query = self._apply_default_filters(query)
             for key, value in filters.items():
                 if hasattr(self.db_model_class, key):
                     if key.endswith("__gte"):
@@ -236,6 +246,10 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
         async with self._session_manager.get_session() as session:
             base_query = select(self.db_model_class)
             count_query = select(func.count()).select_from(self.db_model_class)
+
+            # Apply default filters (e.g., soft delete)
+            base_query = self._apply_default_filters(base_query)
+            count_query = self._apply_default_filters(count_query)
 
             for key, value in filters.items():
                 if hasattr(self.db_model_class, key):

@@ -1,8 +1,8 @@
 """init
 
-Revision ID: 2866926e08a1
+Revision ID: 3b367f7b3be7
 Revises: 
-Create Date: 2025-10-26 03:45:49.148268
+Create Date: 2025-10-29 23:48:24.479641
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '2866926e08a1'
+revision: str = '3b367f7b3be7'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -70,6 +70,7 @@ def upgrade() -> None:
     sa.Column('state', sa.Enum('PENDING', 'DEPLOYING', 'DEPLOYED', 'FAILED', 'DELETING', 'DELETED', name='deploymentstates'), nullable=False),
     sa.Column('status_message', sa.Text(), nullable=True),
     sa.Column('deployed_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('workspace_id', sa.UUID(), nullable=False),
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
@@ -78,6 +79,7 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('workspace_id', 'name', name='uq_workspace_deployment_name')
     )
+    op.create_index(op.f('ix_compose_deployments_deleted_at'), 'compose_deployments', ['deleted_at'], unique=False)
     op.create_index(op.f('ix_compose_deployments_name'), 'compose_deployments', ['name'], unique=False)
     op.create_index(op.f('ix_compose_deployments_state'), 'compose_deployments', ['state'], unique=False)
     op.create_index('ix_compose_deployments_workspace_id_name', 'compose_deployments', ['workspace_id', 'name'], unique=False)
@@ -95,7 +97,7 @@ def upgrade() -> None:
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
-    sa.ForeignKeyConstraint(['workspace_id'], ['workspaces.id'], ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['workspace_id'], ['workspaces.id'], ondelete='RESTRICT'),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_usage_records_collection_start'), 'usage_records', ['collection_start'], unique=False)
@@ -120,17 +122,22 @@ def upgrade() -> None:
     op.create_index(op.f('ix_user_workspaces_status'), 'user_workspaces', ['status'], unique=False)
     op.create_table('compute_usage_breakdown',
     sa.Column('usage_record_id', sa.UUID(), nullable=False),
+    sa.Column('deployment_id', sa.UUID(), nullable=True),
     sa.Column('pod_name', sa.String(), nullable=False),
+    sa.Column('service_name', sa.String(), nullable=False),
     sa.Column('cpu_core_seconds', sa.Float(), nullable=False),
     sa.Column('memory_gb_seconds', sa.Float(), nullable=False),
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.ForeignKeyConstraint(['deployment_id'], ['compose_deployments.id'], ondelete='RESTRICT'),
     sa.ForeignKeyConstraint(['usage_record_id'], ['usage_records.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('usage_record_id', 'pod_name', name='uq_compute_breakdown_record_pod')
     )
+    op.create_index(op.f('ix_compute_usage_breakdown_deployment_id'), 'compute_usage_breakdown', ['deployment_id'], unique=False)
     op.create_index(op.f('ix_compute_usage_breakdown_pod_name'), 'compute_usage_breakdown', ['pod_name'], unique=False)
+    op.create_index(op.f('ix_compute_usage_breakdown_service_name'), 'compute_usage_breakdown', ['service_name'], unique=False)
     op.create_index(op.f('ix_compute_usage_breakdown_usage_record_id'), 'compute_usage_breakdown', ['usage_record_id'], unique=False)
     op.create_table('secrets',
     sa.Column('deployment_id', sa.UUID(), nullable=False),
@@ -149,16 +156,19 @@ def upgrade() -> None:
     op.create_index(op.f('ix_secrets_key'), 'secrets', ['key'], unique=False)
     op.create_table('storage_usage_breakdown',
     sa.Column('usage_record_id', sa.UUID(), nullable=False),
+    sa.Column('deployment_id', sa.UUID(), nullable=True),
     sa.Column('pvc_name', sa.String(), nullable=False),
     sa.Column('storage_class', sa.String(), nullable=False),
     sa.Column('gb_hours', sa.Float(), nullable=False),
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.ForeignKeyConstraint(['deployment_id'], ['compose_deployments.id'], ondelete='RESTRICT'),
     sa.ForeignKeyConstraint(['usage_record_id'], ['usage_records.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('usage_record_id', 'pvc_name', name='uq_storage_breakdown_record_pvc')
     )
+    op.create_index(op.f('ix_storage_usage_breakdown_deployment_id'), 'storage_usage_breakdown', ['deployment_id'], unique=False)
     op.create_index(op.f('ix_storage_usage_breakdown_pvc_name'), 'storage_usage_breakdown', ['pvc_name'], unique=False)
     op.create_index(op.f('ix_storage_usage_breakdown_storage_class'), 'storage_usage_breakdown', ['storage_class'], unique=False)
     op.create_index(op.f('ix_storage_usage_breakdown_usage_record_id'), 'storage_usage_breakdown', ['usage_record_id'], unique=False)
@@ -171,12 +181,15 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_storage_usage_breakdown_usage_record_id'), table_name='storage_usage_breakdown')
     op.drop_index(op.f('ix_storage_usage_breakdown_storage_class'), table_name='storage_usage_breakdown')
     op.drop_index(op.f('ix_storage_usage_breakdown_pvc_name'), table_name='storage_usage_breakdown')
+    op.drop_index(op.f('ix_storage_usage_breakdown_deployment_id'), table_name='storage_usage_breakdown')
     op.drop_table('storage_usage_breakdown')
     op.drop_index(op.f('ix_secrets_key'), table_name='secrets')
     op.drop_index(op.f('ix_secrets_deployment_id'), table_name='secrets')
     op.drop_table('secrets')
     op.drop_index(op.f('ix_compute_usage_breakdown_usage_record_id'), table_name='compute_usage_breakdown')
+    op.drop_index(op.f('ix_compute_usage_breakdown_service_name'), table_name='compute_usage_breakdown')
     op.drop_index(op.f('ix_compute_usage_breakdown_pod_name'), table_name='compute_usage_breakdown')
+    op.drop_index(op.f('ix_compute_usage_breakdown_deployment_id'), table_name='compute_usage_breakdown')
     op.drop_table('compute_usage_breakdown')
     op.drop_index(op.f('ix_user_workspaces_status'), table_name='user_workspaces')
     op.drop_index(op.f('ix_user_workspaces_role'), table_name='user_workspaces')
@@ -191,6 +204,7 @@ def downgrade() -> None:
     op.drop_index('ix_compose_deployments_workspace_id_name', table_name='compose_deployments')
     op.drop_index(op.f('ix_compose_deployments_state'), table_name='compose_deployments')
     op.drop_index(op.f('ix_compose_deployments_name'), table_name='compose_deployments')
+    op.drop_index(op.f('ix_compose_deployments_deleted_at'), table_name='compose_deployments')
     op.drop_table('compose_deployments')
     op.drop_index(op.f('ix_api_keys_value'), table_name='api_keys')
     op.drop_index('ix_api_keys_user_id_name', table_name='api_keys')

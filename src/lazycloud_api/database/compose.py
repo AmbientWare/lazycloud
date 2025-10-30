@@ -56,6 +56,9 @@ class ComposeDeploymentTable(BaseTable):
     )
     status_message: Mapped[str | None] = mapped_column(Text)
     deployed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
     workspace_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE")
     )
@@ -93,6 +96,7 @@ class ComposeDeploymentPydantic(BaseDbPydanticModel):
     state: DeploymentStates = DeploymentStates.PENDING
     status_message: str | None = None
     deployed_at: datetime | None = None
+    deleted_at: datetime | None = None
 
     @field_validator("compose_yaml", "pending_compose_yaml", mode="before")
     @classmethod
@@ -168,22 +172,47 @@ class ComposeDeploymentService(
     async def aget_by_name(
         self, workspace_id: str, name: str
     ) -> ComposeDeploymentPydantic | None:
-        """Get deployment by name."""
-        return await self.afind_one({"workspace_id": workspace_id, "name": name})
+        """Get deployment by name (excluding soft-deleted)."""
+        async with self._session_manager.get_session() as session:
+            query = (
+                select(ComposeDeploymentTable)
+                .where(ComposeDeploymentTable.workspace_id == workspace_id)
+                .where(ComposeDeploymentTable.name == name)
+                .where(ComposeDeploymentTable.deleted_at.is_(None))
+            )
+            result = await session.execute(query)
+            db_model = result.scalar_one_or_none()
+            return self._to_pydantic(db_model)
 
     async def find_by_namespace(
         self, workspace_id: str, namespace: str
     ) -> ComposeDeploymentPydantic | None:
-        """Find deployment by namespace and workspace."""
-        return await self.afind_one(
-            {"workspace_id": workspace_id, "namespace": namespace}
-        )
+        """Find deployment by namespace and workspace (excluding soft-deleted)."""
+        async with self._session_manager.get_session() as session:
+            query = (
+                select(ComposeDeploymentTable)
+                .where(ComposeDeploymentTable.workspace_id == workspace_id)
+                .where(ComposeDeploymentTable.namespace == namespace)
+                .where(ComposeDeploymentTable.deleted_at.is_(None))
+            )
+            result = await session.execute(query)
+            db_model = result.scalar_one_or_none()
+            return self._to_pydantic(db_model)
 
     async def find_by_status(
         self, workspace_id: str, state: DeploymentStates
     ) -> list[ComposeDeploymentPydantic]:
-        """Find deployments by status."""
-        return await self.afind({"workspace_id": workspace_id, "state": state})
+        """Find deployments by status (excluding soft-deleted)."""
+        async with self._session_manager.get_session() as session:
+            query = (
+                select(ComposeDeploymentTable)
+                .where(ComposeDeploymentTable.workspace_id == workspace_id)
+                .where(ComposeDeploymentTable.state == state)
+                .where(ComposeDeploymentTable.deleted_at.is_(None))
+            )
+            result = await session.execute(query)
+            db_models = list(result.scalars().all())
+            return [self._to_pydantic(db_model) for db_model in db_models]
 
     async def update_status(
         self,
@@ -202,17 +231,31 @@ class ComposeDeploymentService(
 
         return await self.aupdate(deployment)
 
+    async def aget_active_deployments_for_workspace(
+        self, workspace_id: str
+    ) -> dict[str, uuid.UUID]:
+        """Get mapping of deployment_name -> deployment_id for active deployments."""
+        async with self._session_manager.get_session() as session:
+            query = (
+                select(ComposeDeploymentTable.name, ComposeDeploymentTable.id)
+                .where(ComposeDeploymentTable.workspace_id == workspace_id)
+                .where(ComposeDeploymentTable.deleted_at.is_(None))
+            )
+            result = await session.execute(query)
+            return {row.name: row.id for row in result.all() if row.name is not None}
+
     async def afind_one_with_lock(
         self,
         workspace_id: str,
         name: str,
         session: AsyncSession,
     ) -> ComposeDeploymentPydantic | None:
-        """Find a deployment by workspace and name with row-level lock"""
+        """Find a deployment by workspace and name with row-level lock (excluding soft-deleted)"""
         query = (
             select(ComposeDeploymentTable)
             .where(ComposeDeploymentTable.workspace_id == workspace_id)
             .where(ComposeDeploymentTable.name == name)
+            .where(ComposeDeploymentTable.deleted_at.is_(None))
             .with_for_update()
         )
         result = await session.execute(query)
@@ -222,7 +265,7 @@ class ComposeDeploymentService(
     async def aget_with_workspace_access(
         self, deployment_id: str, user_id: str
     ) -> tuple[ComposeDeploymentPydantic | None, str | None]:
-        """Get deployment and user's workspace role"""
+        """Get deployment and user's workspace role (excluding soft-deleted)"""
         async with self._session_manager.get_session() as session:
             query = (
                 select(ComposeDeploymentTable, UserWorkspaceTable.role)
@@ -232,6 +275,7 @@ class ComposeDeploymentService(
                     == UserWorkspaceTable.workspace_id,
                 )
                 .where(ComposeDeploymentTable.id == deployment_id)
+                .where(ComposeDeploymentTable.deleted_at.is_(None))
                 .where(UserWorkspaceTable.user_id == user_id)
             )
 
