@@ -187,7 +187,7 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
 
     async def upsert_usage_record(
         self,
-        workspace_id: uuid.UUID,
+        workspace_id: str,
         collection_start: datetime,
         collection_end: datetime,
         cpu_core_seconds: float,
@@ -244,11 +244,11 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
 
     async def upsert_compute_breakdown(
         self,
-        usage_record_id: uuid.UUID,
+        usage_record_id: str,
         pod_name: str,
         cpu_core_seconds: float,
         memory_gb_seconds: float,
-        deployment_id: uuid.UUID | None = None,
+        deployment_id: str | None = None,
         service_name: str | None = None,
         session: AsyncSession | None = None,
     ) -> ComputeUsageBreakdownPydantic:
@@ -284,11 +284,11 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
 
     async def upsert_storage_breakdown(
         self,
-        usage_record_id: uuid.UUID,
+        usage_record_id: str,
         pvc_name: str,
         storage_class: str,
         gb_hours: float,
-        deployment_id: uuid.UUID | None = None,
+        deployment_id: str | None = None,
         session: AsyncSession | None = None,
     ) -> StorageUsageBreakdownPydantic:
         async def _upsert(sess: AsyncSession):
@@ -321,7 +321,7 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
 
     async def get_workspace_usage(
         self,
-        workspace_id: uuid.UUID,
+        workspace_id: str,
         start_date: datetime,
         end_date: datetime,
         record_type: UsageRecordType | None = None,
@@ -353,7 +353,7 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
             records = result.scalars().all()
             return [record.to_pydantic(UsageRecordPydantic) for record in records]
 
-    async def mark_as_reported(self, usage_record_id: uuid.UUID) -> None:
+    async def mark_as_reported(self, usage_record_id: str) -> None:
         """Mark a usage record as reported to billing system."""
         async with session_manager.get_session() as session:
             result = await session.execute(
@@ -364,7 +364,7 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
                 record.status = UsageRecordStatus.REPORTED.value
                 await session.commit()
 
-    async def finalize_record(self, usage_record_id: uuid.UUID) -> None:
+    async def finalize_record(self, usage_record_id: str) -> None:
         """Mark a usage record as finalized and ready for billing."""
         async with session_manager.get_session() as session:
             result = await session.execute(
@@ -388,7 +388,7 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
             return [record.to_pydantic(UsageRecordPydantic) for record in records]
 
     async def get_latest_interval_usage(
-        self, workspace_id: uuid.UUID
+        self, workspace_id: str
     ) -> UsageRecordPydantic | None:
         """Get the most recent interval usage record based on current collection config."""
         async with session_manager.get_session() as session:

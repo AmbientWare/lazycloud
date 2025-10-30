@@ -35,7 +35,7 @@ class UsageRecordStatus(StrEnum):
 class UsageCollectionConfig:
     """Configuration for usage data collection intervals"""
 
-    # Primary configuration - change this to adjust collection frequency
+    # NOTE: change this to adjust collection frequency
     COLLECTION_INTERVAL = UsageCollectionInterval.FIFTEEN_MINUTES
 
     # Derived values

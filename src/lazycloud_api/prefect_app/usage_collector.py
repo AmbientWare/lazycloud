@@ -1,4 +1,3 @@
-import uuid
 from datetime import date, datetime, timedelta, timezone
 
 from loguru import logger
@@ -18,7 +17,7 @@ from shared.models.billing import (
 )
 
 
-async def _get_deployment_map(workspace_id: str) -> dict[str, uuid.UUID]:
+async def _get_deployment_map(workspace_id: str) -> dict[str, str]:
     """Get mapping of release_name -> deployment_id for active deployments in workspace."""
     deployment_name_map = (
         await db.compose_deployments.aget_active_deployments_for_workspace(workspace_id)
@@ -32,7 +31,7 @@ async def _get_deployment_map(workspace_id: str) -> dict[str, uuid.UUID]:
     return release_name_map
 
 
-async def _get_pvc_deployment_map(workspace_id: str) -> dict[str, uuid.UUID]:
+async def _get_pvc_deployment_map(workspace_id: str) -> dict[str, str]:
     """Get mapping of sanitized PVC name -> deployment_id for active deployments."""
     deployments = await db.compose_deployments.afind({"workspace_id": workspace_id})
     usage_service = get_usage_service()
@@ -43,10 +42,10 @@ async def _get_pvc_deployment_map(workspace_id: str) -> dict[str, uuid.UUID]:
             continue
 
         volumes = usage_service._parse_deployment_volumes(
-            deployment.compose_yaml, str(deployment.id)
+            deployment.compose_yaml, deployment.id
         )
         for volume_name in volumes:
-            pvc_map[volume_name] = uuid.UUID(str(deployment.id))
+            pvc_map[volume_name] = deployment.id
 
     return pvc_map
 
@@ -77,7 +76,7 @@ async def collect_workspace_usage_for_interval(
 
         # Upsert usage record (update if exists, insert if not)
         usage_record = await db.usage.upsert_usage_record(
-            workspace_id=uuid.UUID(workspace_id),
+            workspace_id=workspace_id,
             collection_start=start_time,
             collection_end=end_time,
             cpu_core_seconds=breakdown.totals.cpu_core_seconds,
@@ -99,7 +98,7 @@ async def collect_workspace_usage_for_interval(
                 deployment_id = deployment_map.get(pod_usage.release_name)
 
             await db.usage.upsert_compute_breakdown(
-                usage_record_id=uuid.UUID(usage_record.id),
+                usage_record_id=usage_record.id,
                 pod_name=pod_usage.pod,
                 cpu_core_seconds=pod_usage.cpu_core_seconds,
                 memory_gb_seconds=pod_usage.memory_gb_seconds,
@@ -112,7 +111,7 @@ async def collect_workspace_usage_for_interval(
             deployment_id = pvc_deployment_map.get(storage_usage.pvc_name)
 
             await db.usage.upsert_storage_breakdown(
-                usage_record_id=uuid.UUID(usage_record.id),
+                usage_record_id=usage_record.id,
                 pvc_name=storage_usage.pvc_name,
                 storage_class=storage_usage.storage_class,
                 gb_hours=storage_usage.gb_hours,
@@ -151,7 +150,7 @@ async def collect_workspace_daily_usage(
     try:
         # Aggregate from interval records instead of re-querying Prometheus
         interval_records = await db.usage.get_workspace_usage(
-            workspace_id=uuid.UUID(workspace_id),
+            workspace_id=workspace_id,
             start_date=day_start,
             end_date=day_end,
             record_type=UsageCollectionConfig.get_record_type(),
@@ -202,7 +201,7 @@ async def collect_workspace_daily_usage(
 
         # Create DAILY usage record with FINALIZED status
         usage_record = await db.usage.upsert_usage_record(
-            workspace_id=uuid.UUID(workspace_id),
+            workspace_id=workspace_id,
             collection_start=day_start,
             collection_end=day_end,
             cpu_core_seconds=total_cpu,
@@ -217,7 +216,7 @@ async def collect_workspace_daily_usage(
         # Upsert compute breakdowns for daily record
         for pod_name, aggregates in compute_aggregates.items():
             await db.usage.upsert_compute_breakdown(
-                usage_record_id=uuid.UUID(usage_record.id),
+                usage_record_id=usage_record.id,
                 pod_name=pod_name,
                 cpu_core_seconds=aggregates["cpu_core_seconds"],
                 memory_gb_seconds=aggregates["memory_gb_seconds"],
@@ -226,7 +225,7 @@ async def collect_workspace_daily_usage(
         # Upsert storage breakdowns for daily record
         for (pvc_name, storage_class), gb_hours in storage_aggregates.items():
             await db.usage.upsert_storage_breakdown(
-                usage_record_id=uuid.UUID(usage_record.id),
+                usage_record_id=usage_record.id,
                 pvc_name=pvc_name,
                 storage_class=storage_class,
                 gb_hours=gb_hours,
@@ -438,7 +437,7 @@ async def forward_for_billing():
 
             # Mark as reported only if delivery confirmed or gracefully skipped
             if should_mark_reported:
-                await db.usage.mark_as_reported(uuid.UUID(usage.id))
+                await db.usage.mark_as_reported(usage.id)
                 forwarded += 1
                 logger.info(f"Marked usage as reported: {usage.id}")
             else:
@@ -530,7 +529,7 @@ async def mark_workspaces_for_backfill():
     for workspace in candidate_workspaces.values():
         # Check if already has a FINALIZED or REPORTED daily record for yesterday
         existing_records = await db.usage.get_workspace_usage(
-            workspace_id=uuid.UUID(workspace.id),
+            workspace_id=workspace.id,
             start_date=yesterday_start,
             end_date=yesterday_end,
             record_type=UsageRecordType.DAILY,
@@ -558,7 +557,7 @@ async def mark_workspaces_for_backfill():
         # Create INCOMPLETE record as marker for processing
         try:
             await db.usage.upsert_usage_record(
-                workspace_id=uuid.UUID(workspace.id),
+                workspace_id=workspace.id,
                 collection_start=yesterday_start,
                 collection_end=yesterday_end,
                 cpu_core_seconds=0.0,

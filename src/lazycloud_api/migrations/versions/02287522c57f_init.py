@@ -1,8 +1,8 @@
 """init
 
-Revision ID: 3b367f7b3be7
+Revision ID: 02287522c57f
 Revises: 
-Create Date: 2025-10-29 23:48:24.479641
+Create Date: 2025-10-30 05:03:38.856731
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '3b367f7b3be7'
+revision: str = '02287522c57f'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -76,13 +76,13 @@ def upgrade() -> None:
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.ForeignKeyConstraint(['workspace_id'], ['workspaces.id'], ondelete='CASCADE'),
-    sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('workspace_id', 'name', name='uq_workspace_deployment_name')
+    sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_compose_deployments_deleted_at'), 'compose_deployments', ['deleted_at'], unique=False)
     op.create_index(op.f('ix_compose_deployments_name'), 'compose_deployments', ['name'], unique=False)
     op.create_index(op.f('ix_compose_deployments_state'), 'compose_deployments', ['state'], unique=False)
     op.create_index('ix_compose_deployments_workspace_id_name', 'compose_deployments', ['workspace_id', 'name'], unique=False)
+    op.create_index('uq_workspace_deployment_name', 'compose_deployments', ['workspace_id', 'name'], unique=True, postgresql_where=sa.text('deleted_at IS NULL'))
     op.create_table('usage_records',
     sa.Column('workspace_id', sa.UUID(), nullable=False),
     sa.Column('record_type', sa.String(), nullable=False),
@@ -201,6 +201,7 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_usage_records_record_type'), table_name='usage_records')
     op.drop_index(op.f('ix_usage_records_collection_start'), table_name='usage_records')
     op.drop_table('usage_records')
+    op.drop_index('uq_workspace_deployment_name', table_name='compose_deployments', postgresql_where=sa.text('deleted_at IS NULL'))
     op.drop_index('ix_compose_deployments_workspace_id_name', table_name='compose_deployments')
     op.drop_index(op.f('ix_compose_deployments_state'), table_name='compose_deployments')
     op.drop_index(op.f('ix_compose_deployments_name'), table_name='compose_deployments')

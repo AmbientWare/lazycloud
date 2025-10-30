@@ -1,5 +1,3 @@
-import uuid
-
 import yaml
 from loguru import logger
 
@@ -10,24 +8,21 @@ from shared.responses.usage import ServiceUsageItem, UsageMetrics, VolumeUsageIt
 
 
 def sanitize_volume_name(name: str) -> str:
-    """Sanitize volume name to match Kubernetes PVC naming (DNS-1123)"""
     return name.lower().replace("_", "-").replace(".", "-")[:63].rstrip("-")
 
 
 class UsageService:
-    """Service for processing and aggregating usage data"""
-
     async def get_workspace_usage_breakdown(
         self,
-        workspace_id: uuid.UUID,
+        workspace_id: str,
+        deployment_id: str | None = None,
     ) -> tuple[
         UsageMetrics | None,
         list[ServiceUsageItem] | None,
         list[VolumeUsageItem] | None,
         UsageRecordPydantic | None,
     ]:
-        """Get detailed usage breakdown for workspace (all deployments)"""
-        # Get latest interval usage record (hourly, 15-min, etc.)
+        """Get usage breakdown for workspace, optionally filtered by deployment."""
         usage_record = await db.usage.get_latest_interval_usage(
             workspace_id=workspace_id
         )
@@ -35,14 +30,11 @@ class UsageService:
         if not usage_record:
             return None, None, None, None
 
-        # Aggregate service usage using service_name from breakdown records
-        # This returns all services from all deployments in the workspace
-        service_usage = self._aggregate_service_usage(usage_record)
+        service_usage = self._aggregate_service_usage(usage_record, deployment_id)
+        volumes, s3_gb_hours, efs_gb_hours = self._aggregate_storage_usage(
+            usage_record, deployment_id
+        )
 
-        # Return all volumes from the usage record (all deployments)
-        volumes, s3_gb_hours, efs_gb_hours = self._aggregate_storage_usage(usage_record)
-
-        # Build metrics
         metrics = UsageMetrics(
             cpu_core_hours=usage_record.cpu_core_seconds / 3600,
             memory_gb_hours=usage_record.memory_gb_seconds / 3600,
@@ -53,15 +45,20 @@ class UsageService:
         return metrics, list(service_usage.values()), volumes, usage_record
 
     def _aggregate_service_usage(
-        self, usage_record: UsageRecordPydantic
+        self, usage_record: UsageRecordPydantic, deployment_id: str | None = None
     ) -> dict[str, ServiceUsageItem]:
-        """Aggregate compute breakdowns by service name (all deployments)"""
         service_usage: dict[str, ServiceUsageItem] = {}
 
         for breakdown in usage_record.compute_breakdowns:
-            # Use service_name directly from breakdown record
+            # Filter by deployment if specified
+            if deployment_id and (
+                not breakdown.deployment_id or breakdown.deployment_id != deployment_id
+            ):
+                continue
+
             service_name = breakdown.service_name
 
+            # Accumulate usage across multiple pods of the same service
             if service_name not in service_usage:
                 service_usage[service_name] = ServiceUsageItem(
                     service_name=service_name,
@@ -69,7 +66,6 @@ class UsageService:
                     memory_gb_seconds=breakdown.memory_gb_seconds,
                 )
             else:
-                # Accumulate usage for multiple pods of the same service
                 service_usage[
                     service_name
                 ].cpu_core_seconds += breakdown.cpu_core_seconds
@@ -82,7 +78,6 @@ class UsageService:
     def _parse_deployment_volumes(
         self, compose_yaml: str, deployment_id: str
     ) -> set[str]:
-        """Parse compose YAML to extract sanitized volume names"""
         deployment_volumes: set[str] = set()
 
         try:
@@ -99,15 +94,18 @@ class UsageService:
         return deployment_volumes
 
     def _aggregate_storage_usage(
-        self, usage_record: UsageRecordPydantic
+        self, usage_record: UsageRecordPydantic, deployment_id: str | None = None
     ) -> tuple[list[VolumeUsageItem], float, float]:
-        """Aggregate storage by class (S3 vs EFS) for all volumes in the workspace"""
         s3_gb_hours = 0.0
         efs_gb_hours = 0.0
         volumes: list[VolumeUsageItem] = []
 
         for breakdown in usage_record.storage_breakdowns:
-            # Add all volumes (all deployments in the workspace)
+            # Filter by deployment if specified
+            if deployment_id and (
+                not breakdown.deployment_id or breakdown.deployment_id != deployment_id
+            ):
+                continue
             volumes.append(
                 VolumeUsageItem(
                     volume_name=breakdown.pvc_name,
