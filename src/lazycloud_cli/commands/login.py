@@ -41,6 +41,7 @@ def login():
             password=True,
             show_default=False,
         )
+        console.print()
 
         if not api_key or not api_key.strip():
             error_card = ErrorCard(

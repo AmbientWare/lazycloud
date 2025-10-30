@@ -553,7 +553,7 @@ class PrometheusMetricsService:
     ) -> list[PodUsage]:
         """Get resource usage for individual pods."""
         cpu_query = f'''
-            sum by (pod, label_lazycloud_io_service) (
+            sum by (pod, label_lazycloud_io_service, label_app_kubernetes_io_instance) (
                 rate(
                     container_cpu_usage_seconds_total{{
                         namespace="{namespace}",
@@ -565,7 +565,7 @@ class PrometheusMetricsService:
         '''
 
         memory_query = f'''
-            sum by (pod, label_lazycloud_io_service) (
+            sum by (pod, label_lazycloud_io_service, label_app_kubernetes_io_instance) (
                 container_memory_working_set_bytes{{
                     namespace="{namespace}",
                     name!="",
@@ -590,11 +590,15 @@ class PrometheusMetricsService:
                 service_name = series.get("metric", {}).get(
                     "label_lazycloud_io_service", "unknown"
                 )
+                release_name = series.get("metric", {}).get(
+                    "label_app_kubernetes_io_instance", None
+                )
 
                 if pod_name not in pods:
                     pods[pod_name] = PodUsage(
                         pod=pod_name,
                         service=service_name,
+                        release_name=release_name,
                     )
 
                 # Calculate average CPU
@@ -618,12 +622,20 @@ class PrometheusMetricsService:
                 service_name = series.get("metric", {}).get(
                     "label_lazycloud_io_service", "unknown"
                 )
+                release_name = series.get("metric", {}).get(
+                    "label_app_kubernetes_io_instance", None
+                )
 
                 if pod_name not in pods:
                     pods[pod_name] = PodUsage(
                         pod=pod_name,
                         service=service_name,
+                        release_name=release_name,
                     )
+                else:
+                    # Update release_name if not set or different
+                    if pods[pod_name].release_name is None and release_name:
+                        pods[pod_name].release_name = release_name
 
                 # Calculate average memory
                 total_bytes = 0.0

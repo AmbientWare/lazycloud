@@ -316,8 +316,13 @@ async def destroy_compose_task(deployment_id: str) -> None:
             # ECR cleanup is non-fatal - log warning but continue
             logger.warning(f"ECR cleanup failed (continuing): {ecr_error}")
 
-        # Step 4: Delete deployment from database
-        await db.compose_deployments.adelete(deployment_id)
+        # Step 4: Soft delete deployment from database
+        deployment = await db.compose_deployments.aget_by_id(deployment_id)
+        if deployment:
+            deployment.deleted_at = datetime.now(UTC)
+            deployment.state = DeploymentStates.DELETED
+            deployment.status_message = "Deployment deleted"
+            await db.compose_deployments.aupdate(deployment)
 
         logger.info(f"Successfully destroyed deployment {deployment_id}")
 

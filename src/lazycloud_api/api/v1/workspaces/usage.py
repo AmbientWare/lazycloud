@@ -52,7 +52,6 @@ async def query_usage(
                 usage_record,
             ) = await usage_service.get_workspace_usage_breakdown(
                 workspace_id=workspace.id,
-                deployment=deployment,
             )
 
             # Handle no data case
