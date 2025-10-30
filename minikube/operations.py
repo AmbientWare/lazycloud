@@ -265,6 +265,8 @@ def setup_monitoring_stack() -> None:
                 "prometheus.prometheusSpec.retention=90d",
                 "--set",
                 "prometheus.prometheusSpec.retentionSize=50GB",
+                "--set-json",
+                'kube-state-metrics.metricLabelsAllowlist=["pods=[lazycloud.io/service,lazycloud.io/deployment-id,lazycloud.io/workspace-id,app.kubernetes.io/instance]"]',
                 "--wait",
                 "--timeout=10m",
             ]

@@ -11,8 +11,8 @@ from sqlalchemy import (
     Index,
     String,
     Text,
-    UniqueConstraint,
     select,
+    text,
 )
 from sqlalchemy import (
     Enum as SQLAEnum,
@@ -63,9 +63,15 @@ class ComposeDeploymentTable(BaseTable):
         UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE")
     )
 
-    # Unique constraint to ensure one deployment per name per workspace
+    # Unique constraint to ensure one deployment per name per workspace (only for non-deleted)
     __table_args__ = (
-        UniqueConstraint("workspace_id", "name", name="uq_workspace_deployment_name"),
+        Index(
+            "uq_workspace_deployment_name",
+            "workspace_id",
+            "name",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
         Index("ix_compose_deployments_workspace_id_name", "workspace_id", "name"),
     )
 
@@ -233,7 +239,7 @@ class ComposeDeploymentService(
 
     async def aget_active_deployments_for_workspace(
         self, workspace_id: str
-    ) -> dict[str, uuid.UUID]:
+    ) -> dict[str, str]:
         """Get mapping of deployment_name -> deployment_id for active deployments."""
         async with self._session_manager.get_session() as session:
             query = (
@@ -242,7 +248,9 @@ class ComposeDeploymentService(
                 .where(ComposeDeploymentTable.deleted_at.is_(None))
             )
             result = await session.execute(query)
-            return {row.name: row.id for row in result.all() if row.name is not None}
+            return {
+                row.name: str(row.id) for row in result.all() if row.name is not None
+            }
 
     async def afind_one_with_lock(
         self,

@@ -553,7 +553,7 @@ class PrometheusMetricsService:
     ) -> list[PodUsage]:
         """Get resource usage for individual pods."""
         cpu_query = f'''
-            sum by (pod, label_lazycloud_io_service, label_app_kubernetes_io_instance) (
+            sum by (pod) (
                 rate(
                     container_cpu_usage_seconds_total{{
                         namespace="{namespace}",
@@ -565,7 +565,7 @@ class PrometheusMetricsService:
         '''
 
         memory_query = f'''
-            sum by (pod, label_lazycloud_io_service, label_app_kubernetes_io_instance) (
+            sum by (pod) (
                 container_memory_working_set_bytes{{
                     namespace="{namespace}",
                     name!="",
@@ -581,76 +581,72 @@ class PrometheusMetricsService:
             memory_query, start_time, end_time, step="60s"
         )
 
+        pod_labels_map: dict[str, dict[str, str]] = {}
+        labels_query = f'kube_pod_labels{{namespace="{namespace}"}}'
+        labels_result = await self._query(labels_query)
+        if labels_result and "result" in labels_result:
+            for series in labels_result.get("result", []):
+                pod_name = series.get("metric", {}).get("pod", "")
+                if pod_name:
+                    pod_labels_map[pod_name] = series.get("metric", {})
+
         pods: dict[str, PodUsage] = {}
 
-        # Process CPU results
+        def process_series(
+            series: dict, metric_type: str, pods: dict[str, PodUsage]
+        ) -> None:
+            metric = series.get("metric", {})
+            pod_name = metric.get("pod", "unknown")
+            if pod_name == "unknown":
+                return
+
+            pod_labels = pod_labels_map.get(pod_name, {})
+            service_name = pod_labels.get("label_lazycloud_io_service", "unknown")
+            release_name = pod_labels.get("label_app_kubernetes_io_instance")
+
+            if service_name == "unknown":
+                logger.warning(
+                    f"Pod {pod_name} in namespace {namespace} missing lazycloud.io/service label. "
+                    "Labels may not be configured or pod may be from system namespace."
+                )
+
+            if pod_name not in pods:
+                pods[pod_name] = PodUsage(
+                    pod=pod_name, service=service_name, release_name=release_name
+                )
+            elif pods[pod_name].release_name is None and release_name:
+                pods[pod_name].release_name = release_name
+
+            values = series.get("values", [])
+            if not values:
+                return
+
+            # Calculate average across time series and convert to core-seconds or GB-seconds
+            total = 0.0
+            count = 0
+            for _, value in values:
+                try:
+                    total += float(value)
+                    count += 1
+                except (ValueError, TypeError):
+                    continue
+
+            if count > 0:
+                avg = total / count
+                if metric_type == "CPU":
+                    pods[pod_name].cpu_core_seconds = avg * duration_seconds
+                else:
+                    pods[pod_name].memory_gb_seconds = (
+                        avg / (1024**3)
+                    ) * duration_seconds
+
         if cpu_result and "result" in cpu_result:
             for series in cpu_result["result"]:
-                pod_name = series.get("metric", {}).get("pod", "unknown")
-                service_name = series.get("metric", {}).get(
-                    "label_lazycloud_io_service", "unknown"
-                )
-                release_name = series.get("metric", {}).get(
-                    "label_app_kubernetes_io_instance", None
-                )
+                process_series(series, "CPU", pods)
 
-                if pod_name not in pods:
-                    pods[pod_name] = PodUsage(
-                        pod=pod_name,
-                        service=service_name,
-                        release_name=release_name,
-                    )
-
-                # Calculate average CPU
-                total_cpu = 0.0
-                count = 0
-                for _, value in series.get("values", []):
-                    try:
-                        total_cpu += float(value)
-                        count += 1
-                    except (ValueError, TypeError):
-                        continue
-
-                if count > 0:
-                    avg_cpu = total_cpu / count
-                    pods[pod_name].cpu_core_seconds = avg_cpu * duration_seconds
-
-        # Process memory results
         if memory_result and "result" in memory_result:
             for series in memory_result["result"]:
-                pod_name = series.get("metric", {}).get("pod", "unknown")
-                service_name = series.get("metric", {}).get(
-                    "label_lazycloud_io_service", "unknown"
-                )
-                release_name = series.get("metric", {}).get(
-                    "label_app_kubernetes_io_instance", None
-                )
-
-                if pod_name not in pods:
-                    pods[pod_name] = PodUsage(
-                        pod=pod_name,
-                        service=service_name,
-                        release_name=release_name,
-                    )
-                else:
-                    # Update release_name if not set or different
-                    if pods[pod_name].release_name is None and release_name:
-                        pods[pod_name].release_name = release_name
-
-                # Calculate average memory
-                total_bytes = 0.0
-                count = 0
-                for _, value in series.get("values", []):
-                    try:
-                        total_bytes += float(value)
-                        count += 1
-                    except (ValueError, TypeError):
-                        continue
-
-                if count > 0:
-                    avg_bytes = total_bytes / count
-                    avg_gb = avg_bytes / (1024**3)
-                    pods[pod_name].memory_gb_seconds = avg_gb * duration_seconds
+                process_series(series, "Memory", pods)
 
         return list(pods.values())
 

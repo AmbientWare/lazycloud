@@ -37,14 +37,12 @@ async def query_usage(
     _, workspace = workspace_membership
 
     try:
-        # If deployment_id provided, return detailed breakdown
         if deployment_id:
-            # Get deployment to verify it exists and belongs to workspace
+            # Return detailed breakdown for specific deployment
             deployment = await db.compose_deployments.aget_by_id(deployment_id)
             if not deployment or deployment.workspace_id != workspace.id:
                 raise HTTPException(status_code=404, detail="Deployment not found")
 
-            # Get usage breakdown from service layer
             (
                 metrics,
                 services,
@@ -52,13 +50,12 @@ async def query_usage(
                 usage_record,
             ) = await usage_service.get_workspace_usage_breakdown(
                 workspace_id=workspace.id,
+                deployment_id=deployment_id,
             )
 
-            # Handle no data case
             if not usage_record:
                 raise HTTPException(status_code=404, detail="Usage record not found")
 
-            # Return detailed breakdown
             return WorkspaceUsageResponse(
                 workspace_id=workspace.id,
                 period=UsagePeriodInfo(
@@ -73,7 +70,7 @@ async def query_usage(
                 volumes=volumes,
             )
 
-        # Otherwise, return workspace-level aggregation
+        # Return workspace-level aggregation across date range
         now = datetime.now(timezone.utc)
         if not start_date:
             logger.info("No start date provided, using default start of current month")
@@ -82,14 +79,12 @@ async def query_usage(
             logger.info("No end date provided, using default end of current month")
             end_date = now
 
-        # Aggregate usage records from database for the period
         usage_records = await db.usage.get_workspace_usage(
             workspace_id=workspace.id,
             start_date=start_date,
             end_date=end_date,
         )
 
-        # Sum all usage from records
         total_cpu_seconds = sum(r.cpu_core_seconds for r in usage_records)
         total_memory_seconds = sum(r.memory_gb_seconds for r in usage_records)
         total_s3_hours = sum(r.s3_gb_hours for r in usage_records)
@@ -99,8 +94,8 @@ async def query_usage(
             workspace_id=workspace.id,
             period=UsagePeriodInfo(start=start_date, end=end_date),
             usage=UsageMetrics(
-                cpu_core_hours=total_cpu_seconds / 3600,  # convert to hours
-                memory_gb_hours=total_memory_seconds / 3600,  # convert to hours
+                cpu_core_hours=total_cpu_seconds / 3600,
+                memory_gb_hours=total_memory_seconds / 3600,
                 s3_gb_hours=total_s3_hours,
                 efs_gb_hours=total_efs_hours,
             ),
@@ -140,14 +135,12 @@ async def get_daily_usage(
             logger.info("No end date provided, using default end of current month")
             end_date = now
 
-        # Get all usage records for the period
         usage_records = await db.usage.get_workspace_usage(
             workspace_id=workspace.id,
             start_date=start_date,
             end_date=end_date,
         )
 
-        # Group by day
         daily_data: dict[str, DailyUsageData] = {}
         for record in usage_records:
             day_key = record.collection_start.strftime("%Y-%m-%d")
@@ -165,7 +158,7 @@ async def get_daily_usage(
             daily_data[day_key].s3_gb_hours += record.s3_gb_hours
             daily_data[day_key].efs_gb_hours += record.efs_gb_hours
 
-        # Fill in missing days with zeros
+        # Fill missing days with zeros for continuous sparkline visualization
         current_date = start_date
         while current_date <= end_date:
             day_key = current_date.strftime("%Y-%m-%d")
@@ -179,7 +172,6 @@ async def get_daily_usage(
                 )
             current_date += timedelta(days=1)
 
-        # Sort by date
         sorted_daily = sorted(daily_data.values(), key=lambda x: x.date)
 
         return DailyUsageResponse(
