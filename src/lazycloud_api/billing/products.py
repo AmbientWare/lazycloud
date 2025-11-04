@@ -36,25 +36,17 @@ class ProductDefinition:
     metadata: dict[str, str] | None = None
 
 
-METER_PRICES = [
-    MeterPrice(
-        meter_name=MeterNames.CPU_USAGE,
-        unit_amount=1.0,
-    ),
-    MeterPrice(
-        meter_name=MeterNames.MEMORY_USAGE,
-        unit_amount=1.0,
-    ),
-    MeterPrice(
-        meter_name=MeterNames.NORMAL_STORAGE,
-        unit_amount=1.0,
-    ),
-    MeterPrice(
-        meter_name=MeterNames.HIGH_PERFORMANCE_STORAGE,
-        unit_amount=1.0,
-    ),
-]
+METER_PRICE_MAP = {
+    MeterNames.CPU_USAGE: 1.0,
+    MeterNames.MEMORY_USAGE: 1.0,
+    MeterNames.STANDARD_STORAGE: 1.0,
+    MeterNames.PREMIUM_STORAGE: 1.0,
+}
 
+METER_PRICES = [
+    MeterPrice(meter_name=meter_name, unit_amount=METER_PRICE_MAP[meter_name])
+    for meter_name in MeterNames
+]
 
 # Product definitions
 PRODUCT_DEFINITIONS = [

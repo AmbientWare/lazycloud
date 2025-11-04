@@ -28,16 +28,9 @@ class PolarUsageModule:
             )
             return False
 
-        # Skip zero usage events (Polar may reject them)
-        if quantity == 0:
-            logger.debug(
-                f"Skipping zero usage event: {event_name} for customer {external_customer_id}"
-            )
-            return True  # Consider it success
-
         try:
-            # Send usage event to Polar
-            self.client.events.ingest(
+            # Send usage event to Polar and capture response
+            response = await self.client.events.ingest_async(
                 request=EventsIngest(
                     events=[
                         EventCreateExternalCustomer(
@@ -49,13 +42,18 @@ class PolarUsageModule:
                 )
             )
 
-            logger.info(
-                f"Sent Polar usage event: {event_name} for customer {external_customer_id}"
-            )
+            # Validate response - check that events were inserted
+            if response.inserted < 1:
+                logger.error(
+                    f"Polar API returned inserted={response.inserted} (expected >= 1) "
+                    f"for event {event_name} customer {external_customer_id}"
+                )
+                return False
+
             return True
 
         except Exception as e:
-            logger.error(
+            logger.exception(
                 f"Failed to send Polar usage event {event_name} for customer {external_customer_id}: {e}"
             )
             return False
@@ -93,15 +91,18 @@ class PolarUsageModule:
             # Meter-specific fields (these are what meters aggregate on)
             METER_METADATA_FIELDS[MeterNames.CPU_USAGE]: cpu_core_hours,
             METER_METADATA_FIELDS[MeterNames.MEMORY_USAGE]: memory_gb_hours,
-            METER_METADATA_FIELDS[MeterNames.NORMAL_STORAGE]: s3_gb_hours,
-            METER_METADATA_FIELDS[MeterNames.HIGH_PERFORMANCE_STORAGE]: efs_gb_hours,
+            METER_METADATA_FIELDS[MeterNames.STANDARD_STORAGE]: s3_gb_hours,
+            METER_METADATA_FIELDS[MeterNames.PREMIUM_STORAGE]: efs_gb_hours,
         }
+
+        # Calculate total quantity
+        total_quantity = cpu_core_hours + memory_gb_hours + s3_gb_hours + efs_gb_hours
 
         # Send single usage event with all metrics
         success = await self.send_usage_event(
             external_customer_id=external_customer_id,
             event_name=USAGE_EVENT_NAME,
-            quantity=cpu_core_hours + memory_gb_hours + s3_gb_hours + efs_gb_hours,
+            quantity=total_quantity,
             metadata=usage_metadata,
         )
 
@@ -109,11 +110,8 @@ class PolarUsageModule:
             logger.info(
                 f"Successfully sent usage event for workspace {usage_record.workspace_id}: "
                 f"CPU={cpu_core_hours:.4f}h, Memory={memory_gb_hours:.4f}GB-h, "
-                f"S3={s3_gb_hours:.2f}GB-h, EFS={efs_gb_hours:.2f}GB-h"
-            )
-        else:
-            logger.warning(
-                f"Failed to send usage event for workspace {usage_record.workspace_id}"
+                f"S3={s3_gb_hours:.2f}GB-h, EFS={efs_gb_hours:.2f}GB-h "
+                f"(total={total_quantity:.4f})"
             )
 
         return success
