@@ -389,7 +389,14 @@ async def backfill_daily_usage(
 @flow(log_prints=True)
 async def forward_for_billing():
     """Forward finalized usage data to billing service"""
+    logger.info("Starting billing forward process")
+    start_time = datetime.now(timezone.utc)
+
     finalized_usage = await db.usage.get_finalized_usage()
+    logger.info(
+        f"Found {len(finalized_usage) if finalized_usage else 0} finalized usage records to forward"
+    )
+
     polar_service = get_polar_service()
 
     if not finalized_usage:
@@ -399,15 +406,25 @@ async def forward_for_billing():
     forwarded = 0
     failed = 0
 
+    logger.info(f"Processing {len(finalized_usage)} usage records")
     for usage in finalized_usage:
         # bill usage to the workspace owner
-        workspace_owner = await db.users.aget_by_id(usage.workspace_id)
+        workspace_owner = await db.workspaces.aget_owner_user(usage.workspace_id)
+        if not workspace_owner:
+            logger.error(
+                f"No owner found for workspace {usage.workspace_id}, skipping usage {usage.id}"
+            )
+            failed += 1
+            continue
+
         try:
             logger.info(
                 f"Forwarding usage to billing: workspace={usage.workspace_id}, "
                 f"period={usage.collection_start} to {usage.collection_end}, "
                 f"CPU={usage.cpu_core_seconds:.0f}s, "
-                f"Memory={usage.memory_gb_seconds:.0f}GB-s"
+                f"Memory={usage.memory_gb_seconds:.0f}GB-s, "
+                f"S3={usage.s3_gb_hours:.2f}GB-h, "
+                f"EFS={usage.efs_gb_hours:.2f}GB-h"
             )
 
             should_mark_reported = False
@@ -428,11 +445,14 @@ async def forward_for_billing():
                 # Only mark as reported if event succeeded
                 if success:
                     should_mark_reported = True
-                    logger.info(f"Usage event sent successfully for usage {usage.id}")
+                    logger.info(
+                        f"Usage event sent successfully for usage {usage.id} "
+                        f"(workspace={usage.workspace_id})"
+                    )
                 else:
                     logger.error(
-                        f"Failed to send usage event for usage {usage.id}. "
-                        f"Will retry on next run."
+                        f"Failed to send usage event for usage {usage.id} "
+                        f"(workspace={usage.workspace_id}). Will retry on next run."
                     )
 
             # Mark as reported only if delivery confirmed or gracefully skipped
@@ -445,9 +465,16 @@ async def forward_for_billing():
 
         except Exception as e:
             failed += 1
-            logger.error(f"Failed to forward usage {usage.id}: {e}")
+            logger.exception(
+                f"Exception while forwarding usage {usage.id} "
+                f"(workspace={usage.workspace_id}): {e}"
+            )
 
-    logger.info(f"Billing forward complete: {forwarded} forwarded, {failed} failed")
+    elapsed_time = (datetime.now(timezone.utc) - start_time).total_seconds()
+    logger.info(
+        f"Billing forward complete: {forwarded} forwarded, {failed} failed "
+        f"(took {elapsed_time:.2f}s)"
+    )
     return {"forwarded": forwarded, "failed": failed}
 
 

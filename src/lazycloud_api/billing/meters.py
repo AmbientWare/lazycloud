@@ -53,7 +53,7 @@ METER_DEFINITIONS = [
         ),
     ),
     MeterDefinition(
-        name=MeterNames.NORMAL_STORAGE,
+        name=MeterNames.STANDARD_STORAGE,
         filter=Filter(
             conjunction=polar_sdk.FilterConjunction.OR,
             clauses=[
@@ -66,11 +66,11 @@ METER_DEFINITIONS = [
         ),
         aggregation=PropertyAggregation(
             func=polar_sdk.Func.SUM,
-            property=METER_METADATA_FIELDS[MeterNames.NORMAL_STORAGE],
+            property=METER_METADATA_FIELDS[MeterNames.STANDARD_STORAGE],
         ),
     ),
     MeterDefinition(
-        name=MeterNames.HIGH_PERFORMANCE_STORAGE,
+        name=MeterNames.PREMIUM_STORAGE,
         filter=Filter(
             conjunction=polar_sdk.FilterConjunction.OR,
             clauses=[
@@ -83,7 +83,7 @@ METER_DEFINITIONS = [
         ),
         aggregation=PropertyAggregation(
             func=polar_sdk.Func.SUM,
-            property=METER_METADATA_FIELDS[MeterNames.HIGH_PERFORMANCE_STORAGE],
+            property=METER_METADATA_FIELDS[MeterNames.PREMIUM_STORAGE],
         ),
     ),
 ]
