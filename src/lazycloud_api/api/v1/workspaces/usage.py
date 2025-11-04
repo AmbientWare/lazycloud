@@ -38,8 +38,9 @@ async def query_usage(
 
     try:
         if deployment_id:
-            # Return detailed breakdown for specific deployment
-            deployment = await db.compose_deployments.aget_by_id(deployment_id)
+            deployment = await db.compose_deployments.aget_by_id(
+                deployment_id, include_deleted=True
+            )
             if not deployment or deployment.workspace_id != workspace.id:
                 raise HTTPException(status_code=404, detail="Deployment not found")
 

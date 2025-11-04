@@ -53,7 +53,7 @@ async def list_deployments(
 
     try:
         total, deployments = await db.compose_deployments.afind_paginated(
-            filters=filters, skip=skip, limit=limit
+            filters=filters, skip=skip, limit=limit, include_deleted=False
         )
 
         deployment_responses = [

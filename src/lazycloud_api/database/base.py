@@ -114,11 +114,12 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
             db_models = list[baseDbType](result.scalars().all())
             return [self._to_pydantic(db_model) for db_model in db_models]
 
-    async def aget_by_id(self, id: str) -> basePydanticType | None:
+    async def aget_by_id(self, id: str, include_deleted: bool = False) -> basePydanticType | None:
         """Get a model instance by id"""
         async with self._session_manager.get_session() as session:
             query = select(self.db_model_class).where(self.db_model_class.id == id)
-            query = self._apply_default_filters(query)
+            if not include_deleted:
+                query = self._apply_default_filters(query)
             result = await session.execute(query)
             db_model = result.scalar_one_or_none()
             return self._to_pydantic(db_model)
@@ -239,7 +240,7 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
         return results[0] if results else None
 
     async def afind_paginated(
-        self, filters: dict, skip: int = 0, limit: int = 100
+        self, filters: dict, skip: int = 0, limit: int = 100, include_deleted: bool = False
     ) -> tuple[int, list[basePydanticType]]:
         """Find models matching filters with pagination and return total count"""
 
@@ -247,9 +248,10 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
             base_query = select(self.db_model_class)
             count_query = select(func.count()).select_from(self.db_model_class)
 
-            # Apply default filters (e.g., soft delete)
-            base_query = self._apply_default_filters(base_query)
-            count_query = self._apply_default_filters(count_query)
+            # Apply default filters (e.g., soft delete) unless include_deleted is True
+            if not include_deleted:
+                base_query = self._apply_default_filters(base_query)
+                count_query = self._apply_default_filters(count_query)
 
             for key, value in filters.items():
                 if hasattr(self.db_model_class, key):
