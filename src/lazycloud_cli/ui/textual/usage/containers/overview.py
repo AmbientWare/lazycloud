@@ -1,8 +1,9 @@
 import asyncio
+from datetime import datetime, timezone
 
 from textual.app import ComposeResult
 from textual.reactive import reactive
-from textual.widgets import Static
+from textual.widgets import DataTable
 
 from lazycloud_cli.api.usage import UsageAPI
 from lazycloud_cli.config import config
@@ -10,81 +11,159 @@ from lazycloud_cli.ui.colors import Colors
 from lazycloud_cli.ui.textual.components import Container
 from lazycloud_cli.ui.textual.components.section import SectionContainer
 from lazycloud_cli.ui.textual.theme import Icons
-from shared.responses.usage import WorkspaceUsageResponse
+from shared.responses.usage import WorkspaceUsageWithDeploymentsResponse
 
 
 class UsageOverviewSection(Container):
-    """Section showing current billing period usage"""
+    """Section showing workspace or deployment usage summary"""
 
-    usage_data: reactive[WorkspaceUsageResponse | None] = reactive(None)
+    usage_data: reactive[WorkspaceUsageWithDeploymentsResponse | None] = reactive(None)
+    selected_deployment_id: reactive[str | None] = reactive(None)
 
     def __init__(self):
         super().__init__(id="usage-overview-section")
         self._usage_api = UsageAPI()
-        self._content_widget: Static | None = None
         self._section_container: SectionContainer | None = None
+        self._metrics_table: DataTable | None = None
+        self._period_start: datetime | None = None
+        self._period_end: datetime | None = None
 
     def compose(self) -> ComposeResult:
         """Compose the usage overview"""
-        self._section_container = SectionContainer(
-            f"{Icons.COMPUTER} Current Billing Period"
-        )
+        self._section_container = SectionContainer(f"{Icons.COMPUTER} Workspace Totals")
         with self._section_container:
-            self._content_widget = Static("Loading usage data...", id="usage-content")
-            yield self._content_widget
+            self._metrics_table = DataTable(
+                show_header=True,
+                id="workspace-totals-table",
+                show_cursor=False,
+                zebra_stripes=True,
+            )
+            self._metrics_table.can_focus = False
+            self._metrics_table.add_columns(
+                "Metric", "Usage (core-hrs / GB-hrs)", "Cost ($)"
+            )
+            # Show loading state
+            self._metrics_table.add_row(
+                "Loading...",
+                "",
+                "",
+                key="loading",
+            )
+            yield self._metrics_table
 
     def on_mount(self) -> None:
         """Fetch usage data when mounted"""
-        self.run_worker(self._fetch_usage_async(), exclusive=True)
+        now_local = datetime.now()
+        start_local = now_local.replace(
+            day=1, hour=0, minute=0, second=0, microsecond=0
+        )
+        start_date = start_local.astimezone(timezone.utc).replace(microsecond=0)
+        end_date = datetime.now(timezone.utc).replace(microsecond=0)
 
-    async def _fetch_usage_async(self) -> None:
-        """Fetch current period usage from the API"""
+        self.run_worker(self._fetch_usage_async(start_date, end_date), exclusive=True)
+
+    async def _fetch_usage_async(
+        self,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
+    ) -> None:
+        """Fetch workspace usage with deployments from the API"""
         try:
             usage = await asyncio.to_thread(
-                self._usage_api.get_usage, config.active_workspace_id
+                self._usage_api.get_workspace_usage_with_deployments,
+                config.active_workspace_id,
+                start_date=start_date,
+                end_date=end_date,
             )
+            self._period_start = usage.period.start
+            self._period_end = usage.period.end
             self.usage_data = usage
         except Exception as e:
-            if self._content_widget:
-                self._content_widget.update(
-                    f"[{Colors.Hex.error}]{str(e)}[/{Colors.Hex.error}]"
+            if self._metrics_table:
+                self._metrics_table.clear()
+                self._metrics_table.add_row(
+                    "Error",
+                    str(e),
+                    "-",
+                    key="error",
                 )
 
     def _get_web_url(self) -> str:
         """Get web dashboard URL for detailed breakdown"""
-        # Convert API URL to web URL (remove /api path if present)
         base_url = config.api_base_url.replace("/api", "")
         return f"{base_url}/usage"
 
-    def watch_usage_data(self, usage: WorkspaceUsageResponse | None) -> None:
+    def watch_usage_data(
+        self, usage: WorkspaceUsageWithDeploymentsResponse | None
+    ) -> None:
         """Update display when usage data changes"""
-        if not usage or not self._content_widget or not self._section_container:
+        self._update_display()
+
+    def watch_selected_deployment_id(self, deployment_id: str | None) -> None:
+        """Update display when deployment selection changes"""
+        self._update_display()
+
+    def _update_display(self) -> None:
+        """Update the display based on current usage data"""
+        if not self.usage_data or not self._metrics_table:
             return
 
-        period_start = usage.period.start.strftime("%b %d")
-        period_end = usage.period.end.strftime("%b %d, %Y")
-        accent = Colors.Hex.accent
+        usage = self.usage_data
+        metrics = usage.workspace_usage
+        costs = metrics.costs
 
-        # Update section title with date range using consistent format
-        self._section_container.border_title = (
-            f"{Icons.COMPUTER} [3] Current Billing • {period_start} - {period_end}"
+        # Clear and update the table
+        self._metrics_table.clear()
+
+        # CPU row
+        cpu_cost_str = f"{costs.cpu_cost:.2f}" if costs else "-"
+        self._metrics_table.add_row(
+            "CPU",
+            f"{metrics.cpu_core_hours:.2f}",
+            cpu_cost_str,
+            key="cpu",
         )
 
-        # Get web URL for detailed breakdown
-        web_url = self._get_web_url()
-
-        # Display metrics on two rows with web link
-        text = (
-            f"[bold {accent}]CPU:[/bold {accent}] {usage.usage.cpu_core_hours:.2f} core-hrs  "
-            f"[bold {accent}]Memory:[/bold {accent}] {usage.usage.memory_gb_hours:.2f} GB-hrs\n"
-            f"[bold {accent}]Standard Storage:[/bold {accent}] {usage.usage.s3_gb_hours:.2f} GB-hrs  "
-            f"[bold {accent}]Performance Storage:[/bold {accent}] {usage.usage.efs_gb_hours:.2f} GB-hrs\n"
-            f"[dim]Visit {web_url} for detailed breakdown[/dim]"
+        # Memory row
+        memory_cost_str = f"{costs.memory_cost:.2f}" if costs else "-"
+        self._metrics_table.add_row(
+            "Memory",
+            f"{metrics.memory_gb_hours:.2f}",
+            memory_cost_str,
+            key="memory",
         )
 
-        self._content_widget.update(text)
+        # Standard Storage row
+        s3_cost_str = f"{costs.s3_cost:.2f}" if costs else "-"
+        self._metrics_table.add_row(
+            "Standard Storage",
+            f"{metrics.s3_gb_hours:.2f}",
+            s3_cost_str,
+            key="s3",
+        )
 
-    def refresh_usage(self) -> None:
+        # Performance Storage row
+        efs_cost_str = f"{costs.efs_cost:.2f}" if costs else "-"
+        self._metrics_table.add_row(
+            "Performance Storage",
+            f"{metrics.efs_gb_hours:.2f}",
+            efs_cost_str,
+            key="efs",
+        )
+
+        # Total row
+        if costs:
+            success_color = Colors.Hex.success
+            total_cost_str = f"{costs.total_cost:.2f}"
+            self._metrics_table.add_row(
+                f"[bold {success_color}]Total[/bold {success_color}]",
+                "",
+                f"[bold {success_color}]{total_cost_str}[/bold {success_color}]",
+                key="total",
+            )
+
+    def refresh_usage(
+        self, start_date: datetime | None = None, end_date: datetime | None = None
+    ) -> None:
         """Manually refresh usage data"""
-        self.run_worker(self._fetch_usage_async(), exclusive=True)
-
+        self.run_worker(self._fetch_usage_async(start_date, end_date), exclusive=True)

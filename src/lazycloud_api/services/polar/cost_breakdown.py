@@ -4,38 +4,15 @@ from loguru import logger
 from pydantic import BaseModel
 
 from shared.models.billing import STORAGE_CLASS_EFS, STORAGE_CLASS_S3
-from shared.responses.usage import ServiceUsageItem, VolumeUsageItem
+from shared.responses.usage import (
+    MeterCostBreakdown,
+    ServiceCostBreakdown,
+    ServiceUsageItem,
+    VolumeCostBreakdown,
+    VolumeUsageItem,
+)
 
 from .pricing import MeterPrices, PolarPricingModule
-
-
-class MeterCostBreakdown(BaseModel):
-    """Cost breakdown by meter type."""
-
-    cpu_cost: float
-    memory_cost: float
-    s3_cost: float
-    efs_cost: float
-    total_cost: float
-
-
-class ServiceCostBreakdown(BaseModel):
-    """Cost breakdown for a single service."""
-
-    service_name: str
-    cpu_cost: float
-    memory_cost: float
-    total_compute_cost: float
-    percentage_of_total: float
-
-
-class VolumeCostBreakdown(BaseModel):
-    """Cost breakdown for a single volume."""
-
-    volume_name: str
-    storage_class: str
-    storage_cost: float
-    percentage_of_total: float
 
 
 class WorkspaceCostBreakdown(BaseModel):
@@ -44,7 +21,9 @@ class WorkspaceCostBreakdown(BaseModel):
     meter_breakdown: MeterCostBreakdown
     service_breakdown: list[ServiceCostBreakdown]
     volume_breakdown: list[VolumeCostBreakdown]
-    is_estimated: bool = True  # Always true since we calculate from prices
+    is_estimated: bool = (
+        True  # for now just true since prices are calculated not direct
+    )
 
 
 class PolarCostBreakdownModule:
@@ -121,12 +100,6 @@ class PolarCostBreakdownModule:
         efs_cost = efs_gb_hours * prices.efs_price_per_unit
         total_cost = cpu_cost + memory_cost + s3_cost + efs_cost
 
-        logger.debug(
-            f"Calculated meter costs: CPU=${cpu_cost:.4f}, "
-            f"Memory=${memory_cost:.4f}, S3=${s3_cost:.4f}, EFS=${efs_cost:.4f}, "
-            f"Total=${total_cost:.4f}"
-        )
-
         return MeterCostBreakdown(
             cpu_cost=round(cpu_cost, 4),
             memory_cost=round(memory_cost, 4),
@@ -160,6 +133,8 @@ class PolarCostBreakdownModule:
             breakdowns.append(
                 ServiceCostBreakdown(
                     service_name=service.service_name,
+                    cpu_core_hours=round(cpu_core_hours, 2),
+                    memory_gb_hours=round(memory_gb_hours, 2),
                     cpu_cost=round(cpu_cost, 4),
                     memory_cost=round(memory_cost, 4),
                     total_compute_cost=round(service_total, 4),
@@ -169,14 +144,6 @@ class PolarCostBreakdownModule:
 
         # Sort by total cost descending
         breakdowns.sort(key=lambda x: x.total_compute_cost, reverse=True)
-
-        logger.debug(
-            f"Calculated costs for {len(breakdowns)} services, "
-            f"top service: {breakdowns[0].service_name if breakdowns else 'none'} "
-            f"(${breakdowns[0].total_compute_cost:.2f})"
-            if breakdowns
-            else ""
-        )
 
         return breakdowns
 
@@ -224,13 +191,5 @@ class PolarCostBreakdownModule:
 
         # Sort by cost descending
         breakdowns.sort(key=lambda x: x.storage_cost, reverse=True)
-
-        logger.debug(
-            f"Calculated costs for {len(breakdowns)} volumes, "
-            f"top volume: {breakdowns[0].volume_name if breakdowns else 'none'} "
-            f"(${breakdowns[0].storage_cost:.2f})"
-            if breakdowns
-            else ""
-        )
 
         return breakdowns

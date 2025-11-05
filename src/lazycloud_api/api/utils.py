@@ -1,6 +1,8 @@
 import asyncio
 import json
+from datetime import datetime, timezone
 from typing import Callable
+from zoneinfo import ZoneInfo
 
 from loguru import logger
 
@@ -20,19 +22,7 @@ async def _sse_event_loop(
     stream_id: str,
     should_continue: Callable[[], bool] | None = None,
 ):
-    """
-    Common SSE event streaming logic.
-
-    Args:
-        queue: Queue to read data from
-        event_type: SSE event type
-        format_data: Function to format data for JSON serialization
-        stream_id: Stream identifier for logging
-        should_continue: Optional function to check if streaming should continue
-
-    Yields:
-        Dict objects for sse-starlette EventSourceResponse
-    """
+    """Common SSE event streaming logic"""
     while should_continue is None or should_continue():
         try:
             data = await asyncio.wait_for(queue.get(), timeout=30.0)
@@ -61,12 +51,7 @@ async def create_sse_stream_with_subscription(
     format_data: Callable,
     stream_id: str,
 ):
-    """
-    Generic SSE stream generator using subscription manager.
-
-    Yields dict objects for sse-starlette EventSourceResponse.
-    Dict keys: "event", "data", "id", "retry", "comment"
-    """
+    """Generic SSE stream generator using subscription manager"""
     subscription_manager = get_subscription_manager()
     monitor_key = None
     subscription_id = None
@@ -119,15 +104,7 @@ async def create_sse_stream_direct(
     format_data: Callable,
     stream_id: str,
 ):
-    """
-    Direct SSE stream generator for per-connection monitors.
-
-    Used for LogMonitor which has unique per-pod/tail parameters that make
-    sharing monitors impractical.
-
-    Yields dict objects for sse-starlette EventSourceResponse.
-    Dict keys: "event", "data", "id", "retry", "comment"
-    """
+    """Direct SSE stream generator for per-connection monitors"""
     queue: asyncio.Queue = asyncio.Queue(maxsize=LOG_QUEUE_SIZE)
 
     def callback(data):
@@ -158,3 +135,17 @@ async def create_sse_stream_direct(
         await monitor.remove_callback(callback)
         await monitor.stop()
         logger.info(f"SSE disconnected: {stream_id}")
+
+
+def get_calendar_day_in_timezone(utc_datetime: datetime, tz: ZoneInfo) -> str:
+    """Get the calendar day (YYYY-MM-DD) in the given timezone from a UTC datetime."""
+    local_time = utc_datetime.astimezone(tz)
+    return local_time.strftime("%Y-%m-%d")
+
+
+def get_utc_midnight_for_calendar_day(calendar_day: str, tz: ZoneInfo) -> datetime:
+    """Get UTC datetime for midnight of the calendar day in the given timezone."""
+    local_midnight = datetime.strptime(calendar_day, "%Y-%m-%d").replace(
+        tzinfo=tz, hour=0, minute=0, second=0, microsecond=0
+    )
+    return local_midnight.astimezone(timezone.utc)

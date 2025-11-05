@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
@@ -9,6 +10,10 @@ from lazycloud_api.api.dependencies import (
     get_workspace_with_any_access,
 )
 from lazycloud_api.api.security import get_current_active_user
+from lazycloud_api.api.utils import (
+    get_calendar_day_in_timezone,
+    get_utc_midnight_for_calendar_day,
+)
 from lazycloud_api.database import db
 from lazycloud_api.database.usage import UsageRecordPydantic
 from lazycloud_api.database.user_workspaces import (
@@ -380,11 +385,21 @@ async def get_aggregated_daily_usage(
         None, description="Start date (defaults to start of current month)"
     ),
     end_date: datetime | None = Query(None, description="End date (defaults to now)"),
+    timezone_str: str = Query(
+        "UTC", description="Timezone for grouping (e.g., 'America/Denver', 'UTC')"
+    ),
     cost_service: CostBreakdownService = Depends(get_cost_breakdown_service),
     polar_service: PolarService = Depends(get_polar_service),
 ) -> AggregatedDailyUsageResponse:
     """Get aggregated daily usage across all user's workspaces"""
     try:
+        # Parse timezone, default to UTC if invalid
+        try:
+            tz = ZoneInfo(timezone_str) if timezone_str else ZoneInfo("UTC")
+        except Exception:
+            logger.warning(f"Invalid timezone '{timezone_str}', defaulting to UTC")
+            tz = ZoneInfo("UTC")
+
         now = datetime.now(timezone.utc)
         if not start_date:
             logger.info("No start date provided, using default start of current month")
@@ -408,10 +423,13 @@ async def get_aggregated_daily_usage(
             )
 
             for record in usage_records:
-                day_key = record.collection_start.strftime("%Y-%m-%d")
+                # Group by calendar day in user's timezone
+                day_key = get_calendar_day_in_timezone(record.collection_start, tz)
                 if day_key not in daily_data:
+                    # Store UTC midnight for this calendar day in user's timezone
+                    utc_midnight = get_utc_midnight_for_calendar_day(day_key, tz)
                     daily_data[day_key] = DailyUsageData(
-                        date=day_key,
+                        date=utc_midnight.strftime("%Y-%m-%dT%H:%M:%SZ"),
                         cpu_core_hours=0.0,
                         memory_gb_hours=0.0,
                         s3_gb_hours=0.0,
@@ -429,18 +447,25 @@ async def get_aggregated_daily_usage(
                 daily_data[day_key].efs_gb_hours += record.efs_gb_hours
                 daily_records[day_key].append(record)
 
-        current_date = start_date
-        while current_date <= end_date:
-            day_key = current_date.strftime("%Y-%m-%d")
+        # Fill in missing days with zeros (but not future days)
+        now_local = now.astimezone(tz)
+        start_local = start_date.astimezone(tz).date()
+        end_local = min(end_date.astimezone(tz).date(), now_local.date())
+        current_local_date = start_local
+
+        while current_local_date <= end_local:
+            day_key = current_local_date.strftime("%Y-%m-%d")
             if day_key not in daily_data:
+                # Only add zero entries for days that have already occurred
+                utc_midnight = get_utc_midnight_for_calendar_day(day_key, tz)
                 daily_data[day_key] = DailyUsageData(
-                    date=day_key,
+                    date=utc_midnight.strftime("%Y-%m-%dT%H:%M:%SZ"),
                     cpu_core_hours=0.0,
                     memory_gb_hours=0.0,
                     s3_gb_hours=0.0,
                     efs_gb_hours=0.0,
                 )
-            current_date += timedelta(days=1)
+            current_local_date += timedelta(days=1)
 
         if polar_service.enabled:
             for day_key, day_data in daily_data.items():
