@@ -3,8 +3,10 @@ from enum import StrEnum
 from loguru import logger
 from polar_sdk import Polar
 
+from .cost_breakdown import PolarCostBreakdownModule
 from .customers import PolarCustomersModule
 from .meters import PolarMetersModule
+from .pricing import PolarPricingModule
 from .products import PolarProductsModule
 from .usage import PolarUsageModule
 
@@ -42,7 +44,11 @@ class PolarService:
                 "Polar billing service disabled: POLAR_ACCESS_TOKEN not configured"
             )
 
-        self.usage = PolarUsageModule(client=self.client, enabled=self.enabled)
         self.customers = PolarCustomersModule(client=self.client, enabled=self.enabled)
         self.meters = PolarMetersModule(client=self.client, enabled=self.enabled)
         self.products = PolarProductsModule(client=self.client, enabled=self.enabled)
+        self.pricing = PolarPricingModule(
+            client=self.client, enabled=self.enabled, products_module=self.products
+        )
+        self.cost_breakdown = PolarCostBreakdownModule(pricing_module=self.pricing)
+        self.usage = PolarUsageModule(client=self.client, enabled=self.enabled)

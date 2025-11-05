@@ -92,6 +92,10 @@ class MeterNames(StrEnum):
     PREMIUM_STORAGE = "Premium Storage"
 
 
+# Time conversion constants
+SECONDS_PER_HOUR = 3600
+
+
 # Event name for the usage metrics event
 USAGE_EVENT_NAME = "lazycloud-usage"
 

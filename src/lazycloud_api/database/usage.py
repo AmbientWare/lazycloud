@@ -212,12 +212,18 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
 
             if existing_record:
                 # Update existing record
-                existing_record.cpu_core_seconds = cpu_core_seconds
-                existing_record.memory_gb_seconds = memory_gb_seconds
-                existing_record.storage_gb_hours = storage_gb_hours
-                existing_record.s3_gb_hours = s3_gb_hours
-                existing_record.efs_gb_hours = efs_gb_hours
-                existing_record.status = status.value
+                # Only update if not already finalized or reported to prevent data corruption
+                if existing_record.status not in (
+                    UsageRecordStatus.FINALIZED.value,
+                    UsageRecordStatus.REPORTED.value,
+                ):
+                    existing_record.cpu_core_seconds = cpu_core_seconds
+                    existing_record.memory_gb_seconds = memory_gb_seconds
+                    existing_record.storage_gb_hours = storage_gb_hours
+                    existing_record.s3_gb_hours = s3_gb_hours
+                    existing_record.efs_gb_hours = efs_gb_hours
+                    existing_record.status = status.value
+
                 await sess.flush()
                 await sess.refresh(existing_record)
                 return existing_record.to_pydantic(UsageRecordPydantic)

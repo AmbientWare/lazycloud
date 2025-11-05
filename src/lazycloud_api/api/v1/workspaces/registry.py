@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
 
-from lazycloud_api.api.dependencies import get_workspace_with_admin_access
-from lazycloud_api.database.user_workspaces import UserWorkspacePydantic
-from lazycloud_api.database.workspaces import WorkspacePydantic
+from lazycloud_api.api.dependencies import (
+    WorkspaceAccess,
+    get_workspace_with_admin_access,
+)
 from lazycloud_api.services import ECRAuthService, get_ecr_auth_service
 from shared.requests.registry import UploadIntentRequest
 from shared.responses.registry import UploadIntentResponse
@@ -14,18 +15,16 @@ registry_router = APIRouter(prefix="/registry")
 @registry_router.post("/upload-intent", response_model=UploadIntentResponse)
 async def get_upload_intent(
     request: UploadIntentRequest,
-    workspace_membership: tuple[UserWorkspacePydantic, WorkspacePydantic] = Depends(
-        get_workspace_with_admin_access
-    ),
+    workspace_access: WorkspaceAccess = Depends(get_workspace_with_admin_access),
     ecr_auth_service: ECRAuthService = Depends(get_ecr_auth_service),
 ) -> UploadIntentResponse:
     """Get temporary ECR push credentials for a deployment"""
 
-    _, workspace = workspace_membership
+    workspace = workspace_access.workspace
 
     try:
         logger.info(
-            f"Getting upload credentials for lc-user-{workspace_membership[0].user_id}/deployment-{request.deployment_name}"
+            f"Getting upload credentials for lc-user-{workspace_access.user.id}/deployment-{request.deployment_name}"
         )
 
         credentials = await ecr_auth_service.get_upload_credentials(

@@ -16,6 +16,7 @@ class UsageMetrics(BaseModel):
     memory_gb_hours: float
     s3_gb_hours: float
     efs_gb_hours: float
+    costs: "MeterCostBreakdown | None" = None
 
 
 class ServiceUsageItem(BaseModel):
@@ -49,6 +50,7 @@ class DailyUsageData(BaseModel):
     memory_gb_hours: float
     s3_gb_hours: float
     efs_gb_hours: float
+    costs: "MeterCostBreakdown | None" = None
 
 
 class DailyUsageResponse(BaseModel):
@@ -72,3 +74,46 @@ class AggregatedDailyUsageResponse(BaseModel):
     period: UsagePeriodInfo
     daily_usage: list[DailyUsageData]
     workspace_count: int
+
+
+# Cost breakdown models
+
+
+class MeterCostBreakdown(BaseModel):
+    """Cost breakdown by meter type (estimated from cached prices)."""
+
+    cpu_cost: float
+    memory_cost: float
+    s3_cost: float
+    efs_cost: float
+    total_cost: float
+
+
+class ServiceCostBreakdown(BaseModel):
+    """Cost breakdown for a single service (estimated)."""
+
+    service_name: str
+    cpu_cost: float
+    memory_cost: float
+    total_compute_cost: float
+    percentage_of_total: float
+
+
+class VolumeCostBreakdown(BaseModel):
+    """Cost breakdown for a single volume (estimated)."""
+
+    volume_name: str
+    storage_class: Literal[STORAGE_CLASS_S3, STORAGE_CLASS_EFS]
+    storage_cost: float
+    percentage_of_total: float
+
+
+class WorkspaceCostBreakdownResponse(BaseModel):
+    """Complete cost breakdown for workspace usage"""
+
+    workspace_id: str
+    period: UsagePeriodInfo
+    meter_breakdown: MeterCostBreakdown
+    service_breakdown: list[ServiceCostBreakdown]
+    volume_breakdown: list[VolumeCostBreakdown]
+    is_estimated: bool = True

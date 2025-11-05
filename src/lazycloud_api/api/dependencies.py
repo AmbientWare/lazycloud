@@ -3,9 +3,9 @@ from fastapi import Depends, HTTPException
 from lazycloud_api.api.security import get_current_active_user
 from lazycloud_api.database import db
 from lazycloud_api.database.compose import ComposeDeploymentPydantic
-from lazycloud_api.database.user_workspaces import UserWorkspacePydantic, WorkspaceRole
+from lazycloud_api.database.user_workspaces import WorkspaceRole
 from lazycloud_api.database.users import UserPydantic
-from lazycloud_api.database.workspaces import WorkspacePydantic
+from lazycloud_api.models.workspace_access import WorkspaceAccess
 
 
 async def require_workspace_member(
@@ -37,7 +37,7 @@ async def require_workspace_admin(
 async def get_workspace_with_any_access(
     workspace_id: str,
     current_user: UserPydantic = Depends(get_current_active_user),
-) -> tuple[UserWorkspacePydantic, WorkspacePydantic]:
+) -> WorkspaceAccess:
     """Get workspace and verify user has any access"""
     membership = await db.user_workspaces.aget_by_user_and_workspace(
         current_user.id, workspace_id
@@ -49,13 +49,15 @@ async def get_workspace_with_any_access(
     if not workspace:
         raise HTTPException(404, "Workspace not found")
 
-    return (membership, workspace)
+    return WorkspaceAccess(
+        membership=membership, workspace=workspace, user=current_user
+    )
 
 
 async def get_workspace_with_admin_access(
     workspace_id: str,
     current_user: UserPydantic = Depends(get_current_active_user),
-) -> tuple[UserWorkspacePydantic, WorkspacePydantic]:
+) -> WorkspaceAccess:
     """Get workspace and verify user has admin/owner access"""
     membership = await db.user_workspaces.aget_by_user_and_workspace(
         current_user.id, workspace_id
@@ -69,7 +71,9 @@ async def get_workspace_with_admin_access(
     if not workspace:
         raise HTTPException(404, "Workspace not found")
 
-    return (membership, workspace)
+    return WorkspaceAccess(
+        membership=membership, workspace=workspace, user=current_user
+    )
 
 
 async def get_deployment_with_access(

@@ -4,11 +4,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
 
 from lazycloud_api.api.dependencies import (
+    WorkspaceAccess,
     get_workspace_with_admin_access,
     get_workspace_with_any_access,
 )
 from lazycloud_api.api.security import get_current_active_user
 from lazycloud_api.database import db
+from lazycloud_api.database.usage import UsageRecordPydantic
 from lazycloud_api.database.user_workspaces import (
     UserWorkspacePydantic,
     UserWorkspaceStatus,
@@ -17,6 +19,13 @@ from lazycloud_api.database.user_workspaces import (
 from lazycloud_api.database.users import UserPydantic
 from lazycloud_api.database.utils import validate_workspace_name
 from lazycloud_api.database.workspaces import WorkspacePydantic, WorkspaceStatus
+from lazycloud_api.services import (
+    CostBreakdownService,
+    PolarService,
+    get_cost_breakdown_service,
+    get_polar_service,
+)
+from shared.models.billing import SECONDS_PER_HOUR
 from shared.requests.workspaces import (
     CreateWorkspaceRequest,
     InviteUserRequest,
@@ -62,18 +71,16 @@ async def get_workspaces(
 
 @workspaces_router.get("/{workspace_id}")
 async def get_workspace(
-    workspace_membership: tuple[UserWorkspacePydantic, WorkspacePydantic] = Depends(
-        get_workspace_with_any_access
-    ),
+    workspace_access: WorkspaceAccess = Depends(get_workspace_with_any_access),
 ) -> WorkspaceResponse:
     """Get a specific workspace by ID"""
-    membership, workspace = workspace_membership
+    workspace = workspace_access.workspace
 
     return WorkspaceResponse(
         id=workspace.id,
         name=workspace.name,
         is_personal=workspace.is_personal,
-        role=membership.role,
+        role=workspace_access.membership.role,
     )
 
 
@@ -120,9 +127,7 @@ async def create_workspace(
 @workspaces_router.patch("/{workspace_id}/rename")
 async def rename_workspace(
     request: RenameWorkspaceRequest,
-    workspace_membership: tuple[UserWorkspacePydantic, WorkspacePydantic] = Depends(
-        get_workspace_with_admin_access
-    ),
+    workspace_access: WorkspaceAccess = Depends(get_workspace_with_admin_access),
 ) -> WorkspaceResponse:
     """Rename a workspace (requires owner role)"""
     try:
@@ -130,8 +135,7 @@ async def rename_workspace(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    membership, workspace = workspace_membership
-
+    workspace = workspace_access.workspace
     workspace.name = validated_name
     workspace = await db.workspaces.aupdate(workspace)
 
@@ -139,19 +143,17 @@ async def rename_workspace(
         id=workspace.id,
         name=workspace.name,
         is_personal=workspace.is_personal,
-        role=membership.role,
+        role=workspace_access.membership.role,
     )
 
 
 @workspaces_router.post("/{workspace_id}/invite")
 async def invite_user(
     request: InviteUserRequest,
-    workspace_membership: tuple[UserWorkspacePydantic, WorkspacePydantic] = Depends(
-        get_workspace_with_admin_access
-    ),
+    workspace_access: WorkspaceAccess = Depends(get_workspace_with_admin_access),
 ) -> WorkspaceSuccessResponse:
     """Invite a user to a workspace (requires owner or admin role)"""
-    _, workspace = workspace_membership
+    workspace = workspace_access.workspace
 
     if workspace.is_personal:
         raise HTTPException(
@@ -168,12 +170,10 @@ async def invite_user(
 
 @workspaces_router.get("/{workspace_id}/members")
 async def get_workspace_members(
-    workspace_membership: tuple[UserWorkspacePydantic, WorkspacePydantic] = Depends(
-        get_workspace_with_any_access
-    ),
+    workspace_access: WorkspaceAccess = Depends(get_workspace_with_any_access),
 ) -> list[WorkspaceMemberResponse]:
     """Get all members of a workspace"""
-    _, workspace = workspace_membership
+    workspace = workspace_access.workspace
 
     # Get all members with user information
     members_with_users = await db.user_workspaces.aget_workspace_members_with_users(
@@ -195,12 +195,10 @@ async def get_workspace_members(
 @workspaces_router.patch("/{workspace_id}/members/{user_id}/role")
 async def update_member_role(
     request: UpdateMemberRoleRequest,
-    workspace_membership: tuple[UserWorkspacePydantic, WorkspacePydantic] = Depends(
-        get_workspace_with_admin_access
-    ),
+    workspace_access: WorkspaceAccess = Depends(get_workspace_with_admin_access),
 ) -> WorkspaceMemberResponse:
     """Update a member's role (requires owner or admin role)"""
-    _, workspace = workspace_membership
+    workspace = workspace_access.workspace
 
     target_membership = await db.user_workspaces.aget_by_user_and_workspace(
         request.user_id, workspace.id
@@ -243,13 +241,11 @@ async def update_member_role(
 @workspaces_router.delete("/{workspace_id}/members/{user_id}")
 async def remove_member(
     user_id: str,
-    workspace_membership: tuple[UserWorkspacePydantic, WorkspacePydantic] = Depends(
-        get_workspace_with_admin_access
-    ),
+    workspace_access: WorkspaceAccess = Depends(get_workspace_with_admin_access),
 ) -> WorkspaceSuccessResponse:
     """Remove a member from a workspace (requires owner or admin role)"""
     # Check if current user has permission
-    _, workspace = workspace_membership
+    workspace = workspace_access.workspace
 
     # Check if target user is a member
     target_membership = await db.user_workspaces.aget_by_user_and_workspace(
@@ -270,13 +266,11 @@ async def remove_member(
 
 @workspaces_router.delete("/{workspace_id}")
 async def delete_workspace(
-    workspace_membership: tuple[UserWorkspacePydantic, WorkspacePydantic] = Depends(
-        get_workspace_with_admin_access
-    ),
+    workspace_access: WorkspaceAccess = Depends(get_workspace_with_admin_access),
 ) -> WorkspaceSuccessResponse:
     """Delete a workspace (requires owner role)"""
     # Check if current user is the owner
-    _, workspace = workspace_membership
+    workspace = workspace_access.workspace
 
     # Prevent deleting personal workspaces
     if workspace.is_personal:
@@ -325,6 +319,7 @@ async def get_aggregated_usage(
         total_s3_hours = 0.0
         total_efs_hours = 0.0
         total_records = 0
+        all_usage_records = []
 
         for workspace, _ in user_workspaces:
             usage_records = await db.usage.get_workspace_usage(
@@ -338,14 +333,33 @@ async def get_aggregated_usage(
             total_s3_hours += sum(r.s3_gb_hours for r in usage_records)
             total_efs_hours += sum(r.efs_gb_hours for r in usage_records)
             total_records += len(usage_records)
+            all_usage_records.extend(usage_records)
+
+        # Calculate costs if Polar is enabled
+        total_costs = None
+        cost_service = get_cost_breakdown_service()
+        polar_service = get_polar_service()
+
+        if polar_service.enabled:
+            try:
+                total_costs = await cost_service.calculate_costs_from_usage(
+                    cpu_core_hours=total_cpu_seconds / SECONDS_PER_HOUR,
+                    memory_gb_hours=total_memory_seconds / SECONDS_PER_HOUR,
+                    s3_gb_hours=total_s3_hours,
+                    efs_gb_hours=total_efs_hours,
+                    external_customer_id=current_user.clerk_id,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to calculate aggregated costs: {e}")
 
         return AggregatedUsageResponse(
             period=UsagePeriodInfo(start=start_date, end=end_date),
             usage=UsageMetrics(
-                cpu_core_hours=total_cpu_seconds / 3600,
-                memory_gb_hours=total_memory_seconds / 3600,
+                cpu_core_hours=total_cpu_seconds / SECONDS_PER_HOUR,
+                memory_gb_hours=total_memory_seconds / SECONDS_PER_HOUR,
                 s3_gb_hours=total_s3_hours,
                 efs_gb_hours=total_efs_hours,
+                costs=total_costs,
             ),
             workspace_count=len(user_workspaces),
             record_count=total_records,
@@ -366,6 +380,8 @@ async def get_aggregated_daily_usage(
         None, description="Start date (defaults to start of current month)"
     ),
     end_date: datetime | None = Query(None, description="End date (defaults to now)"),
+    cost_service: CostBreakdownService = Depends(get_cost_breakdown_service),
+    polar_service: PolarService = Depends(get_polar_service),
 ) -> AggregatedDailyUsageResponse:
     """Get aggregated daily usage across all user's workspaces"""
     try:
@@ -382,6 +398,7 @@ async def get_aggregated_daily_usage(
         )
 
         daily_data: dict[str, DailyUsageData] = {}
+        daily_records: dict[str, list[UsageRecordPydantic]] = {}
 
         for workspace, _ in user_workspaces:
             usage_records = await db.usage.get_workspace_usage(
@@ -400,11 +417,17 @@ async def get_aggregated_daily_usage(
                         s3_gb_hours=0.0,
                         efs_gb_hours=0.0,
                     )
+                    daily_records[day_key] = []
 
-                daily_data[day_key].cpu_core_hours += record.cpu_core_seconds / 3600
-                daily_data[day_key].memory_gb_hours += record.memory_gb_seconds / 3600
+                daily_data[day_key].cpu_core_hours += (
+                    record.cpu_core_seconds / SECONDS_PER_HOUR
+                )
+                daily_data[day_key].memory_gb_hours += (
+                    record.memory_gb_seconds / SECONDS_PER_HOUR
+                )
                 daily_data[day_key].s3_gb_hours += record.s3_gb_hours
                 daily_data[day_key].efs_gb_hours += record.efs_gb_hours
+                daily_records[day_key].append(record)
 
         current_date = start_date
         while current_date <= end_date:
@@ -418,6 +441,20 @@ async def get_aggregated_daily_usage(
                     efs_gb_hours=0.0,
                 )
             current_date += timedelta(days=1)
+
+        if polar_service.enabled:
+            for day_key, day_data in daily_data.items():
+                try:
+                    day_costs = await cost_service.calculate_costs_from_usage(
+                        cpu_core_hours=day_data.cpu_core_hours,
+                        memory_gb_hours=day_data.memory_gb_hours,
+                        s3_gb_hours=day_data.s3_gb_hours,
+                        efs_gb_hours=day_data.efs_gb_hours,
+                        external_customer_id=current_user.clerk_id,
+                    )
+                    day_data.costs = day_costs
+                except Exception as e:
+                    logger.warning(f"Failed to calculate costs for {day_key}: {e}")
 
         sorted_daily = sorted(daily_data.values(), key=lambda x: x.date)
 

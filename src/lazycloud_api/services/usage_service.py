@@ -3,7 +3,7 @@ from loguru import logger
 
 from lazycloud_api.database import db
 from lazycloud_api.database.usage import UsageRecordPydantic
-from shared.models.billing import STORAGE_CLASS_EFS, STORAGE_CLASS_S3
+from shared.models.billing import SECONDS_PER_HOUR, STORAGE_CLASS_EFS, STORAGE_CLASS_S3
 from shared.responses.usage import ServiceUsageItem, UsageMetrics, VolumeUsageItem
 
 
@@ -36,8 +36,8 @@ class UsageService:
         )
 
         metrics = UsageMetrics(
-            cpu_core_hours=usage_record.cpu_core_seconds / 3600,
-            memory_gb_hours=usage_record.memory_gb_seconds / 3600,
+            cpu_core_hours=usage_record.cpu_core_seconds / SECONDS_PER_HOUR,
+            memory_gb_hours=usage_record.memory_gb_seconds / SECONDS_PER_HOUR,
             s3_gb_hours=s3_gb_hours,
             efs_gb_hours=efs_gb_hours,
         )

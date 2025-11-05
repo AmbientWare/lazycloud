@@ -2,6 +2,7 @@ from functools import lru_cache
 
 from lazycloud_api.config import app_config
 from lazycloud_api.services.cloudflare import CloudflareService
+from lazycloud_api.services.cost_breakdown_service import CostBreakdownService
 from lazycloud_api.services.ecr_auth import ECRAuthService
 from lazycloud_api.services.polar import PolarService
 from lazycloud_api.services.prometheus import PrometheusMetricsService
@@ -57,15 +58,25 @@ def get_usage_service() -> UsageService:
     return UsageService()
 
 
+@lru_cache(maxsize=1)
+def get_cost_breakdown_service() -> CostBreakdownService:
+    return CostBreakdownService(
+        polar_service=get_polar_service(),
+        usage_service=get_usage_service(),
+    )
+
+
 __all__ = [
     "ECRAuthService",
     "CloudflareService",
+    "CostBreakdownService",
     "PrometheusMetricsService",
     "PolarService",
     "UserOnboardingService",
     "UsageService",
     "get_ecr_auth_service",
     "get_cloudflare_service",
+    "get_cost_breakdown_service",
     "get_metrics_service",
     "get_polar_service",
     "get_user_onboarding_service",

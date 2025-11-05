@@ -5,14 +5,21 @@ from loguru import logger
 
 from lazycloud_api.api.dependencies import get_workspace_with_admin_access
 from lazycloud_api.database import db
-from lazycloud_api.database.user_workspaces import UserWorkspacePydantic
-from lazycloud_api.database.workspaces import WorkspacePydantic
-from lazycloud_api.services import UsageService, get_usage_service
+from lazycloud_api.database.usage import UsageRecordPydantic
+from lazycloud_api.models.workspace_access import WorkspaceAccess
+from lazycloud_api.services import (
+    UsageService,
+    get_cost_breakdown_service,
+    get_polar_service,
+    get_usage_service,
+)
+from shared.models.billing import SECONDS_PER_HOUR
 from shared.responses.usage import (
     DailyUsageData,
     DailyUsageResponse,
     UsageMetrics,
     UsagePeriodInfo,
+    WorkspaceCostBreakdownResponse,
     WorkspaceUsageResponse,
 )
 
@@ -21,9 +28,7 @@ usage_router = APIRouter(prefix="/usage")
 
 @usage_router.get("")
 async def query_usage(
-    workspace_membership: tuple[UserWorkspacePydantic, WorkspacePydantic] = Depends(
-        get_workspace_with_admin_access
-    ),
+    workspace_access: WorkspaceAccess = Depends(get_workspace_with_admin_access),
     start_date: datetime | None = Query(
         None, description="Start date (defaults to start of current month)"
     ),
@@ -34,7 +39,7 @@ async def query_usage(
     usage_service: UsageService = Depends(get_usage_service),
 ) -> WorkspaceUsageResponse:
     """Query workspace usage. When deployment_id provided, returns detailed service and volume breakdown."""
-    _, workspace = workspace_membership
+    workspace = workspace_access.workspace
 
     try:
         if deployment_id:
@@ -91,14 +96,32 @@ async def query_usage(
         total_s3_hours = sum(r.s3_gb_hours for r in usage_records)
         total_efs_hours = sum(r.efs_gb_hours for r in usage_records)
 
+        # Calculate costs if Polar is enabled
+        workspace_costs = None
+        cost_service = get_cost_breakdown_service()
+        polar_service = get_polar_service()
+
+        if polar_service.enabled:
+            try:
+                workspace_costs = await cost_service.calculate_costs_from_usage(
+                    cpu_core_hours=total_cpu_seconds / SECONDS_PER_HOUR,
+                    memory_gb_hours=total_memory_seconds / SECONDS_PER_HOUR,
+                    s3_gb_hours=total_s3_hours,
+                    efs_gb_hours=total_efs_hours,
+                    external_customer_id=workspace_access.user.clerk_id,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to calculate workspace costs: {e}")
+
         return WorkspaceUsageResponse(
             workspace_id=workspace.id,
             period=UsagePeriodInfo(start=start_date, end=end_date),
             usage=UsageMetrics(
-                cpu_core_hours=total_cpu_seconds / 3600,
-                memory_gb_hours=total_memory_seconds / 3600,
+                cpu_core_hours=total_cpu_seconds / SECONDS_PER_HOUR,
+                memory_gb_hours=total_memory_seconds / SECONDS_PER_HOUR,
                 s3_gb_hours=total_s3_hours,
                 efs_gb_hours=total_efs_hours,
+                costs=workspace_costs,
             ),
             record_count=len(usage_records),
         )
@@ -116,16 +139,14 @@ async def query_usage(
 
 @usage_router.get("/daily")
 async def get_daily_usage(
-    workspace_membership: tuple[UserWorkspacePydantic, WorkspacePydantic] = Depends(
-        get_workspace_with_admin_access
-    ),
+    workspace_access: WorkspaceAccess = Depends(get_workspace_with_admin_access),
     start_date: datetime | None = Query(
         None, description="Start date (defaults to start of current month)"
     ),
     end_date: datetime | None = Query(None, description="End date (defaults to now)"),
 ) -> DailyUsageResponse:
     """Get daily aggregated usage for the workspace, suitable for sparkline visualization."""
-    _, workspace = workspace_membership
+    workspace = workspace_access.workspace
 
     try:
         now = datetime.now(timezone.utc)
@@ -143,6 +164,7 @@ async def get_daily_usage(
         )
 
         daily_data: dict[str, DailyUsageData] = {}
+        daily_records: dict[str, list[UsageRecordPydantic]] = {}
         for record in usage_records:
             day_key = record.collection_start.strftime("%Y-%m-%d")
             if day_key not in daily_data:
@@ -153,11 +175,17 @@ async def get_daily_usage(
                     s3_gb_hours=0.0,
                     efs_gb_hours=0.0,
                 )
+                daily_records[day_key] = []
 
-            daily_data[day_key].cpu_core_hours += record.cpu_core_seconds / 3600
-            daily_data[day_key].memory_gb_hours += record.memory_gb_seconds / 3600
+            daily_data[day_key].cpu_core_hours += (
+                record.cpu_core_seconds / SECONDS_PER_HOUR
+            )
+            daily_data[day_key].memory_gb_hours += (
+                record.memory_gb_seconds / SECONDS_PER_HOUR
+            )
             daily_data[day_key].s3_gb_hours += record.s3_gb_hours
             daily_data[day_key].efs_gb_hours += record.efs_gb_hours
+            daily_records[day_key].append(record)
 
         # Fill missing days with zeros for continuous sparkline visualization
         current_date = start_date
@@ -186,4 +214,65 @@ async def get_daily_usage(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch daily usage: {str(e)}",
+        )
+
+
+@usage_router.get("/costs")
+async def get_cost_breakdown(
+    workspace_access: WorkspaceAccess = Depends(get_workspace_with_admin_access),
+    start_date: datetime | None = Query(
+        None, description="Start date (defaults to start of current month)"
+    ),
+    end_date: datetime | None = Query(None, description="End date (defaults to now)"),
+    deployment_id: str | None = Query(
+        None, description="Deployment ID to get detailed cost breakdown for"
+    ),
+) -> WorkspaceCostBreakdownResponse:
+    """Get estimated cost breakdown for workspace usage"""
+    workspace = workspace_access.workspace
+    user = workspace_access.user
+
+    try:
+        polar_service = get_polar_service()
+        cost_service = get_cost_breakdown_service()
+
+        if not polar_service.enabled:
+            raise HTTPException(
+                status_code=503,
+                detail="Cost breakdown unavailable: billing service not configured",
+            )
+
+        # Get customer's external ID (clerk_id) - already available from dependency
+        external_customer_id = user.clerk_id
+
+        # Handle deployment-specific or date range breakdown
+        if deployment_id:
+            return await cost_service.get_deployment_cost_breakdown(
+                workspace_id=workspace.id,
+                deployment_id=deployment_id,
+                external_customer_id=external_customer_id,
+            )
+
+        # Default date range to current month if not specified
+        now = datetime.now(timezone.utc)
+        if not start_date:
+            start_date = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        if not end_date:
+            end_date = now
+
+        return await cost_service.get_aggregated_cost_breakdown(
+            workspace_id=workspace.id,
+            start_date=start_date,
+            end_date=end_date,
+            external_customer_id=external_customer_id,
+        )
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        logger.error(f"Error getting cost breakdown: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch cost breakdown: {str(e)}",
         )
