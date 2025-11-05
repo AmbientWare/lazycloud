@@ -336,8 +336,8 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
             query = (
                 select(UsageRecordTable)
                 .where(UsageRecordTable.workspace_id == workspace_id)
-                .where(UsageRecordTable.collection_start >= start_date)
-                .where(UsageRecordTable.collection_end <= end_date)
+                .where(UsageRecordTable.collection_start <= end_date)
+                .where(UsageRecordTable.collection_end >= start_date)
                 .order_by(UsageRecordTable.collection_start)
             )
             if record_type:

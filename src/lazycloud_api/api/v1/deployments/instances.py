@@ -6,7 +6,7 @@ from lazycloud_api.api.dependencies import (
     get_deployment_with_access,
     get_deployment_with_admin_access,
 )
-from lazycloud_api.api.streaming_utils import create_sse_stream_with_subscription
+from lazycloud_api.api.utils import create_sse_stream_with_subscription
 from lazycloud_api.database.compose import ComposeDeploymentPydantic
 from lazycloud_api.prefect_app.instances import delete_instance_task
 from lazycloud_api.services.monitoring.monitor_config import LogMonitorConfig

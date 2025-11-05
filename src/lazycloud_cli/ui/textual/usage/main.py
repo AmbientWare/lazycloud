@@ -10,10 +10,8 @@ from lazycloud_cli.ui.textual.theme import Icons, lazycloud_theme
 
 from .containers import (
     DeploymentsListView,
-    UsageBreakdownTable,
     UsageMainContainer,
     UsageOverviewSection,
-    UsageTrendSparkline,
 )
 
 
@@ -29,7 +27,6 @@ class UsageDashboard(App):
         ("q", "quit", "Quit"),
         ("r", "refresh", "Refresh"),
         ("1", "focus_deployments", "Deployments"),
-        ("2", "focus_services", "Services"),
     ]
 
     def on_mount(self) -> None:
@@ -69,12 +66,6 @@ class UsageDashboard(App):
             pass
 
         try:
-            sparkline = self.query_one(UsageTrendSparkline, UsageTrendSparkline)
-            sparkline.refresh_trend()
-        except Exception:
-            pass
-
-        try:
             deployments_list = self.query_one(DeploymentsListView, DeploymentsListView)
             deployments_list.run_worker(
                 deployments_list._fetch_deployments_async(), exclusive=True
@@ -87,14 +78,6 @@ class UsageDashboard(App):
         try:
             deployments_list = self.query_one(DeploymentsListView)
             self.set_focus(deployments_list)
-        except Exception:
-            pass
-
-    def action_focus_services(self) -> None:
-        """Focus the services table"""
-        try:
-            services_table = self.query_one(UsageBreakdownTable)
-            self.set_focus(services_table)
         except Exception:
             pass
 

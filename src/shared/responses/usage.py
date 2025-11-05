@@ -20,28 +20,19 @@ class UsageMetrics(BaseModel):
 
 
 class ServiceUsageItem(BaseModel):
+    """Internal type for service usage processing"""
+
     service_name: str
     cpu_core_seconds: float
     memory_gb_seconds: float
 
 
 class VolumeUsageItem(BaseModel):
-    """Individual volume usage"""
+    """Internal type for volume usage processing"""
 
     volume_name: str
     storage_class: Literal[STORAGE_CLASS_S3, STORAGE_CLASS_EFS]
     gb_hours: float
-
-
-class WorkspaceUsageResponse(BaseModel):
-    workspace_id: str
-    period: UsagePeriodInfo
-    usage: UsageMetrics
-    record_count: int
-    deployment_id: str | None = None
-    deployment_name: str | None = None
-    services: list[ServiceUsageItem] | None = None
-    volumes: list[VolumeUsageItem] | None = None
 
 
 class DailyUsageData(BaseModel):
@@ -51,12 +42,6 @@ class DailyUsageData(BaseModel):
     s3_gb_hours: float
     efs_gb_hours: float
     costs: "MeterCostBreakdown | None" = None
-
-
-class DailyUsageResponse(BaseModel):
-    workspace_id: str
-    period: UsagePeriodInfo
-    daily_usage: list[DailyUsageData]
 
 
 class AggregatedUsageResponse(BaseModel):
@@ -93,6 +78,8 @@ class ServiceCostBreakdown(BaseModel):
     """Cost breakdown for a single service (estimated)."""
 
     service_name: str
+    cpu_core_hours: float | None = None
+    memory_gb_hours: float | None = None
     cpu_cost: float
     memory_cost: float
     total_compute_cost: float
@@ -117,3 +104,22 @@ class WorkspaceCostBreakdownResponse(BaseModel):
     service_breakdown: list[ServiceCostBreakdown]
     volume_breakdown: list[VolumeCostBreakdown]
     is_estimated: bool = True
+
+
+class DeploymentUsageBreakdown(BaseModel):
+    """Usage and cost breakdown for a single deployment"""
+
+    deployment_id: str
+    deployment_name: str
+    usage: UsageMetrics
+    cost_breakdown: WorkspaceCostBreakdownResponse | None = None
+
+
+class WorkspaceUsageWithDeploymentsResponse(BaseModel):
+    """Workspace usage with deployment breakdowns in one response"""
+
+    workspace_id: str
+    period: UsagePeriodInfo
+    workspace_usage: UsageMetrics
+    record_count: int
+    deployments: list[DeploymentUsageBreakdown]

@@ -84,6 +84,8 @@ class CostBreakdownService:
             service_breakdown=[
                 ServiceCostBreakdown(
                     service_name=s.service_name,
+                    cpu_core_hours=s.cpu_core_hours,
+                    memory_gb_hours=s.memory_gb_hours,
                     cpu_cost=s.cpu_cost,
                     memory_cost=s.memory_cost,
                     total_compute_cost=s.total_compute_cost,

@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from lazycloud_cli.api.base import BaseAPI
-from shared.responses.usage import DailyUsageResponse, WorkspaceUsageResponse
+from shared.responses.usage import WorkspaceUsageWithDeploymentsResponse
 
 
 class UsageAPI(BaseAPI):
@@ -10,37 +10,27 @@ class UsageAPI(BaseAPI):
     def __init__(self):
         super().__init__("workspaces")
 
-    def get_usage(
+    def get_workspace_usage_with_deployments(
         self,
         workspace_id: str,
         start_date: datetime | None = None,
         end_date: datetime | None = None,
-        deployment_id: str | None = None,
-    ) -> WorkspaceUsageResponse:
-        """Get workspace usage. When deployment_id provided, includes service and volume breakdown."""
+    ) -> WorkspaceUsageWithDeploymentsResponse:
+        """Get workspace usage with deployment breakdowns in a single request."""
         params = {}
         if start_date:
-            params["start_date"] = start_date.isoformat()
+            # Format as ISO 8601 with 'Z' suffix to match frontend format
+            iso_str = start_date.isoformat()
+            if iso_str.endswith("+00:00"):
+                iso_str = iso_str.replace("+00:00", "Z")
+            params["start_date"] = iso_str
+
         if end_date:
-            params["end_date"] = end_date.isoformat()
-        if deployment_id:
-            params["deployment_id"] = deployment_id
+            # Format as ISO 8601 with 'Z' suffix to match frontend format
+            iso_str = end_date.isoformat()
+            if iso_str.endswith("+00:00"):
+                iso_str = iso_str.replace("+00:00", "Z")
+            params["end_date"] = iso_str
 
-        response = self._get(f"/{workspace_id}/usage", params=params)
-        return WorkspaceUsageResponse.model_validate(response)
-
-    def get_daily_usage(
-        self,
-        workspace_id: str,
-        start_date: datetime | None = None,
-        end_date: datetime | None = None,
-    ) -> DailyUsageResponse:
-        """Get daily aggregated usage for sparkline visualization."""
-        params = {}
-        if start_date:
-            params["start_date"] = start_date.isoformat()
-        if end_date:
-            params["end_date"] = end_date.isoformat()
-
-        response = self._get(f"/{workspace_id}/usage/daily", params=params)
-        return DailyUsageResponse.model_validate(response)
+        response = self._get(f"/{workspace_id}/usage/with-deployments", params=params)
+        return WorkspaceUsageWithDeploymentsResponse.model_validate(response)
