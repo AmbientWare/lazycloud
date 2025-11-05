@@ -52,7 +52,10 @@ async def _get_pvc_deployment_map(workspace_id: str) -> dict[str, str]:
 
 @task(retries=2, retry_delay_seconds=60)
 async def collect_workspace_usage_for_interval(
-    workspace_id: str, start_time: datetime, end_time: datetime
+    workspace_id: str,
+    start_time: datetime,
+    end_time: datetime,
+    status: UsageRecordStatus = UsageRecordStatus.DRAFT,
 ) -> dict:
     metrics_service = get_metrics_service()
 
@@ -85,6 +88,7 @@ async def collect_workspace_usage_for_interval(
             s3_gb_hours=breakdown.totals.s3_gb_hours,
             efs_gb_hours=breakdown.totals.efs_gb_hours,
             record_type=UsageCollectionConfig.get_record_type(),
+            status=status,
         )
 
         # Get deployment mappings
@@ -336,7 +340,7 @@ async def backfill_daily_usage(
             end_time = start_time + UsageCollectionConfig.COLLECTION_INTERVAL_TIMEDELTA
 
             result = await collect_workspace_usage_for_interval(
-                workspace_id, start_time, end_time
+                workspace_id, start_time, end_time, status=UsageRecordStatus.FINALIZED
             )
             interval_results.append(result)
 

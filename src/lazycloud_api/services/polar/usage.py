@@ -3,7 +3,12 @@ from polar_sdk import Polar
 from polar_sdk.models import EventCreateExternalCustomer, EventsIngest
 
 from lazycloud_api.database.usage import UsageRecordPydantic
-from shared.models.billing import METER_METADATA_FIELDS, USAGE_EVENT_NAME, MeterNames
+from shared.models.billing import (
+    METER_METADATA_FIELDS,
+    SECONDS_PER_HOUR,
+    USAGE_EVENT_NAME,
+    MeterNames,
+)
 
 
 class PolarUsageModule:
@@ -74,8 +79,8 @@ class PolarUsageModule:
         s3_gb_hours = usage_record.s3_gb_hours
         efs_gb_hours = usage_record.efs_gb_hours
 
-        cpu_core_hours = cpu_core_seconds / 3600
-        memory_gb_hours = memory_gb_seconds / 3600
+        cpu_core_hours = cpu_core_seconds / SECONDS_PER_HOUR
+        memory_gb_hours = memory_gb_seconds / SECONDS_PER_HOUR
 
         # Single event with all metrics in metadata
         usage_metadata = {
