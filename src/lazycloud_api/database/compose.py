@@ -11,6 +11,7 @@ from sqlalchemy import (
     Index,
     String,
     Text,
+    or_,
     select,
     text,
 )
@@ -296,3 +297,33 @@ class ComposeDeploymentService(
             deployment, role = row
             deployment_pydantic = self._to_pydantic(deployment)
             return deployment_pydantic, role
+
+    async def afind_active_during_date_range(
+        self,
+        workspace_id: str,
+        start_date: datetime,
+        end_date: datetime,
+        limit: int = 100,
+    ) -> list[ComposeDeploymentPydantic]:
+        """Get deployments that existed during the date range.
+
+        Includes:
+        - Active deployments (deleted_at IS NULL)
+        - Deleted deployments that were deleted during or after the date range
+        - Only deployments created before or during the date range
+        """
+        async with self._session_manager.get_session() as session:
+            query = (
+                select(ComposeDeploymentTable)
+                .where(ComposeDeploymentTable.workspace_id == workspace_id)
+                .where(
+                    or_(
+                        ComposeDeploymentTable.deleted_at.is_(None),
+                        ComposeDeploymentTable.deleted_at >= start_date,
+                    )
+                )
+                .where(ComposeDeploymentTable.created_at <= end_date)
+                .limit(limit)
+            )
+            result = await session.execute(query)
+            return [self._to_pydantic(d) for d in result.scalars().all()]
