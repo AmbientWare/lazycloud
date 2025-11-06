@@ -1,110 +1,23 @@
+import asyncio
+
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.reactive import reactive
-from textual.widgets import DataTable, Static
+from textual.widgets import Static
 
+from lazycloud_cli.api.usage import UsageAPI
 from lazycloud_cli.ui.textual.components import Container
 from lazycloud_cli.ui.textual.components.section import SectionContainer
 from lazycloud_cli.ui.textual.theme import Icons
-from shared.models.billing import STORAGE_CLASS_S3
+from lazycloud_cli.ui.textual.usage.containers.breakdown.tables import (
+    ServicesCostTable,
+    UsageMetricsTable,
+    VolumesCostTable,
+)
 from shared.responses.usage import (
-    ServiceCostBreakdown,
-    VolumeCostBreakdown,
+    WorkspaceCostBreakdownResponse,
     WorkspaceUsageWithDeploymentsResponse,
 )
-
-
-class UsageMetricsTable(DataTable):
-    """Table displaying usage metrics with costs"""
-
-    def __init__(self, **kwargs):
-        super().__init__(show_header=True, id="usage-metrics-table", **kwargs)
-        self.can_focus = False
-        self.show_cursor = False
-        self.zebra_stripes = True
-        self.add_columns("Metric", "Usage (core-hrs / GB-hrs)", "Cost ($)")
-
-    def update_metrics(
-        self,
-        cpu_hours,
-        memory_hours,
-        s3_hours,
-        efs_hours,
-        cpu_cost=None,
-        memory_cost=None,
-        s3_cost=None,
-        efs_cost=None,
-    ):
-        """Update the table with usage metrics and costs"""
-        self.clear()
-        cpu_cost_str = f"{cpu_cost:.2f}" if cpu_cost is not None else "-"
-        memory_cost_str = f"{memory_cost:.2f}" if memory_cost is not None else "-"
-        s3_cost_str = f"{s3_cost:.2f}" if s3_cost is not None else "-"
-        efs_cost_str = f"{efs_cost:.2f}" if efs_cost is not None else "-"
-
-        self.add_row("CPU", f"{cpu_hours:.2f}", cpu_cost_str, key="cpu")
-        self.add_row("Memory", f"{memory_hours:.2f}", memory_cost_str, key="memory")
-        self.add_row("Standard Storage", f"{s3_hours:.2f}", s3_cost_str, key="s3")
-        self.add_row("Performance Storage", f"{efs_hours:.2f}", efs_cost_str, key="efs")
-
-
-class ServicesCostTable(DataTable):
-    """Table displaying service cost breakdown with usage"""
-
-    def __init__(self, **kwargs):
-        super().__init__(show_header=True, id="services-cost-table", **kwargs)
-        self.can_focus = False
-        self.show_cursor = False
-        self.zebra_stripes = True
-        self.add_columns("Service", "CPU (core-hrs)", "Memory (GB-hrs)", "Cost ($)")
-
-    def update_services(self, services: list[ServiceCostBreakdown]):
-        """Update the table with service cost and usage data"""
-        self.clear()
-        for idx, service in enumerate(services):
-            # Get usage data from service breakdown (if available)
-            cpu_usage_str = "-"
-            memory_usage_str = "-"
-            if service.cpu_core_hours is not None:
-                cpu_usage_str = f"{service.cpu_core_hours:.2f}"
-            if service.memory_gb_hours is not None:
-                memory_usage_str = f"{service.memory_gb_hours:.2f}"
-
-            cost_str = f"{service.total_compute_cost:.4f}"
-            self.add_row(
-                service.service_name,
-                cpu_usage_str,
-                memory_usage_str,
-                cost_str,
-                key=str(idx),
-            )
-
-
-class VolumesCostTable(DataTable):
-    """Table displaying volume cost breakdown"""
-
-    def __init__(self, **kwargs):
-        super().__init__(show_header=True, id="volumes-cost-table", **kwargs)
-        self.can_focus = False
-        self.show_cursor = False
-        self.zebra_stripes = True
-        self.add_columns("Volume", "Type", "Cost ($)")
-
-    def update_volumes(self, volumes: list[VolumeCostBreakdown]):
-        """Update the table with volume cost data"""
-        self.clear()
-        for idx, volume in enumerate(volumes):
-            storage_type = (
-                "Standard"
-                if volume.storage_class == STORAGE_CLASS_S3
-                else "Performance"
-            )
-            self.add_row(
-                volume.volume_name,
-                storage_type,
-                f"{volume.storage_cost:.4f}",
-                key=str(idx),
-            )
 
 
 class DeploymentBreakdownSection(Container):
@@ -119,6 +32,11 @@ class DeploymentBreakdownSection(Container):
         self._usage_table: UsageMetricsTable | None = None
         self._services_table: ServicesCostTable | None = None
         self._volumes_table: VolumesCostTable | None = None
+        self._usage_api = UsageAPI()
+        self._loaded_breakdowns: dict[str, WorkspaceCostBreakdownResponse] = {}
+        self._loading_breakdowns: set[str] = set()
+        self._breakdown_timer = None
+        self._fetch_worker = None
 
     def compose(self) -> ComposeResult:
         """Compose the breakdown section"""
@@ -138,11 +56,46 @@ class DeploymentBreakdownSection(Container):
         self, usage: WorkspaceUsageWithDeploymentsResponse | None
     ) -> None:
         """Update display when usage data changes"""
+        # Cancel any pending fetches when usage data changes (new date range)
+        if self._fetch_worker and not self._fetch_worker.is_finished:
+            self._fetch_worker.cancel()
+            self._fetch_worker = None
+
+        # Clear timer if pending
+        if self._breakdown_timer:
+            self._breakdown_timer = None
+
+        # Clear loaded breakdowns when usage data changes (new date range)
+        self._loaded_breakdowns.clear()
+        self._loading_breakdowns.clear()
         self._update_display()
 
     def watch_selected_deployment_id(self, deployment_id: str | None) -> None:
-        """Update display when deployment selection changes"""
-        self._update_display()
+        """Update display when deployment selection changes with debouncing"""
+        # Cancel any in-flight fetch when selection changes
+        if self._fetch_worker and not self._fetch_worker.is_finished:
+            self._fetch_worker.cancel()
+            self._fetch_worker = None
+
+        # Clear loading state for previous deployment
+        self._loading_breakdowns.clear()
+
+        if not deployment_id:
+            self._update_display()
+            return
+
+        # Check if we already have breakdown for this deployment
+        has_breakdown = deployment_id in self._loaded_breakdowns
+
+        # Only show display immediately if we have complete data, otherwise wait
+        if has_breakdown:
+            self._update_display()
+
+        # Debounce the breakdown fetch
+        self._breakdown_timer = self.handle_debounce(
+            self._breakdown_timer,
+            lambda: self._fetch_breakdown_after_debounce(deployment_id),
+        )
 
     def _update_display(self) -> None:
         """Update the display based on current usage data and deployment selection"""
@@ -180,7 +133,18 @@ class DeploymentBreakdownSection(Container):
             message_section.mount(Static("Deployment not found in usage data"))
             return
 
-        # Clear existing sections and rebuild
+        # Get breakdown from loaded breakdowns
+        breakdown = None
+        if self.selected_deployment_id in self._loaded_breakdowns:
+            breakdown = self._loaded_breakdowns[self.selected_deployment_id]
+
+        # Only show display if breakdown is available (not while loading)
+        # This prevents jumpy UI - we show everything at once when complete
+        if not breakdown:
+            self._scroll.remove_children()
+            return
+
+        # Clear existing sections and rebuild - only when breakdown is ready
         self._scroll.remove_children()
 
         # Add bold "Deployment Cost" title above the section if costs are available
@@ -188,7 +152,6 @@ class DeploymentBreakdownSection(Container):
             cost_title = Static(
                 f"[bold]Deployment Cost: ${deployment.usage.costs.total_cost:.2f}[/bold]",
                 markup=True,
-                id="deployment-cost-title",
             )
             self._scroll.mount(cost_title)
 
@@ -213,21 +176,73 @@ class DeploymentBreakdownSection(Container):
         )
 
         # Service Breakdown section
-        if deployment.cost_breakdown and deployment.cost_breakdown.service_breakdown:
+        if breakdown.service_breakdown:
             services_section = SectionContainer(f"{Icons.WRENCH} Service Breakdown")
             self._scroll.mount(services_section)
             self._services_table = ServicesCostTable()
             services_section.mount(self._services_table)
-            self._services_table.update_services(
-                deployment.cost_breakdown.service_breakdown,
-            )
+            self._services_table.update_services(breakdown.service_breakdown)
 
         # Volumes section
-        if deployment.cost_breakdown and deployment.cost_breakdown.volume_breakdown:
+        if breakdown.volume_breakdown:
             volumes_section = SectionContainer(f"{Icons.SAVE} Volumes")
             self._scroll.mount(volumes_section)
             self._volumes_table = VolumesCostTable()
             volumes_section.mount(self._volumes_table)
-            self._volumes_table.update_volumes(
-                deployment.cost_breakdown.volume_breakdown
+            self._volumes_table.update_volumes(breakdown.volume_breakdown)
+
+    def _fetch_breakdown_after_debounce(self, deployment_id: str) -> None:
+        """Fetch breakdown after debounce delay"""
+        self._breakdown_timer = None
+        # Only fetch if this deployment is still selected
+        if deployment_id and self.selected_deployment_id == deployment_id:
+            self._fetch_worker = self.run_worker(
+                self._fetch_breakdown_async(deployment_id), exclusive=False
             )
+
+    async def _fetch_breakdown_async(self, deployment_id: str) -> None:
+        """Fetch deployment cost breakdown asynchronously"""
+        if not self.usage_data:
+            return
+
+        # Skip if already loaded or is loading
+        if (
+            deployment_id in self._loaded_breakdowns
+            or deployment_id in self._loading_breakdowns
+        ):
+            return
+
+        # Mark as loading
+        self._loading_breakdowns.add(deployment_id)
+
+        try:
+            # Check if still selected before fetching (may have changed during debounce)
+            if self.selected_deployment_id != deployment_id:
+                return
+
+            # Get date range from usage_data
+            start_date = self.usage_data.period.start
+            end_date = self.usage_data.period.end
+
+            # Fetch breakdown
+            breakdown = await asyncio.to_thread(
+                self._usage_api.get_deployment_cost_breakdown,
+                deployment_id,
+                start_date=start_date,
+                end_date=end_date,
+            )
+
+            # Only store and update if this deployment is still selected
+            if self.selected_deployment_id == deployment_id:
+                self._loaded_breakdowns[deployment_id] = breakdown
+
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            self.log.error(
+                f"Failed to fetch breakdown for deployment {deployment_id}: {e}"
+            )
+        finally:
+            self._loading_breakdowns.discard(deployment_id)
+            if self.selected_deployment_id == deployment_id:
+                self.call_after_refresh(self._update_display)

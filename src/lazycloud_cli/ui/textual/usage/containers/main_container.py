@@ -4,7 +4,7 @@ from textual.containers import Horizontal, Vertical
 from lazycloud_cli.config import config
 from lazycloud_cli.ui.textual.components import Container
 
-from .deployment_breakdown import DeploymentBreakdownSection
+from .breakdown import DeploymentBreakdownSection
 from .deployments_list import DeploymentsListView
 from .overview import UsageOverviewSection
 
