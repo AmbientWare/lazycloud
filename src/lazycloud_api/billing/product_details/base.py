@@ -9,7 +9,7 @@ from lazycloud_api.billing.product_details.features import (
     WorkspaceFeature,
 )
 
-PRODUCT_NAME = "Basic"
+BASE_PRODUCT_NAME = "Basic"
 
 BASE_FEATURES = BaseFeatures(
     workspace=WorkspaceFeature(
@@ -31,11 +31,11 @@ Perfect for getting started. Pay only for what you use.
 """
 
 base_product = ProductDefinition(
-    name=PRODUCT_NAME,
+    name=BASE_PRODUCT_NAME,
     description=DESCRITPION_MARKDOWN,
     recurring_interval=SubscriptionRecurringInterval.MONTH,
     has_free_base=True,
     monthly_fee=None,
     meter_prices=METER_PRICES,
-    metadata={"tier": PRODUCT_NAME.lower()},
+    metadata={"tier": BASE_PRODUCT_NAME.lower()},
 )

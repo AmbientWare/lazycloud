@@ -4,11 +4,15 @@ from loguru import logger
 from sqlalchemy.exc import IntegrityError
 
 from lazycloud_api.api.dependencies import (
+    check_deployment_features,
+    check_deployment_limit,
     get_deployment_with_access,
     get_deployment_with_admin_access,
+    get_user_product_features,
     require_workspace_member,
 )
 from lazycloud_api.api.security import get_current_active_user
+from lazycloud_api.billing.product_details.features import BaseFeatures
 from lazycloud_api.database import db
 from lazycloud_api.database.compose import ComposeDeploymentPydantic
 from lazycloud_api.database.user_workspaces import WorkspaceRole
@@ -108,6 +112,7 @@ async def get_deployment_status(
 async def create_deployment(
     request: DeploymentCreateRequest,
     current_user: UserPydantic = Depends(get_current_active_user),
+    features: BaseFeatures = Depends(get_user_product_features),
 ) -> DeploymentTaskStatusResponse:
     """Create a new compose deployment."""
     # make sure to check workspace permissions
@@ -121,6 +126,13 @@ async def create_deployment(
     if membership.role not in [WorkspaceRole.OWNER, WorkspaceRole.ADMIN]:
         raise HTTPException(403, "Admin or owner role required")
 
+    # Check deployment limit based on subscription tier
+    await check_deployment_limit(
+        workspace_id=request.workspace_id,
+        current_user=current_user,
+        features=features,
+    )
+
     try:
         compose_data = yaml.safe_load(request.compose_yaml)
         namespace = create_ns_name(request.workspace_id)
@@ -133,6 +145,13 @@ async def create_deployment(
             raise ValueError(
                 f"Validation errors: {'; '.join(validation_result.errors)}"
             )
+
+        # Check deployment features (services, volumes, networks, domains) after compose parsing
+        await check_deployment_features(
+            compose_file=compose_file,
+            compose_data=compose_data,
+            features=features,
+        )
 
         deployment = None
         if request.name:

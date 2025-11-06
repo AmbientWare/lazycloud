@@ -1,0 +1,281 @@
+from typing import TYPE_CHECKING, Any
+
+from fastapi import HTTPException
+from loguru import logger
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from lazycloud_api.billing.product_details.base import BASE_FEATURES, BASE_PRODUCT_NAME
+from lazycloud_api.billing.product_details.enterprise import (
+    ENTERPRISE_FEATURES,
+    ENTERPRISE_PRODUCT_NAME,
+)
+from lazycloud_api.billing.product_details.features import BaseFeatures
+from lazycloud_api.billing.product_details.pro import PRO_FEATURES, PRO_PRODUCT_NAME
+from lazycloud_api.database import db
+from lazycloud_api.database.users import SubscriptionState, UserPydantic
+from lazycloud_api.database.workspaces import WorkspaceStatus
+from lazycloud_api.services.polar import PolarService
+
+if TYPE_CHECKING:
+    from shared.models.compose import ComposeFile
+
+
+class SubscriptionService:
+    """Service for managing subscription features and limits."""
+
+    def __init__(self, polar_service: PolarService):
+        self.polar_service = polar_service
+        self._tier_to_features: dict[str, BaseFeatures] = {
+            BASE_PRODUCT_NAME.lower(): BASE_FEATURES,
+            PRO_PRODUCT_NAME.lower(): PRO_FEATURES,
+            ENTERPRISE_PRODUCT_NAME.lower(): ENTERPRISE_FEATURES,
+        }
+
+    async def get_user_features(self, external_customer_id: str) -> BaseFeatures:
+        """Get product features for a user based on their subscription."""
+        if not self.polar_service.enabled:
+            logger.debug("Polar disabled, returning Basic features")
+            return BASE_FEATURES
+
+        try:
+            subscriptions_response = (
+                await self.polar_service.client.subscriptions.list_async(
+                    external_customer_id=external_customer_id,
+                    active=True,
+                    limit=1,
+                )
+            )
+
+            if (
+                not subscriptions_response
+                or not subscriptions_response.result
+                or not subscriptions_response.result.items
+            ):
+                logger.debug(
+                    f"No active subscription for {external_customer_id}, returning Basic features"
+                )
+                return BASE_FEATURES
+
+            subscription = subscriptions_response.result.items[0]
+            if not subscription.product:
+                logger.debug(
+                    f"Subscription {subscription.id} has no product, returning Basic features"
+                )
+                return BASE_FEATURES
+
+            product = await self.polar_service.products.get_product(
+                subscription.product.id
+            )
+            if not product:
+                logger.debug(
+                    f"Product {subscription.product.id} not found, returning Basic features"
+                )
+                return BASE_FEATURES
+
+            tier = product.metadata.get("tier")
+            if tier is None:
+                raise ValueError(f"Product {subscription.product.id} has no tier")
+
+            return self._tier_to_features.get(tier.lower(), BASE_FEATURES)
+
+        except Exception as e:
+            logger.error(
+                f"Failed to get product features for {external_customer_id}: {e}"
+            )
+            return BASE_FEATURES
+
+    async def _update_user_subscription_state(
+        self,
+        user: UserPydantic,
+        new_state: SubscriptionState,
+        session: AsyncSession | None,
+    ) -> UserPydantic:
+        """Update user's subscription_state and return updated Pydantic model."""
+        user.subscription_state = new_state
+        updated = await db.users.aupdate(user, session=session)
+        if updated is None:
+            logger.warning(
+                f"aupdate returned None for user {user.id} - using in-memory state. "
+                "This should not happen if user was just fetched."
+            )
+        return updated or user
+
+    async def _audit_and_update_subscription_state(
+        self, user_id: str, features: BaseFeatures, session: AsyncSession | None = None
+    ) -> UserPydantic | None:
+        """Audit user's resource usage and update subscription_state accordingly"""
+        user = await db.users.aget_by_id(user_id, session=session)
+        if not user:
+            return None
+
+        workspace_count = await db.workspaces.aget_active_workspace_count(user_id)
+
+        if workspace_count > features.workspace.limit:
+            if user.subscription_state != SubscriptionState.OVER_LIMITS:
+                user = await self._update_user_subscription_state(
+                    user, SubscriptionState.OVER_LIMITS, session
+                )
+                logger.warning(
+                    f"User {user.email} (ID: {user_id}) exceeded workspace limit: "
+                    f"{workspace_count}/{features.workspace.limit}. Setting OVER_LIMITS status."
+                )
+            return user
+
+        if workspace_count > 0:
+            workspaces_with_membership = (
+                await db.workspaces.aget_user_workspaces_with_membership(
+                    user_id, status=WorkspaceStatus.ACTIVE
+                )
+            )
+            workspace_ids = [ws.id for ws, _ in workspaces_with_membership]
+            deployment_counts = (
+                await db.compose_deployments.aget_deployment_counts_by_workspace(
+                    workspace_ids
+                )
+            )
+
+            for workspace, _membership in workspaces_with_membership:
+                deployment_count = deployment_counts.get(workspace.id, 0)
+                if deployment_count > features.workspace.deployment_limit:
+                    if user.subscription_state != SubscriptionState.OVER_LIMITS:
+                        user = await self._update_user_subscription_state(
+                            user, SubscriptionState.OVER_LIMITS, session
+                        )
+                        logger.warning(
+                            f"User {user.email} (ID: {user_id}) exceeded deployment limit in workspace "
+                            f"{workspace.id}. Setting OVER_LIMITS status."
+                        )
+                    return user
+
+        if user.subscription_state == SubscriptionState.OVER_LIMITS:
+            user = await self._update_user_subscription_state(
+                user, SubscriptionState.WITHIN_LIMITS, session
+            )
+            logger.info(
+                f"User {user.email} (ID: {user_id}) is now within limits. "
+                "Resetting to WITHIN_LIMITS status."
+            )
+
+        return user
+
+    async def check_workspace_limit(self, user_id: str, features: BaseFeatures) -> None:
+        """Check if user can create a new workspace based on their subscription tier."""
+        workspace_count = await db.workspaces.aget_active_workspace_count(user_id)
+
+        if workspace_count >= features.workspace.limit:
+            raise HTTPException(
+                403,
+                f"Workspace limit reached. Your plan allows {features.workspace.limit} workspace(s). "
+                "Please upgrade your plan to create more workspaces.",
+            )
+
+    async def check_deployment_limit(
+        self, workspace_id: str, features: BaseFeatures, user_id: str | None = None
+    ) -> None:
+        """Check if user can create a new deployment in the workspace based on their subscription tier."""
+        deployment_count = await db.compose_deployments.aget_deployment_count(
+            workspace_id
+        )
+
+        if deployment_count >= features.workspace.deployment_limit:
+            raise HTTPException(
+                403,
+                f"Deployment limit reached for this workspace. Your plan allows {features.workspace.deployment_limit} deployment(s) per workspace. "
+                "Please upgrade your plan to create more deployments.",
+            )
+
+    def extract_custom_domains_from_compose(
+        self, compose_data: dict[str, Any]
+    ) -> list[str]:
+        """Extract custom domains from compose file service labels.
+
+        Looks for domains in service labels like:
+        - lazycloud.domain
+        - lazycloud.ingress.domain
+        - deploy.labels with domain information
+        """
+        custom_domains = set()
+        services = compose_data.get("services", {})
+
+        for _, service_config in services.items():
+            if not isinstance(service_config, dict):
+                continue
+
+            # Check top-level labels
+            labels = service_config.get("labels", {})
+            if isinstance(labels, dict):
+                domain = labels.get("lazycloud.domain") or labels.get(
+                    "lazycloud.ingress.domain"
+                )
+                if domain:
+                    custom_domains.add(domain)
+
+            # Check deploy.labels
+            deploy = service_config.get("deploy", {})
+            if isinstance(deploy, dict):
+                deploy_labels = deploy.get("labels", {})
+                if isinstance(deploy_labels, dict):
+                    domain = deploy_labels.get("lazycloud.domain") or deploy_labels.get(
+                        "lazycloud.ingress.domain"
+                    )
+                    if domain:
+                        custom_domains.add(domain)
+
+        return list(custom_domains)
+
+    async def check_deployment_features(
+        self,
+        compose_file: "ComposeFile",
+        compose_data: dict[str, Any],
+        features: BaseFeatures,
+    ) -> None:
+        """Check if deployment features (services, volumes, networks, domains) are within subscription limits."""
+
+        # Extract custom domains from compose file service labels
+        custom_domains = self.extract_custom_domains_from_compose(compose_data)
+
+        # Count services
+        service_count = len(compose_file.services)
+        if service_count > features.deployment.service_limit:
+            raise HTTPException(
+                403,
+                f"Service limit exceeded. Your plan allows {features.deployment.service_limit} service(s) per deployment, "
+                f"but this deployment has {service_count}. Please upgrade your plan or reduce the number of services.",
+            )
+
+        # Count volumes (unique volume names)
+        volume_names = set()
+        for service in compose_file.services:
+            if service.volumes:
+                for volume in service.volumes:
+                    if volume.source:
+                        volume_names.add(volume.source)
+        volume_count = len(volume_names) + len(compose_file.volumes)
+        if volume_count > features.deployment.volume_limit:
+            raise HTTPException(
+                403,
+                f"Volume limit exceeded. Your plan allows {features.deployment.volume_limit} volume(s) per deployment, "
+                f"but this deployment has {volume_count}. Please upgrade your plan or reduce the number of volumes.",
+            )
+
+        # Count networks (unique network names)
+        network_names = set()
+        for service in compose_file.services:
+            if service.networks:
+                for network in service.networks:
+                    network_names.add(network.name)
+        network_count = len(network_names) + len(compose_file.networks)
+        if network_count > features.deployment.network_limit:
+            raise HTTPException(
+                403,
+                f"Network limit exceeded. Your plan allows {features.deployment.network_limit} network(s) per deployment, "
+                f"but this deployment has {network_count}. Please upgrade your plan or reduce the number of networks.",
+            )
+
+        # Check custom domains
+        if features.domain_limit == 0 and len(custom_domains) > 0:
+            raise HTTPException(
+                403,
+                "Custom domains are not available on your plan. Please upgrade to a plan that supports custom domains.",
+            )
+        # TODO: Check global domain limit across all deployments in workspace

@@ -11,6 +11,7 @@ from sqlalchemy import (
     Index,
     String,
     Text,
+    func,
     or_,
     select,
     text,
@@ -327,3 +328,34 @@ class ComposeDeploymentService(
             )
             result = await session.execute(query)
             return [self._to_pydantic(d) for d in result.scalars().all()]
+
+    async def aget_deployment_count(self, workspace_id: str) -> int:
+        """Count active deployments for a workspace using a single COUNT query."""
+        async with self._session_manager.get_session() as session:
+            query = (
+                select(func.count(ComposeDeploymentTable.id))
+                .where(ComposeDeploymentTable.workspace_id == workspace_id)
+                .where(ComposeDeploymentTable.deleted_at.is_(None))
+            )
+            result = await session.execute(query)
+            return result.scalar() or 0
+
+    async def aget_deployment_counts_by_workspace(
+        self, workspace_ids: list[str]
+    ) -> dict[str, int]:
+        """Get deployment counts for multiple workspaces in a single query."""
+        if not workspace_ids:
+            return {}
+
+        async with self._session_manager.get_session() as session:
+            query = (
+                select(
+                    ComposeDeploymentTable.workspace_id,
+                    func.count(ComposeDeploymentTable.id).label("deployment_count"),
+                )
+                .where(ComposeDeploymentTable.workspace_id.in_(workspace_ids))
+                .where(ComposeDeploymentTable.deleted_at.is_(None))
+                .group_by(ComposeDeploymentTable.workspace_id)
+            )
+            result = await session.execute(query)
+            return {str(row.workspace_id): row.deployment_count for row in result.all()}

@@ -9,8 +9,6 @@ from lazycloud_api.database.api_keys import (
     ApiKeyPydantic,
     ApiKeyService,
 )
-from lazycloud_api.database.base import Base
-from lazycloud_api.database.session import session_manager
 from lazycloud_api.database.user_workspaces import (
     UserWorkspacePydantic,
     UserWorkspaceService,
@@ -26,11 +24,6 @@ from lazycloud_api.database.users import (
 from lazycloud_api.database.utils import api_key_is_expired, generate_api_key_expires_at
 from lazycloud_api.database.workspaces import WorkspacePydantic, WorkspaceService
 from lazycloud_api.services import get_polar_service
-
-
-async def create_tables():
-    async with session_manager.engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
 
 
 async def update_admin_api_keys():

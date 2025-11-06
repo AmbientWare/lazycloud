@@ -6,6 +6,7 @@ from lazycloud_api.services.cost_breakdown_service import CostBreakdownService
 from lazycloud_api.services.ecr_auth import ECRAuthService
 from lazycloud_api.services.polar import PolarService
 from lazycloud_api.services.prometheus import PrometheusMetricsService
+from lazycloud_api.services.subscription_service import SubscriptionService
 from lazycloud_api.services.usage_service import UsageService
 from lazycloud_api.services.user_onboarding import UserOnboardingService
 
@@ -66,12 +67,18 @@ def get_cost_breakdown_service() -> CostBreakdownService:
     )
 
 
+@lru_cache(maxsize=1)
+def get_subscription_service() -> SubscriptionService:
+    return SubscriptionService(polar_service=get_polar_service())
+
+
 __all__ = [
     "ECRAuthService",
     "CloudflareService",
     "CostBreakdownService",
     "PrometheusMetricsService",
     "PolarService",
+    "SubscriptionService",
     "UserOnboardingService",
     "UsageService",
     "get_ecr_auth_service",
@@ -79,6 +86,7 @@ __all__ = [
     "get_cost_breakdown_service",
     "get_metrics_service",
     "get_polar_service",
+    "get_subscription_service",
     "get_user_onboarding_service",
     "get_usage_service",
 ]
