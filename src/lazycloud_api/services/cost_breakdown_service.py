@@ -5,7 +5,7 @@ from fastapi import HTTPException
 from lazycloud_api.database import db
 from lazycloud_api.services.polar import PolarService
 from lazycloud_api.services.usage_service import UsageService
-from shared.models.billing import SECONDS_PER_HOUR
+from shared.models.billing import SECONDS_PER_HOUR, UsageCollectionConfig
 from shared.responses.usage import (
     MeterCostBreakdown,
     ServiceCostBreakdown,
@@ -120,6 +120,7 @@ class CostBreakdownService:
             workspace_id=workspace_id,
             start_date=start_date,
             end_date=end_date,
+            record_type=UsageCollectionConfig.get_record_type(),
         )
 
         # Aggregate usage

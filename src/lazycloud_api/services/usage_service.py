@@ -5,7 +5,12 @@ from loguru import logger
 
 from lazycloud_api.database import db
 from lazycloud_api.database.usage import UsageRecordPydantic
-from shared.models.billing import SECONDS_PER_HOUR, STORAGE_CLASS_EFS, STORAGE_CLASS_S3
+from shared.models.billing import (
+    SECONDS_PER_HOUR,
+    STORAGE_CLASS_EFS,
+    STORAGE_CLASS_S3,
+    UsageCollectionConfig,
+)
 from shared.responses.usage import ServiceUsageItem, UsageMetrics, VolumeUsageItem
 
 
@@ -146,6 +151,7 @@ class UsageService:
             workspace_id=workspace_id,
             start_date=start_date,
             end_date=end_date,
+            record_type=UsageCollectionConfig.get_record_type(),
         )
 
         total_cpu_seconds = sum(r.cpu_core_seconds for r in usage_records)
