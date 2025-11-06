@@ -1,7 +1,7 @@
 from enum import StrEnum
 from typing import TYPE_CHECKING, List
 
-from sqlalchemy import String
+from sqlalchemy import Enum, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from lazycloud_api.database.base import BaseDbPydanticModel, BaseTable, DatabaseService
@@ -19,6 +19,16 @@ class UserStatus(StrEnum):
     DELETED = "deleted"
 
 
+class SubscriptionState(StrEnum):
+    """Subscription/billing state"""
+
+    WITHIN_LIMITS = "within_limits"
+    OVER_LIMITS = "over_limits"
+    PAYMENT_FAILED = "payment_failed"
+    TRIAL_EXPIRED = "trial_expired"
+    SUSPENDED = "suspended"
+
+
 class UserRole(StrEnum):
     ADMIN = "admin"
     USER = "user"
@@ -33,8 +43,15 @@ class UserTable(BaseTable):
     name: Mapped[str] = mapped_column(String)
     email: Mapped[str] = mapped_column(String)
     clerk_id: Mapped[str] = mapped_column(String, unique=True)
-    role: Mapped[str] = mapped_column(String, default=UserRole.USER)
-    status: Mapped[str] = mapped_column(String, default=UserStatus.ACTIVE)
+    role: Mapped[UserRole] = mapped_column(
+        Enum(UserRole), default=UserRole.USER, index=True
+    )
+    status: Mapped[UserStatus] = mapped_column(
+        Enum(UserStatus), default=UserStatus.ACTIVE, index=True
+    )
+    subscription_state: Mapped[SubscriptionState] = mapped_column(
+        Enum(SubscriptionState), default=SubscriptionState.WITHIN_LIMITS, index=True
+    )
 
     # Relationships
     api_keys: Mapped[List["ApiKeyTable"]] = relationship(
@@ -60,6 +77,7 @@ class UserPydantic(BaseDbPydanticModel):
     clerk_id: str
     role: UserRole
     status: UserStatus
+    subscription_state: SubscriptionState
 
 
 class UserService(DatabaseService[UserTable, UserPydantic]):

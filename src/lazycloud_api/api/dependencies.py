@@ -1,11 +1,18 @@
+from typing import TYPE_CHECKING, Any
+
 from fastapi import Depends, HTTPException
 
 from lazycloud_api.api.security import get_current_active_user
+from lazycloud_api.billing.product_details.features import BaseFeatures
 from lazycloud_api.database import db
 from lazycloud_api.database.compose import ComposeDeploymentPydantic
 from lazycloud_api.database.user_workspaces import WorkspaceRole
 from lazycloud_api.database.users import UserPydantic
 from lazycloud_api.models.workspace_access import WorkspaceAccess
+from lazycloud_api.services import get_subscription_service
+
+if TYPE_CHECKING:
+    from shared.models.compose import ComposeFile
 
 
 async def require_workspace_member(
@@ -144,3 +151,52 @@ async def check_deployment_exists_with_admin_access(
         raise HTTPException(403, "Admin or owner role required")
 
     return deployment
+
+
+async def get_user_product_features(
+    current_user: UserPydantic = Depends(get_current_active_user),
+) -> BaseFeatures:
+    """Get product features for the current user based on their subscription."""
+    subscription_service = get_subscription_service()
+    return await subscription_service.get_user_features(
+        external_customer_id=current_user.clerk_id
+    )
+
+
+async def check_workspace_limit(
+    current_user: UserPydantic = Depends(get_current_active_user),
+    features: BaseFeatures = Depends(get_user_product_features),
+) -> None:
+    """Check if user can create a new workspace based on their subscription tier."""
+    subscription_service = get_subscription_service()
+    await subscription_service.check_workspace_limit(current_user.id, features)
+
+
+async def check_deployment_limit(
+    workspace_id: str,
+    current_user: UserPydantic = Depends(get_current_active_user),
+    features: BaseFeatures = Depends(get_user_product_features),
+) -> None:
+    """Check if user can create a new deployment in the workspace based on their subscription tier."""
+    membership = await db.user_workspaces.aget_by_user_and_workspace(
+        current_user.id, workspace_id
+    )
+    if not membership:
+        raise HTTPException(404, "Workspace not found")
+
+    subscription_service = get_subscription_service()
+    await subscription_service.check_deployment_limit(
+        workspace_id, features, user_id=current_user.id
+    )
+
+
+async def check_deployment_features(
+    compose_file: "ComposeFile",
+    compose_data: dict[str, Any],
+    features: BaseFeatures,
+) -> None:
+    """Check if deployment features (services, volumes, networks, domains) are within subscription limits."""
+    subscription_service = get_subscription_service()
+    await subscription_service.check_deployment_features(
+        compose_file, compose_data, features
+    )

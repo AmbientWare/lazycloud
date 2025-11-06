@@ -21,7 +21,7 @@ from lazycloud_api.api.v1 import (
     workspaces_router,
 )
 from lazycloud_api.config import app_config
-from lazycloud_api.database.crud import create_tables, update_admin_api_keys
+from lazycloud_api.database.crud import update_admin_api_keys
 from lazycloud_api.log_config import setup_logger
 from lazycloud_api.prefect_app import serve_prefect_tasks
 from lazycloud_api.services.monitoring import (
@@ -37,7 +37,6 @@ setup_logger()
 async def lifespan(app: FastAPI):
     """Handle startup and shutdown events"""
     logger.info("Starting up application")
-    await create_tables()
     await update_admin_api_keys()
 
     # Initialize subscription manager for shared monitoring (sse streams)

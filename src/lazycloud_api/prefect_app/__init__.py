@@ -10,6 +10,9 @@ from lazycloud_api.prefect_app.services import (
     restart_all_services_task,
     restart_service_task,
 )
+from lazycloud_api.prefect_app.subscription_monitor import (
+    monitor_subscription_states_deployment,
+)
 from lazycloud_api.prefect_app.usage_collector import (
     forward_for_billing_deployment,
     mark_workspaces_for_backfill_deployment,
@@ -37,6 +40,7 @@ def serve_deployments():
         mark_workspaces_for_backfill_deployment,
         process_incomplete_usage_deployment,
         forward_for_billing_deployment,
+        monitor_subscription_states_deployment,
     )
 
 

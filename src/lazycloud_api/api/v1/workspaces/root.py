@@ -6,6 +6,7 @@ from loguru import logger
 
 from lazycloud_api.api.dependencies import (
     WorkspaceAccess,
+    check_workspace_limit,
     get_workspace_with_admin_access,
     get_workspace_with_any_access,
 )
@@ -168,6 +169,7 @@ async def get_workspace_with_deployments(
 async def create_workspace(
     request: CreateWorkspaceRequest,
     current_user: UserPydantic = Depends(get_current_active_user),
+    _: None = Depends(check_workspace_limit),
 ) -> WorkspaceResponse:
     """Create a new workspace"""
     try:

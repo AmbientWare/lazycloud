@@ -1,5 +1,5 @@
-import os
 import asyncio
+import os
 from logging.config import fileConfig
 
 from alembic import context
@@ -7,6 +7,8 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+# Import db to ensure all models are registered with Base.metadata
+from lazycloud_api.database import db  # noqa: F401
 from lazycloud_api.database.base import Base
 
 # this is the Alembic Config object, which provides

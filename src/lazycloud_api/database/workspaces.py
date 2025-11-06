@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, List
 
-from sqlalchemy import Boolean, DateTime, String, and_, update
+from sqlalchemy import Boolean, DateTime, String, and_, func, update
 from sqlalchemy.future import select
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -259,3 +259,15 @@ class WorkspaceService(DatabaseService[WorkspaceTable, WorkspacePydantic]):
                 )
 
             return workspaces
+
+    async def aget_active_workspace_count(self, user_id: str) -> int:
+        """Count active workspaces for a user using a single COUNT query."""
+        async with self._session_manager.get_session() as session:
+            query = (
+                select(func.count(WorkspaceTable.id))
+                .join(UserWorkspaceTable)
+                .where(UserWorkspaceTable.user_id == user_id)
+                .where(WorkspaceTable.status == WorkspaceStatus.ACTIVE.value)
+            )
+            result = await session.execute(query)
+            return result.scalar() or 0

@@ -64,6 +64,8 @@ services:
       retries: 3
     restart: unless-stopped
     depends_on:
+      db-migration:
+        condition: service_completed_successfully
       localstack:
         condition: service_healthy
       postgres:
@@ -91,6 +93,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      db-migration:
+        condition: service_completed_successfully
       prefect-server:
         condition: service_started
 
@@ -107,6 +111,26 @@ services:
       PREFECT_SERVER_API_HOST: 0.0.0.0
     ports:
       - 4200:4200
+
+  db-migration:
+    networks:
+      lazycloud:
+        ipv4_address: 172.20.0.9
+    image: lazycloud-api:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api
+    volumes: *lazycloud-shared-volumes
+    env_file:
+      - .env
+    environment:
+      <<: *lazycloud-shared-environment
+    command: [ "uv", "run", "alembic", "upgrade", "head" ]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   postgres:
     image: postgres:17

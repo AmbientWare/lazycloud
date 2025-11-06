@@ -114,15 +114,26 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
             db_models = list[baseDbType](result.scalars().all())
             return [self._to_pydantic(db_model) for db_model in db_models]
 
-    async def aget_by_id(self, id: str, include_deleted: bool = False) -> basePydanticType | None:
+    async def aget_by_id(
+        self,
+        id: str,
+        include_deleted: bool = False,
+        session: AsyncSession | None = None,
+    ) -> basePydanticType | None:
         """Get a model instance by id"""
-        async with self._session_manager.get_session() as session:
+
+        async def _get(sess: AsyncSession):
             query = select(self.db_model_class).where(self.db_model_class.id == id)
             if not include_deleted:
                 query = self._apply_default_filters(query)
-            result = await session.execute(query)
+            result = await sess.execute(query)
             db_model = result.scalar_one_or_none()
             return self._to_pydantic(db_model)
+
+        if session:
+            return await _get(session)
+        else:
+            return await self._execute_in_session(_get, None)
 
     async def aget_by_user_id(self, user_id: str) -> list[basePydanticType]:
         """Get all model instances by user id"""
@@ -240,7 +251,11 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
         return results[0] if results else None
 
     async def afind_paginated(
-        self, filters: dict, skip: int = 0, limit: int = 100, include_deleted: bool = False
+        self,
+        filters: dict,
+        skip: int = 0,
+        limit: int = 100,
+        include_deleted: bool = False,
     ) -> tuple[int, list[basePydanticType]]:
         """Find models matching filters with pagination and return total count"""
 
