@@ -1,83 +1,13 @@
-from dataclasses import dataclass
-
 from loguru import logger
 from polar_sdk.models import (
     ProductCreateRecurringPrices,
     ProductPriceFixedCreate,
     ProductPriceFreeCreate,
     ProductPriceMeteredUnitCreate,
-    SubscriptionRecurringInterval,
-    UnitAmount,
 )
 
+from lazycloud_api.billing.product_details import PRODUCT_DEFINITIONS
 from lazycloud_api.services import get_polar_service
-from shared.models.billing import MeterNames
-
-
-@dataclass
-class MeterPrice:
-    """Metered price configuration."""
-
-    meter_name: MeterNames
-    unit_amount: UnitAmount  # amount in cents, up to 12 decimal places
-
-
-@dataclass
-class ProductDefinition:
-    """Complete product definition for LazyCloud billing."""
-
-    name: str
-    description: str
-    recurring_interval: SubscriptionRecurringInterval
-    has_free_base: bool
-    meter_prices: list[MeterPrice]
-    monthly_fee: int | None
-    recurring_interval_count: int = 1
-    metadata: dict[str, str] | None = None
-
-
-METER_PRICE_MAP = {
-    MeterNames.CPU_USAGE: 1.0,
-    MeterNames.MEMORY_USAGE: 1.0,
-    MeterNames.STANDARD_STORAGE: 1.0,
-    MeterNames.PREMIUM_STORAGE: 1.0,
-}
-
-METER_PRICES = [
-    MeterPrice(meter_name=meter_name, unit_amount=METER_PRICE_MAP[meter_name])
-    for meter_name in MeterNames
-]
-
-# Product definitions
-PRODUCT_DEFINITIONS = [
-    ProductDefinition(
-        name="Basic",
-        description="Basic features and pay-as-you-go pricing for compute, memory, and storage",
-        recurring_interval=SubscriptionRecurringInterval.MONTH,
-        has_free_base=True,
-        monthly_fee=None,
-        meter_prices=METER_PRICES,
-        metadata={"tier": "basic"},
-    ),
-    ProductDefinition(
-        name="Pro",
-        description="Extended features and pay-as-you-go pricing for small teams and individuals",
-        recurring_interval=SubscriptionRecurringInterval.MONTH,
-        has_free_base=False,
-        monthly_fee=5000,  # $50/month
-        meter_prices=METER_PRICES,
-        metadata={"tier": "pro"},
-    ),
-    ProductDefinition(
-        name="Enterprise",
-        description="Enterprise-grade features and pay-as-you-go pricing for large teams and organizations",
-        recurring_interval=SubscriptionRecurringInterval.MONTH,
-        has_free_base=False,
-        monthly_fee=10000,  # $100/month
-        meter_prices=METER_PRICES,
-        metadata={"tier": "enterprise"},
-    ),
-]
 
 
 async def setup_products(organization_id: str) -> dict:
@@ -156,10 +86,11 @@ async def setup_products(organization_id: str) -> dict:
                     f"Product '{name}' already exists with ID: {existing_product.id}"
                 )
 
-                # Update the product with new prices
-                logger.info(f"Updating product '{name}' prices...")
+                # Update the product with new prices and description
+                logger.info(f"Updating product '{name}' prices and description...")
                 result = await polar.products.update_product(
                     product_id=existing_product.id,
+                    description=product_def.description,
                     prices=prices,
                 )
 
