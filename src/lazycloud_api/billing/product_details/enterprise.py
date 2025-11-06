@@ -28,6 +28,7 @@ Built for large teams and production workloads. Maximum scale and flexibility.
 - {ENTERPRISE_FEATURES.deployment.volume_limit} Volumes per deployment
 - {ENTERPRISE_FEATURES.deployment.network_limit} Networks per deployment
 - {ENTERPRISE_FEATURES.domain_limit} Custom domain names
+- Add team members to your custom workspaces
 """
 
 enterprise_product = ProductDefinition(

@@ -28,6 +28,7 @@ Ideal for teams needing environment isolation. Includes custom domains.
 - {PRO_FEATURES.deployment.volume_limit} Volumes per deployment
 - {PRO_FEATURES.deployment.network_limit} Networks per deployment
 - {PRO_FEATURES.domain_limit} Custom domain names
+- Add team members to your custom workspaces
 """
 
 pro_product = ProductDefinition(

@@ -27,7 +27,7 @@ Perfect for getting started. Pay only for what you use.
 - {BASE_FEATURES.deployment.service_limit} Services per deployment
 - {BASE_FEATURES.deployment.volume_limit} Volumes per deployment
 - {BASE_FEATURES.deployment.network_limit} Network per deployment
-- Platform-generated domain
+- Platform-generated domains names
 """
 
 base_product = ProductDefinition(
