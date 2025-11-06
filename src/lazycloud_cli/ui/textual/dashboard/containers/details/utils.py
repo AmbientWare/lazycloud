@@ -6,7 +6,11 @@ def get_status_class(status: KubernetesPhase) -> str:
     """Get CSS class for status display in widgets."""
     if status == KubernetesPhase.RUNNING:
         return "status-running"
-    elif status in (KubernetesPhase.PENDING, KubernetesPhase.PARTIALLY_RUNNING, KubernetesPhase.TERMINATING):
+    elif status in (
+        KubernetesPhase.PENDING,
+        KubernetesPhase.PARTIALLY_RUNNING,
+        KubernetesPhase.TERMINATING,
+    ):
         return "status-pending"
     elif status == KubernetesPhase.STOPPED:
         return "status-stopped"
@@ -18,7 +22,11 @@ def get_status_color(status: KubernetesPhase) -> str:
     """Get Rich color hex for status in markup text (matches CSS theme)."""
     if status == KubernetesPhase.RUNNING:
         return Colors.Hex.success
-    elif status in (KubernetesPhase.PENDING, KubernetesPhase.PARTIALLY_RUNNING, KubernetesPhase.TERMINATING):
+    elif status in (
+        KubernetesPhase.PENDING,
+        KubernetesPhase.PARTIALLY_RUNNING,
+        KubernetesPhase.TERMINATING,
+    ):
         return Colors.Hex.warning
     elif status == KubernetesPhase.STOPPED:
         return f"{Colors.Hex.primary} 50%"

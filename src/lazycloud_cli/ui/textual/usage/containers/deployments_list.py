@@ -121,4 +121,3 @@ class DeploymentsListView(Container):
         """Move cursor down in the list"""
         if self._list_view:
             self._list_view.action_cursor_down()
-

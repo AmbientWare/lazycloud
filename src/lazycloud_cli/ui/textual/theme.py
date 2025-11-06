@@ -22,7 +22,8 @@ class Icons(StrEnum):
     HEALTH = "❤️"
     WARNING = "⚠️"
     CHECKMARK = "✔️"
-    TRASH = "🗑️ " # space for formatting
+    TRASH = "🗑️ "  # space for formatting
+
 
 class Symbols(StrEnum):
     """Symbols configuration constants."""
