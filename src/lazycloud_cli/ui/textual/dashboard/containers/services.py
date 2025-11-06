@@ -4,7 +4,9 @@ from textual.reactive import reactive
 from lazycloud_cli.api import api
 from lazycloud_cli.ui.textual.components import Container, ListItemData, ListView
 from lazycloud_cli.ui.textual.components.listview import ListItem
-from lazycloud_cli.ui.textual.dashboard.containers.details.container import ContentContainer
+from lazycloud_cli.ui.textual.dashboard.containers.details.container import (
+    ContentContainer,
+)
 from lazycloud_cli.ui.textual.theme import Icons
 from shared.models.statuses import ServiceStatus
 

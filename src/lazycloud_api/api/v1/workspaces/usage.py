@@ -15,9 +15,8 @@ from lazycloud_api.services import (
     get_usage_service,
 )
 from shared.responses.usage import (
-    DeploymentUsageBreakdown,
+    DeploymentUsageOverview,
     UsagePeriodInfo,
-    WorkspaceCostBreakdownResponse,
     WorkspaceUsageWithDeploymentsResponse,
 )
 
@@ -115,16 +114,16 @@ async def get_workspace_usage_with_deployments(
                 f"Consider pagination or increasing MAX_DEPLOYMENT_LIMIT."
             )
 
-        # Get usage and cost breakdown for each deployment
+        # Get usage overview for each deployment
         # Aggregate from usage records' breakdown tables for the date range
-        deployment_breakdowns: list[DeploymentUsageBreakdown] = []
+        deployment_overviews: list[DeploymentUsageOverview] = []
 
         for deployment in deployments:
             if not deployment.id or not deployment.name:
                 continue
 
             try:
-                deployment_metrics, service_usage_list, volume_usage_list = (
+                deployment_metrics, _, _ = (
                     usage_service.aggregate_deployment_usage_from_records(
                         usage_records=usage_records,
                         deployment_id=str(deployment.id),
@@ -140,36 +139,20 @@ async def get_workspace_usage_with_deployments(
                 ):
                     continue
 
-                # Calculate deployment costs and breakdown if Polar is enabled
+                # Calculate deployment meter costs only (no service/volume breakdown)
                 deployment_costs = None
-                cost_breakdown = None
 
                 if polar_service.enabled:
                     try:
-                        workspace_cost_breakdown = await polar_service.cost_breakdown.calculate_workspace_costs(
-                            external_customer_id=user.clerk_id,
-                            cpu_core_hours=deployment_metrics.cpu_core_hours,
-                            memory_gb_hours=deployment_metrics.memory_gb_hours,
-                            s3_gb_hours=deployment_metrics.s3_gb_hours,
-                            efs_gb_hours=deployment_metrics.efs_gb_hours,
-                            service_usage=service_usage_list
-                            if service_usage_list
-                            else None,
-                            volume_usage=volume_usage_list
-                            if volume_usage_list
-                            else None,
+                        deployment_costs = (
+                            await cost_service.calculate_costs_from_usage(
+                                cpu_core_hours=deployment_metrics.cpu_core_hours,
+                                memory_gb_hours=deployment_metrics.memory_gb_hours,
+                                s3_gb_hours=deployment_metrics.s3_gb_hours,
+                                efs_gb_hours=deployment_metrics.efs_gb_hours,
+                                external_customer_id=user.clerk_id,
+                            )
                         )
-
-                        deployment_costs = workspace_cost_breakdown.meter_breakdown
-                        cost_breakdown = WorkspaceCostBreakdownResponse(
-                            workspace_id=workspace.id,
-                            period=UsagePeriodInfo(start=start_date, end=end_date),
-                            meter_breakdown=workspace_cost_breakdown.meter_breakdown,
-                            service_breakdown=workspace_cost_breakdown.service_breakdown,
-                            volume_breakdown=workspace_cost_breakdown.volume_breakdown,
-                            is_estimated=True,
-                        )
-
                     except Exception as e:
                         logger.warning(
                             f"Failed to calculate costs for deployment {deployment.name} "
@@ -179,12 +162,11 @@ async def get_workspace_usage_with_deployments(
 
                 deployment_metrics.costs = deployment_costs
 
-                deployment_breakdowns.append(
-                    DeploymentUsageBreakdown(
+                deployment_overviews.append(
+                    DeploymentUsageOverview(
                         deployment_id=str(deployment.id),
                         deployment_name=deployment.name,
                         usage=deployment_metrics,
-                        cost_breakdown=cost_breakdown,
                     )
                 )
             except Exception as e:
@@ -200,7 +182,7 @@ async def get_workspace_usage_with_deployments(
             period=UsagePeriodInfo(start=start_date, end=end_date),
             workspace_usage=workspace_usage,
             record_count=len(usage_records),
-            deployments=deployment_breakdowns,
+            deployments=deployment_overviews,
         )
 
     except HTTPException:
