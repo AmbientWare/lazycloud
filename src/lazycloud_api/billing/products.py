@@ -86,12 +86,18 @@ async def setup_products(organization_id: str) -> dict:
                     f"Product '{name}' already exists with ID: {existing_product.id}"
                 )
 
-                # Update the product with new prices and description
-                logger.info(f"Updating product '{name}' prices and description...")
+                # Update the product with new prices, description, and metadata
+                logger.info(
+                    f"Updating product '{name}' prices, description, and metadata..."
+                )
+                metadata_dict = (
+                    product_def.metadata.model_dump() if product_def.metadata else None
+                )
                 result = await polar.products.update_product(
                     product_id=existing_product.id,
                     description=product_def.description,
                     prices=prices,
+                    metadata=metadata_dict,
                 )
 
                 if result:
@@ -104,6 +110,9 @@ async def setup_products(organization_id: str) -> dict:
 
             # Create the product
             logger.info(f"Creating product '{name}' with {len(prices)} prices...")
+            metadata_dict = (
+                product_def.metadata.model_dump() if product_def.metadata else None
+            )
             result = await polar.products.create_recurring_product(
                 organization_id=organization_id,
                 name=name,
@@ -111,7 +120,7 @@ async def setup_products(organization_id: str) -> dict:
                 prices=prices,
                 recurring_interval=product_def.recurring_interval,
                 recurring_interval_count=product_def.recurring_interval_count,
-                metadata=product_def.metadata,
+                metadata=metadata_dict,
             )
 
             if result:
