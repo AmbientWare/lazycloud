@@ -63,3 +63,20 @@ class DeploymentStatusResponse(BaseModel):
     """Response for deployment status."""
 
     status: DeploymentStatus
+
+
+class DeploymentOverview(BaseModel):
+    """Overview of a deployment with basic info and resource counts."""
+
+    id: str
+    workspace_id: str
+    name: str
+    namespace: str
+    state: DeploymentStates
+    status_message: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    deployed_at: datetime | None = None
+    service_count: int
+    volume_count: int
+    ready_services: int | None = None

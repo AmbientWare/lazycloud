@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
 
-from lazycloud_api.api.dependencies import get_workspace_with_admin_access
+from lazycloud_api.api.dependencies import get_workspace_with_admin_access_for_usage
 from lazycloud_api.database import db
 from lazycloud_api.models.workspace_access import WorkspaceAccess
 from lazycloud_api.services import (
@@ -29,7 +29,9 @@ MAX_DATE_RANGE_DAYS = 365  # 1 year maximum
 
 @usage_router.get("/with-deployments")
 async def get_workspace_usage_with_deployments(
-    workspace_access: WorkspaceAccess = Depends(get_workspace_with_admin_access),
+    workspace_access: WorkspaceAccess = Depends(
+        get_workspace_with_admin_access_for_usage
+    ),
     start_date: datetime | None = Query(
         None, description="Start date (defaults to start of current month)"
     ),
@@ -98,14 +100,15 @@ async def get_workspace_usage_with_deployments(
 
         workspace_usage.costs = workspace_costs
 
-        # Get all deployments for this workspace
-        deployments_list = await db.compose_deployments.afind_paginated(
-            filters={"workspace_id": workspace.id},
-            skip=0,
+        # Get all deployments for this workspace that existed during the date range
+        # Include deleted deployments if they were deleted during or after the date range
+        deployments = await db.compose_deployments.afind_active_during_date_range(
+            workspace_id=str(workspace.id),
+            start_date=start_date,
+            end_date=end_date,
             limit=MAX_DEPLOYMENT_LIMIT,
-            include_deleted=False,
         )
-        total_deployments, deployments = deployments_list
+        total_deployments = len(deployments)
 
         if total_deployments > MAX_DEPLOYMENT_LIMIT:
             logger.warning(

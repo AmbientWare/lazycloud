@@ -76,6 +76,28 @@ async def get_workspace_with_admin_access(
     )
 
 
+async def get_workspace_with_admin_access_for_usage(
+    workspace_id: str,
+    current_user: UserPydantic = Depends(get_current_active_user),
+) -> WorkspaceAccess:
+    """Get workspace and verify user has admin/owner access, including deleted workspaces (for usage reporting)"""
+    membership = await db.user_workspaces.aget_by_user_and_workspace(
+        current_user.id, workspace_id
+    )
+    if not membership:
+        raise HTTPException(404, "Workspace not found")
+    if membership.role not in [WorkspaceRole.OWNER, WorkspaceRole.ADMIN]:
+        raise HTTPException(403, "Admin or owner role required")
+
+    workspace = await db.workspaces.aget_by_id(workspace_id, include_deleted=True)
+    if not workspace:
+        raise HTTPException(404, "Workspace not found")
+
+    return WorkspaceAccess(
+        membership=membership, workspace=workspace, user=current_user
+    )
+
+
 async def get_deployment_with_access(
     deployment_id: str,
     current_user: UserPydantic = Depends(get_current_active_user),

@@ -2,6 +2,8 @@ import uuid
 
 from pydantic import BaseModel
 
+from shared.responses.deployments import DeploymentOverview
+
 
 class WorkspaceResponse(BaseModel):
     id: uuid.UUID
@@ -20,3 +22,13 @@ class WorkspaceMemberResponse(BaseModel):
 
 class WorkspaceSuccessResponse(BaseModel):
     success: bool
+
+
+class WorkspaceWithDeploymentsResponse(BaseModel):
+    """Workspace with deployment overviews."""
+
+    id: uuid.UUID
+    name: str
+    is_personal: bool
+    role: str
+    deployments: list[DeploymentOverview]

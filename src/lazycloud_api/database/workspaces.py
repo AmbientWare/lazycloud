@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, List
 
-from sqlalchemy import Boolean, DateTime, String, update
+from sqlalchemy import Boolean, DateTime, String, and_, update
 from sqlalchemy.future import select
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -197,8 +197,6 @@ class WorkspaceService(DatabaseService[WorkspaceTable, WorkspacePydantic]):
     ) -> list[WorkspacePydantic]:
         """Get all workspaces deleted within a date range (inclusive)"""
         async with self._session_manager.get_session() as session:
-            from sqlalchemy import and_
-
             query = (
                 select(WorkspaceTable)
                 .where(WorkspaceTable.status == WorkspaceStatus.DELETED.value)
@@ -212,3 +210,52 @@ class WorkspaceService(DatabaseService[WorkspaceTable, WorkspacePydantic]):
             result = await session.execute(query)
             workspaces = result.scalars().all()
             return [self._to_pydantic(ws) for ws in workspaces]
+
+    async def aget_user_workspaces_active_during_range(
+        self, user_id: str, start_date: datetime, end_date: datetime
+    ) -> list[tuple[WorkspacePydantic, UserWorkspacePydantic]]:
+        """Get all workspaces for a user that were active during the date range.
+
+        Includes:
+        - Active workspaces (status = ACTIVE)
+        - Deleted workspaces that were deleted during or after the date range
+        """
+        async with self._session_manager.get_session() as session:
+            # Get active workspaces
+            active_query = (
+                select(WorkspaceTable, UserWorkspaceTable)
+                .join(UserWorkspaceTable)
+                .where(UserWorkspaceTable.user_id == user_id)
+                .where(WorkspaceTable.status == WorkspaceStatus.ACTIVE.value)
+            )
+
+            # Get deleted workspaces that were deleted during or after the date range
+            deleted_query = (
+                select(WorkspaceTable, UserWorkspaceTable)
+                .join(UserWorkspaceTable)
+                .where(UserWorkspaceTable.user_id == user_id)
+                .where(WorkspaceTable.status == WorkspaceStatus.DELETED.value)
+                .where(WorkspaceTable.deleted_at >= start_date)
+            )
+
+            # Combine both queries
+            active_result = await session.execute(active_query)
+            deleted_result = await session.execute(deleted_query)
+
+            workspaces = []
+            for workspace, membership in active_result.all():
+                workspaces.append(
+                    (
+                        self._to_pydantic(workspace),
+                        membership.to_pydantic(UserWorkspacePydantic),
+                    )
+                )
+            for workspace, membership in deleted_result.all():
+                workspaces.append(
+                    (
+                        self._to_pydantic(workspace),
+                        membership.to_pydantic(UserWorkspacePydantic),
+                    )
+                )
+
+            return workspaces

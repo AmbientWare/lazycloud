@@ -37,9 +37,9 @@ from shared.models.billing import (
 from shared.requests.workspaces import (
     CreateWorkspaceRequest,
     InviteUserRequest,
-    RenameWorkspaceRequest,
     UpdateMemberRoleRequest,
 )
+from shared.responses.deployments import DeploymentOverview
 from shared.responses.usage import (
     AggregatedDailyUsageResponse,
     AggregatedUsageResponse,
@@ -51,6 +51,7 @@ from shared.responses.workspaces import (
     WorkspaceMemberResponse,
     WorkspaceResponse,
     WorkspaceSuccessResponse,
+    WorkspaceWithDeploymentsResponse,
 )
 
 workspaces_router = APIRouter(prefix="/workspaces", tags=["workspaces"])
@@ -59,12 +60,31 @@ workspaces_router = APIRouter(prefix="/workspaces", tags=["workspaces"])
 @workspaces_router.get("")
 async def get_workspaces(
     current_user: UserPydantic = Depends(get_current_active_user),
+    start_date: datetime | None = Query(
+        None,
+        description="Optional start date for usage context (includes deleted workspaces active during range)",
+    ),
+    end_date: datetime | None = Query(
+        None, description="Optional end date for usage context"
+    ),
 ) -> list[WorkspaceResponse]:
-    """Get all workspaces the current user has access to"""
-    # NOTE: for now we only show active workspaces
-    user_workspaces = await db.workspaces.aget_user_workspaces_with_membership(
-        current_user.id, status=WorkspaceStatus.ACTIVE
-    )
+    """Get all workspaces the current user has access to.
+
+    If start_date and end_date are provided, includes deleted workspaces
+    that were active during the date range (for usage reporting).
+    """
+    if start_date and end_date:
+        # For usage context, include deleted workspaces active during the range
+        user_workspaces = await db.workspaces.aget_user_workspaces_active_during_range(
+            user_id=current_user.id,
+            start_date=start_date,
+            end_date=end_date,
+        )
+    else:
+        # Default: only show active workspaces
+        user_workspaces = await db.workspaces.aget_user_workspaces_with_membership(
+            current_user.id, status=WorkspaceStatus.ACTIVE
+        )
 
     return [
         WorkspaceResponse(
@@ -77,19 +97,71 @@ async def get_workspaces(
     ]
 
 
-@workspaces_router.get("/{workspace_id}")
-async def get_workspace(
+@workspaces_router.get("/{workspace_id}/with-deployments")
+async def get_workspace_with_deployments(
     workspace_access: WorkspaceAccess = Depends(get_workspace_with_any_access),
-) -> WorkspaceResponse:
-    """Get a specific workspace by ID"""
+) -> WorkspaceWithDeploymentsResponse:
+    """Get workspace with deployment overviews (including service/volume counts)"""
     workspace = workspace_access.workspace
 
-    return WorkspaceResponse(
-        id=workspace.id,
-        name=workspace.name,
-        is_personal=workspace.is_personal,
-        role=workspace_access.membership.role,
-    )
+    try:
+        # Get all deployments for this workspace
+        total, deployments = await db.compose_deployments.afind_paginated(
+            filters={"workspace_id": workspace.id},
+            skip=0,
+            limit=100,
+            include_deleted=False,
+        )
+
+        deployment_overviews: list[DeploymentOverview] = []
+
+        for deployment in deployments:
+            if not deployment.id or not deployment.name:
+                continue
+
+            # Calculate service and volume counts from helm_values
+            service_count = 0
+            volume_count = 0
+
+            if deployment.helm_values:
+                if deployment.helm_values.services:
+                    service_count = len(deployment.helm_values.services)
+                if deployment.helm_values.volumes:
+                    volume_count = len(deployment.helm_values.volumes)
+
+            deployment_overviews.append(
+                DeploymentOverview(
+                    id=str(deployment.id),
+                    workspace_id=str(deployment.workspace_id),
+                    name=deployment.name,
+                    namespace=deployment.namespace,
+                    state=deployment.state,
+                    status_message=deployment.status_message,
+                    created_at=deployment.created_at,
+                    updated_at=deployment.updated_at,
+                    deployed_at=deployment.deployed_at,
+                    service_count=service_count,
+                    volume_count=volume_count,
+                    ready_services=None,  # Not available without K8s call
+                )
+            )
+
+        return WorkspaceWithDeploymentsResponse(
+            id=workspace.id,
+            name=workspace.name,
+            is_personal=workspace.is_personal,
+            role=workspace_access.membership.role,
+            deployments=deployment_overviews,
+        )
+
+    except Exception as e:
+        logger.error(
+            f"Failed to get workspace with deployments for workspace {workspace.id}: {e}",
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=500, detail="Failed to fetch workspace with deployments"
+        )
 
 
 @workspaces_router.post("")
@@ -129,29 +201,6 @@ async def create_workspace(
         name=workspace.name,
         is_personal=workspace.is_personal,
         role=membership.role,
-    )
-
-
-@workspaces_router.patch("/{workspace_id}/rename")
-async def rename_workspace(
-    request: RenameWorkspaceRequest,
-    workspace_access: WorkspaceAccess = Depends(get_workspace_with_admin_access),
-) -> WorkspaceResponse:
-    """Rename a workspace (requires owner role)"""
-    try:
-        validated_name = validate_workspace_name(request.name)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    workspace = workspace_access.workspace
-    workspace.name = validated_name
-    workspace = await db.workspaces.aupdate(workspace)
-
-    return WorkspaceResponse(
-        id=workspace.id,
-        name=workspace.name,
-        is_personal=workspace.is_personal,
-        role=workspace_access.membership.role,
     )
 
 
@@ -318,8 +367,14 @@ async def get_aggregated_usage(
             logger.info("No end date provided, using default end of current month")
             end_date = now
 
-        user_workspaces = await db.workspaces.aget_user_workspaces_with_membership(
-            current_user.id, status=WorkspaceStatus.ACTIVE
+        # Get all workspaces that were active during the date range
+        # Includes active workspaces and deleted workspaces deleted during/after the range
+        all_user_workspaces = (
+            await db.workspaces.aget_user_workspaces_active_during_range(
+                user_id=current_user.id,
+                start_date=start_date,
+                end_date=end_date,
+            )
         )
 
         total_cpu_seconds = 0.0
@@ -329,7 +384,7 @@ async def get_aggregated_usage(
         total_records = 0
         all_usage_records = []
 
-        for workspace, _ in user_workspaces:
+        for workspace, _ in all_user_workspaces:
             usage_records = await db.usage.get_workspace_usage(
                 workspace_id=workspace.id,
                 start_date=start_date,
@@ -370,7 +425,7 @@ async def get_aggregated_usage(
                 efs_gb_hours=total_efs_hours,
                 costs=total_costs,
             ),
-            workspace_count=len(user_workspaces),
+            workspace_count=len(all_user_workspaces),
             record_count=total_records,
         )
 
@@ -412,8 +467,12 @@ async def get_aggregated_daily_usage(
             logger.info("No end date provided, using default end of current month")
             end_date = now
 
-        user_workspaces = await db.workspaces.aget_user_workspaces_with_membership(
-            current_user.id, status=WorkspaceStatus.ACTIVE
+        # Get all workspaces that were active during the date range
+        # Includes active workspaces and deleted workspaces deleted during/after the range
+        user_workspaces = await db.workspaces.aget_user_workspaces_active_during_range(
+            user_id=current_user.id,
+            start_date=start_date,
+            end_date=end_date,
         )
 
         daily_data: dict[str, DailyUsageData] = {}
