@@ -359,9 +359,13 @@ class StatusWatcher:
         # Count pods by phase
         running_count = sum(1 for p in pods if p.phase == KubernetesPhase.RUNNING)
         pending_count = sum(1 for p in pods if p.phase == KubernetesPhase.PENDING)
-        terminating_count = sum(1 for p in pods if p.phase == KubernetesPhase.TERMINATING)
+        terminating_count = sum(
+            1 for p in pods if p.phase == KubernetesPhase.TERMINATING
+        )
         error_count = sum(
-            1 for p in pods if p.phase in [KubernetesPhase.ERROR, KubernetesPhase.FAILED]
+            1
+            for p in pods
+            if p.phase in [KubernetesPhase.ERROR, KubernetesPhase.FAILED]
         )
 
         # If all pods are terminating, service is terminating

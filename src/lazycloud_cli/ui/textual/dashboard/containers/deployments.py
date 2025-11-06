@@ -7,7 +7,9 @@ from lazycloud_cli.config import config
 from lazycloud_cli.ui.textual.components import Container, ListItemData, ListView
 from lazycloud_cli.ui.textual.components.listview import ListItem
 from lazycloud_cli.ui.textual.components.modals import ErrorModal
-from lazycloud_cli.ui.textual.dashboard.containers.details.container import ContentContainer
+from lazycloud_cli.ui.textual.dashboard.containers.details.container import (
+    ContentContainer,
+)
 from lazycloud_cli.ui.textual.dashboard.containers.secrets import SecretsContainer
 from lazycloud_cli.ui.textual.dashboard.containers.services import ServicesContainer
 from lazycloud_cli.ui.textual.theme import Icons
