@@ -179,13 +179,15 @@ async def collect_workspace_daily_usage(
         total_efs = sum(r.efs_gb_hours for r in interval_records)
 
         # Aggregate compute breakdowns from all interval records
-        compute_aggregates: dict[str, dict[str, float]] = {}
+        compute_aggregates: dict[str, dict] = {}
         for record in interval_records:
             for breakdown in record.compute_breakdowns:
                 if breakdown.pod_name not in compute_aggregates:
                     compute_aggregates[breakdown.pod_name] = {
                         "cpu_core_seconds": 0.0,
                         "memory_gb_seconds": 0.0,
+                        "deployment_id": breakdown.deployment_id,
+                        "service_name": breakdown.service_name,
                     }
                 compute_aggregates[breakdown.pod_name]["cpu_core_seconds"] += (
                     breakdown.cpu_core_seconds
@@ -195,13 +197,16 @@ async def collect_workspace_daily_usage(
                 )
 
         # Aggregate storage breakdowns from all interval records
-        storage_aggregates: dict[tuple[str, str], float] = {}
+        storage_aggregates: dict[tuple[str, str], dict] = {}
         for record in interval_records:
             for breakdown in record.storage_breakdowns:
                 key = (breakdown.pvc_name, breakdown.storage_class)
                 if key not in storage_aggregates:
-                    storage_aggregates[key] = 0.0
-                storage_aggregates[key] += breakdown.gb_hours
+                    storage_aggregates[key] = {
+                        "gb_hours": 0.0,
+                        "deployment_id": breakdown.deployment_id,
+                    }
+                storage_aggregates[key]["gb_hours"] += breakdown.gb_hours
 
         # Create DAILY usage record with FINALIZED status
         usage_record = await db.usage.upsert_usage_record(
@@ -224,15 +229,18 @@ async def collect_workspace_daily_usage(
                 pod_name=pod_name,
                 cpu_core_seconds=aggregates["cpu_core_seconds"],
                 memory_gb_seconds=aggregates["memory_gb_seconds"],
+                deployment_id=aggregates["deployment_id"],
+                service_name=aggregates["service_name"],
             )
 
         # Upsert storage breakdowns for daily record
-        for (pvc_name, storage_class), gb_hours in storage_aggregates.items():
+        for (pvc_name, storage_class), aggregates in storage_aggregates.items():
             await db.usage.upsert_storage_breakdown(
                 usage_record_id=usage_record.id,
                 pvc_name=pvc_name,
                 storage_class=storage_class,
-                gb_hours=gb_hours,
+                gb_hours=aggregates["gb_hours"],
+                deployment_id=aggregates["deployment_id"],
             )
 
         logger.info(

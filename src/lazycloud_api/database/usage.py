@@ -254,8 +254,8 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
         pod_name: str,
         cpu_core_seconds: float,
         memory_gb_seconds: float,
-        deployment_id: str | None = None,
-        service_name: str | None = None,
+        service_name: str,
+        deployment_id: str,
         session: AsyncSession | None = None,
     ) -> ComputeUsageBreakdownPydantic:
         async def _upsert(sess: AsyncSession):
@@ -265,7 +265,7 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
                 cpu_core_seconds=cpu_core_seconds,
                 memory_gb_seconds=memory_gb_seconds,
                 deployment_id=deployment_id,
-                service_name=service_name or "unknown",
+                service_name=service_name,
             )
 
             # On conflict, update the values
@@ -294,7 +294,7 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
         pvc_name: str,
         storage_class: str,
         gb_hours: float,
-        deployment_id: str | None = None,
+        deployment_id: str,
         session: AsyncSession | None = None,
     ) -> StorageUsageBreakdownPydantic:
         async def _upsert(sess: AsyncSession):

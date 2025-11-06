@@ -30,7 +30,10 @@ from lazycloud_api.services import (
     get_cost_breakdown_service,
     get_polar_service,
 )
-from shared.models.billing import SECONDS_PER_HOUR
+from shared.models.billing import (
+    SECONDS_PER_HOUR,
+    UsageCollectionConfig,
+)
 from shared.requests.workspaces import (
     CreateWorkspaceRequest,
     InviteUserRequest,
@@ -331,6 +334,7 @@ async def get_aggregated_usage(
                 workspace_id=workspace.id,
                 start_date=start_date,
                 end_date=end_date,
+                record_type=UsageCollectionConfig.get_record_type(),
             )
 
             total_cpu_seconds += sum(r.cpu_core_seconds for r in usage_records)
@@ -420,6 +424,7 @@ async def get_aggregated_daily_usage(
                 workspace_id=workspace.id,
                 start_date=start_date,
                 end_date=end_date,
+                record_type=UsageCollectionConfig.get_record_type(),
             )
 
             for record in usage_records:
