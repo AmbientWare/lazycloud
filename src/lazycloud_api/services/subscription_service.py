@@ -1,16 +1,12 @@
+import json
 from typing import TYPE_CHECKING, Any
 
 from fastapi import HTTPException
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from lazycloud_api.billing.product_details.base import BASE_FEATURES, BASE_PRODUCT_NAME
-from lazycloud_api.billing.product_details.enterprise import (
-    ENTERPRISE_FEATURES,
-    ENTERPRISE_PRODUCT_NAME,
-)
+from lazycloud_api.billing.product_details.base import BASE_FEATURES
 from lazycloud_api.billing.product_details.features import BaseFeatures
-from lazycloud_api.billing.product_details.pro import PRO_FEATURES, PRO_PRODUCT_NAME
 from lazycloud_api.database import db
 from lazycloud_api.database.users import SubscriptionState, UserPydantic
 from lazycloud_api.database.workspaces import WorkspaceStatus
@@ -25,14 +21,28 @@ class SubscriptionService:
 
     def __init__(self, polar_service: PolarService):
         self.polar_service = polar_service
-        self._tier_to_features: dict[str, BaseFeatures] = {
-            BASE_PRODUCT_NAME.lower(): BASE_FEATURES,
-            PRO_PRODUCT_NAME.lower(): PRO_FEATURES,
-            ENTERPRISE_PRODUCT_NAME.lower(): ENTERPRISE_FEATURES,
-        }
+
+    def _parse_features_from_metadata(
+        self, metadata: dict[str, str] | None
+    ) -> BaseFeatures | None:
+        """Parse features from product metadata JSON string"""
+        if not metadata:
+            return None
+
+        features_json = metadata.get("features")
+        if not features_json:
+            return None
+
+        try:
+            features_dict = json.loads(features_json)
+            return BaseFeatures.model_validate(features_dict)
+
+        except (json.JSONDecodeError, ValueError, TypeError) as e:
+            logger.warning(f"Failed to parse features from metadata: {e}")
+            return None
 
     async def get_user_features(self, external_customer_id: str) -> BaseFeatures:
-        """Get product features for a user based on their subscription."""
+        """Get product features for a user based on their subscription"""
         if not self.polar_service.enabled:
             logger.debug("Polar disabled, returning Basic features")
             return BASE_FEATURES
@@ -45,44 +55,50 @@ class SubscriptionService:
                     limit=1,
                 )
             )
-
-            if (
-                not subscriptions_response
-                or not subscriptions_response.result
-                or not subscriptions_response.result.items
-            ):
-                logger.debug(
-                    f"No active subscription for {external_customer_id}, returning Basic features"
-                )
-                return BASE_FEATURES
-
-            subscription = subscriptions_response.result.items[0]
-            if not subscription.product:
-                logger.debug(
-                    f"Subscription {subscription.id} has no product, returning Basic features"
-                )
-                return BASE_FEATURES
-
-            product = await self.polar_service.products.get_product(
-                subscription.product.id
-            )
-            if not product:
-                logger.debug(
-                    f"Product {subscription.product.id} not found, returning Basic features"
-                )
-                return BASE_FEATURES
-
-            tier = product.metadata.get("tier")
-            if tier is None:
-                raise ValueError(f"Product {subscription.product.id} has no tier")
-
-            return self._tier_to_features.get(tier.lower(), BASE_FEATURES)
-
         except Exception as e:
             logger.error(
-                f"Failed to get product features for {external_customer_id}: {e}"
+                f"Failed to fetch subscriptions from Polar for {external_customer_id}: {e}"
             )
-            return BASE_FEATURES
+            raise RuntimeError(
+                f"Failed to retrieve subscription information: {e}"
+            ) from e
+
+        if (
+            not subscriptions_response
+            or not subscriptions_response.result
+            or not subscriptions_response.result.items
+        ):
+            raise ValueError(
+                f"No active subscription found for {external_customer_id}. "
+                f"User must have an active subscription."
+            )
+
+        subscription = subscriptions_response.result.items[0]
+        if not subscription.product:
+            raise ValueError(
+                f"Subscription {subscription.id} has no associated product. "
+                f"This is a configuration error."
+            )
+
+        product = await self.polar_service.products.get_product(subscription.product.id)
+        if not product:
+            raise ValueError(
+                f"Product {subscription.product.id} not found. "
+                f"This is a configuration error."
+            )
+
+        # Parse features from metadata (required)
+        features = self._parse_features_from_metadata(product.metadata)
+        if features is None:
+            raise ValueError(
+                f"Product {subscription.product.id} has no features in metadata. "
+                f"Please update the product metadata with features JSON."
+            )
+
+        logger.debug(
+            f"Loaded features from product metadata for {external_customer_id}"
+        )
+        return features
 
     async def _update_user_subscription_state(
         self,

@@ -1,6 +1,9 @@
+import json
+
 from lazycloud_api.billing.product_details.base_models import (
     METER_PRICES,
     ProductDefinition,
+    ProductMetadata,
     SubscriptionRecurringInterval,
 )
 from lazycloud_api.billing.product_details.features import (
@@ -37,5 +40,8 @@ base_product = ProductDefinition(
     has_free_base=True,
     monthly_fee=None,
     meter_prices=METER_PRICES,
-    metadata={"tier": BASE_PRODUCT_NAME.lower()},
+    metadata=ProductMetadata(
+        tier=BASE_PRODUCT_NAME.lower(),
+        features=json.dumps(BASE_FEATURES.model_dump()),
+    ),
 )

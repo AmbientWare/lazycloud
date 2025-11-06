@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 from polar_sdk.models import SubscriptionRecurringInterval, UnitAmount
+from pydantic import BaseModel
 
 from shared.models.billing import MeterNames
 
@@ -26,6 +27,13 @@ METER_PRICES = [
 ]
 
 
+class ProductMetadata(BaseModel):
+    """Product metadata for LazyCloud billing"""
+
+    tier: str
+    features: str  # JSON string
+
+
 @dataclass
 class ProductDefinition:
     """Complete product definition for LazyCloud billing."""
@@ -35,6 +43,6 @@ class ProductDefinition:
     recurring_interval: SubscriptionRecurringInterval
     has_free_base: bool
     meter_prices: list[MeterPrice]
+    metadata: ProductMetadata
     monthly_fee: int | None
     recurring_interval_count: int = 1
-    metadata: dict[str, str] | None = None

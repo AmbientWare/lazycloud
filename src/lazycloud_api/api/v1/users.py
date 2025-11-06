@@ -1,11 +1,20 @@
 from fastapi import APIRouter, Depends, HTTPException
 
+from lazycloud_api.api.dependencies import get_user_product_features
 from lazycloud_api.api.security import get_current_active_user, require_admin
+from lazycloud_api.billing.product_details.features import BaseFeatures
+from lazycloud_api.database import db
 from lazycloud_api.database.users import UserPydantic
 from lazycloud_api.services import get_user_onboarding_service
 from lazycloud_api.services.user_onboarding import UserOnboardingService
 from shared.requests.users import OnboardingRequest
-from shared.responses.users import CurrentUserResponse, OnboardingResponse
+from shared.responses.users import (
+    CurrentUserResponse,
+    DeploymentFeatureResponse,
+    OnboardingResponse,
+    UserFeaturesResponse,
+    WorkspaceFeatureResponse,
+)
 
 users_router = APIRouter(prefix="/users", tags=["users"])
 
@@ -16,6 +25,29 @@ async def current_user(
 ) -> CurrentUserResponse:
     """Used to return the current user's id. This is typically used when user requests with an api key"""
     return current_user
+
+
+@users_router.get("/features")
+async def get_user_features(
+    current_user: UserPydantic = Depends(get_current_active_user),
+    features: BaseFeatures = Depends(get_user_product_features),
+) -> UserFeaturesResponse:
+    """Get the current user's subscription features and current usage counts."""
+    workspace_count = await db.workspaces.aget_active_workspace_count(current_user.id)
+
+    return UserFeaturesResponse(
+        workspace=WorkspaceFeatureResponse(
+            limit=features.workspace.limit,
+            deployment_limit=features.workspace.deployment_limit,
+            current_count=workspace_count,
+        ),
+        deployment=DeploymentFeatureResponse(
+            service_limit=features.deployment.service_limit,
+            volume_limit=features.deployment.volume_limit,
+            network_limit=features.deployment.network_limit,
+        ),
+        domain_limit=features.domain_limit,
+    )
 
 
 @users_router.post("/onboarding")
