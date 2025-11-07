@@ -165,11 +165,17 @@ async def get_workspace_usage_with_deployments(
 
                 deployment_metrics.costs = deployment_costs
 
+                # Determine deployment status based on deleted_at
+                deployment_status = (
+                    "Active" if deployment.deleted_at is None else "Inactive"
+                )
+
                 deployment_overviews.append(
                     DeploymentUsageOverview(
                         deployment_id=str(deployment.id),
                         deployment_name=deployment.name,
                         usage=deployment_metrics,
+                        status=deployment_status,
                     )
                 )
             except Exception as e:
@@ -180,12 +186,16 @@ async def get_workspace_usage_with_deployments(
                 )
                 continue
 
+        # Determine workspace status based on deleted_at
+        workspace_status = "Active" if workspace.deleted_at is None else "Inactive"
+
         return WorkspaceUsageWithDeploymentsResponse(
             workspace_id=workspace.id,
             period=UsagePeriodInfo(start=start_date, end=end_date),
             workspace_usage=workspace_usage,
             record_count=len(usage_records),
             deployments=deployment_overviews,
+            workspace_status=workspace_status,
         )
 
     except HTTPException:

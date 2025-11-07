@@ -112,6 +112,7 @@ class DeploymentUsageOverview(BaseModel):
     deployment_id: str
     deployment_name: str
     usage: UsageMetrics
+    status: Literal["Active", "Inactive"]
 
 
 class DeploymentUsageBreakdown(BaseModel):
@@ -131,3 +132,4 @@ class WorkspaceUsageWithDeploymentsResponse(BaseModel):
     workspace_usage: UsageMetrics
     record_count: int
     deployments: list[DeploymentUsageOverview]
+    workspace_status: Literal["Active", "Inactive"]

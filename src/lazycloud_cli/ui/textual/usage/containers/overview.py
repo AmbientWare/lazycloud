@@ -81,6 +81,7 @@ class UsageOverviewSection(Container):
             self._period_end = usage.period.end
             self.usage_data = usage
         except Exception as e:
+            self.log.error(f"Failed to fetch usage data: {e}", exc_info=True)
             if self._metrics_table:
                 self._metrics_table.clear()
                 self._metrics_table.add_row(
@@ -89,11 +90,6 @@ class UsageOverviewSection(Container):
                     "-",
                     key="error",
                 )
-
-    def _get_web_url(self) -> str:
-        """Get web dashboard URL for detailed breakdown"""
-        base_url = config.api_base_url.replace("/api", "")
-        return f"{base_url}/usage"
 
     def watch_usage_data(
         self, usage: WorkspaceUsageWithDeploymentsResponse | None
