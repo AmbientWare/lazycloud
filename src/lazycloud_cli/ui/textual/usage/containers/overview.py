@@ -97,11 +97,13 @@ class UsageOverviewSection(Container):
         self, usage: WorkspaceUsageWithDeploymentsResponse | None
     ) -> None:
         """Update display when usage data changes"""
-        self._update_display()
+        if usage and self.is_mounted:
+            self.call_after_refresh(self._update_display)
 
     def watch_selected_deployment_id(self, deployment_id: str | None) -> None:
         """Update display when deployment selection changes"""
-        self._update_display()
+        if self.is_mounted:
+            self.call_after_refresh(self._update_display)
 
     def _update_display(self) -> None:
         """Update the display based on current usage data"""
