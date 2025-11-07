@@ -7,11 +7,11 @@ from lazycloud_api.services.k8s.pod_manager import KubernetesPodManager
 
 @task
 async def delete_instance_task(
-    deployment_id: str, service_name: str, pod_name: str
+    deployment_id: str, service_name: str, pod_name: str, force: bool = False
 ) -> None:
     """Delete a specific instance (pod) in a deployment."""
     logger.info(
-        f"Starting deletion of instance {pod_name} in deployment {deployment_id} for service {service_name}"
+        f"Starting deletion of instance {pod_name} in deployment {deployment_id} for service {service_name} (force={force})"
     )
 
     # Get the deployment
@@ -57,11 +57,12 @@ async def delete_instance_task(
             )
 
     # Delete the pod
-    logger.info(f"Deleting pod {pod_name} in namespace {namespace}")
+    logger.info(f"Deleting pod {pod_name} in namespace {namespace} (force={force})")
     delete_result = pod_manager.delete_pod(
         pod_name=pod_name,
         namespace=namespace,
-        grace_period=30,  # Give 30 seconds for graceful shutdown
+        grace_period=0 if force else 30,  # No grace period if forcing
+        force=force,
     )
 
     if not delete_result.success:

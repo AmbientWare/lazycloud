@@ -17,6 +17,7 @@ class PodTable(DataTable):
 
     BINDINGS = [
         ("d", "delete_instance", "Delete Instance"),
+        ("f", "force_delete_instance", "Force Delete Instance"),
         ("l", "show_logs", "Show Logs"),
         ("j,down", "cursor_down", "Move down"),
         ("k,up", "cursor_up", "Move up"),
@@ -65,6 +66,24 @@ class PodTable(DataTable):
             service_name=self.service_name,
             deployment_id=self.deployment_id,
             pod_name=self.selected_pod_name,
+            force=False,
+        )
+        self.app.push_screen(modal)
+
+    def action_force_delete_instance(self) -> None:
+        """Handle the force delete instance action."""
+        if (
+            not self.deployment_id
+            or not self.service_name
+            or not self.selected_pod_name
+        ):
+            return
+
+        modal = DeleteInstanceModal(
+            service_name=self.service_name,
+            deployment_id=self.deployment_id,
+            pod_name=self.selected_pod_name,
+            force=True,
         )
         self.app.push_screen(modal)
 
@@ -92,7 +111,7 @@ class PodTable(DataTable):
 
     def on_focus(self) -> None:
         """Handle focus event."""
-        self.border_subtitle = "↑↓/jk Navigate • l: Show Logs • d: Delete Instance"
+        self.border_subtitle = "↑↓/jk Navigate • l: Logs • d: Delete • f: Force Delete"
 
     def on_blur(self) -> None:
         """Handle blur event."""
@@ -111,7 +130,13 @@ class PodTable(DataTable):
 
         for pod in pods:
             status_color = get_status_color(pod.phase)
-            status_text = f"[{status_color}]{pod.phase.value}[/{status_color}]"
+            # Include error reason in status if available
+            if pod.reason and pod.phase.value in ["Error", "Pending"]:
+                status_text = (
+                    f"[{status_color}]{pod.phase.value}: {pod.reason}[/{status_color}]"
+                )
+            else:
+                status_text = f"[{status_color}]{pod.phase.value}[/{status_color}]"
 
             ready = f"{pod.ready_containers}/{pod.total_containers}"
 

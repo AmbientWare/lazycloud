@@ -126,13 +126,6 @@ async def create_deployment(
     if membership.role not in [WorkspaceRole.OWNER, WorkspaceRole.ADMIN]:
         raise HTTPException(403, "Admin or owner role required")
 
-    # Check deployment limit based on subscription tier
-    await check_deployment_limit(
-        workspace_id=request.workspace_id,
-        current_user=current_user,
-        features=features,
-    )
-
     try:
         compose_data = yaml.safe_load(request.compose_yaml)
         namespace = create_ns_name(request.workspace_id)
@@ -146,7 +139,25 @@ async def create_deployment(
                 f"Validation errors: {'; '.join(validation_result.errors)}"
             )
 
-        # Check deployment features (services, volumes, networks, domains) after compose parsing
+        # Step 1: Check if this is an update to an existing deployment
+        is_update = False
+        if request.name:
+            existing_deployment = await db.compose_deployments.aget_by_name(
+                workspace_id=request.workspace_id,
+                name=request.name,
+            )
+            is_update = existing_deployment is not None
+
+        # Step 2: Only check deployment limit for new deployments (not updates)
+        if not is_update:
+            await check_deployment_limit(
+                workspace_id=request.workspace_id,
+                current_user=current_user,
+                features=features,
+            )
+
+        # Step 3: Always check deployment features (services, volumes, networks, domains)
+        # This ensures updates don't exceed limits even if they were previously within limits
         await check_deployment_features(
             compose_file=compose_file,
             compose_data=compose_data,

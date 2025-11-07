@@ -173,6 +173,28 @@ class ServiceDetailsContainer(Widget):
                 f"Last Checked: {service.last_checked.strftime('%Y-%m-%d %H:%M:%S')}"
             )
 
+        # Add pod error information if available
+        if service.pods:
+            error_pods = [
+                pod
+                for pod in service.pods
+                if pod.phase.value in ["Error", "Pending"] and pod.reason
+            ]
+            if error_pods:
+                content.append("")  # Spacing
+                content.append("[red]Pod Errors:[/red]")
+                for pod in error_pods:
+                    error_msg = f"  • {pod.name}: {pod.reason}"
+                    if pod.message:
+                        # Truncate long messages
+                        msg = (
+                            pod.message[:80] + "..."
+                            if len(pod.message) > 80
+                            else pod.message
+                        )
+                        error_msg += f" - {msg}"
+                    content.append(f"[red]{error_msg}[/red]")
+
         return content
 
     def _build_ports_content(self, ports: list) -> list[str]:

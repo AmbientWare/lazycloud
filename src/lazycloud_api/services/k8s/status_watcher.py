@@ -1,9 +1,10 @@
 import asyncio
-import json
 from datetime import UTC, datetime
 
+from kubernetes.client.exceptions import ApiException
 from loguru import logger
 
+from lazycloud_api.services.k8s.client import get_apps_v1_api, get_core_v1_api
 from shared.models.helm import (
     CurrentUsage,
     HealthCheckValues,
@@ -14,6 +15,7 @@ from shared.models.k8s import (
     Deployment,
     PodList,
     StatefulSet,
+    WorkloadType,
 )
 from shared.models.statuses import (
     DeploymentStatus,
@@ -157,31 +159,33 @@ class StatusWatcher:
         resources = None
 
         try:
-            cmd = [
-                "kubectl",
-                "get",
-                service.workloadType,
-                service.resourceName,
-                "-n",
-                self.namespace,
-                "-o",
-                "json",
-            ]
+            apps_v1 = get_apps_v1_api()
 
-            proc = await asyncio.create_subprocess_exec(
-                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-            )
-            stdout, _ = await proc.communicate()
-            k8s_raw_json = json.loads(stdout.decode())
+            def _get_resource():
+                if service.workloadType == WorkloadType.DEPLOYMENT:
+                    k8s_resource = apps_v1.read_namespaced_deployment(
+                        name=service.resourceName, namespace=self.namespace
+                    )
+                    # Convert to our model
+                    resource_dict = apps_v1.api_client.sanitize_for_serialization(
+                        k8s_resource
+                    )
+                    return Deployment(**resource_dict)
+                elif service.workloadType == WorkloadType.STATEFULSET:
+                    k8s_resource = apps_v1.read_namespaced_stateful_set(
+                        name=service.resourceName, namespace=self.namespace
+                    )
+                    # Convert to our model
+                    resource_dict = apps_v1.api_client.sanitize_for_serialization(
+                        k8s_resource
+                    )
+                    return StatefulSet(**resource_dict)
+                else:
+                    raise ValueError(
+                        f"Unsupported resource type: {service.workloadType}"
+                    )
 
-            kind = k8s_raw_json.get("kind")
-            if kind == "Deployment":
-                k8s_resource = Deployment(**k8s_raw_json)
-            elif kind == "StatefulSet":
-                k8s_resource = StatefulSet(**k8s_raw_json)
-            else:
-                raise ValueError(f"Unsupported resource type: {kind}")
-
+            k8s_resource = await asyncio.to_thread(_get_resource)
             replicas = k8s_resource.spec.replicas or 1
 
             k8s_healthcheck = None
@@ -195,6 +199,9 @@ class StatusWatcher:
                         )
                     resources = container.resources
                     break
+
+        except ApiException as e:
+            logger.error(f"Kubernetes API error getting status for {service.name}: {e}")
 
         except Exception as e:
             logger.error(f"Error getting status for {service.name}: {e}")
@@ -237,59 +244,81 @@ class StatusWatcher:
         """Get pod details for a specific service."""
 
         try:
-            cmd = [
-                "kubectl",
-                "get",
-                "pods",
-                "-n",
-                self.namespace,
-                "-l",
-                f"app.kubernetes.io/name={service_config.resourceName}",
-                "-o",
-                "json",
-            ]
+            core_v1 = get_core_v1_api()
 
-            proc = await asyncio.create_subprocess_exec(
-                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-            )
-            stdout, stderr = await proc.communicate()
+            def _list_pods():
+                v1_pods = core_v1.list_namespaced_pod(
+                    namespace=self.namespace,
+                    label_selector=f"app.kubernetes.io/name={service_config.resourceName}",
+                )
+                # Convert to our model
+                pods_dict = core_v1.api_client.sanitize_for_serialization(v1_pods)
+                return PodList(**pods_dict)
 
-            if proc.returncode == 0:
-                pods_json = json.loads(stdout.decode())
+            pod_list = await asyncio.to_thread(_list_pods)
+            pods = []
 
-                pod_list = PodList(**pods_json)
-                pods = []
+            for pod in pod_list.items:
+                # Step 1: Extract container statuses and initialize tracking variables
+                container_statuses = pod.status.container_statuses if pod.status else []
+                ready_containers = 0
+                total_containers = len(container_statuses)
+                restart_count = 0
+                container_reason = None
+                container_message = None
+                has_container_error = False
 
-                for pod in pod_list.items:
-                    # Calculate container readiness
-                    container_statuses = (
-                        pod.status.container_statuses if pod.status else []
+                # Step 2: Process each container to calculate metrics and detect errors
+                for container_status in container_statuses:
+                    if container_status.get("ready", False):
+                        ready_containers += 1
+
+                    restart_count += container_status.get("restartCount", 0)
+
+                    # Step 3: Check for container errors (waiting or terminated states)
+                    if not has_container_error:
+                        waiting = container_status.get("state", {}).get("waiting")
+                        if waiting:
+                            container_reason = waiting.get("reason")
+                            container_message = waiting.get("message")
+                            if container_reason in [
+                                "ImagePullBackOff",
+                                "ErrImagePull",
+                                "ErrImageNeverPull",
+                                "InvalidImageName",
+                            ]:
+                                has_container_error = True
+                        else:
+                            terminated = container_status.get("state", {}).get(
+                                "terminated"
+                            )
+                            if terminated and terminated.get("exitCode", 0) != 0:
+                                container_reason = (
+                                    terminated.get("reason") or "ContainerError"
+                                )
+                                container_message = terminated.get("message")
+                                has_container_error = True
+
+                # Step 4: Calculate pod age from creation timestamp
+                if pod.metadata.creation_timestamp:
+                    created = datetime.fromisoformat(
+                        pod.metadata.creation_timestamp.replace("Z", "+00:00")
                     )
-                    ready_containers = sum(
-                        1 for c in container_statuses if c.get("ready", False)
-                    )
-                    total_containers = len(container_statuses)
+                    age = datetime.now(UTC) - created
+                    age_str = self._format_age(age)
+                else:
+                    age_str = "Unknown"
 
-                    # Calculate restarts
-                    restart_count = sum(
-                        c.get("restartCount", 0) for c in container_statuses
-                    )
+                # Step 5: Fetch resource usage metrics for the pod
+                pod_metrics = await self._get_pod_metrics(pod.metadata.name)
 
-                    # Calculate age
-                    if pod.metadata.creation_timestamp:
-                        created = datetime.fromisoformat(
-                            pod.metadata.creation_timestamp.replace("Z", "+00:00")
-                        )
-                        age = datetime.now(UTC) - created
-                        age_str = self._format_age(age)
-                    else:
-                        age_str = "Unknown"
+                # Step 6: Determine pod phase from status, defaulting to RUNNING
+                phase = KubernetesPhase.RUNNING
+                pod_reason = None
+                pod_message = None
 
-                    # Get metrics for this pod
-                    pod_metrics = await self._get_pod_metrics(pod.metadata.name)
-
-                    phase = KubernetesPhase.RUNNING
-                    if pod.status and pod.status.phase:
+                if pod.status:
+                    if pod.status.phase:
                         phase_map = {
                             "Running": KubernetesPhase.RUNNING,
                             "Pending": KubernetesPhase.PENDING,
@@ -299,34 +328,45 @@ class StatusWatcher:
                         }
                         phase = phase_map.get(pod.status.phase, KubernetesPhase.ERROR)
 
-                        # Check if pod is terminating (has deletionTimestamp)
-                        if pod.metadata.deletion_timestamp:
-                            phase = KubernetesPhase.TERMINATING
+                    pod_reason = pod.status.reason
+                    pod_message = pod.status.message
 
-                    # Create PodInfo object
-                    pod_info = PodStatus(
-                        name=pod.metadata.name,
-                        phase=phase,
-                        ready_containers=ready_containers,
-                        total_containers=total_containers,
-                        restart_count=restart_count,
-                        age=age_str,
-                        node=pod.spec.scheduler_name or "",
-                        ip=pod.status.pod_ip if pod.status else "",
-                        cpu_usage=pod_metrics.get("cpu") if pod_metrics else "N/A",
-                        memory_usage=pod_metrics.get("memory")
-                        if pod_metrics
-                        else "N/A",
-                    )
+                # Step 7: Override phase to ERROR if container errors detected
+                if has_container_error:
+                    phase = KubernetesPhase.ERROR
+                    if container_reason:
+                        pod_reason = container_reason
+                    if container_message:
+                        pod_message = container_message
 
-                    pods.append(pod_info)
+                # Step 8: Check if pod is being terminated
+                if pod.metadata.deletion_timestamp:
+                    phase = KubernetesPhase.TERMINATING
 
-                return pods
-            else:
-                logger.error(
-                    f"Failed to get pods for {service_config.name}: {stderr.decode()}"
+                pod_info = PodStatus(
+                    name=pod.metadata.name,
+                    phase=phase,
+                    ready_containers=ready_containers,
+                    total_containers=total_containers,
+                    restart_count=restart_count,
+                    age=age_str,
+                    node=pod.spec.scheduler_name or "",
+                    ip=pod.status.pod_ip if pod.status else "",
+                    cpu_usage=pod_metrics.get("cpu") if pod_metrics else "N/A",
+                    memory_usage=pod_metrics.get("memory") if pod_metrics else "N/A",
+                    reason=pod_reason,
+                    message=pod_message,
                 )
-                return []
+
+                pods.append(pod_info)
+
+            return pods
+
+        except ApiException as e:
+            logger.error(
+                f"Kubernetes API error getting pods for {service_config.name}: {e}"
+            )
+            return []
 
         except Exception as e:
             logger.error(f"Error getting pods for {service_config.name}: {e}")
@@ -421,6 +461,12 @@ class StatusWatcher:
     async def _get_pod_metrics(self, pod_name: str) -> dict[str, str] | None:
         """Get resource metrics for a pod."""
         try:
+            # Note: kubectl top uses the metrics.k8s.io API which may not be available
+            # We use kubectl top instead of CustomObjectsApi because:
+            # 1. Metrics API may not be installed in all clusters
+            # 2. kubectl top handles API availability gracefully
+            # 3. Simpler than using CustomObjectsApi for metrics.k8s.io/v1beta1
+
             cmd = [
                 "kubectl",
                 "top",

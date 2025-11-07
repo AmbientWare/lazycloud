@@ -8,9 +8,11 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from kubernetes.client.exceptions import ApiException
 from loguru import logger
 from pydantic import BaseModel
 
+from lazycloud_api.services.k8s.client import get_apps_v1_api, get_core_v1_api
 from shared.models.helm import HelmNamespaceValues, HelmValues
 
 
@@ -359,55 +361,150 @@ class HelmManager:
         self, release_name: str, namespace: str
     ) -> dict[str, list[dict[str, Any]]]:
         """Get status of all resources in a release."""
+
         resources = {}
+        apps_v1 = get_apps_v1_api()
+        core_v1 = get_core_v1_api()
+        label_selector = f"app.kubernetes.io/instance={release_name}"
 
-        # Get all resources with the release label
-        resource_types = ["deployment", "statefulset", "daemonset", "pod", "service"]
+        try:
+            # Get Deployments
+            try:
+                deployments = apps_v1.list_namespaced_deployment(
+                    namespace=namespace, label_selector=label_selector
+                )
+                items = []
+                for deployment in deployments.items:
+                    status = (
+                        apps_v1.api_client.sanitize_for_serialization(deployment.status)
+                        if deployment.status
+                        else {}
+                    )
+                    ready = self._is_resource_ready("deployment", status)
+                    items.append(
+                        {
+                            "name": deployment.metadata.name,
+                            "ready": ready,
+                            "status": self._get_resource_status_summary(
+                                "deployment", status
+                            ),
+                        }
+                    )
+                if items:
+                    resources["deployment"] = items
+            except ApiException as e:
+                logger.debug(f"Error getting deployments: {e}")
 
-        for resource_type in resource_types:
-            cmd = [
-                "kubectl",
-                "get",
-                resource_type,
-                "-n",
-                namespace,
-                "-l",
-                f"app.kubernetes.io/instance={release_name}",
-                "-o",
-                "json",
-            ]
-
-            logger.debug(f"Running command: {' '.join(cmd)}")
-
-            result = subprocess.run(cmd, capture_output=True, text=True, env=os.environ)
-
-            if result.returncode == 0 and result.stdout:
-                try:
-                    data = json.loads(result.stdout)
-                    items = []
-
-                    for item in data.get("items", []):
-                        metadata = item.get("metadata", {})
-                        status = item.get("status", {})
-
-                        # Determine readiness based on resource type
-                        ready = self._is_resource_ready(resource_type, status)
-
-                        items.append(
-                            {
-                                "name": metadata.get("name"),
-                                "ready": ready,
-                                "status": self._get_resource_status_summary(
-                                    resource_type, status
-                                ),
-                            }
+            # Get StatefulSets
+            try:
+                statefulsets = apps_v1.list_namespaced_stateful_set(
+                    namespace=namespace, label_selector=label_selector
+                )
+                items = []
+                for statefulset in statefulsets.items:
+                    status = (
+                        apps_v1.api_client.sanitize_for_serialization(
+                            statefulset.status
                         )
+                        if statefulset.status
+                        else {}
+                    )
+                    ready = self._is_resource_ready("statefulset", status)
+                    items.append(
+                        {
+                            "name": statefulset.metadata.name,
+                            "ready": ready,
+                            "status": self._get_resource_status_summary(
+                                "statefulset", status
+                            ),
+                        }
+                    )
+                if items:
+                    resources["statefulset"] = items
+            except ApiException as e:
+                logger.debug(f"Error getting statefulsets: {e}")
 
-                    if items:
-                        resources[resource_type] = items
+            # Get DaemonSets
+            try:
+                daemonsets = apps_v1.list_namespaced_daemon_set(
+                    namespace=namespace, label_selector=label_selector
+                )
+                items = []
+                for daemonset in daemonsets.items:
+                    status = (
+                        apps_v1.api_client.sanitize_for_serialization(daemonset.status)
+                        if daemonset.status
+                        else {}
+                    )
+                    ready = self._is_resource_ready("daemonset", status)
+                    items.append(
+                        {
+                            "name": daemonset.metadata.name,
+                            "ready": ready,
+                            "status": self._get_resource_status_summary(
+                                "daemonset", status
+                            ),
+                        }
+                    )
+                if items:
+                    resources["daemonset"] = items
+            except ApiException as e:
+                logger.debug(f"Error getting daemonsets: {e}")
 
-                except json.JSONDecodeError:
-                    logger.error(f"Failed to parse {resource_type} status")
+            # Get Pods
+            try:
+                pods = core_v1.list_namespaced_pod(
+                    namespace=namespace, label_selector=label_selector
+                )
+                items = []
+                for pod in pods.items:
+                    status = (
+                        core_v1.api_client.sanitize_for_serialization(pod.status)
+                        if pod.status
+                        else {}
+                    )
+                    ready = self._is_resource_ready("pod", status)
+                    items.append(
+                        {
+                            "name": pod.metadata.name,
+                            "ready": ready,
+                            "status": self._get_resource_status_summary("pod", status),
+                        }
+                    )
+                if items:
+                    resources["pod"] = items
+            except ApiException as e:
+                logger.debug(f"Error getting pods: {e}")
+
+            # Get Services
+            try:
+                services = core_v1.list_namespaced_service(
+                    namespace=namespace, label_selector=label_selector
+                )
+                items = []
+                for service in services.items:
+                    status = (
+                        core_v1.api_client.sanitize_for_serialization(service.status)
+                        if service.status
+                        else {}
+                    )
+                    ready = self._is_resource_ready("service", status)
+                    items.append(
+                        {
+                            "name": service.metadata.name,
+                            "ready": ready,
+                            "status": self._get_resource_status_summary(
+                                "service", status
+                            ),
+                        }
+                    )
+                if items:
+                    resources["service"] = items
+            except ApiException as e:
+                logger.debug(f"Error getting services: {e}")
+
+        except Exception as e:
+            logger.error(f"Error getting release status: {e}")
 
         return resources
 

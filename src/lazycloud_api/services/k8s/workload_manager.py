@@ -1,12 +1,10 @@
-"""
-Kubernetes workload operations for managing deployments, statefulsets, etc.
-"""
+from datetime import datetime, timezone
 
-import subprocess
-
+from kubernetes.client.exceptions import ApiException
 from loguru import logger
 from pydantic import BaseModel
 
+from lazycloud_api.services.k8s.client import get_apps_v1_api
 from shared.models.helm import HelmValues, ServiceValues, WorkloadType
 
 
@@ -37,33 +35,72 @@ class WorkloadManager:
         self, resource_type: str, resource_name: str, namespace: str
     ) -> RestartResult:
         """Restart a specific Kubernetes workload using rollout restart."""
-        cmd = [
-            "kubectl",
-            "rollout",
-            "restart",
-            resource_type,
-            resource_name,
-            "-n",
-            namespace,
-        ]
-
         logger.info(
             f"Restarting {resource_type}/{resource_name} in namespace {namespace}"
         )
 
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            apps_v1 = get_apps_v1_api()
+
+            # Trigger restart by updating the restartedAt annotation
+            # This is the same mechanism kubectl rollout restart uses
+            restarted_at = datetime.now(timezone.utc).isoformat()
+            patch_body = {
+                "spec": {
+                    "template": {
+                        "metadata": {
+                            "annotations": {
+                                "kubectl.kubernetes.io/restartedAt": restarted_at
+                            }
+                        }
+                    }
+                }
+            }
+
+            if resource_type.lower() == "deployment":
+                apps_v1.patch_namespaced_deployment(
+                    name=resource_name,
+                    namespace=namespace,
+                    body=patch_body,
+                )
+            elif resource_type.lower() == "statefulset":
+                apps_v1.patch_namespaced_stateful_set(
+                    name=resource_name,
+                    namespace=namespace,
+                    body=patch_body,
+                )
+            else:
+                return RestartResult(
+                    success=False,
+                    message=f"Unsupported resource type: {resource_type}",
+                    resource_type=resource_type,
+                    resource_name=resource_name,
+                    error=f"Resource type {resource_type} not supported for restart",
+                )
 
             return RestartResult(
                 success=True,
                 message=f"Successfully triggered restart of {resource_name}",
                 resource_type=resource_type,
                 resource_name=resource_name,
-                output=result.stdout,
+                output=f"Restarted at {restarted_at}",
             )
 
-        except subprocess.CalledProcessError as e:
-            error_msg = e.stderr or e.stdout or str(e)
+        except ApiException as e:
+            error_msg = e.reason or str(e)
+            logger.error(
+                f"Failed to restart {resource_type}/{resource_name}: {error_msg}"
+            )
+
+            return RestartResult(
+                success=False,
+                message=f"Failed to restart {resource_name}",
+                resource_type=resource_type,
+                resource_name=resource_name,
+                error=error_msg,
+            )
+        except Exception as e:
+            error_msg = str(e)
             logger.error(
                 f"Failed to restart {resource_type}/{resource_name}: {error_msg}"
             )
@@ -120,26 +157,50 @@ class WorkloadManager:
         self, resource_type: str, resource_name: str, namespace: str
     ) -> tuple[bool, str]:
         """Check the rollout status of a workload."""
-        cmd = [
-            "kubectl",
-            "rollout",
-            "status",
-            resource_type,
-            resource_name,
-            "-n",
-            namespace,
-            "--timeout=5s",
-        ]
-
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            apps_v1 = get_apps_v1_api()
 
-            if result.returncode == 0:
-                return True, result.stdout.strip()
-            else:
-                # Non-zero return code might mean still rolling out
-                return False, result.stdout.strip() or "Rollout in progress"
+            if resource_type.lower() == "deployment":
+                deployment = apps_v1.read_namespaced_deployment(
+                    name=resource_name, namespace=namespace
+                )
+                if deployment.status:
+                    # Check if rollout is complete
+                    conditions = deployment.status.conditions or []
+                    progressing_condition = next(
+                        (c for c in conditions if c.type == "Progressing"),
+                        None,
+                    )
 
+                    if (
+                        progressing_condition
+                        and progressing_condition.status == "True"
+                        and progressing_condition.reason == "NewReplicaSetAvailable"
+                    ):
+                        return True, "Deployment rollout complete"
+                    else:
+                        return False, "Rollout in progress"
+
+            elif resource_type.lower() == "statefulset":
+                statefulset = apps_v1.read_namespaced_stateful_set(
+                    name=resource_name, namespace=namespace
+                )
+                if statefulset.status:
+                    # Check if all replicas are ready and updated
+                    if (
+                        statefulset.status.ready_replicas == statefulset.spec.replicas
+                        and statefulset.status.updated_replicas
+                        == statefulset.spec.replicas
+                    ):
+                        return True, "StatefulSet rollout complete"
+                    else:
+                        return False, "Rollout in progress"
+
+            return False, "Unknown status"
+
+        except ApiException as e:
+            logger.error(f"Failed to get rollout status: {e}")
+            return False, f"Error checking status: {e.reason or str(e)}"
         except Exception as e:
             logger.error(f"Failed to get rollout status: {e}")
             return False, f"Error checking status: {str(e)}"
@@ -148,22 +209,34 @@ class WorkloadManager:
         self, resource_type: str, resource_name: str, namespace: str, replicas: int
     ) -> tuple[bool, str]:
         """Scale a workload to specified number of replicas."""
-        cmd = [
-            "kubectl",
-            "scale",
-            resource_type,
-            resource_name,
-            "-n",
-            namespace,
-            f"--replicas={replicas}",
-        ]
-
         try:
-            subprocess.run(cmd, capture_output=True, text=True, check=True)
+            apps_v1 = get_apps_v1_api()
+
+            patch_body = {"spec": {"replicas": replicas}}
+
+            if resource_type.lower() == "deployment":
+                apps_v1.patch_namespaced_deployment(
+                    name=resource_name,
+                    namespace=namespace,
+                    body=patch_body,
+                )
+            elif resource_type.lower() == "statefulset":
+                apps_v1.patch_namespaced_stateful_set(
+                    name=resource_name,
+                    namespace=namespace,
+                    body=patch_body,
+                )
+            else:
+                return False, f"Unsupported resource type: {resource_type}"
+
             return True, f"Successfully scaled {resource_name} to {replicas} replicas"
 
-        except subprocess.CalledProcessError as e:
-            error_msg = e.stderr or e.stdout or str(e)
+        except ApiException as e:
+            error_msg = e.reason or str(e)
+            return False, f"Failed to scale: {error_msg}"
+
+        except Exception as e:
+            error_msg = str(e)
             return False, f"Failed to scale: {error_msg}"
 
     def _determine_workload_type(self, service: ServiceValues) -> str:

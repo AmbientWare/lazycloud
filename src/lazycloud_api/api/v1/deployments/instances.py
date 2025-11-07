@@ -39,6 +39,9 @@ def _find_service_for_pod(
 @instances_router.delete("/{pod_name}")
 async def delete_instance(
     pod_name: str,
+    force: bool = Query(
+        False, description="Force delete the pod (bypasses graceful shutdown)"
+    ),
     deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_admin_access),
 ) -> InstanceTaskStatusResponse:
     """Delete a specific instance in a deployment."""
@@ -68,13 +71,14 @@ async def delete_instance(
 
         # Submit task to delete the instance
         logger.info(
-            f"Submitting delete instance task for pod {pod_name} in deployment {deployment.id}"
+            f"Submitting delete instance task for pod {pod_name} in deployment {deployment.id} (force={force})"
         )
 
         task_future = delete_instance_task.delay(
             deployment_id=str(deployment.id),
             service_name=service.name,
             pod_name=pod_name,
+            force=force,
         )
 
         return InstanceTaskStatusResponse(
