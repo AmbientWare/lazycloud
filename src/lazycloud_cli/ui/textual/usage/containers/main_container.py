@@ -55,9 +55,11 @@ class UsageMainContainer(Container):
             )
 
     def _on_usage_data_loaded(self, usage_data) -> None:
-        """Handle usage data loaded - share with breakdown component and update title"""
+        """Handle usage data loaded - share with breakdown component and deployments list"""
         if self._breakdown:
             self._breakdown.usage_data = usage_data
+        if self._deployments_list:
+            self._deployments_list.usage_data = usage_data
 
         # Update main container title with date range
         if usage_data and usage_data.period:
@@ -71,7 +73,5 @@ class UsageMainContainer(Container):
 
     def _on_deployment_selected(self, deployment_id: str | None) -> None:
         """Handle deployment selection change"""
-        if self._overview:
-            self._overview.selected_deployment_id = deployment_id
         if self._breakdown:
             self._breakdown.selected_deployment_id = deployment_id

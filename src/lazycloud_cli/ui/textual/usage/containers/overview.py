@@ -15,10 +15,9 @@ from shared.responses.usage import WorkspaceUsageWithDeploymentsResponse
 
 
 class UsageOverviewSection(Container):
-    """Section showing workspace or deployment usage summary"""
+    """Section showing workspace usage summary"""
 
     usage_data: reactive[WorkspaceUsageWithDeploymentsResponse | None] = reactive(None)
-    selected_deployment_id: reactive[str | None] = reactive(None)
 
     def __init__(self):
         super().__init__(id="usage-overview-section")
@@ -31,7 +30,7 @@ class UsageOverviewSection(Container):
 
     def compose(self) -> ComposeResult:
         """Compose the usage overview"""
-        self._section_container = SectionContainer(f"{Icons.COMPUTER} Workspace Totals")
+        self._section_container = SectionContainer(f"{Icons.COMPUTER} Usage Summary")
         with self._section_container:
             self._metrics_table = DataTable(
                 show_header=True,
@@ -40,9 +39,7 @@ class UsageOverviewSection(Container):
                 zebra_stripes=True,
             )
             self._metrics_table.can_focus = False
-            self._metrics_table.add_columns(
-                "Metric", "Usage (core-hrs / GB-hrs)", "Cost ($)"
-            )
+            self._metrics_table.add_columns("Metric", "Usage (unit-h)", "Cost ($)")
             # Show loading state
             self._metrics_table.add_row(
                 "Loading...",
@@ -106,11 +103,6 @@ class UsageOverviewSection(Container):
             # Always schedule update - call_after_refresh will handle timing
             self.call_after_refresh(self._try_update_display)
 
-    def watch_selected_deployment_id(self, deployment_id: str | None) -> None:
-        """Update display when deployment selection changes"""
-        # Always schedule update - call_after_refresh will handle timing
-        self.call_after_refresh(self._try_update_display)
-
     def _try_update_display(self) -> None:
         """Try to update display - will update if table is ready and data is available"""
         # Wait for table to be ready
@@ -130,11 +122,15 @@ class UsageOverviewSection(Container):
         self._update_display()
 
     def _update_display(self) -> None:
-        """Update the display based on current usage data"""
+        """Update the display to always show workspace totals"""
 
         usage = self.usage_data
+
+        # Always show workspace totals
         metrics = usage.workspace_usage
         costs = metrics.costs
+        if self._section_container:
+            self._section_container.border_title = f"{Icons.COMPUTER} Workspace Totals"
 
         # Clear and update the table
         self._metrics_table.clear()
@@ -142,7 +138,7 @@ class UsageOverviewSection(Container):
         # CPU row
         cpu_cost_str = f"{costs.cpu_cost:.2f}" if costs else "-"
         self._metrics_table.add_row(
-            "CPU",
+            "CPU (core)",
             f"{metrics.cpu_core_hours:.2f}",
             cpu_cost_str,
             key="cpu",
@@ -151,7 +147,7 @@ class UsageOverviewSection(Container):
         # Memory row
         memory_cost_str = f"{costs.memory_cost:.2f}" if costs else "-"
         self._metrics_table.add_row(
-            "Memory",
+            "Memory (GB)",
             f"{metrics.memory_gb_hours:.2f}",
             memory_cost_str,
             key="memory",
@@ -160,7 +156,7 @@ class UsageOverviewSection(Container):
         # Standard Storage row
         s3_cost_str = f"{costs.s3_cost:.2f}" if costs else "-"
         self._metrics_table.add_row(
-            "Standard Storage",
+            "Standard Storage (GB)",
             f"{metrics.s3_gb_hours:.2f}",
             s3_cost_str,
             key="s3",
@@ -169,7 +165,7 @@ class UsageOverviewSection(Container):
         # Performance Storage row
         efs_cost_str = f"{costs.efs_cost:.2f}" if costs else "-"
         self._metrics_table.add_row(
-            "Performance Storage",
+            "Performance Storage (GB)",
             f"{metrics.efs_gb_hours:.2f}",
             efs_cost_str,
             key="efs",

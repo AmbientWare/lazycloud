@@ -1,19 +1,23 @@
-import asyncio
-
 from textual.app import ComposeResult
 from textual.reactive import reactive
 
-from lazycloud_cli.api import api
-from lazycloud_cli.config import config
 from lazycloud_cli.ui.textual.components import Container
-from lazycloud_cli.ui.textual.components.listview import ListItemData, ListView
+from lazycloud_cli.ui.textual.components.listview import (
+    ListItem,
+    ListItemData,
+    ListView,
+)
 from lazycloud_cli.ui.textual.theme import Icons
+from shared.responses.usage import (
+    WorkspaceUsageWithDeploymentsResponse,
+)
 
 
 class DeploymentsListView(Container):
     """List view showing workspace deployments"""
 
     selected_deployment_id: reactive[str | None] = reactive(None)
+    usage_data: reactive[WorkspaceUsageWithDeploymentsResponse | None] = reactive(None)
 
     BINDINGS = [
         ("up,k", "cursor_up", "Move up"),
@@ -27,90 +31,110 @@ class DeploymentsListView(Container):
 
     def compose(self) -> ComposeResult:
         """Compose the list view"""
-        self._list_view = ListView(id="deployments-list")
+        self._list_view = ListView(
+            id="deployments-list",
+            on_select=self._handle_selection,
+            on_highlight=self._handle_highlight,
+        )
         yield self._list_view
 
     def on_mount(self) -> None:
-        """Fetch deployments when mounted"""
+        """Set up when mounted"""
         self.can_focus = True
-        self.run_worker(self._fetch_deployments_async(), exclusive=True)
+        if self._list_view:
+            self._list_view.show_loading("Loading deployments...")
 
     def on_focus(self) -> None:
         """Handle focus event"""
         self.border_subtitle = "↑↓/jk Navigate"
         if self._list_view:
             self._list_view.ensure_highlighted()
+            # Update selected_deployment_id if list view has a highlighted item
+            if self._list_view.index is not None and self._list_view.index < len(
+                self._list_view.children
+            ):
+                item = self._list_view.children[self._list_view.index]
+                if isinstance(item, ListItem) and item.item_data:
+                    # Only update if it's different to avoid unnecessary updates
+                    if self.selected_deployment_id != item.item_data.id:
+                        self.selected_deployment_id = item.item_data.id
 
     def on_blur(self) -> None:
         """Handle blur event"""
         self.border_subtitle = ""
 
-    async def _fetch_deployments_async(self) -> None:
-        """Fetch deployments from API"""
-        try:
-            if not self._list_view:
-                return
+    def watch_usage_data(
+        self, usage_data: WorkspaceUsageWithDeploymentsResponse | None
+    ) -> None:
+        """Update deployments list when usage data is loaded"""
+        if not self._list_view:
+            return
 
-            self._list_view.show_loading("Loading deployments...")
+        if not usage_data or not usage_data.deployments:
+            self._list_view._empty_message = "No deployments with usage found"
+            self._list_view.show_empty_message()
+            self._list_view.hide_loading()
+            return
 
-            # Fetch deployments using existing API
-            response = await asyncio.to_thread(
-                api.deployments.list_deployments, config.active_workspace_id
-            )
-
-            if not response.deployments:
-                self._list_view._empty_message = "No deployments found"
-                self._list_view.show_empty_message()
-                return
-
-            # Convert to list items
-            items = []
-            for dep in response.deployments:
-                try:
-                    # Extract status string safely
-                    status_str = None
-                    if hasattr(dep, "status") and dep.status:
-                        if hasattr(dep.status, "status"):
-                            status_str = dep.status.status
-                        elif isinstance(dep.status, str):
-                            status_str = dep.status
-
-                    items.append(
-                        ListItemData(
-                            id=dep.id,
-                            name=dep.name or "Unknown",
-                            status=status_str,
-                            data=dep,
-                        )
+        # Convert deployment usage overviews to list items
+        items = []
+        for deployment in usage_data.deployments:
+            try:
+                items.append(
+                    ListItemData(
+                        id=deployment.deployment_id,
+                        name=deployment.deployment_name or "Unknown",
+                        status=None,
+                        data=deployment,
                     )
-                except Exception:
-                    # Skip deployments that fail to parse
-                    continue
+                )
+            except Exception:
+                continue
 
-            if not items:
-                self._list_view._empty_message = "No valid deployments found"
-                self._list_view.show_empty_message()
-                return
+        if not items:
+            self._list_view._empty_message = "No valid deployments found"
+            self._list_view.show_empty_message()
+            self._list_view.hide_loading()
+            return
 
-            self._list_view.update_items(items)
+        self._list_view.update_items(items)
+        self._list_view.hide_loading()
 
-            # Auto-select and highlight first deployment
-            if items and self._list_view:
-                self._list_view.index = 0
+        # Auto-select and highlight first deployment if none selected
+        # Use call_after_refresh to ensure ListView has rendered before setting index
+        if items and self._list_view:
+            if not self.selected_deployment_id:
+                # Set selected_deployment_id first, then highlight after refresh
                 self.selected_deployment_id = items[0].id
+                self.call_after_refresh(lambda: setattr(self._list_view, "index", 0))
+            else:
+                # If already selected, ensure it's highlighted
+                try:
+                    current_index = next(
+                        (
+                            idx
+                            for idx, item in enumerate(items)
+                            if item.id == self.selected_deployment_id
+                        ),
+                        0,
+                    )
+                    self.call_after_refresh(
+                        lambda: setattr(self._list_view, "index", current_index)
+                    )
+                except StopIteration:
+                    # Selected deployment not in list, select first
+                    self.selected_deployment_id = items[0].id
+                    self.call_after_refresh(
+                        lambda: setattr(self._list_view, "index", 0)
+                    )
 
-        except Exception as e:
-            if self._list_view:
-                self._list_view._empty_message = f"{str(e)}"
-                self._list_view.show_empty_message()
+    def _handle_selection(self, item_data: ListItemData) -> None:
+        """Handle deployment selection (Enter key pressed)"""
+        self.selected_deployment_id = item_data.id
 
-        finally:
-            if self._list_view:
-                self._list_view.hide_loading()
-
-    def on_list_view_selected(self, event: ListView.Selected) -> None:
-        """Handle deployment selection"""
-        self.selected_deployment_id = event.item.id
+    def _handle_highlight(self, item_data: ListItemData) -> None:
+        """Handle deployment highlight (arrow navigation)"""
+        self.selected_deployment_id = item_data.id
 
     def action_cursor_up(self) -> None:
         """Move cursor up in the list"""

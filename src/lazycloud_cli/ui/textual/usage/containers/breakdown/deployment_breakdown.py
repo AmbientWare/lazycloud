@@ -154,6 +154,10 @@ class DeploymentBreakdownSection(Container):
                 markup=True,
             )
             self._scroll.mount(cost_title)
+            # Add spacer for visual separation
+            spacer = Static("")
+            spacer.styles.height = 1
+            self._scroll.mount(spacer)
 
         # Usage metrics section with "Usage Breakdown" title
         usage_container = SectionContainer(title="Usage Breakdown")
