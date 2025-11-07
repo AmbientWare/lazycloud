@@ -6,6 +6,7 @@ from textual.reactive import reactive
 from textual.widgets import Static
 
 from lazycloud_cli.api.usage import UsageAPI
+from lazycloud_cli.ui.colors import Colors
 from lazycloud_cli.ui.textual.components import Container
 from lazycloud_cli.ui.textual.components.section import SectionContainer
 from lazycloud_cli.ui.textual.theme import Icons
@@ -147,17 +148,23 @@ class DeploymentBreakdownSection(Container):
         # Clear existing sections and rebuild - only when breakdown is ready
         self._scroll.remove_children()
 
-        # Add bold "Deployment Cost" title above the section if costs are available
+        # Add status and cost info above the section
+        status_and_cost_container = Static("", markup=True)
+        # Color status: green for Active, yellow for Inactive
+        status_color = (
+            Colors.Hex.success if deployment.status == "Active" else Colors.Hex.warning
+        )
+        status_text = f"[bold]Status: [/bold][bold {status_color}]{deployment.status}[/bold {status_color}]"
         if deployment.usage.costs:
-            cost_title = Static(
-                f"[bold]Deployment Cost: ${deployment.usage.costs.total_cost:.2f}[/bold]",
-                markup=True,
-            )
-            self._scroll.mount(cost_title)
-            # Add spacer for visual separation
-            spacer = Static("")
-            spacer.styles.height = 1
-            self._scroll.mount(spacer)
+            cost_text = f"[bold]Deployment Cost: ${deployment.usage.costs.total_cost:.2f}[/bold]"
+            status_and_cost_container.update(f"{status_text}  •  {cost_text}")
+        else:
+            status_and_cost_container.update(status_text)
+        self._scroll.mount(status_and_cost_container)
+        # Add spacer for visual separation
+        spacer = Static("")
+        spacer.styles.height = 1
+        self._scroll.mount(spacer)
 
         # Usage metrics section with "Usage Breakdown" title
         usage_container = SectionContainer(title="Usage Breakdown")

@@ -1,11 +1,12 @@
 from .breakdown import DeploymentBreakdownSection
-from .deployments_list import DeploymentsListView
+from .deployments_list import ActiveDeploymentsContainer, InactiveDeploymentsContainer
 from .main_container import UsageMainContainer
 from .overview import UsageOverviewSection
 
 __all__ = [
+    "ActiveDeploymentsContainer",
     "DeploymentBreakdownSection",
-    "DeploymentsListView",
+    "InactiveDeploymentsContainer",
     "UsageMainContainer",
     "UsageOverviewSection",
 ]

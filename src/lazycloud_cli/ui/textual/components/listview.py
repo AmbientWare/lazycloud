@@ -48,6 +48,11 @@ class ListItem(TextualListItem):
             else:
                 dot.add_class("status-pending")  # Default to warning/pending color
             yield dot
+        else:
+            # Add empty space for alignment when no status dot
+            spacer = TextualLabel("")
+            spacer.styles.width = 2
+            yield spacer
 
         # Item name with ellipsis truncation
         name = TextualLabel(self.item_data.name)

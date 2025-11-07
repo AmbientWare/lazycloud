@@ -9,7 +9,7 @@ from lazycloud_cli.ui.textual.components import Container
 from lazycloud_cli.ui.textual.theme import Icons, lazycloud_theme
 
 from .containers import (
-    DeploymentsListView,
+    ActiveDeploymentsContainer,
     UsageMainContainer,
     UsageOverviewSection,
 )
@@ -26,7 +26,6 @@ class UsageDashboard(App):
         ("escape", "quit", "Quit"),
         ("q", "quit", "Quit"),
         ("r", "refresh", "Refresh"),
-        ("1", "focus_deployments", "Deployments"),
     ]
 
     def on_mount(self) -> None:
@@ -35,10 +34,10 @@ class UsageDashboard(App):
         self.register_theme(lazycloud_theme)
         self.theme = "lazycloud"
 
-        # Set initial focus to deployments list
+        # Set initial focus to active deployments list
         try:
-            deployments_list = self.query_one(DeploymentsListView)
-            self.set_focus(deployments_list)
+            active_deployments = self.query_one(ActiveDeploymentsContainer)
+            self.set_focus(active_deployments)
         except Exception:
             pass
 
@@ -62,22 +61,6 @@ class UsageDashboard(App):
         try:
             overview = self.query_one(UsageOverviewSection, UsageOverviewSection)
             overview.refresh_usage()
-        except Exception:
-            pass
-
-        try:
-            deployments_list = self.query_one(DeploymentsListView, DeploymentsListView)
-            deployments_list.run_worker(
-                deployments_list._fetch_deployments_async(), exclusive=True
-            )
-        except Exception:
-            pass
-
-    def action_focus_deployments(self) -> None:
-        """Focus the deployments list"""
-        try:
-            deployments_list = self.query_one(DeploymentsListView)
-            self.set_focus(deployments_list)
         except Exception:
             pass
 
