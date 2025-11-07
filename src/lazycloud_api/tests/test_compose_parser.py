@@ -152,14 +152,14 @@ class TestComposeParser:
             compose_parser.parse_file("non-existent-file.yml")
 
     def test_skip_service_with_label(self, compose_parser):
-        """Test that services with lazycloud.skip: 'true' are excluded."""
+        """Test that services with lazycloud.ignore: 'true' are excluded."""
         compose_dict = {
             "version": "3.8",
             "services": {
                 "web": {"image": "nginx:latest", "ports": ["80:80"]},
                 "local-db": {
                     "image": "postgres:17",
-                    "labels": {"lazycloud.skip": "true"},
+                    "labels": {"lazycloud.ignore": "true"},
                     "ports": ["5432:5432"],
                 },
             },
@@ -175,18 +175,18 @@ class TestComposeParser:
         assert "local-db" not in service_names
 
     def test_skip_service_case_insensitive(self, compose_parser):
-        """Test that lazycloud.skip works with different case variations."""
+        """Test that lazycloud.ignore works with different case variations."""
         compose_dict = {
             "version": "3.8",
             "services": {
                 "web": {"image": "nginx:latest"},
                 "db1": {
                     "image": "postgres:17",
-                    "labels": {"lazycloud.skip": "True"},  # Uppercase
+                    "labels": {"lazycloud.ignore": "True"},  # Uppercase
                 },
                 "db2": {
                     "image": "postgres:17",
-                    "labels": {"lazycloud.skip": "TRUE"},  # All caps
+                    "labels": {"lazycloud.ignore": "TRUE"},  # All caps
                 },
             },
         }
@@ -197,14 +197,14 @@ class TestComposeParser:
         assert result.services[0].name == "web"
 
     def test_skip_service_false_includes_service(self, compose_parser):
-        """Test that lazycloud.skip: 'false' includes the service."""
+        """Test that lazycloud.ignore: 'false' includes the service."""
         compose_dict = {
             "version": "3.8",
             "services": {
                 "web": {"image": "nginx:latest"},
                 "api": {
                     "image": "myapi:latest",
-                    "labels": {"lazycloud.skip": "false"},
+                    "labels": {"lazycloud.ignore": "false"},
                 },
             },
         }
@@ -217,7 +217,7 @@ class TestComposeParser:
         assert "api" in service_names
 
     def test_skip_service_no_label_includes_service(self, compose_parser):
-        """Test that services without lazycloud.skip label are included."""
+        """Test that services without lazycloud.ignore label are included."""
         compose_dict = {
             "version": "3.8",
             "services": {
@@ -244,7 +244,7 @@ class TestComposeParser:
                 },
                 "local-db": {
                     "image": "postgres:17",
-                    "labels": {"lazycloud.skip": "true"},
+                    "labels": {"lazycloud.ignore": "true"},
                     "volumes": ["db-data:/var/lib/postgresql/data"],
                 },
             },
@@ -275,7 +275,7 @@ class TestComposeParser:
                 },
                 "local-db": {
                     "image": "postgres:17",
-                    "labels": {"lazycloud.skip": "true"},
+                    "labels": {"lazycloud.ignore": "true"},
                     "networks": ["backend"],
                 },
             },
@@ -312,7 +312,7 @@ class TestComposeParser:
                 },
                 "local-db": {
                     "image": "postgres:17",
-                    "labels": {"lazycloud.skip": "true"},
+                    "labels": {"lazycloud.ignore": "true"},
                     "networks": ["shared"],
                     "volumes": ["shared-data:/var/lib/postgresql"],
                 },

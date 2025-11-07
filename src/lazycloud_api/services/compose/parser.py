@@ -16,6 +16,7 @@ from shared.models.compose import (
     ServiceNetwork,
     ServiceVolume,
 )
+from shared.models.k8s import RestartPolicy
 
 
 def _get_int(scaling_labels, key, default=None):
@@ -26,7 +27,7 @@ def _should_skip_service(service_config: dict[str, Any]) -> bool:
     """Check if a service should be skipped from deployment"""
     labels = service_config.get("labels", {})
     if isinstance(labels, dict):
-        skip_value = labels.get("lazycloud.skip", "false")
+        skip_value = labels.get("lazycloud.ignore", "false")
         return str(skip_value).lower() == "true"
     return False
 
@@ -68,7 +69,7 @@ class ComposeParser:
             if network_config is not None
         ]
 
-        # Parse services (excluding those marked with lazycloud.skip)
+        # Parse services (excluding those marked with lazycloud.ignore)
         services = [
             ComposeParser._parse_service(
                 service_name, service_config, networks, volumes
@@ -117,8 +118,31 @@ class ComposeParser:
             config.get("networks"), {n.name for n in networks}
         )
 
+        # Handle top-level restart field (maps to deploy.restart_policy)
+        deploy_config = config.get("deploy", {})
+        if "restart" in config and "restart_policy" not in deploy_config:
+            # Map docker-compose restart values to deploy.restart_policy
+            restart_value = config.get("restart", "").lower()
+            if restart_value == "no":
+                deploy_config = {**deploy_config, "restart_policy": {"condition": "no"}}
+            elif restart_value == "always":
+                deploy_config = {
+                    **deploy_config,
+                    "restart_policy": {"condition": "any"},
+                }
+            elif restart_value == "on-failure":
+                deploy_config = {
+                    **deploy_config,
+                    "restart_policy": {"condition": "on-failure"},
+                }
+            elif restart_value == "unless-stopped":
+                deploy_config = {
+                    **deploy_config,
+                    "restart_policy": {"condition": "any"},
+                }
+
         deploy, scaling = ComposeParser._parse_deploy_and_scaling(
-            config.get("deploy", {}), service_name
+            deploy_config, service_name
         )
 
         healthcheck = ComposeParser._parse_healthcheck(config.get("healthcheck", {}))
@@ -227,6 +251,18 @@ class ComposeParser:
         # Add replicas if specified
         if "replicas" in deploy_config:
             deploy_kwargs["replicas"] = deploy_config["replicas"]
+
+        # Parse restart policy
+        restart_policy_config = deploy_config.get("restart_policy", {})
+        if restart_policy_config:
+            condition = restart_policy_config.get("condition", "any")
+            # Map docker-compose restart policy conditions to RestartPolicy enum
+            if condition == "no":
+                deploy_kwargs["restart_policy"] = RestartPolicy.NEVER
+            elif condition == "on-failure":
+                deploy_kwargs["restart_policy"] = RestartPolicy.ON_FAILURE
+            else:  # "any", "always", "unless-stopped" all map to ALWAYS
+                deploy_kwargs["restart_policy"] = RestartPolicy.ALWAYS
 
         # Parse resources
         resources_config = deploy_config.get("resources", {})

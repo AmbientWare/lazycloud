@@ -3,6 +3,7 @@ import time
 from datetime import UTC, datetime
 
 import yaml
+from kubernetes.client.exceptions import ApiException
 from loguru import logger
 from prefect import task
 
@@ -14,6 +15,7 @@ from lazycloud_api.services.k8s import (
     create_release_name,
     get_chart_paths,
 )
+from lazycloud_api.services.k8s.client import get_batch_v1_api
 from lazycloud_api.services.k8s.helm_manager import (
     DeploymentStrategy,
     HelmDeploymentConfig,
@@ -22,6 +24,7 @@ from lazycloud_api.services.k8s.helm_manager import (
 from lazycloud_api.services.k8s.helm_values_generator import HelmValuesGenerator
 from shared.models.deployments import DeploymentStates
 from shared.models.helm import HelmNamespaceValues, NamespaceConfig
+from shared.models.k8s import WorkloadType
 from shared.models.secrets import SecretState
 
 charts = get_chart_paths()
@@ -156,8 +159,37 @@ async def deploy_compose_task(
             ):
                 raise Exception(f"Failed to deploy namespace: {namespace_result.error}")
 
-        # Step 2: Deploy application without waiting
+        # Step 2: Deploy application
         logger.info(f"Deploying application {name} in namespace {namespace}")
+
+        # Check if deployment contains Jobs - Jobs have immutable spec.template and must be deleted before upgrade
+        job_services = [
+            service
+            for service in helm_values.services
+            if service.enabled and service.workloadType == WorkloadType.JOB
+        ]
+
+        # Delete existing Jobs before upgrade (they can't be patched)
+        if job_services:
+            logger.info(
+                f"Deployment contains {len(job_services)} Job(s), deleting existing Jobs before upgrade"
+            )
+            batch_v1 = get_batch_v1_api()
+            for service in job_services:
+                try:
+                    batch_v1.delete_namespaced_job(
+                        name=service.resourceName,
+                        namespace=namespace,
+                        propagation_policy="Foreground",
+                    )
+                    logger.info(f"Deleted existing Job: {service.name}")
+                except ApiException as e:
+                    # Job might not exist (first deployment), that's okay
+                    if e.status != 404:
+                        logger.warning(f"Could not delete Job {service.name}: {e}")
+                except Exception as e:
+                    logger.warning(f"Unexpected error deleting Job {service.name}: {e}")
+
         helm_app_config = HelmDeploymentConfig(
             release_name=name,
             namespace=namespace,

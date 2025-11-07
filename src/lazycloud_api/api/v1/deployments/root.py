@@ -175,18 +175,22 @@ async def create_deployment(
                     )
 
                     if deployment:
-                        active_states = [
-                            DeploymentStates.PENDING,
-                            DeploymentStates.DEPLOYING,
-                            DeploymentStates.DELETING,
-                        ]
+                        # Block if there's a pending update queued (PENDING state)
+                        # Block if actively deleting (DELETING state)
+                        # Allow updates if DEPLOYING (might be stuck, allow recovery)
+                        # Allow updates if terminal (DEPLOYED, FAILED, DELETED)
                         if (
                             deployment.pending_compose_yaml
-                            and deployment.state in active_states
+                            and deployment.state == DeploymentStates.PENDING
                         ):
                             raise HTTPException(
                                 409,
-                                "Deployment is currently in progress. Please wait for it to complete.",
+                                "Deployment is currently queued. Please wait for it to complete.",
+                            )
+                        if deployment.state == DeploymentStates.DELETING:
+                            raise HTTPException(
+                                409,
+                                "Deployment is currently being deleted. Please wait for it to complete.",
                             )
 
                         deployment.pending_compose_yaml = request.compose_yaml
