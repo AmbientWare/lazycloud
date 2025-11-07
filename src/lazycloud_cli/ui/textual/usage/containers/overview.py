@@ -27,6 +27,7 @@ class UsageOverviewSection(Container):
         self._metrics_table: DataTable | None = None
         self._period_start: datetime | None = None
         self._period_end: datetime | None = None
+        self._update_retry_count = 0
 
     def compose(self) -> ComposeResult:
         """Compose the usage overview"""
@@ -61,6 +62,10 @@ class UsageOverviewSection(Container):
         end_date = datetime.now(timezone.utc).replace(microsecond=0)
 
         self.run_worker(self._fetch_usage_async(start_date, end_date), exclusive=True)
+
+        # Ensure display updates after widget is fully mounted
+        # This handles cases where data arrives before mount completes
+        self.call_after_refresh(self._try_update_display)
 
     async def _fetch_usage_async(
         self,
@@ -97,18 +102,35 @@ class UsageOverviewSection(Container):
         self, usage: WorkspaceUsageWithDeploymentsResponse | None
     ) -> None:
         """Update display when usage data changes"""
-        if usage and self.is_mounted:
-            self.call_after_refresh(self._update_display)
+        if usage:
+            # Always schedule update - call_after_refresh will handle timing
+            self.call_after_refresh(self._try_update_display)
 
     def watch_selected_deployment_id(self, deployment_id: str | None) -> None:
         """Update display when deployment selection changes"""
-        if self.is_mounted:
-            self.call_after_refresh(self._update_display)
+        # Always schedule update - call_after_refresh will handle timing
+        self.call_after_refresh(self._try_update_display)
+
+    def _try_update_display(self) -> None:
+        """Try to update display - will update if table is ready and data is available"""
+        # Wait for table to be ready
+        if not self._metrics_table or not self._metrics_table.is_mounted:
+            # Retry after a short delay if table isn't ready yet (max 10 retries = 1 second)
+            if self.usage_data and self._update_retry_count < 10:
+                self._update_retry_count += 1
+                self.set_timer(0.1, self._try_update_display)
+            return
+
+        # Reset retry count on success
+        self._update_retry_count = 0
+
+        if not self.usage_data:
+            return
+
+        self._update_display()
 
     def _update_display(self) -> None:
         """Update the display based on current usage data"""
-        if not self.usage_data or not self._metrics_table:
-            return
 
         usage = self.usage_data
         metrics = usage.workspace_usage

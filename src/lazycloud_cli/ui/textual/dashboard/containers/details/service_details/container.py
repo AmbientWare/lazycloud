@@ -21,7 +21,8 @@ from lazycloud_cli.ui.textual.dashboard.containers.details.utils import get_stat
 from lazycloud_cli.ui.textual.theme import Icons, Symbols
 from lazycloud_cli.utils.utils import format_cpu, format_image_name, format_memory
 from shared.models.helm import HealthCheckValues, HPAValues
-from shared.models.statuses import PodStatus, ServiceStatus
+from shared.models.k8s import WorkloadType
+from shared.models.statuses import KubernetesPhase, PodStatus, ServiceStatus
 
 
 class ServiceDetailsContainer(Widget):
@@ -153,11 +154,26 @@ class ServiceDetailsContainer(Widget):
         """Build service overview section content."""
         status_color = get_status_color(service.status)
 
+        # For Jobs, show completion status instead of replicas
+        if service.workload_type == WorkloadType.JOB:
+            if service.status == KubernetesPhase.STOPPED:
+                completion_text = "Completion:   [green]Completed[/green]"
+            elif service.status == KubernetesPhase.ERROR:
+                completion_text = "Completion:   [red]Failed[/red]"
+            elif service.status == KubernetesPhase.RUNNING:
+                completion_text = "Completion:   [yellow]Running[/yellow]"
+            else:
+                completion_text = "Completion:   [dim]Pending[/dim]"
+        else:
+            completion_text = (
+                f"Replicas:     {service.ready_replicas}/{service.replicas}"
+            )
+
         content = [
             f"Name:         {service.name}",
             f"Status:       [{status_color}]{service.status.upper()}[/{status_color}]",
             f"Image:        {format_image_name(service.image)}",
-            f"Replicas:     {service.ready_replicas}/{service.replicas}",
+            completion_text,
         ]
 
         if service.current_usage:

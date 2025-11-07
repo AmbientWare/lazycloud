@@ -178,14 +178,24 @@ class HelmValuesGenerator:
                 self.deployment.id
             )
 
-        # Set workload type
-        # Since labels are now in deploy config for scaling, use empty dict for workload detection
-        is_statefulset = should_be_statefulset(service.image, service.name)
-        if is_statefulset:
-            service_values.workloadType = WorkloadType.STATEFULSET
-            service_values.serviceName = service.name
+        # Add restart policy first to determine workload type
+        restart_policy = self._map_restart_policy(service.deploy)
+
+        # Set workload type based on restart policy
+        # Services with restart: "no" (NEVER) should be Jobs (one-time execution)
+        if restart_policy == RestartPolicy.NEVER:
+            service_values.workloadType = WorkloadType.JOB
+            service_values.restartPolicy = RestartPolicy.NEVER.value
         else:
-            service_values.workloadType = WorkloadType.DEPLOYMENT
+            # For Deployments/StatefulSets, determine based on image/name
+            is_statefulset = should_be_statefulset(service.image, service.name)
+            if is_statefulset:
+                service_values.workloadType = WorkloadType.STATEFULSET
+                service_values.serviceName = service.name
+            else:
+                service_values.workloadType = WorkloadType.DEPLOYMENT
+            # Kubernetes Deployments and StatefulSets MUST have restartPolicy: Always
+            service_values.restartPolicy = RestartPolicy.ALWAYS.value
 
         # Add command if specified
         if service.command:
@@ -203,26 +213,6 @@ class HelmValuesGenerator:
         if service.volumes:
             volume_mounts = generate_service_volumes_values(service.volumes, compose)
             service_values.volumes = volume_mounts
-
-        # Add restart policy
-        # Restart policy is derived from deploy config
-        restart_policy = self._map_restart_policy(service.deploy)
-
-        # Kubernetes Deployments and StatefulSets MUST have restartPolicy: Always
-        # If the service needs "Never" (run once), it should be a Job, but Jobs aren't
-        # supported yet in the Helm templates. For now, we'll use "Always" for compatibility.
-        # TODO: Add Job support for one-shot containers
-        if restart_policy in [RestartPolicy.NEVER, RestartPolicy.ON_FAILURE]:
-            # Log a warning or add a comment that this service might be better as a Job
-            service_values.restartPolicy = RestartPolicy.ALWAYS.value
-            service_values.annotations["lazycloud.io/intended-restart-policy"] = (
-                service.deploy.restart_policy.value
-            )
-            service_values.annotations["lazycloud.io/note"] = (
-                "Should be Job when supported"
-            )
-        else:
-            service_values.restartPolicy = RestartPolicy.ALWAYS.value
 
         # Add resources
         if service.deploy and service.deploy.resources:

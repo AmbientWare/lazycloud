@@ -4,6 +4,7 @@ from functools import lru_cache
 from kubernetes import config
 from kubernetes.client import ApiClient
 from kubernetes.client.api.apps_v1_api import AppsV1Api
+from kubernetes.client.api.batch_v1_api import BatchV1Api
 from kubernetes.client.api.core_v1_api import CoreV1Api
 from loguru import logger
 
@@ -44,3 +45,9 @@ def get_core_v1_api() -> CoreV1Api:
 def get_apps_v1_api() -> AppsV1Api:
     """Get AppsV1Api client for deployments, statefulsets, etc."""
     return AppsV1Api(_get_api_client())
+
+
+@lru_cache(maxsize=1)
+def get_batch_v1_api() -> BatchV1Api:
+    """Get BatchV1Api client for jobs, cronjobs, etc."""
+    return BatchV1Api(_get_api_client())

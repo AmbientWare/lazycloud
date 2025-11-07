@@ -4,7 +4,11 @@ from datetime import UTC, datetime
 from kubernetes.client.exceptions import ApiException
 from loguru import logger
 
-from lazycloud_api.services.k8s.client import get_apps_v1_api, get_core_v1_api
+from lazycloud_api.services.k8s.client import (
+    get_apps_v1_api,
+    get_batch_v1_api,
+    get_core_v1_api,
+)
 from shared.models.helm import (
     CurrentUsage,
     HealthCheckValues,
@@ -18,6 +22,8 @@ from shared.models.k8s import (
     WorkloadType,
 )
 from shared.models.statuses import (
+    JOB_CONDITION_COMPLETE,
+    JOB_CONDITION_FAILED,
     DeploymentStatus,
     KubernetesPhase,
     NetworkStatusSummary,
@@ -157,51 +163,119 @@ class StatusWatcher:
         replicas = service.replicas or 1
         k8s_healthcheck = None
         resources = None
+        job_status = None
+
+        is_job = service.workloadType == WorkloadType.JOB
 
         try:
-            apps_v1 = get_apps_v1_api()
+            if is_job:
+                batch_v1 = get_batch_v1_api()
 
-            def _get_resource():
-                if service.workloadType == WorkloadType.DEPLOYMENT:
-                    k8s_resource = apps_v1.read_namespaced_deployment(
+                def _get_job():
+                    k8s_job = batch_v1.read_namespaced_job(
                         name=service.resourceName, namespace=self.namespace
                     )
-                    # Convert to our model
-                    resource_dict = apps_v1.api_client.sanitize_for_serialization(
-                        k8s_resource
-                    )
-                    return Deployment(**resource_dict)
-                elif service.workloadType == WorkloadType.STATEFULSET:
-                    k8s_resource = apps_v1.read_namespaced_stateful_set(
-                        name=service.resourceName, namespace=self.namespace
-                    )
-                    # Convert to our model
-                    resource_dict = apps_v1.api_client.sanitize_for_serialization(
-                        k8s_resource
-                    )
-                    return StatefulSet(**resource_dict)
-                else:
-                    raise ValueError(
-                        f"Unsupported resource type: {service.workloadType}"
-                    )
+                    return batch_v1.api_client.sanitize_for_serialization(k8s_job)
 
-            k8s_resource = await asyncio.to_thread(_get_resource)
-            replicas = k8s_resource.spec.replicas or 1
+                k8s_job_dict = await asyncio.to_thread(_get_job)
+                replicas = 1
 
-            k8s_healthcheck = None
-            for container in k8s_resource.spec.template.spec.containers:
-                if container.name == service.name:
-                    if container.liveness_probe or container.readiness_probe:
-                        k8s_healthcheck = HealthCheckValues(
-                            enabled=True,
-                            livenessProbe=container.liveness_probe,
-                            readinessProbe=container.readiness_probe,
+                # Extract resources from job spec
+                spec = k8s_job_dict.get("spec", {})
+                if spec:
+                    template = spec.get("template", {})
+                    if template:
+                        pod_spec = template.get("spec", {})
+                        if pod_spec:
+                            containers = pod_spec.get("containers", [])
+                            for container in containers:
+                                if container.get("name") == service.name:
+                                    resources = container.get("resources")
+                                    break
+
+                # Determine job status from conditions or counts
+                status_obj = k8s_job_dict.get("status", {})
+                conditions = status_obj.get("conditions", [])
+                succeeded = status_obj.get("succeeded", 0) or 0
+                failed = status_obj.get("failed", 0) or 0
+                active = status_obj.get("active", 0) or 0
+
+                for condition in conditions:
+                    condition_type = condition.get("type")
+                    condition_status = condition.get("status")
+                    is_true = condition_status in ["True", "true", True]
+
+                    if condition_type == JOB_CONDITION_COMPLETE and is_true:
+                        job_status = KubernetesPhase.STOPPED
+                        break
+                    elif condition_type == JOB_CONDITION_FAILED and is_true:
+                        job_status = KubernetesPhase.ERROR
+                        break
+
+                if job_status is None:
+                    if succeeded > 0:
+                        job_status = KubernetesPhase.STOPPED
+                    elif failed > 0:
+                        job_status = KubernetesPhase.ERROR
+                    elif active > 0:
+                        job_status = KubernetesPhase.RUNNING
+                    else:
+                        job_status = KubernetesPhase.PENDING
+
+            else:
+                apps_v1 = get_apps_v1_api()
+
+                def _get_resource():
+                    if service.workloadType == WorkloadType.DEPLOYMENT:
+                        k8s_resource = apps_v1.read_namespaced_deployment(
+                            name=service.resourceName, namespace=self.namespace
                         )
-                    resources = container.resources
-                    break
+                        resource_dict = apps_v1.api_client.sanitize_for_serialization(
+                            k8s_resource
+                        )
+                        return Deployment(**resource_dict)
+                    elif service.workloadType == WorkloadType.STATEFULSET:
+                        k8s_resource = apps_v1.read_namespaced_stateful_set(
+                            name=service.resourceName, namespace=self.namespace
+                        )
+                        resource_dict = apps_v1.api_client.sanitize_for_serialization(
+                            k8s_resource
+                        )
+                        return StatefulSet(**resource_dict)
+                    else:
+                        raise ValueError(
+                            f"Unsupported resource type: {service.workloadType}"
+                        )
+
+                k8s_resource = await asyncio.to_thread(_get_resource)
+                replicas = k8s_resource.spec.replicas or 1
+
+                for container in k8s_resource.spec.template.spec.containers:
+                    if container.name == service.name:
+                        if container.liveness_probe or container.readiness_probe:
+                            k8s_healthcheck = HealthCheckValues(
+                                enabled=True,
+                                livenessProbe=container.liveness_probe,
+                                readinessProbe=container.readiness_probe,
+                            )
+                        resources = container.resources
+                        break
 
         except ApiException as e:
-            logger.error(f"Kubernetes API error getting status for {service.name}: {e}")
+            if e.status == 404 and is_job:
+                # If Job not found and deployment is older than TTL (300s), assume it completed
+                if self.deployed_at:
+                    age_seconds = (datetime.now(UTC) - self.deployed_at).total_seconds()
+                    if age_seconds > 300:  # TTL is 300 seconds
+                        job_status = KubernetesPhase.STOPPED
+                    else:
+                        job_status = KubernetesPhase.PENDING
+                else:
+                    job_status = KubernetesPhase.PENDING
+            else:
+                logger.error(
+                    f"Kubernetes API error getting status for {service.name}: {e}"
+                )
 
         except Exception as e:
             logger.error(f"Error getting status for {service.name}: {e}")
@@ -210,11 +284,17 @@ class StatusWatcher:
         pods = await self._get_service_pods(service)
         current_usage = self._calculate_average_usage(pods) if pods else None
 
-        # Determine status based on actual pod phases
-        ready_replicas = (
-            len([p for p in pods if p.phase == KubernetesPhase.RUNNING]) if pods else 0
-        )
-        status_enum = self._determine_status_from_pods(pods, replicas)
+        # Determine status: use job status for Jobs, otherwise use pod status
+        if is_job and job_status is not None:
+            status_enum = job_status
+            ready_replicas = 1 if job_status == KubernetesPhase.STOPPED else 0
+        else:
+            ready_replicas = (
+                len([p for p in pods if p.phase == KubernetesPhase.RUNNING])
+                if pods
+                else 0
+            )
+            status_enum = self._determine_status_from_pods(pods, replicas)
 
         # Format ports and volumes
         formatted_ports = [

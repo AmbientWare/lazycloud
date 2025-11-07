@@ -10,6 +10,9 @@ from shared.models.helm import (
 )
 from shared.models.k8s import Resources, WorkloadType
 
+JOB_CONDITION_COMPLETE = "Complete"
+JOB_CONDITION_FAILED = "Failed"
+
 
 class TaskStatus(StrEnum):
     """Status enumeration."""
