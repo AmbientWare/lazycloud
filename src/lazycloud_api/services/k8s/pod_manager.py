@@ -1,11 +1,8 @@
-import json
-import os
-import subprocess
-from typing import Optional
-
+from kubernetes.client.exceptions import ApiException
 from loguru import logger
 from pydantic import BaseModel
 
+from lazycloud_api.services.k8s.client import get_core_v1_api
 from shared.models.k8s import Pod
 
 
@@ -14,8 +11,8 @@ class PodOperationResult(BaseModel):
 
     success: bool
     message: str
-    error: Optional[str] = None
-    pod: Optional[Pod] = None
+    error: str | None = None
+    pod: Pod | None = None
 
 
 class KubernetesPodManager:
@@ -28,41 +25,37 @@ class KubernetesPodManager:
         """Get detailed information about a pod."""
         logger.info(f"Getting pod {pod_name} in namespace {namespace}")
 
-        cmd = [
-            "kubectl",
-            "get",
-            "pod",
-            pod_name,
-            "-n",
-            namespace,
-            "-o",
-            "json",
-        ]
-
-        result = self._run_kubectl_command(cmd)
-
-        if result.returncode != 0:
-            if "NotFound" in result.stderr:
-                return PodOperationResult(
-                    success=False,
-                    message=f"Pod {pod_name} not found",
-                    error="Pod does not exist",
-                )
-            return PodOperationResult(
-                success=False,
-                message=f"Failed to get pod {pod_name}",
-                error=result.stderr,
-            )
-
         try:
-            pod_data = json.loads(result.stdout)
-            pod = Pod(**pod_data)
+            core_v1 = get_core_v1_api()
+            v1_pod = core_v1.read_namespaced_pod(name=pod_name, namespace=namespace)
+
+            # Convert Kubernetes client object to dict, then to our Pod model
+            pod_dict = core_v1.api_client.sanitize_for_serialization(v1_pod)
+            pod = Pod(**pod_dict)
+
             return PodOperationResult(
                 success=True,
                 message=f"Successfully retrieved pod {pod_name}",
                 pod=pod,
             )
-        except (json.JSONDecodeError, KeyError) as e:
+
+        except ApiException as e:
+            if e.status == 404:
+                return PodOperationResult(
+                    success=False,
+                    message=f"Pod {pod_name} not found",
+                    error="Pod does not exist",
+                )
+
+            logger.error(f"Kubernetes API error getting pod {pod_name}: {e}")
+            return PodOperationResult(
+                success=False,
+                message=f"Failed to get pod {pod_name}",
+                error=e.reason or str(e),
+            )
+
+        except Exception as e:
+            logger.error(f"Error getting pod {pod_name}: {e}")
             return PodOperationResult(
                 success=False,
                 message="Failed to parse pod information",
@@ -73,51 +66,56 @@ class KubernetesPodManager:
         self,
         pod_name: str,
         namespace: str,
-        grace_period: Optional[int] = None,
+        grace_period: int | None = None,
         force: bool = False,
     ) -> PodOperationResult:
         """Delete a pod with options for grace period and force deletion."""
         logger.info(f"Deleting pod {pod_name} in namespace {namespace}")
 
-        cmd = [
-            "kubectl",
-            "delete",
-            "pod",
-            pod_name,
-            "-n",
-            namespace,
-            "--ignore-not-found=true",
-        ]
+        try:
+            core_v1 = get_core_v1_api()
 
-        if grace_period is not None:
-            cmd.extend(["--grace-period", str(grace_period)])
+            # Build delete options
+            delete_options = {}
+            if grace_period is not None:
+                delete_options["grace_period_seconds"] = grace_period
+            if force:
+                delete_options["propagation_policy"] = "Background"
 
-        if force:
-            cmd.append("--force")
-        else:
-            # Don't wait for deletion to complete for non-force deletions
-            cmd.append("--wait=false")
+            # Delete the pod
+            core_v1.delete_namespaced_pod(
+                name=pod_name,
+                namespace=namespace,
+                **delete_options,
+            )
 
-        result = self._run_kubectl_command(cmd)
+            return PodOperationResult(
+                success=True,
+                message=f"Successfully initiated deletion of pod {pod_name}",
+            )
 
-        if result.returncode == 0:
-            # Check if the pod was actually deleted or didn't exist
-            if "not found" in result.stdout.lower():
+        except ApiException as e:
+            if e.status == 404:
+                # Pod doesn't exist - treat as success (ignore-not-found behavior)
                 return PodOperationResult(
                     success=True,
                     message=f"Pod {pod_name} does not exist",
                 )
-            else:
-                return PodOperationResult(
-                    success=True,
-                    message=f"Successfully initiated deletion of pod {pod_name}",
-                )
 
-        return PodOperationResult(
-            success=False,
-            message=f"Failed to delete pod {pod_name}",
-            error=result.stderr,
-        )
+            logger.error(f"Kubernetes API error deleting pod {pod_name}: {e}")
+            return PodOperationResult(
+                success=False,
+                message=f"Failed to delete pod {pod_name}",
+                error=e.reason or str(e),
+            )
+
+        except Exception as e:
+            logger.error(f"Error deleting pod {pod_name}: {e}")
+            return PodOperationResult(
+                success=False,
+                message=f"Failed to delete pod {pod_name}",
+                error=str(e),
+            )
 
     def verify_pod_ownership(
         self,
@@ -160,19 +158,3 @@ class KubernetesPodManager:
             message=f"Pod {pod_name} verified as belonging to service {service_name}",
             pod=pod,
         )
-
-    def _run_kubectl_command(self, cmd: list[str]) -> subprocess.CompletedProcess:
-        """Run a kubectl command with proper error handling."""
-        logger.debug(f"Running command: {' '.join(cmd)}")
-
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            env=os.environ,
-        )
-
-        if result.returncode != 0:
-            logger.debug(f"Command failed with error: {result.stderr}")
-
-        return result

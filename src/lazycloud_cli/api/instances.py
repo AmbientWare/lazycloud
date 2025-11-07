@@ -7,8 +7,11 @@ class InstancesAPI(BaseAPI):
         super().__init__("deployments")
 
     def delete_instance(
-        self, deployment_id: str, pod_name: str
+        self, deployment_id: str, pod_name: str, force: bool = False
     ) -> InstanceTaskStatusResponse:
         """Delete a specific instance in a deployment"""
-        response_data = self._delete(f"/{deployment_id}/instances/{pod_name}")
+        params = {"force": "true"} if force else {}
+        response_data = self._delete(
+            f"/{deployment_id}/instances/{pod_name}", params=params
+        )
         return InstanceTaskStatusResponse(**response_data)

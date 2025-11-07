@@ -87,6 +87,8 @@ class PodStatus(BaseModel):
     ip: str | None = None
     cpu_usage: str | None = None
     memory_usage: str | None = None
+    reason: str | None = None
+    message: str | None = None
 
 
 class ServiceStatus(BaseModel):
