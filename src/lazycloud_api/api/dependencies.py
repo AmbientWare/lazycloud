@@ -123,10 +123,11 @@ async def get_deployment_with_access(
 async def get_deployment_with_admin_access(
     deployment_id: str,
     current_user: UserPydantic = Depends(get_current_active_user),
+    include_deleted: bool = False,
 ) -> ComposeDeploymentPydantic:
     """Get deployment and verify user has admin/owner access"""
     deployment, role = await db.compose_deployments.aget_with_workspace_access(
-        deployment_id, current_user.id
+        deployment_id, current_user.id, include_deleted=include_deleted
     )
 
     if not deployment or not role:
@@ -136,6 +137,16 @@ async def get_deployment_with_admin_access(
         raise HTTPException(403, "Admin or owner role required")
 
     return deployment
+
+
+async def get_deployment_with_admin_access_for_usage(
+    deployment_id: str,
+    current_user: UserPydantic = Depends(get_current_active_user),
+) -> ComposeDeploymentPydantic:
+    """Get deployment with admin access, including deleted deployments for usage purposes"""
+    return await get_deployment_with_admin_access(
+        deployment_id, current_user, include_deleted=True
+    )
 
 
 async def check_deployment_exists_with_admin_access(

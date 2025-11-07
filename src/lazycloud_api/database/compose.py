@@ -273,9 +273,9 @@ class ComposeDeploymentService(
         return self._to_pydantic(db_model)
 
     async def aget_with_workspace_access(
-        self, deployment_id: str, user_id: str
+        self, deployment_id: str, user_id: str, include_deleted: bool = False
     ) -> tuple[ComposeDeploymentPydantic | None, str | None]:
-        """Get deployment and user's workspace role (excluding soft-deleted)"""
+        """Get deployment and user's workspace role"""
         async with self._session_manager.get_session() as session:
             query = (
                 select(ComposeDeploymentTable, UserWorkspaceTable.role)
@@ -285,9 +285,11 @@ class ComposeDeploymentService(
                     == UserWorkspaceTable.workspace_id,
                 )
                 .where(ComposeDeploymentTable.id == deployment_id)
-                .where(ComposeDeploymentTable.deleted_at.is_(None))
                 .where(UserWorkspaceTable.user_id == user_id)
             )
+
+            if not include_deleted:
+                query = query.where(ComposeDeploymentTable.deleted_at.is_(None))
 
             result = await session.execute(query)
             row = result.first()

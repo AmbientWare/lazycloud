@@ -3,16 +3,14 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
 
-from lazycloud_api.api.dependencies import get_deployment_with_admin_access
+from lazycloud_api.api.dependencies import get_deployment_with_admin_access_for_usage
 from lazycloud_api.api.security import get_current_active_user
 from lazycloud_api.database import db
 from lazycloud_api.database.compose import ComposeDeploymentPydantic
 from lazycloud_api.database.users import UserPydantic
 from lazycloud_api.services import (
-    CostBreakdownService,
     PolarService,
     UsageService,
-    get_cost_breakdown_service,
     get_polar_service,
     get_usage_service,
 )
@@ -30,14 +28,15 @@ MAX_DATE_RANGE_DAYS = 365  # 1 year maximum
 
 @usage_router.get("/breakdown")
 async def get_deployment_cost_breakdown(
-    deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_admin_access),
+    deployment: ComposeDeploymentPydantic = Depends(
+        get_deployment_with_admin_access_for_usage
+    ),
     current_user: UserPydantic = Depends(get_current_active_user),
     start_date: datetime | None = Query(
         None, description="Start date (defaults to start of current month)"
     ),
     end_date: datetime | None = Query(None, description="End date (defaults to now)"),
     usage_service: UsageService = Depends(get_usage_service),
-    cost_service: CostBreakdownService = Depends(get_cost_breakdown_service),
     polar_service: PolarService = Depends(get_polar_service),
 ) -> WorkspaceCostBreakdownResponse:
     """Get detailed cost breakdown for a specific deployment with service and volume details"""

@@ -12,7 +12,7 @@ class UsageMetricsTable(DataTable):
         self.can_focus = False
         self.show_cursor = False
         self.zebra_stripes = True
-        self.add_columns("Metric", "Usage (core-hrs / GB-hrs)", "Cost ($)")
+        self.add_columns("Metric", "Usage (unit-h)", "Cost ($)")
 
     def update_metrics(
         self,
@@ -32,10 +32,14 @@ class UsageMetricsTable(DataTable):
         s3_cost_str = f"{s3_cost:.2f}" if s3_cost is not None else "-"
         efs_cost_str = f"{efs_cost:.2f}" if efs_cost is not None else "-"
 
-        self.add_row("CPU", f"{cpu_hours:.2f}", cpu_cost_str, key="cpu")
-        self.add_row("Memory", f"{memory_hours:.2f}", memory_cost_str, key="memory")
-        self.add_row("Standard Storage", f"{s3_hours:.2f}", s3_cost_str, key="s3")
-        self.add_row("Performance Storage", f"{efs_hours:.2f}", efs_cost_str, key="efs")
+        self.add_row("CPU (core)", f"{cpu_hours:.2f}", cpu_cost_str, key="cpu")
+        self.add_row(
+            "Memory (GB)", f"{memory_hours:.2f}", memory_cost_str, key="memory"
+        )
+        self.add_row("Standard Storage (GB)", f"{s3_hours:.2f}", s3_cost_str, key="s3")
+        self.add_row(
+            "Performance Storage (GB)", f"{efs_hours:.2f}", efs_cost_str, key="efs"
+        )
 
 
 class ServicesCostTable(DataTable):
