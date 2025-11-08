@@ -65,10 +65,11 @@ class DeploymentOverview(BaseModel):
     name: str
     namespace: str
     state: DeploymentStates
+    service_count: int
+    volume_count: int
+    network_count: int
     status_message: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
     deployed_at: datetime | None = None
-    service_count: int
-    volume_count: int
     ready_services: int | None = None
