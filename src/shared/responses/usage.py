@@ -44,6 +44,17 @@ class DailyUsageData(BaseModel):
     costs: "MeterCostBreakdown | None" = None
 
 
+class WorkspaceUsageSummary(BaseModel):
+    """Workspace-level usage summary with minimal deployment info (no usage metrics)"""
+
+    workspace_id: str
+    workspace_name: str
+    workspace_status: Literal["Active", "Inactive"]
+    usage: UsageMetrics
+    record_count: int
+    deployments: list["DeploymentUsageOverview"]
+
+
 class AggregatedUsageResponse(BaseModel):
     """Aggregated usage across all user workspaces"""
 
@@ -51,6 +62,7 @@ class AggregatedUsageResponse(BaseModel):
     usage: UsageMetrics
     workspace_count: int
     record_count: int
+    workspaces: list[WorkspaceUsageSummary]
 
 
 class AggregatedDailyUsageResponse(BaseModel):

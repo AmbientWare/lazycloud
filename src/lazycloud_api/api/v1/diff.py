@@ -2,10 +2,8 @@ import yaml
 from fastapi import APIRouter, Body, Depends, HTTPException
 from loguru import logger
 
-from lazycloud_api.api.dependencies import (
-    get_current_active_user,
-    require_workspace_admin,
-)
+from lazycloud_api.api.dependencies import require_workspace_admin
+from lazycloud_api.api.security import get_current_active_user
 from lazycloud_api.database import db
 from lazycloud_api.database.compose import ComposeDeploymentPydantic
 from lazycloud_api.database.users import UserPydantic

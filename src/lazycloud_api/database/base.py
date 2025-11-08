@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -103,6 +104,26 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
         """Apply default filters (e.g., soft delete) if the model supports them"""
         if hasattr(self.db_model_class, "deleted_at"):
             query = query.where(self.db_model_class.deleted_at.is_(None))
+        return query
+
+    def _build_filtered_query(self, filters: dict, include_deleted: bool = False):
+        """Build a base query with filters applied"""
+        query = select(self.db_model_class)
+
+        if not include_deleted:
+            query = self._apply_default_filters(query)
+
+        for key, value in filters.items():
+            if hasattr(self.db_model_class, key):
+                if key.endswith("__gte"):
+                    field = key[:-5]
+                    query = query.where(getattr(self.db_model_class, field) >= value)
+                elif key.endswith("__lte"):
+                    field = key[:-5]
+                    query = query.where(getattr(self.db_model_class, field) <= value)
+                else:
+                    query = query.where(getattr(self.db_model_class, key) == value)
+
         return query
 
     async def aget_all(self) -> list[basePydanticType]:
@@ -224,23 +245,7 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
     async def afind(self, filters: dict) -> list[basePydanticType]:
         """Find models matching the filters"""
         async with self._session_manager.get_session() as session:
-            query = select(self.db_model_class)
-            query = self._apply_default_filters(query)
-            for key, value in filters.items():
-                if hasattr(self.db_model_class, key):
-                    if key.endswith("__gte"):
-                        field = key[:-5]
-                        query = query.where(
-                            getattr(self.db_model_class, field) >= value
-                        )
-                    elif key.endswith("__lte"):
-                        field = key[:-5]
-                        query = query.where(
-                            getattr(self.db_model_class, field) <= value
-                        )
-                    else:
-                        query = query.where(getattr(self.db_model_class, key) == value)
-
+            query = self._build_filtered_query(filters, include_deleted=False)
             result = await session.execute(query)
             db_models = list(result.scalars().all())
             return [model.to_pydantic(self.pydantic_model_class) for model in db_models]
@@ -253,53 +258,32 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
     async def afind_paginated(
         self,
         filters: dict,
-        skip: int = 0,
+        offset: int = 0,
         limit: int = 100,
         include_deleted: bool = False,
-    ) -> tuple[int, list[basePydanticType]]:
-        """Find models matching filters with pagination and return total count"""
+        include_total: bool = True,
+    ) -> tuple[int | None, list[basePydanticType]]:
+        """Find models matching filters with offset-based pagination"""
 
         async with self._session_manager.get_session() as session:
-            base_query = select(self.db_model_class)
-            count_query = select(func.count()).select_from(self.db_model_class)
+            base_query = self._build_filtered_query(filters, include_deleted)
 
-            # Apply default filters (e.g., soft delete) unless include_deleted is True
-            if not include_deleted:
-                base_query = self._apply_default_filters(base_query)
-                count_query = self._apply_default_filters(count_query)
+            # Execute count and data queries in parallel for better performance
+            if include_total:
+                count_query = select(func.count()).select_from(base_query.subquery())
+                paginated_query = base_query.offset(offset).limit(limit)
 
-            for key, value in filters.items():
-                if hasattr(self.db_model_class, key):
-                    if key.endswith("__gte"):
-                        field = key[:-5]
-                        base_query = base_query.where(
-                            getattr(self.db_model_class, field) >= value
-                        )
-                        count_query = count_query.where(
-                            getattr(self.db_model_class, field) >= value
-                        )
-                    elif key.endswith("__lte"):
-                        field = key[:-5]
-                        base_query = base_query.where(
-                            getattr(self.db_model_class, field) <= value
-                        )
-                        count_query = count_query.where(
-                            getattr(self.db_model_class, field) <= value
-                        )
-                    else:
-                        base_query = base_query.where(
-                            getattr(self.db_model_class, key) == value
-                        )
-                        count_query = count_query.where(
-                            getattr(self.db_model_class, key) == value
-                        )
+                total_result, data_result = await asyncio.gather(
+                    session.execute(count_query),
+                    session.execute(paginated_query),
+                )
+                total = total_result.scalar() or 0
+            else:
+                paginated_query = base_query.offset(offset).limit(limit)
+                data_result = await session.execute(paginated_query)
+                total = None
 
-            total_result = await session.execute(count_query)
-            total = total_result.scalar() or 0
-
-            paginated_query = base_query.offset(skip).limit(limit)
-            result = await session.execute(paginated_query)
-            db_models = list(result.scalars().all())
+            db_models = list(data_result.scalars().all())
             return total, [
                 model.to_pydantic(self.pydantic_model_class) for model in db_models
             ]

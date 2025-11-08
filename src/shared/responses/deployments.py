@@ -26,8 +26,9 @@ class DeploymentListResponse(BaseModel):
 
     deployments: list[DeploymentResponse]
     total: int
-    skip: int
     limit: int
+    has_more: bool
+    cursor: str | None = None
 
 
 class DiffResponse(BaseModel):

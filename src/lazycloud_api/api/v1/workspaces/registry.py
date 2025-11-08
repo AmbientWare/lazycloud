@@ -9,7 +9,7 @@ from lazycloud_api.services import ECRAuthService, get_ecr_auth_service
 from shared.requests.registry import UploadIntentRequest
 from shared.responses.registry import UploadIntentResponse
 
-registry_router = APIRouter(prefix="/registry")
+registry_router = APIRouter(prefix="/{workspace_id}/registry")
 
 
 @registry_router.post("/upload-intent", response_model=UploadIntentResponse)

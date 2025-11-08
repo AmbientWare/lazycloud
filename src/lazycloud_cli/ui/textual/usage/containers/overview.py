@@ -11,21 +11,23 @@ from lazycloud_cli.ui.colors import Colors
 from lazycloud_cli.ui.textual.components import Container
 from lazycloud_cli.ui.textual.components.section import SectionContainer
 from lazycloud_cli.ui.textual.theme import Icons
-from shared.responses.usage import WorkspaceUsageWithDeploymentsResponse
+from shared.responses.usage import (
+    UsagePeriodInfo,
+    WorkspaceUsageSummary,
+)
 
 
 class UsageOverviewSection(Container):
     """Section showing workspace usage summary"""
 
-    usage_data: reactive[WorkspaceUsageWithDeploymentsResponse | None] = reactive(None)
+    usage_data: reactive[WorkspaceUsageSummary | None] = reactive(None)
+    usage_period: reactive[UsagePeriodInfo | None] = reactive(None)
 
     def __init__(self):
         super().__init__(id="usage-overview-section")
         self._usage_api = UsageAPI()
         self._section_container: SectionContainer | None = None
         self._metrics_table: DataTable | None = None
-        self._period_start: datetime | None = None
-        self._period_end: datetime | None = None
         self._update_retry_count = 0
 
     def compose(self) -> ComposeResult:
@@ -69,17 +71,28 @@ class UsageOverviewSection(Container):
         start_date: datetime | None = None,
         end_date: datetime | None = None,
     ) -> None:
-        """Fetch workspace usage with deployments from the API"""
+        """Fetch aggregated usage and filter for active workspace"""
         try:
-            usage = await asyncio.to_thread(
-                self._usage_api.get_workspace_usage_with_deployments,
-                config.active_workspace_id,
+            aggregated = await asyncio.to_thread(
+                self._usage_api.get_aggregated_usage,
                 start_date=start_date,
                 end_date=end_date,
             )
-            self._period_start = usage.period.start
-            self._period_end = usage.period.end
-            self.usage_data = usage
+            self.usage_period = aggregated.period
+
+            # Find workspace summary for active workspace
+            workspace_summary = None
+            for ws in aggregated.workspaces:
+                if ws.workspace_id == config.active_workspace_id:
+                    workspace_summary = ws
+                    break
+
+            if not workspace_summary:
+                raise Exception(
+                    f"Workspace {config.active_workspace_id} not found in usage data"
+                )
+
+            self.usage_data = workspace_summary
         except Exception as e:
             self.log.error(f"Failed to fetch usage data: {e}", exc_info=True)
             if self._metrics_table:
@@ -91,9 +104,7 @@ class UsageOverviewSection(Container):
                     key="error",
                 )
 
-    def watch_usage_data(
-        self, usage: WorkspaceUsageWithDeploymentsResponse | None
-    ) -> None:
+    def watch_usage_data(self, usage: WorkspaceUsageSummary | None) -> None:
         """Update display when usage data changes"""
         if usage:
             # Always schedule update - call_after_refresh will handle timing
@@ -123,7 +134,7 @@ class UsageOverviewSection(Container):
         usage = self.usage_data
 
         # Always show workspace totals
-        metrics = usage.workspace_usage
+        metrics = usage.usage
         costs = metrics.costs
         if self._section_container:
             self._section_container.border_title = f"{Icons.COMPUTER} Workspace Totals"

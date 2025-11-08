@@ -8,9 +8,8 @@ from lazycloud_cli.ui.textual.components.listview import (
     ListItemData,
     ListView,
 )
-from lazycloud_cli.ui.textual.theme import Icons
 from shared.responses.usage import (
-    WorkspaceUsageWithDeploymentsResponse,
+    WorkspaceUsageSummary,
 )
 
 
@@ -18,7 +17,7 @@ class ActiveDeploymentsContainer(Container):
     """Container for active deployments list"""
 
     selected_deployment_id: reactive[str | None] = reactive(None)
-    usage_data: reactive[WorkspaceUsageWithDeploymentsResponse | None] = reactive(None)
+    usage_data: reactive[WorkspaceUsageSummary | None] = reactive(None)
 
     BINDINGS = [
         ("up,k", "cursor_up", "Move up"),
@@ -28,7 +27,9 @@ class ActiveDeploymentsContainer(Container):
     def __init__(self):
         super().__init__(id="active-deployments-container")
         self._list_view: ListView | None = None
-        self.border_title = f"[1] [bold {Colors.Hex.success}]Active[/bold {Colors.Hex.success}]"
+        self.border_title = (
+            f"[1] [bold {Colors.Hex.success}]Active[/bold {Colors.Hex.success}]"
+        )
 
     def compose(self) -> ComposeResult:
         """Compose the active deployments list"""
@@ -65,9 +66,7 @@ class ActiveDeploymentsContainer(Container):
                 if isinstance(first_item, ListItem) and first_item.item_data:
                     self.selected_deployment_id = first_item.item_data.id
 
-    def watch_usage_data(
-        self, usage_data: WorkspaceUsageWithDeploymentsResponse | None
-    ) -> None:
+    def watch_usage_data(self, usage_data: WorkspaceUsageSummary | None) -> None:
         """Update deployments list when usage data is loaded"""
         if not self._list_view:
             return
@@ -79,9 +78,7 @@ class ActiveDeploymentsContainer(Container):
             return
 
         # Filter active deployments
-        active_deployments = [
-            d for d in usage_data.deployments if d.status == "Active"
-        ]
+        active_deployments = [d for d in usage_data.deployments if d.status == "Active"]
 
         # Convert to list items
         active_items = []
@@ -109,12 +106,18 @@ class ActiveDeploymentsContainer(Container):
                 # Try to find selected deployment
                 try:
                     current_index = next(
-                        (idx for idx, item in enumerate(active_items) if item.id == self.selected_deployment_id),
+                        (
+                            idx
+                            for idx, item in enumerate(active_items)
+                            if item.id == self.selected_deployment_id
+                        ),
                         None,
                     )
                     if current_index is not None:
                         self.call_after_refresh(
-                            lambda idx=current_index: setattr(self._list_view, "index", idx)
+                            lambda idx=current_index: setattr(
+                                self._list_view, "index", idx
+                            )
                         )
                 except StopIteration:
                     pass
@@ -146,7 +149,7 @@ class InactiveDeploymentsContainer(Container):
     """Container for inactive deployments list"""
 
     selected_deployment_id: reactive[str | None] = reactive(None)
-    usage_data: reactive[WorkspaceUsageWithDeploymentsResponse | None] = reactive(None)
+    usage_data: reactive[WorkspaceUsageSummary | None] = reactive(None)
 
     BINDINGS = [
         ("up,k", "cursor_up", "Move up"),
@@ -156,7 +159,9 @@ class InactiveDeploymentsContainer(Container):
     def __init__(self):
         super().__init__(id="inactive-deployments-container")
         self._list_view: ListView | None = None
-        self.border_title = f"[2] [bold {Colors.Hex.warning}]Inactive[/bold {Colors.Hex.warning}]"
+        self.border_title = (
+            f"[2] [bold {Colors.Hex.warning}]Inactive[/bold {Colors.Hex.warning}]"
+        )
 
     def compose(self) -> ComposeResult:
         """Compose the inactive deployments list"""
@@ -193,9 +198,7 @@ class InactiveDeploymentsContainer(Container):
                 if isinstance(first_item, ListItem) and first_item.item_data:
                     self.selected_deployment_id = first_item.item_data.id
 
-    def watch_usage_data(
-        self, usage_data: WorkspaceUsageWithDeploymentsResponse | None
-    ) -> None:
+    def watch_usage_data(self, usage_data: WorkspaceUsageSummary | None) -> None:
         """Update deployments list when usage data is loaded"""
         if not self._list_view:
             return
@@ -233,12 +236,18 @@ class InactiveDeploymentsContainer(Container):
             if self.selected_deployment_id:
                 try:
                     current_index = next(
-                        (idx for idx, item in enumerate(inactive_items) if item.id == self.selected_deployment_id),
+                        (
+                            idx
+                            for idx, item in enumerate(inactive_items)
+                            if item.id == self.selected_deployment_id
+                        ),
                         None,
                     )
                     if current_index is not None:
                         self.call_after_refresh(
-                            lambda idx=current_index: setattr(self._list_view, "index", idx)
+                            lambda idx=current_index: setattr(
+                                self._list_view, "index", idx
+                            )
                         )
                 except StopIteration:
                     pass

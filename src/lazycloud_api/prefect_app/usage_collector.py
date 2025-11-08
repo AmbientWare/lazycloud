@@ -1,5 +1,6 @@
 from datetime import date, datetime, timedelta, timezone
 
+import yaml
 from loguru import logger
 from prefect import flow, task
 
@@ -7,7 +8,6 @@ from lazycloud_api.database import db
 from lazycloud_api.services import (
     get_metrics_service,
     get_polar_service,
-    get_usage_service,
 )
 from lazycloud_api.services.k8s import create_ns_name, create_release_name
 from shared.models.billing import (
@@ -15,6 +15,28 @@ from shared.models.billing import (
     UsageRecordStatus,
     UsageRecordType,
 )
+
+
+def sanitize_volume_name(name: str) -> str:
+    return name.lower().replace("_", "-").replace(".", "-")[:63].rstrip("-")
+
+
+def _parse_deployment_volumes(compose_yaml: str, deployment_id: str) -> set[str]:
+    """Parse volume names from Docker Compose YAML."""
+    deployment_volumes: set[str] = set()
+
+    try:
+        compose_data = yaml.safe_load(compose_yaml)
+        if compose_data and "volumes" in compose_data:
+            for vol_name in compose_data["volumes"].keys():
+                sanitized = sanitize_volume_name(vol_name)
+                deployment_volumes.add(sanitized)
+    except Exception as e:
+        logger.warning(
+            f"Failed to parse compose YAML for deployment {deployment_id}: {e}"
+        )
+
+    return deployment_volumes
 
 
 async def _get_deployment_map(workspace_id: str) -> dict[str, str]:
@@ -34,16 +56,13 @@ async def _get_deployment_map(workspace_id: str) -> dict[str, str]:
 async def _get_pvc_deployment_map(workspace_id: str) -> dict[str, str]:
     """Get mapping of sanitized PVC name -> deployment_id for active deployments."""
     deployments = await db.compose_deployments.afind({"workspace_id": workspace_id})
-    usage_service = get_usage_service()
 
     pvc_map = {}
     for deployment in deployments:
         if not deployment.compose_yaml:
             continue
 
-        volumes = usage_service._parse_deployment_volumes(
-            deployment.compose_yaml, deployment.id
-        )
+        volumes = _parse_deployment_volumes(deployment.compose_yaml, deployment.id)
         for volume_name in volumes:
             pvc_map[volume_name] = deployment.id
 

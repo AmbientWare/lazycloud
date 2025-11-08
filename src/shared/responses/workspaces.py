@@ -31,4 +31,6 @@ class WorkspaceWithDeploymentsResponse(BaseModel):
     name: str
     is_personal: bool
     role: str
+    has_more: bool
     deployments: list[DeploymentOverview]
+    cursor: str | None = None

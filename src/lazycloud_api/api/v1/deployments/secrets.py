@@ -11,7 +11,9 @@ from shared.models.secrets import Secret, SecretState
 from shared.requests.secrets import SecretsRequest
 from shared.responses.secrets import SecretsResponse, SecretsStoredResponse
 
-secrets_router = APIRouter(prefix="/secrets", dependencies=[Depends(require_admin)])
+secrets_router = APIRouter(
+    prefix="/{deployment_id}/secrets", dependencies=[Depends(require_admin)]
+)
 
 
 async def _require_admin_for_secret_values(
