@@ -51,15 +51,6 @@ class ValidationResult(BaseModel):
     can_deploy: bool
 
 
-class ServiceResourceStatus(BaseModel):
-    """Status of a service resource."""
-
-    type: str  # container, volume, network, config
-    name: str
-    status: str  # running, stopped, pending, error
-    message: str | None = None
-
-
 class DeploymentStatusResponse(BaseModel):
     """Response for deployment status."""
 

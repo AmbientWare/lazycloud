@@ -125,23 +125,3 @@ class DeploymentUsageOverview(BaseModel):
     deployment_name: str
     usage: UsageMetrics
     status: Literal["Active", "Inactive"]
-
-
-class DeploymentUsageBreakdown(BaseModel):
-    """Usage and cost breakdown for a single deployment (with detailed service/volume breakdown)"""
-
-    deployment_id: str
-    deployment_name: str
-    usage: UsageMetrics
-    cost_breakdown: WorkspaceCostBreakdownResponse
-
-
-class WorkspaceUsageWithDeploymentsResponse(BaseModel):
-    """Workspace usage with deployment overviews in one response"""
-
-    workspace_id: str
-    period: UsagePeriodInfo
-    workspace_usage: UsageMetrics
-    record_count: int
-    deployments: list[DeploymentUsageOverview]
-    workspace_status: Literal["Active", "Inactive"]
