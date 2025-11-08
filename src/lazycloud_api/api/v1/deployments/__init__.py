@@ -6,10 +6,10 @@ from .statuses import status_router
 from .usage import usage_router
 
 # Combine all deployment routes into one router
-deployments_router.include_router(status_router, prefix="/{deployment_id}")
-deployments_router.include_router(instances_router, prefix="/{deployment_id}")
-deployments_router.include_router(secrets_router, prefix="/{deployment_id}")
-deployments_router.include_router(services_router, prefix="/{deployment_id}")
-deployments_router.include_router(usage_router, prefix="/{deployment_id}")
+deployments_router.include_router(status_router)
+deployments_router.include_router(instances_router)
+deployments_router.include_router(secrets_router)
+deployments_router.include_router(services_router)
+deployments_router.include_router(usage_router)
 
 __all__ = ["deployments_router"]

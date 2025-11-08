@@ -16,15 +16,17 @@ from lazycloud_cli.ui.textual.usage.containers.breakdown.tables import (
     VolumesCostTable,
 )
 from shared.responses.usage import (
+    UsagePeriodInfo,
     WorkspaceCostBreakdownResponse,
-    WorkspaceUsageWithDeploymentsResponse,
+    WorkspaceUsageSummary,
 )
 
 
 class DeploymentBreakdownSection(Container):
     """Section showing deployment breakdown with services and volumes"""
 
-    usage_data: reactive[WorkspaceUsageWithDeploymentsResponse | None] = reactive(None)
+    usage_data: reactive[WorkspaceUsageSummary | None] = reactive(None)
+    usage_period: reactive[UsagePeriodInfo | None] = reactive(None)
     selected_deployment_id: reactive[str | None] = reactive(None)
 
     def __init__(self):
@@ -53,9 +55,7 @@ class DeploymentBreakdownSection(Container):
             self._scroll.styles.width = "100%"
             self._scroll.styles.height = "100%"
 
-    def watch_usage_data(
-        self, usage: WorkspaceUsageWithDeploymentsResponse | None
-    ) -> None:
+    def watch_usage_data(self, usage: WorkspaceUsageSummary | None) -> None:
         """Update display when usage data changes"""
         # Cancel any pending fetches when usage data changes (new date range)
         if self._fetch_worker and not self._fetch_worker.is_finished:
@@ -231,9 +231,11 @@ class DeploymentBreakdownSection(Container):
             if self.selected_deployment_id != deployment_id:
                 return
 
-            # Get date range from usage_data
-            start_date = self.usage_data.period.start
-            end_date = self.usage_data.period.end
+            # Get date range from usage_period
+            if not self.usage_period:
+                return
+            start_date = self.usage_period.start
+            end_date = self.usage_period.end
 
             # Fetch breakdown
             breakdown = await asyncio.to_thread(

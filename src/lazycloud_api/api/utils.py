@@ -149,3 +149,15 @@ def get_utc_midnight_for_calendar_day(calendar_day: str, tz: ZoneInfo) -> dateti
         tzinfo=tz, hour=0, minute=0, second=0, microsecond=0
     )
     return local_midnight.astimezone(timezone.utc)
+
+
+def normalize_usage_date_range(
+    start_date: datetime | None, end_date: datetime | None
+) -> tuple[datetime, datetime]:
+    """Normalize date range for usage queries (defaults to current month)."""
+    now = datetime.now(timezone.utc)
+    if not start_date:
+        start_date = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    if not end_date:
+        end_date = now
+    return start_date, end_date

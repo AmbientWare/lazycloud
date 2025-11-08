@@ -1,5 +1,5 @@
 import yaml
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
 from sqlalchemy.exc import IntegrityError
 
@@ -38,12 +38,11 @@ deployments_router = APIRouter(prefix="/deployments", tags=["deployments"])
 @deployments_router.get("", response_model=DeploymentListResponse)
 async def list_deployments(
     workspace_id: str,
-    skip: int = 0,
-    limit: int = 100,
-    status: str | None = None,
-    deployment_id: str | None = None,
-    name: str | None = None,
-    current_user: UserPydantic = Depends(get_current_active_user),
+    cursor: str | None = Query(None, description="Cursor to start from"),
+    limit: int = Query(100, description="Limit the number of deployments returned"),
+    status: str | None = Query(None, description="Status to filter by"),
+    deployment_id: str | None = Query(None, description="Deployment ID to filter by"),
+    name: str | None = Query(None, description="Name to filter by"),
     _: None = Depends(require_workspace_member),
 ) -> DeploymentListResponse:
     """List compose deployments."""
@@ -56,8 +55,9 @@ async def list_deployments(
         filters["name"] = name
 
     try:
+        offset = int(cursor) if cursor else 0
         total, deployments = await db.compose_deployments.afind_paginated(
-            filters=filters, skip=skip, limit=limit, include_deleted=False
+            filters=filters, offset=offset, limit=limit, include_deleted=False
         )
 
         deployment_responses = [
@@ -79,8 +79,11 @@ async def list_deployments(
         return DeploymentListResponse(
             deployments=deployment_responses,
             total=total,
-            skip=skip,
+            cursor=str(offset + limit)
+            if total is not None and total > offset + limit
+            else None,
             limit=limit,
+            has_more=total is not None and total > offset + limit,
         )
 
     except Exception as e:

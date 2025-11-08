@@ -56,14 +56,15 @@ def get_user_onboarding_service() -> UserOnboardingService:
 
 @lru_cache(maxsize=1)
 def get_usage_service() -> UsageService:
-    return UsageService()
+    return UsageService(
+        cost_service=get_cost_breakdown_service(),
+    )
 
 
 @lru_cache(maxsize=1)
 def get_cost_breakdown_service() -> CostBreakdownService:
     return CostBreakdownService(
         polar_service=get_polar_service(),
-        usage_service=get_usage_service(),
     )
 
 

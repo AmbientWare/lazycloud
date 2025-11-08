@@ -149,21 +149,6 @@ async def get_deployment_with_admin_access_for_usage(
     )
 
 
-async def check_deployment_exists_with_admin_access(
-    deployment_id: str,
-    current_user: UserPydantic = Depends(get_current_active_user),
-) -> ComposeDeploymentPydantic | None:
-    """Check if deployment exists and user has admin/owner access"""
-    deployment, role = await db.compose_deployments.aget_with_workspace_access(
-        deployment_id, current_user.id
-    )
-
-    if role not in [WorkspaceRole.OWNER, WorkspaceRole.ADMIN]:
-        raise HTTPException(403, "Admin or owner role required")
-
-    return deployment
-
-
 async def get_user_product_features(
     current_user: UserPydantic = Depends(get_current_active_user),
 ) -> BaseFeatures:

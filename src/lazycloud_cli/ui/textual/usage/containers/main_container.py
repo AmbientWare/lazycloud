@@ -4,7 +4,7 @@ from textual.containers import Horizontal, Vertical
 from lazycloud_cli.config import config
 from lazycloud_cli.ui.textual.components import Container
 from lazycloud_cli.ui.textual.components.listview import ListItem
-from shared.responses.usage import WorkspaceUsageWithDeploymentsResponse
+from shared.responses.usage import UsagePeriodInfo, WorkspaceUsageSummary
 
 from .breakdown import DeploymentBreakdownSection
 from .deployments_list import ActiveDeploymentsContainer, InactiveDeploymentsContainer
@@ -73,13 +73,18 @@ class UsageMainContainer(Container):
                 "usage_data",
                 self._on_usage_data_loaded,
             )
+            self.watch(
+                self._overview,
+                "usage_period",
+                self._on_period_changed,
+            )
 
-    def _on_usage_data_loaded(
-        self, usage_data: WorkspaceUsageWithDeploymentsResponse | None
-    ) -> None:
+    def _on_usage_data_loaded(self, usage_data: WorkspaceUsageSummary | None) -> None:
         """Handle usage data loaded - share with breakdown component and deployments lists"""
         if self._breakdown:
             self._breakdown.usage_data = usage_data
+            if self._overview:
+                self._breakdown.usage_period = self._overview.usage_period
         if self._active_deployments:
             self._active_deployments.usage_data = usage_data
         if self._inactive_deployments:
@@ -120,15 +125,19 @@ class UsageMainContainer(Container):
                         lambda: self.app.set_focus(self._inactive_deployments)
                     )
 
-        # Update main container title with date range
-        if usage_data and usage_data.period:
-            period_start = usage_data.period.start.strftime("%b %d")
-            period_end = usage_data.period.end.strftime("%b %d, %Y")
+    def _on_period_changed(self, period: UsagePeriodInfo | None) -> None:
+        """Update main container title with date range and share period with breakdown"""
+        if period:
+            period_start = period.start.strftime("%b %d")
+            period_end = period.end.strftime("%b %d, %Y")
             self.border_title = (
                 f"Workspace: {self._workspace_name} • {period_start} - {period_end}"
             )
         else:
             self.border_title = f"Workspace: {self._workspace_name}"
+
+        if self._breakdown:
+            self._breakdown.usage_period = period
 
     def _on_deployment_selected(self, deployment_id: str | None) -> None:
         """Handle deployment selection change"""

@@ -20,7 +20,7 @@ from shared.responses.usage import (
     WorkspaceCostBreakdownResponse,
 )
 
-usage_router = APIRouter(prefix="/usage")
+usage_router = APIRouter(prefix="/{deployment_id}/usage")
 
 # Constants
 MAX_DATE_RANGE_DAYS = 365  # 1 year maximum

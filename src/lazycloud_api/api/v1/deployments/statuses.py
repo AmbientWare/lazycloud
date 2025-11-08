@@ -7,7 +7,7 @@ from lazycloud_api.database.compose import ComposeDeploymentPydantic
 from lazycloud_api.services.monitoring.monitor_config import DeploymentMonitorConfig
 from shared.models.monitoring import StreamEventType
 
-status_router = APIRouter(prefix="/status")
+status_router = APIRouter(prefix="/{deployment_id}/status")
 
 
 @status_router.get("/stream")

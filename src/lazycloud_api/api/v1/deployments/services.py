@@ -21,7 +21,7 @@ from shared.models.statuses import TaskStatus
 from shared.responses.services import ServiceStatusResponse
 from shared.responses.tasks import ServiceTaskStatusResponse
 
-services_router = APIRouter(prefix="/services")
+services_router = APIRouter(prefix="/{deployment_id}/services")
 
 
 @services_router.get(

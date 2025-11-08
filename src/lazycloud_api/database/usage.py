@@ -24,7 +24,6 @@ from lazycloud_api.database.base import (
 )
 from lazycloud_api.database.session import session_manager
 from shared.models.billing import (
-    UsageCollectionConfig,
     UsageRecordStatus,
     UsageRecordType,
 )
@@ -392,23 +391,3 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
             )
             records = result.scalars().all()
             return [record.to_pydantic(UsageRecordPydantic) for record in records]
-
-    async def get_latest_interval_usage(
-        self, workspace_id: str
-    ) -> UsageRecordPydantic | None:
-        """Get the most recent interval usage record based on current collection config."""
-        async with session_manager.get_session() as session:
-            result = await session.execute(
-                select(UsageRecordTable)
-                .where(UsageRecordTable.workspace_id == workspace_id)
-                .where(
-                    UsageRecordTable.record_type
-                    == UsageCollectionConfig.get_record_type().value
-                )
-                .order_by(UsageRecordTable.collection_end.desc())
-                .limit(1)
-            )
-            record = result.scalar_one_or_none()
-            if record:
-                return record.to_pydantic(UsageRecordPydantic)
-            return None

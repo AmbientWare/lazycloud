@@ -1,157 +1,19 @@
-from datetime import datetime
+import asyncio
 
-from fastapi import HTTPException
+from loguru import logger
 
-from lazycloud_api.database import db
 from lazycloud_api.services.polar import PolarService
-from lazycloud_api.services.usage_service import UsageService
-from shared.models.billing import SECONDS_PER_HOUR, UsageCollectionConfig
-from shared.responses.usage import (
-    MeterCostBreakdown,
-    ServiceCostBreakdown,
-    UsagePeriodInfo,
-    VolumeCostBreakdown,
-    WorkspaceCostBreakdownResponse,
-)
+from shared.responses.usage import DailyUsageData, MeterCostBreakdown, UsageMetrics
 
 
 class CostBreakdownService:
-    """Service for calculating and retrieving workspace cost breakdowns."""
+    """Service for calculating and retrieving workspace cost breakdowns"""
 
     def __init__(
         self,
         polar_service: PolarService,
-        usage_service: UsageService,
     ):
         self.polar_service = polar_service
-        self.usage_service = usage_service
-
-    async def get_deployment_cost_breakdown(
-        self,
-        workspace_id: str,
-        deployment_id: str,
-        external_customer_id: str,
-    ) -> WorkspaceCostBreakdownResponse:
-        """Get detailed cost breakdown for a specific deployment"""
-        polar_service = self.polar_service
-        usage_service = self.usage_service
-
-        # Verify deployment exists and belongs to workspace
-        deployment = await db.compose_deployments.aget_by_id(
-            deployment_id, include_deleted=True
-        )
-        if not deployment or deployment.workspace_id != workspace_id:
-            raise HTTPException(status_code=404, detail="Deployment not found")
-
-        # Get usage breakdown
-        (
-            metrics,
-            services,
-            volumes,
-            usage_record,
-        ) = await usage_service.get_workspace_usage_breakdown(
-            workspace_id=workspace_id,
-            deployment_id=deployment_id,
-        )
-
-        if not usage_record:
-            raise HTTPException(status_code=404, detail="Usage record not found")
-
-        # Calculate costs
-        cost_breakdown = await polar_service.cost_breakdown.calculate_workspace_costs(
-            external_customer_id=external_customer_id,
-            cpu_core_hours=metrics.cpu_core_hours,
-            memory_gb_hours=metrics.memory_gb_hours,
-            s3_gb_hours=metrics.s3_gb_hours,
-            efs_gb_hours=metrics.efs_gb_hours,
-            service_usage=services,
-            volume_usage=volumes,
-        )
-
-        return WorkspaceCostBreakdownResponse(
-            workspace_id=workspace_id,
-            period=UsagePeriodInfo(
-                start=usage_record.collection_start,
-                end=usage_record.collection_end,
-            ),
-            meter_breakdown=MeterCostBreakdown(
-                cpu_cost=cost_breakdown.meter_breakdown.cpu_cost,
-                memory_cost=cost_breakdown.meter_breakdown.memory_cost,
-                s3_cost=cost_breakdown.meter_breakdown.s3_cost,
-                efs_cost=cost_breakdown.meter_breakdown.efs_cost,
-                total_cost=cost_breakdown.meter_breakdown.total_cost,
-            ),
-            service_breakdown=[
-                ServiceCostBreakdown(
-                    service_name=s.service_name,
-                    cpu_core_hours=s.cpu_core_hours,
-                    memory_gb_hours=s.memory_gb_hours,
-                    cpu_cost=s.cpu_cost,
-                    memory_cost=s.memory_cost,
-                    total_compute_cost=s.total_compute_cost,
-                    percentage_of_total=s.percentage_of_total,
-                )
-                for s in cost_breakdown.service_breakdown
-            ],
-            volume_breakdown=[
-                VolumeCostBreakdown(
-                    volume_name=v.volume_name,
-                    storage_class=v.storage_class,
-                    storage_cost=v.storage_cost,
-                    percentage_of_total=v.percentage_of_total,
-                )
-                for v in cost_breakdown.volume_breakdown
-            ],
-            is_estimated=True,
-        )
-
-    async def get_aggregated_cost_breakdown(
-        self,
-        workspace_id: str,
-        start_date: datetime,
-        end_date: datetime,
-        external_customer_id: str,
-    ) -> WorkspaceCostBreakdownResponse:
-        """Get aggregated cost breakdown for a date range"""
-        polar_service = self.polar_service
-
-        # Get all usage records in date range
-        usage_records = await db.usage.get_workspace_usage(
-            workspace_id=workspace_id,
-            start_date=start_date,
-            end_date=end_date,
-            record_type=UsageCollectionConfig.get_record_type(),
-        )
-
-        # Aggregate usage
-        total_cpu_seconds = sum(r.cpu_core_seconds for r in usage_records)
-        total_memory_seconds = sum(r.memory_gb_seconds for r in usage_records)
-        total_s3_hours = sum(r.s3_gb_hours for r in usage_records)
-        total_efs_hours = sum(r.efs_gb_hours for r in usage_records)
-
-        # Calculate costs
-        cost_breakdown = await polar_service.cost_breakdown.calculate_workspace_costs(
-            external_customer_id=external_customer_id,
-            cpu_core_hours=total_cpu_seconds / SECONDS_PER_HOUR,
-            memory_gb_hours=total_memory_seconds / SECONDS_PER_HOUR,
-            s3_gb_hours=total_s3_hours,
-            efs_gb_hours=total_efs_hours,
-        )
-
-        return WorkspaceCostBreakdownResponse(
-            workspace_id=workspace_id,
-            period=UsagePeriodInfo(start=start_date, end=end_date),
-            meter_breakdown=MeterCostBreakdown(
-                cpu_cost=cost_breakdown.meter_breakdown.cpu_cost,
-                memory_cost=cost_breakdown.meter_breakdown.memory_cost,
-                s3_cost=cost_breakdown.meter_breakdown.s3_cost,
-                efs_cost=cost_breakdown.meter_breakdown.efs_cost,
-                total_cost=cost_breakdown.meter_breakdown.total_cost,
-            ),
-            service_breakdown=[],
-            volume_breakdown=[],
-            is_estimated=True,
-        )
 
     async def calculate_costs_from_usage(
         self,
@@ -162,6 +24,9 @@ class CostBreakdownService:
         external_customer_id: str,
     ) -> MeterCostBreakdown:
         """Calculate costs from usage metrics without requiring database records"""
+        if not self.polar_service.enabled:
+            raise ValueError("Polar service is not enabled. Cannot calculate costs.")
+
         cost_breakdown = (
             await self.polar_service.cost_breakdown.calculate_workspace_costs(
                 external_customer_id=external_customer_id,
@@ -179,3 +44,71 @@ class CostBreakdownService:
             efs_cost=cost_breakdown.meter_breakdown.efs_cost,
             total_cost=cost_breakdown.meter_breakdown.total_cost,
         )
+
+    async def calculate_costs_batch(
+        self,
+        usages: list[UsageMetrics],
+        external_customer_id: str,
+    ) -> list[MeterCostBreakdown | None]:
+        """Calculate costs for multiple usage metrics in parallel.
+
+        Returns a list of cost breakdowns, with None for any that failed to calculate.
+        """
+        if not self.polar_service.enabled:
+            return []
+
+        cost_tasks = [
+            self.calculate_costs_from_usage(
+                cpu_core_hours=usage.cpu_core_hours,
+                memory_gb_hours=usage.memory_gb_hours,
+                s3_gb_hours=usage.s3_gb_hours,
+                efs_gb_hours=usage.efs_gb_hours,
+                external_customer_id=external_customer_id,
+            )
+            for usage in usages
+            if usage is not None
+        ]
+        cost_results_raw = await asyncio.gather(*cost_tasks, return_exceptions=True)
+        cost_results = [
+            r if not isinstance(r, Exception) else None for r in cost_results_raw
+        ]
+        for result in cost_results_raw:
+            if isinstance(result, Exception):
+                logger.warning(f"Failed to calculate costs: {result}", exc_info=True)
+
+        return cost_results
+
+    async def calculate_costs_for_daily_data(
+        self,
+        daily_data: dict[str, DailyUsageData],
+        external_customer_id: str,
+    ) -> None:
+        """Calculate costs for each day's usage data and attach to the data structures."""
+        if not self.polar_service.enabled:
+            return
+
+        cost_tasks = [
+            self.calculate_costs_from_usage(
+                cpu_core_hours=day_data.cpu_core_hours,
+                memory_gb_hours=day_data.memory_gb_hours,
+                s3_gb_hours=day_data.s3_gb_hours,
+                efs_gb_hours=day_data.efs_gb_hours,
+                external_customer_id=external_customer_id,
+            )
+            for day_data in daily_data.values()
+        ]
+
+        cost_results = await asyncio.gather(*cost_tasks, return_exceptions=True)
+
+        for (day_key, day_data), cost_result in zip(daily_data.items(), cost_results):
+            if isinstance(cost_result, Exception):
+                logger.warning(
+                    f"Failed to calculate costs for {day_key}: {cost_result}",
+                    exc_info=True,
+                )
+            else:
+                day_data.costs = cost_result
+
+    def is_enabled(self) -> bool:
+        """Check if cost calculation is enabled (Polar service is configured)."""
+        return self.polar_service.enabled

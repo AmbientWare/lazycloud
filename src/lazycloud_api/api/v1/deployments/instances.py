@@ -16,7 +16,7 @@ from shared.models.monitoring import StreamEventType
 from shared.models.statuses import TaskStatus
 from shared.responses.tasks import InstanceTaskStatusResponse
 
-instances_router = APIRouter(prefix="/instances")
+instances_router = APIRouter(prefix="/{deployment_id}/instances")
 
 
 def _find_service_for_pod(
