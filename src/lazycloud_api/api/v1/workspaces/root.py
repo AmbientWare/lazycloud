@@ -102,15 +102,18 @@ async def get_workspace_with_deployments(
             if not deployment.id or not deployment.name:
                 continue
 
-            # Calculate service and volume counts from helm_values
+            # Calculate service, volume, and network counts from helm_values
             service_count = 0
             volume_count = 0
+            network_count = 0
 
             if deployment.helm_values:
                 if deployment.helm_values.services:
                     service_count = len(deployment.helm_values.services)
                 if deployment.helm_values.volumes:
                     volume_count = len(deployment.helm_values.volumes)
+                if deployment.helm_values.networks:
+                    network_count = len(deployment.helm_values.networks)
 
             deployment_overviews.append(
                 DeploymentOverview(
@@ -125,6 +128,7 @@ async def get_workspace_with_deployments(
                     deployed_at=deployment.deployed_at,
                     service_count=service_count,
                     volume_count=volume_count,
+                    network_count=network_count,
                     ready_services=None,  # Not available without K8s call
                 )
             )
