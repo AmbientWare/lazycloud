@@ -1,23 +1,18 @@
 {{/*
-Create PersistentVolumeClaims for each volume (except for StatefulSet volumes which use volumeClaimTemplates)
+Create PersistentVolumeClaims for each volume
 */}}
 {{- range $volume := .Values.volumes }}
 {{- if $volume.enabled }}
 {{- $volumeNamespace := $.Release.Namespace }}
-{{- $isStatefulSetVolume := false }}
 {{- range $service := $.Values.services }}
 {{- if $service.enabled }}
 {{- range $serviceVolume := $service.volumes }}
 {{- if eq $serviceVolume.name $volume.name }}
 {{- $volumeNamespace = include "lazycloud-compose.serviceNamespace" (dict "serviceName" $service.name "Values" $.Values "root" $) }}
-{{- if eq ($service.workloadType | default "Deployment") "StatefulSet" }}
-{{- $isStatefulSetVolume = true }}
 {{- end }}
 {{- end }}
 {{- end }}
 {{- end }}
-{{- end }}
-{{- if not $isStatefulSetVolume }}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -50,6 +45,5 @@ spec:
   {{- if or $volume.storageClass $.Values.defaultStorage.storageClass }}
   storageClassName: {{ $volume.storageClass | default $.Values.defaultStorage.storageClass }}
   {{- end }}
-{{- end }}
 {{- end }}
 {{- end }}

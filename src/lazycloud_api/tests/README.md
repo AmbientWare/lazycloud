@@ -18,7 +18,6 @@ Tests for the Helm values generator (`services/k8s/helm_values_generator.py`):
 - Resource conversion (CPU/memory limits and requests)
 - HPA configuration generation
 - Ingress configuration with petnames
-- StatefulSet auto-detection
 - ConfigMap generation from labels
 - Metrics/Prometheus annotations
 - Restart policy mapping
@@ -29,7 +28,6 @@ Tests for the Helm values generator (`services/k8s/helm_values_generator.py`):
 End-to-end integration tests:
 - Complete pipeline from Docker Compose to Helm values
 - Comprehensive service configuration testing
-- StatefulSet vs Deployment detection
 - Volume management across services
 - Validation warnings generation
 - YAML serialization compatibility
@@ -94,7 +92,7 @@ The `conftest.py` file provides shared fixtures:
 - Extension fields (x- prefixed)
 
 ### Kubernetes Generation ✅
-- **Workload Types**: Deployment vs StatefulSet auto-detection
+- **Workload Types**: Deployment generation
 - **Resources**: CPU/memory limits and requests conversion
 - **Scaling**: HPA with CPU/memory targets and scaling policies
 - **Networking**: Ingress with hostname prefixes and TLS
@@ -106,7 +104,6 @@ The `conftest.py` file provides shared fixtures:
 
 ### Production Features ✅
 - Auto-generated petnames for ingress
-- StatefulSet detection for databases
 - Resource unit conversion (G→Gi, M→Mi)
 - Port range and IP binding support
 - Validation warnings for unsupported features

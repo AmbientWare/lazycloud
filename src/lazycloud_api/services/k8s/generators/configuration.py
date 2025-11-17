@@ -19,7 +19,7 @@ def generate_service_volumes_values(
 ) -> list[VolumeMount]:
     """Generate Helm values for service volume mounts, only for defined volumes."""
     volumes_values = []
-    defined_volumes = compose.volumes or {}
+    defined_volumes = {v.name: v for v in (compose.volumes or [])}
 
     for volume in volumes:
         volume_name = None

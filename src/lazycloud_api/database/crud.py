@@ -16,6 +16,7 @@ from lazycloud_api.database.user_workspaces import (
     WorkspaceRole,
 )
 from lazycloud_api.database.users import (
+    SubscriptionState,
     UserPydantic,
     UserRole,
     UserService,
@@ -44,6 +45,7 @@ async def update_admin_api_keys():
                 clerk_id="lzy_admin",
                 role=UserRole.ADMIN,
                 status=UserStatus.ACTIVE,
+                subscription_state=SubscriptionState.WITHIN_LIMITS,
             )
             user = await user_service.acreate(user, session=session)
 

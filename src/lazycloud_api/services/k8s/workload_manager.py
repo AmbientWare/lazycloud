@@ -5,7 +5,8 @@ from loguru import logger
 from pydantic import BaseModel
 
 from lazycloud_api.services.k8s.client import get_apps_v1_api
-from shared.models.helm import HelmValues, ServiceValues, WorkloadType
+from shared.models.helm import HelmValues, ServiceValues
+from shared.models.k8s import WorkloadType
 
 
 class RestartResult(BaseModel):
@@ -59,12 +60,6 @@ class WorkloadManager:
 
             if resource_type.lower() == "deployment":
                 apps_v1.patch_namespaced_deployment(
-                    name=resource_name,
-                    namespace=namespace,
-                    body=patch_body,
-                )
-            elif resource_type.lower() == "statefulset":
-                apps_v1.patch_namespaced_stateful_set(
                     name=resource_name,
                     namespace=namespace,
                     body=patch_body,
@@ -181,21 +176,6 @@ class WorkloadManager:
                     else:
                         return False, "Rollout in progress"
 
-            elif resource_type.lower() == "statefulset":
-                statefulset = apps_v1.read_namespaced_stateful_set(
-                    name=resource_name, namespace=namespace
-                )
-                if statefulset.status:
-                    # Check if all replicas are ready and updated
-                    if (
-                        statefulset.status.ready_replicas == statefulset.spec.replicas
-                        and statefulset.status.updated_replicas
-                        == statefulset.spec.replicas
-                    ):
-                        return True, "StatefulSet rollout complete"
-                    else:
-                        return False, "Rollout in progress"
-
             return False, "Unknown status"
 
         except ApiException as e:
@@ -220,12 +200,6 @@ class WorkloadManager:
                     namespace=namespace,
                     body=patch_body,
                 )
-            elif resource_type.lower() == "statefulset":
-                apps_v1.patch_namespaced_stateful_set(
-                    name=resource_name,
-                    namespace=namespace,
-                    body=patch_body,
-                )
             else:
                 return False, f"Unsupported resource type: {resource_type}"
 
@@ -245,9 +219,8 @@ class WorkloadManager:
         logger.info(
             f"Determining workload type for service {service.name} for workload type {service.workloadType}"
         )
-        workload_type = service.workloadType
-        if workload_type in ["statefulset", "deployment", "daemonset"]:
-            return workload_type
+        if service.workloadType == WorkloadType.DEPLOYMENT:
+            return service.workloadType.value
 
         # Default to deployment
-        return WorkloadType.DEPLOYMENT
+        return WorkloadType.DEPLOYMENT.value

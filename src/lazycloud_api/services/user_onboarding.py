@@ -9,7 +9,12 @@ from lazycloud_api.database.user_workspaces import (
     UserWorkspaceStatus,
     WorkspaceRole,
 )
-from lazycloud_api.database.users import UserPydantic, UserRole, UserStatus
+from lazycloud_api.database.users import (
+    SubscriptionState,
+    UserPydantic,
+    UserRole,
+    UserStatus,
+)
 from lazycloud_api.database.utils import generate_api_key, generate_api_key_expires_at
 from lazycloud_api.database.workspaces import WorkspacePydantic
 from lazycloud_api.services import PolarService
@@ -55,6 +60,7 @@ class UserOnboardingService:
                     clerk_id=clerk_id,
                     role=UserRole.ADMIN,
                     status=UserStatus.ACTIVE,
+                    subscription_state=SubscriptionState.WITHIN_LIMITS,
                 )
                 user = await db.users.acreate(user, session=session)
 

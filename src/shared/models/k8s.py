@@ -8,8 +8,6 @@ class WorkloadType(StrEnum):
     """Kubernetes workload types."""
 
     DEPLOYMENT = "Deployment"
-    STATEFULSET = "StatefulSet"
-    DAEMONSET = "DaemonSet"
     REPLICASET = "ReplicaSet"
     JOB = "Job"
     CRONJOB = "CronJob"
@@ -234,26 +232,6 @@ class DeploymentSpec(BaseModel):
     progress_deadline_seconds: int | None = Field(None, alias="progressDeadlineSeconds")
 
 
-class StatefulSetSpec(BaseModel):
-    """StatefulSet specification."""
-
-    replicas: int | None = 1
-    selector: dict[str, Any]
-    template: PodTemplateSpec
-    service_name: str = Field(..., alias="serviceName")
-    pod_management_policy: str | None = Field(
-        "OrderedReady", alias="podManagementPolicy"
-    )
-    update_strategy: dict[str, Any] | None = Field(None, alias="updateStrategy")
-    volume_claim_templates: list[dict[str, Any]] | None = Field(
-        None, alias="volumeClaimTemplates"
-    )
-    persistent_volume_claim_retention_policy: dict[str, Any] | None = Field(
-        None, alias="persistentVolumeClaimRetentionPolicy"
-    )
-    revision_history_limit: int | None = Field(None, alias="revisionHistoryLimit")
-
-
 # ============================================================================
 # Status Objects
 # ============================================================================
@@ -270,21 +248,6 @@ class DeploymentStatus(BaseModel):
     unavailable_replicas: int | None = Field(0, alias="unavailableReplicas")
     conditions: list[dict[str, Any]] | None = None
     collision_count: int | None = Field(None, alias="collisionCount")
-
-
-class StatefulSetStatus(BaseModel):
-    """StatefulSet status."""
-
-    observed_generation: int | None = Field(None, alias="observedGeneration")
-    replicas: int | None = 0
-    ready_replicas: int | None = Field(0, alias="readyReplicas")
-    current_replicas: int | None = Field(0, alias="currentReplicas")
-    updated_replicas: int | None = Field(0, alias="updatedReplicas")
-    available_replicas: int | None = Field(0, alias="availableReplicas")
-    collision_count: int | None = Field(None, alias="collisionCount")
-    current_revision: str | None = Field(None, alias="currentRevision")
-    update_revision: str | None = Field(None, alias="updateRevision")
-    conditions: list[dict[str, Any]] | None = None
 
 
 class PodStatus(BaseModel):
@@ -331,16 +294,6 @@ class Deployment(BaseModel):
     metadata: ObjectMeta
     spec: DeploymentSpec
     status: DeploymentStatus | None = None
-
-
-class StatefulSet(BaseModel):
-    """Kubernetes StatefulSet resource."""
-
-    api_version: str = Field("apps/v1", alias="apiVersion")
-    kind: str = "StatefulSet"
-    metadata: ObjectMeta
-    spec: StatefulSetSpec
-    status: StatefulSetStatus | None = None
 
 
 class Pod(BaseModel):

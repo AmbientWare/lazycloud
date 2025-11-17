@@ -14,6 +14,10 @@ class DeploymentFeature(BaseModel):
     service_limit: int = Field(description="Maximum services per deployment")
     volume_limit: int = Field(description="Maximum volumes per deployment")
     network_limit: int = Field(description="Maximum networks per deployment")
+    max_replicas_per_service: int = Field(
+        default=10,
+        description="Maximum replicas allowed per service (for scaling limits)",
+    )
 
 
 class BaseFeatures(BaseModel):

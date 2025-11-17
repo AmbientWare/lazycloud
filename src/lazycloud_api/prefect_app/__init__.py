@@ -4,6 +4,8 @@ from prefect.task_worker import serve as task_worker_serve
 from lazycloud_api.prefect_app.compose import (
     deploy_compose_task,
     destroy_compose_task,
+    reconcile_rollback_states_deployment,
+    rollback_compose_task,
 )
 from lazycloud_api.prefect_app.instances import delete_instance_task
 from lazycloud_api.prefect_app.services import (
@@ -27,6 +29,7 @@ def serve_prefect_tasks():
     task_worker_serve(
         deploy_compose_task,
         destroy_compose_task,
+        rollback_compose_task,
         delete_instance_task,
         restart_service_task,
         restart_all_services_task,
@@ -41,6 +44,7 @@ def serve_deployments():
         process_incomplete_usage_deployment,
         forward_for_billing_deployment,
         monitor_subscription_states_deployment,
+        reconcile_rollback_states_deployment,
     )
 
 

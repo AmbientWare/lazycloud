@@ -17,18 +17,25 @@ from lazycloud_api.database import db
 from lazycloud_api.database.compose import ComposeDeploymentPydantic
 from lazycloud_api.database.user_workspaces import WorkspaceRole
 from lazycloud_api.database.users import UserPydantic
-from lazycloud_api.prefect_app.compose import deploy_compose_task, destroy_compose_task
+from lazycloud_api.prefect_app.compose import (
+    deploy_compose_task,
+    destroy_compose_task,
+    rollback_compose_task,
+)
 from lazycloud_api.services.compose.parser import ComposeParser
 from lazycloud_api.services.compose.validator import ComposeValidator
-from lazycloud_api.services.k8s import create_ns_name
+from lazycloud_api.services.k8s import create_ns_name, create_release_name
+from lazycloud_api.services.k8s.helm_manager import HelmManager
 from lazycloud_api.services.k8s.status_watcher import StatusWatcher
 from shared.models.deployments import DeploymentStates
 from shared.models.statuses import TaskStatus
-from shared.requests.deployments import DeploymentCreateRequest
+from shared.requests.deployments import DeploymentCreateRequest, RollbackRequest
 from shared.responses.deployments import (
+    DeploymentHistoryResponse,
     DeploymentListResponse,
     DeploymentResponse,
     DeploymentStatusResponse,
+    Revision,
 )
 from shared.responses.tasks import DeploymentTaskStatusResponse
 
@@ -326,3 +333,79 @@ async def delete_deployment(
     except Exception as e:
         logger.error(f"Failed to delete deployment: {e}")
         raise HTTPException(status_code=500, detail="Failed to delete deployment")
+
+
+@deployments_router.get(
+    "/{deployment_id}/history", response_model=DeploymentHistoryResponse
+)
+async def get_deployment_history(
+    deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_access),
+) -> DeploymentHistoryResponse:
+    """Get Helm release history for a deployment."""
+    name = create_release_name(deployment.workspace_id, deployment.name)
+    namespace = deployment.namespace
+
+    if not name:
+        raise HTTPException(status_code=400, detail="Deployment name is required")
+
+    helm_manager = HelmManager()
+    history = helm_manager.get_history(name, namespace)
+
+    revisions = [
+        Revision(
+            revision=item.get("revision", 0),
+            status=item.get("status", "unknown"),
+            chart=item.get("chart", ""),
+            description=item.get("description", ""),
+            updated=item.get("updated", ""),
+        )
+        for item in history
+    ]
+
+    return DeploymentHistoryResponse(revisions=revisions)
+
+
+@deployments_router.post(
+    "/{deployment_id}/rollback", response_model=DeploymentTaskStatusResponse
+)
+async def rollback_deployment(
+    request: RollbackRequest,
+    deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_admin_access),
+    _: UserPydantic = Depends(get_current_active_user),
+) -> DeploymentTaskStatusResponse:
+    """Rollback a deployment to a previous Helm revision."""
+    if deployment.state in (DeploymentStates.DELETING, DeploymentStates.DELETED):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot rollback deployment in state: {deployment.state}",
+        )
+
+    # Allow rollback from DEPLOYED, FAILED, or DEPLOYING states
+    # DEPLOYING is allowed to handle stuck rollbacks (the task will validate state)
+    if deployment.state not in (
+        DeploymentStates.DEPLOYED,
+        DeploymentStates.FAILED,
+        DeploymentStates.DEPLOYING,
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Deployment must be deployed, failed, or deploying to rollback (current state: {deployment.state})",
+        )
+
+    if request.revision <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Revision must be greater than 0 (got: {request.revision})",
+        )
+
+    task_future = rollback_compose_task.delay(
+        deployment_id=deployment.id,
+        revision=request.revision,
+    )
+
+    return DeploymentTaskStatusResponse(
+        task_id=task_future.task_run_id,
+        status=TaskStatus.PENDING,
+        message=f"Rollback to revision {request.revision} queued",
+        deployment_id=deployment.id,
+    )

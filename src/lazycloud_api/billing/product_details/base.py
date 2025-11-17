@@ -18,7 +18,12 @@ BASE_FEATURES = BaseFeatures(
     workspace=WorkspaceFeature(
         limit=1, deployment_limit=1
     ),  # only Personal workspace, no isolation
-    deployment=DeploymentFeature(service_limit=5, volume_limit=5, network_limit=1),
+    deployment=DeploymentFeature(
+        service_limit=3,
+        volume_limit=3,
+        network_limit=1,
+        max_replicas_per_service=1,  # No auto-scaling
+    ),
     domain_limit=0,  # Platform-generated domain only
 )
 

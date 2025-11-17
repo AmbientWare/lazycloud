@@ -1,4 +1,4 @@
-from rich.console import Group
+from rich.table import Table
 from rich.text import Text
 
 from lazycloud_cli.ui.colors import Colors
@@ -10,11 +10,15 @@ class InfoCard(Card):
 
     def __init__(self, message: str, title: str | None = None):
         """Initialize info card"""
+        table = Table(show_header=False, box=None)
+        table.add_column(style=Colors.Ansi.text)
+
         content = Text()
         content.append(message, style=Colors.Ansi.text)
+        table.add_row(content)
 
         super().__init__(
-            content=content,
+            content=table,
             title=title,
             border_style=Colors.Ansi.info,
         )
@@ -25,14 +29,18 @@ class BuildInfoCard(Card):
 
     def __init__(self, service_name: str, action: str = "Building"):
         """Initialize build info card"""
+        table = Table(show_header=False, box=None)
+        table.add_column(style=Colors.Ansi.info)
+
         content = Text()
         content.append("🔨  ", style=Colors.Ansi.info)
         content.append(f"{action} ", style=Colors.Ansi.text)
         content.append(service_name, style=f"{Colors.Ansi.primary} bold")
         content.append("...", style=Colors.Ansi.text)
+        table.add_row(content)
 
         super().__init__(
-            content=content,
+            content=table,
             border_style=Colors.Ansi.info,
         )
 
@@ -42,12 +50,16 @@ class SuccessCard(Card):
 
     def __init__(self, message: str, title: str | None = None):
         """Initialize success card"""
+        table = Table(show_header=False, box=None)
+        table.add_column(style=Colors.Ansi.success)
+
         content = Text()
         content.append("✅  ", style=Colors.Ansi.success)
         content.append(message, style=Colors.Ansi.success)
+        table.add_row(content)
 
         super().__init__(
-            content=content,
+            content=table,
             title=title,
             border_style=Colors.Ansi.success,
         )
@@ -58,12 +70,16 @@ class WarningCard(Card):
 
     def __init__(self, message: str, title: str | None = None):
         """Initialize warning card"""
+        table = Table(show_header=False, box=None)
+        table.add_column(style=Colors.Ansi.warning)
+
         content = Text()
         content.append("⚠️  ", style=Colors.Ansi.warning)
         content.append(message, style=Colors.Ansi.warning)
+        table.add_row(content)
 
         super().__init__(
-            content=content,
+            content=table,
             title=title,
             border_style=Colors.Ansi.warning,
         )
@@ -79,17 +95,22 @@ class ErrorCard(Card):
         suggestion: str | None = None,
     ):
         """Initialize error card"""
-        content = Text()
-        content.append("❌  ", style=Colors.Ansi.error)
-        content.append(message, style=Colors.Ansi.error)
+        table = Table(show_header=False, box=None)
+        table.add_column(style=Colors.Ansi.error)
+
+        error_content = Text()
+        error_content.append("❌  ", style=Colors.Ansi.error)
+        error_content.append(message, style=Colors.Ansi.error)
+        table.add_row(error_content)
 
         if suggestion:
-            content.append("\n\n")
-            content.append("💡  ", style=Colors.Ansi.warning)
-            content.append(suggestion, style=Colors.Ansi.warning)
+            suggestion_content = Text()
+            suggestion_content.append("💡  ", style=Colors.Ansi.warning)
+            suggestion_content.append(suggestion, style=Colors.Ansi.warning)
+            table.add_row(suggestion_content)
 
         super().__init__(
-            content=content,
+            content=table,
             title=title or "Error",
             border_style=Colors.Ansi.error,
         )
@@ -118,12 +139,16 @@ class StatusMessageCard(Card):
             style = Colors.Ansi.info
             border = Colors.Ansi.info
 
+        table = Table(show_header=False, box=None)
+        table.add_column(style=style)
+
         content = Text()
         content.append(f"{icon}  ", style=style)
         content.append(message, style=Colors.Ansi.text)
+        table.add_row(content)
 
         super().__init__(
-            content=content,
+            content=table,
             border_style=border,
         )
 
@@ -133,24 +158,22 @@ class DeploymentActionCard(Card):
 
     def __init__(self, action: str, deployment_name: str, details: str | None = None):
         """Initialize deployment action card"""
-        content = Group()
+        table = Table(show_header=False, box=None)
+        table.add_column(style=Colors.Ansi.info)
 
         # Main message
         main_text = Text()
         main_text.append("🚀  ", style=Colors.Ansi.info)
         main_text.append(f"{action} deployment ", style=Colors.Ansi.text)
         main_text.append(f"'{deployment_name}'", style=f"{Colors.Ansi.primary} bold")
-
-        parts = [main_text]
+        table.add_row(main_text)
 
         if details:
             detail_text = Text(details, style=Colors.Ansi.text_muted)
-            parts.append(detail_text)
-
-        content = Group(*parts)
+            table.add_row(detail_text)
 
         super().__init__(
-            content=content,
+            content=table,
             border_style=Colors.Ansi.info,
         )
 
@@ -166,16 +189,22 @@ class SuccessDetailsCard(Card):
         icon: str = "✓",
     ):
         """Initialize success details card"""
-        content = Text()
-        content.append(f"{icon} {message}\n\n", style=Colors.Ansi.success)
+        table = Table(show_header=False, box=None)
+        table.add_column(style=Colors.Ansi.success)
+
+        message_text = Text()
+        message_text.append(f"{icon} {message}", style=Colors.Ansi.success)
+        table.add_row(message_text)
 
         if details:
             for key, value in details.items():
-                content.append(f"  {key}: ", style=Colors.Ansi.text_muted)
-                content.append(f"{value}\n", style=Colors.Ansi.primary)
+                detail_text = Text()
+                detail_text.append(f"{key}: ", style=Colors.Ansi.text_muted)
+                detail_text.append(value, style=Colors.Ansi.primary)
+                table.add_row(detail_text)
 
         super().__init__(
-            content=content,
+            content=table,
             title=title,
             border_style=Colors.Ansi.success,
         )

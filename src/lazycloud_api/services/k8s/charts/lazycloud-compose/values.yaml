@@ -7,8 +7,7 @@ services: []
   # Example service configuration:
   # - name: web
   #   enabled: true
-  #   workloadType: Deployment  # or StatefulSet
-  #   serviceName: web  # Only for StatefulSets
+  #   workloadType: Deployment
   #   image:
   #     repository: nginx
   #     tag: latest

@@ -288,6 +288,36 @@ class SubscriptionService:
                 f"but this deployment has {network_count}. Please upgrade your plan or reduce the number of networks.",
             )
 
+        # Check replicas per service
+        max_replicas = features.deployment.max_replicas_per_service
+        for service in compose_file.services:
+            replicas = None
+            # Check deploy.replicas first
+            if service.deploy and service.deploy.replicas is not None:
+                replicas = service.deploy.replicas
+            # Check scaling.min if scaling is enabled
+            elif service.scaling and service.scaling.enabled:
+                replicas = service.scaling.min
+
+            if replicas is not None and replicas > max_replicas:
+                raise HTTPException(
+                    403,
+                    f"Replica limit exceeded for service '{service.name}'. Your plan allows {max_replicas} replica(s) per service, "
+                    f"but this service has {replicas}. Please upgrade your plan or reduce the number of replicas.",
+                )
+
+            # Check HPA max replicas if scaling is enabled
+            if (
+                service.scaling
+                and service.scaling.enabled
+                and service.scaling.max > max_replicas
+            ):
+                raise HTTPException(
+                    403,
+                    f"HPA max replica limit exceeded for service '{service.name}'. Your plan allows {max_replicas} replica(s) per service, "
+                    f"but HPA max is set to {service.scaling.max}. Please upgrade your plan or reduce the max replicas.",
+                )
+
         # Check custom domains
         if features.domain_limit == 0 and len(custom_domains) > 0:
             raise HTTPException(

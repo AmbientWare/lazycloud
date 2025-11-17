@@ -139,6 +139,7 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
         self,
         id: str,
         include_deleted: bool = False,
+        with_lock: bool = False,
         session: AsyncSession | None = None,
     ) -> basePydanticType | None:
         """Get a model instance by id"""
@@ -147,6 +148,8 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
             query = select(self.db_model_class).where(self.db_model_class.id == id)
             if not include_deleted:
                 query = self._apply_default_filters(query)
+            if with_lock:
+                query = query.with_for_update()
             result = await sess.execute(query)
             db_model = result.scalar_one_or_none()
             return self._to_pydantic(db_model)

@@ -1,5 +1,5 @@
 {{/*
-Create Deployments or StatefulSets for each service
+Create Deployments for each service
 Skip services that are Jobs (they are handled in job.yaml)
 */}}
 {{- range $service := .Values.services }}
@@ -29,35 +29,6 @@ metadata:
 spec:
   {{- if not (and $service.hpa $service.hpa.enabled) }}
   replicas: {{ $service.replicas | default 1 }}
-  {{- end }}
-  {{- if eq ($service.workloadType | default "Deployment") "StatefulSet" }}
-  serviceName: {{ $service.serviceName | default $service.name }}
-  {{- if $service.volumes }}
-  volumeClaimTemplates:
-    {{- range $service.volumes }}
-    - metadata:
-        name: {{ include "lazycloud-compose.sanitizeName" .name }}
-        labels:
-          {{- include "lazycloud-compose.labels" $ | nindent 10 }}
-          app.kubernetes.io/component: storage
-          lazycloud.io/volume: {{ .name }}
-        annotations:
-          {{- include "lazycloud-compose.annotations" $ | nindent 10 }}
-      spec:
-        accessModes:
-          {{- if .accessModes }}
-          {{- toYaml .accessModes | nindent 10 }}
-          {{- else }}
-          {{- toYaml $.Values.defaultStorage.accessModes | nindent 10 }}
-          {{- end }}
-        resources:
-          requests:
-            storage: {{ .size | default $.Values.defaultStorage.size }}
-        {{- if or .storageClass $.Values.defaultStorage.storageClass }}
-        storageClassName: {{ .storageClass | default $.Values.defaultStorage.storageClass }}
-        {{- end }}
-    {{- end }}
-  {{- end }}
   {{- end }}
   selector:
     matchLabels:
@@ -177,9 +148,9 @@ spec:
             {{- else }}
             {{- toYaml $.Values.defaultResources | nindent 12 }}
             {{- end }}
-      {{- if or (and $service.volumes (ne ($service.workloadType | default "Deployment") "StatefulSet")) $service.secrets }}
+      {{- if or $service.volumes $service.secrets }}
       volumes:
-        {{- if and $service.volumes (ne ($service.workloadType | default "Deployment") "StatefulSet") }}
+        {{- if $service.volumes }}
         {{- range $service.volumes }}
         - name: {{ include "lazycloud-compose.sanitizeName" .name }}
           persistentVolumeClaim:

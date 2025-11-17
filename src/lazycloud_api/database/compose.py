@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, List
 
 from cryptography.fernet import InvalidToken
@@ -9,6 +9,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
     func,
@@ -53,6 +54,7 @@ class ComposeDeploymentTable(BaseTable):
     compose_yaml: Mapped[str] = mapped_column(Text)
     pending_compose_yaml: Mapped[str | None] = mapped_column(Text)
     helm_values: Mapped[str | None] = mapped_column(Text)
+    current_helm_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
     state: Mapped[DeploymentStates] = mapped_column(
         SQLAEnum(DeploymentStates), default=DeploymentStates.PENDING, index=True
     )
@@ -101,6 +103,7 @@ class ComposeDeploymentPydantic(BaseDbPydanticModel):
     compose_yaml: str
     pending_compose_yaml: str | None = None
     helm_values: HelmValues | None = None
+    current_helm_revision: int | None = None
     state: DeploymentStates = DeploymentStates.PENDING
     status_message: str | None = None
     deployed_at: datetime | None = None
@@ -361,3 +364,19 @@ class ComposeDeploymentService(
             )
             result = await session.execute(query)
             return {str(row.workspace_id): row.deployment_count for row in result.all()}
+
+    async def find_stuck_deploying(
+        self, minutes_old: int = 10
+    ) -> list[ComposeDeploymentPydantic]:
+        """Find deployments in DEPLOYING state older than specified minutes."""
+        async with self._session_manager.get_session() as session:
+            threshold = datetime.now(UTC) - timedelta(minutes=minutes_old)
+            query = (
+                select(ComposeDeploymentTable)
+                .where(ComposeDeploymentTable.state == DeploymentStates.DEPLOYING)
+                .where(ComposeDeploymentTable.updated_at < threshold)
+                .where(ComposeDeploymentTable.deleted_at.is_(None))
+            )
+            result = await session.execute(query)
+            db_models = list(result.scalars().all())
+            return [self._to_pydantic(db_model) for db_model in db_models]
