@@ -26,29 +26,21 @@ podSecurityStandards:
   warnVersion: latest
 
 # Resource Quota for the entire namespace
+# Modal-style: No CPU/memory quotas (users pay per usage), only object limits to prevent abuse
+# These are fallback defaults - actual quotas are calculated dynamically from subscription features
 resourceQuota:
   enabled: true
-  # Resource requests (guaranteed minimums)
-  requests:
-    cpu: "100"  # Total CPU cores for all deployments
-    memory: "100Gi"  # Total memory for all deployments
-    storage: "500Gi"  # Total storage for all PVCs
-    ephemeral-storage: "50Gi"  # Total ephemeral storage
-  # Resource limits (maximum allowed)
-  limits:
-    cpu: "200"  # Maximum CPU cores for all deployments
-    memory: "200Gi"  # Maximum memory for all deployments
-    ephemeral-storage: "100Gi"  # Maximum ephemeral storage
+  # No CPU/memory quotas - users pay for what they use (usage-based billing)
+  # Only object limits to prevent resource exhaustion/abuse
+  # If resourceQuota.objects is provided dynamically, these defaults are ignored
   objects:
-    # Limit number of objects across all deployments
-    pods: "100"
-    services: "50"
-    persistentvolumeclaims: "50"
-    configmaps: "100"
-    secrets: "100"
-    count/deployments.apps: "20"
-    count/statefulsets.apps: "10"
-    count/ingresses.networking.k8s.io: "20"
+    pods: "50"  # Fallback default
+    services: "10"  # Fallback default
+    persistentvolumeclaims: "10"  # Fallback default (EFS/S3 scales automatically)
+    configmaps: "500"
+    secrets: "500"
+    count/deployments.apps: "5"  # Fallback default
+    count/ingresses.networking.k8s.io: "10"  # Fallback default
 
 # Default NetworkPolicy for namespace isolation
 networkPolicy:

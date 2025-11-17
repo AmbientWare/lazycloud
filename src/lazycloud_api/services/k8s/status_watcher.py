@@ -18,7 +18,6 @@ from shared.models.helm import (
 from shared.models.k8s import (
     Deployment,
     PodList,
-    StatefulSet,
     WorkloadType,
 )
 from shared.models.statuses import (
@@ -234,14 +233,6 @@ class StatusWatcher:
                             k8s_resource
                         )
                         return Deployment(**resource_dict)
-                    elif service.workloadType == WorkloadType.STATEFULSET:
-                        k8s_resource = apps_v1.read_namespaced_stateful_set(
-                            name=service.resourceName, namespace=self.namespace
-                        )
-                        resource_dict = apps_v1.api_client.sanitize_for_serialization(
-                            k8s_resource
-                        )
-                        return StatefulSet(**resource_dict)
                     else:
                         raise ValueError(
                             f"Unsupported resource type: {service.workloadType}"
@@ -302,6 +293,13 @@ class StatusWatcher:
             for p in (service.ports or [])
         ]
 
+        formatted_volumes = None
+        if service.volumes:
+            formatted_volumes = [
+                f"{v.name}:{v.mount_path}" + (":ro" if v.read_only else "")
+                for v in service.volumes
+            ]
+
         return ServiceStatus(
             name=service.name,
             image=f"{service.image.repository}:{service.image.tag}",
@@ -313,7 +311,7 @@ class StatusWatcher:
             resources=resources,
             current_usage=current_usage,
             ports=formatted_ports or None,
-            volumes=service.volumes or None,
+            volumes=formatted_volumes,
             hpa=service.hpa,
             healthcheck=k8s_healthcheck,
             total_restarts=sum(pod.restart_count for pod in pods) if pods else 0,

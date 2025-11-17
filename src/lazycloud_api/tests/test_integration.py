@@ -73,7 +73,6 @@ class TestIntegration:
                     "image": "redis:alpine",
                     "ports": ["6379:6379"],
                     "volumes": ["redis-data:/data"],
-                    "labels": {"lazycloud.statefulset": "true"},
                 },
                 "frontend": {
                     "image": "nginx:latest",
@@ -172,25 +171,22 @@ class TestIntegration:
         assert api["metrics"]["enabled"] is True
         assert api["metrics"]["port"] == "9090"
 
-    def test_statefulset_detection_integration(self, comprehensive_compose_dict):
-        """Test StatefulSet detection in integration."""
+    def test_deployment_generation_integration(self, comprehensive_compose_dict):
+        """Test Deployment generation in integration."""
         parser = ComposeParser()
         generator = HelmValuesGenerator("test-user")
 
         compose_file = parser.parse_dict(comprehensive_compose_dict)
         helm_values, warnings = generator.generate_values(compose_file)
 
-        # Postgres should be auto-detected as StatefulSet
+        # All services should be Deployments
         postgres = helm_values["services"]["postgres"]
-        assert postgres["workloadType"] == "StatefulSet"
-        assert postgres["serviceName"] == "postgres"
+        assert postgres["workloadType"] == "Deployment"
 
-        # Redis should be explicit StatefulSet
         redis = helm_values["services"]["redis"]
-        assert redis["workloadType"] == "StatefulSet"
-        assert redis["serviceName"] == "redis"
+        assert redis["workloadType"] == "Deployment"
 
-        # API and frontend should be Deployments (no workloadType)
+        # API and frontend should be Deployments
         api = helm_values["services"]["api"]
         frontend = helm_values["services"]["frontend"]
         assert "workloadType" not in api

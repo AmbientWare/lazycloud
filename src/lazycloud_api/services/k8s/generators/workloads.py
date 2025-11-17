@@ -39,38 +39,6 @@ def determine_pull_policy(tag: str) -> str:
     return "IfNotPresent"
 
 
-def should_be_statefulset(image: str, service_name: str) -> bool:
-    """Determine if service should be deployed as StatefulSet instead of Deployment."""
-    # Auto-detect based on image name (common databases)
-    stateful_images = {
-        "postgres",
-        "postgresql",
-        "mysql",
-        "mariadb",
-        "mongo",
-        "mongodb",
-        "redis",
-        "elasticsearch",
-        "cassandra",
-        "neo4j",
-        "influxdb",
-        "etcd",
-        "zookeeper",
-        "kafka",
-        "rabbitmq",
-        "consul",
-    }
-
-    # Check image name
-    image_lower = image.lower()
-    if any(db in image_lower for db in stateful_images):
-        return True
-
-    # Check service name patterns
-    service_name_lower = service_name.lower()
-    return any(db in service_name_lower for db in stateful_images)
-
-
 def generate_resources_values(
     resources_config: ResourcesConfig,
 ) -> Resources | None:

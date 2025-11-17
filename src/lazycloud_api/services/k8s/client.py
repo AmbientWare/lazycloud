@@ -43,7 +43,7 @@ def get_core_v1_api() -> CoreV1Api:
 
 @lru_cache(maxsize=1)
 def get_apps_v1_api() -> AppsV1Api:
-    """Get AppsV1Api client for deployments, statefulsets, etc."""
+    """Get AppsV1Api client for deployments, etc."""
     return AppsV1Api(_get_api_client())
 
 

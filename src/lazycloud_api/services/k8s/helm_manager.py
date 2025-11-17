@@ -12,6 +12,7 @@ from kubernetes.client.exceptions import ApiException
 from loguru import logger
 from pydantic import BaseModel
 
+from lazycloud_api.config import app_config
 from lazycloud_api.services.k8s.client import get_apps_v1_api, get_core_v1_api
 from shared.models.helm import HelmNamespaceValues, HelmValues
 
@@ -178,11 +179,17 @@ class HelmManager:
         if revision:
             cmd.append(str(revision))
 
+        cmd.extend(["--history-max", str(app_config.HELM_HISTORY_MAX_REVISIONS)])
+        cmd.append("--cleanup-on-fail")
+
         result = self._run_helm_command(cmd)
 
         if result.returncode == 0:
+            new_revision = self._get_latest_revision(release_name, namespace)
             return DeploymentResult(
-                success=True, message=f"Successfully rolled back {release_name}"
+                success=True,
+                message=f"Successfully rolled back {release_name}",
+                revision=new_revision,
             )
 
         return DeploymentResult(
@@ -190,6 +197,45 @@ class HelmManager:
             message=f"Failed to rollback {release_name}",
             error=result.stderr,
         )
+
+    def get_history(self, release_name: str, namespace: str) -> list[dict[str, Any]]:
+        """Get Helm release history."""
+        cmd = ["helm", "history", release_name, "-n", namespace, "-o", "json"]
+        result = self._run_helm_command(cmd)
+
+        if result.returncode == 0 and result.stdout:
+            try:
+                history = json.loads(result.stdout)
+                history.sort(key=lambda x: x.get("revision", 0))
+                return history
+
+            except (json.JSONDecodeError, KeyError):
+                logger.error(f"Failed to parse Helm history: {result.stdout}")
+                return []
+
+        return []
+
+    def get_compose_yaml_from_release(
+        self, release_name: str, namespace: str, revision: int | None = None
+    ) -> str | None:
+        """Get compose_yaml from a Helm release revision."""
+        cmd = ["helm", "get", "values", release_name, "-n", namespace, "-o", "json"]
+        if revision:
+            cmd.extend(["--revision", str(revision)])
+
+        result = self._run_helm_command(cmd)
+
+        if result.returncode == 0 and result.stdout:
+            try:
+                values = json.loads(result.stdout)
+                compose_yaml = values.get("compose_yaml")
+                if compose_yaml:
+                    return compose_yaml
+
+            except (json.JSONDecodeError, KeyError):
+                logger.error(f"Failed to parse Helm values: {result.stdout}")
+
+        return None
 
     def _helm_install(
         self, config: HelmDeploymentConfig, values_file: Path
@@ -218,6 +264,8 @@ class HelmManager:
 
         if config.atomic:
             cmd.extend(["--atomic", "--cleanup-on-fail"])
+
+        cmd.extend(["--history-max", str(app_config.HELM_HISTORY_MAX_REVISIONS)])
 
         result = self._run_helm_command(cmd)
 
@@ -264,6 +312,8 @@ class HelmManager:
 
         if config.atomic:
             cmd.extend(["--atomic", "--cleanup-on-fail"])
+
+        cmd.extend(["--history-max", str(app_config.HELM_HISTORY_MAX_REVISIONS)])
 
         # First attempt
         result = self._run_helm_command(cmd)
@@ -395,62 +445,6 @@ class HelmManager:
             except ApiException as e:
                 logger.debug(f"Error getting deployments: {e}")
 
-            # Get StatefulSets
-            try:
-                statefulsets = apps_v1.list_namespaced_stateful_set(
-                    namespace=namespace, label_selector=label_selector
-                )
-                items = []
-                for statefulset in statefulsets.items:
-                    status = (
-                        apps_v1.api_client.sanitize_for_serialization(
-                            statefulset.status
-                        )
-                        if statefulset.status
-                        else {}
-                    )
-                    ready = self._is_resource_ready("statefulset", status)
-                    items.append(
-                        {
-                            "name": statefulset.metadata.name,
-                            "ready": ready,
-                            "status": self._get_resource_status_summary(
-                                "statefulset", status
-                            ),
-                        }
-                    )
-                if items:
-                    resources["statefulset"] = items
-            except ApiException as e:
-                logger.debug(f"Error getting statefulsets: {e}")
-
-            # Get DaemonSets
-            try:
-                daemonsets = apps_v1.list_namespaced_daemon_set(
-                    namespace=namespace, label_selector=label_selector
-                )
-                items = []
-                for daemonset in daemonsets.items:
-                    status = (
-                        apps_v1.api_client.sanitize_for_serialization(daemonset.status)
-                        if daemonset.status
-                        else {}
-                    )
-                    ready = self._is_resource_ready("daemonset", status)
-                    items.append(
-                        {
-                            "name": daemonset.metadata.name,
-                            "ready": ready,
-                            "status": self._get_resource_status_summary(
-                                "daemonset", status
-                            ),
-                        }
-                    )
-                if items:
-                    resources["daemonset"] = items
-            except ApiException as e:
-                logger.debug(f"Error getting daemonsets: {e}")
-
             # Get Pods
             try:
                 pods = core_v1.list_namespaced_pod(
@@ -510,7 +504,7 @@ class HelmManager:
 
     def _is_resource_ready(self, resource_type: str, status: dict[str, Any]) -> bool:
         """Determine if a resource is ready based on its type and status."""
-        if resource_type in ["deployment", "statefulset", "daemonset"]:
+        if resource_type == "deployment":
             replicas = status.get("replicas", 0)
             ready_replicas = status.get("readyReplicas", 0)
             return replicas > 0 and replicas == ready_replicas
@@ -535,7 +529,7 @@ class HelmManager:
         self, resource_type: str, status: dict[str, Any]
     ) -> str:
         """Get a human-readable status summary for a resource."""
-        if resource_type in ["deployment", "statefulset", "daemonset"]:
+        if resource_type == "deployment":
             replicas = status.get("replicas", 0)
             ready = status.get("readyReplicas", 0)
             return f"{ready}/{replicas} ready"
@@ -555,9 +549,11 @@ class HelmManager:
             try:
                 history = json.loads(result.stdout)
                 if history:
+                    history.sort(key=lambda x: x.get("revision", 0))
                     return history[-1].get("revision")
+
             except (json.JSONDecodeError, KeyError, IndexError):
-                pass
+                logger.error(f"Failed to parse Helm history: {result.stdout}")
 
         return None
 

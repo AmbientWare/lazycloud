@@ -183,7 +183,6 @@ class ServiceValues(BaseModel):
     labels: dict[str, str] = {}
     annotations: dict[str, str] = {}
     workloadType: WorkloadType | None = None
-    serviceName: str | None = None
     command: list[str] | None = None
     environment: dict[str, str] | None = None
     ports: list[PortConfig] | None = None
@@ -214,6 +213,10 @@ class HelmNamespaceValues(BaseModel):
     """Model for namespace chart values."""
 
     namespace: NamespaceConfig
+    resourceQuota: dict | None = Field(
+        default=None,
+        description="Dynamic resource quota objects from subscription features",
+    )
 
 
 class HelmValues(BaseModel):
@@ -228,3 +231,4 @@ class HelmValues(BaseModel):
     volumes: list[VolumeValues] = []
     secrets: list[SecretValues] = []
     imagePullSecrets: list[dict[str, str]] | None = None
+    compose_yaml: str | None = None

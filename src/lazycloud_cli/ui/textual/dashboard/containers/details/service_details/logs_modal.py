@@ -94,6 +94,9 @@ class LogViewerModal(ContentModal):
                     return
 
                 log_line = data.get("line", "")
+                # Also check if data itself is a string (for backward compatibility)
+                if not log_line and isinstance(data, str):
+                    log_line = data
                 if log_line:
                     # Check if user has scrolled up
                     is_at_bottom = self._logs_widget.scroll_offset.y >= (

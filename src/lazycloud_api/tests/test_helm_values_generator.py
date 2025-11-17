@@ -182,49 +182,6 @@ class TestHelmValuesGenerator:
         for part in parts:
             assert part.isalpha()
 
-    def test_statefulset_detection(self, helm_generator):
-        """Test StatefulSet detection logic."""
-        # Test explicit StatefulSet
-        labels_explicit = {"lazycloud.statefulset": "true"}
-        assert (
-            helm_generator._should_be_statefulset(
-                labels_explicit, None, "myapp:latest", "test"
-            )
-            is True
-        )
-
-        # Test auto-detection from image name
-        assert (
-            helm_generator._should_be_statefulset({}, None, "postgres:13", "db") is True
-        )
-        assert (
-            helm_generator._should_be_statefulset({}, None, "redis:latest", "cache")
-            is True
-        )
-        assert (
-            helm_generator._should_be_statefulset({}, None, "mysql:8", "database")
-            is True
-        )
-
-        # Test auto-detection from service name
-        assert (
-            helm_generator._should_be_statefulset({}, None, "myapp:latest", "postgres")
-            is True
-        )
-        assert (
-            helm_generator._should_be_statefulset({}, None, "myapp:latest", "mongodb")
-            is True
-        )
-
-        # Test regular service (should not be StatefulSet)
-        assert (
-            helm_generator._should_be_statefulset({}, None, "nginx:latest", "web")
-            is False
-        )
-        assert (
-            helm_generator._should_be_statefulset({}, None, "node:16", "api") is False
-        )
-
     def test_configmap_generation(self, helm_generator, compose_parser):
         """Test ConfigMap generation from labels."""
         compose_dict = {
@@ -304,7 +261,7 @@ class TestHelmValuesGenerator:
         helm_values, warnings = helm_generator.generate_values(compose_file)
 
         assert helm_values["services"]["web1"]["restartPolicy"] == "Always"
-        # Even though web2 has "on-failure", Deployments/StatefulSets must use "Always"
+        # Even though web2 has "on-failure", Deployments must use "Always"
         assert helm_values["services"]["web2"]["restartPolicy"] == "Always"
         assert helm_values["services"]["web3"]["restartPolicy"] == "Always"
 

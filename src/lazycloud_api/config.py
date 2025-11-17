@@ -80,6 +80,18 @@ class AppConfig(BaseModel):
     # Secrets Configuration
     SECRETS_TIMEOUT_SECONDS: int = int(os.getenv("SECRETS_TIMEOUT_SECONDS", "30"))
 
+    # Rollback Configuration
+    ROLLBACK_JOB_DELETION_TIMEOUT_SECONDS: int = int(
+        os.getenv("ROLLBACK_JOB_DELETION_TIMEOUT_SECONDS", "60")
+    )
+    ROLLBACK_RECONCILIATION_INTERVAL_MINUTES: int = int(
+        os.getenv("ROLLBACK_RECONCILIATION_INTERVAL_MINUTES", "10")
+    )
+    COMPOSE_YAML_MAX_SIZE_BYTES: int = int(
+        os.getenv("COMPOSE_YAML_MAX_SIZE_BYTES", "245760")  # 240KB
+    )
+    HELM_HISTORY_MAX_REVISIONS: int = int(os.getenv("HELM_HISTORY_MAX_REVISIONS", "6"))
+
     # Required Environment Variables
     required_env_vars: List[str] = [
         "ADMIN_API_KEY",

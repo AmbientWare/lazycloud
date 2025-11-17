@@ -73,3 +73,19 @@ class DeploymentOverview(BaseModel):
     updated_at: datetime | None = None
     deployed_at: datetime | None = None
     ready_services: int | None = None
+
+
+class Revision(BaseModel):
+    """Revision information."""
+
+    revision: int
+    status: str
+    chart: str
+    description: str
+    updated: str
+
+
+class DeploymentHistoryResponse(BaseModel):
+    """Response for deployment history."""
+
+    revisions: list[Revision]

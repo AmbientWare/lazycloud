@@ -28,3 +28,7 @@ class DiffRequest(BaseModel):
     env_keys: list[str] = Field(
         default_factory=list, description="List of environment variable keys"
     )
+
+
+class RollbackRequest(BaseModel):
+    revision: int = Field(..., description="Helm revision number to rollback to")

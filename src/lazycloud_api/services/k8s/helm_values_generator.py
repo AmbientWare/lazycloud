@@ -24,7 +24,6 @@ from lazycloud_api.services.k8s.generators.workloads import (
     generate_resources_values,
     generate_security_context_values,
     parse_image,
-    should_be_statefulset,
 )
 from shared.models.billing import STORAGE_CLASS_EFS, STORAGE_CLASS_S3
 from shared.models.compose import (
@@ -187,14 +186,7 @@ class HelmValuesGenerator:
             service_values.workloadType = WorkloadType.JOB
             service_values.restartPolicy = RestartPolicy.NEVER.value
         else:
-            # For Deployments/StatefulSets, determine based on image/name
-            is_statefulset = should_be_statefulset(service.image, service.name)
-            if is_statefulset:
-                service_values.workloadType = WorkloadType.STATEFULSET
-                service_values.serviceName = service.name
-            else:
-                service_values.workloadType = WorkloadType.DEPLOYMENT
-            # Kubernetes Deployments and StatefulSets MUST have restartPolicy: Always
+            service_values.workloadType = WorkloadType.DEPLOYMENT
             service_values.restartPolicy = RestartPolicy.ALWAYS.value
 
         # Add command if specified
@@ -273,7 +265,7 @@ class HelmValuesGenerator:
         # Check deploy.restart_policy if present
         if deploy_config and deploy_config.restart_policy:
             # For now, we always use "Always" for Kubernetes deployments
-            # This is because Deployments and StatefulSets require this policy
+            # This is because Deployments require this policy
             return deploy_config.restart_policy
 
         # Default to Always
@@ -366,15 +358,6 @@ class HelmValuesGenerator:
     def _generate_petname(self, service_name: str) -> str:
         """Generate petname - wrapper for testing."""
         return generate_petname(service_name)
-
-    def _should_be_statefulset(
-        self,
-        image: str,
-        service_name: str,
-    ) -> bool:
-        """Check if should be StatefulSet - wrapper for testing."""
-        # NOTE: volumes parameter kept for backward compatibility with tests
-        return should_be_statefulset(image, service_name)
 
     def _parse_image(self, image_string: str) -> dict[str, str]:
         """Parse image string - wrapper for testing."""

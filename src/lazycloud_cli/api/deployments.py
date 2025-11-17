@@ -4,8 +4,9 @@ from typing import Any
 from lazycloud_cli.api.base import BaseAPI
 from lazycloud_cli.api.tasks import TasksAPI
 from lazycloud_cli.config import config
-from shared.requests.deployments import DeploymentCreateRequest
+from shared.requests.deployments import DeploymentCreateRequest, RollbackRequest
 from shared.responses.deployments import (
+    DeploymentHistoryResponse,
     DeploymentListResponse,
     DeploymentResponse,
     DeploymentStatusResponse,
@@ -117,3 +118,27 @@ class DeploymentsAPI(BaseAPI):
             tzinfo=UTC
         ).astimezone()
         return status
+
+    def get_deployment_history(self, deployment_id: str) -> DeploymentHistoryResponse:
+        """Get deployment revision history."""
+        response = self._get(path=f"/{deployment_id}/history")
+        return DeploymentHistoryResponse(**response)
+
+    async def rollback_deployment(
+        self, deployment_id: str, revision: int
+    ) -> DeploymentTaskStatusResponse:
+        """Rollback a deployment to a previous revision."""
+        request = RollbackRequest(revision=revision)
+        response_data = self._post(
+            path=f"/{deployment_id}/rollback", json=request.model_dump()
+        )
+        rollback_response = DeploymentTaskStatusResponse(**response_data)
+
+        final_status = await self._tasks.stream_task_status(rollback_response.task_id)
+
+        return DeploymentTaskStatusResponse(
+            task_id=rollback_response.task_id,
+            deployment_id=rollback_response.deployment_id,
+            status=final_status.status,
+            message=final_status.message,
+        )

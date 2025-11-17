@@ -1,6 +1,7 @@
-"""Pure formatting functions for deployment UI."""
-
+from datetime import timezone
 from typing import Any
+
+from dateutil import parser
 
 DEFAULT_DISABLED_VALUE = "Disabled"
 
@@ -203,3 +204,22 @@ def truncate_text(text: str | None, max_length: int = 50) -> str:
         return text
 
     return text[: max_length - 3] + "..."
+
+
+def format_timestamp(timestamp_str: str) -> str:
+    """Convert UTC timestamp string to local time and format it.
+
+    Args:
+        timestamp_str: UTC timestamp string (from Helm or API)
+
+    Returns:
+        Formatted timestamp string in local timezone (YYYY-MM-DD HH:MM:SS TZ)
+    """
+    try:
+        dt = parser.parse(timestamp_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        local_dt = dt.astimezone()
+        return local_dt.strftime("%Y-%m-%d %H:%M:%S %Z")
+    except (ValueError, TypeError):
+        return timestamp_str
