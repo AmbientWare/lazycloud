@@ -1,8 +1,8 @@
 """init
 
-Revision ID: f5387c62faaf
+Revision ID: 54d3ce48cb59
 Revises: 
-Create Date: 2025-11-12 22:38:11.645926
+Create Date: 2025-11-23 05:44:50.439610
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = 'f5387c62faaf'
+revision: str = '54d3ce48cb59'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -125,6 +125,27 @@ def upgrade() -> None:
     )
     op.create_index(op.f('ix_user_workspaces_role'), 'user_workspaces', ['role'], unique=False)
     op.create_index(op.f('ix_user_workspaces_status'), 'user_workspaces', ['status'], unique=False)
+    op.create_table('workspace_invitations',
+    sa.Column('workspace_id', sa.UUID(), nullable=False),
+    sa.Column('email', sa.String(), nullable=False),
+    sa.Column('role', sa.String(), nullable=False),
+    sa.Column('token', sa.String(), nullable=False),
+    sa.Column('invitation_type', sa.String(), nullable=False),
+    sa.Column('invited_by_user_id', sa.UUID(), nullable=False),
+    sa.Column('expires_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('accepted_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('id', sa.UUID(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.ForeignKeyConstraint(['invited_by_user_id'], ['users.id'], ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['workspace_id'], ['workspaces.id'], ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index('idx_workspace_invitations_workspace_email', 'workspace_invitations', ['workspace_id', 'email'], unique=False)
+    op.create_index(op.f('ix_workspace_invitations_email'), 'workspace_invitations', ['email'], unique=False)
+    op.create_index(op.f('ix_workspace_invitations_expires_at'), 'workspace_invitations', ['expires_at'], unique=False)
+    op.create_index(op.f('ix_workspace_invitations_token'), 'workspace_invitations', ['token'], unique=True)
+    op.create_index(op.f('ix_workspace_invitations_workspace_id'), 'workspace_invitations', ['workspace_id'], unique=False)
     op.create_table('compute_usage_breakdown',
     sa.Column('usage_record_id', sa.UUID(), nullable=False),
     sa.Column('deployment_id', sa.UUID(), nullable=True),
@@ -196,6 +217,12 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_compute_usage_breakdown_pod_name'), table_name='compute_usage_breakdown')
     op.drop_index(op.f('ix_compute_usage_breakdown_deployment_id'), table_name='compute_usage_breakdown')
     op.drop_table('compute_usage_breakdown')
+    op.drop_index(op.f('ix_workspace_invitations_workspace_id'), table_name='workspace_invitations')
+    op.drop_index(op.f('ix_workspace_invitations_token'), table_name='workspace_invitations')
+    op.drop_index(op.f('ix_workspace_invitations_expires_at'), table_name='workspace_invitations')
+    op.drop_index(op.f('ix_workspace_invitations_email'), table_name='workspace_invitations')
+    op.drop_index('idx_workspace_invitations_workspace_email', table_name='workspace_invitations')
+    op.drop_table('workspace_invitations')
     op.drop_index(op.f('ix_user_workspaces_status'), table_name='user_workspaces')
     op.drop_index(op.f('ix_user_workspaces_role'), table_name='user_workspaces')
     op.drop_table('user_workspaces')
