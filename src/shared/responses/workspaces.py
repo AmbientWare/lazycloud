@@ -13,8 +13,8 @@ class WorkspaceResponse(BaseModel):
 
 
 class WorkspaceMemberResponse(BaseModel):
-    user_id: str
-    name: str
+    user_id: str | None = None
+    name: str | None = None
     email: str
     role: str
     status: str
@@ -22,6 +22,11 @@ class WorkspaceMemberResponse(BaseModel):
 
 class WorkspaceSuccessResponse(BaseModel):
     success: bool
+
+
+class InviteUserResponse(BaseModel):
+    success: bool
+    token: str | None = None
 
 
 class WorkspaceWithDeploymentsResponse(BaseModel):

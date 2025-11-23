@@ -15,7 +15,7 @@ async def delete_instance_task(
     )
 
     # Get the deployment
-    deployment = await db.compose_deployments.aget_by_id(deployment_id)
+    deployment = await db.compose_deployments.get_by_id(deployment_id)
     if not deployment:
         raise Exception(f"Deployment {deployment_id} not found")
 

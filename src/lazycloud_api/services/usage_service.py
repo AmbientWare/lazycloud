@@ -158,7 +158,7 @@ class UsageService:
     ) -> AggregatedUsageResponse:
         """Get aggregated usage across all user's workspaces with workspace summaries."""
         all_user_workspaces = (
-            await db.workspaces.aget_user_workspaces_active_during_range(
+            await db.workspaces.get_user_workspaces_active_during_range(
                 user_id=user_id,
                 start_date=start_date,
                 end_date=end_date,
@@ -242,7 +242,7 @@ class UsageService:
         """Get aggregated daily usage across all user's workspaces."""
         tz = self._parse_timezone(timezone_str)
 
-        user_workspaces = await db.workspaces.aget_user_workspaces_active_during_range(
+        user_workspaces = await db.workspaces.get_user_workspaces_active_during_range(
             user_id=user_id,
             start_date=start_date,
             end_date=end_date,
@@ -302,7 +302,7 @@ class UsageService:
         external_customer_id: str,
     ) -> list[DeploymentUsageOverview]:
         """Build deployment overviews for a workspace with actual usage metrics."""
-        deployments = await db.compose_deployments.afind_active_during_date_range(
+        deployments = await db.compose_deployments.find_active_during_date_range(
             workspace_id=workspace_id,
             start_date=start_date,
             end_date=end_date,

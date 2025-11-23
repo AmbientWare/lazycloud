@@ -79,7 +79,7 @@ class ApiKeyService(DatabaseService[ApiKeyTable, ApiKeyPydantic]):
     def __init__(self):
         super().__init__(ApiKeyTable, ApiKeyPydantic)
 
-    async def aget_by_user_id(self, user_id: str) -> list[ApiKeyPydantic]:
+    async def get_by_user_id(self, user_id: str) -> list[ApiKeyPydantic]:
         """Get a api key by reference id"""
         async with self._session_manager.get_session() as session:
             query = select(ApiKeyTable).where(ApiKeyTable.user_id == user_id)
@@ -87,7 +87,7 @@ class ApiKeyService(DatabaseService[ApiKeyTable, ApiKeyPydantic]):
             api_keys = result.scalars().all()
             return [self._to_pydantic(api_key) for api_key in api_keys]
 
-    async def auser_by_value(self, value: str) -> str | None:
+    async def user_by_value(self, value: str) -> str | None:
         """Get a user by value"""
         async with self._session_manager.get_session() as session:
             query = select(ApiKeyTable).where(ApiKeyTable.value == value)

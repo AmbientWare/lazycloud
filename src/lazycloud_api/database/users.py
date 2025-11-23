@@ -86,7 +86,12 @@ class UserService(DatabaseService[UserTable, UserPydantic]):
     def __init__(self):
         super().__init__(UserTable, UserPydantic)
 
-    async def aget_by_clerk_id(self, clerk_id: str) -> UserPydantic | None:
+    async def get_by_clerk_id(self, clerk_id: str) -> UserPydantic | None:
         """Get user by Clerk ID"""
         filters = {"clerk_id": clerk_id}
-        return await self.afind_one(filters=filters)
+        return await self.find_one(filters=filters)
+
+    async def get_by_email(self, email: str) -> UserPydantic | None:
+        """Get user by email"""
+        filters = {"email": email.lower().strip()}
+        return await self.find_one(filters=filters)

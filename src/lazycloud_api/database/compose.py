@@ -180,7 +180,7 @@ class ComposeDeploymentService(
     def __init__(self):
         super().__init__(ComposeDeploymentTable, ComposeDeploymentPydantic)
 
-    async def aget_by_name(
+    async def get_by_name(
         self, workspace_id: str, name: str
     ) -> ComposeDeploymentPydantic | None:
         """Get deployment by name (excluding soft-deleted)."""
@@ -232,7 +232,7 @@ class ComposeDeploymentService(
         message: str | None = None,
     ) -> ComposeDeploymentPydantic | None:
         """Update deployment status."""
-        deployment = await self.aget_by_id(deployment_id)
+        deployment = await self.get_by_id(deployment_id)
         if not deployment:
             return None
 
@@ -240,9 +240,9 @@ class ComposeDeploymentService(
         if message:
             deployment.status_message = message
 
-        return await self.aupdate(deployment)
+        return await self.update(deployment)
 
-    async def aget_active_deployments_for_workspace(
+    async def get_active_deployments_for_workspace(
         self, workspace_id: str
     ) -> dict[str, str]:
         """Get mapping of deployment_name -> deployment_id for active deployments."""
@@ -257,7 +257,7 @@ class ComposeDeploymentService(
                 row.name: str(row.id) for row in result.all() if row.name is not None
             }
 
-    async def afind_one_with_lock(
+    async def find_one_with_lock(
         self,
         workspace_id: str,
         name: str,
@@ -275,7 +275,7 @@ class ComposeDeploymentService(
         db_model = result.scalar_one_or_none()
         return self._to_pydantic(db_model)
 
-    async def aget_with_workspace_access(
+    async def get_with_workspace_access(
         self, deployment_id: str, user_id: str, include_deleted: bool = False
     ) -> tuple[ComposeDeploymentPydantic | None, str | None]:
         """Get deployment and user's workspace role"""
@@ -304,7 +304,7 @@ class ComposeDeploymentService(
             deployment_pydantic = self._to_pydantic(deployment)
             return deployment_pydantic, role
 
-    async def afind_active_during_date_range(
+    async def find_active_during_date_range(
         self,
         workspace_id: str,
         start_date: datetime,
@@ -334,7 +334,7 @@ class ComposeDeploymentService(
             result = await session.execute(query)
             return [self._to_pydantic(d) for d in result.scalars().all()]
 
-    async def aget_deployment_count(self, workspace_id: str) -> int:
+    async def get_deployment_count(self, workspace_id: str) -> int:
         """Count active deployments for a workspace using a single COUNT query."""
         async with self._session_manager.get_session() as session:
             query = (
@@ -345,7 +345,7 @@ class ComposeDeploymentService(
             result = await session.execute(query)
             return result.scalar() or 0
 
-    async def aget_deployment_counts_by_workspace(
+    async def get_deployment_counts_by_workspace(
         self, workspace_ids: list[str]
     ) -> dict[str, int]:
         """Get deployment counts for multiple workspaces in a single query."""

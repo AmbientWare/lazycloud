@@ -1,16 +1,13 @@
 from dataclasses import dataclass
 
-import nest_asyncio
-
 from lazycloud_api.database.api_keys import ApiKeyService
 from lazycloud_api.database.compose import ComposeDeploymentService
+from lazycloud_api.database.invitations import WorkspaceInvitationService
 from lazycloud_api.database.secrets import SecretService
 from lazycloud_api.database.usage import UsageService
 from lazycloud_api.database.user_workspaces import UserWorkspaceService
 from lazycloud_api.database.users import UserService
 from lazycloud_api.database.workspaces import WorkspaceService
-
-nest_asyncio.apply()
 
 
 @dataclass
@@ -22,6 +19,7 @@ class Database:
     workspaces: WorkspaceService
     user_workspaces: UserWorkspaceService
     usage: UsageService
+    invitations: WorkspaceInvitationService
 
 
 db = Database(
@@ -32,6 +30,7 @@ db = Database(
     workspaces=WorkspaceService(),
     user_workspaces=UserWorkspaceService(),
     usage=UsageService(),
+    invitations=WorkspaceInvitationService(),
 )
 
 __all__ = ["db"]

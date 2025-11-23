@@ -58,11 +58,11 @@ async def get_workspaces(
     that were active during the date range will be included.
     """
     if start_date and end_date:
-        user_workspaces = await db.workspaces.aget_user_workspaces_active_during_range(
+        user_workspaces = await db.workspaces.get_user_workspaces_active_during_range(
             user_id=current_user.id, start_date=start_date, end_date=end_date
         )
     else:
-        user_workspaces = await db.workspaces.aget_user_workspaces_with_membership(
+        user_workspaces = await db.workspaces.get_user_workspaces_with_membership(
             current_user.id, status=WorkspaceStatus.ACTIVE
         )
 
@@ -89,7 +89,7 @@ async def get_workspace_with_deployments(
     try:
         # Get all deployments for this workspace
         offset = int(cursor) if cursor else 0
-        total, deployments = await db.compose_deployments.afind_paginated(
+        total, deployments = await db.compose_deployments.find_paginated(
             filters={"workspace_id": workspace.id},
             offset=offset,
             limit=limit,
@@ -174,7 +174,7 @@ async def create_workspace(
                 name=validated_name,
                 is_personal=False,
             )
-            workspace = await db.workspaces.acreate(workspace, session=session)
+            workspace = await db.workspaces.create(workspace, session=session)
 
             # Add current user as owner
             membership = UserWorkspacePydantic(
@@ -183,7 +183,7 @@ async def create_workspace(
                 role=WorkspaceRole.OWNER,
                 status=UserWorkspaceStatus.ACTIVE,
             )
-            membership = await db.user_workspaces.acreate(membership, session=session)
+            membership = await db.user_workspaces.create(membership, session=session)
 
     except Exception:
         raise HTTPException(status_code=500, detail="Failed to create workspace")
@@ -209,17 +209,15 @@ async def delete_workspace(
         raise HTTPException(status_code=400, detail="Cannot delete personal workspace")
 
     # get all deployments in the workspace
-    deployments = await db.compose_deployments.afind({"workspace_id": workspace.id})
+    deployments = await db.compose_deployments.find({"workspace_id": workspace.id})
     if len(deployments) > 0:
         # delete all deployments for the workspace
-        await db.compose_deployments.adelete_bulk(
+        await db.compose_deployments.delete_bulk(
             [deployment.id for deployment in deployments]
         )
 
     # set workspace status to deleted
-    workspace = await db.workspaces.aupdate_status(
-        workspace.id, WorkspaceStatus.DELETED
-    )
+    workspace = await db.workspaces.update_status(workspace.id, WorkspaceStatus.DELETED)
 
     return WorkspaceSuccessResponse(success=True)
 

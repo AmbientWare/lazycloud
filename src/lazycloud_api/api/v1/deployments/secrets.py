@@ -22,7 +22,7 @@ async def _require_admin_for_secret_values(
     current_user: UserPydantic = Depends(get_current_active_user),
 ) -> ComposeDeploymentPydantic:
     """Verify user has appropriate access to deployment secrets."""
-    deployment, role = await db.compose_deployments.aget_with_workspace_access(
+    deployment, role = await db.compose_deployments.get_with_workspace_access(
         deployment_id, current_user.id
     )
 
@@ -44,7 +44,7 @@ async def get_secrets(
     deployment: ComposeDeploymentPydantic = Depends(_require_admin_for_secret_values),
 ) -> SecretsResponse:
     """Get secrets for a deployment"""
-    secrets = await db.secrets.aget_secrets(deployment.id)
+    secrets = await db.secrets.get_secrets(deployment.id)
 
     response_secrets = [
         Secret(
@@ -65,7 +65,7 @@ async def get_secret_value(
     deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_admin_access),
 ) -> str:
     """Get a secret value for a deployment."""
-    secret = await db.secrets.aget_secret_by_key(deployment.id, key)
+    secret = await db.secrets.get_secret_by_key(deployment.id, key)
     if not secret:
         raise HTTPException(status_code=404, detail=f"Secret '{key}' not found")
 
@@ -84,7 +84,7 @@ async def store_secrets(
         return SecretsStoredResponse(deployment_id=deployment.id, secrets_count=0)
 
     # Check if any secrets already exist (single query)
-    existing_secrets = await db.secrets.aget_secrets(deployment.id)
+    existing_secrets = await db.secrets.get_secrets(deployment.id)
     existing_keys = {secret.key for secret in existing_secrets}
 
     # Find duplicates
@@ -108,7 +108,7 @@ async def store_secrets(
         for secret in secrets
     ]
 
-    await db.secrets.acreate_bulk(secrets_to_create)
+    await db.secrets.create_bulk(secrets_to_create)
 
     return SecretsStoredResponse(
         deployment_id=deployment.id, secrets_count=len(secrets_to_create)
@@ -125,7 +125,7 @@ async def update_secrets(
 
     # Update existing secrets only (fail if not found)
     for secret in secrets:
-        updated = await db.secrets.aupdate_by_key(
+        updated = await db.secrets.update_by_key(
             deployment_id=deployment.id,
             key=secret.key,
             value=secret.value,
@@ -139,7 +139,7 @@ async def update_secrets(
             )
 
     # Get final count of secrets
-    remaining_secrets = await db.secrets.aget_secrets(deployment.id)
+    remaining_secrets = await db.secrets.get_secrets(deployment.id)
 
     return SecretsStoredResponse(
         deployment_id=deployment.id, secrets_count=len(remaining_secrets)
@@ -159,7 +159,7 @@ async def delete_secrets(
 
     # Delete existing secrets
     for secret in secrets:
-        deleted = await db.secrets.adelete_secret_by_key(deployment.id, secret.key)
+        deleted = await db.secrets.delete_secret_by_key(deployment.id, secret.key)
         if not deleted:
             raise HTTPException(
                 status_code=404,

@@ -92,6 +92,13 @@ class AppConfig(BaseModel):
     )
     HELM_HISTORY_MAX_REVISIONS: int = int(os.getenv("HELM_HISTORY_MAX_REVISIONS", "6"))
 
+    # Invitation Configuration
+    INVITATION_EXPIRATION_DAYS: int = int(os.getenv("INVITATION_EXPIRATION_DAYS", "14"))
+
+    # Email Configuration
+    RESEND_API_KEY: str = os.getenv("RESEND_API_KEY", "")
+    SUPPORT_EMAIL: str = os.getenv("SUPPORT_EMAIL", "support@lazycloud.dev")
+
     # Required Environment Variables
     required_env_vars: List[str] = [
         "ADMIN_API_KEY",

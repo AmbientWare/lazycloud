@@ -63,7 +63,7 @@ async def list_deployments(
 
     try:
         offset = int(cursor) if cursor else 0
-        total, deployments = await db.compose_deployments.afind_paginated(
+        total, deployments = await db.compose_deployments.find_paginated(
             filters=filters, offset=offset, limit=limit, include_deleted=False
         )
 
@@ -126,7 +126,7 @@ async def create_deployment(
 ) -> DeploymentTaskStatusResponse:
     """Create a new compose deployment."""
     # make sure to check workspace permissions
-    membership = await db.user_workspaces.aget_by_user_and_workspace(
+    membership = await db.user_workspaces.get_by_user_and_workspace(
         current_user.id, request.workspace_id
     )
     if not membership:
@@ -152,7 +152,7 @@ async def create_deployment(
         # Step 1: Check if this is an update to an existing deployment
         is_update = False
         if request.name:
-            existing_deployment = await db.compose_deployments.aget_by_name(
+            existing_deployment = await db.compose_deployments.get_by_name(
                 workspace_id=request.workspace_id,
                 name=request.name,
             )
@@ -178,7 +178,7 @@ async def create_deployment(
         if request.name:
             async with db.compose_deployments.transaction() as session:
                 try:
-                    deployment = await db.compose_deployments.afind_one_with_lock(
+                    deployment = await db.compose_deployments.find_one_with_lock(
                         workspace_id=request.workspace_id,
                         name=request.name,
                         session=session,
@@ -206,9 +206,10 @@ async def create_deployment(
                         deployment.pending_compose_yaml = request.compose_yaml
                         deployment.state = DeploymentStates.PENDING
                         deployment.status_message = "Update queued"
-                        deployment = await db.compose_deployments.aupdate(
+                        deployment = await db.compose_deployments.update(
                             deployment, session=session
                         )
+
                     else:
                         deployment_data = ComposeDeploymentPydantic(
                             workspace_id=request.workspace_id,
@@ -218,9 +219,10 @@ async def create_deployment(
                             state=DeploymentStates.PENDING,
                             status_message="Deployment queued",
                         )
-                        deployment = await db.compose_deployments.acreate(
+                        deployment = await db.compose_deployments.create(
                             deployment_data, session=session
                         )
+
                 except IntegrityError as e:
                     await session.rollback()
                     if "uq_workspace_deployment_name" in str(e.orig):
@@ -233,9 +235,11 @@ async def create_deployment(
                         status_code=500,
                         detail=f"Database constraint violation: {str(e)}",
                     ) from e
+
                 except HTTPException:
                     await session.rollback()
                     raise
+
                 except Exception as e:
                     await session.rollback()
                     logger.error(
@@ -254,7 +258,8 @@ async def create_deployment(
                 status_message="Deployment queued",
             )
             try:
-                deployment = await db.compose_deployments.acreate(deployment_data)
+                deployment = await db.compose_deployments.create(deployment_data)
+
             except IntegrityError as e:
                 if "uq_workspace_deployment_name" in str(e.orig):
                     raise HTTPException(

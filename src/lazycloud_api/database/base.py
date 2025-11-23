@@ -126,7 +126,7 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
 
         return query
 
-    async def aget_all(self) -> list[basePydanticType]:
+    async def get_all(self) -> list[basePydanticType]:
         """Get all model instances"""
         async with self._session_manager.get_session() as session:
             query = select(self.db_model_class)
@@ -135,7 +135,7 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
             db_models = list[baseDbType](result.scalars().all())
             return [self._to_pydantic(db_model) for db_model in db_models]
 
-    async def aget_by_id(
+    async def get_by_id(
         self,
         id: str,
         include_deleted: bool = False,
@@ -159,7 +159,7 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
         else:
             return await self._execute_in_session(_get, None)
 
-    async def aget_by_user_id(self, user_id: str) -> list[basePydanticType]:
+    async def get_by_user_id(self, user_id: str) -> list[basePydanticType]:
         """Get all model instances by user id"""
         async with self._session_manager.get_session() as session:
             query = select(self.db_model_class).where(
@@ -170,7 +170,7 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
             db_models = list(result.scalars().all())
             return [model.to_pydantic(self.pydantic_model_class) for model in db_models]
 
-    async def acreate(
+    async def create(
         self, model: basePydanticType, session: AsyncSession | None = None
     ) -> basePydanticType:
         """Create a new model instance"""
@@ -185,7 +185,7 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
 
         return await self._execute_in_session(_create, session)
 
-    async def acreate_bulk(
+    async def create_bulk(
         self, models: list[basePydanticType]
     ) -> list[basePydanticType]:
         """Create multiple model instances"""
@@ -205,7 +205,7 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
 
             return [self._to_pydantic(model) for model in db_models]
 
-    async def aupdate(
+    async def update(
         self, model: basePydanticType, session: AsyncSession | None = None
     ) -> basePydanticType | None:
         """Update an existing model instance"""
@@ -227,25 +227,25 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
         result = await self._execute_in_session(_update, session)
         return result
 
-    async def adelete(self, id: str) -> None:
+    async def delete(self, id: str) -> None:
         """Delete a model instance"""
         async with self._session_manager.get_session() as session:
             stmt = delete(self.db_model_class).where(self.db_model_class.id == id)
             await session.execute(stmt)
             await session.commit()
 
-    async def adelete_bulk(self, ids: list[str]) -> None:
+    async def delete_bulk(self, ids: list[str]) -> None:
         """Delete multiple model instances"""
         async with self._session_manager.get_session() as session:
             stmt = delete(self.db_model_class).where(self.db_model_class.id.in_(ids))
             await session.execute(stmt)
             await session.commit()
 
-    async def aexists(self, id: str) -> bool:
+    async def exists(self, id: str) -> bool:
         """Check if a model instance exists"""
-        return await self.aget_by_id(id) is not None
+        return await self.get_by_id(id) is not None
 
-    async def afind(self, filters: dict) -> list[basePydanticType]:
+    async def find(self, filters: dict) -> list[basePydanticType]:
         """Find models matching the filters"""
         async with self._session_manager.get_session() as session:
             query = self._build_filtered_query(filters, include_deleted=False)
@@ -253,12 +253,12 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
             db_models = list(result.scalars().all())
             return [model.to_pydantic(self.pydantic_model_class) for model in db_models]
 
-    async def afind_one(self, filters: dict) -> basePydanticType | None:
+    async def find_one(self, filters: dict) -> basePydanticType | None:
         """Find a single model matching the filters"""
-        results = await self.afind(filters)
+        results = await self.find(filters)
         return results[0] if results else None
 
-    async def afind_paginated(
+    async def find_paginated(
         self,
         filters: dict,
         offset: int = 0,

@@ -42,7 +42,7 @@ def _parse_deployment_volumes(compose_yaml: str, deployment_id: str) -> set[str]
 async def _get_deployment_map(workspace_id: str) -> dict[str, str]:
     """Get mapping of release_name -> deployment_id for active deployments in workspace."""
     deployment_name_map = (
-        await db.compose_deployments.aget_active_deployments_for_workspace(workspace_id)
+        await db.compose_deployments.get_active_deployments_for_workspace(workspace_id)
     )
 
     release_name_map = {}
@@ -55,7 +55,7 @@ async def _get_deployment_map(workspace_id: str) -> dict[str, str]:
 
 async def _get_pvc_deployment_map(workspace_id: str) -> dict[str, str]:
     """Get mapping of sanitized PVC name -> deployment_id for active deployments."""
-    deployments = await db.compose_deployments.afind({"workspace_id": workspace_id})
+    deployments = await db.compose_deployments.find({"workspace_id": workspace_id})
 
     pvc_map = {}
     for deployment in deployments:
@@ -327,7 +327,7 @@ async def backfill_daily_usage(
     )
 
     # Get workspace to check created_at and deleted_at
-    workspace = await db.workspaces.aget_by_id(workspace_id)
+    workspace = await db.workspaces.get_by_id(workspace_id)
     if not workspace:
         logger.error(f"Workspace {workspace_id} not found")
         return {
@@ -440,7 +440,7 @@ async def forward_for_billing():
     logger.info(f"Processing {len(finalized_usage)} usage records")
     for usage in finalized_usage:
         # bill usage to the workspace owner
-        workspace_owner = await db.workspaces.aget_owner_user(usage.workspace_id)
+        workspace_owner = await db.workspaces.get_owner_user(usage.workspace_id)
         if not workspace_owner:
             logger.error(
                 f"No owner found for workspace {usage.workspace_id}, skipping usage {usage.id}"
@@ -513,7 +513,7 @@ async def forward_for_billing():
 async def spawn_usage_collection():
     """Spawn usage collection flows for active workspaces"""
     # Get only active workspaces (skip deleted ones)
-    active_workspaces = await db.workspaces.aget_active_workspaces()
+    active_workspaces = await db.workspaces.get_active_workspaces()
 
     logger.info(
         f"Collecting usage for {len(active_workspaces)} active workspaces "
@@ -567,8 +567,8 @@ async def mark_workspaces_for_backfill():
     today_start = datetime.combine(now.date(), datetime.min.time()).replace(
         tzinfo=timezone.utc
     )
-    active_workspaces = await db.workspaces.aget_active_workspaces_before(today_start)
-    deleted_yesterday = await db.workspaces.aget_deleted_in_range(
+    active_workspaces = await db.workspaces.get_active_workspaces_before(today_start)
+    deleted_yesterday = await db.workspaces.get_deleted_in_range(
         yesterday_start, yesterday_end
     )
 

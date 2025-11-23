@@ -13,7 +13,7 @@ async def restart_service_task(deployment_id: str, service_name: str) -> None:
     )
 
     # Get deployment from database
-    deployment = await db.compose_deployments.aget_by_id(deployment_id)
+    deployment = await db.compose_deployments.get_by_id(deployment_id)
 
     if not deployment:
         raise Exception(f"Deployment {deployment_id} not found")
@@ -45,7 +45,7 @@ async def restart_all_services_task(deployment_id: str) -> None:
     logger.info(f"Starting restart of all services in deployment {deployment_id}")
 
     # Get deployment from database
-    deployment = await db.compose_deployments.aget_by_id(deployment_id)
+    deployment = await db.compose_deployments.get_by_id(deployment_id)
 
     if not deployment:
         raise Exception(f"Deployment {deployment_id} not found")

@@ -33,7 +33,7 @@ async def get_user_features(
     features: BaseFeatures = Depends(get_user_product_features),
 ) -> UserFeaturesResponse:
     """Get the current user's subscription features and current usage counts."""
-    workspace_count = await db.workspaces.aget_active_workspace_count(current_user.id)
+    workspace_count = await db.workspaces.get_active_workspace_count(current_user.id)
 
     return UserFeaturesResponse(
         workspace=WorkspaceFeatureResponse(
