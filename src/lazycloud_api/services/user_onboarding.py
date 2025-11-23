@@ -44,7 +44,7 @@ class UserOnboardingService:
 
     async def _get_user_by_clerk_id(self, clerk_id: str) -> Optional[UserPydantic]:
         """Get user by clerk_id."""
-        return await db.users.aget_by_clerk_id(clerk_id=clerk_id)
+        return await db.users.get_by_clerk_id(clerk_id=clerk_id)
 
     async def _create_user_with_entities(
         self, clerk_id: str, name: str, email: str
@@ -62,7 +62,7 @@ class UserOnboardingService:
                     status=UserStatus.ACTIVE,
                     subscription_state=SubscriptionState.WITHIN_LIMITS,
                 )
-                user = await db.users.acreate(user, session=session)
+                user = await db.users.create(user, session=session)
 
                 # Create API key
                 api_key = ApiKeyPydantic(
@@ -71,14 +71,14 @@ class UserOnboardingService:
                     value=generate_api_key(),
                     expires_at=generate_api_key_expires_at(ApiKeyExpirationDays.NEVER),
                 )
-                await db.api_keys.acreate(api_key, session=session)
+                await db.api_keys.create(api_key, session=session)
 
                 # Create personal workspace
                 workspace = WorkspacePydantic(
                     name="Personal",
                     is_personal=True,
                 )
-                workspace = await db.workspaces.acreate(workspace, session=session)
+                workspace = await db.workspaces.create(workspace, session=session)
 
                 # Link user to workspace
                 user_workspace = UserWorkspacePydantic(
@@ -87,7 +87,7 @@ class UserOnboardingService:
                     role=WorkspaceRole.OWNER,
                     status=UserWorkspaceStatus.ACTIVE,
                 )
-                await db.user_workspaces.acreate(user_workspace, session=session)
+                await db.user_workspaces.create(user_workspace, session=session)
 
             logger.info(f"Successfully created user {clerk_id} in database")
             return user

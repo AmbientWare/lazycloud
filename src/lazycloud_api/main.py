@@ -16,6 +16,7 @@ from lazycloud_api.api.v1 import (
     deployments_router,
     diff_router,
     health_router,
+    invitations_router,
     tasks_router,
     users_router,
     workspaces_router,
@@ -114,6 +115,7 @@ versionsed_routes.include_router(api_keys_router)
 versionsed_routes.include_router(tasks_router)
 versionsed_routes.include_router(deployments_router)
 versionsed_routes.include_router(workspaces_router)
+versionsed_routes.include_router(invitations_router)
 versionsed_routes.include_router(diff_router)
 app.include_router(versionsed_routes)
 

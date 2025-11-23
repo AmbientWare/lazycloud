@@ -30,7 +30,7 @@ async def _get_deployment_or_verify_workspace(
     if request.diff_type == DiffType.NEW:
         return None
 
-    deployment = await db.compose_deployments.aget_by_name(
+    deployment = await db.compose_deployments.get_by_name(
         request.workspace_id, request.deployment_name
     )
 
@@ -68,7 +68,7 @@ async def get_deployment_diff(
     env_var_changes = None
     if request.diff_type == DiffType.EXISTING:
         # Existing deployment - compare with current secrets
-        existing_secrets = await db.secrets.aget_secrets(deployment.id)
+        existing_secrets = await db.secrets.get_secrets(deployment.id)
 
         existing_keys, user_managed_keys = set(), set()
         for secret in existing_secrets:

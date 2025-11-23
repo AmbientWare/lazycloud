@@ -15,7 +15,7 @@ async def monitor_subscription_states():
     logger.info("Starting subscription state monitoring")
 
     # Get all active users
-    users = await db.users.afind(
+    users = await db.users.find(
         filters={"status": UserStatus.ACTIVE},
     )
 

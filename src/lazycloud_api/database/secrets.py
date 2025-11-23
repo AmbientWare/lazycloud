@@ -91,7 +91,7 @@ class SecretService(DatabaseService[SecretTable, SecretPydantic]):
     def __init__(self):
         super().__init__(SecretTable, SecretPydantic)
 
-    async def aget_secrets(
+    async def get_secrets(
         self, deployment_id: str, source: SecretSource | None = None
     ) -> list[SecretPydantic]:
         """Get secrets by deployment id."""
@@ -106,7 +106,7 @@ class SecretService(DatabaseService[SecretTable, SecretPydantic]):
             db_secrets = result.scalars().all()
             return [self._to_pydantic(secret) for secret in db_secrets]
 
-    async def aget_secret_by_key(
+    async def get_secret_by_key(
         self, deployment_id: str, key: str
     ) -> SecretPydantic | None:
         """Get a single secret by deployment_id and key."""
@@ -119,7 +119,7 @@ class SecretService(DatabaseService[SecretTable, SecretPydantic]):
             db_secret = result.scalar_one_or_none()
             return self._to_pydantic(db_secret) if db_secret else None
 
-    async def aupdate_by_key(
+    async def update_by_key(
         self,
         deployment_id: str,
         key: str,
@@ -128,7 +128,7 @@ class SecretService(DatabaseService[SecretTable, SecretPydantic]):
         state: SecretState,
     ) -> SecretPydantic | None:
         """Update an existing secret by deployment_id and key. Returns None if not found."""
-        existing = await self.aget_secret_by_key(deployment_id, key)
+        existing = await self.get_secret_by_key(deployment_id, key)
         if not existing:
             return None
 
@@ -142,9 +142,9 @@ class SecretService(DatabaseService[SecretTable, SecretPydantic]):
             state=state,
         )
 
-        return await self.aupdate(updated_secret)
+        return await self.update(updated_secret)
 
-    async def adelete_secret_by_key(self, deployment_id: str, key: str) -> bool:
+    async def delete_secret_by_key(self, deployment_id: str, key: str) -> bool:
         """Delete a single secret by deployment_id and key"""
         async with self._session_manager.get_session() as session:
             query = select(SecretTable).where(
@@ -155,6 +155,6 @@ class SecretService(DatabaseService[SecretTable, SecretPydantic]):
             db_secret = result.scalar_one_or_none()
 
             if db_secret:
-                await self.adelete(str(db_secret.id))
+                await self.delete(str(db_secret.id))
                 return True
             return False

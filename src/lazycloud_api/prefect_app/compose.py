@@ -107,12 +107,12 @@ async def _update_deployment_state(
 ) -> None:
     """Update deployment status in database."""
     try:
-        deployment = await db.compose_deployments.aget_by_id(deployment_id)
+        deployment = await db.compose_deployments.get_by_id(deployment_id)
         if deployment:
             deployment.state = state
             if message:
                 deployment.status_message = message[:500]  # Truncate to fit
-            await db.compose_deployments.aupdate(deployment)
+            await db.compose_deployments.update(deployment)
 
     except Exception as e:
         logger.error(f"Failed to update deployment status: {e}")
@@ -127,7 +127,7 @@ async def _wait_for_secrets(deployment_id: str, timeout: int | None = None) -> N
     secrets = []
     while time.time() - start_time < timeout:
         await asyncio.sleep(1)
-        secrets = await db.secrets.aget_secrets(deployment_id)
+        secrets = await db.secrets.get_secrets(deployment_id)
         if secrets:
             logger.info(f"Found {len(secrets)} secrets for deployment {deployment_id}")
             break
@@ -161,7 +161,7 @@ async def deploy_compose_task(
             raise
 
     # get deployment
-    deployment = await db.compose_deployments.aget_by_id(deployment_id)
+    deployment = await db.compose_deployments.get_by_id(deployment_id)
     if not deployment:
         raise ValueError(f"Deployment {deployment_id} not found")
 
@@ -203,7 +203,7 @@ async def deploy_compose_task(
         )
 
     # get the helm values with deployment_id to load secrets
-    secrets = await db.secrets.aget_secrets(deployment_id)
+    secrets = await db.secrets.get_secrets(deployment_id)
     helm_generator = HelmValuesGenerator(deployment, secrets)
     helm_values, _ = helm_generator.generate_values(compose_file)
     helm_values.compose_yaml = compose_yaml
@@ -228,7 +228,7 @@ async def deploy_compose_task(
         logger.info(f"Deploying namespace resources for {namespace}")
 
         # Get workspace owner and their subscription features for dynamic quota
-        owner_user = await db.workspaces.aget_owner_user(deployment.workspace_id)
+        owner_user = await db.workspaces.get_owner_user(deployment.workspace_id)
         if not owner_user:
             raise ValueError(
                 f"Workspace {deployment.workspace_id} has no owner. Cannot determine resource quota."
@@ -370,7 +370,7 @@ async def deploy_compose_task(
 
         try:
             async with db.compose_deployments.transaction() as session:
-                deployment = await db.compose_deployments.aget_by_id(
+                deployment = await db.compose_deployments.get_by_id(
                     deployment_id, with_lock=True, session=session
                 )
                 if deployment is None:
@@ -389,13 +389,13 @@ async def deploy_compose_task(
                 if app_result.revision:
                     deployment.current_helm_revision = app_result.revision
 
-                await db.compose_deployments.aupdate(deployment, session=session)
+                await db.compose_deployments.update(deployment, session=session)
 
             if secrets:
                 async with db.secrets.transaction() as session:
                     for secret in secrets:
                         secret.state = SecretState.DEPLOYED
-                        await db.secrets.aupdate(secret, session=session)
+                        await db.secrets.update(secret, session=session)
         except Exception as db_error:
             logger.error(
                 f"Helm deployment succeeded but DB update failed for deployment {deployment_id}. "
@@ -435,7 +435,7 @@ async def deploy_compose_task(
             async with db.secrets.transaction() as session:
                 for secret in secrets:
                     secret.state = SecretState.AWAITING_DEPLOYMENT
-                    await db.secrets.aupdate(secret, session=session)
+                    await db.secrets.update(secret, session=session)
         raise
     except Exception as e:
         error_type = type(e).__name__
@@ -453,7 +453,7 @@ async def deploy_compose_task(
             async with db.secrets.transaction() as session:
                 for secret in secrets:
                     secret.state = SecretState.AWAITING_DEPLOYMENT
-                    await db.secrets.aupdate(secret, session=session)
+                    await db.secrets.update(secret, session=session)
 
         # Attempt cleanup on failure only if Helm deployment never succeeded
         try:
@@ -484,7 +484,7 @@ async def destroy_compose_task(deployment_id: str) -> None:
     ecr_auth_service = get_ecr_auth_service()
 
     # get the deployment
-    deployment = await db.compose_deployments.aget_by_id(deployment_id)
+    deployment = await db.compose_deployments.get_by_id(deployment_id)
     if not deployment:
         raise Exception(f"Deployment {deployment_id} not found")
 
@@ -533,12 +533,12 @@ async def destroy_compose_task(deployment_id: str) -> None:
             logger.warning(f"ECR cleanup failed (continuing): {ecr_error}")
 
         # Step 4: Soft delete deployment from database
-        deployment = await db.compose_deployments.aget_by_id(deployment_id)
+        deployment = await db.compose_deployments.get_by_id(deployment_id)
         if deployment:
             deployment.deleted_at = datetime.now(UTC)
             deployment.state = DeploymentStates.DELETED
             deployment.status_message = "Deployment deleted"
-            await db.compose_deployments.aupdate(deployment)
+            await db.compose_deployments.update(deployment)
 
         logger.info(f"Successfully destroyed deployment {deployment_id}")
 
@@ -566,7 +566,7 @@ async def rollback_compose_task(deployment_id: str, revision: int) -> None:
     helm_manager = HelmManager()
 
     async with db.compose_deployments.transaction() as session:
-        deployment = await db.compose_deployments.aget_by_id(
+        deployment = await db.compose_deployments.get_by_id(
             deployment_id, with_lock=True, session=session
         )
         if deployment is None:
@@ -616,7 +616,7 @@ async def rollback_compose_task(deployment_id: str, revision: int) -> None:
                 deployment.current_helm_revision = revision
                 deployment.state = DeploymentStates.DEPLOYED
                 deployment.status_message = f"Rollback already completed (idempotent sync to revision {revision})"
-                await db.compose_deployments.aupdate(deployment, session=session)
+                await db.compose_deployments.update(deployment, session=session)
                 logger.info(
                     f"Successfully synced deployment {deployment_id} DB state to match Helm revision {revision}"
                 )
@@ -628,7 +628,7 @@ async def rollback_compose_task(deployment_id: str, revision: int) -> None:
                 return
 
         async with db.compose_deployments.transaction() as session:
-            deployment = await db.compose_deployments.aget_by_id(
+            deployment = await db.compose_deployments.get_by_id(
                 deployment_id, with_lock=True, session=session
             )
             if deployment is None:
@@ -645,7 +645,7 @@ async def rollback_compose_task(deployment_id: str, revision: int) -> None:
 
             deployment.state = DeploymentStates.DEPLOYING
             deployment.status_message = f"Rolling back to revision {revision}"
-            await db.compose_deployments.aupdate(deployment, session=session)
+            await db.compose_deployments.update(deployment, session=session)
 
     try:
         compose_yaml = helm_manager.get_compose_yaml_from_release(
@@ -689,7 +689,7 @@ async def rollback_compose_task(deployment_id: str, revision: int) -> None:
 
         compose_file = ComposeParser.parse_dict(compose_data)
 
-        secrets = await db.secrets.aget_secrets(deployment_id)
+        secrets = await db.secrets.get_secrets(deployment_id)
         helm_generator = HelmValuesGenerator(deployment, secrets)
         helm_values, _ = helm_generator.generate_values(compose_file)
         helm_values.compose_yaml = compose_yaml
@@ -700,7 +700,7 @@ async def rollback_compose_task(deployment_id: str, revision: int) -> None:
             if service.enabled and service.workloadType == WorkloadType.JOB
         ]
 
-        current_deployment = await db.compose_deployments.aget_by_id(deployment_id)
+        current_deployment = await db.compose_deployments.get_by_id(deployment_id)
         current_job_services = []
         if (
             current_deployment
@@ -799,7 +799,7 @@ async def rollback_compose_task(deployment_id: str, revision: int) -> None:
 
         try:
             async with db.compose_deployments.transaction() as session:
-                deployment = await db.compose_deployments.aget_by_id(
+                deployment = await db.compose_deployments.get_by_id(
                     deployment_id, with_lock=True, session=session
                 )
                 if deployment is None:
@@ -828,7 +828,7 @@ async def rollback_compose_task(deployment_id: str, revision: int) -> None:
                 deployment.state = DeploymentStates.DEPLOYED
                 deployment.status_message = f"Successfully rolled back to revision {revision} (new revision: {new_revision})"
 
-                await db.compose_deployments.aupdate(deployment, session=session)
+                await db.compose_deployments.update(deployment, session=session)
 
             logger.info(
                 f"Successfully rolled back deployment {deployment_id} to revision {revision}"
@@ -964,7 +964,7 @@ async def reconcile_rollback_states(
                 continue
 
             async with db.compose_deployments.transaction() as session:
-                deployment_locked = await db.compose_deployments.aget_by_id(
+                deployment_locked = await db.compose_deployments.get_by_id(
                     deployment.id, with_lock=True, session=session
                 )
                 if deployment_locked is None:
@@ -987,7 +987,7 @@ async def reconcile_rollback_states(
                     f"Reconciled: DB synced to Helm revision {helm_revision} "
                     f"(was stuck in DEPLOYING state)"
                 )
-                await db.compose_deployments.aupdate(deployment_locked, session=session)
+                await db.compose_deployments.update(deployment_locked, session=session)
 
             logger.info(
                 f"Successfully reconciled deployment {deployment.id}: synced DB revision to {helm_revision}"

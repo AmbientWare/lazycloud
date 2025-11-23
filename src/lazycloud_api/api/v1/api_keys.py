@@ -24,12 +24,14 @@ async def get_api_keys(
     # user_id here is the Clerk ID from the frontend
     if user_id:
         # Look up the user by Clerk ID to get the internal UUID
-        user = await db.users.aget_by_clerk_id(clerk_id=user_id)
+        user = await db.users.get_by_clerk_id(clerk_id=user_id)
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
-        api_keys = await db.api_keys.afind(filters={"user_id": user.id})
+
+        api_keys = await db.api_keys.find(filters={"user_id": user.id})
+
     else:
-        api_keys = await db.api_keys.afind(filters={})
+        api_keys = await db.api_keys.find(filters={})
 
     return api_keys
 
@@ -39,12 +41,12 @@ async def create_api_key(
     request: CreateApiKeyRequest,
 ) -> ApiKeyPydantic:
     # Look up the user by Clerk ID to get the internal UUID
-    user = await db.users.aget_by_clerk_id(clerk_id=request.clerk_id)
+    user = await db.users.get_by_clerk_id(clerk_id=request.clerk_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
     # Check if an API key with this name already exists for the user
-    existing_key = await db.api_keys.afind_one(
+    existing_key = await db.api_keys.find_one(
         filters={"user_id": user.id, "name": request.name}
     )
     if existing_key:
@@ -61,7 +63,7 @@ async def create_api_key(
         expires_at=generate_api_key_expires_at(request.expires_at),
     )
 
-    new_api_key = await db.api_keys.acreate(api_key)
+    new_api_key = await db.api_keys.create(api_key)
     if new_api_key is None:
         raise HTTPException(status_code=500, detail="Unable to create api key")
 
@@ -74,13 +76,11 @@ async def update_api_key(
     request: UpdateApiKeyRequest,
 ) -> ApiKeyPydantic:
     # Look up the user by Clerk ID to get the internal UUID
-    user = await db.users.aget_by_clerk_id(clerk_id=request.clerk_id)
+    user = await db.users.get_by_clerk_id(clerk_id=request.clerk_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    api_key = await db.api_keys.afind_one(
-        filters={"id": api_key_id, "user_id": user.id}
-    )
+    api_key = await db.api_keys.find_one(filters={"id": api_key_id, "user_id": user.id})
     if api_key is None:
         raise HTTPException(status_code=404, detail="Api key not found")
 
@@ -88,7 +88,7 @@ async def update_api_key(
     api_key.value = generate_api_key()
     api_key.expires_at = generate_api_key_expires_at(request.expires_at)
 
-    new_api_key = await db.api_keys.aupdate(api_key)
+    new_api_key = await db.api_keys.update(api_key)
     if new_api_key is None:
         raise HTTPException(status_code=404, detail="Unable to update api key")
 
@@ -109,15 +109,15 @@ async def delete_api_keys(
     if api_key_id:
         filters["id"] = api_key_id
     if clerk_id:
-        user = await db.users.aget_by_clerk_id(clerk_id=clerk_id)
+        user = await db.users.get_by_clerk_id(clerk_id=clerk_id)
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
         filters["user_id"] = user.id
 
-    api_keys = await db.api_keys.afind(filters=filters)
+    api_keys = await db.api_keys.find(filters=filters)
 
     for api_key in api_keys:
         if api_key.id is not None:
-            await db.api_keys.adelete(api_key.id)
+            await db.api_keys.delete(api_key.id)
 
     return api_keys

@@ -1,7 +1,7 @@
 import json
 from typing import TYPE_CHECKING, Any
 
-from fastapi import HTTPException
+import yaml
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,10 +10,19 @@ from lazycloud_api.billing.product_details.features import BaseFeatures
 from lazycloud_api.database import db
 from lazycloud_api.database.users import SubscriptionState, UserPydantic
 from lazycloud_api.database.workspaces import WorkspaceStatus
+from lazycloud_api.services.compose.parser import ComposeParser
 from lazycloud_api.services.polar import PolarService
 
 if TYPE_CHECKING:
     from shared.models.compose import ComposeFile
+
+
+class SubscriptionLimitError(Exception):
+    """Exception raised when subscription limits are exceeded."""
+
+    def __init__(self, message: str, status_code: int = 403):
+        self.status_code = status_code
+        super().__init__(message)
 
 
 class SubscriptionService:
@@ -108,7 +117,7 @@ class SubscriptionService:
     ) -> UserPydantic:
         """Update user's subscription_state and return updated Pydantic model."""
         user.subscription_state = new_state
-        updated = await db.users.aupdate(user, session=session)
+        updated = await db.users.update(user, session=session)
         if updated is None:
             logger.warning(
                 f"aupdate returned None for user {user.id} - using in-memory state. "
@@ -120,11 +129,11 @@ class SubscriptionService:
         self, user_id: str, features: BaseFeatures, session: AsyncSession | None = None
     ) -> UserPydantic | None:
         """Audit user's resource usage and update subscription_state accordingly"""
-        user = await db.users.aget_by_id(user_id, session=session)
+        user = await db.users.get_by_id(user_id, session=session)
         if not user:
             return None
 
-        workspace_count = await db.workspaces.aget_active_workspace_count(user_id)
+        workspace_count = await db.workspaces.get_active_workspace_count(user_id)
 
         if workspace_count > features.workspace.limit:
             if user.subscription_state != SubscriptionState.OVER_LIMITS:
@@ -139,13 +148,13 @@ class SubscriptionService:
 
         if workspace_count > 0:
             workspaces_with_membership = (
-                await db.workspaces.aget_user_workspaces_with_membership(
+                await db.workspaces.get_user_workspaces_with_membership(
                     user_id, status=WorkspaceStatus.ACTIVE
                 )
             )
             workspace_ids = [ws.id for ws, _ in workspaces_with_membership]
             deployment_counts = (
-                await db.compose_deployments.aget_deployment_counts_by_workspace(
+                await db.compose_deployments.get_deployment_counts_by_workspace(
                     workspace_ids
                 )
             )
@@ -176,11 +185,10 @@ class SubscriptionService:
 
     async def check_workspace_limit(self, user_id: str, features: BaseFeatures) -> None:
         """Check if user can create a new workspace based on their subscription tier."""
-        workspace_count = await db.workspaces.aget_active_workspace_count(user_id)
+        workspace_count = await db.workspaces.get_active_workspace_count(user_id)
 
         if workspace_count >= features.workspace.limit:
-            raise HTTPException(
-                403,
+            raise SubscriptionLimitError(
                 f"Workspace limit reached. Your plan allows {features.workspace.limit} workspace(s). "
                 "Please upgrade your plan to create more workspaces.",
             )
@@ -189,13 +197,12 @@ class SubscriptionService:
         self, workspace_id: str, features: BaseFeatures, user_id: str | None = None
     ) -> None:
         """Check if user can create a new deployment in the workspace based on their subscription tier."""
-        deployment_count = await db.compose_deployments.aget_deployment_count(
+        deployment_count = await db.compose_deployments.get_deployment_count(
             workspace_id
         )
 
         if deployment_count >= features.workspace.deployment_limit:
-            raise HTTPException(
-                403,
+            raise SubscriptionLimitError(
                 f"Deployment limit reached for this workspace. Your plan allows {features.workspace.deployment_limit} deployment(s) per workspace. "
                 "Please upgrade your plan to create more deployments.",
             )
@@ -253,8 +260,7 @@ class SubscriptionService:
         # Count services
         service_count = len(compose_file.services)
         if service_count > features.deployment.service_limit:
-            raise HTTPException(
-                403,
+            raise SubscriptionLimitError(
                 f"Service limit exceeded. Your plan allows {features.deployment.service_limit} service(s) per deployment, "
                 f"but this deployment has {service_count}. Please upgrade your plan or reduce the number of services.",
             )
@@ -268,8 +274,7 @@ class SubscriptionService:
                         volume_names.add(volume.source)
         volume_count = len(volume_names) + len(compose_file.volumes)
         if volume_count > features.deployment.volume_limit:
-            raise HTTPException(
-                403,
+            raise SubscriptionLimitError(
                 f"Volume limit exceeded. Your plan allows {features.deployment.volume_limit} volume(s) per deployment, "
                 f"but this deployment has {volume_count}. Please upgrade your plan or reduce the number of volumes.",
             )
@@ -282,8 +287,7 @@ class SubscriptionService:
                     network_names.add(network.name)
         network_count = len(network_names) + len(compose_file.networks)
         if network_count > features.deployment.network_limit:
-            raise HTTPException(
-                403,
+            raise SubscriptionLimitError(
                 f"Network limit exceeded. Your plan allows {features.deployment.network_limit} network(s) per deployment, "
                 f"but this deployment has {network_count}. Please upgrade your plan or reduce the number of networks.",
             )
@@ -300,8 +304,7 @@ class SubscriptionService:
                 replicas = service.scaling.min
 
             if replicas is not None and replicas > max_replicas:
-                raise HTTPException(
-                    403,
+                raise SubscriptionLimitError(
                     f"Replica limit exceeded for service '{service.name}'. Your plan allows {max_replicas} replica(s) per service, "
                     f"but this service has {replicas}. Please upgrade your plan or reduce the number of replicas.",
                 )
@@ -312,16 +315,81 @@ class SubscriptionService:
                 and service.scaling.enabled
                 and service.scaling.max > max_replicas
             ):
-                raise HTTPException(
-                    403,
+                raise SubscriptionLimitError(
                     f"HPA max replica limit exceeded for service '{service.name}'. Your plan allows {max_replicas} replica(s) per service, "
                     f"but HPA max is set to {service.scaling.max}. Please upgrade your plan or reduce the max replicas.",
                 )
 
         # Check custom domains
         if features.domain_limit == 0 and len(custom_domains) > 0:
-            raise HTTPException(
-                403,
+            raise SubscriptionLimitError(
                 "Custom domains are not available on your plan. Please upgrade to a plan that supports custom domains.",
             )
-        # TODO: Check global domain limit across all deployments in workspace
+
+    async def validate_workspace_for_owner(
+        self, workspace_id: str, new_owner_features: BaseFeatures, new_owner_id: str
+    ) -> None:
+        """Validate that a workspace can be transferred to a new owner based on their plan features."""
+        # Check workspace limit: new owner must have room for one more workspace
+        workspace_count = await db.workspaces.get_active_workspace_count(new_owner_id)
+        if workspace_count >= new_owner_features.workspace.limit:
+            raise SubscriptionLimitError(
+                f"Workspace limit reached. Your plan allows {new_owner_features.workspace.limit} workspace(s), "
+                f"and you currently own {workspace_count}. Please upgrade your plan to accept this workspace transfer.",
+            )
+
+        # Check deployment limit: workspace's deployment count must not exceed new owner's limit
+        deployment_count = await db.compose_deployments.get_deployment_count(
+            workspace_id
+        )
+        if deployment_count > new_owner_features.workspace.deployment_limit:
+            raise SubscriptionLimitError(
+                f"Deployment limit exceeded. This workspace has {deployment_count} deployment(s), "
+                f"but your plan allows {new_owner_features.workspace.deployment_limit} deployment(s) per workspace. "
+                "Please upgrade your plan to accept this workspace transfer.",
+            )
+
+        # Validate each deployment's features against new owner's plan
+        _, deployments = await db.compose_deployments.find_paginated(
+            filters={"workspace_id": workspace_id},
+            offset=0,
+            limit=1000,  # Get all deployments
+            include_deleted=False,
+        )
+
+        validation_errors = []
+        for deployment in deployments:
+            if not deployment.compose_yaml:
+                continue
+
+            try:
+                compose_data = yaml.safe_load(deployment.compose_yaml)
+                if not compose_data:
+                    continue
+
+                compose_file = ComposeParser.parse_dict(compose_data)
+                # This will raise SubscriptionLimitError if validation fails
+                await self.check_deployment_features(
+                    compose_file, compose_data, new_owner_features
+                )
+
+            except SubscriptionLimitError as e:
+                deployment_name = deployment.name or deployment.id
+                validation_errors.append(f"Deployment '{deployment_name}': {str(e)}")
+
+            except Exception as e:
+                logger.error(
+                    f"Error validating deployment {deployment.id} for workspace transfer: {e}"
+                )
+                deployment_name = deployment.name or deployment.id
+                validation_errors.append(
+                    f"Deployment '{deployment_name}': Failed to validate - {str(e)}"
+                )
+
+        if validation_errors:
+            error_message = (
+                "The following deployment(s) exceed your plan limits:\n"
+                + "\n".join(f"  - {error}" for error in validation_errors)
+                + "\n\nPlease upgrade your plan to accept this workspace transfer."
+            )
+            raise SubscriptionLimitError(error_message)

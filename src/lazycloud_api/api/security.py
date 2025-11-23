@@ -22,7 +22,7 @@ async def get_current_user(
     if app_config.ENV.value == ENVIRONMENT.DEV.value and (
         credentials is None or not credentials.credentials
     ):
-        user = await db.users.aget_by_clerk_id(clerk_id="lzy_admin")
+        user = await db.users.get_by_clerk_id(clerk_id="lzy_admin")
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -49,7 +49,7 @@ async def get_current_user(
 
 async def _authenticate_api_key(api_key: str) -> UserPydantic:
     """Authenticate using API key (sk_ prefix)"""
-    db_api_key = await db.api_keys.afind_one(filters={"value": api_key})
+    db_api_key = await db.api_keys.find_one(filters={"value": api_key})
 
     if not db_api_key or api_key_is_expired(db_api_key.expires_at):
         raise HTTPException(
@@ -58,7 +58,7 @@ async def _authenticate_api_key(api_key: str) -> UserPydantic:
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    user = await db.users.aget_by_id(id=db_api_key.user_id)
+    user = await db.users.get_by_id(id=db_api_key.user_id)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -88,7 +88,7 @@ async def _authenticate_jwt(token: str) -> UserPydantic:
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
-        user = await db.users.aget_by_clerk_id(clerk_id=clerk_id)
+        user = await db.users.get_by_clerk_id(clerk_id=clerk_id)
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,

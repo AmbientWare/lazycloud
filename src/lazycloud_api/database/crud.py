@@ -32,7 +32,7 @@ async def update_admin_api_keys():
 
     # check if we have an admin user
     user_service = UserService()
-    user = await user_service.aget_by_clerk_id(clerk_id="lzy_admin")
+    user = await user_service.get_by_clerk_id(clerk_id="lzy_admin")
 
     if not user:
         # Create admin user with workspace in a transaction
@@ -47,7 +47,7 @@ async def update_admin_api_keys():
                 status=UserStatus.ACTIVE,
                 subscription_state=SubscriptionState.WITHIN_LIMITS,
             )
-            user = await user_service.acreate(user, session=session)
+            user = await user_service.create(user, session=session)
 
             # Create personal workspace
             workspace_service = WorkspaceService()
@@ -55,7 +55,7 @@ async def update_admin_api_keys():
                 name="Personal",
                 is_personal=True,
             )
-            personal_workspace = await workspace_service.acreate(
+            personal_workspace = await workspace_service.create(
                 personal_workspace, session=session
             )
 
@@ -67,7 +67,7 @@ async def update_admin_api_keys():
                 role=WorkspaceRole.OWNER,
                 status=UserWorkspaceStatus.ACTIVE,
             )
-            await user_workspace_service.acreate(
+            await user_workspace_service.create(
                 user_workspace_membership, session=session
             )
 
@@ -76,7 +76,7 @@ async def update_admin_api_keys():
     else:
         # ensure admin user has a personal workspace
         workspace_service = WorkspaceService()
-        personal_workspace = await workspace_service.aget_personal_workspace(user.id)
+        personal_workspace = await workspace_service.get_personal_workspace(user.id)
         if not personal_workspace:
             logger.info("Creating personal workspace for admin user...")
             async with workspace_service.transaction() as session:
@@ -84,7 +84,7 @@ async def update_admin_api_keys():
                     name="Personal",
                     is_personal=True,
                 )
-                personal_workspace = await workspace_service.acreate(
+                personal_workspace = await workspace_service.create(
                     personal_workspace, session=session
                 )
 
@@ -96,7 +96,7 @@ async def update_admin_api_keys():
                     role=WorkspaceRole.OWNER,
                     status=UserWorkspaceStatus.ACTIVE,
                 )
-                await user_workspace_service.acreate(
+                await user_workspace_service.create(
                     user_workspace_membership, session=session
                 )
             logger.info(
@@ -109,7 +109,7 @@ async def update_admin_api_keys():
             )
 
     # check if the admin api key exists
-    admin_api_keys = await api_key_service.aget_by_user_id(user_id=user.id)
+    admin_api_keys = await api_key_service.get_by_user_id(user_id=user.id)
     api_key_exists = False
     if admin_api_keys and len(admin_api_keys) > 0:
         # delete api keys if they are expired
@@ -121,7 +121,7 @@ async def update_admin_api_keys():
             ):
                 if api_key_is_expired(api_key.expires_at):
                     logger.info(f"Deleting expired admin api key: {api_key.value}")
-                    await api_key_service.adelete(api_key.id)
+                    await api_key_service.delete(api_key.id)
                     continue
 
                 elif api_key.updated_at > datetime.now(timezone.utc) - timedelta(
@@ -136,7 +136,7 @@ async def update_admin_api_keys():
                     logger.info(
                         f"Updating admin api key: {api_key.value} to expire in 30 days"
                     )
-                    await api_key_service.aupdate(api_key)
+                    await api_key_service.update(api_key)
 
             else:
                 api_key_exists = True
@@ -154,7 +154,7 @@ async def update_admin_api_keys():
         ),
     )
 
-    new_api_key = await api_key_service.acreate(api_key)
+    new_api_key = await api_key_service.create(api_key)
     if new_api_key and new_api_key.user_id == user.id:
         logger.info(f"New admin api key created: {new_api_key.value}")
 
