@@ -10,6 +10,7 @@ from minikube.constants import MINIKUBE_ADDONS, PROMETHEUS_NAMESPACE
 from minikube.operations import (
     cleanup_existing_cluster,
     configure_localstack_registry_dns,
+    ensure_localstack_running,
     setup_monitoring_stack,
     setup_storage_class,
     setup_test_namespace,
@@ -114,6 +115,7 @@ def start_minikube(
     setup_storage_class()
     setup_test_namespace()
     verify_gvisor_runtime()
+    ensure_localstack_running()
     configure_localstack_registry_dns()
     setup_monitoring_stack()
 

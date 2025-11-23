@@ -71,11 +71,14 @@ class UserWorkspaceService(DatabaseService[UserWorkspaceTable, UserWorkspacePyda
         super().__init__(UserWorkspaceTable, UserWorkspacePydantic)
 
     async def get_by_user_and_workspace(
-        self, user_id: str, workspace_id: str
+        self,
+        user_id: str,
+        workspace_id: str,
+        session: AsyncSession | None = None,
     ) -> UserWorkspacePydantic | None:
         """Get membership by user and workspace"""
         filters = {"user_id": user_id, "workspace_id": workspace_id}
-        return await self.find_one(filters=filters)
+        return await self.find_one(filters=filters, session=session)
 
     async def get_user_memberships(self, user_id: str) -> list[UserWorkspacePydantic]:
         """Get all workspace memberships for a user"""

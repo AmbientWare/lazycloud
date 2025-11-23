@@ -18,6 +18,7 @@ class WorkspaceMemberResponse(BaseModel):
     email: str
     role: str
     status: str
+    invitation_id: str | None = None
 
 
 class WorkspaceSuccessResponse(BaseModel):

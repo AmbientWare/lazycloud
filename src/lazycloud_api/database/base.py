@@ -227,12 +227,19 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
         result = await self._execute_in_session(_update, session)
         return result
 
-    async def delete(self, id: str) -> None:
+    async def delete(self, id: str, session: AsyncSession | None = None) -> None:
         """Delete a model instance"""
-        async with self._session_manager.get_session() as session:
+
+        async def _delete(sess: AsyncSession):
             stmt = delete(self.db_model_class).where(self.db_model_class.id == id)
-            await session.execute(stmt)
-            await session.commit()
+            await sess.execute(stmt)
+
+        if session:
+            await _delete(session)
+        else:
+            async with self._session_manager.get_session() as new_session:
+                await _delete(new_session)
+                await new_session.commit()
 
     async def delete_bulk(self, ids: list[str]) -> None:
         """Delete multiple model instances"""
@@ -253,10 +260,21 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
             db_models = list(result.scalars().all())
             return [model.to_pydantic(self.pydantic_model_class) for model in db_models]
 
-    async def find_one(self, filters: dict) -> basePydanticType | None:
+    async def find_one(
+        self, filters: dict, session: AsyncSession | None = None
+    ) -> basePydanticType | None:
         """Find a single model matching the filters"""
-        results = await self.find(filters)
-        return results[0] if results else None
+
+        async def _find_one(sess: AsyncSession):
+            query = self._build_filtered_query(filters, include_deleted=False)
+            result = await sess.execute(query)
+            db_model = result.scalar_one_or_none()
+            return self._to_pydantic(db_model)
+
+        if session:
+            return await _find_one(session)
+        else:
+            return await self._execute_in_session(_find_one, None)
 
     async def find_paginated(
         self,
