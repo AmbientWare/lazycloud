@@ -7,7 +7,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from lazycloud_api.database import db
 from lazycloud_api.database.base import BaseDbPydanticModel, BaseTable, DatabaseService
 from lazycloud_api.database.user_workspaces import (
     UserWorkspacePydantic,
@@ -120,7 +119,7 @@ class WorkspaceService(DatabaseService[WorkspaceTable, WorkspacePydantic]):
             membership = result.scalar_one_or_none()
 
             if membership:
-                return db.user_workspaces._to_pydantic(membership)
+                return membership.to_pydantic(UserWorkspacePydantic)
 
             return None
 
@@ -183,8 +182,8 @@ class WorkspaceService(DatabaseService[WorkspaceTable, WorkspacePydantic]):
             await sess.refresh(new_owner_membership)
 
             return (
-                db.user_workspaces._to_pydantic(current_owner_membership),
-                db.user_workspaces._to_pydantic(new_owner_membership),
+                current_owner_membership.to_pydantic(UserWorkspacePydantic),
+                new_owner_membership.to_pydantic(UserWorkspacePydantic),
             )
 
         if session:
