@@ -114,6 +114,111 @@ def verify_gvisor_runtime() -> None:
         console.print("[yellow]⚠ Could not verify gVisor RuntimeClass[/yellow]")
 
 
+def ensure_localstack_running() -> None:
+    """Ensure LocalStack container is running before configuring DNS."""
+    console.print("🔧 [bold]Ensuring LocalStack is running...[/bold]")
+
+    # Check if container exists and is running
+    check_result = run_command(
+        [
+            "docker",
+            "ps",
+            "--filter",
+            "name=lazycloud-localstack",
+            "--format",
+            "{{.Names}}",
+        ],
+        check=False,
+    )
+
+    if check_result.stdout.strip():
+        console.print("[green]✓ LocalStack is already running[/green]")
+        return
+
+    # Check if container exists but is stopped
+    check_stopped = run_command(
+        [
+            "docker",
+            "ps",
+            "-a",
+            "--filter",
+            "name=lazycloud-localstack",
+            "--format",
+            "{{.Names}}",
+        ],
+        check=False,
+    )
+
+    if check_stopped.stdout.strip():
+        console.print("  Starting existing LocalStack container...")
+        run_command(["docker", "start", "lazycloud-localstack"], check=False)
+    else:
+        # Start LocalStack via docker compose
+        console.print("  Starting LocalStack via docker compose...")
+        compose_file = Path.cwd() / "docker-compose.yml"
+        if not compose_file.exists():
+            console.print(
+                "[yellow]⚠ docker-compose.yml not found, skipping LocalStack startup[/yellow]"
+            )
+            console.print(
+                "[blue]💡 Start LocalStack manually with: docker compose up -d localstack[/blue]"
+            )
+            return
+
+        run_command(
+            ["docker", "compose", "up", "-d", "localstack"],
+            check=False,
+        )
+
+    # Wait for LocalStack to be healthy
+    console.print("  Waiting for LocalStack to be healthy...")
+    max_attempts = 30
+    for attempt in range(max_attempts):
+        health_result = run_command(
+            [
+                "docker",
+                "inspect",
+                "--format",
+                "{{.State.Health.Status}}",
+                "lazycloud-localstack",
+            ],
+            check=False,
+        )
+
+        if health_result.returncode == 0:
+            status = health_result.stdout.strip()
+            if status == "healthy":
+                console.print("[green]✓ LocalStack is healthy[/green]")
+                return
+            elif status == "starting":
+                time.sleep(2)
+                continue
+
+        # Fallback: check if container is running
+        running_check = run_command(
+            [
+                "docker",
+                "ps",
+                "--filter",
+                "name=lazycloud-localstack",
+                "--format",
+                "{{.Names}}",
+            ],
+            check=False,
+        )
+        if running_check.stdout.strip():
+            console.print(
+                "[yellow]⚠ LocalStack is running but healthcheck status unclear[/yellow]"
+            )
+            console.print("[blue]💡 Continuing anyway...[/blue]")
+            return
+
+        time.sleep(2)
+
+    console.print("[yellow]⚠ LocalStack did not become healthy within timeout[/yellow]")
+    console.print("[blue]💡 Continuing anyway, DNS configuration may fail[/blue]")
+
+
 def configure_localstack_registry_dns() -> None:
     """Configure minikube to resolve LocalStack registry hostname.
 
@@ -151,8 +256,18 @@ def configure_localstack_registry_dns() -> None:
                     "lazycloud-localstack",
                     "--format={{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
                 ],
-                check=True,
+                check=False,
             )
+
+            if ip_result.returncode != 0:
+                console.print(
+                    "[yellow]⚠ Could not inspect LocalStack container[/yellow]"
+                )
+                console.print(
+                    "[blue]💡 Make sure LocalStack is running: docker compose up -d localstack[/blue]"
+                )
+                return
+
             localstack_ip = ip_result.stdout.strip()
 
             if not localstack_ip:

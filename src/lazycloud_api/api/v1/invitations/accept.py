@@ -6,9 +6,10 @@ from pydantic import BaseModel
 
 from lazycloud_api.api.security import get_current_active_user
 from lazycloud_api.database import db
-from lazycloud_api.database.invitations import WorkspaceInvitationService
+from lazycloud_api.database.invitations import WorkspaceInvitationPydantic
 from lazycloud_api.database.users import UserPydantic
 from lazycloud_api.services import (
+    InvitationService,
     get_invitation_service,
     get_subscription_service,
 )
@@ -16,6 +17,7 @@ from lazycloud_api.services.subscription_service import (
     SubscriptionLimitError,
     SubscriptionService,
 )
+from shared.models.workspaces import InvitationType
 from shared.responses.workspaces import WorkspaceSuccessResponse
 
 invitations_router = APIRouter(prefix="/invitations", tags=["invitations"])
@@ -28,58 +30,75 @@ class InvitationDetailsResponse(BaseModel):
     role: str
     invited_by_name: str
     expires_at: str
-    invitation_type: str = "member"
+    invitation_type: str = InvitationType.MEMBER.value
+    invitation_id: str  # Required for logged-in users to accept invitations
 
 
-@invitations_router.get("/{token}")
-async def get_invitation(
-    token: str,
-    invitation_service: WorkspaceInvitationService = Depends(get_invitation_service),
-) -> InvitationDetailsResponse:
-    """Get invitation details by token"""
-    invitation = await invitation_service.get_by_token(token)
+@invitations_router.get("/pending")
+async def get_pending_invitations(
+    current_user: UserPydantic = Depends(get_current_active_user),
+) -> list[InvitationDetailsResponse]:
+    """Get all pending invitations for the current user (including ownership transfers)"""
+    pending_invitations = await db.invitations.get_pending_by_email(current_user.email)
+
+    result = []
+    for invitation in pending_invitations:
+        workspace = await db.workspaces.get_by_id(invitation.workspace_id)
+        if not workspace:
+            continue
+
+        invited_by = await db.users.get_by_id(invitation.invited_by_user_id)
+        if not invited_by:
+            continue
+
+        result.append(
+            InvitationDetailsResponse(
+                workspace_id=invitation.workspace_id,
+                workspace_name=workspace.name,
+                email=invitation.email,
+                role=invitation.role,
+                invited_by_name=invited_by.name,
+                expires_at=invitation.expires_at.isoformat(),
+                invitation_type=invitation.invitation_type,
+                invitation_id=invitation.id,  # Use invitation_id for accepting
+            )
+        )
+
+    return result
+
+
+@invitations_router.post("/{invitation_id}/accept")
+async def accept_invitation(
+    invitation_id: str,
+    current_user: UserPydantic = Depends(get_current_active_user),
+    subscription_service: SubscriptionService = Depends(get_subscription_service),
+    invitation_service: InvitationService = Depends(get_invitation_service),
+) -> WorkspaceSuccessResponse:
+    """Accept an invitation by ID (for logged-in users)"""
+    invitation = await db.invitations.get_by_id(invitation_id)
 
     if not invitation:
         raise HTTPException(status_code=404, detail="Invitation not found")
 
-    if invitation.accepted_at:
+    # Verify the invitation belongs to the current user
+    if current_user.email.lower().strip() != invitation.email.lower().strip():
         raise HTTPException(
-            status_code=400, detail="Invitation has already been accepted"
+            status_code=403, detail="This invitation does not belong to you"
         )
 
-    if invitation.expires_at < datetime.now(timezone.utc):
-        raise HTTPException(status_code=400, detail="Invitation has expired")
-
-    workspace = await db.workspaces.get_by_id(invitation.workspace_id)
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
-
-    invited_by = await db.users.get_by_id(invitation.invited_by_user_id)
-    if not invited_by:
-        raise HTTPException(status_code=404, detail="Inviter not found")
-
-    return InvitationDetailsResponse(
-        workspace_id=invitation.workspace_id,
-        workspace_name=workspace.name,
-        email=invitation.email,
-        role=invitation.role,
-        invited_by_name=invited_by.name,
-        expires_at=invitation.expires_at.isoformat(),
-        invitation_type=invitation.invitation_type,
+    # Continue with acceptance logic
+    return await _accept_invitation_logic(
+        invitation, current_user, subscription_service, invitation_service
     )
 
 
-@invitations_router.post("/{token}/accept")
-async def accept_invitation(
-    token: str,
-    current_user: UserPydantic = Depends(get_current_active_user),
-    subscription_service: SubscriptionService = Depends(get_subscription_service),
+async def _accept_invitation_logic(
+    invitation: WorkspaceInvitationPydantic,
+    current_user: UserPydantic,
+    subscription_service: SubscriptionService,
+    invitation_service: InvitationService,
 ) -> WorkspaceSuccessResponse:
-    """Accept an invitation"""
-    invitation = await db.invitations.get_by_token(token)
-
-    if not invitation:
-        raise HTTPException(status_code=404, detail="Invitation not found")
+    """Shared logic for accepting invitations"""
 
     if invitation.accepted_at:
         raise HTTPException(
@@ -89,13 +108,8 @@ async def accept_invitation(
     if invitation.expires_at < datetime.now(timezone.utc):
         raise HTTPException(status_code=400, detail="Invitation has expired")
 
-    if current_user.email.lower().strip() != invitation.email.lower().strip():
-        raise HTTPException(
-            status_code=400, detail="Invitation email does not match your email"
-        )
-
     # Handle ownership transfer differently
-    if invitation.invitation_type == "ownership_transfer":
+    if invitation.invitation_type == InvitationType.OWNERSHIP_TRANSFER.value:
         # Re-validate workspace for new owner (in case plan changed since invitation)
         new_owner_features = await subscription_service.get_user_features(
             current_user.clerk_id
@@ -134,8 +148,8 @@ async def accept_invitation(
     else:
         # Regular member invitation
         try:
-            workspace_id, role = await db.invitations.accept_invitation(
-                token, current_user.id
+            workspace_id, role = await invitation_service.accept_invitation(
+                invitation.id, current_user.id
             )
             logger.info(
                 f"User {current_user.id} accepted invitation to workspace {workspace_id} with role {role}"

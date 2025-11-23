@@ -14,7 +14,7 @@ from lazycloud_api.database.base import (
     UUIDStr,
 )
 from lazycloud_api.database.users import UserTable
-from shared.models.workspaces import WorkspaceRole
+from shared.models.workspaces import InvitationType, WorkspaceRole
 
 if TYPE_CHECKING:
     from lazycloud_api.database.workspaces import WorkspaceTable
@@ -33,8 +33,8 @@ class WorkspaceInvitationTable(BaseTable):
     role: Mapped[str] = mapped_column(String, default=WorkspaceRole.MEMBER)
     token: Mapped[str] = mapped_column(String, unique=True, index=True)
     invitation_type: Mapped[str] = mapped_column(
-        String, default="member"
-    )  # "member" or "ownership_transfer"
+        String, default=InvitationType.MEMBER.value
+    )
     invited_by_user_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE")
     )
@@ -67,7 +67,7 @@ class WorkspaceInvitationPydantic(BaseDbPydanticModel):
     invited_by_user_id: UUIDStr
     expires_at: datetime
     accepted_at: datetime | None = None
-    invitation_type: str = "member"  # "member" or "ownership_transfer"
+    invitation_type: str = InvitationType.MEMBER.value
 
 
 class WorkspaceInvitationService(
@@ -86,7 +86,7 @@ class WorkspaceInvitationService(
         invited_by_user_id: str,
         token: str,
         expires_at: datetime,
-        invitation_type: str = "member",
+        invitation_type: str = InvitationType.MEMBER.value,
         session: AsyncSession | None = None,
     ) -> WorkspaceInvitationPydantic:
         """Create a new invitation"""
@@ -166,5 +166,16 @@ class WorkspaceInvitationService(
         filters = {
             "workspace_id": workspace_id,
             "email": email.lower().strip(),
+        }
+        return await self.find_one(filters=filters)
+
+    async def get_by_workspace_and_email_and_type(
+        self, workspace_id: str, email: str, invitation_type: str
+    ) -> WorkspaceInvitationPydantic | None:
+        """Get invitation by workspace, email, and invitation type"""
+        filters = {
+            "workspace_id": workspace_id,
+            "email": email.lower().strip(),
+            "invitation_type": invitation_type,
         }
         return await self.find_one(filters=filters)

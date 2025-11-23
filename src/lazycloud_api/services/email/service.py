@@ -34,7 +34,7 @@ class EmailService:
         email: str,
         workspace_name: str,
         inviter_name: str,
-        acceptance_url: str,
+        workspaces_url: str,
         expiration_days: int = 14,
     ) -> dict:
         """Send workspace invitation email"""
@@ -44,7 +44,7 @@ class EmailService:
                 {
                     "workspace_name": workspace_name,
                     "inviter_name": inviter_name,
-                    "acceptance_url": acceptance_url,
+                    "workspaces_url": workspaces_url,
                     "expiration_days": expiration_days,
                 },
             )
@@ -70,7 +70,7 @@ class EmailService:
         email: str,
         workspace_name: str,
         current_owner_name: str,
-        acceptance_url: str,
+        workspaces_url: str,
         expiration_days: int = 14,
     ) -> dict:
         """Send ownership transfer invitation email"""
@@ -80,7 +80,7 @@ class EmailService:
                 {
                     "workspace_name": workspace_name,
                     "current_owner_name": current_owner_name,
-                    "acceptance_url": acceptance_url,
+                    "workspaces_url": workspaces_url,
                     "expiration_days": expiration_days,
                 },
             )
