@@ -37,5 +37,10 @@ def dashboard():
         raise typer.Exit(1)
 
     except Exception as e:
-        typer.secho(f"Error: {e}", fg=typer.colors.RED, err=True)
+        error_card = ErrorCard(
+            message=str(e),
+            title="🔧 Dashboard Error",
+            suggestion="Please check the error and try again.",
+        )
+        console.print(error_card)
         raise typer.Exit(1)

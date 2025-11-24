@@ -62,11 +62,9 @@ def login():
             workspaces = api.workspaces.list_workspaces()
 
             # Find the personal workspace
-            personal_workspace = None
-            for ws in workspaces:
-                if ws.get("is_personal"):
-                    personal_workspace = ws
-                    break
+            personal_workspace = next(
+                (ws for ws in workspaces if ws.get("is_personal")), None
+            )
 
             if not personal_workspace:
                 error_card = ErrorCard(

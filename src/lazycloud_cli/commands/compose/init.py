@@ -13,8 +13,8 @@ console = Console()
 view = InitView(console)
 
 
-def validate_deployment_name(name: str) -> str:
-    """Validate deployment name follows LazyCloud naming conventions."""
+def validate_deployment_name(name: str) -> tuple[str, bool]:
+    """Validate deployment name follows LazyCloud naming conventions"""
     pattern = r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
     if not re.match(pattern, name) or len(name) > 63:
         raise typer.BadParameter(
@@ -23,7 +23,8 @@ def validate_deployment_name(name: str) -> str:
         )
 
     # check if the name is already taken
-    if api.deployments.get_deployment(name=name):
+    existing_deployment = api.deployments.get_deployment(name=name)
+    if existing_deployment:
         # deployment already exists, ask if we want to sync it locally
         dialog = SimpleConfirmationDialog(
             action="sync this existing deployment locally",
@@ -36,15 +37,16 @@ def validate_deployment_name(name: str) -> str:
         )
 
         if dialog.show(console):
-            # User wants to sync - return the name to continue
-            return name
+            # User wants to sync - return the name and flag
+            return name, True
+
         else:
             # User doesn't want to sync - raise an exception to exit
             raise typer.BadParameter(
                 f"Deployment '{name}' already exists. Choose a different name or sync the existing deployment."
             )
 
-    return name
+    return name, False
 
 
 def find_compose_files(directory: Path = Path.cwd()) -> list[str]:
@@ -121,9 +123,7 @@ def init_deployment(
 
     # Validate deployment name
     try:
-        deployment_name = validate_deployment_name(deployment_name)
-        # Check if this is a sync operation (deployment already exists)
-        is_sync = api.deployments.get_deployment(name=deployment_name) is not None
+        deployment_name, is_sync = validate_deployment_name(deployment_name)
     except typer.BadParameter as e:
         view.show_validation_error(str(e))
         raise typer.Exit(1)
