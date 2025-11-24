@@ -6,8 +6,8 @@ from lazycloud_api.api.dependencies import (
     get_workspace_with_admin_access,
 )
 from lazycloud_api.services import ECRAuthService, get_ecr_auth_service
-from shared.requests.registry import UploadIntentRequest
-from shared.responses.registry import UploadIntentResponse
+from shared.requests.registry import ImageExistsRequest, UploadIntentRequest
+from shared.responses.registry import ImageExistsResponse, UploadIntentResponse
 
 registry_router = APIRouter(prefix="/{workspace_id}/registry")
 
@@ -49,3 +49,34 @@ async def get_upload_intent(
     except Exception as e:
         logger.error(f"Failed to get upload credentials: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@registry_router.post("/images-exist", response_model=ImageExistsResponse)
+async def check_images_exist(
+    request: ImageExistsRequest,
+    workspace_access: WorkspaceAccess = Depends(get_workspace_with_admin_access),
+    ecr_auth_service: ECRAuthService = Depends(get_ecr_auth_service),
+) -> ImageExistsResponse:
+    """Check if images exist in the registry."""
+
+    workspace = workspace_access.workspace
+
+    try:
+        logger.debug(
+            f"Checking existence for {len(request.image_names)} images in deployment {request.deployment_name}"
+        )
+
+        exists_map = await ecr_auth_service.check_images_exist(
+            workspace_id=workspace.id,
+            deployment_name=request.deployment_name,
+            image_names=request.image_names,
+        )
+
+        return ImageExistsResponse(exists_map=exists_map)
+
+    except Exception as e:
+        logger.error(f"Failed to check image existence: {e}")
+        # On error, return False for all (will trigger builds)
+        return ImageExistsResponse(
+            exists_map={img: False for img in request.image_names}
+        )

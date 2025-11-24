@@ -334,3 +334,93 @@ class ECRAuthService:
         except ClientError as e:
             logger.error(f"Failed to get upload credentials: {e}")
             raise
+
+    async def check_images_exist(
+        self, workspace_id: str, deployment_name: str, image_names: list[str]
+    ) -> dict[str, bool]:
+        """Check if images exist in ECR. Returns dict mapping image_name -> exists."""
+        result = {}
+
+        # For LocalStack, we can't reliably check, so return False for all
+        if self.is_localstack:
+            return {image_name: False for image_name in image_names}
+
+        # Group images by repository to minimize API calls
+        repo_to_images: dict[str, list[tuple[str, str]]] = {}
+        for image_name in image_names:
+            # Parse image name to extract repository and tag
+            if ":" in image_name:
+                repo_name, tag = image_name.rsplit(":", 1)
+            else:
+                repo_name = image_name
+                tag = "latest"
+
+            # Get the full repository path
+            full_repo_name = self.get_repository_path(
+                workspace_id, deployment_name, repo_name
+            )
+
+            if full_repo_name not in repo_to_images:
+                repo_to_images[full_repo_name] = []
+            repo_to_images[full_repo_name].append((image_name, tag))
+
+        # Check each repository
+        for full_repo_name, images in repo_to_images.items():
+            # Initialize all images for this repo as False
+            for image_name, _ in images:
+                result[image_name] = False
+
+            # Get all tags for this repository
+            tags = [tag for _, tag in images]
+            image_name_map = {tag: img_name for img_name, tag in images}
+
+            try:
+                # Batch check all tags for this repository
+                response = self.ecr_client.describe_images(
+                    repositoryName=full_repo_name,
+                    imageIds=[{"imageTag": tag} for tag in tags],
+                )
+
+                # Mark found images as existing
+                found_tags = {
+                    img["imageTags"][0]
+                    for img in response.get("imageDetails", [])
+                    if img.get("imageTags")
+                }
+
+                for tag, image_name in image_name_map.items():
+                    if tag in found_tags:
+                        result[image_name] = True
+
+            except ClientError as e:
+                error_code = e.response.get("Error", {}).get("Code", "")
+                if error_code == "RepositoryNotFoundException":
+                    # Repository doesn't exist, all images don't exist
+                    for _, image_name in images:
+                        result[image_name] = False
+                elif error_code == "ImageNotFoundException":
+                    # Some images not found, check which ones individually
+                    for image_name, tag in images:
+                        try:
+                            individual_response = self.ecr_client.describe_images(
+                                repositoryName=full_repo_name,
+                                imageIds=[{"imageTag": tag}],
+                            )
+                            result[image_name] = (
+                                len(individual_response.get("imageDetails", [])) > 0
+                            )
+                        except Exception:
+                            result[image_name] = False
+                else:
+                    # On other errors, assume doesn't exist
+                    logger.warning(f"Error checking images in {full_repo_name}: {e}")
+                    for _, image_name in images:
+                        result[image_name] = False
+
+            except Exception as e:
+                logger.warning(f"Unexpected error checking images: {e}")
+                # On error, assume doesn't exist
+                for _, image_name in images:
+                    result[image_name] = False
+
+        return result

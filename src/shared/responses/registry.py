@@ -11,3 +11,9 @@ class UploadIntentResponse(BaseModel):
     password: str
     repository: str
     expires_at: datetime
+
+
+class ImageExistsResponse(BaseModel):
+    """Response indicating which images exist."""
+
+    exists_map: dict[str, bool]

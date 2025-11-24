@@ -147,3 +147,19 @@ class ECRRegistry(BaseRegistry):
     def get_image_url(self, image_name: str) -> str:
         """Get the full registry URL for an image."""
         return self.credentials.repository
+
+    def images_exist(self, image_names: list[str]) -> dict[str, bool]:
+        """Check if images exist via API call."""
+        if not image_names:
+            return {}
+
+        try:
+            response = api.registry.check_images_exist(
+                deployment_name=self.deployment_name,
+                image_names=image_names,
+            )
+            return response.exists_map
+
+        except Exception:
+            # On error, assume doesn't exist (will trigger build)
+            return {image_name: False for image_name in image_names}

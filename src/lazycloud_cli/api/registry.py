@@ -1,7 +1,7 @@
 from lazycloud_cli.api.base import BaseAPI
 from lazycloud_cli.config import config
-from shared.requests.registry import UploadIntentRequest
-from shared.responses.registry import UploadIntentResponse
+from shared.requests.registry import ImageExistsRequest, UploadIntentRequest
+from shared.responses.registry import ImageExistsResponse, UploadIntentResponse
 
 
 class RegistryAPI(BaseAPI):
@@ -26,3 +26,20 @@ class RegistryAPI(BaseAPI):
             json=request.model_dump(),
         )
         return UploadIntentResponse(**response_data)
+
+    def check_images_exist(
+        self, deployment_name: str, image_names: list[str]
+    ) -> ImageExistsResponse:
+        """Check if images exist in the registry."""
+
+        workspace_id = config.active_workspace_id
+        request = ImageExistsRequest(
+            deployment_name=deployment_name,
+            image_names=image_names,
+        )
+
+        response_data = self._post(
+            f"/{workspace_id}/registry/images-exist",
+            json=request.model_dump(),
+        )
+        return ImageExistsResponse(**response_data)
