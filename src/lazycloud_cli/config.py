@@ -14,8 +14,7 @@ class CLIConfig(BaseSettings):
     registry_type: str = "ecr"
 
     # Private attributes for api key management
-    _api_keys: dict[str, str] = PrivateAttr(default_factory=dict)
-    _active_api_key: str | None = PrivateAttr(default=None)
+    _api_key: str | None = PrivateAttr(default=None)
 
     # Private attributes for workspace management
     _active_workspace_id: str | None = PrivateAttr(default=None)
@@ -34,12 +33,8 @@ class CLIConfig(BaseSettings):
         if config_path.exists():
             with open(config_path) as f:
                 for line in f:
-                    if line.startswith("API_KEY_"):
-                        key, value = line.strip().split("=", 1)
-                        api_key_name = key.replace("API_KEY_", "").lower()
-                        self._api_keys[api_key_name] = value
-                    elif line.startswith("ACTIVE_API_KEY="):
-                        self._active_api_key = line.strip().split("=", 1)[1]
+                    if line.startswith("API_KEY="):
+                        self._api_key = line.strip().split("=", 1)[1]
                     elif line.startswith("ACTIVE_WORKSPACE_ID="):
                         self._active_workspace_id = line.strip().split("=", 1)[1]
                     elif line.startswith("ACTIVE_WORKSPACE_NAME="):
@@ -49,83 +44,39 @@ class CLIConfig(BaseSettings):
         """Save configuration to the config file"""
         config_path = Path.home() / ".lazycloud"
         with open(config_path, "w") as f:
-            for api_key_name, value in self._api_keys.items():
-                f.write(f"API_KEY_{api_key_name.upper()}={value}\n")
-            if self._active_api_key:
-                f.write(f"ACTIVE_API_KEY={self._active_api_key}\n")
+            if self._api_key:
+                f.write(f"API_KEY={self._api_key}\n")
             if self._active_workspace_id:
                 f.write(f"ACTIVE_WORKSPACE_ID={self._active_workspace_id}\n")
             if self._active_workspace_name:
                 f.write(f"ACTIVE_WORKSPACE_NAME={self._active_workspace_name}\n")
 
     @property
-    def active_api_key(self) -> str | None:
-        """Get the currently active api key"""
-        return self._active_api_key
-
-    @property
-    def active_api_key_value(self) -> str | None:
-        """Get the value of the currently active api key.
+    def api_key(self) -> str | None:
+        """Get the API key.
 
         Checks in order:
         1. Stored API key from config file
         2. LAZYCLOUD_API_KEY environment variable
         """
-        # First try stored key
-        if self._active_api_key:
-            value = self._api_keys.get(self._active_api_key)
-            if value is not None:
-                return value
+        if self._api_key:
+            return self._api_key
 
-        # Fall back to environment variable
         env_key = os.getenv("LAZYCLOUD_API_KEY")
         if env_key:
             return env_key
 
-        raise ValueError("No active api key found")
+        return None
 
-    @active_api_key.setter
-    def active_api_key(self, value: str | None):
-        """Set the active api key"""
-        if value is not None and value not in self._api_keys:
-            raise ValueError(f"Api key {value} does not exist")
-        self._active_api_key = value
+    def set_api_key(self, value: str):
+        """Set the API key"""
+        self._api_key = value
         self._save_config()
 
-    def add_api_key(self, name: str, value: str):
-        """Add a new api key"""
-        name = name.lower()
-        self._api_keys[name] = value
-        # Only set as active if it's the first key
-        if not self._active_api_key:
-            self._active_api_key = name
+    def clear_api_key(self):
+        """Clear the API key"""
+        self._api_key = None
         self._save_config()
-
-    def remove_api_key(self, name: str):
-        """Remove an api key"""
-        name = name.lower()
-        if name not in self._api_keys:
-            raise ValueError(f"Api key {name} does not exist")
-
-        del self._api_keys[name]
-        # if the active key is being removed, set the active key to the next key
-        if self._active_api_key == name:
-            self._active_api_key = next(iter(self._api_keys.keys()), None)
-        self._save_config()
-
-    def get_api_key(self, name: str | None = None) -> str | None:
-        """Get an api key value by name. If no name is provided, returns the active api key."""
-        if name is None:
-            return (
-                self._api_keys.get(self._active_api_key)
-                if self._active_api_key
-                else None
-            )
-        return self._api_keys.get(name.lower())
-
-    def list_api_keys(self) -> dict[str, str]:
-        """List all api keys"""
-        return self._api_keys.copy()
 
     @property
     def api_url(self) -> str:
@@ -182,12 +133,7 @@ class CLIConfig(BaseSettings):
     def check_authentication(self) -> tuple[bool, str]:
         """Check if user is properly authenticated and configured."""
         # Check for API key (stored or env var)
-        has_stored_key = self._active_api_key and self._api_keys.get(
-            self._active_api_key
-        )
-        has_env_key = bool(os.getenv("LAZYCLOUD_API_KEY"))
-
-        if not has_stored_key and not has_env_key:
+        if not self.api_key:
             return (
                 False,
                 "Not logged in. Please run 'lazycloud login' first or set LAZYCLOUD_API_KEY.",
@@ -195,7 +141,7 @@ class CLIConfig(BaseSettings):
 
         # Check for workspace configuration (only required for stored keys)
         # Env var usage (CI/CD) can skip workspace config
-        if has_stored_key and not self._active_workspace_id:
+        if self._api_key and not self._active_workspace_id:
             return False, "No workspace configured. Please run 'lazycloud login' again."
 
         return True, ""

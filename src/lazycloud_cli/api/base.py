@@ -25,14 +25,9 @@ class BaseAPI:
     def _get_client(self) -> httpx.Client:
         """Get an HTTP client with authentication"""
         headers = {}
-        if config.active_api_key:
-            api_key = config.active_api_key_value
-            if api_key:
-                headers["Authorization"] = f"Bearer {api_key}"
-            else:
-                raise Exception(
-                    "No API key set. Please set an API key with `lazycloud keys add`"
-                )
+        api_key = config.api_key
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
 
         return httpx.Client(timeout=self.timeout, headers=headers)
 
