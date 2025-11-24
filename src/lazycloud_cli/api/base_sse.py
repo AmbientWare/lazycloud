@@ -65,10 +65,9 @@ class SSEClient:
 
             # Setup headers
             headers = {"Accept": "text/event-stream", "Cache-Control": "no-cache"}
-            if config.active_api_key:
-                api_key = config.active_api_key_value
-                if api_key:
-                    headers["Authorization"] = f"Bearer {api_key}"
+            api_key = config.api_key
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
 
             # Create streaming connection
             self._client = httpx.AsyncClient(timeout=httpx.Timeout(None, connect=10.0))

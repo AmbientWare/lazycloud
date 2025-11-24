@@ -62,7 +62,7 @@ def login(
         console.print(validating_card)
 
         # Store the API key temporarily to test it
-        config.add_api_key("default", api_key.strip())
+        config.set_api_key(api_key.strip())
 
         try:
             # Test the API key by fetching workspaces
@@ -80,7 +80,7 @@ def login(
                 )
                 console.print(error_card)
                 # Clean up the key before exiting
-                config.remove_api_key("default")
+                config.clear_api_key()
                 raise typer.Exit(1)
 
             # Set the personal workspace as active
@@ -104,7 +104,7 @@ def login(
             raise
         except Exception as e:
             # If validation fails, remove the key
-            config.remove_api_key("default")
+            config.clear_api_key()
 
             error_card = ErrorCard(
                 message=f"The API key is invalid or could not connect to the server.\n\nError: {e}",
