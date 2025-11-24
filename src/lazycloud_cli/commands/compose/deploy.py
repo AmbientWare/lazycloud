@@ -1240,10 +1240,21 @@ def _deploy(
                 creation_progress.update_status(
                     TaskStatus.COMPLETED, "Deployment created successfully!"
                 )
+                # Update last_deployed timestamp in .lazycloud file
+                try:
+                    lazycloud_file = LazyCloudFile.find_and_load(Path.cwd())
+                    if lazycloud_file:
+                        lazycloud_file.update(last_deployed=datetime.now(UTC))
+
+                except Exception:
+                    # Don't fail deployment if we can't update the timestamp
+                    pass
+
             elif final_status.status == TaskStatus.ERROR:
                 error_msg = final_status.message or "Task failed"
                 creation_progress.update_status("failed", error_msg)
                 raise Exception(f"Deployment task failed: {error_msg}")
+
             else:
                 creation_progress.update_status(
                     "failed", f"Unexpected status: {final_status.status}"
