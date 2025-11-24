@@ -19,8 +19,6 @@ from lazycloud_api.services.monitoring.service_monitor import ServiceMonitor
 from lazycloud_api.services.monitoring.task_monitor import TaskMonitor
 from shared.models.monitoring import MonitorStats, SubscriptionManagerStats
 
-DEFAULT_CLEANUP_DELAY = 15
-
 
 class SubscriptionManager:
     """
@@ -30,19 +28,12 @@ class SubscriptionManager:
     clients subscribing to the same monitor instance.
     """
 
-    def __init__(self, cleanup_delay: int = DEFAULT_CLEANUP_DELAY):
-        """
-        Initialize the subscription manager.
-
-        Args:
-            cleanup_delay: Seconds to wait after last unsubscribe before stopping monitor
-        """
+    def __init__(self):
+        """Initialize the subscription manager."""
         self._monitors: dict[str, BaseMonitor] = {}
         self._subscriptions: dict[
             str, dict[str, Callable]
         ] = {}  # monitor_key -> {sub_id -> callback}
-        self._cleanup_tasks: dict[str, asyncio.Task] = {}  # monitor_key -> cleanup task
-        self._cleanup_delay = cleanup_delay
         self._lock = asyncio.Lock()  # Global lock for monitor creation/removal
         self._monitor_locks: dict[
             str, asyncio.Lock
@@ -70,18 +61,6 @@ class SubscriptionManager:
 
         # Phase 1: Check/create monitor using global lock
         async with self._lock:
-            # Cancel any pending cleanup for this monitor
-            cleanup_task = self._cleanup_tasks.pop(monitor_key, None)
-            if cleanup_task:
-                cleanup_task.cancel()
-                try:
-                    await cleanup_task
-                except asyncio.CancelledError:
-                    pass
-                # Re-check if monitor still exists after cleanup cancellation
-                # If cleanup completed before we could cancel, monitor may have been removed
-                # Fall through to creation logic below
-
             # Get or create monitor
             if monitor_key not in self._monitors:
                 monitor = self._create_monitor(config)
@@ -183,74 +162,52 @@ class SubscriptionManager:
                 f"Remaining subscribers: {remaining}"
             )
 
-            # Schedule cleanup if no more subscribers (use global lock)
+            # Cleanup immediately if no more subscribers (use global lock)
+            monitor_to_stop = None
             if remaining == 0:
                 async with self._lock:
                     # Double-check still no subscribers after acquiring lock
-                    if (
-                        len(self._subscriptions[monitor_key]) == 0
-                        and monitor_key not in self._cleanup_tasks
-                    ):
-                        self._cleanup_tasks[monitor_key] = asyncio.create_task(
-                            self._schedule_cleanup(monitor_key)
-                        )
-
-    async def _schedule_cleanup(self, monitor_key: str) -> None:
-        """Wait for cleanup delay, then stop and remove monitor if still no subscribers"""
-        try:
-            logger.info(
-                f"Scheduling cleanup for monitor {monitor_key} in {self._cleanup_delay}s"
-            )
-            await asyncio.sleep(self._cleanup_delay)
-
-            async with self._lock:
-                # Check if still no subscribers
-                if (
-                    monitor_key in self._subscriptions
-                    and len(self._subscriptions[monitor_key]) == 0
-                ):
-                    monitor = self._monitors.pop(monitor_key, None)
-                    if monitor:
-                        await monitor.stop()
-                        logger.info(f"Stopped and removed monitor: {monitor_key}")
+                    if len(self._subscriptions[monitor_key]) == 0:
+                        monitor_to_stop = self._monitors.pop(monitor_key, None)
                         self._subscriptions.pop(monitor_key, None)
                         self._monitor_locks.pop(monitor_key, None)
 
-        except asyncio.CancelledError:
-            logger.debug(f"Cleanup cancelled for monitor {monitor_key}")
-            raise
+            # Stop monitor outside the lock to avoid blocking other operations
+            if monitor_to_stop:
+                asyncio.create_task(
+                    self._stop_monitor_background(monitor_to_stop, monitor_key)
+                )
+
+    async def _stop_monitor_background(
+        self, monitor: BaseMonitor, monitor_key: str
+    ) -> None:
+        """Stop a monitor in the background without blocking."""
+        try:
+            await asyncio.wait_for(monitor.stop(), timeout=2.0)
+            logger.info(f"Stopped and removed monitor: {monitor_key}")
+        except asyncio.TimeoutError:
+            logger.warning(f"Timeout stopping monitor {monitor_key}, forcing stop")
         except Exception as e:
             logger.error(
-                f"Unexpected error during cleanup for {monitor_key}: {e}", exc_info=True
+                f"Error stopping monitor {monitor_key}: {e}",
+                exc_info=True,
             )
-            raise
-        finally:
-            # Always remove cleanup task reference, even on exception
-            self._cleanup_tasks.pop(monitor_key, None)
 
     async def shutdown(self) -> None:
         """Stop all monitors and clean up resources."""
         logger.info("Shutting down SubscriptionManager")
-
-        # Cancel all cleanup tasks
-        for task in self._cleanup_tasks.values():
-            task.cancel()
-
-        # Wait for cleanup tasks to finish
-        if self._cleanup_tasks:
-            await asyncio.gather(*self._cleanup_tasks.values(), return_exceptions=True)
 
         # Stop all monitors
         for monitor_key, monitor in self._monitors.items():
             try:
                 await monitor.stop()
                 logger.info(f"Stopped monitor: {monitor_key}")
+
             except Exception as e:
                 logger.error(f"Error stopping monitor {monitor_key}: {e}")
 
         self._monitors.clear()
         self._subscriptions.clear()
-        self._cleanup_tasks.clear()
         self._monitor_locks.clear()
         logger.info("SubscriptionManager shutdown complete")
 
@@ -259,7 +216,7 @@ class SubscriptionManager:
         return SubscriptionManagerStats(
             active_monitors=len(self._monitors),
             total_subscriptions=sum(len(subs) for subs in self._subscriptions.values()),
-            pending_cleanups=len(self._cleanup_tasks),
+            pending_cleanups=0,
             monitors={
                 key: MonitorStats(
                     subscribers=len(self._subscriptions.get(key, {})),
@@ -281,6 +238,7 @@ def get_subscription_manager() -> SubscriptionManager:
         raise RuntimeError(
             "SubscriptionManager not initialized. Call initialize_subscription_manager() first."
         )
+
     return _subscription_manager
 
 
@@ -291,7 +249,7 @@ def initialize_subscription_manager() -> SubscriptionManager:
         logger.warning("SubscriptionManager already initialized")
         return _subscription_manager
 
-    _subscription_manager = SubscriptionManager(cleanup_delay=DEFAULT_CLEANUP_DELAY)
+    _subscription_manager = SubscriptionManager()
     logger.info("SubscriptionManager initialized")
     return _subscription_manager
 

@@ -32,6 +32,7 @@ class LogMonitor(BaseGenerativeMonitor[str]):
         async for log_line in self.log_streamer.stream():
             if not self._running:
                 break
+
             await self._emit(log_line)
 
     async def _cleanup(self):

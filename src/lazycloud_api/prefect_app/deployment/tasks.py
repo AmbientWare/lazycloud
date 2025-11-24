@@ -240,7 +240,7 @@ async def prepare_namespace_config_task(
         values=namespace_values,
         timeout="2m",
         wait=True,
-        create_namespace=True,
+        create_namespace=False,
     )
 
     return namespace_config

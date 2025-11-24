@@ -20,6 +20,7 @@ dependencies = [
     "importlib>=1.0.4",
     "jsondiff>=2.2.1",
     "kubernetes>=33.1.0",
+    "kubernetes-asyncio>=33.3.0",
     "loguru>=0.7.3",
     "nest-asyncio>=1.6.0",
     "pandas>=2.2.3",

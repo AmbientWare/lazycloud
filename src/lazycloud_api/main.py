@@ -25,6 +25,7 @@ from lazycloud_api.config import app_config
 from lazycloud_api.database.crud import update_admin_api_keys
 from lazycloud_api.log_config import setup_logger
 from lazycloud_api.prefect_app import serve_background_tasks
+from lazycloud_api.services.k8s.client import close_async_api_client
 from lazycloud_api.services.monitoring import (
     initialize_subscription_manager,
     shutdown_subscription_manager,
@@ -79,6 +80,10 @@ async def lifespan(app: FastAPI):
     # Shutdown subscription manager
     await shutdown_subscription_manager()
     logger.info("Subscription manager shutdown complete")
+
+    # Close async Kubernetes client
+    await close_async_api_client()
+    logger.info("Async Kubernetes client closed")
 
 
 # create a fastapi app

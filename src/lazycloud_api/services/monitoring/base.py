@@ -190,16 +190,27 @@ class BaseGenerativeMonitor(ABC, Generic[T]):
         """Stop the generative monitor."""
         self._running = False
 
-        # Allow subclasses to perform cleanup
-        await self._cleanup()
-
-        # Cancel the stream task
+        # Cancel the stream task first to stop generating new data
         if self._stream_task:
             self._stream_task.cancel()
             try:
-                await self._stream_task
+                # Wait for task cancellation with timeout to prevent blocking
+                await asyncio.wait_for(self._stream_task, timeout=1.0)
+
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"Timeout waiting for {self._name} stream task to cancel"
+                )
+
             except asyncio.CancelledError:
                 pass
+
+        # Allow subclasses to perform cleanup (e.g., close connections)
+        try:
+            await asyncio.wait_for(self._cleanup(), timeout=1.0)
+
+        except asyncio.TimeoutError:
+            logger.warning(f"Timeout during cleanup for {self._name} {self._detail}")
 
         logger.info(f"Stopped {self._name} for {self._detail}")
 
@@ -211,8 +222,10 @@ class BaseGenerativeMonitor(ABC, Generic[T]):
         """Run the stream with error handling"""
         try:
             await self._stream()
+
         except asyncio.CancelledError:
             logger.debug(f"{self._name} stream task cancelled")
+
         except Exception as e:
             logger.error(f"Error in {self._name} stream: {e}")
             # Emit error to callbacks if still running

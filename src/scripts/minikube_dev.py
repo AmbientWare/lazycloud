@@ -72,14 +72,6 @@ def create_docker_kubeconfig() -> None:
             )
             return
 
-        # Copy current kubeconfig to Docker-specific file
-        main_kubeconfig = kubeconfig_dir / "config"
-        if main_kubeconfig.exists():
-            docker_kubeconfig.write_bytes(main_kubeconfig.read_bytes())
-        else:
-            console.print("[yellow]⚠ Main kubeconfig not found[/yellow]")
-            return
-
         # Create temporary directory for certificate files
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_ca = Path(temp_dir) / "ca.crt"
@@ -91,7 +83,12 @@ def create_docker_kubeconfig() -> None:
             temp_client_crt.write_bytes(client_crt_path.read_bytes())
             temp_client_key.write_bytes(client_key_path.read_bytes())
 
-            # Update Docker kubeconfig with minikube:8443 and embedded certificates
+            # Create a fresh minimal kubeconfig for Docker (don't copy main config)
+            # This ensures it's not affected by other clusters or minikube updates
+            if docker_kubeconfig.exists():
+                docker_kubeconfig.unlink()
+
+            # Set cluster with minikube:8443 and embedded certificates
             run_command(
                 [
                     "kubectl",
@@ -106,7 +103,7 @@ def create_docker_kubeconfig() -> None:
                 check=True,
             )
 
-            # Update user credentials with embedded client certificates
+            # Set user credentials with embedded client certificates
             run_command(
                 [
                     "kubectl",
@@ -121,7 +118,22 @@ def create_docker_kubeconfig() -> None:
                 check=True,
             )
 
-            # Ensure minikube context is set
+            # Create context linking cluster and user
+            run_command(
+                [
+                    "kubectl",
+                    "config",
+                    "set-context",
+                    "minikube",
+                    "--cluster=minikube",
+                    "--user=minikube",
+                    "--namespace=default",
+                    f"--kubeconfig={docker_kubeconfig}",
+                ],
+                check=True,
+            )
+
+            # Set minikube as current context
             run_command(
                 [
                     "kubectl",
@@ -130,7 +142,7 @@ def create_docker_kubeconfig() -> None:
                     "minikube",
                     f"--kubeconfig={docker_kubeconfig}",
                 ],
-                check=False,
+                check=True,
             )
 
         console.print(
@@ -143,8 +155,8 @@ def create_docker_kubeconfig() -> None:
 
 @app.command("up")
 def start_minikube(
-    memory: str = typer.Option("8192", help="Memory allocation for Minikube"),
-    cpus: str = typer.Option("8", help="CPU allocation for Minikube"),
+    memory: str = typer.Option("16384", help="Memory allocation for Minikube (MB)"),
+    cpus: str = typer.Option("12", help="CPU allocation for Minikube"),
     disk_size: str = typer.Option("20gb", help="Disk size for Minikube"),
     fresh: bool = typer.Option(
         False, "--fresh", help="Delete existing cluster and start fresh"
