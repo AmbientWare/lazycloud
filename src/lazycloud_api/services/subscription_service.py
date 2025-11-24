@@ -265,14 +265,9 @@ class SubscriptionService:
                 f"but this deployment has {service_count}. Please upgrade your plan or reduce the number of services.",
             )
 
-        # Count volumes (unique volume names)
-        volume_names = set()
-        for service in compose_file.services:
-            if service.volumes:
-                for volume in service.volumes:
-                    if volume.source:
-                        volume_names.add(volume.source)
-        volume_count = len(volume_names) + len(compose_file.volumes)
+        # Count volumes - compose_file.volumes already contains only volumes used by non-ignored services)
+        # and is already deduplicated, so we just count that
+        volume_count = len(compose_file.volumes)
         if volume_count > features.deployment.volume_limit:
             raise SubscriptionLimitError(
                 f"Volume limit exceeded. Your plan allows {features.deployment.volume_limit} volume(s) per deployment, "
@@ -285,6 +280,7 @@ class SubscriptionService:
             if service.networks:
                 for network in service.networks:
                     network_names.add(network.name)
+
         network_count = len(network_names) + len(compose_file.networks)
         if network_count > features.deployment.network_limit:
             raise SubscriptionLimitError(
@@ -296,9 +292,11 @@ class SubscriptionService:
         max_replicas = features.deployment.max_replicas_per_service
         for service in compose_file.services:
             replicas = None
+
             # Check deploy.replicas first
             if service.deploy and service.deploy.replicas is not None:
                 replicas = service.deploy.replicas
+
             # Check scaling.min if scaling is enabled
             elif service.scaling and service.scaling.enabled:
                 replicas = service.scaling.min

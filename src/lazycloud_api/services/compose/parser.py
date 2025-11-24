@@ -86,8 +86,12 @@ class ComposeParser:
             if service.networks:
                 used_networks.update(net.name for net in service.networks)
             if service.volumes:
-                used_volumes.update(vol.source for vol in service.volumes if vol.source)
+                # Collect volume sources, ensuring deduplication
+                for vol in service.volumes:
+                    if vol.source:
+                        used_volumes.add(vol.source)
 
+        # Deduplicate: filter networks and volumes to only include those used by non-skipped services
         filtered_networks = [net for net in networks if net.name in used_networks]
         filtered_volumes = [vol for vol in volumes if vol.name in used_volumes]
 
@@ -114,6 +118,7 @@ class ComposeParser:
         service_volumes = ComposeParser._parse_service_volumes(
             config.get("volumes", []), {v.name for v in volumes}
         )
+
         service_networks = ComposeParser._parse_service_networks(
             config.get("networks"), {n.name for n in networks}
         )
@@ -125,16 +130,19 @@ class ComposeParser:
             restart_value = config.get("restart", "").lower()
             if restart_value == "no":
                 deploy_config = {**deploy_config, "restart_policy": {"condition": "no"}}
+
             elif restart_value == "always":
                 deploy_config = {
                     **deploy_config,
                     "restart_policy": {"condition": "any"},
                 }
+
             elif restart_value == "on-failure":
                 deploy_config = {
                     **deploy_config,
                     "restart_policy": {"condition": "on-failure"},
                 }
+
             elif restart_value == "unless-stopped":
                 deploy_config = {
                     **deploy_config,

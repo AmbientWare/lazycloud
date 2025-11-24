@@ -58,13 +58,31 @@ class HelmManager:
     def __init__(self):
         pass
 
+    def _namespace_exists(self, namespace: str) -> bool:
+        """Check if a namespace exists."""
+        try:
+            core_v1 = get_core_v1_api()
+            core_v1.read_namespace(name=namespace)
+            return True
+
+        except ApiException as e:
+            if e.status == 404:
+                return False
+
+            # For other errors, assume namespace doesn't exist to be safe
+            logger.warning(f"Error checking namespace {namespace}: {e}")
+            return False
+
+        except Exception as e:
+            logger.warning(f"Unexpected error checking namespace {namespace}: {e}")
+            return False
+
     def deploy(self, config: HelmDeploymentConfig) -> DeploymentResult:
         """Deploy or update a Helm release with intelligent handling."""
         logger.info(f"Deploying {config.release_name} in namespace {config.namespace}")
 
         # Check if release exists
-        exists, _ = self._check_release_status(config.release_name, config.namespace)
-
+        exists, _ = self.check_release_status(config.release_name, config.namespace)
         if exists and config.strategy == DeploymentStrategy.RECREATE:
             logger.info("Using RECREATE strategy, deleting existing release first")
             delete_result = self.destroy(config.release_name, config.namespace)
@@ -121,6 +139,7 @@ class HelmManager:
                     success=True,
                     message=f"Successfully destroyed release {release_name}",
                 )
+
             else:
                 logger.error(f"Release {release_name} still exists after uninstall!")
                 return DeploymentResult(
@@ -142,7 +161,7 @@ class HelmManager:
 
     def get_status(self, release_name: str, namespace: str) -> DeploymentResult:
         """Get detailed status of a Helm release."""
-        exists, is_deployed = self._check_release_status(release_name, namespace)
+        exists, is_deployed = self.check_release_status(release_name, namespace)
 
         if not exists:
             return DeploymentResult(
@@ -256,7 +275,8 @@ class HelmManager:
             config.timeout,
         ]
 
-        if config.create_namespace:
+        # Only use --create-namespace if namespace doesn't exist
+        if config.create_namespace and not self._namespace_exists(config.namespace):
             cmd.append("--create-namespace")
 
         if config.wait:
@@ -277,6 +297,34 @@ class HelmManager:
                     config.release_name, config.namespace
                 ),
             )
+
+        # If failed due to pending operations, clear locks and retry
+        if (
+            "another operation" in result.stderr.lower()
+            or "pending" in result.stderr.lower()
+        ):
+            logger.warning(
+                "Detected stuck operation during install, clearing Helm locks and retrying"
+            )
+
+            # Clear Helm lock secrets
+            self._clear_helm_locks(config.release_name, config.namespace)
+
+            # Add force flag if not already present
+            if "--force" not in cmd:
+                cmd.append("--force")
+
+            # Retry with force after clearing locks
+            result = self._run_helm_command(cmd)
+
+            if result.returncode == 0:
+                return DeploymentResult(
+                    success=True,
+                    message=f"Successfully deployed {config.release_name} after clearing locks",
+                    revision=self._get_latest_revision(
+                        config.release_name, config.namespace
+                    ),
+                )
 
         return DeploymentResult(
             success=False,
@@ -327,24 +375,27 @@ class HelmManager:
                 ),
             )
 
-        # If failed due to pending operations, try force update
+        # If failed due to pending operations, clear locks and retry
         if (
             "another operation" in result.stderr.lower()
             or "pending" in result.stderr.lower()
         ):
-            logger.warning("Detected stuck operation, attempting force update")
+            logger.warning("Detected stuck operation, clearing Helm locks and retrying")
+
+            # Clear Helm lock secrets
+            self._clear_helm_locks(config.release_name, config.namespace)
 
             # Add force flag if not already present
             if "--force" not in cmd:
                 cmd.append("--force")
 
-            # Retry with force
+            # Retry with force after clearing locks
             result = self._run_helm_command(cmd)
 
             if result.returncode == 0:
                 return DeploymentResult(
                     success=True,
-                    message=f"Successfully force-upgraded {config.release_name}",
+                    message=f"Successfully force-upgraded {config.release_name} after clearing locks",
                     revision=self._get_latest_revision(
                         config.release_name, config.namespace
                     ),
@@ -356,12 +407,12 @@ class HelmManager:
             error=result.stderr,
         )
 
-    def _check_release_status(
+    def check_release_status(
         self, release_name: str, namespace: str
     ) -> tuple[bool, bool]:
         """Check if a release exists and its deployment status."""
         cmd = ["helm", "status", release_name, "-n", namespace, "-o", "json"]
-        result = self._run_helm_command(cmd)
+        result = self._run_helm_command(cmd, suppress_not_found_warning=True)
 
         if result.returncode != 0:
             return False, False
@@ -373,6 +424,54 @@ class HelmManager:
 
         except (json.JSONDecodeError, KeyError):
             return True, False
+
+    def _clear_helm_locks(self, release_name: str, namespace: str) -> None:
+        """Clear Helm lock secrets for a release to unstick operations."""
+        core_v1 = get_core_v1_api()
+        lock_prefix = f"sh.helm.release.v1.{release_name}."
+
+        try:
+            secrets = core_v1.list_namespaced_secret(namespace=namespace)
+            deleted_count = 0
+
+            for secret in secrets.items:
+                secret_name = secret.metadata.name
+                if secret_name.startswith(lock_prefix):
+                    # Delete all lock secrets (pending-install, pending-upgrade, pending-rollback)
+                    # but keep deployed releases (they end with just the revision number)
+                    if any(
+                        status in secret_name
+                        for status in [
+                            "pending-install",
+                            "pending-upgrade",
+                            "pending-rollback",
+                        ]
+                    ):
+                        try:
+                            core_v1.delete_namespaced_secret(
+                                name=secret_name, namespace=namespace
+                            )
+                            logger.info(
+                                f"Deleted Helm lock secret: {secret_name} in namespace {namespace}"
+                            )
+                            deleted_count += 1
+                        except ApiException as e:
+                            if e.status != 404:  # Ignore if already deleted
+                                logger.warning(
+                                    f"Failed to delete Helm lock secret {secret_name}: {e}"
+                                )
+
+            if deleted_count > 0:
+                logger.info(
+                    f"Cleared {deleted_count} Helm lock secret(s) for release {release_name}"
+                )
+                # Small delay to ensure Kubernetes processes the deletion
+                time.sleep(1)
+            else:
+                logger.debug(f"No Helm lock secrets found for release {release_name}")
+
+        except ApiException as e:
+            logger.warning(f"Failed to list secrets when clearing Helm locks: {e}")
 
     def _wait_for_resources(
         self, config: HelmDeploymentConfig, timeout: int = 300
@@ -571,7 +670,9 @@ class HelmManager:
 
         return values_file
 
-    def _run_helm_command(self, cmd: list[str]) -> subprocess.CompletedProcess:
+    def _run_helm_command(
+        self, cmd: list[str], suppress_not_found_warning: bool = False
+    ) -> subprocess.CompletedProcess:
         """Run a Helm command with proper error handling."""
         logger.debug(f"Running command: {' '.join(cmd)}")
 
@@ -583,6 +684,10 @@ class HelmManager:
         )
 
         if result.returncode != 0:
-            logger.warning(f"Command failed: {result.stderr}")
+            # Suppress warning for expected "not found" cases (e.g., checking if release exists)
+            if suppress_not_found_warning and "not found" in result.stderr.lower():
+                logger.debug(f"Command returned not found (expected): {result.stderr}")
+            else:
+                logger.warning(f"Command failed: {result.stderr}")
 
         return result

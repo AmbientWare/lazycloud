@@ -1,5 +1,6 @@
 import asyncio
 import queue
+import time
 from typing import AsyncGenerator
 
 from kubernetes.client.exceptions import ApiException
@@ -28,9 +29,9 @@ class LogStreamer:
         self.tail_lines = tail_lines
         self.pod_name = pod_name
         self._running = False
+        self._follow_response = None
 
     async def _check_pod_exists(self) -> tuple[bool, str | None]:
-        """Check if pod exists and get its status with detailed error information"""
         if not self.pod_name:
             return True, None
 
@@ -39,24 +40,26 @@ class LogStreamer:
 
             def _get_pod_details():
                 return core_v1.read_namespaced_pod(
-                    name=self.pod_name, namespace=self.namespace
+                    name=self.pod_name,
+                    namespace=self.namespace,
+                    _request_timeout=5.0,
                 )
 
-            # Step 1: Fetch pod details from Kubernetes API
-            pod = await asyncio.to_thread(_get_pod_details)
+            # Add timeout to prevent indefinite blocking
+            pod = await asyncio.wait_for(
+                asyncio.to_thread(_get_pod_details), timeout=5.0
+            )
 
             if not pod.status:
                 return True, "Instance status not available"
 
             phase = pod.status.phase
 
-            # Step 2: Check container states for errors that prevent log access
             container_statuses = pod.status.container_statuses or []
             for container_status in container_statuses:
                 if not container_status.state:
                     continue
 
-                # Step 3: Detect waiting states (image pull errors, etc.)
                 if container_status.state.waiting:
                     waiting = container_status.state.waiting
                     reason = waiting.reason or ""
@@ -79,7 +82,6 @@ class LogStreamer:
                     if reason:
                         return True, f"Container waiting: {reason}"
 
-                # Step 4: Detect terminated containers with errors
                 elif container_status.state.terminated:
                     terminated = container_status.state.terminated
                     if terminated.exit_code and terminated.exit_code != 0:
@@ -93,7 +95,6 @@ class LogStreamer:
                             error_msg += f": {short_msg}"
                         return True, error_msg
 
-            # Step 5: Determine if logs are available based on pod phase
             if phase in ["Running", "Succeeded", "Failed"]:
                 return True, None
             elif phase == "Pending":
@@ -106,6 +107,9 @@ class LogStreamer:
                     reason_msg += f": {pod.status.reason}"
                 return True, reason_msg
 
+        except asyncio.TimeoutError:
+            logger.warning(f"Timeout checking pod status for {self.pod_name}")
+            return True, "Timeout checking pod status"
         except ApiException as e:
             if e.status == 404:
                 return False, "Instance not found"
@@ -123,10 +127,10 @@ class LogStreamer:
 
         self._running = True
 
-        # Step 1: Wait for pod to be ready (with retries for starting pods)
         if self.pod_name:
-            max_retries = 15
-            retry_delay = 2
+            # Quick check for pod readiness (reduced retries for faster startup)
+            max_retries = 3
+            retry_delay = 1
 
             for attempt in range(max_retries):
                 exists, reason = await self._check_pod_exists()
@@ -140,8 +144,9 @@ class LogStreamer:
                         yield "ERROR: Instance not found after waiting. It may have been deleted or failed to start."
                         self._running = False
                         return
+
                 elif reason:
-                    # Step 2: Check for unrecoverable errors that prevent log access
+                    # Fail fast on unrecoverable image pull errors
                     if any(
                         err in reason
                         for err in [
@@ -176,88 +181,223 @@ class LogStreamer:
             )
             logger.info(f"Started log streaming for {pod_info} in {self.namespace}")
 
-            # Step 3: Resolve target pod name (use provided name or find first pod for service)
             target_pod_name = self.pod_name
             if not target_pod_name:
-
+                # Resolve pod name from service label selector
                 def _find_pod():
                     pods = core_v1.list_namespaced_pod(
                         namespace=self.namespace,
                         label_selector=f"app.kubernetes.io/name={self.service_name}",
+                        _request_timeout=5.0,
                     )
                     if pods.items:
                         return pods.items[0].metadata.name
                     return None
 
-                target_pod_name = await asyncio.to_thread(_find_pod)
+                # Add timeout to prevent indefinite blocking
+                try:
+                    target_pod_name = await asyncio.wait_for(
+                        asyncio.to_thread(_find_pod), timeout=5.0
+                    )
+                except asyncio.TimeoutError:
+                    yield "ERROR: Timeout finding pod for service"
+                    self._running = False
+                    return
+
                 if not target_pod_name:
                     yield "ERROR: No pods found for service"
                     self._running = False
                     return
 
-            # Step 4: Set up worker thread to read logs synchronously and queue them
-            log_queue: queue.Queue[str | None] = queue.Queue()
+            # Bounded queue prevents unbounded memory growth under high log volume
+            log_queue: queue.Queue[str | None] = queue.Queue(maxsize=1000)
+            MAX_BUFFER_SIZE = 1024 * 1024
+
+            def _enqueue_line(line: str) -> None:
+                """Enqueue a log line, dropping oldest if queue is full."""
+                try:
+                    log_queue.put_nowait(line)
+                except queue.Full:
+                    try:
+                        log_queue.get_nowait()
+                    except queue.Empty:
+                        pass
+                    try:
+                        log_queue.put_nowait(line)
+                    except queue.Full:
+                        pass
+
+            def _process_buffer(buffer: str) -> str:
+                """Process buffer, enqueue complete lines, return remaining buffer."""
+                while "\n" in buffer:
+                    line, buffer = buffer.split("\n", 1)
+                    _enqueue_line(line)
+                return buffer
 
             def _stream_worker():
-                """Worker function to stream logs and put them in queue."""
                 try:
-                    response = core_v1.read_namespaced_pod_log(
-                        name=target_pod_name,
-                        namespace=self.namespace,
-                        tail_lines=self.tail_lines,
-                        follow=self.follow,
-                        _preload_content=False,
-                    )
+                    # Read initial logs without follow to get tail_lines immediately
+                    if self.tail_lines > 0:
+                        try:
+                            initial_response = core_v1.read_namespaced_pod_log(
+                                name=target_pod_name,
+                                namespace=self.namespace,
+                                tail_lines=self.tail_lines,
+                                follow=False,
+                                _preload_content=False,
+                                _request_timeout=5.0,
+                            )
+                            buffer = ""
+                            # Read with timeout protection - if connection hangs, break after reasonable time
+                            read_start_time = time.time()
+                            max_read_time = 10.0  # Max 10 seconds for initial read
 
-                    # Step 5: Read log stream in chunks and buffer until complete lines
-                    buffer = ""
-                    while self._running:
-                        chunk = response.read(4096)
-                        if not chunk:
-                            break
+                            while True:
+                                # Check if we've been running too long (timeout protection)
+                                elapsed = time.time() - read_start_time
+                                if elapsed > max_read_time:
+                                    logger.warning(
+                                        f"Initial log read timeout after {elapsed:.1f}s"
+                                    )
+                                    break
 
-                        buffer += chunk.decode("utf-8", errors="replace")
-                        while "\n" in buffer:
-                            line, buffer = buffer.split("\n", 1)
-                            if line.strip():
-                                log_queue.put(line.rstrip())
+                                try:
+                                    chunk = initial_response.read(4096)
+                                    if not chunk:
+                                        break
+                                    buffer += chunk.decode("utf-8", errors="replace")
+                                    if len(buffer) > MAX_BUFFER_SIZE:
+                                        buffer = (
+                                            _process_buffer(buffer[:MAX_BUFFER_SIZE])
+                                            + buffer[MAX_BUFFER_SIZE:]
+                                        )
+                                    else:
+                                        buffer = _process_buffer(buffer)
+                                except Exception as read_err:
+                                    logger.debug(
+                                        f"Error reading initial log chunk: {read_err}"
+                                    )
+                                    break
 
-                    if buffer.strip():
-                        log_queue.put(buffer.rstrip())
+                            if buffer:
+                                _enqueue_line(buffer)
+                        except Exception as init_err:
+                            logger.error(f"Error reading initial logs: {init_err}")
+                            _enqueue_line(
+                                f"ERROR: Failed to read initial logs: {str(init_err)}"
+                            )
+
+                    # Start following for new logs after initial batch
+                    if self.follow:
+                        try:
+                            follow_response = core_v1.read_namespaced_pod_log(
+                                name=target_pod_name,
+                                namespace=self.namespace,
+                                tail_lines=0,
+                                follow=True,
+                                _preload_content=False,
+                                _request_timeout=5.0,
+                            )
+                            self._follow_response = follow_response
+                            buffer = ""
+                            last_read_time = time.time()
+                            max_idle_time = 30.0  # Max 30 seconds without data before checking connection
+
+                            while self._running:
+                                try:
+                                    chunk = follow_response.read(4096)
+                                    if not chunk:
+                                        # Empty chunk means connection closed
+                                        break
+
+                                    # Reset idle timer on successful read
+                                    last_read_time = time.time()
+
+                                    buffer += chunk.decode("utf-8", errors="replace")
+                                except Exception as read_error:
+                                    logger.debug(
+                                        f"Follow stream read error: {read_error}"
+                                    )
+                                    break
+
+                                # Check for idle timeout (connection might be dead)
+                                idle_time = time.time() - last_read_time
+                                if idle_time > max_idle_time:
+                                    logger.warning(
+                                        f"Follow stream idle timeout after {idle_time:.1f}s"
+                                    )
+                                    break
+
+                                if len(buffer) > MAX_BUFFER_SIZE:
+                                    buffer = (
+                                        _process_buffer(buffer[:MAX_BUFFER_SIZE])
+                                        + buffer[MAX_BUFFER_SIZE:]
+                                    )
+                                else:
+                                    buffer = _process_buffer(buffer)
+
+                            if buffer:
+                                _enqueue_line(buffer)
+                        except Exception as follow_err:
+                            logger.error(f"Error starting follow stream: {follow_err}")
+                            _enqueue_line(
+                                f"ERROR: Failed to follow logs: {str(follow_err)}"
+                            )
 
                 except ApiException as e:
-                    if e.status == 404:
-                        log_queue.put("INFO: Pod was deleted or is no longer available")
-                    elif e.status == 400:
-                        error_msg = e.reason or str(e)
-                        if (
-                            "container" in error_msg.lower()
-                            and "not running" in error_msg.lower()
-                        ):
-                            log_queue.put(
-                                "INFO: Container is not running yet. Logs will be available once the container starts."
-                            )
-                        else:
-                            log_queue.put(f"ERROR: {error_msg}")
-                    else:
-                        error_msg = e.reason or str(e)
-                        log_queue.put(f"ERROR: {error_msg}")
-                except Exception as e:
-                    log_queue.put(f"ERROR: {str(e)}")
-                finally:
-                    log_queue.put(None)
+                    logger.error(
+                        f"Kubernetes API error reading logs: {e}", exc_info=True
+                    )
+                    error_msg = None
 
-            # Step 6: Start worker thread and consume from queue asynchronously
+                    if e.status == 404:
+                        error_msg = "INFO: Pod was deleted or is no longer available"
+
+                    elif e.status == 400:
+                        api_error_msg = e.reason or str(e)
+                        if (
+                            "container" in api_error_msg.lower()
+                            and "not running" in api_error_msg.lower()
+                        ):
+                            error_msg = "INFO: Container is not running yet. Logs will be available once the container starts."
+                        else:
+                            error_msg = f"ERROR: {api_error_msg}"
+
+                    else:
+                        error_msg = f"ERROR: {e.reason or str(e)}"
+
+                    if error_msg:
+                        _enqueue_line(error_msg)
+
+                except Exception as e:
+                    logger.error(
+                        f"Unexpected error in log worker thread: {e}", exc_info=True
+                    )
+                    _enqueue_line(f"ERROR: {str(e)}")
+
+                finally:
+                    # Clear the response reference
+                    self._follow_response = None
+                    try:
+                        log_queue.put_nowait(None)
+                    except queue.Full:
+                        pass
+
+            # Worker thread reads logs synchronously, async generator consumes from queue
             stream_task = asyncio.create_task(asyncio.to_thread(_stream_worker))
+            await asyncio.sleep(0.1)
 
             while self._running:
                 try:
-                    line = await asyncio.to_thread(log_queue.get_nowait)
+                    line = await asyncio.wait_for(
+                        asyncio.to_thread(log_queue.get), timeout=0.5
+                    )
                     if line is None:
                         break
                     yield line
-                except queue.Empty:
+                except asyncio.TimeoutError:
                     if stream_task.done():
+                        # Drain remaining items from queue before exiting
                         try:
                             while True:
                                 line = await asyncio.to_thread(log_queue.get_nowait)
@@ -267,11 +407,11 @@ class LogStreamer:
                         except queue.Empty:
                             pass
                         break
-                    await asyncio.sleep(0.1)
                     continue
 
             try:
                 await stream_task
+
             except Exception:
                 pass
 
@@ -289,6 +429,15 @@ class LogStreamer:
     async def stop(self):
         """Stop streaming logs."""
         self._running = False
+
+        # Close the follow response to interrupt blocking read() call
+        if self._follow_response:
+            try:
+                self._follow_response.close()
+            except Exception as e:
+                logger.debug(f"Error closing follow response: {e}")
+            finally:
+                self._follow_response = None
 
         pod_info = (
             f"pod {self.pod_name}" if self.pod_name else f"service {self.service_name}"

@@ -210,13 +210,21 @@ class DeployView:
         """Show warning message."""
         self.console.print(WarningCard(title="Warning", message=message))
 
+    def show_success(self, message: str, title: str = "Success") -> None:
+        """Show success message."""
+        self.console.print(SuccessCard(title=title, message=message))
+
     def show_cancelled(self) -> None:
         """Show deployment cancelled message."""
-        self.console.print(
-            WarningCard(
-                title="Deployment Cancelled", message="Operation cancelled by user"
-            )
+        card = Card(
+            content=Text(
+                "Deployment cancelled. No changes were made.",
+                style=Colors.Ansi.warning,
+            ),
+            title="🚫 Cancelled",
+            border_style=Colors.Ansi.warning,
         )
+        self.console.print(card)
 
     def show_diff(
         self, diff_response: DiffResponse, show_warnings: bool = False

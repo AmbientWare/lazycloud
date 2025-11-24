@@ -5,7 +5,7 @@ from lazycloud_api.database import db
 from lazycloud_api.services.k8s.pod_manager import KubernetesPodManager
 
 
-@task
+@task(log_prints=True)
 async def delete_instance_task(
     deployment_id: str, service_name: str, pod_name: str, force: bool = False
 ) -> None:
@@ -50,6 +50,7 @@ async def delete_instance_task(
                 f"Pod {pod_name} does not exist - deletion goal already achieved"
             )
             return
+
         else:
             # Other verification errors (e.g., wrong ownership) are real errors
             raise Exception(

@@ -7,7 +7,10 @@ from zoneinfo import ZoneInfo
 from loguru import logger
 
 from lazycloud_api.services.monitoring import LogMonitor, get_subscription_manager
-from lazycloud_api.services.monitoring.monitor_config import MonitorConfig
+from lazycloud_api.services.monitoring.monitor_config import (
+    LogMonitorConfig,
+    MonitorConfig,
+)
 from shared.models.monitoring import StreamEventType
 
 # NOTE: maybe make this configurable?
@@ -55,7 +58,11 @@ async def create_sse_stream_with_subscription(
     subscription_manager = get_subscription_manager()
     monitor_key = None
     subscription_id = None
-    queue: asyncio.Queue = asyncio.Queue(maxsize=STATUS_QUEUE_SIZE)
+    # Use LOG_QUEUE_SIZE for log streams, STATUS_QUEUE_SIZE for status streams
+    queue_size = (
+        LOG_QUEUE_SIZE if isinstance(config, LogMonitorConfig) else STATUS_QUEUE_SIZE
+    )
+    queue: asyncio.Queue = asyncio.Queue(maxsize=queue_size)
 
     def callback(data):
         """Callback to receive data from shared monitor."""

@@ -6,8 +6,8 @@ from loguru import logger
 from lazycloud_api.api.dependencies import (
     WorkspaceAccess,
     check_workspace_limit,
-    get_workspace_with_admin_access,
     get_workspace_with_any_access,
+    get_workspace_with_owner_access,
 )
 from lazycloud_api.api.security import get_current_active_user
 from lazycloud_api.api.utils import normalize_usage_date_range
@@ -117,8 +117,8 @@ async def get_workspace_with_deployments(
 
             deployment_overviews.append(
                 DeploymentOverview(
-                    id=str(deployment.id),
-                    workspace_id=str(deployment.workspace_id),
+                    id=deployment.id,
+                    workspace_id=deployment.workspace_id,
                     name=deployment.name,
                     namespace=deployment.namespace,
                     state=deployment.state,
@@ -198,10 +198,9 @@ async def create_workspace(
 
 @workspaces_router.delete("/{workspace_id}")
 async def delete_workspace(
-    workspace_access: WorkspaceAccess = Depends(get_workspace_with_admin_access),
+    workspace_access: WorkspaceAccess = Depends(get_workspace_with_owner_access),
 ) -> WorkspaceSuccessResponse:
     """Delete a workspace (requires owner role)"""
-    # Check if current user is the owner
     workspace = workspace_access.workspace
 
     # Prevent deleting personal workspaces

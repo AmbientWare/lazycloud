@@ -128,12 +128,24 @@ def deploy(
             warnings,
             _get_env_source_display(env),
         )
+    except typer.Exit:
+        # Re-raise typer.Exit (including cancellation) so it propagates correctly
+        raise
+
     except Exception as e:
         view.show_error(f"Error during confirmation: {e}")
         raise typer.Exit(1)
 
+    # Check if validation passed (diff endpoint already did full validation)
+    if diff_response and not diff_response.can_deploy:
+        view.show_error("Validation failed - cannot proceed with deployment")
+        if diff_response.errors:
+            for error in diff_response.errors:
+                view.show_error(f"  • {error}")
+        raise typer.Exit(1)
+
     try:
-        # Handle image building AFTER confirmation
+        # Handle image building AFTER validation passes
         compose_yaml = _handle_builds(
             compose_data, compose_file_path, deployment_name, yes
         )

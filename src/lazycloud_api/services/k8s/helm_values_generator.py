@@ -68,18 +68,18 @@ class HelmValuesGenerator:
 
         # Generate global values with user context
         global_values = GlobalValues(
-            deploymentId=self.deployment.id,
+            deploymentId=str(self.deployment.id),
             workspaceId=str(self.deployment.workspace_id),
             managedBy="lazycloud",
             createdBy="lazycloud-api",
             runtimeClassName="gvisor",
             labels={
-                "lazycloud.io/deployment-id": self.deployment.id,
+                "lazycloud.io/deployment-id": str(self.deployment.id),
                 "lazycloud.io/workspace-id": str(self.deployment.workspace_id),
                 "lazycloud.io/managed-by": "lazycloud",
             },
             annotations={
-                "lazycloud.io/deployment-id": self.deployment.id,
+                "lazycloud.io/deployment-id": str(self.deployment.id),
                 "lazycloud.io/workspace-id": str(self.deployment.workspace_id),
                 "lazycloud.io/created-by": "lazycloud-api",
             },
@@ -145,7 +145,7 @@ class HelmValuesGenerator:
         if service.build is not None:
             image_info.pullPolicy = ecr_auth_service.get_pull_policy()
             image_info.repository = ecr_auth_service.get_repository_url(
-                workspace_id=str(self.deployment.workspace_id),
+                workspace_id=self.deployment.workspace_id,
                 deployment_name=self.deployment.name,
                 image_name=image_info.repository,
             )
@@ -160,12 +160,12 @@ class HelmValuesGenerator:
             image=image_info,
             resourceName=service.name,
             labels={
-                "lazycloud.io/workspace-id": str(self.deployment.workspace_id),
+                "lazycloud.io/workspace-id": self.deployment.workspace_id,
                 "lazycloud.io/service": service.name,
                 "lazycloud.io/managed-by": "lazycloud",
             },
             annotations={
-                "lazycloud.io/workspace-id": str(self.deployment.workspace_id),
+                "lazycloud.io/workspace-id": self.deployment.workspace_id,
                 "lazycloud.io/created-by": "lazycloud-api",
             },
         )
@@ -293,7 +293,7 @@ class HelmValuesGenerator:
 
         # Merge user labels with system labels
         merged_labels = {
-            "lazycloud.io/workspace-id": str(self.deployment.workspace_id),
+            "lazycloud.io/workspace-id": self.deployment.workspace_id,
             "lazycloud.io/managed-by": "lazycloud",
         }
         if volume_labels:
@@ -309,7 +309,7 @@ class HelmValuesGenerator:
             storageClass=storage_class,
             labels=merged_labels,
             annotations={
-                "lazycloud.io/workspace-id": str(self.deployment.workspace_id),
+                "lazycloud.io/workspace-id": self.deployment.workspace_id,
                 "lazycloud.io/created-by": "lazycloud-api",
             },
         )
@@ -340,9 +340,6 @@ class HelmValuesGenerator:
                                     warnings.append(
                                         f"Service '{service.name}': Volume '{volume_source}' not defined in volumes section"
                                     )
-
-        # We don't support external networks or volumes
-        # but, we already filters these out during parsing
 
         return warnings
 

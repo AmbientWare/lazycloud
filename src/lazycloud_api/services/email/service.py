@@ -1,3 +1,5 @@
+import base64
+from datetime import datetime
 from pathlib import Path
 
 import resend
@@ -7,6 +9,8 @@ from lazycloud_api.config import app_config
 
 LAZYCLOUD_DOMAIN = "lazycloud.dev"
 TEMPLATES_DIR = Path(__file__).parent / "templates"
+ASSETS_DIR = Path(__file__).parent / "assets"
+LOGO_PATH = ASSETS_DIR / "lazycloud.png"
 
 
 class EmailService:
@@ -29,6 +33,25 @@ class EmailService:
         template = self._load_template(template_name)
         return template.format(**context)
 
+    def _get_logo_attachment(self) -> dict | None:
+        """Get logo as inline attachment if logo file exists"""
+        if not LOGO_PATH.exists():
+            return None
+
+        try:
+            # Read logo file and encode as base64
+            logo_content = LOGO_PATH.read_bytes()
+            logo_base64 = base64.b64encode(logo_content).decode("utf-8")
+
+            return {
+                "content": logo_base64,
+                "filename": "lazycloud.png",
+                "content_id": "lazycloud-logo",
+            }
+        except Exception as e:
+            logger.warning(f"Failed to load logo file: {e}")
+            return None
+
     def send_workspace_invitation(
         self,
         email: str,
@@ -39,6 +62,14 @@ class EmailService:
     ) -> dict:
         """Send workspace invitation email"""
         try:
+            # Get logo attachment if available
+            logo_attachment = self._get_logo_attachment()
+            logo_html = (
+                '<img src="cid:lazycloud-logo" alt="LazyCloud" style="height: 48px; width: auto; vertical-align: middle; display: inline-block;" />'
+                if logo_attachment
+                else ""
+            )
+
             html_content = self._render_template(
                 "workspace_invitation.html",
                 {
@@ -46,6 +77,8 @@ class EmailService:
                     "inviter_name": inviter_name,
                     "workspaces_url": workspaces_url,
                     "expiration_days": expiration_days,
+                    "logo_html": logo_html,
+                    "current_year": datetime.now().year,
                 },
             )
 
@@ -55,6 +88,11 @@ class EmailService:
                 "subject": f"You've been invited to join {workspace_name} on LazyCloud",
                 "html": html_content,
             }
+
+            # Add logo as inline attachment if available
+            if logo_attachment:
+                params["attachments"] = [logo_attachment]
+
             response = resend.Emails.send(params)
 
             logger.info(
@@ -75,6 +113,14 @@ class EmailService:
     ) -> dict:
         """Send ownership transfer invitation email"""
         try:
+            # Get logo attachment if available
+            logo_attachment = self._get_logo_attachment()
+            logo_html = (
+                '<img src="cid:lazycloud-logo" alt="LazyCloud" style="height: 48px; width: auto; vertical-align: middle; display: inline-block;" />'
+                if logo_attachment
+                else ""
+            )
+
             html_content = self._render_template(
                 "ownership_transfer.html",
                 {
@@ -82,6 +128,8 @@ class EmailService:
                     "current_owner_name": current_owner_name,
                     "workspaces_url": workspaces_url,
                     "expiration_days": expiration_days,
+                    "logo_html": logo_html,
+                    "current_year": datetime.now().year,
                 },
             )
 
@@ -91,6 +139,11 @@ class EmailService:
                 "subject": f"Ownership Transfer Request: {workspace_name} on LazyCloud",
                 "html": html_content,
             }
+
+            # Add logo as inline attachment if available
+            if logo_attachment:
+                params["attachments"] = [logo_attachment]
+
             response = resend.Emails.send(params)
 
             logger.info(
