@@ -33,6 +33,12 @@ def deploy(
         "--env",
         help="Source for environment variables: path to .env file or 'shell'",
     ),
+    service: str = typer.Option(
+        None,
+        "-s",
+        "--service",
+        help="Deploy only this specific service (requires existing deployment)",
+    ),
 ):
     """Deploy or update a Docker Compose application."""
     view = DeployView(console)
@@ -67,23 +73,61 @@ def deploy(
         view.show_error(f"Error reading compose file: {e}")
         raise typer.Exit(1)
 
+    # Validate service exists in compose file if specified
+    if service:
+        services_in_compose = compose_data.get("services", {})
+        if service not in services_in_compose:
+            available_services = ", ".join(services_in_compose.keys())
+            view.show_error(
+                f"Service '{service}' not found in compose file",
+                suggestion=f"Available services: {available_services}",
+            )
+            raise typer.Exit(1)
+
+    # For service-specific deployments, we need to get existing compose YAML first
+    # to preserve non-target service image tags
+    if service:
+        try:
+            # Get diff just to fetch existing compose YAML
+            initial_compose_yaml = yaml.dump(compose_data, default_flow_style=False)
+            initial_diff = _get_deployment_diff(
+                deployment_name,
+                initial_compose_yaml,
+                env_files_content,
+                is_service_specific=True,
+            )
+
+            # Preserve existing images for non-target services
+            if initial_diff and initial_diff.existing_compose_yaml:
+                existing_compose_data = yaml.safe_load(
+                    initial_diff.existing_compose_yaml
+                )
+                _preserve_existing_images(
+                    compose_data, existing_compose_data, target_service=service
+                )
+            elif initial_diff:
+                # No existing compose means this is a new deployment - error already handled in validation
+                pass
+        except Exception as e:
+            view.show_warning(
+                f"Could not preserve existing image tags: {e}. "
+                "Non-target services may be updated."
+            )
+
     # Generate timestamp for built images
     timestamp = _generate_build_timestamp()
-    _apply_build_timestamps(compose_data, timestamp)
+    _apply_build_timestamps(compose_data, timestamp, target_service=service)
 
-    # Regenerate YAML with timestamped images
+    # Regenerate YAML with timestamped images (now with preserved + new timestamps)
     compose_yaml = yaml.dump(compose_data, default_flow_style=False)
 
+    # Now get the REAL diff with the final compose YAML to show to user
     try:
-        # Check for existing deployment and get diff (don't confirm yet)
-        existing_deployment = _get_existing_deployment(deployment_name)
-
-        # Get diff response to know what changed
         diff_response = _get_deployment_diff(
-            existing_deployment,
             deployment_name,
             compose_yaml,
             env_files_content,
+            is_service_specific=bool(service),
         )
 
     except Exception as e:
@@ -147,7 +191,11 @@ def deploy(
     try:
         # Handle image building AFTER validation passes
         compose_yaml = _handle_builds(
-            compose_data, compose_file_path, deployment_name, yes
+            compose_data,
+            compose_file_path,
+            deployment_name,
+            yes,
+            target_service=service,
         )
     except typer.Exit:
         # Re-raise typer.Exit from build failures
@@ -162,6 +210,7 @@ def deploy(
             deployment_name,
             compose_yaml,
             secrets=secrets if has_secrets else None,
+            service_name=service,
         )
     except typer.Exit:
         # Re-raise typer.Exit from deployment failures
@@ -224,10 +273,34 @@ def _generate_build_timestamp() -> str:
     return f"{now.strftime('%Y%m%d-%H%M%S')}-{now.microsecond // 1000:03d}"
 
 
-def _apply_build_timestamps(compose_data: dict, timestamp: str) -> None:
-    """Apply timestamp tags to all services with build sections."""
+def _preserve_existing_images(
+    compose_data: dict, existing_compose_data: dict, target_service: str
+) -> None:
+    """Preserve existing image tags for non-target services."""
+    existing_services = existing_compose_data.get("services", {})
+
+    for service_name, service_config in compose_data.get("services", {}).items():
+        # Skip the target service - it will get a new timestamp
+        if service_name == target_service:
+            continue
+
+        # If this service exists in the deployed version, preserve its image tag
+        if service_name in existing_services:
+            existing_image = existing_services[service_name].get("image")
+            if existing_image:
+                service_config["image"] = existing_image
+
+
+def _apply_build_timestamps(
+    compose_data: dict, timestamp: str, target_service: str | None = None
+) -> None:
+    """Apply timestamp tags to all services with build sections, or only target service if specified."""
     for service_name, service_config in compose_data.get("services", {}).items():
         if "build" in service_config:
+            # Skip non-target services if target is specified
+            if target_service and service_name != target_service:
+                continue
+
             # Get original image and replace tag with timestamp
             original_image = service_config.get("image", f"{service_name}:latest")
             if ":" in original_image:
@@ -365,14 +438,22 @@ def _extract_env_variables(
 
 
 def _handle_builds(
-    compose_data: dict, compose_file_path: Path, deployment_name: str, yes: bool = False
+    compose_data: dict,
+    compose_file_path: Path,
+    deployment_name: str,
+    yes: bool = False,
+    target_service: str | None = None,
 ) -> str:
-    """Handle building and pushing images if needed"""
+    """Handle building and pushing images if needed, optionally for only a target service"""
     view = DeployView(console)
     services_to_build = []
 
     for service_name, service_config in compose_data.get("services", {}).items():
         if "build" in service_config:
+            # Skip non-target services if target is specified
+            if target_service and service_name != target_service:
+                continue
+
             build_config = service_config.get("build", {})
             if isinstance(build_config, str):
                 build_config = {"context": build_config}
@@ -442,42 +523,58 @@ def _handle_builds(
     return yaml.dump(compose_data, default_flow_style=False)
 
 
-def _get_existing_deployment(deployment_name: str):
-    """Get existing deployment if it exists."""
-    try:
-        return api.deployments.get_deployment(name=deployment_name)
-
-    except Exception:
-        return None
-
-
 def _get_deployment_diff(
-    existing_deployment,
     deployment_name: str,
     compose_yaml: str,
     env_files_content: dict[str, str],
+    is_service_specific: bool = False,
 ) -> DiffResponse | None:
     """Get deployment diff without showing or confirming. Returns DiffResponse or None."""
-    # Determine diff type based on whether deployment exists
-    diff_type = DiffType.EXISTING if existing_deployment else DiffType.NEW
+    # For service-specific deploys, deployment must exist (use EXISTING)
+    # For normal deploys, try EXISTING first, fall back to NEW
+    view = DeployView(console)
 
     try:
         # Extract env keys from compose for diff
         compose_data = yaml.safe_load(compose_yaml)
         env_keys = _extract_env_variables(compose_data, env_files_content).keys()
 
-        diff_response = api.diff.get_deployment_diff(
-            diff_type=diff_type,
-            workspace_id=config.active_workspace_id,
-            deployment_name=deployment_name,
-            compose_yaml=compose_yaml,
-            env_keys=list(env_keys),
-        )
+        # Try EXISTING first (most deployments are updates)
+        try:
+            diff_response = api.diff.get_deployment_diff(
+                diff_type=DiffType.EXISTING,
+                workspace_id=config.active_workspace_id,
+                deployment_name=deployment_name,
+                compose_yaml=compose_yaml,
+                env_keys=list(env_keys),
+            )
+            return diff_response
 
-        return diff_response
+        except APIError as e:
+            # If 404 and service-specific, error out
+            if e.status_code == 404:
+                if is_service_specific:
+                    view.show_error(
+                        f"Cannot deploy single service: deployment '{deployment_name}' does not exist",
+                        suggestion="Run 'lazycloud deploy' first to create the deployment",
+                    )
+                    raise typer.Exit(1)
+
+                # Otherwise, try as NEW deployment
+                diff_response = api.diff.get_deployment_diff(
+                    diff_type=DiffType.NEW,
+                    workspace_id=config.active_workspace_id,
+                    deployment_name=deployment_name,
+                    compose_yaml=compose_yaml,
+                    env_keys=list(env_keys),
+                )
+                return diff_response
+            raise
+
+    except typer.Exit:
+        raise
 
     except Exception as e:
-        view = DeployView(console)
         view.show_warning(f"Could not generate diff: {e}")
         return None
 
@@ -520,6 +617,7 @@ def _deploy(
     deployment_name: str,
     compose_yaml: str,
     secrets: SecretCollection | None = None,
+    service_name: str | None = None,
 ):
     """Perform the actual deployment."""
     view = DeployView(console)
@@ -542,6 +640,7 @@ def _deploy(
                     workspace_id=config.active_workspace_id,
                     name=deployment_name,
                     secrets=bool(secrets),
+                    service_name=service_name,
                 )
 
                 if not task_response or not task_response.task_id:

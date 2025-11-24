@@ -20,10 +20,13 @@ from shared.models.secrets import SecretState
 
 @task(log_prints=True)
 async def deploy_compose_task(
-    deployment_id: str, wait_for_secrets: bool = False
+    deployment_id: str, wait_for_secrets: bool = False, service_name: str | None = None
 ) -> None:
     """Deploy a Docker Compose file to Kubernetes using modular Prefect tasks."""
-    logger.info(f"Starting deployment flow for {deployment_id}")
+    logger.info(
+        f"Starting deployment flow for {deployment_id}"
+        + (f" (service: {service_name})" if service_name else "")
+    )
 
     try:
         # Step 1: Check idempotency and update state

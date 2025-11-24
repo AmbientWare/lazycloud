@@ -18,6 +18,7 @@ from shared.models.k8s import WorkloadType
 async def validate_deployment_request(
     deployment: ComposeDeploymentPydantic,
     existing_deployment: ComposeDeploymentPydantic | None = None,
+    service_name: str | None = None,
 ) -> tuple[HelmValues, ResourceRequirements]:
     """Validate deployment request before queuing task.
 
@@ -40,6 +41,16 @@ async def validate_deployment_request(
         compose_file = ComposeParser.parse_dict(compose_data)
     except Exception as e:
         raise ValueError(f"Failed to parse compose file: {str(e)}") from e
+
+    # Validate service_name if specified
+    if service_name:
+        service_names = [service.name for service in compose_file.services]
+        if service_name not in service_names:
+            available = ", ".join(service_names)
+            raise ValueError(
+                f"Service '{service_name}' not found in compose file. "
+                f"Available services: {available}"
+            )
 
     # Check size
     compose_yaml_size = len(compose_yaml.encode("utf-8"))

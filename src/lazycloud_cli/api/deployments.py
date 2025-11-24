@@ -25,6 +25,7 @@ class DeploymentsAPI(BaseAPI):
         workspace_id: str,
         name: str | None = None,
         secrets: bool = False,
+        service_name: str | None = None,
     ) -> DeploymentTaskStatusResponse:
         """Create a deployment and return the task response."""
 
@@ -33,6 +34,7 @@ class DeploymentsAPI(BaseAPI):
             workspace_id=workspace_id,
             name=name,
             secrets=secrets,
+            service_name=service_name,
         )
 
         # Make the initial request

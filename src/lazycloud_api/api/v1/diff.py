@@ -157,4 +157,5 @@ async def get_deployment_diff(
         errors=all_errors if all_errors else None,
         warnings=validation_result.warnings,
         can_deploy=can_deploy,
+        existing_compose_yaml=deployment.compose_yaml if deployment else None,
     )
