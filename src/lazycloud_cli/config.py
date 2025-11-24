@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from pydantic import PrivateAttr, field_validator
@@ -64,15 +65,24 @@ class CLIConfig(BaseSettings):
 
     @property
     def active_api_key_value(self) -> str | None:
-        """Get the value of the currently active api key"""
-        if not self._active_api_key:
-            raise ValueError("No active api key found")
+        """Get the value of the currently active api key.
 
-        value = self._api_keys.get(self._active_api_key)
-        if value is None:
-            raise ValueError("No active api key found")
+        Checks in order:
+        1. Stored API key from config file
+        2. LAZYCLOUD_API_KEY environment variable
+        """
+        # First try stored key
+        if self._active_api_key:
+            value = self._api_keys.get(self._active_api_key)
+            if value is not None:
+                return value
 
-        return value
+        # Fall back to environment variable
+        env_key = os.getenv("LAZYCLOUD_API_KEY")
+        if env_key:
+            return env_key
+
+        raise ValueError("No active api key found")
 
     @active_api_key.setter
     def active_api_key(self, value: str | None):
@@ -133,11 +143,21 @@ class CLIConfig(BaseSettings):
     # Workspace management methods
     @property
     def active_workspace_id(self) -> str:
-        """Get the currently active workspace ID"""
-        if self._active_workspace_id is None:
-            raise ValueError("No active workspace ID found")
+        """Get the currently active workspace ID.
 
-        return self._active_workspace_id
+        Can fall back to LAZYCLOUD_WORKSPACE_ID env var for CI/CD usage.
+        """
+        if self._active_workspace_id is not None:
+            return self._active_workspace_id
+
+        # Fall back to env var for CI/CD
+        env_workspace_id = os.getenv("LAZYCLOUD_WORKSPACE_ID")
+        if env_workspace_id:
+            return env_workspace_id
+
+        raise ValueError(
+            "No active workspace ID found. Set LAZYCLOUD_WORKSPACE_ID or run 'lazycloud login'"
+        )
 
     @property
     def active_workspace_name(self) -> str:
@@ -161,15 +181,21 @@ class CLIConfig(BaseSettings):
 
     def check_authentication(self) -> tuple[bool, str]:
         """Check if user is properly authenticated and configured."""
-        # Check for API key
-        if not self._active_api_key:
-            return False, "Not logged in. Please run 'lazycloud login' first."
+        # Check for API key (stored or env var)
+        has_stored_key = self._active_api_key and self._api_keys.get(
+            self._active_api_key
+        )
+        has_env_key = bool(os.getenv("LAZYCLOUD_API_KEY"))
 
-        if not self._api_keys.get(self._active_api_key):
-            return False, "API key not found. Please run 'lazycloud login' again."
+        if not has_stored_key and not has_env_key:
+            return (
+                False,
+                "Not logged in. Please run 'lazycloud login' first or set LAZYCLOUD_API_KEY.",
+            )
 
-        # Check for workspace configuration
-        if not self._active_workspace_id:
+        # Check for workspace configuration (only required for stored keys)
+        # Env var usage (CI/CD) can skip workspace config
+        if has_stored_key and not self._active_workspace_id:
             return False, "No workspace configured. Please run 'lazycloud login' again."
 
         return True, ""
