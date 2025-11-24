@@ -18,30 +18,37 @@ console = Console()
 
 
 @app.command()
-def login():
+def login(
+    api_key: str = typer.Argument(
+        None,
+        help="API key to use for authentication (will prompt if not provided)",
+    ),
+):
     """Login with your LazyCloud API key"""
     try:
-        # Show informational card
-        info_card = Card(
-            content=Text(
-                "Please enter your LazyCloud API key.\n\n"
-                "You can find your API key at:\n"
-                "  • https://lazycloud.dev/settings/api-keys\n\n"
-                "The key will be hidden as you type for security.",
-                style=Colors.Ansi.text_muted,
-            ),
-            title="🔑 API Key Required",
-            border_style=Colors.Ansi.info,
-        )
-        console.print(info_card)
+        # If no API key provided, prompt for it
+        if not api_key:
+            # Show informational card
+            info_card = Card(
+                content=Text(
+                    "Please enter your LazyCloud API key.\n\n"
+                    "You can find your API key at:\n"
+                    "  • https://lazycloud.dev/settings/api-keys\n\n"
+                    "The key will be hidden as you type for security.",
+                    style=Colors.Ansi.text_muted,
+                ),
+                title="🔑 API Key Required",
+                border_style=Colors.Ansi.info,
+            )
+            console.print(info_card)
 
-        # Prompt for API key
-        api_key = Prompt.ask(
-            Text("API Key", style=f"bold {Colors.Ansi.primary}"),
-            password=True,
-            show_default=False,
-        )
-        console.print()
+            # Prompt for API key
+            api_key = Prompt.ask(
+                Text("API Key", style=f"bold {Colors.Ansi.primary}"),
+                password=True,
+                show_default=False,
+            )
+            console.print()
 
         if not api_key or not api_key.strip():
             error_card = ErrorCard(
