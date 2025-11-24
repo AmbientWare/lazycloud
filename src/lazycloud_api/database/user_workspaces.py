@@ -1,7 +1,7 @@
 import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import UUID, ForeignKey, String
+from sqlalchemy import UUID, ForeignKey, String, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -12,8 +12,9 @@ from lazycloud_api.database.base import (
     DatabaseService,
     UUIDStr,
 )
+from lazycloud_api.database.invitations import WorkspaceInvitationTable
 from lazycloud_api.database.users import UserPydantic, UserTable
-from shared.models.workspaces import UserWorkspaceStatus, WorkspaceRole
+from shared.models.workspaces import InvitationType, UserWorkspaceStatus, WorkspaceRole
 
 if TYPE_CHECKING:
     from lazycloud_api.database.workspaces import WorkspaceTable
@@ -106,6 +107,45 @@ class UserWorkspaceService(DatabaseService[UserWorkspaceTable, UserWorkspacePyda
             return [
                 (self._to_pydantic(member), user.to_pydantic(UserPydantic))
                 for member, user in rows
+            ]
+
+    async def get_workspace_members_with_invitations(
+        self, workspace_id: str
+    ) -> list[tuple[UserWorkspacePydantic, UserPydantic, str | None]]:
+        """Get all members of a workspace with their user information and pending invitation IDs"""
+        async with self._session_manager.get_session() as session:
+            # LEFT JOIN to get invitation_id for members with pending invitations
+            # Join on email (lowercased) and workspace_id, and filter for pending (not accepted) invitations
+            query = (
+                select(
+                    UserWorkspaceTable,
+                    UserTable,
+                    WorkspaceInvitationTable.id.label("invitation_id"),
+                )
+                .join(UserTable, UserWorkspaceTable.user_id == UserTable.id)
+                .outerjoin(
+                    WorkspaceInvitationTable,
+                    and_(
+                        func.lower(UserTable.email)
+                        == func.lower(WorkspaceInvitationTable.email),
+                        WorkspaceInvitationTable.workspace_id == workspace_id,
+                        WorkspaceInvitationTable.accepted_at.is_(None),
+                        WorkspaceInvitationTable.invitation_type
+                        != InvitationType.OWNERSHIP_TRANSFER.value,
+                    ),
+                )
+                .where(UserWorkspaceTable.workspace_id == workspace_id)
+            )
+            result = await session.execute(query)
+            rows = result.all()
+
+            return [
+                (
+                    self._to_pydantic(member),
+                    user.to_pydantic(UserPydantic),
+                    str(invitation_id) if invitation_id is not None else None,
+                )
+                for member, user, invitation_id in rows
             ]
 
     async def update_role(

@@ -1,5 +1,6 @@
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import typer
@@ -17,10 +18,127 @@ from minikube.operations import (
     show_cluster_info,
     verify_gvisor_runtime,
 )
-from minikube.utils import check_prerequisites, is_minikube_running, run_command
+from minikube.utils import (
+    check_prerequisites,
+    is_minikube_running,
+    retry_until,
+    run_command,
+)
 
 console = Console()
 app = typer.Typer(help="Manage LazyCloud Minikube development environment")
+
+
+def ensure_minikube_on_lazycloud_network() -> bool:
+    """Ensure minikube is connected to lazycloud network."""
+    try:
+        result = run_command(
+            ["docker", "ps", "--filter", "name=minikube", "--format", "{{.Names}}"],
+            check=False,
+        )
+        container_name = (
+            result.stdout.strip().split("\n")[0] if result.stdout.strip() else None
+        )
+        if not container_name:
+            return False
+        run_command(
+            ["docker", "network", "connect", "lazycloud", container_name], check=False
+        )
+        return True
+    except Exception:
+        return False
+
+
+def create_docker_kubeconfig() -> None:
+    """Create a Docker-specific kubeconfig file with minikube:8443 and embedded certificates."""
+    try:
+        home = Path.home()
+        kubeconfig_dir = home / ".kube"
+        kubeconfig_dir.mkdir(exist_ok=True)
+        docker_kubeconfig = kubeconfig_dir / "config-docker"
+        minikube_dir = home / ".minikube"
+        profiles_dir = minikube_dir / "profiles" / "minikube"
+
+        # Read certificate files
+        ca_crt_path = minikube_dir / "ca.crt"
+        client_crt_path = profiles_dir / "client.crt"
+        client_key_path = profiles_dir / "client.key"
+
+        if not all(
+            [ca_crt_path.exists(), client_crt_path.exists(), client_key_path.exists()]
+        ):
+            console.print(
+                "[yellow]⚠ Certificate files not found, cannot create Docker kubeconfig[/yellow]"
+            )
+            return
+
+        # Copy current kubeconfig to Docker-specific file
+        main_kubeconfig = kubeconfig_dir / "config"
+        if main_kubeconfig.exists():
+            docker_kubeconfig.write_bytes(main_kubeconfig.read_bytes())
+        else:
+            console.print("[yellow]⚠ Main kubeconfig not found[/yellow]")
+            return
+
+        # Create temporary directory for certificate files
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_ca = Path(temp_dir) / "ca.crt"
+            temp_client_crt = Path(temp_dir) / "client.crt"
+            temp_client_key = Path(temp_dir) / "client.key"
+
+            # Copy certificates to temp directory
+            temp_ca.write_bytes(ca_crt_path.read_bytes())
+            temp_client_crt.write_bytes(client_crt_path.read_bytes())
+            temp_client_key.write_bytes(client_key_path.read_bytes())
+
+            # Update Docker kubeconfig with minikube:8443 and embedded certificates
+            run_command(
+                [
+                    "kubectl",
+                    "config",
+                    "set-cluster",
+                    "minikube",
+                    "--server=https://minikube:8443",
+                    f"--certificate-authority={temp_ca}",
+                    "--embed-certs=true",
+                    f"--kubeconfig={docker_kubeconfig}",
+                ],
+                check=True,
+            )
+
+            # Update user credentials with embedded client certificates
+            run_command(
+                [
+                    "kubectl",
+                    "config",
+                    "set-credentials",
+                    "minikube",
+                    f"--client-certificate={temp_client_crt}",
+                    f"--client-key={temp_client_key}",
+                    "--embed-certs=true",
+                    f"--kubeconfig={docker_kubeconfig}",
+                ],
+                check=True,
+            )
+
+            # Ensure minikube context is set
+            run_command(
+                [
+                    "kubectl",
+                    "config",
+                    "use-context",
+                    "minikube",
+                    f"--kubeconfig={docker_kubeconfig}",
+                ],
+                check=False,
+            )
+
+        console.print(
+            f"[green]✓ Created Docker kubeconfig at {docker_kubeconfig}[/green]"
+        )
+
+    except Exception as e:
+        console.print(f"[yellow]⚠ Could not create Docker kubeconfig: {e}[/yellow]")
 
 
 @app.command("up")
@@ -30,6 +148,11 @@ def start_minikube(
     disk_size: str = typer.Option("20gb", help="Disk size for Minikube"),
     fresh: bool = typer.Option(
         False, "--fresh", help="Delete existing cluster and start fresh"
+    ),
+    monitoring: bool = typer.Option(
+        True,
+        "--monitoring/--no-monitoring",
+        help="Install monitoring stack (Prometheus + Grafana)",
     ),
 ):
     """Start Minikube development environment."""
@@ -51,14 +174,15 @@ def start_minikube(
         need_to_start = False
 
     if need_to_start:
-        # Start minikube
         console.print("🔧 [bold]Starting Minikube cluster...[/bold]")
+        console.print(
+            "[dim]This may take a few minutes. Minikube output will be shown below...[/dim]"
+        )
         try:
-            run_command(
+            subprocess.run(
                 [
                     "minikube",
                     "start",
-                    "--network=lazycloud",
                     f"--memory={memory}",
                     f"--cpus={cpus}",
                     f"--disk-size={disk_size}",
@@ -67,42 +191,36 @@ def start_minikube(
                     "--docker-opt",
                     "containerd=/var/run/containerd/containerd.sock",
                     "--insecure-registry=000000000000.dkr.ecr.us-east-1.localhost:4566",
-                ]
+                ],
+                check=True,
             )
             console.print("[green]✓ Minikube cluster started successfully[/green]")
-
-            # Create Docker-friendly kubeconfig with embedded certificates
-            console.print("🔧 [bold]Creating Docker-friendly kubeconfig...[/bold]")
-            try:
-                kube_dir = Path.home() / ".kube"
-                kube_dir.mkdir(exist_ok=True)
-
-                # Write to config-docker file
-                result = subprocess.run(
-                    ["kubectl", "config", "view", "--flatten", "--minify"],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                )
-                (kube_dir / "config-docker").write_text(result.stdout)
-                console.print(
-                    "[green]✓ Docker-friendly kubeconfig created at ~/.kube/config-docker[/green]"
-                )
-            except Exception as e:
-                console.print(
-                    f"[yellow]⚠ Could not create Docker kubeconfig: {e}[/yellow]"
-                )
 
         except subprocess.CalledProcessError:
             console.print("[red]❌ Failed to start Minikube[/red]")
             raise typer.Exit(1)
 
-    # Verify minikube is actually running before proceeding
-    if not is_minikube_running():
-        console.print("[red]❌ Minikube failed to start properly[/red]")
+    # Verify minikube is ready
+    console.print("🔍 [bold]Verifying Minikube is ready...[/bold]")
+    if retry_until(is_minikube_running, description="Minikube to be ready"):
+        console.print("[green]✓ Minikube is running and ready[/green]")
+    else:
+        console.print("[red]❌ Minikube failed to start properly after waiting[/red]")
         raise typer.Exit(1)
 
-    # Enable addons
+    # Connect minikube to lazycloud network (for Docker Compose services to access it)
+    console.print("🔧 [bold]Connecting Minikube to lazycloud network...[/bold]")
+    if ensure_minikube_on_lazycloud_network():
+        console.print("[green]✓ Minikube connected to lazycloud network[/green]")
+    else:
+        console.print(
+            "[yellow]⚠ Could not connect minikube to lazycloud network[/yellow]"
+        )
+
+    # All operations below run from HOST and need IP-based kubeconfig
+    # Only update kubeconfig to minikube:8443 AFTER all host-side operations complete
+
+    # Enable addons (host-side: minikube addons enable)
     console.print("🔧 [bold]Enabling Minikube addons...[/bold]")
     for addon in MINIKUBE_ADDONS:
         try:
@@ -111,16 +229,22 @@ def start_minikube(
             console.print(f"[yellow]⚠ Failed to enable {addon} addon[/yellow]")
     console.print("[green]✓ Addons enabled[/green]")
 
-    # Setup environment
-    setup_storage_class()
-    setup_test_namespace()
-    verify_gvisor_runtime()
-    ensure_localstack_running()
-    configure_localstack_registry_dns()
-    setup_monitoring_stack()
+    # Setup environment (all use kubectl from host)
+    setup_storage_class()  # kubectl apply
+    setup_test_namespace()  # kubectl create
+    verify_gvisor_runtime()  # kubectl get
+    ensure_localstack_running()  # docker commands only
+    configure_localstack_registry_dns()  # minikube ssh + docker inspect
+    if monitoring:
+        setup_monitoring_stack()  # helm + kubectl
 
-    # Show results
+    # Show cluster info (uses kubectl from host)
     show_cluster_info()
+
+    # Create Docker-specific kubeconfig (containers can resolve minikube via Docker DNS)
+    console.print("🔧 [bold]Creating Docker-specific kubeconfig...[/bold]")
+    create_docker_kubeconfig()
+
     console.print("[green]✅ LazyCloud Minikube environment is ready! 🎉[/green]")
 
 
@@ -296,7 +420,6 @@ def open_dashboard():
         console.print(f"[red]❌ Failed to start dashboard: {e}[/red]")
 
 
-# Entry points for uv run commands
 def help():
     """Entry point for minikube-help."""
     print("Available commands:")
@@ -309,29 +432,25 @@ def help():
 
 
 def main():
-    """Entry point for minikube-up."""
-
-    fresh = "--fresh" in sys.argv
-    start_minikube(memory="4096", cpus="2", disk_size="20gb", fresh=fresh)
+    """Entry point for mk-up."""
+    sys.argv = ["minikube_dev.py", "up"] + sys.argv[1:]
+    app()
 
 
 def main_down():
-    """Entry point for minikube-down."""
-
-    delete = "--delete" in sys.argv
-    cleanup_docker = "--cleanup-docker" in sys.argv
-    stop_minikube(delete=delete, cleanup_docker=cleanup_docker)
+    """Entry point for mk-down."""
+    sys.argv = ["minikube_dev.py", "down"] + sys.argv[1:]
+    app()
 
 
 def main_dashboard():
-    """Entry point for minikube-dash."""
-    open_dashboard()
+    """Entry point for mk-dash."""
+    sys.argv = ["minikube_dev.py", "dashboard"]
+    app()
 
 
 def main_status():
-    """Entry point for minikube-status."""
-
-    # Just call the typer app with status command
+    """Entry point for mk-status."""
     sys.argv = ["minikube_dev.py", "status"]
     app()
 

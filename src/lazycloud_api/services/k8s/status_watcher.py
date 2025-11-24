@@ -54,10 +54,41 @@ class StatusWatcher:
 
     async def get_service_statuses_for_deployment(self) -> list[ServiceStatus]:
         """Get the status of all services in a deployment."""
+        tasks = [
+            self._get_service_status(service_config)
+            for service_config in self.helm_values.services
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
         services_list: list[ServiceStatus] = []
-        for service_config in self.helm_values.services:
-            status = await self._get_service_status(service_config)
-            services_list.append(status)
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.error(
+                    f"Error getting status for service {self.helm_values.services[i].name}: {result}"
+                )
+                # Return a minimal error status so the deployment status can still be computed
+                service_config = self.helm_values.services[i]
+                services_list.append(
+                    ServiceStatus(
+                        name=service_config.name,
+                        image=f"{service_config.image.repository}:{service_config.image.tag}",
+                        workload_type=service_config.workloadType,
+                        status=KubernetesPhase.ERROR,
+                        replicas=service_config.replicas or 1,
+                        ready_replicas=0,
+                        pods=[],
+                        resources=None,
+                        current_usage=None,
+                        ports=None,
+                        volumes=None,
+                        hpa=service_config.hpa,
+                        healthcheck=None,
+                        total_restarts=0,
+                        last_checked=datetime.now(UTC),
+                    )
+                )
+            else:
+                services_list.append(result)
 
         return services_list
 
@@ -172,11 +203,15 @@ class StatusWatcher:
 
                 def _get_job():
                     k8s_job = batch_v1.read_namespaced_job(
-                        name=service.resourceName, namespace=self.namespace
+                        name=service.resourceName,
+                        namespace=self.namespace,
+                        _request_timeout=5.0,
                     )
                     return batch_v1.api_client.sanitize_for_serialization(k8s_job)
 
-                k8s_job_dict = await asyncio.to_thread(_get_job)
+                k8s_job_dict = await asyncio.wait_for(
+                    asyncio.to_thread(_get_job), timeout=5.0
+                )
                 replicas = 1
 
                 # Extract resources from job spec
@@ -227,7 +262,9 @@ class StatusWatcher:
                 def _get_resource():
                     if service.workloadType == WorkloadType.DEPLOYMENT:
                         k8s_resource = apps_v1.read_namespaced_deployment(
-                            name=service.resourceName, namespace=self.namespace
+                            name=service.resourceName,
+                            namespace=self.namespace,
+                            _request_timeout=5.0,
                         )
                         resource_dict = apps_v1.api_client.sanitize_for_serialization(
                             k8s_resource
@@ -238,7 +275,9 @@ class StatusWatcher:
                             f"Unsupported resource type: {service.workloadType}"
                         )
 
-                k8s_resource = await asyncio.to_thread(_get_resource)
+                k8s_resource = await asyncio.wait_for(
+                    asyncio.to_thread(_get_resource), timeout=5.0
+                )
                 replicas = k8s_resource.spec.replicas or 1
 
                 for container in k8s_resource.spec.template.spec.containers:
@@ -252,6 +291,10 @@ class StatusWatcher:
                         resources = container.resources
                         break
 
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"Timeout getting Kubernetes resource status for {service.name}"
+            )
         except ApiException as e:
             if e.status == 404 and is_job:
                 # If Job not found and deployment is older than TTL (300s), assume it completed
@@ -328,14 +371,25 @@ class StatusWatcher:
                 v1_pods = core_v1.list_namespaced_pod(
                     namespace=self.namespace,
                     label_selector=f"app.kubernetes.io/name={service_config.resourceName}",
+                    _request_timeout=5.0,
                 )
                 # Convert to our model
                 pods_dict = core_v1.api_client.sanitize_for_serialization(v1_pods)
                 return PodList(**pods_dict)
 
-            pod_list = await asyncio.to_thread(_list_pods)
-            pods = []
+            pod_list = await asyncio.wait_for(
+                asyncio.to_thread(_list_pods), timeout=5.0
+            )
 
+            # Start all metrics tasks in parallel
+            metrics_tasks = {
+                pod.metadata.name: asyncio.create_task(
+                    self._get_pod_metrics(pod.metadata.name)
+                )
+                for pod in pod_list.items
+            }
+
+            pods = []
             for pod in pod_list.items:
                 # Step 1: Extract container statuses and initialize tracking variables
                 container_statuses = pod.status.container_statuses if pod.status else []
@@ -387,10 +441,7 @@ class StatusWatcher:
                 else:
                     age_str = "Unknown"
 
-                # Step 5: Fetch resource usage metrics for the pod
-                pod_metrics = await self._get_pod_metrics(pod.metadata.name)
-
-                # Step 6: Determine pod phase from status, defaulting to RUNNING
+                # Step 5: Determine pod phase from status, defaulting to RUNNING
                 phase = KubernetesPhase.RUNNING
                 pod_reason = None
                 pod_message = None
@@ -409,7 +460,7 @@ class StatusWatcher:
                     pod_reason = pod.status.reason
                     pod_message = pod.status.message
 
-                # Step 7: Override phase to ERROR if container errors detected
+                # Step 6: Override phase to ERROR if container errors detected
                 if has_container_error:
                     phase = KubernetesPhase.ERROR
                     if container_reason:
@@ -417,9 +468,12 @@ class StatusWatcher:
                     if container_message:
                         pod_message = container_message
 
-                # Step 8: Check if pod is being terminated
+                # Step 7: Check if pod is being terminated
                 if pod.metadata.deletion_timestamp:
                     phase = KubernetesPhase.TERMINATING
+
+                # Step 8: Get metrics result (already started in parallel)
+                pod_metrics = await metrics_tasks[pod.metadata.name]
 
                 pod_info = PodStatus(
                     name=pod.metadata.name,
@@ -439,6 +493,10 @@ class StatusWatcher:
                 pods.append(pod_info)
 
             return pods
+
+        except asyncio.TimeoutError:
+            logger.warning(f"Timeout getting pods for {service_config.name}")
+            return []
 
         except ApiException as e:
             logger.error(
@@ -558,7 +616,7 @@ class StatusWatcher:
             proc = await asyncio.create_subprocess_exec(
                 *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
             )
-            stdout, _ = await proc.communicate()
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5.0)
 
             if proc.returncode == 0:
                 output = stdout.decode().strip()
@@ -571,6 +629,9 @@ class StatusWatcher:
                         }
             return None
 
+        except asyncio.TimeoutError:
+            logger.debug(f"Timeout getting metrics for pod {pod_name}")
+            return None
         except Exception as e:
-            logger.error(f"Error getting metrics for pod {pod_name}: {e}")
+            logger.debug(f"Error getting metrics for pod {pod_name}: {e}")
             return None

@@ -1,0 +1,93 @@
+---
+description: Python 3.13+ codebase standards, patterns, and best practices for LazyCloud
+alwaysApply: true
+---
+
+# LazyCloud Python Codebase Rules
+
+## Language & Version
+- Python 3.13+ with modern type hints
+- Use `|` for union types (not `Union`)
+- Use `list[str]` not `List[str]` (built-in generics)
+- Prefer `dict[str, T]` over `Dict[str, T]`
+
+## Code Style
+- Formatter: Ruff (configured in .vscode/settings.json)
+- All imports at top of file, grouped: stdlib, third-party, local
+- Use type hints for all function parameters and return types
+- Use async/await for async operations
+- Use `from __future__ import annotations` if needed for forward references
+
+## Documentation & Comments
+- **Minimal docstrings**: Only single-line docstrings directly under function definitions (triple quotes)
+- **No multi-line docstrings**, parameter lists, or return descriptions
+- **Avoid comments** unless absolutely necessary for clarity
+- Keep code clean and readable without redundant explanations
+
+## Project Structure
+- `src/lazycloud_api/` - FastAPI backend
+- `src/lazycloud_cli/` - CLI tool with Typer
+- `src/shared/` - Shared models between API and CLI
+- `src/scripts/` - Development utilities
+- `minikube/` - Minikube development helpers
+
+## Common Patterns
+
+### FastAPI Endpoints
+- Use dependency injection with `Depends()`
+- Return Pydantic models as response models
+- Use `HTTPException` for errors
+- Use `logger` from loguru for logging
+- Group related endpoints in routers
+
+### Database (SQLAlchemy 2.0+)
+- Use async SQLAlchemy patterns
+- Use Pydantic models for API boundaries (`*Pydantic` suffix)
+- Use `Mapped[]` for column types
+- Use `mapped_column()` for column definitions
+
+### Error Handling
+- Use `ValueError` for user-friendly validation errors
+- Use `HTTPException` for API errors
+- Log unexpected errors with `logger.error()` and `exc_info=True`
+- Re-raise with context: `raise HTTPException(...) from e`
+
+### Async Patterns
+- Use `async def` for async functions
+- Use `await` for async operations
+- Use Prefect tasks for background workflows
+- Use `asyncio` utilities when needed
+
+### Type Hints
+- Always include return type annotations
+- Use `| None` for optional types
+- Use `list[T]` not `List[T]`
+- Use `dict[str, T]` not `Dict[str, T]`
+- Use `tuple[T, U]` not `Tuple[T, U]`
+
+### Imports
+- Group imports: stdlib, third-party, local
+- Use absolute imports from project root
+- Import from `shared` for shared models
+- One import per line for clarity
+
+## Best Practices
+- Keep functions focused and single-purpose
+- Use descriptive variable names
+- Prefer composition over inheritance
+- Use dataclasses or Pydantic models for data structures
+- Validate input early, fail fast
+- Use context managers for resource management
+- Keep functions small and testable
+
+## Testing
+- Use pytest for testing
+- Test files should mirror source structure
+- Use fixtures for common test data
+
+## Tools
+- Ruff for linting and formatting
+- uv for package management
+- Prefect for workflow orchestration
+- Loguru for logging
+- Rich for CLI/TUI output

@@ -1,3 +1,4 @@
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.widgets import RichLog
 from textual.worker import Worker
@@ -33,7 +34,6 @@ class LogViewerModal(ContentModal):
         self._stream_task: Worker | None = None
 
     def compose_body(self) -> ComposeResult:
-        """Create the logs widget."""
         self._logs_widget = RichLog(highlight=True, markup=True, auto_scroll=True)
         self._logs_widget.styles.background = "transparent"
         self._logs_widget.styles.border = None
@@ -41,10 +41,8 @@ class LogViewerModal(ContentModal):
         yield self._logs_widget
 
     def on_mount(self) -> None:
-        """Start log streaming when modal opens."""
         super().on_mount()
 
-        # Set title and subtitle on the modal container
         container = self.query_one("#content-modal-container")
         container.border_title = f"{Icons.FILE} Instance Logs: {self.display_name}"
         container.border_subtitle = "↑↓/jk/scroll Navigate • Esc: Close"
@@ -54,66 +52,57 @@ class LogViewerModal(ContentModal):
         self._start_stream()
 
     async def on_unmount(self) -> None:
-        """Clean up when modal closes."""
         await self.cleanup()
 
     def _start_stream(self) -> None:
-        """Start SSE stream connection for log updates."""
         if self._stream_task and not self._stream_task.is_finished:
             self._stream_task.cancel()
 
         self._stream_task = self.run_worker(self._connect_logs_stream(), exclusive=True)
 
     async def cleanup(self) -> None:
-        """Clean up SSE stream connections and tasks."""
         if self._stream_task and not self._stream_task.is_finished:
             self._stream_task.cancel()
             self._stream_task.wait()
         self._stream_task = None
 
     def action_scroll_down(self) -> None:
-        """Scroll the logs down."""
         if self._logs_widget:
             self._logs_widget.scroll_down()
 
     def action_scroll_up(self) -> None:
-        """Scroll the logs up."""
         if self._logs_widget:
             self._logs_widget.scroll_up()
 
     async def _connect_logs_stream(self) -> None:
-        """Connect to the logs SSE stream."""
-
         def on_log_message(data: dict) -> None:
-            """Handle incoming log messages."""
             if self._logs_widget:
-                # Handle error messages from the server
                 if data.get("type") == "error":
                     error_msg = data.get("data", {}).get("message", "Unknown error")
                     self._logs_widget.write(f"[red]Error: {error_msg}[/red]")
                     return
 
                 log_line = data.get("line", "")
-                # Also check if data itself is a string (for backward compatibility)
                 if not log_line and isinstance(data, str):
                     log_line = data
+
                 if log_line:
-                    # Check if user has scrolled up
+                    # Convert ANSI escape codes to Rich Text for colored display
+                    rich_text = Text.from_ansi(log_line)
+                    # Only auto-scroll if user hasn't manually scrolled up
                     is_at_bottom = self._logs_widget.scroll_offset.y >= (
                         self._logs_widget.virtual_size.height
                         - self._logs_widget.size.height
                     )
 
                     if is_at_bottom:
-                        self._logs_widget.write(log_line)
+                        self._logs_widget.write(rich_text)
                         self._logs_widget.auto_scroll = True
                     else:
                         self._logs_widget.auto_scroll = False
 
         def on_log_error(error: Exception) -> None:
-            """Handle log stream errors."""
             if self._logs_widget:
-                # Check if it's a container not found error
                 error_msg = str(error)
                 if (
                     "not found" in error_msg.lower()

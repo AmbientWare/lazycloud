@@ -43,21 +43,26 @@ async def get_workspace_members(
     """Get all members of a workspace"""
     workspace = workspace_access.workspace
 
-    members_with_users = await db.user_workspaces.get_workspace_members_with_users(
-        workspace.id
+    # Get members with their invitation IDs in a single query
+    members_with_invitations = (
+        await db.user_workspaces.get_workspace_members_with_invitations(workspace.id)
     )
 
-    members = [
-        WorkspaceMemberResponse(
-            user_id=member.user_id,
-            name=user.name,
-            email=user.email,
-            role=member.role,
-            status=member.status,
+    # Build members list from the joined query results
+    members = []
+    for member, user, invitation_id in members_with_invitations:
+        members.append(
+            WorkspaceMemberResponse(
+                user_id=member.user_id,
+                name=user.name,
+                email=user.email,
+                role=member.role,
+                status=member.status,
+                invitation_id=invitation_id,
+            )
         )
-        for member, user in members_with_users
-    ]
 
+    # Get pending invitations for users who don't have a user_workspace record yet
     pending_invitations = await db.invitations.get_by_workspace(
         workspace.id, include_accepted=False
     )
@@ -192,6 +197,60 @@ async def remove_member(
 
     logger.info(
         f"Removed member {user_id} from workspace {workspace.name} (ID: {workspace.id})"
+    )
+
+    return WorkspaceSuccessResponse(success=True)
+
+
+@members_router.post("/leave")
+async def leave_workspace(
+    workspace_access: WorkspaceAccess = Depends(get_workspace_with_any_access),
+) -> WorkspaceSuccessResponse:
+    """Leave a workspace (removes current user from workspace)"""
+    workspace = workspace_access.workspace
+    current_user = workspace_access.user
+
+    # Prevent leaving personal workspaces
+    if workspace.is_personal:
+        raise HTTPException(status_code=400, detail="Cannot leave personal workspace")
+
+    # Get current user's membership
+    membership = await db.user_workspaces.get_by_user_and_workspace(
+        current_user.id, workspace.id
+    )
+    if not membership:
+        raise HTTPException(
+            status_code=404, detail="You are not a member of this workspace"
+        )
+
+    # Prevent owner from leaving (must transfer ownership first)
+    if membership.role == WorkspaceRole.OWNER:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot leave workspace as owner. Transfer ownership first or delete the workspace.",
+        )
+
+    # Wrap invitation deletions and membership deletion in a transaction
+    async with db.user_workspaces.transaction() as session:
+        # Cancel any pending invitations for this user in this workspace
+        pending_invitations = await db.invitations.get_by_workspace(
+            workspace.id, include_accepted=False
+        )
+        for invitation in pending_invitations:
+            if (
+                invitation.email.lower().strip() == current_user.email.lower().strip()
+                and not invitation.accepted_at
+            ):
+                await db.invitations.delete(invitation.id, session=session)
+                logger.info(
+                    f"Cancelled pending invitation for {current_user.email} in workspace {workspace.name} (ID: {workspace.id}) when leaving"
+                )
+
+        # Delete membership using repository method with session
+        await db.user_workspaces.delete(membership.id, session=session)
+
+    logger.info(
+        f"User {current_user.id} left workspace {workspace.name} (ID: {workspace.id})"
     )
 
     return WorkspaceSuccessResponse(success=True)

@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 from loguru import logger
 
 from lazycloud_api.database import db
+from lazycloud_api.database.compose import ComposeDeploymentPydantic
 from lazycloud_api.database.usage import UsageRecordPydantic
 from lazycloud_api.services.cost_breakdown_service import CostBreakdownService
 from shared.models.billing import (
@@ -170,7 +171,7 @@ class UsageService:
         ] = await asyncio.gather(
             *[
                 self.aggregate_workspace_usage_for_date_range(
-                    str(workspace.id), start_date, end_date, return_records=True
+                    workspace.id, start_date, end_date, return_records=True
                 )
                 for workspace, _ in all_user_workspaces
             ],
@@ -250,7 +251,7 @@ class UsageService:
 
         usage_records_tasks = [
             db.usage.get_workspace_usage(
-                workspace_id=str(workspace.id),
+                workspace_id=workspace.id,
                 start_date=start_date,
                 end_date=end_date,
                 record_type=UsageCollectionConfig.get_record_type(),
@@ -314,7 +315,7 @@ class UsageService:
 
         # Aggregate usage for all deployments and build a mapping
         deployment_metrics_map: dict[str, UsageMetrics] = {}
-        valid_deployments: list = []
+        valid_deployments: list[ComposeDeploymentPydantic] = []
         for deployment in deployments:
             if not deployment.id or not deployment.name:
                 continue
@@ -322,9 +323,9 @@ class UsageService:
             valid_deployments.append(deployment)
             deployment_metrics, _, _ = self.aggregate_deployment_usage_from_records(
                 usage_records=usage_records,
-                deployment_id=str(deployment.id),
+                deployment_id=deployment.id,
             )
-            deployment_metrics_map[str(deployment.id)] = deployment_metrics
+            deployment_metrics_map[deployment.id] = deployment_metrics
 
         # Calculate costs in parallel
         deployment_metrics_list = list(deployment_metrics_map.values())
@@ -337,7 +338,7 @@ class UsageService:
         overviews: list[DeploymentUsageOverview] = []
         cost_idx = 0
         for deployment in valid_deployments:
-            deployment_id = str(deployment.id)
+            deployment_id = deployment.id
             deployment_status = (
                 "Active" if deployment.deleted_at is None else "Inactive"
             )
@@ -395,7 +396,7 @@ class UsageService:
             usage_records = usage_records_list[i] if i < len(usage_records_list) else []
             deployment_overview_tasks.append(
                 self._build_deployment_overviews(
-                    str(workspace.id),
+                    workspace.id,
                     usage_records,
                     start_date,
                     end_date,
@@ -423,7 +424,7 @@ class UsageService:
 
             workspace_summaries.append(
                 WorkspaceUsageSummary(
-                    workspace_id=str(workspace.id),
+                    workspace_id=workspace.id,
                     workspace_name=workspace.name or "Unnamed Workspace",
                     workspace_status=workspace_status,
                     usage=usage,

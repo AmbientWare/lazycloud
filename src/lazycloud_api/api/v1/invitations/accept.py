@@ -17,7 +17,7 @@ from lazycloud_api.services.subscription_service import (
     SubscriptionLimitError,
     SubscriptionService,
 )
-from shared.models.workspaces import InvitationType
+from shared.models.workspaces import InvitationType, UserWorkspaceStatus
 from shared.responses.workspaces import WorkspaceSuccessResponse
 
 invitations_router = APIRouter(prefix="/invitations", tags=["invitations"])
@@ -151,10 +151,69 @@ async def _accept_invitation_logic(
             workspace_id, role = await invitation_service.accept_invitation(
                 invitation.id, current_user.id
             )
+
             logger.info(
                 f"User {current_user.id} accepted invitation to workspace {workspace_id} with role {role}"
             )
+
             return WorkspaceSuccessResponse(success=True)
 
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
+
+
+@invitations_router.post("/{invitation_id}/decline")
+async def decline_invitation(
+    invitation_id: str,
+    current_user: UserPydantic = Depends(get_current_active_user),
+) -> WorkspaceSuccessResponse:
+    """Decline an invitation by ID (for logged-in users)"""
+    invitation = await db.invitations.get_by_id(invitation_id)
+
+    if not invitation:
+        raise HTTPException(status_code=404, detail="Invitation not found")
+
+    # Verify the invitation belongs to the current user
+    if current_user.email.lower().strip() != invitation.email.lower().strip():
+        raise HTTPException(
+            status_code=403, detail="This invitation does not belong to you"
+        )
+
+    # Check if already accepted
+    if invitation.accepted_at:
+        raise HTTPException(
+            status_code=400, detail="Invitation has already been accepted"
+        )
+
+    # Handle ownership transfer invitations differently
+    if invitation.invitation_type == InvitationType.OWNERSHIP_TRANSFER.value:
+        # Ownership transfer invitations don't create INVITED user_workspace records
+        # The user is already an active member, so just delete the invitation
+        async with db.invitations.transaction() as session:
+            await db.invitations.delete(invitation.id, session=session)
+
+        logger.info(
+            f"User {current_user.id} declined ownership transfer invitation {invitation_id} for workspace {invitation.workspace_id}"
+        )
+        return WorkspaceSuccessResponse(success=True)
+
+    # Handle regular member invitations
+    # Wrap invitation deletion and user_workspace deletion in a transaction
+    async with db.invitations.transaction() as session:
+        # Delete invitation using repository method
+        await db.invitations.delete(invitation.id, session=session)
+
+        # Also delete the user_workspace record if it exists with INVITED status
+        existing_user = await db.users.get_by_email(invitation.email)
+        if existing_user:
+            membership = await db.user_workspaces.get_by_user_and_workspace(
+                existing_user.id, invitation.workspace_id, session=session
+            )
+            if membership and membership.status == UserWorkspaceStatus.INVITED:
+                await db.user_workspaces.delete(membership.id, session=session)
+
+    logger.info(
+        f"User {current_user.id} declined invitation {invitation_id} for workspace {invitation.workspace_id}"
+    )
+
+    return WorkspaceSuccessResponse(success=True)

@@ -33,7 +33,7 @@ async def list_services(
 ) -> list[ServiceStatusResponse]:
     """Get the status of all services within a deployment."""
     watcher = StatusWatcher(
-        deployment_id=str(deployment.id),
+        deployment_id=deployment.id,
         namespace=deployment.namespace,
         helm_values=deployment.helm_values,
     )
@@ -43,7 +43,7 @@ async def list_services(
     return [
         ServiceStatusResponse(
             service=service,
-            deployment_id=str(deployment.id),
+            deployment_id=deployment.id,
             deployment_name=deployment.name,
             namespace=deployment.namespace,
         )
@@ -62,7 +62,7 @@ async def get_service_status(
     """Get the status of a specific service within a deployment."""
 
     watcher = StatusWatcher(
-        deployment_id=str(deployment.id),
+        deployment_id=deployment.id,
         namespace=deployment.namespace,
         helm_values=deployment.helm_values,
     )
@@ -75,7 +75,7 @@ async def get_service_status(
         )
 
     return ServiceStatusResponse(
-        deployment_id=str(deployment.id),
+        deployment_id=deployment.id,
         deployment_name=deployment.name,
         namespace=deployment.namespace,
         service=service_status,
@@ -92,14 +92,14 @@ async def restart_all_services(
     """Restart all services within a deployment."""
     try:
         task_future = restart_all_services_task.delay(
-            deployment_id=str(deployment.id),
+            deployment_id=deployment.id,
         )
 
         return ServiceTaskStatusResponse(
             task_id=task_future.task_run_id,
             status=TaskStatus.PENDING,
             message="Restart all services task submitted",
-            deployment_id=str(deployment.id),
+            deployment_id=deployment.id,
         )
 
     except Exception as e:

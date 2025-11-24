@@ -5,7 +5,7 @@ from lazycloud_api.database import db
 from lazycloud_api.services.k8s.workload_manager import WorkloadManager
 
 
-@task
+@task(log_prints=True)
 async def restart_service_task(deployment_id: str, service_name: str) -> None:
     """Restart a specific service within a deployment."""
     logger.info(
@@ -39,7 +39,7 @@ async def restart_service_task(deployment_id: str, service_name: str) -> None:
     logger.info(f"Successfully restarted service {service_name}")
 
 
-@task
+@task(log_prints=True)
 async def restart_all_services_task(deployment_id: str) -> None:
     """Restart all services within a deployment."""
     logger.info(f"Starting restart of all services in deployment {deployment_id}")

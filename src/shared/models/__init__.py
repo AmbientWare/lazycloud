@@ -4,6 +4,12 @@ from shared.models.billing import (
     UsageRecordStatus,
     UsageRecordType,
 )
+from shared.models.deployments import (
+    DeploymentInfo,
+    DeploymentResult,
+    DeploymentStates,
+    ResourceRequirements,
+)
 from shared.models.metrics import (
     NamespaceBreakdown,
     NamespaceSummary,
@@ -19,11 +25,15 @@ from shared.models.monitoring import (
 )
 
 __all__ = [
+    "DeploymentInfo",
+    "DeploymentResult",
+    "DeploymentStates",
     "MonitorStats",
     "NamespaceBreakdown",
     "NamespaceSummary",
     "PodMetrics",
     "PodUsage",
+    "ResourceRequirements",
     "StreamEventType",
     "SubscriptionManagerStats",
     "UsageCollectionConfig",

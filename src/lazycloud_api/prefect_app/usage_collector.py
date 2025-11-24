@@ -670,7 +670,7 @@ async def process_incomplete_usage():
         # Process each incomplete record by running backfill flow
         # Pass the collection date from the record to ensure we process the correct date
         result = await backfill_daily_usage(
-            str(record.workspace_id), record.collection_start.date()
+            record.workspace_id, record.collection_start.date()
         )
 
         if result.get("daily_success"):

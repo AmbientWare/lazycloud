@@ -40,8 +40,7 @@ x-shared-volumes: &lazycloud-shared-volumes
 services:
   api:
     networks:
-      lazycloud:
-        ipv4_address: 172.20.0.10
+      - lazycloud
     image: lazycloud-api:latest
     build:
       context: .
@@ -77,8 +76,7 @@ services:
 
   prefect-worker:
     networks:
-      lazycloud:
-        ipv4_address: 172.20.0.11
+      - lazycloud
     image: lazycloud-worker:latest
     build:
       context: .
@@ -101,8 +99,7 @@ services:
   prefect-server:
     image: prefecthq/prefect:3-latest
     networks:
-      lazycloud:
-        ipv4_address: 172.20.0.12
+      - lazycloud
     command: ["prefect", "server", "start"]
     volumes:
       - prefect-data:/root/.prefect
@@ -114,8 +111,7 @@ services:
 
   db-migration:
     networks:
-      lazycloud:
-        ipv4_address: 172.20.0.9
+      - lazycloud
     image: lazycloud-api:latest
     build:
       context: .
@@ -135,8 +131,7 @@ services:
   postgres:
     image: postgres:17
     networks:
-      lazycloud:
-        ipv4_address: 172.20.0.13
+      - lazycloud
     environment:
       POSTGRES_USER: lc_dev
       POSTGRES_PASSWORD: password
@@ -158,8 +153,7 @@ services:
   redis:
     image: redis:latest
     networks:
-      lazycloud:
-        ipv4_address: 172.20.0.14
+      - lazycloud
     volumes:
       - redis-data:/data
     healthcheck:
@@ -169,11 +163,12 @@ services:
       retries: 5
 
   localstack:
+    labels:
+      lazycloud.ignore: "true"
     image: localstack/localstack-pro:latest
     container_name: lazycloud-localstack
     networks:
       lazycloud:
-        ipv4_address: 172.20.0.15
         aliases:
           # NOTE: this is the registry url for the localstack registry
           - 000000000000.dkr.ecr.us-east-1.localhost
@@ -199,7 +194,6 @@ services:
       - "./scripts/setup_localstack_iam.sh:/etc/localstack/init/ready.d/setup_iam.sh"
       - "./scripts/setup_eks_cluster.sh:/etc/localstack/init/ready.d/setup_eks_cluster.sh"
       - localstack-data:/var/lib/localstack
-      - "${HOME}/.kube/config-docker:/root/.kube/config:ro"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
       interval: 10s

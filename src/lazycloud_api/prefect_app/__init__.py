@@ -1,7 +1,7 @@
 from prefect import serve as flow_serve
 from prefect.task_worker import serve as task_worker_serve
 
-from lazycloud_api.prefect_app.compose import (
+from lazycloud_api.prefect_app.deployment import (
     deploy_compose_task,
     destroy_compose_task,
     reconcile_rollback_states_deployment,
@@ -24,7 +24,7 @@ from lazycloud_api.prefect_app.usage_collector import (
 from lazycloud_api.prefect_app.utils import get_task_result
 
 
-def serve_prefect_tasks():
+def serve_background_tasks():
     """Serve Prefect tasks."""
     task_worker_serve(
         deploy_compose_task,
@@ -36,7 +36,7 @@ def serve_prefect_tasks():
     )
 
 
-def serve_deployments():
+def serve_crons():
     """Serve Prefect cron tasks."""
     flow_serve(
         spawn_usage_collection_deployment,
@@ -48,4 +48,8 @@ def serve_deployments():
     )
 
 
-__all__ = ["serve_prefect_tasks", "get_task_result", "serve_deployments"]
+__all__ = [
+    "serve_background_tasks",
+    "serve_crons",
+    "get_task_result",
+]

@@ -75,7 +75,7 @@ async def delete_instance(
         )
 
         task_future = delete_instance_task.delay(
-            deployment_id=str(deployment.id),
+            deployment_id=deployment.id,
             service_name=service.name,
             pod_name=pod_name,
             force=force,
@@ -85,7 +85,7 @@ async def delete_instance(
             task_id=task_future.task_run_id,
             status=TaskStatus.PENDING,
             message=f"Instance {pod_name} deletion task submitted",
-            deployment_id=str(deployment.id),
+            deployment_id=deployment.id,
             service_name=service.name,
             pod_name=pod_name,
         )
@@ -119,7 +119,7 @@ async def stream_service_logs(
     service_name = service.name
 
     config = LogMonitorConfig(
-        deployment_id=str(deployment.id),
+        deployment_id=deployment.id,
         namespace=deployment.namespace,
         service_name=service_name,
         pod_name=pod_name,

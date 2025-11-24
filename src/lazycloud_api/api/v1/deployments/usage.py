@@ -68,7 +68,7 @@ async def get_deployment_cost_breakdown(
 
         # Get usage records for the date range
         usage_records = await db.usage.get_workspace_usage(
-            workspace_id=str(deployment.workspace_id),
+            workspace_id=deployment.workspace_id,
             start_date=start_date,
             end_date=end_date,
             record_type=UsageCollectionConfig.get_record_type(),
@@ -84,7 +84,7 @@ async def get_deployment_cost_breakdown(
         deployment_metrics, service_usage_list, volume_usage_list = (
             usage_service.aggregate_deployment_usage_from_records(
                 usage_records=usage_records,
-                deployment_id=str(deployment.id),
+                deployment_id=deployment.id,
             )
         )
 
@@ -109,7 +109,7 @@ async def get_deployment_cost_breakdown(
             )
 
             return WorkspaceCostBreakdownResponse(
-                workspace_id=str(deployment.workspace_id),
+                workspace_id=deployment.workspace_id,
                 period=UsagePeriodInfo(start=start_date, end=end_date),
                 meter_breakdown=workspace_cost_breakdown.meter_breakdown,
                 service_breakdown=workspace_cost_breakdown.service_breakdown,

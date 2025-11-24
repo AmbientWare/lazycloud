@@ -1,3 +1,5 @@
+import uuid
+
 import yaml
 from fastapi import APIRouter, Body, Depends, HTTPException
 from loguru import logger
@@ -9,8 +11,10 @@ from lazycloud_api.database.compose import ComposeDeploymentPydantic
 from lazycloud_api.database.users import UserPydantic
 from lazycloud_api.services.compose.diff_checker import ComposeDiffChecker
 from lazycloud_api.services.compose.parser import ComposeParser
+from lazycloud_api.services.compose.validation import validate_deployment_request
 from lazycloud_api.services.compose.validator import ComposeValidator
 from lazycloud_api.services.k8s import create_ns_name
+from shared.models.deployments import DeploymentStates
 from shared.models.diffs import EnvVarChanges
 from shared.models.secrets import SecretSource
 from shared.requests.deployments import DiffRequest, DiffType
@@ -107,12 +111,50 @@ async def get_deployment_diff(
         current_compose, compose_file
     )
 
+    # Perform full validation (Helm generation, quota checks) if basic validation passed
+    can_deploy = True
+    full_validation_errors = []
+    if not validation_result.errors:
+        try:
+            # Create temporary deployment for full validation
+            temp_deployment = ComposeDeploymentPydantic(
+                workspace_id=workspace_id,
+                name=request.deployment_name or "",
+                namespace=namespace,
+                compose_yaml=request.compose_yaml,
+                state=DeploymentStates.PENDING,
+            )
+
+            if deployment:
+                temp_deployment.id = deployment.id
+
+            else:
+                temp_deployment.id = uuid.uuid4()
+
+            # Run full validation
+            await validate_deployment_request(temp_deployment, deployment)
+
+        except ValueError as e:
+            # User-friendly validation errors
+            full_validation_errors = [str(e)]
+            can_deploy = False
+
+        except Exception as e:
+            # Unexpected errors
+            logger.error(f"Full validation failed unexpectedly: {e}", exc_info=True)
+            full_validation_errors = [f"Validation failed: {str(e)}"]
+            can_deploy = False
+
+    # Combine basic and full validation errors
+    all_errors = list(validation_result.errors or []) + full_validation_errors
+
     return DiffResponse(
         deployment_id=deployment.id if deployment else "new",
         namespace=namespace,
         has_changes=compose_diff.has_changes(),
         diff=compose_diff,
         env_var_changes=env_var_changes,
-        errors=validation_result.errors,
+        errors=all_errors if all_errors else None,
         warnings=validation_result.warnings,
+        can_deploy=can_deploy,
     )

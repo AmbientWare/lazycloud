@@ -273,6 +273,7 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
 
         if session:
             return await _find_one(session)
+
         else:
             return await self._execute_in_session(_find_one, None)
 
@@ -299,6 +300,7 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
                     session.execute(paginated_query),
                 )
                 total = total_result.scalar() or 0
+
             else:
                 paginated_query = base_query.offset(offset).limit(limit)
                 data_result = await session.execute(paginated_query)

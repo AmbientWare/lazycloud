@@ -63,6 +63,9 @@ class ComposeDeploymentTable(BaseTable):
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
     )
+    current_task_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True, index=True
+    )
     workspace_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE")
     )
@@ -108,6 +111,7 @@ class ComposeDeploymentPydantic(BaseDbPydanticModel):
     status_message: str | None = None
     deployed_at: datetime | None = None
     deleted_at: datetime | None = None
+    current_task_run_id: UUIDStr | None = None
 
     @field_validator("compose_yaml", "pending_compose_yaml", mode="before")
     @classmethod
@@ -136,23 +140,36 @@ class ComposeDeploymentPydantic(BaseDbPydanticModel):
         except Exception as e:
             raise ValueError(f"Failed to encrypt compose field: {e}") from e
 
+    @field_serializer("current_task_run_id", when_used="always")
+    def serialize_task_run_id(self, value: uuid.UUID | str | None) -> str | None:
+        """Ensure task_run_id is serialized as string for Prefect compatibility."""
+        if value is None:
+            return None
+        if isinstance(value, uuid.UUID):
+            return str(value)
+        return value
+
     @field_validator("helm_values", mode="before")
     @classmethod
     def decrypt_helm_values(cls, value: Any) -> HelmValues | None:
         """Automatically decrypt helm_values when loading from database."""
         if value is None:
             return None
+
         if isinstance(value, str):
             try:
                 decrypted_dict = decrypt_dict(value)
                 return HelmValues(**decrypted_dict)
+
             except InvalidToken:
                 # Not encrypted - shouldn't happen in normal flow
                 raise ValueError(
                     "helm_values is not encrypted - possible data corruption"
                 )
+
             except Exception as e:
                 raise ValueError(f"Failed to decrypt helm_values: {e}") from e
+
         # Already a HelmValues object or dict
         return value
 
@@ -161,15 +178,15 @@ class ComposeDeploymentPydantic(BaseDbPydanticModel):
         """Automatically encrypt helm_values when dumping for database storage."""
         if value is None:
             return None
+
         if isinstance(value, HelmValues):
             # Encrypt it
             try:
                 helm_dict = value.model_dump(by_alias=True)
                 return encrypt_dict(helm_dict)
+
             except Exception as e:
                 raise ValueError(f"Failed to encrypt helm_values: {e}") from e
-        # Already encrypted string
-        return value
 
 
 class ComposeDeploymentService(

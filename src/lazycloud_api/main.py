@@ -24,7 +24,7 @@ from lazycloud_api.api.v1 import (
 from lazycloud_api.config import app_config
 from lazycloud_api.database.crud import update_admin_api_keys
 from lazycloud_api.log_config import setup_logger
-from lazycloud_api.prefect_app import serve_prefect_tasks
+from lazycloud_api.prefect_app import serve_background_tasks
 from lazycloud_api.services.monitoring import (
     initialize_subscription_manager,
     shutdown_subscription_manager,
@@ -44,9 +44,9 @@ async def lifespan(app: FastAPI):
     initialize_subscription_manager()
     logger.info("Subscription manager initialized")
 
-    # start the prefect tasks in a separate process
+    # start the prefect background tasks in a separate process
     ctx = mp.get_context("spawn")
-    prefect_worker_process = ctx.Process(target=serve_prefect_tasks, daemon=True)
+    prefect_worker_process = ctx.Process(target=serve_background_tasks, daemon=True)
     prefect_worker_process.start()
     app.state.prefect_worker_process = prefect_worker_process
     logger.info(f"Prefect worker process started with PID {prefect_worker_process.pid}")

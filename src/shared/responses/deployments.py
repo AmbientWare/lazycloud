@@ -41,6 +41,7 @@ class DiffResponse(BaseModel):
     env_var_changes: EnvVarChanges | None = None
     errors: list[str] | None = None
     warnings: list[str] | None = None
+    can_deploy: bool = True
 
 
 class ValidationResult(BaseModel):
