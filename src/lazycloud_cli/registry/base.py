@@ -38,3 +38,8 @@ class BaseRegistry(ABC):
     def get_image_url(self, image_name: str) -> str:
         """Get the full registry URL for an image."""
         pass
+
+    @abstractmethod
+    def images_exist(self, image_names: list[str]) -> dict[str, bool]:
+        """Check if images exist in the registry. Returns dict mapping image_name -> exists."""
+        pass
