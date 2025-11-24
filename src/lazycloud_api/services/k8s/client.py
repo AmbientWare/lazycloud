@@ -14,6 +14,8 @@ from kubernetes_asyncio.client import Configuration as AsyncConfiguration
 from kubernetes_asyncio.client.api.core_v1_api import CoreV1Api as AsyncCoreV1Api
 from loguru import logger
 
+from lazycloud_api.config import app_config
+
 urllib3.disable_warnings()
 
 
@@ -39,8 +41,8 @@ def _get_api_client() -> ApiClient:
                 logger.info("Loaded Kubernetes configuration from default location")
             k8s_config = Configuration.get_default_copy()
 
-        # Configure timeouts to prevent indefinite blocking
-        k8s_config.connection_pool_maxsize = 10
+        # Configure connection pool for better scaling
+        k8s_config.connection_pool_maxsize = app_config.K8S_CONNECTION_POOL_SIZE
 
         # The timeout is handled by asyncio.wait_for wrappers in the calling code
         api_client = ApiClient(configuration=k8s_config)
@@ -115,8 +117,8 @@ async def get_async_api_client() -> AsyncApiClient:
 
                 k8s_config = AsyncConfiguration.get_default_copy()
 
-            # Configure connection pool
-            k8s_config.connection_pool_maxsize = 10
+            # Configure connection pool for better scaling
+            k8s_config.connection_pool_maxsize = app_config.K8S_CONNECTION_POOL_SIZE
 
             _async_api_client = AsyncApiClient(configuration=k8s_config)
             return _async_api_client
