@@ -322,9 +322,7 @@ class DeployView:
     ) -> DeploymentProgress:
         """Create and return a deployment creation progress tracker."""
         progress = DeploymentProgress(deployment_name)
-        progress.add_step("Initializing deployment")
         progress.add_step("Creating deployment resources")
-        progress.add_step("Finalizing deployment")
         return progress
 
     def collect_secrets(
@@ -536,7 +534,10 @@ class BuildProgress:
         duration = int((datetime.now() - self.start_time).total_seconds())
         if duration > 0:
             table.add_row(
-                "", "", "", Text(f"Time: {duration}s", style=Colors.Ansi.text_muted)
+                Text(f"Elapsed time: {duration}s", style=Colors.Ansi.success),
+                "",
+                "",
+                "",
             )
 
         # Determine border style

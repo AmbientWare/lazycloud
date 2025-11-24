@@ -1,9 +1,13 @@
+from datetime import datetime
+
 from rich.box import ROUNDED
 from rich.console import Console, ConsoleOptions, RenderResult
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
 from rich.text import Text
+
+from lazycloud_cli.ui.colors import Colors
 
 
 class ProgressCard:
@@ -109,6 +113,7 @@ class DeploymentProgress:
         self.deployment_name = deployment_name
         self.steps = []
         self.current_step = None
+        self.start_time = datetime.now()
 
     def add_step(self, step_name: str, status: str = "pending"):
         """Add a step to track."""
@@ -126,8 +131,10 @@ class DeploymentProgress:
         # Map status messages to appropriate steps
         if "sending" in message.lower() or "creating" in status.lower():
             self.update_step("Creating deployment resources", message)
+
         elif "processing" in message.lower() or "progress" in message.lower():
             self.update_step("Creating deployment resources", message)
+
         elif "completed" in status.lower() or "success" in message.lower():
             self.update_step("Finalizing deployment", message)
         elif "failed" in status.lower() or "error" in message.lower():
@@ -152,18 +159,43 @@ class DeploymentProgress:
 
         for step in self.steps:
             status = step["status"]
+            step_name = step["name"]
 
-            # Style based on status
-            if "complete" in status.lower():
+            # Determine if this step is in progress (needs spinner)
+            is_in_progress = (
+                "progress" in status.lower()
+                or "processing" in status.lower()
+                or "creating" in status.lower()
+                or "sending" in status.lower()
+                or "storing" in status.lower()
+                or "monitoring" in status.lower()
+            )
+
+            # Create status display
+            if "complete" in status.lower() or "success" in status.lower():
                 status_style = "green"
-            elif "fail" in status.lower():
+                status_display = Text(f"✅ {status}", style=status_style)
+
+            elif "fail" in status.lower() or "error" in status.lower():
                 status_style = "red"
-            elif "progress" in status.lower():
+                status_display = Text(f"❌ {status}", style=status_style)
+
+            elif is_in_progress:
                 status_style = "yellow"
+                status_display = Text(status, style=status_style)
+
             else:
                 status_style = "dim"
+                status_display = Text(status, style=status_style)
 
-            table.add_row(f"{step['name']}", Text(status, style=status_style))
+            table.add_row(f"{step_name}", status_display)
+
+        # Add elapsed time
+        duration = int((datetime.now() - self.start_time).total_seconds())
+        if duration > 0:
+            table.add_row(
+                Text(f"Elapsed time: {duration}s", style=Colors.Ansi.success), ""
+            )
 
         return Panel(
             table,

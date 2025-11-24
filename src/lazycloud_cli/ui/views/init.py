@@ -37,17 +37,17 @@ class InitConfigCard(Card):
         self,
         deployment_name: str,
         compose_file: str,
-        environment: str | None = None,
+        is_sync: bool = False,
     ):
         """Initialize config card."""
         table = Table(show_header=False, box=None)
-        table.add_column("Property", style=Colors.Ansi.primary)
-        table.add_column("Value")
+        table.add_column("Property", style=Colors.Ansi.primary, width=18)
+        table.add_column("Value", style=Colors.Ansi.text)
 
         table.add_row("Deployment Name", deployment_name)
         table.add_row("Compose File", compose_file)
-        if environment:
-            table.add_row("Environment", environment)
+        if is_sync:
+            table.add_row("", "[dim]Syncing existing deployment[/dim]")
 
         super().__init__(
             content=table,
@@ -79,11 +79,13 @@ class InitView:
 
     def prompt_deployment_name(self, suggested_name: str) -> str:
         """Prompt for deployment name with suggestion."""
-        return Prompt.ask(
+        result = Prompt.ask(
             "Enter deployment name",
             default=suggested_name,
             show_default=True,
         )
+        self.console.print()
+        return result
 
     def show_validation_error(self, error_message: str):
         """Show deployment name validation error."""
@@ -140,12 +142,12 @@ class InitView:
         self,
         deployment_name: str,
         compose_file: str,
-        environment: str | None = None,
+        is_sync: bool = False,
     ):
         """Show the initialization configuration summary."""
         section = Section(
             title="Initialization Summary",
-            content=InitConfigCard(deployment_name, compose_file, environment),
+            content=InitConfigCard(deployment_name, compose_file, is_sync=is_sync),
             icon="✅",
         )
         self.console.print(section)
@@ -154,7 +156,6 @@ class InitView:
         self,
         deployment_name: str,
         compose_file: str,
-        environment: str | None = None,
     ):
         """Show successful initialization message."""
         # Create success content
@@ -165,16 +166,14 @@ class InitView:
         content.append("Configuration:\n", style=f"bold {Colors.Ansi.primary}")
         content.append(f"  • Deployment: {deployment_name}\n", style=Colors.Ansi.text)
         content.append(f"  • Compose file: {compose_file}\n", style=Colors.Ansi.text)
-        if environment:
-            content.append(f"  • Environment: {environment}\n", style=Colors.Ansi.text)
 
         content.append("\nNext steps:\n", style=f"bold {Colors.Ansi.primary}")
         content.append("  • Run ", style=Colors.Ansi.text_muted)
         content.append("lazycloud deploy", style=f"bold {Colors.Ansi.primary}")
         content.append(" to deploy your application\n", style=Colors.Ansi.text_muted)
         content.append("  • Run ", style=Colors.Ansi.text_muted)
-        content.append("lazycloud status", style=f"bold {Colors.Ansi.primary}")
-        content.append(" to check deployment status\n", style=Colors.Ansi.text_muted)
+        content.append("lazycloud dashboard", style=f"bold {Colors.Ansi.primary}")
+        content.append(" to view your deployment\n", style=Colors.Ansi.text_muted)
 
         card = Card(
             content=content,
@@ -205,7 +204,7 @@ class InitView:
         self,
         deployment_name: str,
         compose_file: str,
-        environment: str | None = None,
+        deployment_info=None,
     ):
         """Show successful sync message for existing deployment."""
         # Create success content
@@ -213,23 +212,17 @@ class InitView:
         content.append(
             "✅ Successfully synced deployment locally\n\n", style=Colors.Ansi.success
         )
-        content.append("Configuration:\n", style=f"bold {Colors.Ansi.primary}")
-        content.append(f"  • Deployment: {deployment_name}\n", style=Colors.Ansi.text)
-        content.append(f"  • Compose file: {compose_file}\n", style=Colors.Ansi.text)
-        if environment:
-            content.append(f"  • Environment: {environment}\n", style=Colors.Ansi.text)
-
         content.append(
-            "\nThis directory is now linked to the existing deployment.\n",
+            "This directory is now linked to the existing deployment.\n",
             style=Colors.Ansi.text_muted,
         )
         content.append("\nNext steps:\n", style=f"bold {Colors.Ansi.primary}")
         content.append("  • Run ", style=Colors.Ansi.text_muted)
-        content.append("lazycloud status", style=f"bold {Colors.Ansi.primary}")
-        content.append(" to check deployment status\n", style=Colors.Ansi.text_muted)
-        content.append("  • Run ", style=Colors.Ansi.text_muted)
         content.append("lazycloud deploy", style=f"bold {Colors.Ansi.primary}")
         content.append(" to update the deployment\n", style=Colors.Ansi.text_muted)
+        content.append("  • Run ", style=Colors.Ansi.text_muted)
+        content.append("lazycloud dashboard", style=f"bold {Colors.Ansi.primary}")
+        content.append(" to view deployment details\n", style=Colors.Ansi.text_muted)
 
         card = Card(
             content=content,

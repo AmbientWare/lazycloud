@@ -26,9 +26,6 @@ class LazyCloudConfig(BaseModel):
     last_deployed: datetime | None = Field(
         None, description="Last deployment timestamp"
     )
-    environment: str | None = Field(
-        None, description="Environment name (e.g., production, staging)"
-    )
 
     @field_validator("compose_file")
     @classmethod

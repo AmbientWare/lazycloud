@@ -5,6 +5,7 @@ import typer
 from rich.console import Console
 
 from lazycloud_cli.api import api
+from lazycloud_cli.config import config
 from lazycloud_cli.lazycloud_file import LazyCloudConfig, LazyCloudFile
 from lazycloud_cli.ui.components.confirmation import SimpleConfirmationDialog
 from lazycloud_cli.ui.views.init import InitView
@@ -26,13 +27,20 @@ def validate_deployment_name(name: str) -> tuple[str, bool]:
     existing_deployment = api.deployments.get_deployment(name=name)
     if existing_deployment:
         # deployment already exists, ask if we want to sync it locally
+        details = [
+            f"Deployment '{name}' already exists in the cloud",
+            "This will create a local .lazycloud file that references it",
+            "You can then manage this deployment from this directory",
+        ]
+        if existing_deployment.namespace:
+            details.insert(1, f"Namespace: {existing_deployment.namespace}")
+        if existing_deployment.state:
+            state_display = existing_deployment.state.value.title()
+            details.insert(-1, f"Current state: {state_display}")
+
         dialog = SimpleConfirmationDialog(
             action="sync this existing deployment locally",
-            details=[
-                f"Deployment '{name}' already exists in the cloud",
-                "This will create a local .lazycloud file that references it",
-                "You can then manage this deployment from this directory",
-            ],
+            details=details,
             title="🔄 Existing Deployment Found",
         )
 
@@ -103,9 +111,6 @@ def init_deployment(
     force: bool = typer.Option(
         False, "--force", help="Overwrite existing .lazycloud file"
     ),
-    environment: str | None = typer.Option(
-        None, "--env", "-e", help="Environment name (e.g., production, staging)"
-    ),
 ) -> None:
     """Initialize a LazyCloud deployment configuration."""
 
@@ -149,23 +154,28 @@ def init_deployment(
         raise typer.Exit(1)
 
     # Show configuration summary before creating
-    view.show_configuration_summary(deployment_name, compose_file, environment)
+    view.show_configuration_summary(deployment_name, compose_file, is_sync=is_sync)
 
     # Create config
-    config = LazyCloudConfig(
+    lazycloud_config = LazyCloudConfig(
         deployment_name=deployment_name,
         compose_file=compose_file,
-        environment=environment,
         last_deployed=None,
     )
 
     # Write .lazycloud file
     try:
-        lazycloud_file.write(config)
+        lazycloud_file.write(lazycloud_config)
         if is_sync:
-            view.show_sync_success(deployment_name, compose_file, environment)
+            # Get deployment info to show in success message
+            deployment_info = api.deployments.get_deployment(
+                name=deployment_name, workspace_id=config.active_workspace_id
+            )
+            view.show_sync_success(deployment_name, compose_file, deployment_info)
+
         else:
-            view.show_success(deployment_name, compose_file, environment)
+            view.show_success(deployment_name, compose_file)
+
     except Exception as e:
         view.show_error(f"Failed to create .lazycloud file: {e}")
         raise typer.Exit(1)
