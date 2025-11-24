@@ -147,6 +147,14 @@ async def create_deployment(
         )
         is_update = existing_deployment is not None
 
+    # Validate service-specific deployment requirements
+    if request.service_name and not is_update:
+        raise HTTPException(
+            400,
+            f"Cannot deploy single service '{request.service_name}': deployment does not exist. "
+            "Deploy the full application first.",
+        )
+
     # Only check deployment limit for new deployments (not updates)
     if not is_update:
         await check_deployment_limit(
@@ -172,7 +180,9 @@ async def create_deployment(
 
     # Validate everything upfront: compose parsing, Helm generation, quota checks
     try:
-        await validate_deployment_request(temp_deployment, existing_deployment)
+        await validate_deployment_request(
+            temp_deployment, existing_deployment, service_name=request.service_name
+        )
 
     except ValueError as e:
         # Validation errors are user-friendly
@@ -294,6 +304,7 @@ async def create_deployment(
     task_future = deploy_compose_task.delay(
         deployment_id=deployment.id,
         wait_for_secrets=request.secrets,
+        service_name=request.service_name,
     )
 
     # Update deployment with task_run_id in a separate transaction

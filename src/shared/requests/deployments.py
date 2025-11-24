@@ -13,6 +13,10 @@ class DeploymentCreateRequest(BaseModel):
         max_length=63,
     )
     secrets: bool = Field(False, description="Whether to wait for secrets to be stored")
+    service_name: str | None = Field(
+        None,
+        description="Deploy only this specific service (requires existing deployment)",
+    )
 
 
 class DiffType(StrEnum):

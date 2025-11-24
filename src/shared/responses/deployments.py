@@ -42,6 +42,7 @@ class DiffResponse(BaseModel):
     errors: list[str] | None = None
     warnings: list[str] | None = None
     can_deploy: bool = True
+    existing_compose_yaml: str | None = None
 
 
 class ValidationResult(BaseModel):
