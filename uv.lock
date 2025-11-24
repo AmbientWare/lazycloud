@@ -974,6 +974,23 @@ wheels = [
 ]
 
 [[package]]
+name = "kubernetes-asyncio"
+version = "33.3.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "certifi" },
+    { name = "python-dateutil" },
+    { name = "pyyaml" },
+    { name = "six" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/41/5f/c175f86b92ff5f19444e3be1423819491ae9859d1f6f7d83d404eab8b10d/kubernetes_asyncio-33.3.0.tar.gz", hash = "sha256:4c59cd4c99b197995ef38ef0c8ff45aab24b84830ebf0ddcb67355caea9674c9", size = 1124931, upload-time = "2025-08-11T21:39:37.825Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/bc/20/90985f53c141e6f3464b7295a617ffd36574168861882f9291847d09f9b1/kubernetes_asyncio-33.3.0-py3-none-any.whl", hash = "sha256:25e6e265932ebb1aeecbdb30a107dbef3ee0bcd388ed12d092be70915733982b", size = 2174591, upload-time = "2025-08-11T21:39:35.697Z" },
+]
+
+[[package]]
 name = "lazycloud"
 version = "0.0.1"
 source = { editable = "." }
@@ -993,6 +1010,7 @@ dependencies = [
     { name = "importlib" },
     { name = "jsondiff" },
     { name = "kubernetes" },
+    { name = "kubernetes-asyncio" },
     { name = "loguru" },
     { name = "nest-asyncio" },
     { name = "pandas" },
@@ -1040,6 +1058,7 @@ requires-dist = [
     { name = "importlib", specifier = ">=1.0.4" },
     { name = "jsondiff", specifier = ">=2.2.1" },
     { name = "kubernetes", specifier = ">=33.1.0" },
+    { name = "kubernetes-asyncio", specifier = ">=33.3.0" },
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "nest-asyncio", specifier = ">=1.6.0" },
     { name = "pandas", specifier = ">=2.2.3" },

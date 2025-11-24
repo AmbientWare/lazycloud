@@ -58,7 +58,22 @@ class StatusWatcher:
             self._get_service_status(service_config)
             for service_config in self.helm_values.services
         ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # Overall timeout: max 3 seconds per service, but cap total at 10 seconds
+        max_total_timeout = min(10.0, len(tasks) * 3.0)
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(*tasks, return_exceptions=True),
+                timeout=max_total_timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"Timeout getting all service statuses after {max_total_timeout}s"
+            )
+            # Return error statuses for all services
+            results = [
+                TimeoutError(f"Timeout getting status for {s.name}")
+                for s in self.helm_values.services
+            ]
 
         services_list: list[ServiceStatus] = []
         for i, result in enumerate(results):
@@ -205,12 +220,12 @@ class StatusWatcher:
                     k8s_job = batch_v1.read_namespaced_job(
                         name=service.resourceName,
                         namespace=self.namespace,
-                        _request_timeout=5.0,
+                        _request_timeout=2.0,
                     )
                     return batch_v1.api_client.sanitize_for_serialization(k8s_job)
 
                 k8s_job_dict = await asyncio.wait_for(
-                    asyncio.to_thread(_get_job), timeout=5.0
+                    asyncio.to_thread(_get_job), timeout=2.0
                 )
                 replicas = 1
 
@@ -264,7 +279,7 @@ class StatusWatcher:
                         k8s_resource = apps_v1.read_namespaced_deployment(
                             name=service.resourceName,
                             namespace=self.namespace,
-                            _request_timeout=5.0,
+                            _request_timeout=2.0,
                         )
                         resource_dict = apps_v1.api_client.sanitize_for_serialization(
                             k8s_resource
@@ -276,7 +291,7 @@ class StatusWatcher:
                         )
 
                 k8s_resource = await asyncio.wait_for(
-                    asyncio.to_thread(_get_resource), timeout=5.0
+                    asyncio.to_thread(_get_resource), timeout=2.0
                 )
                 replicas = k8s_resource.spec.replicas or 1
 
@@ -371,14 +386,14 @@ class StatusWatcher:
                 v1_pods = core_v1.list_namespaced_pod(
                     namespace=self.namespace,
                     label_selector=f"app.kubernetes.io/name={service_config.resourceName}",
-                    _request_timeout=5.0,
+                    _request_timeout=2.0,
                 )
                 # Convert to our model
                 pods_dict = core_v1.api_client.sanitize_for_serialization(v1_pods)
                 return PodList(**pods_dict)
 
             pod_list = await asyncio.wait_for(
-                asyncio.to_thread(_list_pods), timeout=5.0
+                asyncio.to_thread(_list_pods), timeout=2.0
             )
 
             # Start all metrics tasks in parallel
@@ -616,7 +631,7 @@ class StatusWatcher:
             proc = await asyncio.create_subprocess_exec(
                 *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
             )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=2.0)
 
             if proc.returncode == 0:
                 output = stdout.decode().strip()

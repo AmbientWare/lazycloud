@@ -1,3 +1,4 @@
+import asyncio
 import os
 from functools import lru_cache
 
@@ -7,6 +8,10 @@ from kubernetes.client import ApiClient, Configuration
 from kubernetes.client.api.apps_v1_api import AppsV1Api
 from kubernetes.client.api.batch_v1_api import BatchV1Api
 from kubernetes.client.api.core_v1_api import CoreV1Api
+from kubernetes_asyncio import config as async_config
+from kubernetes_asyncio.client import ApiClient as AsyncApiClient
+from kubernetes_asyncio.client import Configuration as AsyncConfiguration
+from kubernetes_asyncio.client.api.core_v1_api import CoreV1Api as AsyncCoreV1Api
 from loguru import logger
 
 urllib3.disable_warnings()
@@ -44,7 +49,7 @@ def _get_api_client() -> ApiClient:
         if hasattr(api_client.rest_client, "pool_manager"):
             # Configure urllib3 pool manager timeout
             api_client.rest_client.pool_manager.connection_pool_kw.setdefault(
-                "timeout", 5.0
+                "timeout", 2.0
             )
 
         return api_client
@@ -70,3 +75,67 @@ def get_apps_v1_api() -> AppsV1Api:
 def get_batch_v1_api() -> BatchV1Api:
     """Get BatchV1Api client for jobs, cronjobs, etc."""
     return BatchV1Api(_get_api_client())
+
+
+# Async Kubernetes client for log streaming
+_async_api_client: AsyncApiClient | None = None
+_async_client_lock = asyncio.Lock()
+
+
+async def get_async_api_client() -> AsyncApiClient:
+    """Get or create the async Kubernetes API client."""
+    global _async_api_client
+
+    if _async_api_client is not None:
+        return _async_api_client
+
+    async with _async_client_lock:
+        try:
+            # Try in-cluster config first (when running in Kubernetes)
+            try:
+                await async_config.load_incluster_config()
+                logger.info("Loaded async in-cluster Kubernetes configuration")
+                k8s_config = AsyncConfiguration.get_default_copy()
+
+            except async_config.ConfigException:
+                # Fall back to kubeconfig file
+                kubeconfig_path = os.getenv("KUBECONFIG")
+                if kubeconfig_path:
+                    await async_config.load_kube_config(config_file=kubeconfig_path)
+                    logger.info(
+                        f"Loaded async Kubernetes configuration from {kubeconfig_path}"
+                    )
+
+                else:
+                    # Use default kubeconfig location (~/.kube/config)
+                    await async_config.load_kube_config()
+                    logger.info(
+                        "Loaded async Kubernetes configuration from default location"
+                    )
+
+                k8s_config = AsyncConfiguration.get_default_copy()
+
+            # Configure connection pool
+            k8s_config.connection_pool_maxsize = 10
+
+            _async_api_client = AsyncApiClient(configuration=k8s_config)
+            return _async_api_client
+
+        except Exception as e:
+            logger.error(f"Failed to initialize async Kubernetes client: {e}")
+            raise
+
+
+async def get_async_core_v1_api() -> AsyncCoreV1Api:
+    """Get async CoreV1Api client for pods, logs, etc."""
+    api_client = await get_async_api_client()
+    return AsyncCoreV1Api(api_client)
+
+
+async def close_async_api_client():
+    """Close the async API client and cleanup resources."""
+    global _async_api_client
+    if _async_api_client is not None:
+        await _async_api_client.close()
+        _async_api_client = None
+        logger.info("Closed async Kubernetes API client")
