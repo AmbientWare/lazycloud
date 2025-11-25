@@ -41,8 +41,7 @@ class DepotService:
     async def _get_http_client(self) -> httpx.AsyncClient:
         """Get or create HTTP client for Depot Connect API."""
         if self._http_client is None:
-            logger.info(f"Creating HTTP client for Depot API: {DEPOT_API_BASE}")
-            logger.info(f"Using token (first 10 chars): {self.api_token[:10]}...")
+            logger.debug(f"Creating HTTP client for Depot API: {DEPOT_API_BASE}")
             self._http_client = httpx.AsyncClient(
                 base_url=DEPOT_API_BASE,
                 headers={
@@ -93,9 +92,7 @@ class DepotService:
         client = await self._get_http_client()
         full_url = f"{client.base_url}{endpoint}"
 
-        logger.info(
-            f"Calling Depot API: {method} {endpoint} with payload: {json.dumps(payload, indent=2)}"
-        )
+        logger.debug(f"Calling Depot API: {method} {endpoint}")
 
         try:
             if method == "POST":
@@ -111,17 +108,11 @@ class DepotService:
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
 
-            logger.info(
-                f"API response status: {response.status_code}, "
-                f"headers: {dict(response.headers)}"
-            )
+            logger.debug(f"Depot API response: {response.status_code}")
 
             response.raise_for_status()
 
             data = response.json()
-            logger.info(
-                f"Depot API Response - {method} {endpoint}:\n{json.dumps(data, indent=2)}"
-            )
 
             return data
 
@@ -150,15 +141,14 @@ class DepotService:
         deployment_id: str,
         name: str | None = None,
     ) -> DepotProject:
-        """Create a Depot project for a deployment using API."""
+        """Create a Depot project for a deployment and save ID to database."""
         if not self.is_configured:
             raise ValueError("Depot is not configured")
 
         project_name = name or self._make_project_name(deployment_id)
 
-        logger.info(
-            f"Creating Depot project '{project_name}' for deployment {deployment_id}, "
-            f"organization {self.org_id}"
+        logger.debug(
+            f"Creating Depot project '{project_name}' for deployment {deployment_id}"
         )
 
         try:
@@ -184,40 +174,44 @@ class DepotService:
 
             project = DepotProject(id=project_id, name=project_name)
 
+            # Save project ID to database for future lookups
+            deployment = await db.compose_deployments.get_by_id(deployment_id)
+            if deployment:
+                deployment.depot_project_id = project_id
+                await db.compose_deployments.update(deployment)
+                logger.debug(
+                    f"Saved Depot project ID {project_id} to deployment {deployment_id}"
+                )
+
             logger.info(
-                f"Successfully created Depot project {project.id} ({project.name}) "
-                f"for deployment {deployment_id}"
+                f"Created Depot project {project.id} for deployment {deployment_id}"
             )
             return project
 
         except Exception as e:
             logger.error(
-                f"Failed to create Depot project '{project_name}' for deployment {deployment_id}: {str(e)}",
+                f"Failed to create Depot project for deployment {deployment_id}: {str(e)}",
                 exc_info=True,
             )
             raise RuntimeError(f"Failed to create Depot project: {e}") from e
 
     async def get_or_create_project(self, deployment_id: str) -> DepotProject:
-        """Get existing project or create a new one for the deployment."""
+        """Get existing project from DB or create a new one for the deployment."""
         if not self.is_configured:
             raise ValueError("Depot is not configured")
 
-        # Try to find existing project by name
         project_name = self._make_project_name(deployment_id)
-        project = await self._find_project_by_name(project_name)
 
-        if project:
-            logger.info(
-                f"Found existing Depot project {project.id} for deployment {deployment_id}"
-            )
-            return project
+        deployment = await db.compose_deployments.get_by_id(deployment_id)
+        if deployment and deployment.depot_project_id:
+            logger.debug(f"Using cached Depot project {deployment.depot_project_id}")
+            return DepotProject(id=deployment.depot_project_id, name=project_name)
 
-        # Create new project
         return await self.create_project(deployment_id)
 
     async def _find_project_by_name(self, name: str) -> DepotProject | None:
-        """Find a project by name using Connect HTTP API."""
-        logger.info(f"Searching for project '{name}' in organization {self.org_id}")
+        """Find a project by name using Connect HTTP API (fallback for legacy deployments)."""
+        logger.debug(f"Searching for project '{name}' via API")
 
         try:
             endpoint = "/depot.core.v1.ProjectService/ListProjects"
@@ -232,19 +226,13 @@ class DepotService:
                 project_id = self._extract_project_id(project_data)
 
                 if project_name == name:
-                    logger.info(
-                        f"Found matching project '{name}' with ID '{project_id}'"
-                    )
+                    logger.debug(f"Found project '{name}' with ID '{project_id}'")
                     return DepotProject(id=project_id, name=project_name)
 
-            logger.info(f"No project found with name '{name}'")
             return None
 
         except Exception as e:
-            logger.warning(
-                f"Failed to find project '{name}': {str(e)}",
-                exc_info=True,
-            )
+            logger.warning(f"Failed to find project '{name}': {str(e)}")
             return None
 
     async def create_project_token(
@@ -257,9 +245,7 @@ class DepotService:
             raise ValueError("Depot is not configured")
 
         desc = description or "LazyCloud CLI build token"
-        logger.info(
-            f"Creating project token for project {project_id} with description: '{desc}'"
-        )
+        logger.debug(f"Creating project token for project {project_id}")
 
         try:
             endpoint = "/depot.core.v1.ProjectService/CreateToken"
@@ -272,17 +258,11 @@ class DepotService:
 
             # Extract token from "secret" field (Depot API structure: {"tokenId": "...", "secret": "..."})
             if not isinstance(data, dict):
-                logger.error(f"Invalid response structure: {data}")
                 raise ValueError(f"Invalid response structure: {data}")
 
             token_value = data.get("secret")
             if not token_value:
-                logger.error(
-                    f"Token 'secret' field not found in API response. Full data: {data}"
-                )
-                raise ValueError(
-                    f"Token 'secret' field not found in API response: {data}"
-                )
+                raise ValueError("Token 'secret' field not found in API response")
 
             # API doesn't return expiration, use default 1 hour lifetime
             expires_at = datetime.now(timezone.utc) + timedelta(
@@ -291,17 +271,13 @@ class DepotService:
 
             token = DepotProjectToken(token=token_value, expires_at=expires_at)
 
-            logger.info(
-                f"Successfully created project token for project {project_id}, "
-                f"expires at {expires_at}"
+            logger.debug(
+                f"Created project token for {project_id}, expires at {expires_at}"
             )
             return token
 
         except Exception as e:
-            logger.error(
-                f"Failed to create project token for project {project_id}: {str(e)}",
-                exc_info=True,
-            )
+            logger.error(f"Failed to create project token for {project_id}: {str(e)}")
             raise RuntimeError(f"Failed to create project token: {e}") from e
 
     async def delete_project(self, project_id: str) -> bool:
@@ -309,7 +285,7 @@ class DepotService:
         if not self.is_configured:
             raise ValueError("Depot is not configured")
 
-        logger.info(f"Deleting Depot project {project_id}")
+        logger.debug(f"Deleting Depot project {project_id}")
 
         try:
             endpoint = "/depot.core.v1.ProjectService/DeleteProject"
@@ -317,14 +293,11 @@ class DepotService:
 
             await self._call_api(endpoint, payload)
 
-            logger.info(f"Successfully deleted Depot project {project_id}")
+            logger.info(f"Deleted Depot project {project_id}")
             return True
 
         except Exception as e:
-            logger.warning(
-                f"Failed to delete project {project_id}: {str(e)}",
-                exc_info=True,
-            )
+            logger.warning(f"Failed to delete project {project_id}: {str(e)}")
             return False
 
     async def delete_deployment_project(
@@ -332,13 +305,9 @@ class DepotService:
         deployment: ComposeDeploymentPydantic | None = None,
         deployment_id: str | None = None,
     ) -> bool:
-        """Delete a Depot project for a deployment.
-
-        Either deployment object or deployment_id must be provided.
-        If deployment object is provided, avoids a database query.
-        """
+        """Delete a Depot project for a deployment and clear DB reference."""
         if not self.is_configured:
-            logger.warning("Depot not configured, skipping project deletion")
+            logger.debug("Depot not configured, skipping project deletion")
             return False
 
         try:
@@ -351,44 +320,38 @@ class DepotService:
 
                 deployment = await db.compose_deployments.get_by_id(deployment_id)
                 if not deployment:
-                    logger.warning(
-                        f"Deployment {deployment_id} not found, cannot delete Depot project"
-                    )
+                    logger.warning(f"Deployment {deployment_id} not found")
                     return False
 
             elif deployment_id is None:
                 deployment_id = self._extract_deployment_id(deployment)
 
-            project_name = self._make_project_name(deployment_id)
-            project = await self._find_project_by_name(project_name)
-
-            if not project:
-                logger.info(f"No Depot project found for deployment {deployment_id}")
-                # Still clean up tokens in case they exist
+            # Get project ID from database
+            project_id = deployment.depot_project_id
+            if not project_id:
+                logger.debug(f"No Depot project ID for deployment {deployment_id}")
                 await self._token_cache.delete_deployment_tokens(deployment_id)
                 return True
 
-            logger.info(
-                f"Found Depot project {project.id} for deployment {deployment_id}, deleting..."
-            )
+            # Delete project from Depot
+            success = await self.delete_project(project_id)
 
-            success = await self.delete_project(project.id)
-
-            if success:
-                logger.info(
-                    f"Successfully deleted Depot project {project.id} for deployment {deployment_id}"
+            # Clear project ID from database
+            if success and deployment.depot_project_id:
+                deployment.depot_project_id = None
+                await db.compose_deployments.update(deployment)
+                logger.debug(
+                    f"Cleared Depot project ID from deployment {deployment_id}"
                 )
 
-            # Always clean up tokens (even if project deletion failed)
+            # Always clean up cached tokens
             await self._token_cache.delete_deployment_tokens(deployment_id)
-            logger.info(f"Cleaned up Depot tokens for deployment {deployment_id}")
 
             return success
 
         except Exception as e:
             logger.warning(
-                f"Failed to delete Depot project for deployment {deployment_id}: {str(e)}",
-                exc_info=True,
+                f"Failed to delete Depot project for deployment {deployment_id}: {str(e)}"
             )
             return False
 
@@ -399,7 +362,6 @@ class DepotService:
     ) -> DepotBuildCredentials:
         """Get a build token for a deployment.
 
-        This is the main method called by the API endpoint.
         Checks for a cached valid token first, otherwise creates a new one.
         """
         if not self.is_configured:
@@ -409,24 +371,18 @@ class DepotService:
 
         deployment_id = self._extract_deployment_id(deployment)
 
-        # Get or create project first (needed to check cached tokens by project_id)
+        # Get or create project (uses DB cache, falls back to API)
         project = await self.get_or_create_project(deployment_id)
 
-        # Check for cached valid token in Redis (by deployment_id)
-        # Redis TTL automatically handles expiration
+        # Check for cached valid token in Redis (TTL handles expiration)
         cached_token = None
         try:
             cached_token = await self._token_cache.get_token(deployment_id)
         except (redis.RedisError, json.JSONDecodeError, ValueError) as e:
-            logger.warning(
-                f"Failed to get cached token for deployment {deployment_id}: {e}"
-            )
+            logger.warning(f"Failed to get cached token: {e}")
 
         if cached_token:
-            logger.info(
-                f"Using cached token for deployment {deployment_id}, "
-                f"expires at {cached_token.expires_at}"
-            )
+            logger.debug(f"Using cached token for deployment {deployment_id}")
             return DepotBuildCredentials(
                 project_id=project.id,
                 token=cached_token.token,
@@ -434,48 +390,35 @@ class DepotService:
                 registry_url=registry_url,
             )
 
-        # No cached token or cache hit failed - create a fresh token with locking
+        # No cached token - create a fresh token with locking
         lock = await self._token_cache.get_lock(deployment_id, timeout=10.0)
         try:
-            # Try to acquire lock (non-blocking first)
             acquired = await lock.acquire(blocking=False)
 
             if not acquired:
-                # Another process is creating the token, wait briefly and check cache
-                logger.info(
-                    f"Lock held by another process for deployment {deployment_id}, "
-                    "waiting for token creation..."
-                )
+                # Another process is creating the token, wait and check cache
+                logger.debug("Waiting for another process to create token")
                 await asyncio.sleep(0.5)
                 cached_token = await self._token_cache.get_token(deployment_id)
                 if cached_token:
-                    logger.info(
-                        f"Found token after waiting for deployment {deployment_id}"
-                    )
                     return DepotBuildCredentials(
                         project_id=project.id,
                         token=cached_token.token,
                         expires_at=cached_token.expires_at,
                         registry_url=registry_url,
                     )
-                # Try blocking acquire with short timeout
                 try:
                     acquired = await lock.acquire(blocking=True, blocking_timeout=2.0)
                     if not acquired:
                         raise RuntimeError(
-                            f"Could not acquire lock for deployment {deployment_id}"
+                            f"Could not acquire lock for {deployment_id}"
                         )
                 except redis.RedisError as e:
-                    raise RuntimeError(
-                        f"Failed to acquire lock for deployment {deployment_id}: {e}"
-                    ) from e
+                    raise RuntimeError(f"Failed to acquire lock: {e}") from e
 
-            # Double-check cache after acquiring lock (another process may have created it)
+            # Double-check cache after acquiring lock
             cached_token = await self._token_cache.get_token(deployment_id)
             if cached_token:
-                logger.info(
-                    f"Found cached token after lock acquisition for deployment {deployment_id}"
-                )
                 return DepotBuildCredentials(
                     project_id=project.id,
                     token=cached_token.token,
@@ -489,17 +432,11 @@ class DepotService:
                 description=f"Build token for deployment {deployment_id}",
             )
         except Exception as e:
-            logger.error(
-                f"Failed to create project token for deployment {deployment_id}: {e}",
-                exc_info=True,
-            )
+            logger.error(f"Failed to create project token: {e}")
             raise RuntimeError(f"Failed to create Depot project token: {e}") from e
         finally:
-            # Always release lock if we acquired it
             if lock.owned():
                 await lock.release()
-
-        logger.info(f"Created new token for deployment {deployment_id}")
 
         # Store the new token in Redis with TTL
         try:
@@ -508,11 +445,9 @@ class DepotService:
                 token=project_token.token,
                 expires_at=project_token.expires_at,
             )
-            logger.info(f"Cached new token for deployment {deployment_id}")
-
+            logger.debug(f"Cached new token for deployment {deployment_id}")
         except Exception as e:
-            # Don't fail the request if caching fails
-            logger.warning("Failed to cache token: {}", str(e))
+            logger.warning(f"Failed to cache token: {e}")
 
         return DepotBuildCredentials(
             project_id=project.id,
@@ -561,12 +496,14 @@ class DepotService:
             return 0.0
 
         try:
-            project_name = self._make_project_name(deployment_id)
-            project = await self._find_project_by_name(project_name)
-            if not project:
+            # Get project ID from database
+            deployment = await db.compose_deployments.get_by_id(deployment_id)
+            if not deployment or not deployment.depot_project_id:
                 return 0.0
 
-            usage = await self.get_project_usage(project.id, start_at, end_at)
+            usage = await self.get_project_usage(
+                deployment.depot_project_id, start_at, end_at
+            )
 
             # Depot returns usage in seconds, convert to minutes
             build_seconds = usage.get("buildDurationSeconds", 0)
@@ -621,16 +558,10 @@ class DepotService:
                 )
                 total_minutes += build_minutes
 
-            logger.info(
-                f"Workspace {workspace_id} build minutes from {start_at} to {end_at}: "
-                f"{total_minutes:.2f}"
-            )
+            logger.debug(f"Workspace {workspace_id} build minutes: {total_minutes:.2f}")
 
             return total_minutes
 
         except Exception as e:
-            logger.error(
-                f"Failed to get workspace build minutes for {workspace_id}: {e}",
-                exc_info=True,
-            )
+            logger.error(f"Failed to get workspace build minutes: {e}")
             return 0.0

@@ -69,6 +69,9 @@ class ComposeDeploymentTable(BaseTable):
     workspace_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE")
     )
+    depot_project_id: Mapped[str | None] = mapped_column(
+        String, nullable=True, index=True
+    )
 
     # Unique constraint to ensure one deployment per name per workspace (only for non-deleted)
     __table_args__ = (
@@ -112,6 +115,7 @@ class ComposeDeploymentPydantic(BaseDbPydanticModel):
     deployed_at: datetime | None = None
     deleted_at: datetime | None = None
     current_task_run_id: UUIDStr | None = None
+    depot_project_id: str | None = None
 
     @field_validator("compose_yaml", "pending_compose_yaml", mode="before")
     @classmethod

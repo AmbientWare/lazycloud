@@ -105,9 +105,14 @@ async def _authenticate_jwt(token: str) -> UserPydantic:
             headers={"WWW-Authenticate": "Bearer"},
         )
     except jwt_exceptions.InvalidTokenError as e:
+        # Sanitize error details in production to avoid leaking implementation info
+        if app_config.ENV == ENVIRONMENT.DEV:
+            detail = f"Invalid token: {str(e)}"
+        else:
+            detail = "Invalid token"
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid token: {str(e)}",
+            detail=detail,
             headers={"WWW-Authenticate": "Bearer"},
         )
 
