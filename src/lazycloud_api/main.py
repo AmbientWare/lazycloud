@@ -1,14 +1,18 @@
 import argparse
 import multiprocessing as mp
 from contextlib import asynccontextmanager
+from uuid import uuid4
 
 import uvicorn
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
 
 from lazycloud_api.api.v1 import (
     api_keys_router,
@@ -21,7 +25,7 @@ from lazycloud_api.api.v1 import (
     users_router,
     workspaces_router,
 )
-from lazycloud_api.config import app_config
+from lazycloud_api.config import ENVIRONMENT, app_config
 from lazycloud_api.database.crud import update_admin_api_keys
 from lazycloud_api.log_config import setup_logger
 from lazycloud_api.prefect_app import serve_background_tasks
@@ -36,10 +40,29 @@ from lazycloud_api.services.monitoring import (
 setup_logger()
 
 
+class RequestIDMiddleware(BaseHTTPMiddleware):
+    """Middleware to add request ID to all requests for distributed tracing."""
+
+    async def dispatch(self, request: Request, call_next) -> Response:
+        request_id = request.headers.get("X-Request-ID", str(uuid4()))
+        with logger.contextualize(request_id=request_id):
+            response = await call_next(request)
+            response.headers["X-Request-ID"] = request_id
+            return response
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handle startup and shutdown events"""
     logger.info("Starting up application")
+
+    # Dev mode warning
+    if app_config.ENV == ENVIRONMENT.DEV:
+        logger.warning(
+            "RUNNING IN DEV MODE - Authentication bypass enabled! "
+            "Set ENV=prod in production."
+        )
+
     await update_admin_api_keys()
 
     # Initialize subscription manager for shared monitoring (sse streams)
@@ -116,6 +139,18 @@ limiter = Limiter(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore
 app.add_middleware(SlowAPIMiddleware)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=app_config.CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Add request ID middleware for distributed tracing
+app.add_middleware(RequestIDMiddleware)
 
 # Configure Swagger UI
 app.swagger_ui_init_oauth = {

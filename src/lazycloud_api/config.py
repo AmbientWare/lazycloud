@@ -32,6 +32,9 @@ class AppConfig(BaseModel):
     PROJECT_NAME: str = "LazyCloud API"
     PROJECT_VERSION: str = "1.0.0"
     API_VERSION: str = os.getenv("API_VERSION", "/v1")
+    CORS_ORIGINS: list[str] = json.loads(
+        os.getenv("CORS_ORIGINS", '["http://localhost:3000"]')
+    )
 
     # AWS Configuration
     AWS_ACCOUNT_ID: str = os.getenv("AWS_ACCOUNT_ID", "")
