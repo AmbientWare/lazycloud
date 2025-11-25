@@ -15,6 +15,8 @@ class MeterPrices(BaseModel):
     memory_price_per_unit: float
     s3_price_per_unit: float
     efs_price_per_unit: float
+    build_minutes_price_per_unit: float
+    endpoint_hours_price_per_unit: float
 
 
 class PolarPricingModule:
@@ -129,7 +131,9 @@ class PolarPricingModule:
             f"CPU=${meter_prices_dict[MeterNames.CPU_USAGE.value]:.4f}, "
             f"Memory=${meter_prices_dict[MeterNames.MEMORY_USAGE.value]:.4f}, "
             f"S3=${meter_prices_dict[MeterNames.STANDARD_STORAGE.value]:.4f}, "
-            f"EFS=${meter_prices_dict[MeterNames.PREMIUM_STORAGE.value]:.4f}"
+            f"EFS=${meter_prices_dict[MeterNames.PREMIUM_STORAGE.value]:.4f}, "
+            f"Build=${meter_prices_dict[MeterNames.BUILD_MINUTES.value]:.4f}, "
+            f"Endpoints=${meter_prices_dict[MeterNames.PUBLIC_ENDPOINTS.value]:.6f}"
         )
 
         return MeterPrices(
@@ -137,6 +141,12 @@ class PolarPricingModule:
             memory_price_per_unit=meter_prices_dict[MeterNames.MEMORY_USAGE.value],
             s3_price_per_unit=meter_prices_dict[MeterNames.STANDARD_STORAGE.value],
             efs_price_per_unit=meter_prices_dict[MeterNames.PREMIUM_STORAGE.value],
+            build_minutes_price_per_unit=meter_prices_dict[
+                MeterNames.BUILD_MINUTES.value
+            ],
+            endpoint_hours_price_per_unit=meter_prices_dict[
+                MeterNames.PUBLIC_ENDPOINTS.value
+            ],
         )
 
     def clear_cache(self, external_customer_id: str | None = None) -> None:

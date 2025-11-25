@@ -22,6 +22,9 @@ from lazycloud_api.prefect_app.usage_collector import (
     spawn_usage_collection_deployment,
 )
 from lazycloud_api.prefect_app.utils import get_task_result
+from lazycloud_api.prefect_app.workspace_cleanup import (
+    cleanup_orphaned_deployments_deployment,
+)
 
 
 def serve_background_tasks():
@@ -45,6 +48,7 @@ def serve_crons():
         forward_for_billing_deployment,
         monitor_subscription_states_deployment,
         reconcile_rollback_states_deployment,
+        cleanup_orphaned_deployments_deployment,
     )
 
 

@@ -1,5 +1,10 @@
 import importlib.metadata
+import platform
+import sys
 from pathlib import Path
+
+from rich.console import Console
+from rich.panel import Panel
 
 from lazycloud_cli.api import api
 from lazycloud_cli.lazycloud_file import LazyCloudFile
@@ -113,10 +118,43 @@ def get_current_deployment_name() -> str | None:
 
 
 def validate_cli_version():
-    # get required version from api
-    required_version = api.versions.get_cli_version().version
-    installed_version = importlib.metadata.version("lazycloud")
+    """Check if CLI version matches the required version from API."""
+    try:
+        required_version = api.versions.get_cli_version().version
+        installed_version = importlib.metadata.version("lazycloud")
 
-    if installed_version != required_version:
-        # TODO: add auto upgrade here
-        print("NEED TO ADD AUTO UPGRADE HERE")
+        if installed_version != required_version:
+            _show_upgrade_prompt(installed_version, required_version)
+    except Exception:
+        # Don't block CLI if version check fails (e.g., no network)
+        pass
+
+
+def _show_upgrade_prompt(installed: str, required: str):
+    """Show upgrade instructions to the user."""
+    console = Console()
+
+    # Determine OS for appropriate command
+    is_windows = platform.system() == "Windows"
+
+    if is_windows:
+        upgrade_cmd = "irm https://lazycloud.dev/install.ps1 | iex"
+    else:
+        upgrade_cmd = "curl -LsSf https://lazycloud.dev/install.sh | sh"
+
+    console.print()
+    console.print(
+        Panel(
+            f"[yellow]Update available![/yellow]\n\n"
+            f"Installed: [red]{installed}[/red]\n"
+            f"Required:  [green]{required}[/green]\n\n"
+            f"[dim]Run to upgrade:[/dim]\n"
+            f"[cyan]{upgrade_cmd}[/cyan]",
+            title="[bold]LazyCloud Update[/bold]",
+            border_style="yellow",
+        )
+    )
+    console.print()
+
+    # Exit to prevent running with outdated CLI
+    sys.exit(1)

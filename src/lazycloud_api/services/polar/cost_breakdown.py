@@ -40,6 +40,8 @@ class PolarCostBreakdownModule:
         memory_gb_hours: float,
         s3_gb_hours: float,
         efs_gb_hours: float,
+        build_minutes: float,
+        public_endpoint_hours: float,
         service_usage: list[ServiceUsageItem] | None = None,
         volume_usage: list[VolumeUsageItem] | None = None,
     ) -> WorkspaceCostBreakdown:
@@ -47,6 +49,7 @@ class PolarCostBreakdownModule:
         # Get meter prices from cache or Polar
         try:
             prices = await self.pricing.get_meter_prices(external_customer_id)
+
         except Exception as e:
             logger.error(f"Failed to get meter prices for cost calculation: {e}")
             raise ValueError(f"Cannot calculate costs: {e}")
@@ -58,6 +61,8 @@ class PolarCostBreakdownModule:
             memory_gb_hours=memory_gb_hours,
             s3_gb_hours=s3_gb_hours,
             efs_gb_hours=efs_gb_hours,
+            build_minutes=build_minutes,
+            public_endpoint_hours=public_endpoint_hours,
         )
 
         # Calculate service-level breakdown if provided
@@ -92,19 +97,27 @@ class PolarCostBreakdownModule:
         memory_gb_hours: float,
         s3_gb_hours: float,
         efs_gb_hours: float,
+        build_minutes: float,
+        public_endpoint_hours: float,
     ) -> MeterCostBreakdown:
         """Calculate costs by meter type"""
         cpu_cost = cpu_core_hours * prices.cpu_price_per_unit
         memory_cost = memory_gb_hours * prices.memory_price_per_unit
         s3_cost = s3_gb_hours * prices.s3_price_per_unit
         efs_cost = efs_gb_hours * prices.efs_price_per_unit
-        total_cost = cpu_cost + memory_cost + s3_cost + efs_cost
+        build_cost = build_minutes * prices.build_minutes_price_per_unit
+        endpoint_cost = public_endpoint_hours * prices.endpoint_hours_price_per_unit
+        total_cost = (
+            cpu_cost + memory_cost + s3_cost + efs_cost + build_cost + endpoint_cost
+        )
 
         return MeterCostBreakdown(
             cpu_cost=round(cpu_cost, 4),
             memory_cost=round(memory_cost, 4),
             s3_cost=round(s3_cost, 4),
             efs_cost=round(efs_cost, 4),
+            build_cost=round(build_cost, 4),
+            endpoint_cost=round(endpoint_cost, 4),
             total_cost=round(total_cost, 4),
         )
 

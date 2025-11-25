@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 
 import yaml
@@ -5,7 +6,10 @@ from loguru import logger
 from prefect import flow, task
 
 from lazycloud_api.database import db
+from lazycloud_api.database.compose import ComposeDeploymentPydantic
+from lazycloud_api.database.session import session_manager
 from lazycloud_api.services import (
+    get_depot_service,
     get_metrics_service,
     get_polar_service,
 )
@@ -15,6 +19,7 @@ from shared.models.billing import (
     UsageRecordStatus,
     UsageRecordType,
 )
+from shared.models.deployments import DeploymentStates
 
 
 def sanitize_volume_name(name: str) -> str:
@@ -39,34 +44,61 @@ def _parse_deployment_volumes(compose_yaml: str, deployment_id: str) -> set[str]
     return deployment_volumes
 
 
-async def _get_deployment_map(workspace_id: str) -> dict[str, str]:
-    """Get mapping of release_name -> deployment_id for active deployments in workspace."""
-    deployment_name_map = (
-        await db.compose_deployments.get_active_deployments_for_workspace(workspace_id)
-    )
+@dataclass
+class ServiceEndpoint:
+    """Represents an active service endpoint."""
 
-    release_name_map = {}
-    for deployment_name, deployment_id in deployment_name_map.items():
-        release_name = create_release_name(workspace_id, deployment_name)
-        release_name_map[release_name] = deployment_id
-
-    return release_name_map
+    deployment_id: str
+    service_name: str
 
 
-async def _get_pvc_deployment_map(workspace_id: str) -> dict[str, str]:
-    """Get mapping of sanitized PVC name -> deployment_id for active deployments."""
+@dataclass
+class WorkspaceDeploymentContext:
+    """Cached deployment data for a workspace to avoid duplicate queries."""
+
+    deployments: list[ComposeDeploymentPydantic]
+    deployment_map: dict[str, str]  # release_name -> deployment_id
+    pvc_map: dict[str, str]  # pvc_name -> deployment_id
+    active_endpoints: list[ServiceEndpoint]  # List of active service endpoints
+
+
+async def _build_deployment_context(workspace_id: str) -> WorkspaceDeploymentContext:
+    """Build deployment context with a single query."""
     deployments = await db.compose_deployments.find({"workspace_id": workspace_id})
 
-    pvc_map = {}
+    deployment_map: dict[str, str] = {}
+    pvc_map: dict[str, str] = {}
+    active_endpoints: list[ServiceEndpoint] = []
+
     for deployment in deployments:
-        if not deployment.compose_yaml:
-            continue
+        # Build release name map
+        if deployment.name:
+            release_name = create_release_name(workspace_id, deployment.name)
+            deployment_map[release_name] = deployment.id
 
-        volumes = _parse_deployment_volumes(deployment.compose_yaml, deployment.id)
-        for volume_name in volumes:
-            pvc_map[volume_name] = deployment.id
+        # Build PVC map
+        if deployment.compose_yaml:
+            volumes = _parse_deployment_volumes(deployment.compose_yaml, deployment.id)
+            for volume_name in volumes:
+                pvc_map[volume_name] = deployment.id
 
-    return pvc_map
+        # Track endpoints from deployed services with ingress enabled
+        if deployment.state == DeploymentStates.DEPLOYED and deployment.helm_values:
+            for service in deployment.helm_values.services:
+                if service.ingress and service.ingress.enabled:
+                    active_endpoints.append(
+                        ServiceEndpoint(
+                            deployment_id=deployment.id,
+                            service_name=service.name,
+                        )
+                    )
+
+    return WorkspaceDeploymentContext(
+        deployments=deployments,
+        deployment_map=deployment_map,
+        pvc_map=pvc_map,
+        active_endpoints=active_endpoints,
+    )
 
 
 @task(retries=2, retry_delay_seconds=60)
@@ -91,55 +123,107 @@ async def collect_workspace_usage_for_interval(
 
         namespace = create_ns_name(workspace_id)
 
+        # Build deployment context with single query (avoids N+1 queries)
+        ctx = await _build_deployment_context(workspace_id)
+
         # Get detailed breakdown from Prometheus
         breakdown = await metrics_service.get_namespace_breakdown(
             namespace, start_time, end_time
         )
 
-        # Upsert usage record (update if exists, insert if not)
-        usage_record = await db.usage.upsert_usage_record(
-            workspace_id=workspace_id,
-            collection_start=start_time,
-            collection_end=end_time,
-            cpu_core_seconds=breakdown.totals.cpu_core_seconds,
-            memory_gb_seconds=breakdown.totals.memory_gb_seconds,
-            storage_gb_hours=breakdown.totals.storage_gb_hours,
-            s3_gb_hours=breakdown.totals.s3_gb_hours,
-            efs_gb_hours=breakdown.totals.efs_gb_hours,
-            record_type=UsageCollectionConfig.get_record_type(),
-            status=status,
-        )
+        # Collect build minutes from Depot per deployment
+        build_minutes_by_deployment: dict[str, float] = {}
+        total_build_minutes = 0.0
+        depot_service = get_depot_service()
+        if depot_service.is_configured:
+            for deployment in ctx.deployments:
+                if deployment.id:
+                    try:
+                        mins = await depot_service.get_deployment_build_minutes(
+                            deployment_id=deployment.id,
+                            start_at=start_time,
+                            end_at=end_time,
+                        )
+                        if mins > 0:
+                            build_minutes_by_deployment[deployment.id] = mins
+                            total_build_minutes += mins
 
-        # Get deployment mappings
-        deployment_map = await _get_deployment_map(workspace_id)
-        pvc_deployment_map = await _get_pvc_deployment_map(workspace_id)
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to get Depot build minutes for {deployment.id}: {e}"
+                        )
 
-        # Upsert compute breakdowns (per pod)
-        for pod_usage in breakdown.by_pod:
-            deployment_id = None
-            if pod_usage.release_name:
-                deployment_id = deployment_map.get(pod_usage.release_name)
+        # Convert endpoint count to endpoint-hours
+        interval_hours = (end_time - start_time).total_seconds() / 3600
+        public_endpoint_hours = len(ctx.active_endpoints) * interval_hours
 
-            await db.usage.upsert_compute_breakdown(
-                usage_record_id=usage_record.id,
-                pod_name=pod_usage.pod,
-                cpu_core_seconds=pod_usage.cpu_core_seconds,
-                memory_gb_seconds=pod_usage.memory_gb_seconds,
-                deployment_id=deployment_id,
-                service_name=pod_usage.service,
-            )
+        # All upserts in a single atomic transaction
+        async with session_manager.get_session() as session:
+            async with session.begin():
+                # Upsert usage record (update if exists, insert if not)
+                usage_record = await db.usage.upsert_usage_record(
+                    workspace_id=workspace_id,
+                    collection_start=start_time,
+                    collection_end=end_time,
+                    cpu_core_seconds=breakdown.totals.cpu_core_seconds,
+                    memory_gb_seconds=breakdown.totals.memory_gb_seconds,
+                    storage_gb_hours=breakdown.totals.storage_gb_hours,
+                    s3_gb_hours=breakdown.totals.s3_gb_hours,
+                    efs_gb_hours=breakdown.totals.efs_gb_hours,
+                    build_minutes=total_build_minutes,
+                    public_endpoint_hours=public_endpoint_hours,
+                    record_type=UsageCollectionConfig.get_record_type(),
+                    status=status,
+                    session=session,
+                )
 
-        # Upsert storage breakdowns (per PVC)
-        for storage_usage in breakdown.by_pvc:
-            deployment_id = pvc_deployment_map.get(storage_usage.pvc_name)
+                # Upsert compute breakdowns (per pod) using cached deployment map
+                for pod_usage in breakdown.by_pod:
+                    deployment_id = None
+                    if pod_usage.release_name:
+                        deployment_id = ctx.deployment_map.get(pod_usage.release_name)
 
-            await db.usage.upsert_storage_breakdown(
-                usage_record_id=usage_record.id,
-                pvc_name=storage_usage.pvc_name,
-                storage_class=storage_usage.storage_class,
-                gb_hours=storage_usage.gb_hours,
-                deployment_id=deployment_id,
-            )
+                    await db.usage.upsert_compute_breakdown(
+                        usage_record_id=usage_record.id,
+                        pod_name=pod_usage.pod,
+                        cpu_core_seconds=pod_usage.cpu_core_seconds,
+                        memory_gb_seconds=pod_usage.memory_gb_seconds,
+                        deployment_id=deployment_id,
+                        service_name=pod_usage.service,
+                        session=session,
+                    )
+
+                # Upsert storage breakdowns (per PVC) using cached PVC map
+                for storage_usage in breakdown.by_pvc:
+                    deployment_id = ctx.pvc_map.get(storage_usage.pvc_name)
+
+                    await db.usage.upsert_storage_breakdown(
+                        usage_record_id=usage_record.id,
+                        pvc_name=storage_usage.pvc_name,
+                        storage_class=storage_usage.storage_class,
+                        gb_hours=storage_usage.gb_hours,
+                        deployment_id=deployment_id,
+                        session=session,
+                    )
+
+                # Upsert networking breakdowns (per service with ingress)
+                for endpoint in ctx.active_endpoints:
+                    await db.usage.upsert_networking_breakdown(
+                        usage_record_id=usage_record.id,
+                        service_name=endpoint.service_name,
+                        endpoint_hours=interval_hours,
+                        deployment_id=endpoint.deployment_id,
+                        session=session,
+                    )
+
+                # Upsert build breakdowns (per deployment)
+                for deployment_id, mins in build_minutes_by_deployment.items():
+                    await db.usage.upsert_build_breakdown(
+                        usage_record_id=usage_record.id,
+                        deployment_id=deployment_id,
+                        build_minutes=mins,
+                        session=session,
+                    )
 
         logger.debug(
             f"Collected {workspace_id} [{start_time.hour:02d}:00]: "
@@ -196,6 +280,8 @@ async def collect_workspace_daily_usage(
         total_storage = sum(r.storage_gb_hours for r in interval_records)
         total_s3 = sum(r.s3_gb_hours for r in interval_records)
         total_efs = sum(r.efs_gb_hours for r in interval_records)
+        total_build_minutes = sum(r.build_minutes for r in interval_records)
+        total_endpoint_hours = sum(r.public_endpoint_hours for r in interval_records)
 
         # Aggregate compute breakdowns from all interval records
         compute_aggregates: dict[str, dict] = {}
@@ -227,40 +313,89 @@ async def collect_workspace_daily_usage(
                     }
                 storage_aggregates[key]["gb_hours"] += breakdown.gb_hours
 
-        # Create DAILY usage record with FINALIZED status
-        usage_record = await db.usage.upsert_usage_record(
-            workspace_id=workspace_id,
-            collection_start=day_start,
-            collection_end=day_end,
-            cpu_core_seconds=total_cpu,
-            memory_gb_seconds=total_memory,
-            storage_gb_hours=total_storage,
-            s3_gb_hours=total_s3,
-            efs_gb_hours=total_efs,
-            record_type=UsageRecordType.DAILY,
-            status=UsageRecordStatus.FINALIZED,
-        )
+        # Aggregate networking breakdowns from all interval records
+        networking_aggregates: dict[str, dict] = {}
+        for record in interval_records:
+            for breakdown in record.networking_breakdowns:
+                if breakdown.service_name not in networking_aggregates:
+                    networking_aggregates[breakdown.service_name] = {
+                        "endpoint_hours": 0.0,
+                        "deployment_id": breakdown.deployment_id,
+                    }
+                networking_aggregates[breakdown.service_name]["endpoint_hours"] += (
+                    breakdown.endpoint_hours
+                )
 
-        # Upsert compute breakdowns for daily record
-        for pod_name, aggregates in compute_aggregates.items():
-            await db.usage.upsert_compute_breakdown(
-                usage_record_id=usage_record.id,
-                pod_name=pod_name,
-                cpu_core_seconds=aggregates["cpu_core_seconds"],
-                memory_gb_seconds=aggregates["memory_gb_seconds"],
-                deployment_id=aggregates["deployment_id"],
-                service_name=aggregates["service_name"],
-            )
+        # Aggregate build breakdowns from all interval records
+        build_aggregates: dict[str, float] = {}
+        for record in interval_records:
+            for breakdown in record.build_breakdowns:
+                dep_id = str(breakdown.deployment_id)
+                build_aggregates[dep_id] = (
+                    build_aggregates.get(dep_id, 0.0) + breakdown.build_minutes
+                )
 
-        # Upsert storage breakdowns for daily record
-        for (pvc_name, storage_class), aggregates in storage_aggregates.items():
-            await db.usage.upsert_storage_breakdown(
-                usage_record_id=usage_record.id,
-                pvc_name=pvc_name,
-                storage_class=storage_class,
-                gb_hours=aggregates["gb_hours"],
-                deployment_id=aggregates["deployment_id"],
-            )
+        # All upserts in a single atomic transaction
+        async with session_manager.get_session() as session:
+            async with session.begin():
+                # Create DAILY usage record with FINALIZED status
+                usage_record = await db.usage.upsert_usage_record(
+                    workspace_id=workspace_id,
+                    collection_start=day_start,
+                    collection_end=day_end,
+                    cpu_core_seconds=total_cpu,
+                    memory_gb_seconds=total_memory,
+                    storage_gb_hours=total_storage,
+                    s3_gb_hours=total_s3,
+                    efs_gb_hours=total_efs,
+                    build_minutes=total_build_minutes,
+                    public_endpoint_hours=total_endpoint_hours,
+                    record_type=UsageRecordType.DAILY,
+                    status=UsageRecordStatus.FINALIZED,
+                    session=session,
+                )
+
+                # Upsert compute breakdowns for daily record
+                for pod_name, aggregates in compute_aggregates.items():
+                    await db.usage.upsert_compute_breakdown(
+                        usage_record_id=usage_record.id,
+                        pod_name=pod_name,
+                        cpu_core_seconds=aggregates["cpu_core_seconds"],
+                        memory_gb_seconds=aggregates["memory_gb_seconds"],
+                        deployment_id=aggregates["deployment_id"],
+                        service_name=aggregates["service_name"],
+                        session=session,
+                    )
+
+                # Upsert storage breakdowns for daily record
+                for (pvc_name, storage_class), aggregates in storage_aggregates.items():
+                    await db.usage.upsert_storage_breakdown(
+                        usage_record_id=usage_record.id,
+                        pvc_name=pvc_name,
+                        storage_class=storage_class,
+                        gb_hours=aggregates["gb_hours"],
+                        deployment_id=aggregates["deployment_id"],
+                        session=session,
+                    )
+
+                # Upsert networking breakdowns for daily record
+                for service_name, aggregates in networking_aggregates.items():
+                    await db.usage.upsert_networking_breakdown(
+                        usage_record_id=usage_record.id,
+                        service_name=service_name,
+                        endpoint_hours=aggregates["endpoint_hours"],
+                        deployment_id=aggregates["deployment_id"],
+                        session=session,
+                    )
+
+                # Upsert build breakdowns for daily record
+                for deployment_id, mins in build_aggregates.items():
+                    await db.usage.upsert_build_breakdown(
+                        usage_record_id=usage_record.id,
+                        deployment_id=deployment_id,
+                        build_minutes=mins,
+                        session=session,
+                    )
 
         logger.info(
             f"Collected DAILY for {workspace_id} [{day_start.date()}]: "

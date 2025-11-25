@@ -1,11 +1,9 @@
-from datetime import UTC, datetime
-
 from loguru import logger
 from prefect import task
 
 from lazycloud_api.database import db
 from lazycloud_api.prefect_app.deployment.utils import update_deployment_state
-from lazycloud_api.services import get_ecr_auth_service
+from lazycloud_api.services import get_depot_service, get_ecr_auth_service
 from lazycloud_api.services.k8s import create_release_name
 from lazycloud_api.services.k8s.helm_manager import HelmManager
 from shared.models.deployments import DeploymentStates
@@ -17,8 +15,10 @@ async def destroy_compose_task(deployment_id: str) -> None:
     logger.info(f"Starting destruction of deployment {deployment_id}")
     ecr_auth_service = get_ecr_auth_service()
 
-    # get the deployment
-    deployment = await db.compose_deployments.get_by_id(deployment_id)
+    # get the deployment (include_deleted=True to access soft-deleted deployments)
+    deployment = await db.compose_deployments.get_by_id(
+        deployment_id, include_deleted=True
+    )
     if not deployment:
         raise Exception(f"Deployment {deployment_id} not found")
 
@@ -69,10 +69,26 @@ async def destroy_compose_task(deployment_id: str) -> None:
             # ECR cleanup is non-fatal - log warning but continue
             logger.warning(f"ECR cleanup failed (continuing): {ecr_error}")
 
-        # Step 4: Soft delete deployment from database
-        deployment = await db.compose_deployments.get_by_id(deployment_id)
+        # Step 3.5: Clean up Depot project (non-fatal)
+        logger.info(f"Cleaning up Depot project for deployment {deployment_id}")
+        try:
+            depot_service = get_depot_service()
+            # Pass deployment object to avoid redundant DB query
+            await depot_service.delete_deployment_project(deployment=deployment)
+
+        except Exception as depot_error:
+            # Depot cleanup is non-fatal - log warning but continue
+            logger.warning(f"Depot cleanup failed (continuing): {depot_error}")
+
+        # Step 4: Update deployment state to DELETED
+        # Re-fetch deployment to ensure we have latest state (may have been updated)
+        # Note: deployment.deleted_at is already set during workspace deletion
+        deployment = await db.compose_deployments.get_by_id(
+            deployment_id, include_deleted=True
+        )
         if deployment:
-            deployment.deleted_at = datetime.now(UTC)
+            # deployment.deleted_at is already set during workspace deletion
+            # Just update state to DELETED to mark cleanup as complete
             deployment.state = DeploymentStates.DELETED
             deployment.status_message = "Deployment deleted"
             deployment.current_task_run_id = None

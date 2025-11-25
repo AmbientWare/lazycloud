@@ -25,6 +25,7 @@ from lazycloud_api.config import app_config
 from lazycloud_api.database.crud import update_admin_api_keys
 from lazycloud_api.log_config import setup_logger
 from lazycloud_api.prefect_app import serve_background_tasks
+from lazycloud_api.services import get_depot_service
 from lazycloud_api.services.k8s.client import close_async_api_client
 from lazycloud_api.services.monitoring import (
     initialize_subscription_manager,
@@ -84,6 +85,15 @@ async def lifespan(app: FastAPI):
     # Close async Kubernetes client
     await close_async_api_client()
     logger.info("Async Kubernetes client closed")
+
+    # Close Depot service connections (Redis, HTTP client)
+    try:
+        depot_service = get_depot_service()
+        await depot_service.close()
+        logger.info("Depot service connections closed")
+
+    except Exception as e:
+        logger.warning(f"Error closing Depot service: {e}")
 
 
 # create a fastapi app

@@ -78,6 +78,8 @@ class PolarUsageModule:
         memory_gb_seconds = usage_record.memory_gb_seconds
         s3_gb_hours = usage_record.s3_gb_hours
         efs_gb_hours = usage_record.efs_gb_hours
+        build_minutes = usage_record.build_minutes
+        public_endpoint_hours = usage_record.public_endpoint_hours
 
         cpu_core_hours = cpu_core_seconds / SECONDS_PER_HOUR
         memory_gb_hours = memory_gb_seconds / SECONDS_PER_HOUR
@@ -98,10 +100,19 @@ class PolarUsageModule:
             METER_METADATA_FIELDS[MeterNames.MEMORY_USAGE]: memory_gb_hours,
             METER_METADATA_FIELDS[MeterNames.STANDARD_STORAGE]: s3_gb_hours,
             METER_METADATA_FIELDS[MeterNames.PREMIUM_STORAGE]: efs_gb_hours,
+            METER_METADATA_FIELDS[MeterNames.BUILD_MINUTES]: build_minutes,
+            METER_METADATA_FIELDS[MeterNames.PUBLIC_ENDPOINTS]: public_endpoint_hours,
         }
 
         # Calculate total quantity
-        total_quantity = cpu_core_hours + memory_gb_hours + s3_gb_hours + efs_gb_hours
+        total_quantity = (
+            cpu_core_hours
+            + memory_gb_hours
+            + s3_gb_hours
+            + efs_gb_hours
+            + build_minutes
+            + public_endpoint_hours
+        )
 
         # Send single usage event with all metrics
         success = await self.send_usage_event(
@@ -115,7 +126,8 @@ class PolarUsageModule:
             logger.info(
                 f"Successfully sent usage event for workspace {usage_record.workspace_id}: "
                 f"CPU={cpu_core_hours:.4f}h, Memory={memory_gb_hours:.4f}GB-h, "
-                f"S3={s3_gb_hours:.2f}GB-h, EFS={efs_gb_hours:.2f}GB-h "
+                f"S3={s3_gb_hours:.2f}GB-h, EFS={efs_gb_hours:.2f}GB-h, "
+                f"Build={build_minutes:.2f}min, Endpoints={public_endpoint_hours:.2f}h "
                 f"(total={total_quantity:.4f})"
             )
 

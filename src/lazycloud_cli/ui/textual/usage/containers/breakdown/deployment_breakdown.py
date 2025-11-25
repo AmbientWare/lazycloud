@@ -180,10 +180,14 @@ class DeploymentBreakdownSection(Container):
             memory_hours=deployment.usage.memory_gb_hours,
             s3_hours=deployment.usage.s3_gb_hours,
             efs_hours=deployment.usage.efs_gb_hours,
+            build_minutes=deployment.usage.build_minutes,
+            public_endpoint_hours=deployment.usage.public_endpoint_hours,
             cpu_cost=costs.cpu_cost if costs else None,
             memory_cost=costs.memory_cost if costs else None,
             s3_cost=costs.s3_cost if costs else None,
             efs_cost=costs.efs_cost if costs else None,
+            build_cost=costs.build_cost if costs else None,
+            endpoint_cost=costs.endpoint_cost if costs else None,
         )
 
         # Service Breakdown section

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
@@ -20,10 +20,12 @@ from lazycloud_api.database.user_workspaces import (
 from lazycloud_api.database.users import UserPydantic
 from lazycloud_api.database.utils import validate_workspace_name
 from lazycloud_api.database.workspaces import WorkspacePydantic, WorkspaceStatus
+from lazycloud_api.prefect_app.deployment.destroy import destroy_compose_task
 from lazycloud_api.services import (
     UsageService,
     get_usage_service,
 )
+from shared.models.deployments import DeploymentStates
 from shared.requests.workspaces import (
     CreateWorkspaceRequest,
 )
@@ -207,16 +209,49 @@ async def delete_workspace(
     if workspace.is_personal:
         raise HTTPException(status_code=400, detail="Cannot delete personal workspace")
 
-    # get all deployments in the workspace
+    # Get all deployments in the workspace
     deployments = await db.compose_deployments.find({"workspace_id": workspace.id})
-    if len(deployments) > 0:
-        # delete all deployments for the workspace
-        await db.compose_deployments.delete_bulk(
-            [deployment.id for deployment in deployments]
-        )
 
-    # set workspace status to deleted
-    workspace = await db.workspaces.update_status(workspace.id, WorkspaceStatus.DELETED)
+    # Atomically mark workspace and all deployments as deleted in a single transaction
+    async with db.compose_deployments.transaction() as session:
+        # Mark workspace as deleted
+        workspace.deleted_at = datetime.now(UTC)
+        workspace.status = WorkspaceStatus.DELETED
+        await db.workspaces.update(workspace, session=session)
+
+        # Mark all deployments as deleted
+        if len(deployments) > 0:
+            for deployment in deployments:
+                deployment.deleted_at = datetime.now(UTC)
+                deployment.state = DeploymentStates.DELETING
+                await db.compose_deployments.update(deployment, session=session)
+
+    # After transaction commits, trigger cleanup tasks for each deployment (non-blocking)
+    # Set current_task_run_id to prevent duplicate triggers from cleanup cron
+    if len(deployments) > 0:
+        for deployment in deployments:
+            if deployment.id:
+                try:
+                    task_future = destroy_compose_task.delay(
+                        deployment_id=deployment.id
+                    )
+                    # Update deployment with task_run_id to prevent duplicate triggers
+                    async with db.compose_deployments.transaction() as session:
+                        deployment = await db.compose_deployments.get_by_id(
+                            deployment.id,
+                            with_lock=True,
+                            session=session,
+                            include_deleted=True,
+                        )
+                        if deployment:
+                            deployment.current_task_run_id = task_future.task_run_id
+                            await db.compose_deployments.update(
+                                deployment, session=session
+                            )
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to trigger destroy task for deployment {deployment.id}: {e}"
+                    )
 
     return WorkspaceSuccessResponse(success=True)
 

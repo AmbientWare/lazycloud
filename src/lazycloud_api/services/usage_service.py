@@ -8,6 +8,7 @@ from lazycloud_api.database import db
 from lazycloud_api.database.compose import ComposeDeploymentPydantic
 from lazycloud_api.database.usage import UsageRecordPydantic
 from lazycloud_api.services.cost_breakdown_service import CostBreakdownService
+from lazycloud_api.services.depot_service import DepotService
 from shared.models.billing import (
     SECONDS_PER_HOUR,
     STORAGE_CLASS_EFS,
@@ -48,8 +49,10 @@ class UsageService:
     def __init__(
         self,
         cost_service: CostBreakdownService,
+        depot_service: DepotService,
     ):
         self.cost_service = cost_service
+        self.depot_service = depot_service
 
     async def aggregate_workspace_usage_for_date_range(
         self,
@@ -70,12 +73,16 @@ class UsageService:
         total_memory_seconds = sum(r.memory_gb_seconds for r in usage_records)
         total_s3_hours = sum(r.s3_gb_hours for r in usage_records)
         total_efs_hours = sum(r.efs_gb_hours for r in usage_records)
+        total_build_minutes = sum(r.build_minutes for r in usage_records)
+        total_endpoint_hours = sum(r.public_endpoint_hours for r in usage_records)
 
         metrics = UsageMetrics(
             cpu_core_hours=total_cpu_seconds / SECONDS_PER_HOUR,
             memory_gb_hours=total_memory_seconds / SECONDS_PER_HOUR,
             s3_gb_hours=total_s3_hours,
             efs_gb_hours=total_efs_hours,
+            build_minutes=total_build_minutes,
+            public_endpoint_hours=total_endpoint_hours,
         )
 
         if return_records:
@@ -86,6 +93,8 @@ class UsageService:
         self,
         usage_records: list[UsageRecordPydantic],
         deployment_id: str,
+        build_minutes: float,
+        public_endpoint_hours: float,
     ) -> tuple[UsageMetrics, list[ServiceUsageItem], list[VolumeUsageItem]]:
         """Aggregate usage for a specific deployment across multiple usage records."""
 
@@ -146,6 +155,8 @@ class UsageService:
             memory_gb_hours=deployment_memory_seconds / SECONDS_PER_HOUR,
             s3_gb_hours=deployment_s3_hours,
             efs_gb_hours=deployment_efs_hours,
+            build_minutes=build_minutes,
+            public_endpoint_hours=public_endpoint_hours,
         )
 
         return metrics, service_usage_list, volume_usage_list
@@ -217,6 +228,8 @@ class UsageService:
                     memory_cost=sum(c.memory_cost for c in cost_results if c),
                     s3_cost=sum(c.s3_cost for c in cost_results if c),
                     efs_cost=sum(c.efs_cost for c in cost_results if c),
+                    build_cost=sum(c.build_cost for c in cost_results if c),
+                    endpoint_cost=sum(c.endpoint_cost for c in cost_results if c),
                     total_cost=sum(c.total_cost for c in cost_results if c),
                 )
             except Exception as e:
@@ -280,6 +293,10 @@ class UsageService:
                     daily_data[day_key].memory_gb_hours += day_data.memory_gb_hours
                     daily_data[day_key].s3_gb_hours += day_data.s3_gb_hours
                     daily_data[day_key].efs_gb_hours += day_data.efs_gb_hours
+                    daily_data[day_key].build_minutes += day_data.build_minutes
+                    daily_data[
+                        day_key
+                    ].public_endpoint_hours += day_data.public_endpoint_hours
 
         self._fill_missing_days(daily_data, start_date, end_date, tz)
         await self.cost_service.calculate_costs_for_daily_data(
@@ -313,6 +330,27 @@ class UsageService:
         if not deployments:
             return []
 
+        # Aggregate endpoint_hours from networking_breakdowns by deployment_id
+        endpoint_hours_by_deployment: dict[str, float] = {}
+        for record in usage_records:
+            for breakdown in record.networking_breakdowns:
+                if breakdown.deployment_id:
+                    dep_id = str(breakdown.deployment_id)
+                    endpoint_hours_by_deployment[dep_id] = (
+                        endpoint_hours_by_deployment.get(dep_id, 0.0)
+                        + breakdown.endpoint_hours
+                    )
+
+        # Aggregate build_minutes from stored build_breakdowns
+        build_minutes_by_deployment: dict[str, float] = {}
+        for record in usage_records:
+            for breakdown in record.build_breakdowns:
+                dep_id = str(breakdown.deployment_id)
+                build_minutes_by_deployment[dep_id] = (
+                    build_minutes_by_deployment.get(dep_id, 0.0)
+                    + breakdown.build_minutes
+                )
+
         # Aggregate usage for all deployments and build a mapping
         deployment_metrics_map: dict[str, UsageMetrics] = {}
         valid_deployments: list[ComposeDeploymentPydantic] = []
@@ -324,6 +362,10 @@ class UsageService:
             deployment_metrics, _, _ = self.aggregate_deployment_usage_from_records(
                 usage_records=usage_records,
                 deployment_id=deployment.id,
+                build_minutes=build_minutes_by_deployment.get(deployment.id, 0.0),
+                public_endpoint_hours=endpoint_hours_by_deployment.get(
+                    deployment.id, 0.0
+                ),
             )
             deployment_metrics_map[deployment.id] = deployment_metrics
 
@@ -377,6 +419,8 @@ class UsageService:
         total_memory_seconds = 0.0
         total_s3_hours = 0.0
         total_efs_hours = 0.0
+        total_build_minutes = 0.0
+        total_endpoint_hours = 0.0
         total_records = 0
 
         deployment_overview_tasks = []
@@ -437,6 +481,8 @@ class UsageService:
             total_memory_seconds += usage.memory_gb_hours * SECONDS_PER_HOUR
             total_s3_hours += usage.s3_gb_hours
             total_efs_hours += usage.efs_gb_hours
+            total_build_minutes += usage.build_minutes
+            total_endpoint_hours += usage.public_endpoint_hours
             total_records += record_counts[i]
 
         total_usage = UsageMetrics(
@@ -444,6 +490,8 @@ class UsageService:
             memory_gb_hours=total_memory_seconds / SECONDS_PER_HOUR,
             s3_gb_hours=total_s3_hours,
             efs_gb_hours=total_efs_hours,
+            build_minutes=total_build_minutes,
+            public_endpoint_hours=total_endpoint_hours,
         )
 
         return workspace_summaries, total_usage
@@ -473,6 +521,8 @@ class UsageService:
                     memory_gb_hours=0.0,
                     s3_gb_hours=0.0,
                     efs_gb_hours=0.0,
+                    build_minutes=0.0,
+                    public_endpoint_hours=0.0,
                 )
 
             daily_data[day_key].cpu_core_hours += (
@@ -483,6 +533,9 @@ class UsageService:
             )
             daily_data[day_key].s3_gb_hours += record.s3_gb_hours
             daily_data[day_key].efs_gb_hours += record.efs_gb_hours
+            daily_data[day_key].build_minutes += record.build_minutes
+            daily_data[day_key].public_endpoint_hours += record.public_endpoint_hours
+
         return daily_data
 
     def _fill_missing_days(
@@ -509,5 +562,7 @@ class UsageService:
                     memory_gb_hours=0.0,
                     s3_gb_hours=0.0,
                     efs_gb_hours=0.0,
+                    build_minutes=0.0,
+                    public_endpoint_hours=0.0,
                 )
             current_local_date += timedelta(days=1)
