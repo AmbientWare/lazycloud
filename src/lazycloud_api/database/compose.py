@@ -36,12 +36,12 @@ from lazycloud_api.database.utils import (
     encrypt_dict,
     encrypt_string,
 )
+from lazycloud_api.database.workspaces import WorkspaceTable
 from shared.models.deployments import DeploymentStates
 from shared.models.helm import HelmValues
 
 if TYPE_CHECKING:
     from lazycloud_api.database.secrets import SecretTable
-    from lazycloud_api.database.workspaces import WorkspaceTable
 
 
 class ComposeDeploymentTable(BaseTable):
@@ -393,6 +393,33 @@ class ComposeDeploymentService(
                 .where(ComposeDeploymentTable.state == DeploymentStates.DEPLOYING)
                 .where(ComposeDeploymentTable.updated_at < threshold)
                 .where(ComposeDeploymentTable.deleted_at.is_(None))
+            )
+            result = await session.execute(query)
+            db_models = list(result.scalars().all())
+            return [self._to_pydantic(db_model) for db_model in db_models]
+
+    async def find_orphaned_in_deleted_workspaces(
+        self,
+    ) -> list[ComposeDeploymentPydantic]:
+        """Find deployments in deleted workspaces that haven't been cleaned up yet.
+
+        Returns deployments where:
+        - workspace.deleted_at IS NOT NULL (workspace is deleted)
+        - deployment.deleted_at IS NOT NULL (deployment marked for deletion)
+        - deployment.state != DELETED (not yet cleaned up)
+        - deployment.current_task_run_id IS NULL (no active destroy task running)
+        """
+        async with self._session_manager.get_session() as session:
+            query = (
+                select(ComposeDeploymentTable)
+                .join(
+                    WorkspaceTable,
+                    ComposeDeploymentTable.workspace_id == WorkspaceTable.id,
+                )
+                .where(WorkspaceTable.deleted_at.isnot(None))
+                .where(ComposeDeploymentTable.deleted_at.isnot(None))
+                .where(ComposeDeploymentTable.state != DeploymentStates.DELETED.value)
+                .where(ComposeDeploymentTable.current_task_run_id.is_(None))
             )
             result = await session.execute(query)
             db_models = list(result.scalars().all())

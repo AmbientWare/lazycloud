@@ -10,6 +10,11 @@ from shared.models.deployments import (
     DeploymentStates,
     ResourceRequirements,
 )
+from shared.models.depot import (
+    DepotBuildCredentials,
+    DepotProject,
+    DepotProjectToken,
+)
 from shared.models.metrics import (
     NamespaceBreakdown,
     NamespaceSummary,
@@ -28,6 +33,9 @@ __all__ = [
     "DeploymentInfo",
     "DeploymentResult",
     "DeploymentStates",
+    "DepotBuildCredentials",
+    "DepotProject",
+    "DepotProjectToken",
     "MonitorStats",
     "NamespaceBreakdown",
     "NamespaceSummary",

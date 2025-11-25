@@ -16,6 +16,8 @@ class UsageMetrics(BaseModel):
     memory_gb_hours: float
     s3_gb_hours: float
     efs_gb_hours: float
+    build_minutes: float
+    public_endpoint_hours: float
     costs: "MeterCostBreakdown | None" = None
 
 
@@ -41,6 +43,8 @@ class DailyUsageData(BaseModel):
     memory_gb_hours: float
     s3_gb_hours: float
     efs_gb_hours: float
+    build_minutes: float
+    public_endpoint_hours: float
     costs: "MeterCostBreakdown | None" = None
 
 
@@ -83,6 +87,8 @@ class MeterCostBreakdown(BaseModel):
     memory_cost: float
     s3_cost: float
     efs_cost: float
+    build_cost: float
+    endpoint_cost: float
     total_cost: float
 
 

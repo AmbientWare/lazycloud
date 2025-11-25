@@ -3,7 +3,7 @@ FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS builder
 
 RUN mkdir /src
 
-# Install system dependencies, cron, and clean up in one layer to keep image small
+# Install system dependencies and clean up in one layer to keep image small
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ffmpeg \

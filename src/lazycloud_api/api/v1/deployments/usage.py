@@ -9,8 +9,10 @@ from lazycloud_api.database import db
 from lazycloud_api.database.compose import ComposeDeploymentPydantic
 from lazycloud_api.database.users import UserPydantic
 from lazycloud_api.services import (
+    DepotService,
     PolarService,
     UsageService,
+    get_depot_service,
     get_polar_service,
     get_usage_service,
 )
@@ -38,6 +40,7 @@ async def get_deployment_cost_breakdown(
     end_date: datetime | None = Query(None, description="End date (defaults to now)"),
     usage_service: UsageService = Depends(get_usage_service),
     polar_service: PolarService = Depends(get_polar_service),
+    depot_service: DepotService = Depends(get_depot_service),
 ) -> WorkspaceCostBreakdownResponse:
     """Get detailed cost breakdown for a specific deployment with service and volume details"""
     try:
@@ -45,6 +48,7 @@ async def get_deployment_cost_breakdown(
         now = datetime.now(timezone.utc)
         if not start_date:
             start_date = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
         if not end_date:
             end_date = now
 
@@ -80,11 +84,23 @@ async def get_deployment_cost_breakdown(
                 detail="No usage records found for the specified date range",
             )
 
+        # Fetch build minutes from Depot for this deployment
+        build_minutes = await depot_service.get_deployment_build_minutes(
+            deployment_id=deployment.id,
+            start_at=start_date,
+            end_at=end_date,
+        )
+
+        # Calculate endpoint hours from usage records for this deployment
+        public_endpoint_hours = sum(r.public_endpoint_hours for r in usage_records)
+
         # Aggregate deployment usage from records
         deployment_metrics, service_usage_list, volume_usage_list = (
             usage_service.aggregate_deployment_usage_from_records(
                 usage_records=usage_records,
                 deployment_id=deployment.id,
+                build_minutes=build_minutes,
+                public_endpoint_hours=public_endpoint_hours,
             )
         )
 
@@ -103,6 +119,8 @@ async def get_deployment_cost_breakdown(
                     memory_gb_hours=deployment_metrics.memory_gb_hours,
                     s3_gb_hours=deployment_metrics.s3_gb_hours,
                     efs_gb_hours=deployment_metrics.efs_gb_hours,
+                    build_minutes=deployment_metrics.build_minutes,
+                    public_endpoint_hours=deployment_metrics.public_endpoint_hours,
                     service_usage=service_usage_list if service_usage_list else None,
                     volume_usage=volume_usage_list if volume_usage_list else None,
                 )

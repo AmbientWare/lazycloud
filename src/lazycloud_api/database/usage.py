@@ -50,6 +50,8 @@ class UsageRecordTable(BaseTable):
     storage_gb_hours: Mapped[float] = mapped_column(Float, default=0.0)
     s3_gb_hours: Mapped[float] = mapped_column(Float, default=0.0)
     efs_gb_hours: Mapped[float] = mapped_column(Float, default=0.0)
+    build_minutes: Mapped[float] = mapped_column(Float, default=0.0)
+    public_endpoint_hours: Mapped[float] = mapped_column(Float, default=0.0)
 
     # Relationships
     compute_breakdowns: Mapped[list["ComputeUsageBreakdownTable"]] = relationship(
@@ -60,6 +62,18 @@ class UsageRecordTable(BaseTable):
     )
     storage_breakdowns: Mapped[list["StorageUsageBreakdownTable"]] = relationship(
         "StorageUsageBreakdownTable",
+        back_populates="usage_record",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+    networking_breakdowns: Mapped[list["NetworkingUsageBreakdownTable"]] = relationship(
+        "NetworkingUsageBreakdownTable",
+        back_populates="usage_record",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+    build_breakdowns: Mapped[list["BuildUsageBreakdownTable"]] = relationship(
+        "BuildUsageBreakdownTable",
         back_populates="usage_record",
         cascade="all, delete-orphan",
         lazy="selectin",
@@ -140,6 +154,72 @@ class StorageUsageBreakdownTable(BaseTable):
     )
 
 
+class NetworkingUsageBreakdownTable(BaseTable):
+    """Stores detailed per-service networking breakdown (endpoints, future: ingress/egress)."""
+
+    __tablename__ = "networking_usage_breakdown"
+
+    usage_record_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("usage_records.id", ondelete="CASCADE"),
+        index=True,
+    )
+    deployment_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("compose_deployments.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    service_name: Mapped[str] = mapped_column(String, index=True)
+    endpoint_hours: Mapped[float] = mapped_column(Float, default=0.0)
+
+    # Relationship
+    usage_record: Mapped["UsageRecordTable"] = relationship(
+        "UsageRecordTable", back_populates="networking_breakdowns"
+    )
+
+    # Unique constraint for efficient upserts (one record per service per usage record)
+    __table_args__ = (
+        UniqueConstraint(
+            "usage_record_id",
+            "service_name",
+            name="uq_networking_breakdown_record_service",
+        ),
+    )
+
+
+class BuildUsageBreakdownTable(BaseTable):
+    """Stores detailed per-deployment build breakdown."""
+
+    __tablename__ = "build_usage_breakdown"
+
+    usage_record_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("usage_records.id", ondelete="CASCADE"),
+        index=True,
+    )
+    deployment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("compose_deployments.id", ondelete="RESTRICT"),
+        index=True,
+    )
+    build_minutes: Mapped[float] = mapped_column(Float, default=0.0)
+
+    # Relationship
+    usage_record: Mapped["UsageRecordTable"] = relationship(
+        "UsageRecordTable", back_populates="build_breakdowns"
+    )
+
+    # Unique constraint for efficient upserts (one record per deployment per usage record)
+    __table_args__ = (
+        UniqueConstraint(
+            "usage_record_id",
+            "deployment_id",
+            name="uq_build_breakdown_record_deployment",
+        ),
+    )
+
+
 class ComputeUsageBreakdownPydantic(BaseDbPydanticModel):
     """Pydantic model for compute usage breakdown."""
 
@@ -161,6 +241,23 @@ class StorageUsageBreakdownPydantic(BaseDbPydanticModel):
     gb_hours: float
 
 
+class NetworkingUsageBreakdownPydantic(BaseDbPydanticModel):
+    """Pydantic model for networking usage breakdown."""
+
+    usage_record_id: UUIDStr
+    deployment_id: UUIDStr | None = None
+    service_name: str
+    endpoint_hours: float
+
+
+class BuildUsageBreakdownPydantic(BaseDbPydanticModel):
+    """Pydantic model for build usage breakdown."""
+
+    usage_record_id: UUIDStr
+    deployment_id: UUIDStr
+    build_minutes: float
+
+
 class UsageRecordPydantic(BaseDbPydanticModel):
     """Pydantic model for usage record."""
 
@@ -174,8 +271,12 @@ class UsageRecordPydantic(BaseDbPydanticModel):
     storage_gb_hours: float
     s3_gb_hours: float
     efs_gb_hours: float
+    build_minutes: float = 0.0
+    public_endpoint_hours: float = 0.0
     compute_breakdowns: list[ComputeUsageBreakdownPydantic] = []
     storage_breakdowns: list[StorageUsageBreakdownPydantic] = []
+    networking_breakdowns: list[NetworkingUsageBreakdownPydantic] = []
+    build_breakdowns: list[BuildUsageBreakdownPydantic] = []
 
 
 class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
@@ -194,6 +295,8 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
         storage_gb_hours: float,
         s3_gb_hours: float = 0.0,
         efs_gb_hours: float = 0.0,
+        build_minutes: float = 0.0,
+        public_endpoint_hours: float = 0.0,
         record_type: UsageRecordType = UsageRecordType.HOURLY,
         status: UsageRecordStatus = UsageRecordStatus.DRAFT,
         session: AsyncSession | None = None,
@@ -221,6 +324,8 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
                     existing_record.storage_gb_hours = storage_gb_hours
                     existing_record.s3_gb_hours = s3_gb_hours
                     existing_record.efs_gb_hours = efs_gb_hours
+                    existing_record.build_minutes = build_minutes
+                    existing_record.public_endpoint_hours = public_endpoint_hours
                     existing_record.status = status.value
 
                 await sess.flush()
@@ -239,6 +344,8 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
                     storage_gb_hours=storage_gb_hours,
                     s3_gb_hours=s3_gb_hours,
                     efs_gb_hours=efs_gb_hours,
+                    build_minutes=build_minutes,
+                    public_endpoint_hours=public_endpoint_hours,
                 )
                 sess.add(usage_record)
                 await sess.flush()
@@ -321,6 +428,71 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
             await sess.flush()
 
             return breakdown.to_pydantic(StorageUsageBreakdownPydantic)
+
+        return await self._execute_in_session(_upsert, session)
+
+    async def upsert_networking_breakdown(
+        self,
+        usage_record_id: str,
+        service_name: str,
+        endpoint_hours: float,
+        deployment_id: str,
+        session: AsyncSession | None = None,
+    ) -> NetworkingUsageBreakdownPydantic:
+        async def _upsert(sess: AsyncSession):
+            stmt = insert(NetworkingUsageBreakdownTable).values(
+                usage_record_id=usage_record_id,
+                service_name=service_name,
+                endpoint_hours=endpoint_hours,
+                deployment_id=deployment_id,
+            )
+
+            # On conflict, update the values
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["usage_record_id", "service_name"],
+                set_={
+                    "endpoint_hours": stmt.excluded.endpoint_hours,
+                    "deployment_id": stmt.excluded.deployment_id,
+                    "updated_at": func.now(),
+                },
+            ).returning(NetworkingUsageBreakdownTable)
+
+            result = await sess.execute(stmt)
+            breakdown = result.scalar_one()
+            await sess.flush()
+
+            return breakdown.to_pydantic(NetworkingUsageBreakdownPydantic)
+
+        return await self._execute_in_session(_upsert, session)
+
+    async def upsert_build_breakdown(
+        self,
+        usage_record_id: str,
+        deployment_id: str,
+        build_minutes: float,
+        session: AsyncSession | None = None,
+    ) -> BuildUsageBreakdownPydantic:
+        async def _upsert(sess: AsyncSession):
+            stmt = insert(BuildUsageBreakdownTable).values(
+                usage_record_id=usage_record_id,
+                deployment_id=deployment_id,
+                build_minutes=build_minutes,
+            )
+
+            # On conflict, update the values
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["usage_record_id", "deployment_id"],
+                set_={
+                    "build_minutes": stmt.excluded.build_minutes,
+                    "updated_at": func.now(),
+                },
+            ).returning(BuildUsageBreakdownTable)
+
+            result = await sess.execute(stmt)
+            breakdown = result.scalar_one()
+            await sess.flush()
+
+            return breakdown.to_pydantic(BuildUsageBreakdownPydantic)
 
         return await self._execute_in_session(_upsert, session)
 

@@ -1,17 +1,23 @@
 import asyncio
+import shutil
 import subprocess
-from datetime import UTC, datetime
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import typer
 import yaml
 from rich.console import Console
 from rich.live import Live
+from rich.panel import Panel
 
 from lazycloud_cli.api import APIError, api
 from lazycloud_cli.config import config
 from lazycloud_cli.lazycloud_file import LazyCloudFile
-from lazycloud_cli.registry import RegistryType, create_registry
+from lazycloud_cli.logging import logger
+from lazycloud_cli.ui.components.card import Card
+from lazycloud_cli.ui.components.info_cards import ErrorCard
 from lazycloud_cli.ui.views import DeployView
 from lazycloud_cli.ui.views.helpers.env_helpers import (
     ImportMethod,
@@ -22,6 +28,7 @@ from shared.models.diffs import ComposeDiff, EnvVarChanges, ResourceSection
 from shared.models.secrets import Secret, SecretCollection, SecretSource
 from shared.models.statuses import TaskStatus
 from shared.requests.deployments import DiffType
+from shared.responses.builds import DepotTokenResponse
 from shared.responses.deployments import DiffResponse
 
 console = Console()
@@ -258,9 +265,11 @@ def deploy(
             yes,
             target_services=target_services if target_services else None,
         )
+
     except typer.Exit:
         # Re-raise typer.Exit from build failures
         raise
+
     except Exception as e:
         view.show_error(f"Build stage failed: {e}")
         raise typer.Exit(1)
@@ -377,16 +386,15 @@ def _generate_service_tags(
     git_sha = _get_git_sha(context)
     has_changes = _has_uncommitted_changes(context)
 
-    # If git available, use SHA; otherwise fall back to timestamp
+    # If git available, use SHA; otherwise fall back to timestamp for non-git projects
     if git_sha:
         if has_changes:
-            # Add dirty flag with timestamp for uniqueness
-            base_tag = f"{git_sha}-dirty-{int(datetime.now(UTC).timestamp())}"
+            # if dirty git - add timestamp to the tag
+            base_tag = f"{git_sha}-{int(datetime.now(UTC).timestamp())}"
         else:
             base_tag = git_sha
 
     else:
-        # Fall back to timestamp for non-git repos
         base_tag = _generate_build_timestamp()
 
     target_services_set = set(target_services) if target_services else None
@@ -933,6 +941,664 @@ def _extract_env_variables_for_service(
     return env_vars
 
 
+def _is_depot_available() -> bool:
+    """Check if Depot CLI is installed and available."""
+    return shutil.which("depot") is not None
+
+
+def _is_token_valid(token: DepotTokenResponse, buffer_minutes: int = 5) -> bool:
+    """Check if token is valid and not expired (with buffer).
+
+    Returns True if token exists and expires_at is in the future (with buffer).
+    """
+    if not token:
+        return False
+
+    now = datetime.now(UTC)
+    buffer = timedelta(minutes=buffer_minutes)
+    expires_at = token.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+
+    return expires_at > (now + buffer)
+
+
+def _get_depot_token(deployment_name: str) -> DepotTokenResponse | None:
+    """Get Depot token from API. Returns None if Depot is not configured.
+
+    Automatically refreshes token if expired or near expiration.
+    """
+    try:
+        token = api.builds.get_depot_token(deployment_name)
+
+        # Check if token is valid (not expired or near expiration)
+        if not _is_token_valid(token):
+            logger.warning(
+                f"Token for deployment {deployment_name} is expired or near expiration. "
+                "Fetching new token..."
+            )
+            # Fetch fresh token
+            token = api.builds.get_depot_token(deployment_name)
+
+            # Verify new token is valid
+            if not _is_token_valid(token):
+                logger.error(f"Received expired token for deployment {deployment_name}")
+                return None
+
+        return token
+
+    except APIError as e:
+        if e.status_code == 503:
+            # Depot not configured on server
+            return None
+        raise
+
+
+def _run_depot_build(
+    build_info: dict,
+    depot_token: DepotTokenResponse,
+    compose_file_path: Path,
+    build_state: dict | None = None,
+    build_state_lock: threading.Lock | None = None,
+) -> tuple[bool, str]:
+    """Run a single depot build. Returns (success, error_message)."""
+    # Fail fast if token is expired
+    if not _is_token_valid(depot_token, buffer_minutes=0):
+        error_msg = (
+            f"Token expired for deployment {build_info.get('deployment_name', 'unknown')}. "
+            "Please retry the deployment to get a fresh token."
+        )
+        logger.error(error_msg)
+        return False, error_msg
+
+    context_path = compose_file_path.parent / build_info["context"]
+    dockerfile_path = context_path / build_info["dockerfile"]
+    service_name = build_info["service_name"]
+
+    # Construct the full image URL with registry
+    image_tag = build_info["image_name"]
+    # The registry already handles namespacing, so we get the full URL from the API
+    # For now, we'll get upload credentials to get the proper image URL
+    try:
+        credentials = api.registry.get_upload_intent(
+            deployment_name=build_info.get("deployment_name", ""),
+            repo_name=image_tag,
+        )
+        full_image_url = credentials.repository
+
+    except Exception:
+        # Fallback: construct URL manually
+        full_image_url = f"{depot_token.registry_url}/{image_tag}"
+
+    # Check if registry is localhost/localstack - Depot can't push to localhost from remote servers
+    # In this case, we'll use --load to load the image locally, then push it ourselves
+    is_local_registry = "localhost" in full_image_url or "127.0.0.1" in full_image_url
+    use_load = is_local_registry
+
+    # Build depot command
+    depot_cmd = [
+        "depot",
+        "build",
+        "--project",
+        depot_token.project_id,
+        "--progress=plain",  # Force plain text output for pipes (not TTY)
+    ]
+
+    if use_load:
+        # Load image locally instead of pushing (for localhost registries)
+        depot_cmd.extend(["--load", "--tag", full_image_url])
+    else:
+        # Push directly to remote registry
+        depot_cmd.extend(["--push", "--tag", full_image_url])
+
+    depot_cmd.extend(
+        [
+            "-f",
+            str(dockerfile_path),
+            str(context_path),
+        ]
+    )
+
+    env = {
+        **dict(subprocess.os.environ),
+        "DEPOT_TOKEN": depot_token.token,
+    }
+
+    # Token is logged in API, no need to print here
+
+    try:
+        # Stream output in real-time
+        # Combine stderr into stdout so we capture all output
+        process = subprocess.Popen(
+            depot_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,  # Redirect stderr to stdout
+            text=True,
+            env=env,
+            bufsize=1,  # Line buffered
+        )
+
+        # Collect output lines (keep last N lines for display)
+        MAX_DISPLAY_LINES = 15  # Show last 15 lines in the card
+
+        # Use shared state if provided (for parallel builds), otherwise create local state
+        if build_state is not None:
+            if service_name not in build_state:
+                build_state[service_name] = {
+                    "output_lines": [],
+                    "error_lines": [],
+                    "process": process,
+                    "status": "building",
+                }
+            output_lines = build_state[service_name]["output_lines"]
+            error_lines = build_state[service_name]["error_lines"]
+            build_state[service_name]["process"] = process
+        else:
+            output_lines = []
+            error_lines = []
+
+        def render_build_card() -> Panel:
+            """Render the build card with recent output."""
+            # Get last N lines for display
+            display_lines = output_lines[-MAX_DISPLAY_LINES:]
+
+            # Build status indicator
+            if process.poll() is None:
+                status = "[cyan]●[/cyan] Building..."
+            elif process.returncode == 0:
+                status = "[green]✓[/green] Build complete"
+            else:
+                status = "[red]✗[/red] Build failed"
+
+            # Create content
+            content_lines = [f"[bold cyan]{service_name}[/bold cyan] {status}"]
+            content_lines.append("")
+
+            if display_lines:
+                for line in display_lines:
+                    # Truncate very long lines
+                    if len(line) > 120:
+                        line = line[:117] + "..."
+                    content_lines.append(f"  {line}")
+            else:
+                content_lines.append("  [dim]Waiting for build output...[/dim]")
+
+            # Add error lines if any
+            if error_lines:
+                content_lines.append("")
+                content_lines.append("[yellow]Errors:[/yellow]")
+                for line in error_lines[-5:]:  # Show last 5 error lines
+                    if len(line) > 120:
+                        line = line[:117] + "..."
+                    content_lines.append(f"  [yellow]{line}[/yellow]")
+
+            content = "\n".join(content_lines)
+
+            # Choose border color based on status
+            if process.poll() is None:
+                border_style = "cyan"
+            elif process.returncode == 0:
+                border_style = "green"
+            else:
+                border_style = "red"
+
+            return Panel(
+                content,
+                title=f"[bold]{service_name}[/bold]",
+                border_style=border_style,
+                padding=(1, 2),
+            )
+
+        # Read output (without Live display if using shared state)
+        import time
+
+        if build_state is None:
+            # Single build - use Live display
+            with Live(
+                render_build_card(), console=console, refresh_per_second=4
+            ) as live:
+                while True:
+                    if process.poll() is not None:
+                        break
+                    line = process.stdout.readline()
+                    if line:
+                        line = line.rstrip()
+                        if line:
+                            output_lines.append(line)
+                            live.update(render_build_card())
+                    else:
+                        time.sleep(0.1)
+                        live.update(render_build_card())
+        else:
+            # Parallel build - collect output and update shared state
+            # Read output line by line until process completes
+            while True:
+                # Check if process finished
+                returncode = process.poll()
+                if returncode is not None:
+                    break
+
+                # Read line from stdout (non-blocking check)
+                line = process.stdout.readline()
+                if line:
+                    line = line.rstrip()
+                    if line:
+                        # Append to shared list with lock
+                        if build_state_lock:
+                            with build_state_lock:
+                                output_lines.append(line)
+                        else:
+                            output_lines.append(line)
+                else:
+                    # No output available, wait a bit before checking again
+                    time.sleep(0.1)
+
+        # Wait for process to complete
+        process.wait()
+
+        # Read any remaining stdout
+        remaining_stdout = process.stdout.read()
+        if remaining_stdout:
+            for line in remaining_stdout.splitlines():
+                line = line.rstrip()
+                if line:
+                    if build_state_lock:
+                        with build_state_lock:
+                            output_lines.append(line)
+                    else:
+                        output_lines.append(line)
+
+        # Stderr is redirected to stdout, so we don't need to read it separately
+        # Any error messages will already be in output_lines
+
+        # Update status in shared state
+        if build_state is not None:
+            if build_state_lock:
+                with build_state_lock:
+                    if process.returncode == 0:
+                        build_state[service_name]["status"] = "complete"
+                    else:
+                        build_state[service_name]["status"] = "failed"
+            else:
+                if process.returncode == 0:
+                    build_state[service_name]["status"] = "complete"
+                else:
+                    build_state[service_name]["status"] = "failed"
+        else:
+            # Single build - print final card
+            console.print(render_build_card())
+
+        if process.returncode != 0:
+            # Log full error details for debugging
+            full_error_output = (
+                "\n".join(output_lines)
+                if output_lines
+                else "Build failed with no output"
+            )
+            logger.error(
+                f"Build failed for {service_name} (exit code {process.returncode}):\n{full_error_output}"
+            )
+
+            # Extract user-friendly error message from output
+            error_text = "\n".join(output_lines).lower() if output_lines else ""
+
+            # Check for common error patterns and provide user-friendly messages
+            if (
+                "tls: bad record mac" in error_text
+                or "rpc error" in error_text
+                or "unavailable" in error_text
+                or "error reading from server" in error_text
+            ):
+                return (
+                    False,
+                    "Network connection error occurred during build. This is often transient - please try again.",
+                )
+
+            # Look for Dockerfile/build errors
+            if (
+                "dockerfile" in error_text
+                or "failed to solve" in error_text
+                or "error processing" in error_text
+            ):
+                # Extract relevant error line if available
+                relevant_lines = [
+                    line
+                    for line in output_lines
+                    if any(
+                        keyword in line.lower()
+                        for keyword in ["error", "failed", "cannot"]
+                    )
+                ]
+
+                if relevant_lines:
+                    last_error = relevant_lines[-1]
+                    # Clean up the error message
+                    if len(last_error) > 200:
+                        last_error = last_error[:197] + "..."
+                    return (
+                        False,
+                        f"Build configuration error: {last_error}",
+                    )
+
+                return (
+                    False,
+                    "Build configuration error. Please check your Dockerfile and build context.",
+                )
+
+            # Generic build failure
+            return (
+                False,
+                "Build failed. Please check your Dockerfile and build context for errors.",
+            )
+
+        # If we used --load for a local registry, push it now
+        if use_load:
+            push_output_lines = []
+
+            try:
+                push_process = subprocess.Popen(
+                    ["docker", "push", full_image_url],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                )
+
+                # Collect push output (no Live display - main thread handles that)
+                for line in iter(push_process.stdout.readline, ""):
+                    if not line:
+                        break
+
+                    line = line.rstrip()
+                    if line:
+                        push_output_lines.append(line)
+                        # Also add to build output so it shows in the status panel
+                        if build_state is not None and build_state_lock:
+                            with build_state_lock:
+                                output_lines.append(f"[push] {line}")
+
+                push_process.wait()
+
+                if push_process.returncode != 0:
+                    # Log full error details for debugging
+                    full_push_error = (
+                        "\n".join(push_output_lines)
+                        if push_output_lines
+                        else "Push failed with no output"
+                    )
+                    logger.error(
+                        f"Failed to push {service_name} to local registry (exit code {push_process.returncode}):\n{full_push_error}"
+                    )
+
+                    return (
+                        False,
+                        "Failed to push image to registry. Please check your registry configuration.",
+                    )
+
+            except FileNotFoundError:
+                logger.error(
+                    f"Docker CLI not found when trying to push {service_name} to local registry"
+                )
+                return False, "Docker CLI not found. Cannot push to local registry."
+
+            except Exception as e:
+                logger.error(
+                    f"Failed to push {service_name} to local registry: {str(e)}",
+                    exc_info=True,
+                )
+                return (
+                    False,
+                    "Failed to push image to registry. Please check your registry configuration.",
+                )
+
+        return True, ""
+
+    except Exception as e:
+        # Log full error details for debugging
+        logger.error(f"Build error for {service_name}: {str(e)}", exc_info=True)
+
+        # Provide user-friendly error message
+        error_msg = str(e).lower()
+        if "not found" in error_msg or "file" in error_msg:
+            return (
+                False,
+                "Build configuration error: Required files not found. Please check your Dockerfile and build context.",
+            )
+
+        return False, "Build failed due to an unexpected error. Please try again."
+
+
+def _handle_builds_with_depot(
+    compose_data: dict,
+    compose_file_path: Path,
+    deployment_name: str,
+    services_to_build: list[dict],
+    depot_token: DepotTokenResponse,
+) -> str:
+    """Handle builds using Depot remote builder with parallel execution."""
+    view = DeployView(console)
+
+    # Add deployment_name to each build_info for registry URL construction
+    for build_info in services_to_build:
+        build_info["deployment_name"] = deployment_name
+
+    # Check which images already exist
+    all_image_names = [build_info["image_name"] for build_info in services_to_build]
+    image_exists_map = api.registry.check_images_exist(
+        deployment_name=deployment_name,
+        image_names=all_image_names,
+    ).exists_map
+
+    # Filter to only images that need building
+    builds_needed = []
+    for i, build_info in enumerate(services_to_build):
+        image_name = build_info["image_name"]
+        if not image_exists_map.get(image_name, False):
+            builds_needed.append((i, build_info))
+
+    if not builds_needed:
+        return yaml.dump(compose_data, default_flow_style=False)
+
+    # Shared state for all builds (thread-safe dict)
+    build_state = {}
+    build_state_lock = threading.Lock()
+
+    def render_build_status() -> Card:
+        """Render a single panel showing all builds with latest 3 lines each."""
+        with build_state_lock:
+            content_lines = []
+            LATEST_LINES = 3  # Show latest 3 lines per service
+
+            for service_name, state in build_state.items():
+                output_lines = state.get("output_lines", [])
+                error_lines = state.get("error_lines", [])
+                status = state.get("status", "building")
+
+                # Determine status indicator
+                if status == "complete":
+                    status_indicator = "[green]✓[/green]"
+
+                elif status == "failed":
+                    status_indicator = "[red]✗[/red]"
+
+                else:
+                    status_indicator = "[cyan]●[/cyan]"
+
+                # Service header
+                content_lines.append(f"{status_indicator} [bold]{service_name}[/bold]")
+
+                # Show latest N lines
+                display_lines = output_lines[-LATEST_LINES:]
+                if display_lines:
+                    for line in display_lines:
+                        # Truncate long lines
+                        if len(line) > 100:
+                            line = line[:97] + "..."
+                        content_lines.append(f"    {line}")
+
+                else:
+                    content_lines.append("    [dim]Waiting for output...[/dim]")
+
+                # Show errors if any
+                if error_lines:
+                    for line in error_lines[-2:]:  # Last 2 error lines
+                        if len(line) > 100:
+                            line = line[:97] + "..."
+                        content_lines.append(f"    [yellow]⚠ {line}[/yellow]")
+
+                content_lines.append("")  # Spacing between services
+
+            content = "\n".join(content_lines).rstrip()
+
+            # Determine overall status for border
+            all_complete = all(
+                state.get("status") == "complete" for state in build_state.values()
+            )
+            any_failed = any(
+                state.get("status") == "failed" for state in build_state.values()
+            )
+
+            if any_failed:
+                border_style = "red"
+                title = "Build Status"
+            elif all_complete:
+                border_style = "green"
+                title = "Build Status"
+            else:
+                border_style = "cyan"
+                title = "Build Status"
+
+            return Card(
+                content=content,
+                title=f"🔨 {title}",
+                border_style=border_style,
+                padding=(1, 2),
+            )
+
+    # Initialize build state for all services
+    with build_state_lock:
+        for _, build_info in builds_needed:
+            service_name = build_info["service_name"]
+            build_state[service_name] = {
+                "output_lines": [],
+                "error_lines": [],
+                "process": None,
+                "status": "building",
+            }
+
+    # Run builds in parallel with shared state
+    build_results = {}
+    import time
+
+    with ThreadPoolExecutor(max_workers=min(4, len(builds_needed))) as executor:
+        futures = {
+            executor.submit(
+                _run_depot_build,
+                build_info,
+                depot_token,
+                compose_file_path,
+                build_state,
+                build_state_lock,
+            ): (i, build_info)
+            for i, build_info in builds_needed
+        }
+
+        # Store errors to show after Live display closes
+        build_errors = {}
+
+        # Display all builds in a single Live view
+        with Live(render_build_status(), console=console, refresh_per_second=4) as live:
+            while futures:
+                # Update display
+                live.update(render_build_status())
+
+                # Check for completed builds
+                done_futures = []
+                for future in futures:
+                    if future.done():
+                        done_futures.append(future)
+
+                for future in done_futures:
+                    idx, build_info = futures.pop(future)
+                    service_name = build_info["service_name"]
+                    try:
+                        success, error_message = future.result()
+                        build_results[idx] = success
+                        if not success:
+                            # Store error to show after Live closes
+                            build_errors[service_name] = error_message
+
+                            # Fail-fast: Cancel all remaining builds
+                            if futures:
+                                # Cancel all remaining futures
+                                for remaining_future in futures:
+                                    remaining_future.cancel()
+                                # Terminate all running processes
+                                with build_state_lock:
+                                    for name, state in build_state.items():
+                                        if name != service_name and "process" in state:
+                                            proc = state.get("process")
+                                            if proc and proc.poll() is None:
+                                                try:
+                                                    proc.terminate()
+                                                    state["status"] = "cancelled"
+                                                except Exception:
+                                                    pass
+
+                                # Clear remaining futures
+                                futures.clear()
+                                break
+
+                    except Exception as e:
+                        build_results[idx] = False
+                        # Provide user-friendly error message
+                        error_msg = str(e)
+                        if "not found" in error_msg.lower():
+                            build_errors[service_name] = (
+                                "Build configuration error: Required files not found."
+                            )
+                        else:
+                            build_errors[service_name] = (
+                                "Build failed due to an unexpected error."
+                            )
+
+                        # Fail-fast: Cancel all remaining builds
+                        if futures:
+                            for remaining_future in futures:
+                                remaining_future.cancel()
+                            with build_state_lock:
+                                for name, state in build_state.items():
+                                    if name != service_name and "process" in state:
+                                        proc = state.get("process")
+                                        if proc and proc.poll() is None:
+                                            try:
+                                                proc.terminate()
+                                                state["status"] = "cancelled"
+                                            except Exception:
+                                                pass
+                            futures.clear()
+                            break
+
+                if futures:
+                    time.sleep(0.25)  # Update every 250ms
+
+        # Final update
+        live.update(render_build_status())
+
+        # Show errors after Live display is closed
+        if build_errors:
+            for service_name, error_message in build_errors.items():
+                view.show_error(
+                    f"Build failed for '{service_name}'", suggestion=error_message
+                )
+
+    # Check if any builds failed
+    if not all(build_results.values()):
+        raise typer.Exit(1)
+
+    return yaml.dump(compose_data, default_flow_style=False)
+
+
 def _handle_builds(
     compose_data: dict,
     compose_file_path: Path,
@@ -940,8 +1606,7 @@ def _handle_builds(
     yes: bool = False,
     target_services: list[str] | None = None,
 ) -> str:
-    """Handle building and pushing images if needed, optionally for only target services"""
-    view = DeployView(console)
+    """Handle building and pushing images if needed, optionally for only target services."""
     services_to_build = []
 
     target_services_set = set(target_services) if target_services else None
@@ -971,64 +1636,39 @@ def _handle_builds(
     if not services_to_build:
         return yaml.dump(compose_data, default_flow_style=False)
 
-    # Build and push images
-    registry = create_registry(
-        RegistryType(config.registry_type), deployment_name=deployment_name
+    # Remote builds are required - handle errors gracefully
+    depot_available = _is_depot_available()
+
+    if not depot_available:
+        error_card = ErrorCard(
+            message="Remote build service is not available.",
+            title="🔨 Build Error",
+            suggestion="Install LazyCloud with all dependencies:\n  curl -LsSf https://lazycloud.dev/install.sh | sh",
+        )
+        console.print(error_card)
+        raise typer.Exit(code=1)
+
+    # Get build token - handle errors gracefully
+    depot_token = None
+    try:
+        depot_token = _get_depot_token(deployment_name)
+    except APIError as e:
+        error_card = ErrorCard(
+            message="Remote builds are not available.",
+            title="🔨 Build Error",
+            suggestion=f"Could not get build token: {e}\nPlease contact support if this issue persists.",
+        )
+        console.print(error_card)
+        raise typer.Exit(code=1)
+
+    # Build status will be shown in card below
+    return _handle_builds_with_depot(
+        compose_data=compose_data,
+        compose_file_path=compose_file_path,
+        deployment_name=deployment_name,
+        services_to_build=services_to_build,
+        depot_token=depot_token,
     )
-
-    # Create build status tracker (don't print the build info card separately)
-    build_status = view.show_build_status(services_to_build)
-
-    with Live(build_status, console=console, refresh_per_second=4, auto_refresh=True):
-        setup_response = registry.setup()
-        if not setup_response.success:
-            view.show_error(f"Registry setup failed: {setup_response.error_message}")
-            raise typer.Exit(1)
-
-        # Batch check all images at once
-        all_image_names = [build_info["image_name"] for build_info in services_to_build]
-        image_exists_map = registry.images_exist(all_image_names)
-
-        for i, build_info in enumerate(services_to_build):
-            # Check if image already exists in registry
-            image_name = build_info["image_name"]
-            if image_exists_map.get(image_name, False):
-                build_status.update_service(
-                    i, TaskStatus.COMPLETED, f"Using cached image: {image_name}"
-                )
-                continue
-
-            # Update status to building
-            build_status.update_service(i, "building", f"Building {image_name}")
-
-            context_path = compose_file_path.parent / build_info["context"]
-
-            build_response = registry.build_image(
-                image_name, context_path, build_info["dockerfile"]
-            )
-
-            if not build_response.success:
-                build_status.update_service(i, TaskStatus.ERROR, "Build failed")
-                view.show_error(
-                    f"Failed to build {build_info['service_name']}:\n\n{build_response.error_message}"
-                )
-                raise typer.Exit(1)
-
-            # Update status to pushing
-            build_status.update_service(i, TaskStatus.PENDING, "Pushing to registry")
-
-            push_response = registry.push_image(build_info["image_name"])
-
-            if not push_response.success:
-                build_status.update_service(i, TaskStatus.ERROR, "Push failed")
-                view.show_error(
-                    f"Failed to push {build_info['service_name']}:\n\n{push_response.error_message}"
-                )
-                raise typer.Exit(1)
-
-            build_status.update_service(i, TaskStatus.COMPLETED, "Ready")
-
-    return yaml.dump(compose_data, default_flow_style=False)
 
 
 def _get_deployment_diff(

@@ -64,6 +64,11 @@ class AppConfig(BaseModel):
     REGISTRY_PASSWORD: str | None = os.getenv("REGISTRY_PASSWORD", None)
     REGISTRY_REGION: str | None = os.getenv("REGISTRY_REGION", None)
 
+    # Depot Configuration (Remote Builds)
+    DEPOT_ENABLED: bool = os.getenv("DEPOT_ENABLED", "true").lower() == "true"
+    DEPOT_API_TOKEN: str = os.getenv("DEPOT_API_TOKEN", "")
+    DEPOT_ORG_ID: str = os.getenv("DEPOT_ORG_ID", "")
+
     # Monitoring Configuration
     PROMETHEUS_URL: str = os.getenv("PROMETHEUS_URL", "http://localhost:9090")
 

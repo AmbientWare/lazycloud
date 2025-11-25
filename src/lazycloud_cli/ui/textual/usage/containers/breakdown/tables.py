@@ -20,25 +20,45 @@ class UsageMetricsTable(DataTable):
         memory_hours,
         s3_hours,
         efs_hours,
+        build_minutes,
+        public_endpoint_hours,
         cpu_cost=None,
         memory_cost=None,
         s3_cost=None,
         efs_cost=None,
+        build_cost=None,
+        endpoint_cost=None,
     ):
         """Update the table with usage metrics and costs"""
         self.clear()
         cpu_cost_str = f"{cpu_cost:.2f}" if cpu_cost is not None else "-"
         memory_cost_str = f"{memory_cost:.2f}" if memory_cost is not None else "-"
-        s3_cost_str = f"{s3_cost:.2f}" if s3_cost is not None else "-"
-        efs_cost_str = f"{efs_cost:.2f}" if efs_cost is not None else "-"
+
+        # Combined storage
+        storage_hours = s3_hours + efs_hours
+        storage_cost = None
+        if s3_cost is not None and efs_cost is not None:
+            storage_cost = s3_cost + efs_cost
+        storage_cost_str = f"{storage_cost:.2f}" if storage_cost is not None else "-"
+
+        build_cost_str = f"{build_cost:.2f}" if build_cost is not None else "-"
+        endpoint_cost_str = f"{endpoint_cost:.2f}" if endpoint_cost is not None else "-"
 
         self.add_row("CPU (core)", f"{cpu_hours:.2f}", cpu_cost_str, key="cpu")
         self.add_row(
             "Memory (GB)", f"{memory_hours:.2f}", memory_cost_str, key="memory"
         )
-        self.add_row("Standard Storage (GB)", f"{s3_hours:.2f}", s3_cost_str, key="s3")
         self.add_row(
-            "Performance Storage (GB)", f"{efs_hours:.2f}", efs_cost_str, key="efs"
+            "Storage (GB)", f"{storage_hours:.2f}", storage_cost_str, key="storage"
+        )
+        self.add_row(
+            "Build Minutes", f"{build_minutes:.2f}", build_cost_str, key="build"
+        )
+        self.add_row(
+            "Endpoints (hours)",
+            f"{public_endpoint_hours:.2f}",
+            endpoint_cost_str,
+            key="endpoints",
         )
 
 

@@ -160,22 +160,33 @@ class UsageOverviewSection(Container):
             key="memory",
         )
 
-        # Standard Storage row
-        s3_cost_str = f"{costs.s3_cost:.2f}" if costs else "-"
+        # Storage row (combined S3 + EFS)
+        storage_hours = metrics.s3_gb_hours + metrics.efs_gb_hours
+        storage_cost = (costs.s3_cost + costs.efs_cost) if costs else None
+        storage_cost_str = f"{storage_cost:.2f}" if storage_cost is not None else "-"
         self._metrics_table.add_row(
-            "Standard Storage (GB)",
-            f"{metrics.s3_gb_hours:.2f}",
-            s3_cost_str,
-            key="s3",
+            "Storage (GB)",
+            f"{storage_hours:.2f}",
+            storage_cost_str,
+            key="storage",
         )
 
-        # Performance Storage row
-        efs_cost_str = f"{costs.efs_cost:.2f}" if costs else "-"
+        # Build Minutes row
+        build_cost_str = f"{costs.build_cost:.2f}" if costs else "-"
         self._metrics_table.add_row(
-            "Performance Storage (GB)",
-            f"{metrics.efs_gb_hours:.2f}",
-            efs_cost_str,
-            key="efs",
+            "Build Minutes",
+            f"{metrics.build_minutes:.2f}",
+            build_cost_str,
+            key="build",
+        )
+
+        # Endpoints row
+        endpoint_cost_str = f"{costs.endpoint_cost:.2f}" if costs else "-"
+        self._metrics_table.add_row(
+            "Endpoints (hours)",
+            f"{metrics.public_endpoint_hours:.2f}",
+            endpoint_cost_str,
+            key="endpoints",
         )
 
         # Total row

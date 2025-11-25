@@ -90,6 +90,8 @@ class MeterNames(StrEnum):
     MEMORY_USAGE = "Memory Usage"
     STANDARD_STORAGE = "Standard Storage"
     PREMIUM_STORAGE = "Premium Storage"
+    BUILD_MINUTES = "Build Minutes"
+    PUBLIC_ENDPOINTS = "Public Endpoints"
 
 
 # Time conversion constants
@@ -105,6 +107,8 @@ METER_METADATA_FIELDS = {
     MeterNames.MEMORY_USAGE: "memory_gb_hours",
     MeterNames.STANDARD_STORAGE: "s3_gb_hours",
     MeterNames.PREMIUM_STORAGE: "efs_gb_hours",
+    MeterNames.BUILD_MINUTES: "build_minutes",
+    MeterNames.PUBLIC_ENDPOINTS: "public_endpoint_hours",
 }
 
 # Storage class name constants

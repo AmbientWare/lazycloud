@@ -3,6 +3,7 @@ from functools import lru_cache
 from lazycloud_api.config import app_config
 from lazycloud_api.services.cloudflare import CloudflareService
 from lazycloud_api.services.cost_breakdown_service import CostBreakdownService
+from lazycloud_api.services.depot_service import DepotService
 from lazycloud_api.services.ecr_auth import ECRAuthService
 from lazycloud_api.services.invitation_service import InvitationService
 from lazycloud_api.services.polar import PolarService
@@ -59,6 +60,7 @@ def get_user_onboarding_service() -> UserOnboardingService:
 def get_usage_service() -> UsageService:
     return UsageService(
         cost_service=get_cost_breakdown_service(),
+        depot_service=get_depot_service(),
     )
 
 
@@ -79,7 +81,17 @@ def get_invitation_service() -> InvitationService:
     return InvitationService()
 
 
+@lru_cache(maxsize=1)
+def get_depot_service() -> DepotService:
+    return DepotService(
+        api_token=app_config.DEPOT_API_TOKEN,
+        org_id=app_config.DEPOT_ORG_ID,
+        enabled=app_config.DEPOT_ENABLED,
+    )
+
+
 __all__ = [
+    "DepotService",
     "ECRAuthService",
     "CloudflareService",
     "CostBreakdownService",
@@ -89,6 +101,7 @@ __all__ = [
     "InvitationService",
     "UserOnboardingService",
     "UsageService",
+    "get_depot_service",
     "get_ecr_auth_service",
     "get_cloudflare_service",
     "get_cost_breakdown_service",
