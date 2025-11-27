@@ -1,7 +1,7 @@
 """API test fixtures with AsyncClient and dependency overrides."""
 
 import uuid
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -11,7 +11,11 @@ from lazycloud_api.api.dependencies import (
     check_workspace_limit,
     get_user_product_features,
 )
-from lazycloud_api.api.security import get_current_active_user, require_admin
+from lazycloud_api.api.security import (
+    get_current_active_user,
+    get_current_user,
+    require_admin,
+)
 from lazycloud_api.api.v1 import (
     api_keys_router,
     cli_version_router,
@@ -290,7 +294,9 @@ async def client(api_db: Database, api_user: UserPydantic) -> AsyncClient:
 
     # Override dependencies
     app.dependency_overrides[get_db] = lambda: api_db
+    app.dependency_overrides[get_current_user] = lambda: api_user
     app.dependency_overrides[get_current_active_user] = lambda: api_user
+    app.dependency_overrides[require_admin] = lambda: api_user
     app.dependency_overrides[get_user_product_features] = make_test_features
     app.dependency_overrides[check_workspace_limit] = lambda: None
     app.dependency_overrides[get_usage_service] = make_mock_usage_service
@@ -299,9 +305,31 @@ async def client(api_db: Database, api_user: UserPydantic) -> AsyncClient:
     app.dependency_overrides[get_depot_service] = make_mock_depot_service
     app.dependency_overrides[get_ecr_auth_service] = make_mock_ecr_auth_service
 
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        yield ac
+    # Mock quota capacity checks to bypass limits in tests
+    # Also mock ECR auth service for HelmValuesGenerator (called directly, not via DI)
+    mock_ecr_auth = make_mock_ecr_auth_service()
+    mock_ecr_auth.get_pull_policy = MagicMock(return_value="IfNotPresent")
+    mock_ecr_auth.get_repository_url = MagicMock(
+        side_effect=lambda workspace_id,
+        deployment_name,
+        image_name: f"{workspace_id}/{deployment_name}/{image_name}"
+    )
+
+    with (
+        patch(
+            "lazycloud_api.services.compose.validation.verify_quota_capacity",
+            new_callable=AsyncMock,
+        ) as mock_verify_quota,
+        patch(
+            "lazycloud_api.services.k8s.helm_values_generator.get_ecr_auth_service",
+            return_value=mock_ecr_auth,
+        ),
+    ):
+        mock_verify_quota.return_value = None
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            yield ac
 
     app.dependency_overrides.clear()
 
@@ -313,6 +341,7 @@ async def admin_client(api_db: Database, api_admin_user: UserPydantic) -> AsyncC
     app = get_test_app()
 
     app.dependency_overrides[get_db] = lambda: api_db
+    app.dependency_overrides[get_current_user] = lambda: api_admin_user
     app.dependency_overrides[get_current_active_user] = lambda: api_admin_user
     app.dependency_overrides[require_admin] = lambda: api_admin_user
     app.dependency_overrides[get_user_product_features] = make_test_features
