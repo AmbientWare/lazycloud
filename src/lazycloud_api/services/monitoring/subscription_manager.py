@@ -6,10 +6,14 @@ from uuid import uuid4
 from loguru import logger
 
 from lazycloud_api.services.monitoring.base import BaseMonitor
+from lazycloud_api.services.monitoring.deploy_progress_monitor import (
+    DeployProgressMonitor,
+)
 from lazycloud_api.services.monitoring.deployment_monitor import DeploymentMonitor
 from lazycloud_api.services.monitoring.log_monitor import LogMonitor
 from lazycloud_api.services.monitoring.monitor_config import (
     DeploymentMonitorConfig,
+    DeployProgressMonitorConfig,
     LogMonitorConfig,
     MonitorConfig,
     ServiceMonitorConfig,
@@ -127,8 +131,14 @@ class SubscriptionManager:
                 tail_lines=config.tail_lines,
                 callback=None,  # Callbacks will be added via add_callback
             )
-        else:
-            raise TypeError(f"Unsupported monitor config type: {type(config).__name__}")
+        elif isinstance(config, DeployProgressMonitorConfig):
+            return DeployProgressMonitor(
+                deployment_id=config.deployment_id,
+                deployment_name=config.deployment_name,
+                namespace=config.namespace,
+                helm_values=config.helm_values,
+                callback=None,  # Callbacks will be added via add_callback
+            )
 
     async def unsubscribe(self, monitor_key: str, subscription_id: str) -> None:
         """Unsubscribe from a monitor"""

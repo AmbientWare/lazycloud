@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from lazycloud_api.api.dependencies import get_user_product_features
 from lazycloud_api.api.security import get_current_active_user, require_admin
 from lazycloud_api.billing.product_details.features import BaseFeatures
-from lazycloud_api.database import db
+from lazycloud_api.database import Database, get_db
 from lazycloud_api.database.users import UserPydantic
 from lazycloud_api.services import get_user_onboarding_service
 from lazycloud_api.services.user_onboarding import UserOnboardingService
@@ -31,6 +31,7 @@ async def current_user(
 async def get_user_features(
     current_user: UserPydantic = Depends(get_current_active_user),
     features: BaseFeatures = Depends(get_user_product_features),
+    db: Database = Depends(get_db),
 ) -> UserFeaturesResponse:
     """Get the current user's subscription features and current usage counts."""
     workspace_count = await db.workspaces.get_active_workspace_count(current_user.id)

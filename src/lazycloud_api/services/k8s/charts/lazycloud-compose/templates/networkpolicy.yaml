@@ -16,7 +16,7 @@ metadata:
     {{- include "lazycloud-compose.labels" $ | nindent 4 }}
     app.kubernetes.io/name: {{ $service.name }}
     app.kubernetes.io/component: network-policy
-    lazycloud.io/service: {{ $service.name }}
+    lazycloud.dev/service: {{ $service.name }}
 spec:
   podSelector:
     matchLabels:
@@ -33,10 +33,10 @@ spec:
   - from:
     - namespaceSelector:
         matchLabels:
-          lazycloud.io/workspace-id: {{ $.Values.global.workspaceId | quote }}
+          lazycloud.dev/workspace-id: {{ $.Values.global.workspaceId | quote }}
       podSelector:
         matchLabels:
-          lazycloud.io/network.{{ $network.name }}: "true"
+          lazycloud.dev/network.{{ $network.name }}: "true"
   {{- end }}
   {{- end }}
   
@@ -78,10 +78,10 @@ spec:
   - to:
     - namespaceSelector:
         matchLabels:
-          lazycloud.io/workspace-id: {{ $.Values.global.workspaceId | quote }}
+          lazycloud.dev/workspace-id: {{ $.Values.global.workspaceId | quote }}
       podSelector:
         matchLabels:
-          lazycloud.io/network.{{ $network.name }}: "true"
+          lazycloud.dev/network.{{ $network.name }}: "true"
   {{- end }}
   
   # Allow external traffic only if explicitly enabled for this service

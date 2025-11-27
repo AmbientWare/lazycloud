@@ -13,7 +13,7 @@ metadata:
     {{- include "lazycloud-compose.labels" $ | nindent 4 }}
     app.kubernetes.io/name: {{ $service.name }}
     app.kubernetes.io/component: ingress
-    lazycloud.io/service: {{ $service.name }}
+    lazycloud.dev/service: {{ $service.name }}
     {{- if $service.labels }}
     {{- toYaml $service.labels | nindent 4 }}
     {{- end }}

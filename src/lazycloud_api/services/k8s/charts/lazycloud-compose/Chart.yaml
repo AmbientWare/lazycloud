@@ -14,6 +14,6 @@ sources:
   - https://github.com/lazycloud/lazycloud-compose
 maintainers:
   - name: LazyCloud Team
-    email: team@lazycloud.io
+    email: team@lazycloud.dev
 annotations:
   category: Deployment

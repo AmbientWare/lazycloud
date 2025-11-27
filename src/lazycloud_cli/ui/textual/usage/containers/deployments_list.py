@@ -8,6 +8,7 @@ from lazycloud_cli.ui.textual.components.listview import (
     ListItemData,
     ListView,
 )
+from lazycloud_cli.ui.views.helpers.formatters import format_short_date
 from shared.responses.usage import (
     WorkspaceUsageSummary,
 )
@@ -89,6 +90,7 @@ class ActiveDeploymentsContainer(Container):
                         id=deployment.deployment_id,
                         name=deployment.deployment_name or "Unknown",
                         status=None,
+                        extra_text=format_short_date(deployment.deployed_at),
                         data=deployment,
                     )
                 )
@@ -223,6 +225,7 @@ class InactiveDeploymentsContainer(Container):
                         id=deployment.deployment_id,
                         name=deployment.deployment_name or "Unknown",
                         status=None,
+                        extra_text=format_short_date(deployment.deleted_at),
                         data=deployment,
                     )
                 )

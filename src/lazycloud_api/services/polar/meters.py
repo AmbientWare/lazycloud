@@ -135,7 +135,7 @@ class PolarMetersModule:
             return None
 
     async def get_meter_by_name(self, name: str, organization_id: str) -> Meter | None:
-        """Get a meter from Polar by name and organization"""
+        """Get a meter from Polar by name and organization (excludes archived)."""
         if not self.enabled:
             logger.info(
                 f"Polar disabled, skipping meter lookup for name {name} in org "
@@ -144,8 +144,10 @@ class PolarMetersModule:
             return None
 
         try:
-            # List meters filtered by name query
-            meters = await self.list_meters(organization_id=organization_id, query=name)
+            # List meters filtered by name query, excluding archived
+            meters = await self.list_meters(
+                organization_id=organization_id, query=name, is_archived=False
+            )
 
             # Find exact name match
             for meter in meters:

@@ -70,7 +70,7 @@ METER_DEFINITIONS = [
         ),
     ),
     MeterDefinition(
-        name=MeterNames.PREMIUM_STORAGE,
+        name=MeterNames.SHARED_STORAGE,
         filter=Filter(
             conjunction=polar_sdk.FilterConjunction.OR,
             clauses=[
@@ -83,7 +83,7 @@ METER_DEFINITIONS = [
         ),
         aggregation=PropertyAggregation(
             func=polar_sdk.Func.SUM,
-            property=METER_METADATA_FIELDS[MeterNames.PREMIUM_STORAGE],
+            property=METER_METADATA_FIELDS[MeterNames.SHARED_STORAGE],
         ),
     ),
     MeterDefinition(

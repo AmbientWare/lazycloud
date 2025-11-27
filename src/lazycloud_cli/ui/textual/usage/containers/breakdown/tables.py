@@ -1,6 +1,6 @@
 from textual.widgets import DataTable
 
-from shared.models.billing import STORAGE_CLASS_S3
+from shared.models.billing import STORAGE_CLASS_EBS
 from shared.responses.usage import ServiceCostBreakdown, VolumeCostBreakdown
 
 
@@ -18,14 +18,14 @@ class UsageMetricsTable(DataTable):
         self,
         cpu_hours,
         memory_hours,
-        s3_hours,
-        efs_hours,
+        standard_hours,
+        shared_hours,
         build_minutes,
         public_endpoint_hours,
         cpu_cost=None,
         memory_cost=None,
-        s3_cost=None,
-        efs_cost=None,
+        standard_cost=None,
+        shared_cost=None,
         build_cost=None,
         endpoint_cost=None,
     ):
@@ -35,10 +35,10 @@ class UsageMetricsTable(DataTable):
         memory_cost_str = f"{memory_cost:.2f}" if memory_cost is not None else "-"
 
         # Combined storage
-        storage_hours = s3_hours + efs_hours
+        storage_hours = standard_hours + shared_hours
         storage_cost = None
-        if s3_cost is not None and efs_cost is not None:
-            storage_cost = s3_cost + efs_cost
+        if standard_cost is not None and shared_cost is not None:
+            storage_cost = standard_cost + shared_cost
         storage_cost_str = f"{storage_cost:.2f}" if storage_cost is not None else "-"
 
         build_cost_str = f"{build_cost:.2f}" if build_cost is not None else "-"
@@ -109,9 +109,7 @@ class VolumesCostTable(DataTable):
         self.clear()
         for idx, volume in enumerate(volumes):
             storage_type = (
-                "Standard"
-                if volume.storage_class == STORAGE_CLASS_S3
-                else "Performance"
+                "Standard" if volume.storage_class == STORAGE_CLASS_EBS else "Shared"
             )
             self.add_row(
                 volume.volume_name,

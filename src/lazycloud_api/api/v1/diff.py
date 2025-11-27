@@ -6,16 +6,20 @@ from loguru import logger
 
 from lazycloud_api.api.dependencies import require_workspace_admin
 from lazycloud_api.api.security import get_current_active_user
-from lazycloud_api.database import db
+from lazycloud_api.database import Database, get_db
 from lazycloud_api.database.compose import ComposeDeploymentPydantic
 from lazycloud_api.database.users import UserPydantic
-from lazycloud_api.services.compose.diff_checker import ComposeDiffChecker
+from lazycloud_api.services.compose.diff_checker import (
+    ComposeDiffChecker,
+    detect_storage_type_changes,
+)
 from lazycloud_api.services.compose.parser import ComposeParser
 from lazycloud_api.services.compose.validation import validate_deployment_request
 from lazycloud_api.services.compose.validator import ComposeValidator
 from lazycloud_api.services.k8s import create_ns_name
+from lazycloud_api.services.k8s.client import get_namespace_pvcs
 from shared.models.deployments import DeploymentStates
-from shared.models.diffs import EnvVarChanges
+from shared.models.diffs import EnvVarChanges, StorageTypeChange
 from shared.models.secrets import SecretSource
 from shared.requests.deployments import DiffRequest, DiffType
 from shared.responses.deployments import DiffResponse
@@ -26,10 +30,11 @@ diff_router = APIRouter(prefix="/diff")
 async def _get_deployment_or_verify_workspace(
     request: DiffRequest,
     current_user: UserPydantic = Depends(get_current_active_user),
+    db: Database = Depends(get_db),
 ):
     """Get deployment by name for existing, verify workspace access for new."""
     # Verify workspace access first
-    await require_workspace_admin(request.workspace_id, current_user)
+    await require_workspace_admin(request.workspace_id, current_user, db=db)
 
     if request.diff_type == DiffType.NEW:
         return None
@@ -53,6 +58,7 @@ async def get_deployment_diff(
     deployment: ComposeDeploymentPydantic | None = Depends(
         _get_deployment_or_verify_workspace
     ),
+    db: Database = Depends(get_db),
 ) -> DiffResponse:
     """Compare current deployment with proposed changes."""
 
@@ -96,8 +102,9 @@ async def get_deployment_diff(
         )
 
     # Get current compose file for comparison
+    # Only parse if compose_yaml has content (empty means nothing deployed yet)
     current_compose = None
-    if deployment:
+    if deployment and deployment.compose_yaml:
         try:
             current_compose_data = yaml.safe_load(deployment.compose_yaml)
             current_compose = ComposeParser.parse_dict(current_compose_data)
@@ -112,9 +119,9 @@ async def get_deployment_diff(
     )
 
     # Perform full validation (Helm generation, quota checks) if basic validation passed
-    can_deploy = True
+    can_deploy = not validation_result.errors
     full_validation_errors = []
-    if not validation_result.errors:
+    if can_deploy:
         try:
             # Create temporary deployment for full validation
             temp_deployment = ComposeDeploymentPydantic(
@@ -148,14 +155,33 @@ async def get_deployment_diff(
     # Combine basic and full validation errors
     all_errors = list(validation_result.errors or []) + full_validation_errors
 
+    # Detect storage type changes (EBS ↔ EFS transitions)
+    storage_type_changes: list[StorageTypeChange] | None = None
+    if deployment and request.diff_type == DiffType.EXISTING:
+        try:
+            existing_pvcs = get_namespace_pvcs(namespace)
+            if existing_pvcs:
+                changes = detect_storage_type_changes(compose_file, existing_pvcs)
+                if changes:
+                    storage_type_changes = changes
+
+        except Exception as e:
+            logger.warning(f"Failed to detect storage type changes: {e}")
+
+    # Only return existing_compose_yaml if it has content (empty means nothing deployed yet)
+    existing_yaml = None
+    if deployment and deployment.compose_yaml:
+        existing_yaml = deployment.compose_yaml
+
     return DiffResponse(
         deployment_id=deployment.id if deployment else "new",
         namespace=namespace,
         has_changes=compose_diff.has_changes(),
         diff=compose_diff,
         env_var_changes=env_var_changes,
+        storage_type_changes=storage_type_changes,
         errors=all_errors if all_errors else None,
         warnings=validation_result.warnings,
         can_deploy=can_deploy,
-        existing_compose_yaml=deployment.compose_yaml if deployment else None,
+        existing_compose_yaml=existing_yaml,
     )

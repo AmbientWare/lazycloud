@@ -76,8 +76,8 @@ class PolarUsageModule:
         # Convert to hours for billing (keep raw values for audit trail)
         cpu_core_seconds = usage_record.cpu_core_seconds
         memory_gb_seconds = usage_record.memory_gb_seconds
-        s3_gb_hours = usage_record.s3_gb_hours
-        efs_gb_hours = usage_record.efs_gb_hours
+        standard_gb_hours = usage_record.standard_gb_hours
+        shared_gb_hours = usage_record.shared_gb_hours
         build_minutes = usage_record.build_minutes
         public_endpoint_hours = usage_record.public_endpoint_hours
 
@@ -98,8 +98,8 @@ class PolarUsageModule:
             # Meter-specific fields (these are what meters aggregate on)
             METER_METADATA_FIELDS[MeterNames.CPU_USAGE]: cpu_core_hours,
             METER_METADATA_FIELDS[MeterNames.MEMORY_USAGE]: memory_gb_hours,
-            METER_METADATA_FIELDS[MeterNames.STANDARD_STORAGE]: s3_gb_hours,
-            METER_METADATA_FIELDS[MeterNames.PREMIUM_STORAGE]: efs_gb_hours,
+            METER_METADATA_FIELDS[MeterNames.STANDARD_STORAGE]: standard_gb_hours,
+            METER_METADATA_FIELDS[MeterNames.SHARED_STORAGE]: shared_gb_hours,
             METER_METADATA_FIELDS[MeterNames.BUILD_MINUTES]: build_minutes,
             METER_METADATA_FIELDS[MeterNames.PUBLIC_ENDPOINTS]: public_endpoint_hours,
         }
@@ -108,8 +108,8 @@ class PolarUsageModule:
         total_quantity = (
             cpu_core_hours
             + memory_gb_hours
-            + s3_gb_hours
-            + efs_gb_hours
+            + standard_gb_hours
+            + shared_gb_hours
             + build_minutes
             + public_endpoint_hours
         )
@@ -126,7 +126,7 @@ class PolarUsageModule:
             logger.info(
                 f"Successfully sent usage event for workspace {usage_record.workspace_id}: "
                 f"CPU={cpu_core_hours:.4f}h, Memory={memory_gb_hours:.4f}GB-h, "
-                f"S3={s3_gb_hours:.2f}GB-h, EFS={efs_gb_hours:.2f}GB-h, "
+                f"Standard={standard_gb_hours:.2f}GB-h, Shared={shared_gb_hours:.2f}GB-h, "
                 f"Build={build_minutes:.2f}min, Endpoints={public_endpoint_hours:.2f}h "
                 f"(total={total_quantity:.4f})"
             )

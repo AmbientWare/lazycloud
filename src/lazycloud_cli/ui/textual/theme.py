@@ -33,6 +33,10 @@ class Symbols(StrEnum):
     WARNING = "⚠"
     CHECKMARK = "✔"
     RIGHT_TRIANGLE = "▶"
+    CIRCLE_FILLED = "●"
+    CIRCLE_EMPTY = "○"
+    CIRCLE_HALF = "◐"
+    CROSS = "✗"
 
 
 class Layout:

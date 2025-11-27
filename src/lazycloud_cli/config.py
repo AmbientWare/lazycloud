@@ -2,11 +2,13 @@ import os
 from pathlib import Path
 
 from pydantic import PrivateAttr, field_validator
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class CLIConfig(BaseSettings):
     """CLI Configuration"""
+
+    model_config = SettingsConfigDict(env_prefix="LAZYCLOUD_")
 
     # API Configuration
     api_base_url: str = "http://localhost:8000"
@@ -19,9 +21,6 @@ class CLIConfig(BaseSettings):
     # Private attributes for workspace management
     _active_workspace_id: str | None = PrivateAttr(default=None)
     _active_workspace_name: str | None = PrivateAttr(default=None)
-
-    class Config:
-        env_prefix = "LAZYCLOUD_"
 
     def __init__(self, **data):
         super().__init__(**data)

@@ -1,7 +1,7 @@
 from loguru import logger
 from prefect import flow
 
-from lazycloud_api.database import db
+from lazycloud_api.database import get_db_context
 from lazycloud_api.prefect_app.deployment.destroy import destroy_compose_task
 
 
@@ -11,9 +11,10 @@ async def cleanup_orphaned_deployments() -> dict:
     logger.info("Starting cleanup of orphaned deployments in deleted workspaces")
 
     # Find orphaned deployments using repository method
-    orphaned_deployments = (
-        await db.compose_deployments.find_orphaned_in_deleted_workspaces()
-    )
+    async with get_db_context() as db:
+        orphaned_deployments = (
+            await db.compose_deployments.find_orphaned_in_deleted_workspaces()
+        )
 
     if not orphaned_deployments:
         logger.info("No orphaned deployments found")
@@ -36,9 +37,9 @@ async def cleanup_orphaned_deployments() -> dict:
         try:
             # Use transaction with lock to prevent race conditions
             # Re-check that current_task_run_id is still NULL before triggering
-            async with db.compose_deployments.transaction() as session:
+            async with get_db_context() as db:
                 deployment_check = await db.compose_deployments.get_by_id(
-                    deployment.id, with_lock=True, session=session, include_deleted=True
+                    deployment.id, with_lock=True, include_deleted=True
                 )
 
                 # Double-check: if task_run_id was set by another process, skip
@@ -61,7 +62,9 @@ async def cleanup_orphaned_deployments() -> dict:
 
                 # Set task_run_id to prevent duplicate triggers
                 deployment_check.current_task_run_id = task_future.task_run_id
-                await db.compose_deployments.update(deployment_check, session=session)
+                async with get_db_context() as db:
+                    await db.compose_deployments.update(deployment_check)
+
                 triggered += 1
 
         except Exception as e:

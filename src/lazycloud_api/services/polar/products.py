@@ -1,3 +1,6 @@
+import asyncio
+
+from cachetools import TTLCache
 from loguru import logger
 from polar_sdk import Polar
 from polar_sdk.models import (
@@ -11,6 +14,9 @@ from polar_sdk.models import (
 
 class PolarProductsModule:
     """Service for managing product operations with Polar."""
+
+    _product_cache: TTLCache = TTLCache(maxsize=50, ttl=360)
+    _fetch_locks: dict[str, asyncio.Lock] = {}
 
     def __init__(self, client: Polar, enabled: bool):
         """Initialize the Polar products module."""
@@ -55,31 +61,53 @@ class PolarProductsModule:
             return None
 
     async def get_product(self, product_id: str) -> Product | None:
-        """Get a product from Polar by ID"""
+        """Get a product from Polar by ID (cached for 1 hour)."""
         if not self.enabled:
             logger.info(f"Polar disabled, skipping product retrieval for {product_id}")
             return None
 
-        try:
-            result = await self.client.products.get_async(id=product_id)
-            logger.info(f"Retrieved Polar product: {product_id}")
-            return result
+        # Fast path: check cache without lock
+        if product_id in self._product_cache:
+            logger.debug(f"Using cached Polar product: {product_id}")
+            return self._product_cache[product_id]
 
-        except Exception as e:
-            logger.error(f"Failed to get Polar product {product_id}: {e}")
-            return None
+        # Get or create lock for this product to prevent thundering herd
+        if product_id not in self._fetch_locks:
+            self._fetch_locks[product_id] = asyncio.Lock()
+        lock = self._fetch_locks[product_id]
 
-    async def list_products(self, organization_id: str) -> list[Product]:
+        async with lock:
+            # Double-check cache after acquiring lock
+            if product_id in self._product_cache:
+                logger.debug(f"Using cached Polar product: {product_id}")
+                return self._product_cache[product_id]
+
+            try:
+                result = await self.client.products.get_async(id=product_id)
+                self._product_cache[product_id] = result
+                logger.info(f"Retrieved and cached Polar product: {product_id}")
+                return result
+
+            except Exception as e:
+                logger.error(f"Failed to get Polar product {product_id}: {e}")
+                return None
+
+    async def list_products(
+        self, organization_id: str, is_archived: bool | None = None
+    ) -> list[Product]:
         """List products from Polar for the organization"""
         if not self.enabled:
             logger.info("Polar disabled, skipping product listing")
             return []
 
         try:
+            # Build kwargs for list call
+            kwargs = {"organization_id": organization_id}
+            if is_archived is not None:
+                kwargs["is_archived"] = is_archived
+
             # List products for the organization
-            result = await self.client.products.list_async(
-                organization_id=organization_id
-            )
+            result = await self.client.products.list_async(**kwargs)
             logger.info(f"Retrieved {len(result.result.items)} Polar products")
             return result.result.items
 
@@ -143,8 +171,10 @@ class PolarProductsModule:
             return None
 
         try:
-            # List products for the organization and find by name
-            products = await self.list_products(organization_id=organization_id)
+            # List only active products for the organization and find by name
+            products = await self.list_products(
+                organization_id=organization_id, is_archived=False
+            )
 
             for product in products:
                 if product.name == name:

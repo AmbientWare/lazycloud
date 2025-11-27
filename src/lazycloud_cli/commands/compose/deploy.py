@@ -2,21 +2,23 @@ import asyncio
 import shutil
 import subprocess
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 
 import typer
 import yaml
 from rich.console import Console
 from rich.live import Live
-from rich.panel import Panel
+from rich.prompt import Confirm
 
 from lazycloud_cli.api import APIError, api
 from lazycloud_cli.config import config
 from lazycloud_cli.lazycloud_file import LazyCloudFile
-from lazycloud_cli.logging import logger
+from lazycloud_cli.ui.colors import Colors
 from lazycloud_cli.ui.components.card import Card
+from lazycloud_cli.ui.components.deploy_progress import ServiceStatusDisplay
 from lazycloud_cli.ui.components.info_cards import ErrorCard
 from lazycloud_cli.ui.views import DeployView
 from lazycloud_cli.ui.views.helpers.env_helpers import (
@@ -25,10 +27,11 @@ from lazycloud_cli.ui.views.helpers.env_helpers import (
     update_diff_with_collected_secrets,
 )
 from shared.models.diffs import ComposeDiff, EnvVarChanges, ResourceSection
+from shared.models.monitoring import DeployOverallPhase
 from shared.models.secrets import Secret, SecretCollection, SecretSource
 from shared.models.statuses import TaskStatus
 from shared.requests.deployments import DiffType
-from shared.responses.builds import DepotTokenResponse
+from shared.responses.builds import DepotTokenResponse, is_retryable_build_error
 from shared.responses.deployments import DiffResponse
 
 console = Console()
@@ -82,7 +85,8 @@ def deploy(
         view.show_error(f"Error reading compose file: {e}")
         raise typer.Exit(1)
 
-    # Normalize service to list (empty list means deploy all)
+    # Track if user explicitly specified services with -s flag
+    user_specified_services = bool(service)
     target_services = list(service) if service else []
 
     # Validate services exist in compose file if specified
@@ -256,9 +260,33 @@ def deploy(
                 view.show_error(f"  • {error}")
         raise typer.Exit(1)
 
+    # Create deployment record BEFORE building images
+    # This allows build token endpoint to find the deployment
     try:
-        # Handle image building AFTER validation passes
-        compose_yaml = _handle_builds(
+        deployment = api.deployments.create_deployment(
+            compose_yaml=compose_yaml,
+            workspace_id=config.active_workspace_id,
+            name=deployment_name,
+        )
+
+    except APIError as e:
+        if e.status_code == 401:
+            view.show_error(
+                "Authentication failed",
+                suggestion="Run 'lazycloud login' to authenticate",
+            )
+        else:
+            view.show_error(f"Failed to create deployment: {e}")
+
+        raise typer.Exit(1)
+
+    except Exception as e:
+        view.show_error(f"Failed to create deployment: {e}")
+        raise typer.Exit(1)
+
+    try:
+        # Handle image building AFTER deployment record created
+        compose_yaml, build_duration = _handle_builds(
             compose_data,
             compose_file_path,
             deployment_name,
@@ -274,18 +302,17 @@ def deploy(
         view.show_error(f"Build stage failed: {e}")
         raise typer.Exit(1)
 
-    # Deploy
+    # Deploy (updates compose_yaml and triggers deployment in one call)
     try:
-        # For API, pass first service if multiple (API currently expects single service)
-        # TODO: Update API to accept multiple services
         _deploy(
-            deployment_name,
-            compose_yaml,
+            deployment_id=str(deployment.id),
+            deployment_name=deployment_name,
+            compose_yaml=compose_yaml,
             secrets=secrets if has_secrets else None,
-            service_name=target_services[0]
-            if target_services and len(target_services) == 1
-            else None,
+            service_names=target_services if user_specified_services else None,
+            build_duration=build_duration,
         )
+
     except typer.Exit:
         # Re-raise typer.Exit from deployment failures
         raise
@@ -946,47 +973,10 @@ def _is_depot_available() -> bool:
     return shutil.which("depot") is not None
 
 
-def _is_token_valid(token: DepotTokenResponse, buffer_minutes: int = 5) -> bool:
-    """Check if token is valid and not expired (with buffer).
-
-    Returns True if token exists and expires_at is in the future (with buffer).
-    """
-    if not token:
-        return False
-
-    now = datetime.now(UTC)
-    buffer = timedelta(minutes=buffer_minutes)
-    expires_at = token.expires_at
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=UTC)
-
-    return expires_at > (now + buffer)
-
-
 def _get_depot_token(deployment_name: str) -> DepotTokenResponse | None:
-    """Get Depot token from API. Returns None if Depot is not configured.
-
-    Automatically refreshes token if expired or near expiration.
-    """
+    """Get Depot token from API. Returns None if Depot is not configured."""
     try:
-        token = api.builds.get_depot_token(deployment_name)
-
-        # Check if token is valid (not expired or near expiration)
-        if not _is_token_valid(token):
-            logger.warning(
-                f"Token for deployment {deployment_name} is expired or near expiration. "
-                "Fetching new token..."
-            )
-            # Fetch fresh token
-            token = api.builds.get_depot_token(deployment_name)
-
-            # Verify new token is valid
-            if not _is_token_valid(token):
-                logger.error(f"Received expired token for deployment {deployment_name}")
-                return None
-
-        return token
-
+        return api.builds.get_depot_token(deployment_name)
     except APIError as e:
         if e.status_code == 503:
             # Depot not configured on server
@@ -998,19 +988,11 @@ def _run_depot_build(
     build_info: dict,
     depot_token: DepotTokenResponse,
     compose_file_path: Path,
-    build_state: dict | None = None,
-    build_state_lock: threading.Lock | None = None,
+    build_state: dict,
+    build_state_lock: threading.Lock,
+    max_retries: int = 3,
 ) -> tuple[bool, str]:
-    """Run a single depot build. Returns (success, error_message)."""
-    # Fail fast if token is expired
-    if not _is_token_valid(depot_token, buffer_minutes=0):
-        error_msg = (
-            f"Token expired for deployment {build_info.get('deployment_name', 'unknown')}. "
-            "Please retry the deployment to get a fresh token."
-        )
-        logger.error(error_msg)
-        return False, error_msg
-
+    """Run a single depot build with retry logic. Returns (success, error_message)."""
     context_path = compose_file_path.parent / build_info["context"]
     dockerfile_path = context_path / build_info["dockerfile"]
     service_name = build_info["service_name"]
@@ -1064,113 +1046,32 @@ def _run_depot_build(
         "DEPOT_TOKEN": depot_token.token,
     }
 
-    # Token is logged in API, no need to print here
+    # Retry loop for transient errors
+    for attempt in range(1, max_retries + 1):
+        try:
+            # Stream output in real-time
+            # Combine stderr into stdout so we capture all output
+            process = subprocess.Popen(
+                depot_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,  # Redirect stderr to stdout
+                text=True,
+                env=env,
+                bufsize=1,  # Line buffered
+            )
 
-    try:
-        # Stream output in real-time
-        # Combine stderr into stdout so we capture all output
-        process = subprocess.Popen(
-            depot_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,  # Redirect stderr to stdout
-            text=True,
-            env=env,
-            bufsize=1,  # Line buffered
-        )
-
-        # Collect output lines (keep last N lines for display)
-        MAX_DISPLAY_LINES = 15  # Show last 15 lines in the card
-
-        # Use shared state if provided (for parallel builds), otherwise create local state
-        if build_state is not None:
-            if service_name not in build_state:
+            # Initialize/reset shared state for this service
+            with build_state_lock:
                 build_state[service_name] = {
                     "output_lines": [],
                     "error_lines": [],
                     "process": process,
-                    "status": "building",
+                    "status": f"building (attempt {attempt}/{max_retries})"
+                    if attempt > 1
+                    else "building",
                 }
             output_lines = build_state[service_name]["output_lines"]
-            error_lines = build_state[service_name]["error_lines"]
-            build_state[service_name]["process"] = process
-        else:
-            output_lines = []
-            error_lines = []
 
-        def render_build_card() -> Panel:
-            """Render the build card with recent output."""
-            # Get last N lines for display
-            display_lines = output_lines[-MAX_DISPLAY_LINES:]
-
-            # Build status indicator
-            if process.poll() is None:
-                status = "[cyan]●[/cyan] Building..."
-            elif process.returncode == 0:
-                status = "[green]✓[/green] Build complete"
-            else:
-                status = "[red]✗[/red] Build failed"
-
-            # Create content
-            content_lines = [f"[bold cyan]{service_name}[/bold cyan] {status}"]
-            content_lines.append("")
-
-            if display_lines:
-                for line in display_lines:
-                    # Truncate very long lines
-                    if len(line) > 120:
-                        line = line[:117] + "..."
-                    content_lines.append(f"  {line}")
-            else:
-                content_lines.append("  [dim]Waiting for build output...[/dim]")
-
-            # Add error lines if any
-            if error_lines:
-                content_lines.append("")
-                content_lines.append("[yellow]Errors:[/yellow]")
-                for line in error_lines[-5:]:  # Show last 5 error lines
-                    if len(line) > 120:
-                        line = line[:117] + "..."
-                    content_lines.append(f"  [yellow]{line}[/yellow]")
-
-            content = "\n".join(content_lines)
-
-            # Choose border color based on status
-            if process.poll() is None:
-                border_style = "cyan"
-            elif process.returncode == 0:
-                border_style = "green"
-            else:
-                border_style = "red"
-
-            return Panel(
-                content,
-                title=f"[bold]{service_name}[/bold]",
-                border_style=border_style,
-                padding=(1, 2),
-            )
-
-        # Read output (without Live display if using shared state)
-        import time
-
-        if build_state is None:
-            # Single build - use Live display
-            with Live(
-                render_build_card(), console=console, refresh_per_second=4
-            ) as live:
-                while True:
-                    if process.poll() is not None:
-                        break
-                    line = process.stdout.readline()
-                    if line:
-                        line = line.rstrip()
-                        if line:
-                            output_lines.append(line)
-                            live.update(render_build_card())
-                    else:
-                        time.sleep(0.1)
-                        live.update(render_build_card())
-        else:
-            # Parallel build - collect output and update shared state
             # Read output line by line until process completes
             while True:
                 # Check if process finished
@@ -1183,82 +1084,65 @@ def _run_depot_build(
                 if line:
                     line = line.rstrip()
                     if line:
-                        # Append to shared list with lock
-                        if build_state_lock:
-                            with build_state_lock:
-                                output_lines.append(line)
-                        else:
+                        with build_state_lock:
                             output_lines.append(line)
                 else:
                     # No output available, wait a bit before checking again
                     time.sleep(0.1)
 
-        # Wait for process to complete
-        process.wait()
+            # Wait for process to complete
+            process.wait()
 
-        # Read any remaining stdout
-        remaining_stdout = process.stdout.read()
-        if remaining_stdout:
-            for line in remaining_stdout.splitlines():
-                line = line.rstrip()
-                if line:
-                    if build_state_lock:
+            # Read any remaining stdout
+            remaining_stdout = process.stdout.read()
+            if remaining_stdout:
+                for line in remaining_stdout.splitlines():
+                    line = line.rstrip()
+                    if line:
                         with build_state_lock:
                             output_lines.append(line)
-                    else:
-                        output_lines.append(line)
 
-        # Stderr is redirected to stdout, so we don't need to read it separately
-        # Any error messages will already be in output_lines
+            # Stderr is redirected to stdout, so we don't need to read it separately
+            # Any error messages will already be in output_lines
 
-        # Update status in shared state
-        if build_state is not None:
-            if build_state_lock:
+            # Check if build succeeded
+            if process.returncode == 0:
                 with build_state_lock:
-                    if process.returncode == 0:
-                        build_state[service_name]["status"] = "complete"
-                    else:
-                        build_state[service_name]["status"] = "failed"
-            else:
-                if process.returncode == 0:
                     build_state[service_name]["status"] = "complete"
-                else:
-                    build_state[service_name]["status"] = "failed"
-        else:
-            # Single build - print final card
-            console.print(render_build_card())
+                break  # Success - exit retry loop
 
-        if process.returncode != 0:
-            # Log full error details for debugging
-            full_error_output = (
-                "\n".join(output_lines)
-                if output_lines
-                else "Build failed with no output"
-            )
-            logger.error(
-                f"Build failed for {service_name} (exit code {process.returncode}):\n{full_error_output}"
-            )
+            # Build failed - check if error is retryable
+            error_text = "\n".join(output_lines) if output_lines else ""
 
-            # Extract user-friendly error message from output
-            error_text = "\n".join(output_lines).lower() if output_lines else ""
+            if is_retryable_build_error(error_text) and attempt < max_retries:
+                # Retryable error - try again
+                with build_state_lock:
+                    build_state[service_name]["status"] = (
+                        f"retrying ({attempt + 1}/{max_retries})..."
+                    )
+                    build_state[service_name]["output_lines"] = [
+                        f"[Network error, retrying attempt {attempt + 1}/{max_retries}...]"
+                    ]
+                time.sleep(2)  # Brief pause before retry
+                continue
+
+            # Non-retryable error or last attempt - mark as failed
+            with build_state_lock:
+                build_state[service_name]["status"] = "failed"
 
             # Check for common error patterns and provide user-friendly messages
-            if (
-                "tls: bad record mac" in error_text
-                or "rpc error" in error_text
-                or "unavailable" in error_text
-                or "error reading from server" in error_text
-            ):
+            error_text_lower = error_text.lower()
+            if is_retryable_build_error(error_text):
                 return (
                     False,
-                    "Network connection error occurred during build. This is often transient - please try again.",
+                    f"Network error after {attempt} attempt(s). Please try again.",
                 )
 
             # Look for Dockerfile/build errors
             if (
-                "dockerfile" in error_text
-                or "failed to solve" in error_text
-                or "error processing" in error_text
+                "dockerfile" in error_text_lower
+                or "failed to solve" in error_text_lower
+                or "error processing" in error_text_lower
             ):
                 # Extract relevant error line if available
                 relevant_lines = [
@@ -1291,81 +1175,64 @@ def _run_depot_build(
                 "Build failed. Please check your Dockerfile and build context for errors.",
             )
 
-        # If we used --load for a local registry, push it now
-        if use_load:
-            push_output_lines = []
-
-            try:
-                push_process = subprocess.Popen(
-                    ["docker", "push", full_image_url],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1,
-                )
-
-                # Collect push output (no Live display - main thread handles that)
-                for line in iter(push_process.stdout.readline, ""):
-                    if not line:
-                        break
-
-                    line = line.rstrip()
-                    if line:
-                        push_output_lines.append(line)
-                        # Also add to build output so it shows in the status panel
-                        if build_state is not None and build_state_lock:
-                            with build_state_lock:
-                                output_lines.append(f"[push] {line}")
-
-                push_process.wait()
-
-                if push_process.returncode != 0:
-                    # Log full error details for debugging
-                    full_push_error = (
-                        "\n".join(push_output_lines)
-                        if push_output_lines
-                        else "Push failed with no output"
+        except Exception:
+            # Unexpected error during build
+            if attempt < max_retries:
+                with build_state_lock:
+                    build_state[service_name]["status"] = (
+                        f"retrying ({attempt + 1}/{max_retries})..."
                     )
-                    logger.error(
-                        f"Failed to push {service_name} to local registry (exit code {push_process.returncode}):\n{full_push_error}"
-                    )
+                    build_state[service_name]["output_lines"] = [
+                        f"[Unexpected error, retrying attempt {attempt + 1}/{max_retries}...]"
+                    ]
+                time.sleep(2)
+                continue
 
-                    return (
-                        False,
-                        "Failed to push image to registry. Please check your registry configuration.",
-                    )
+            return False, "Build failed due to an unexpected error. Please try again."
 
-            except FileNotFoundError:
-                logger.error(
-                    f"Docker CLI not found when trying to push {service_name} to local registry"
-                )
-                return False, "Docker CLI not found. Cannot push to local registry."
+    # Build succeeded - if we used --load for a local registry, push it now
+    if use_load:
+        push_output_lines = []
 
-            except Exception as e:
-                logger.error(
-                    f"Failed to push {service_name} to local registry: {str(e)}",
-                    exc_info=True,
-                )
+        try:
+            push_process = subprocess.Popen(
+                ["docker", "push", full_image_url],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+
+            # Collect push output (no Live display - main thread handles that)
+            for line in iter(push_process.stdout.readline, ""):
+                if not line:
+                    break
+
+                line = line.rstrip()
+                if line:
+                    push_output_lines.append(line)
+                    # Also add to build output so it shows in the status panel
+                    with build_state_lock:
+                        output_lines.append(f"[push] {line}")
+
+            push_process.wait()
+
+            if push_process.returncode != 0:
                 return (
                     False,
                     "Failed to push image to registry. Please check your registry configuration.",
                 )
 
-        return True, ""
+        except FileNotFoundError:
+            return False, "Docker CLI not found. Cannot push to local registry."
 
-    except Exception as e:
-        # Log full error details for debugging
-        logger.error(f"Build error for {service_name}: {str(e)}", exc_info=True)
-
-        # Provide user-friendly error message
-        error_msg = str(e).lower()
-        if "not found" in error_msg or "file" in error_msg:
+        except Exception:
             return (
                 False,
-                "Build configuration error: Required files not found. Please check your Dockerfile and build context.",
+                "Failed to push image to registry. Please check your registry configuration.",
             )
 
-        return False, "Build failed due to an unexpected error. Please try again."
+    return True, ""
 
 
 def _handle_builds_with_depot(
@@ -1402,38 +1269,49 @@ def _handle_builds_with_depot(
     # Shared state for all builds (thread-safe dict)
     build_state = {}
     build_state_lock = threading.Lock()
+    build_start_time = datetime.now()
 
     def render_build_status() -> Card:
         """Render a single panel showing all builds with latest 3 lines each."""
         with build_state_lock:
             content_lines = []
             LATEST_LINES = 3  # Show latest 3 lines per service
+            elapsed = int((datetime.now() - build_start_time).total_seconds())
+
+            # Calculate available width for log lines (console - borders - padding - indent)
+            term_width = shutil.get_terminal_size().columns
+            max_line_width = term_width - 10  # Account for borders, padding, indent
 
             for service_name, state in build_state.items():
                 output_lines = state.get("output_lines", [])
                 error_lines = state.get("error_lines", [])
                 status = state.get("status", "building")
 
-                # Determine status indicator
+                # Determine status indicator and color
                 if status == "complete":
-                    status_indicator = "[green]✓[/green]"
-
+                    status_indicator = (
+                        f"[{Colors.Ansi.success}]✓[/{Colors.Ansi.success}]"
+                    )
+                    name_color = Colors.Ansi.success
                 elif status == "failed":
-                    status_indicator = "[red]✗[/red]"
-
+                    status_indicator = f"[{Colors.Ansi.error}]✗[/{Colors.Ansi.error}]"
+                    name_color = Colors.Ansi.error
                 else:
-                    status_indicator = "[cyan]●[/cyan]"
+                    status_indicator = f"[{Colors.Ansi.accent}]●[/{Colors.Ansi.accent}]"
+                    name_color = Colors.Ansi.accent
 
-                # Service header
-                content_lines.append(f"{status_indicator} [bold]{service_name}[/bold]")
+                # Service header with matching color
+                content_lines.append(
+                    f"{status_indicator} [bold {name_color}]{service_name}[/bold {name_color}]"
+                )
 
                 # Show latest N lines
                 display_lines = output_lines[-LATEST_LINES:]
                 if display_lines:
                     for line in display_lines:
-                        # Truncate long lines
-                        if len(line) > 100:
-                            line = line[:97] + "..."
+                        # Truncate long lines to fit terminal
+                        if len(line) > max_line_width:
+                            line = line[: max_line_width - 3] + "..."
                         content_lines.append(f"    {line}")
 
                 else:
@@ -1442,11 +1320,20 @@ def _handle_builds_with_depot(
                 # Show errors if any
                 if error_lines:
                     for line in error_lines[-2:]:  # Last 2 error lines
-                        if len(line) > 100:
-                            line = line[:97] + "..."
-                        content_lines.append(f"    [yellow]⚠ {line}[/yellow]")
+                        if len(line) > max_line_width:
+                            line = line[: max_line_width - 3] + "..."
+                        content_lines.append(
+                            f"    [{Colors.Ansi.warning}]⚠ {line}[/{Colors.Ansi.warning}]"
+                        )
 
                 content_lines.append("")  # Spacing between services
+
+            # Add elapsed time at the bottom right
+            elapsed_text = f"Elapsed: {elapsed}s"
+            padding = max_line_width - len(elapsed_text)
+            content_lines.append(
+                f"[{Colors.Ansi.text_muted}]{' ' * padding}{elapsed_text}[/{Colors.Ansi.text_muted}]"
+            )
 
             content = "\n".join(content_lines).rstrip()
 
@@ -1459,13 +1346,13 @@ def _handle_builds_with_depot(
             )
 
             if any_failed:
-                border_style = "red"
+                border_style = Colors.Ansi.error
                 title = "Build Status"
             elif all_complete:
-                border_style = "green"
+                border_style = Colors.Ansi.success
                 title = "Build Status"
             else:
-                border_style = "cyan"
+                border_style = Colors.Ansi.accent
                 title = "Build Status"
 
             return Card(
@@ -1488,7 +1375,6 @@ def _handle_builds_with_depot(
 
     # Run builds in parallel with shared state
     build_results = {}
-    import time
 
     with ThreadPoolExecutor(max_workers=min(4, len(builds_needed))) as executor:
         futures = {
@@ -1596,7 +1482,10 @@ def _handle_builds_with_depot(
     if not all(build_results.values()):
         raise typer.Exit(1)
 
-    return yaml.dump(compose_data, default_flow_style=False)
+    # Calculate total build duration
+    build_duration = int((datetime.now() - build_start_time).total_seconds())
+
+    return yaml.dump(compose_data, default_flow_style=False), build_duration
 
 
 def _handle_builds(
@@ -1605,7 +1494,7 @@ def _handle_builds(
     deployment_name: str,
     yes: bool = False,
     target_services: list[str] | None = None,
-) -> str:
+) -> tuple[str, int | None]:
     """Handle building and pushing images if needed, optionally for only target services."""
     services_to_build = []
 
@@ -1634,7 +1523,7 @@ def _handle_builds(
             )
 
     if not services_to_build:
-        return yaml.dump(compose_data, default_flow_style=False)
+        return yaml.dump(compose_data, default_flow_style=False), None
 
     # Remote builds are required - handle errors gracefully
     depot_available = _is_depot_available()
@@ -1748,6 +1637,32 @@ def _show_diff_and_confirm(
             view.show_error("Cannot proceed due to errors")
             raise typer.Exit(1)
 
+        # Show storage type change warnings (EBS ↔ EFS transitions cause data loss)
+        if diff_response.storage_type_changes:
+            console.print()
+            console.print("[bold yellow]⚠️  STORAGE TYPE CHANGES DETECTED[/bold yellow]")
+            console.print(
+                "The following volumes will change storage type. "
+                "[bold red]DATA WILL BE LOST[/bold red] for these volumes:\n"
+            )
+            for change in diff_response.storage_type_changes:
+                console.print(
+                    f"  • [bold]{change.volume_name}[/bold]: "
+                    f"[red]{change.old_type}[/red] → [green]{change.new_type}[/green]"
+                )
+                console.print(f"    Reason: {change.reason}")
+            console.print()
+
+            if not yes:
+                confirmed_storage = Confirm.ask(
+                    "[bold yellow]Do you understand that data will be lost for these volumes?[/bold yellow]",
+                    default=False,
+                    console=console,
+                )
+                if not confirmed_storage:
+                    view.show_cancelled()
+                    raise typer.Exit(0)
+
     if not yes:
         # Show confirmation using view
         confirmed = view.confirm_deployment(
@@ -1762,55 +1677,25 @@ def _show_diff_and_confirm(
 
 
 def _deploy(
+    deployment_id: str,
     deployment_name: str,
-    compose_yaml: str,
+    compose_yaml: str | None = None,
     secrets: SecretCollection | None = None,
-    service_name: str | None = None,
+    service_names: list[str] | None = None,
+    build_duration: int | None = None,
 ):
-    """Perform the actual deployment."""
+    """Trigger deployment and wait for completion with real-time status."""
     view = DeployView(console)
 
     # Create a deployment creation progress card
     creation_progress = view.show_deployment_creation_progress(deployment_name)
+    task_response = None
+    final_status = None
 
     try:
-        # Show the card while creating deployment
+        # Phase 1: Store secrets and trigger deployment
         with Live(creation_progress, console=console, refresh_per_second=4):
-            # Create the deployment
-            creation_progress.update_status(
-                "creating", "Sending configuration to server..."
-            )
-
-            try:
-                # Create deployment
-                task_response = api.deployments.create_deployment(
-                    compose_yaml=compose_yaml,
-                    workspace_id=config.active_workspace_id,
-                    name=deployment_name,
-                    secrets=bool(secrets),
-                    service_name=service_name,
-                )
-
-                if not task_response or not task_response.task_id:
-                    creation_progress.update_status(
-                        "failed", "Failed to create deployment task"
-                    )
-                    raise Exception("Server did not return a task ID")
-            except APIError as e:
-                creation_progress.update_status("failed", "API request failed")
-                if e.status_code == 401:
-                    raise Exception(
-                        "Authentication failed. Please run 'lazycloud login'"
-                    )
-                elif e.status_code and 500 <= e.status_code < 600:
-                    raise Exception(f"Server error: {e}")
-                else:
-                    raise Exception(f"API error: {e}")
-            except Exception as e:
-                creation_progress.update_status("failed", "Request failed")
-                raise Exception(f"Failed to create deployment: {e}")
-
-            # Store secrets if we have any (BEFORE waiting for task!)
+            # Store secrets first (BEFORE triggering deploy task!)
             if secrets:
                 try:
                     creation_progress.update_status(
@@ -1821,9 +1706,7 @@ def _deploy(
                     if secrets.added:
                         try:
                             # Create new secrets - these keys are brand new per the diff
-                            api.secrets.store_secrets(
-                                task_response.deployment_id, secrets.added
-                            )
+                            api.secrets.store_secrets(deployment_id, secrets.added)
                         except APIError as e:
                             creation_progress.update_status(
                                 "failed", "Failed to create secrets"
@@ -1839,9 +1722,7 @@ def _deploy(
                     # Handle removed secrets
                     if secrets.removed:
                         try:
-                            api.secrets.delete_secrets(
-                                task_response.deployment_id, secrets.removed
-                            )
+                            api.secrets.delete_secrets(deployment_id, secrets.removed)
                         except Exception as delete_error:
                             creation_progress.update_status(
                                 "failed", "Failed to delete secrets"
@@ -1859,60 +1740,175 @@ def _deploy(
                     else:
                         raise
 
-            # NOW wait for task completion via streaming
+            # Trigger deployment (with updated compose_yaml if provided)
+            creation_progress.update_status("creating", "Triggering deployment...")
+
+            try:
+                task_response = api.deployments.deploy_deployment(
+                    deployment_id=deployment_id,
+                    compose_yaml=compose_yaml,
+                    secrets=bool(secrets),
+                    service_names=service_names,
+                )
+
+                if not task_response or not task_response.task_id:
+                    creation_progress.update_status(
+                        "failed", "Failed to create deployment task"
+                    )
+                    raise Exception("Server did not return a task ID")
+
+            except APIError as e:
+                creation_progress.update_status("failed", "API request failed")
+                if e.status_code == 401:
+                    raise Exception(
+                        "Authentication failed. Please run 'lazycloud login'"
+                    )
+                elif e.status_code and 500 <= e.status_code < 600:
+                    raise Exception(f"Server error: {e}")
+                else:
+                    raise Exception(f"API error: {e}")
+            except Exception as e:
+                creation_progress.update_status("failed", "Request failed")
+                raise Exception(f"Failed to trigger deployment: {e}")
+
             creation_progress.update_status(
-                "creating", "Processing deployment request..."
+                "creating", "Deployment started, monitoring services..."
+            )
+
+        # Phase 2: Wait for task and stream service status
+        service_display = ServiceStatusDisplay(deployment_name)
+        stream_error: Exception | None = None
+        stream_complete = False
+
+        async def monitor_deployment():
+            nonlocal final_status, stream_error, stream_complete
+
+            def on_progress(data: dict):
+                nonlocal stream_complete
+                service_display.update(data)
+                # Check if deployment reached terminal state
+                if service_display.is_complete():
+                    stream_complete = True
+
+            def on_stream_error(error: Exception):
+                nonlocal stream_error
+                stream_error = error
+
+            # Start both the task wait and service status stream
+            task_wait = asyncio.create_task(
+                api.deployments.wait_for_deployment(task_response.task_id)
             )
 
             try:
-                # Get the final task status from the stream
-                final_status = asyncio.run(
-                    api.deployments.wait_for_deployment(task_response.task_id)
+                # Stream service status until complete or task finishes
+                progress_stream = asyncio.create_task(
+                    api.deployments.stream_deploy_progress(
+                        deployment_id=deployment_id,
+                        on_progress=on_progress,
+                        on_error=on_stream_error,
+                    )
                 )
-            except Exception as e:
-                creation_progress.update_status(
-                    "failed", "Failed to monitor deployment"
-                )
-                raise Exception(f"Error monitoring deployment: {e}")
 
-            # Update UI based on actual status
-            if final_status.status == TaskStatus.COMPLETED:
-                creation_progress.update_status(
-                    TaskStatus.COMPLETED, "Deployment created successfully!"
-                )
-                # Update last_deployed timestamp in .lazycloud file
+                # Wait for task completion (this is the authoritative signal)
+                final_status = await task_wait
+
+                # Give the progress stream a moment to receive final status update
+                # before cancelling (the server may have one more update pending)
+                if final_status and final_status.status == TaskStatus.COMPLETED:
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.shield(progress_stream), timeout=1.0
+                        )
+                    except asyncio.TimeoutError:
+                        pass
+                    except asyncio.CancelledError:
+                        pass
+
+                # Cancel progress stream
+                progress_stream.cancel()
                 try:
-                    lazycloud_file = LazyCloudFile.find_and_load(Path.cwd())
-                    if lazycloud_file:
-                        lazycloud_file.update(last_deployed=datetime.now(UTC))
+                    await progress_stream
 
-                except Exception:
-                    # Don't fail deployment if we can't update the timestamp
+                except asyncio.CancelledError:
                     pass
 
-            elif final_status.status == TaskStatus.ERROR:
-                error_msg = final_status.message or "Task failed"
-                creation_progress.update_status("failed", error_msg)
-                raise Exception(f"Deployment task failed: {error_msg}")
+                # If deployment succeeded but display doesn't show it yet, update it
+                if (
+                    final_status
+                    and final_status.status == TaskStatus.COMPLETED
+                    and service_display.overall != DeployOverallPhase.COMPLETED
+                ):
+                    service_display.overall = DeployOverallPhase.COMPLETED
 
-            else:
-                creation_progress.update_status(
-                    "failed", f"Unexpected status: {final_status.status}"
-                )
-                raise Exception(
-                    f"Deployment ended with unexpected status: {final_status.status}"
-                )
+            except Exception as e:
+                stream_error = e
+                # Still try to get task result
+                if not task_wait.done():
+                    task_wait.cancel()
+
+                    try:
+                        await task_wait
+                    except asyncio.CancelledError:
+                        pass
+
+        # Run with Live display showing service status
+        with Live(service_display, console=console, refresh_per_second=4) as live:
+            # Run the async monitoring
+            try:
+                asyncio.run(monitor_deployment())
+            except Exception as e:
+                if stream_error is None:
+                    stream_error = e
+
+            # Keep refreshing until we have final status
+            if final_status is None and stream_error:
+                service_display.overall = DeployOverallPhase.FAILED
+                service_display.failure_message = str(stream_error)
+                live.update(service_display)
+
+        # Handle results
+        if stream_error and final_status is None:
+            raise Exception(f"Error monitoring deployment: {stream_error}")
+
+        if final_status is None:
+            raise Exception("Deployment monitoring ended without status")
+
+        # Update UI based on actual status
+        if final_status.status == TaskStatus.COMPLETED:
+            # Update last_deployed timestamp in .lazycloud file
+            try:
+                lazycloud_file = LazyCloudFile.find_and_load(Path.cwd())
+                if lazycloud_file:
+                    lazycloud_file.update(last_deployed=datetime.now(UTC))
+
+            except Exception:
+                # Don't fail deployment if we can't update the timestamp
+                pass
+
+        elif final_status.status == TaskStatus.ERROR:
+            error_msg = final_status.message or "Task failed"
+            # Add failure message from service display if available
+            if service_display.failure_message:
+                error_msg = f"{error_msg}\n{service_display.failure_message}"
+            raise Exception(f"Deployment failed: {error_msg}")
+
+        else:
+            raise Exception(
+                f"Deployment ended with unexpected status: {final_status.status}"
+            )
 
         # Show final success message
         view.show_summary(
             deployment_name=deployment_name,
             status=final_status.status,
-            duration=0,
+            duration=service_display.elapsed_seconds,
+            build_duration=build_duration,
             message="View deployment in the dashboard with 'lazycloud dashboard'",
         )
 
     except typer.Exit:
         raise
+
     except Exception as e:
         view.show_error(str(e))
         raise typer.Exit(1)

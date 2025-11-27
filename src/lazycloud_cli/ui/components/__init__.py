@@ -12,6 +12,7 @@ from lazycloud_cli.ui.components.confirmation import (
     SimpleConfirmationDialog,
     confirm_action,
 )
+from lazycloud_cli.ui.components.deploy_progress import ServiceStatusDisplay
 from lazycloud_cli.ui.components.info_cards import (
     BuildInfoCard,
     DeploymentActionCard,
@@ -53,6 +54,7 @@ __all__ = [
     "ProgressCard",
     "SpinnerProgress",
     "DeploymentProgress",
+    "ServiceStatusDisplay",
     "InfoCard",
     "BuildInfoCard",
     "SuccessCard",

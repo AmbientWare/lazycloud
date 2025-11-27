@@ -75,8 +75,8 @@ class WorkspaceInvitationService(
 ):
     """Service layer for workspace invitation operations"""
 
-    def __init__(self):
-        super().__init__(WorkspaceInvitationTable, WorkspaceInvitationPydantic)
+    def __init__(self, session: AsyncSession):
+        super().__init__(WorkspaceInvitationTable, WorkspaceInvitationPydantic, session)
 
     async def create_invitation(
         self,
@@ -87,7 +87,6 @@ class WorkspaceInvitationService(
         token: str,
         expires_at: datetime,
         invitation_type: str = InvitationType.MEMBER.value,
-        session: AsyncSession | None = None,
     ) -> WorkspaceInvitationPydantic:
         """Create a new invitation"""
         invitation = WorkspaceInvitationPydantic(
@@ -99,7 +98,7 @@ class WorkspaceInvitationService(
             expires_at=expires_at,
             invitation_type=invitation_type,
         )
-        return await self.create(invitation, session=session)
+        return await self.create(invitation)
 
     async def get_by_token(self, token: str) -> WorkspaceInvitationPydantic | None:
         """Get invitation by token"""
@@ -110,33 +109,31 @@ class WorkspaceInvitationService(
         self, workspace_id: str, include_accepted: bool = False
     ) -> list[WorkspaceInvitationPydantic]:
         """Get all invitations for a workspace"""
-        async with self._session_manager.get_session() as session:
-            query = select(WorkspaceInvitationTable).where(
-                WorkspaceInvitationTable.workspace_id == workspace_id
-            )
-            if not include_accepted:
-                query = query.where(WorkspaceInvitationTable.accepted_at.is_(None))
-            result = await session.execute(query)
-            invitations = result.scalars().all()
-            return [self._to_pydantic(inv) for inv in invitations if inv]
+        query = select(WorkspaceInvitationTable).where(
+            WorkspaceInvitationTable.workspace_id == workspace_id
+        )
+        if not include_accepted:
+            query = query.where(WorkspaceInvitationTable.accepted_at.is_(None))
+        result = await self._session.execute(query)
+        invitations = result.scalars().all()
+        return [self._to_pydantic(inv) for inv in invitations if inv]
 
     async def get_pending_by_email(
         self, email: str
     ) -> list[WorkspaceInvitationPydantic]:
         """Get all pending invitations for an email"""
-        async with self._session_manager.get_session() as session:
-            query = (
-                select(WorkspaceInvitationTable)
-                .where(WorkspaceInvitationTable.email == email.lower().strip())
-                .where(WorkspaceInvitationTable.accepted_at.is_(None))
-                .where(WorkspaceInvitationTable.expires_at > datetime.now(timezone.utc))
-            )
-            result = await session.execute(query)
-            invitations = result.scalars().all()
-            return [self._to_pydantic(inv) for inv in invitations if inv]
+        query = (
+            select(WorkspaceInvitationTable)
+            .where(WorkspaceInvitationTable.email == email.lower().strip())
+            .where(WorkspaceInvitationTable.accepted_at.is_(None))
+            .where(WorkspaceInvitationTable.expires_at > datetime.now(timezone.utc))
+        )
+        result = await self._session.execute(query)
+        invitations = result.scalars().all()
+        return [self._to_pydantic(inv) for inv in invitations if inv]
 
     async def accept_invitation(
-        self, invitation_id: str, session: AsyncSession | None = None
+        self, invitation_id: str
     ) -> WorkspaceInvitationPydantic | None:
         """Mark invitation as accepted"""
         invitation = await self.get_by_id(invitation_id)
@@ -144,20 +141,18 @@ class WorkspaceInvitationService(
             return None
 
         invitation.accepted_at = datetime.now(timezone.utc)
-        return await self.update(invitation, session=session)
+        return await self.update(invitation)
 
     async def delete_expired(self) -> int:
         """Delete expired invitations that haven't been accepted"""
-        async with self._session_manager.get_session() as session:
-            query = delete(WorkspaceInvitationTable).where(
-                and_(
-                    WorkspaceInvitationTable.expires_at < datetime.now(timezone.utc),
-                    WorkspaceInvitationTable.accepted_at.is_(None),
-                )
+        query = delete(WorkspaceInvitationTable).where(
+            and_(
+                WorkspaceInvitationTable.expires_at < datetime.now(timezone.utc),
+                WorkspaceInvitationTable.accepted_at.is_(None),
             )
-            result = await session.execute(query)
-            await session.commit()
-            return result.rowcount or 0
+        )
+        result = await self._session.execute(query)
+        return result.rowcount or 0
 
     async def get_by_workspace_and_email(
         self, workspace_id: str, email: str

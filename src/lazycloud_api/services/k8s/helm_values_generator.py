@@ -1,6 +1,7 @@
 from lazycloud_api.database.compose import ComposeDeploymentPydantic
 from lazycloud_api.database.secrets import SecretPydantic
 from lazycloud_api.services import get_ecr_auth_service
+from lazycloud_api.services.compose.diff_checker import get_shared_volumes
 from lazycloud_api.services.compose.validator import ComposeValidator
 from lazycloud_api.services.k8s.generators.configuration import (
     generate_healthcheck_values,
@@ -25,13 +26,14 @@ from lazycloud_api.services.k8s.generators.workloads import (
     generate_security_context_values,
     parse_image,
 )
-from shared.models.billing import STORAGE_CLASS_EFS, STORAGE_CLASS_S3
+from shared.models.billing import STORAGE_CLASS_EBS, STORAGE_CLASS_EFS
 from shared.models.compose import (
     ComposeFile,
     ComposeNetwork,
     ComposeService,
     ComposeVolume,
     DeployConfig,
+    LazyCloudLabel,
 )
 from shared.models.helm import (
     GlobalValues,
@@ -74,14 +76,14 @@ class HelmValuesGenerator:
             createdBy="lazycloud-api",
             runtimeClassName="gvisor",
             labels={
-                "lazycloud.io/deployment-id": str(self.deployment.id),
-                "lazycloud.io/workspace-id": str(self.deployment.workspace_id),
-                "lazycloud.io/managed-by": "lazycloud",
+                "lazycloud.dev/deployment-id": str(self.deployment.id),
+                "lazycloud.dev/workspace-id": str(self.deployment.workspace_id),
+                "lazycloud.dev/managed-by": "lazycloud",
             },
             annotations={
-                "lazycloud.io/deployment-id": str(self.deployment.id),
-                "lazycloud.io/workspace-id": str(self.deployment.workspace_id),
-                "lazycloud.io/created-by": "lazycloud-api",
+                "lazycloud.dev/deployment-id": str(self.deployment.id),
+                "lazycloud.dev/workspace-id": str(self.deployment.workspace_id),
+                "lazycloud.dev/created-by": "lazycloud-api",
             },
         )
 
@@ -125,8 +127,10 @@ class HelmValuesGenerator:
 
         # Generate volumes values
         if compose.volumes:
+            shared_volumes = get_shared_volumes(compose)
             for volume in compose.volumes:
-                values.volumes.append(self._generate_volume_values(volume))
+                is_shared = volume.name in shared_volumes
+                values.volumes.append(self._generate_volume_values(volume, is_shared))
 
         warning_messages = [str(warning) for warning in warnings]
         return values, warning_messages
@@ -160,20 +164,20 @@ class HelmValuesGenerator:
             image=image_info,
             resourceName=service.name,
             labels={
-                "lazycloud.io/workspace-id": self.deployment.workspace_id,
-                "lazycloud.io/service": service.name,
-                "lazycloud.io/managed-by": "lazycloud",
+                "lazycloud.dev/workspace-id": self.deployment.workspace_id,
+                "lazycloud.dev/service": service.name,
+                "lazycloud.dev/managed-by": "lazycloud",
             },
             annotations={
-                "lazycloud.io/workspace-id": self.deployment.workspace_id,
-                "lazycloud.io/created-by": "lazycloud-api",
+                "lazycloud.dev/workspace-id": self.deployment.workspace_id,
+                "lazycloud.dev/created-by": "lazycloud-api",
             },
         )
 
         # Add deployment ID to labels if available
         if self.deployment.id:
-            service_values.labels["lazycloud.io/deployment-id"] = self.deployment.id
-            service_values.annotations["lazycloud.io/deployment-id"] = (
+            service_values.labels["lazycloud.dev/deployment-id"] = self.deployment.id
+            service_values.annotations["lazycloud.dev/deployment-id"] = (
                 self.deployment.id
             )
 
@@ -189,12 +193,32 @@ class HelmValuesGenerator:
             service_values.workloadType = WorkloadType.DEPLOYMENT
             service_values.restartPolicy = RestartPolicy.ALWAYS.value
 
-        # Add command if specified
-        if service.command:
+        # Handle entrypoint and command mapping to K8s command/args
+        # In K8s: command = entrypoint, args = command
+        if service.entrypoint:
+            # If entrypoint exists, it becomes K8s command
+            if isinstance(service.entrypoint, list):
+                service_values.command = service.entrypoint
+            else:
+                service_values.command = service.entrypoint.split()
+
+            # And command becomes K8s args
+            if service.command:
+                if isinstance(service.command, list):
+                    service_values.args = service.command
+                else:
+                    service_values.args = service.command.split()
+                    
+        elif service.command:
+            # No entrypoint, command becomes K8s command (existing behavior)
             if isinstance(service.command, list):
                 service_values.command = service.command
             else:
                 service_values.command = service.command.split()
+
+        # Add working directory if specified
+        if service.working_dir:
+            service_values.workingDir = service.working_dir
 
         # Add ports
         if service.ports:
@@ -255,8 +279,8 @@ class HelmValuesGenerator:
         service_values.podSecurityContext = pod_security_context
 
         # Add graceful shutdown period if specified
-        if service.grace_period_seconds is not None:
-            service_values.terminationGracePeriodSeconds = service.grace_period_seconds
+        if service.stop_grace_period is not None:
+            service_values.terminationGracePeriodSeconds = service.stop_grace_period
 
         return service_values, self._secrets if self._secrets else None
 
@@ -282,19 +306,28 @@ class HelmValuesGenerator:
         )
         return network_values
 
-    def _generate_volume_values(self, volume: ComposeVolume) -> VolumeValues:
-        """Generate Helm values for a volume"""
-        # Check for high-performance storage label
+    def _generate_volume_values(
+        self, volume: ComposeVolume, is_shared: bool = False
+    ) -> VolumeValues:
+        """Generate Helm values for a volume."""
         volume_labels = volume.labels or {}
-        use_high_performance = volume_labels.get("lazycloud.storage.hp") == "true"
 
-        # Select storage class based on label
-        storage_class = STORAGE_CLASS_EFS if use_high_performance else STORAGE_CLASS_S3
+        # Explicit shared label OR auto-detected shared (multi-service usage)
+        use_shared = (
+            volume_labels.get(LazyCloudLabel.VOLUME_SHARED) == "true" or is_shared
+        )
+
+        # Size from label or default 10Gi
+        size = volume_labels.get(LazyCloudLabel.STORAGE_SIZE, "10Gi")
+
+        # Select storage class and access mode based on shared status
+        storage_class = STORAGE_CLASS_EFS if use_shared else STORAGE_CLASS_EBS
+        access_mode = "ReadWriteMany" if use_shared else "ReadWriteOnce"
 
         # Merge user labels with system labels
         merged_labels = {
-            "lazycloud.io/workspace-id": self.deployment.workspace_id,
-            "lazycloud.io/managed-by": "lazycloud",
+            "lazycloud.dev/workspace-id": self.deployment.workspace_id,
+            "lazycloud.dev/managed-by": "lazycloud",
         }
         if volume_labels:
             merged_labels.update(volume_labels)
@@ -302,15 +335,13 @@ class HelmValuesGenerator:
         volume_values = VolumeValues(
             name=volume.name,
             enabled=True,
-            size="1Gi",  # Note: size is largely ignored efs and s3 csi drivers
-            accessModes=[
-                "ReadWriteMany"
-            ],  # Allow for multi-pod access (similar to docker compose volumes)
+            size=size,
+            accessModes=[access_mode],
             storageClass=storage_class,
             labels=merged_labels,
             annotations={
-                "lazycloud.io/workspace-id": self.deployment.workspace_id,
-                "lazycloud.io/created-by": "lazycloud-api",
+                "lazycloud.dev/workspace-id": self.deployment.workspace_id,
+                "lazycloud.dev/created-by": "lazycloud-api",
             },
         )
         return volume_values

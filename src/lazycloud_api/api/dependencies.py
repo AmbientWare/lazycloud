@@ -1,10 +1,10 @@
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from fastapi import Depends, HTTPException
 
 from lazycloud_api.api.security import get_current_active_user
 from lazycloud_api.billing.product_details.features import BaseFeatures
-from lazycloud_api.database import db
+from lazycloud_api.database import Database, get_db
 from lazycloud_api.database.compose import ComposeDeploymentPydantic
 from lazycloud_api.database.user_workspaces import WorkspaceRole
 from lazycloud_api.database.users import UserPydantic
@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 async def require_workspace_member(
     workspace_id: str,
     current_user: UserPydantic = Depends(get_current_active_user),
+    db: Database = Depends(get_db),
 ) -> None:
     """Verify user is a member of workspace (any role)"""
     membership = await db.user_workspaces.get_by_user_and_workspace(
@@ -31,6 +32,7 @@ async def require_workspace_member(
 async def require_workspace_admin(
     workspace_id: str,
     current_user: UserPydantic = Depends(get_current_active_user),
+    db: Database = Depends(get_db),
 ) -> None:
     """Verify user is admin or owner of workspace"""
     membership = await db.user_workspaces.get_by_user_and_workspace(
@@ -45,6 +47,7 @@ async def require_workspace_admin(
 async def get_workspace_with_any_access(
     workspace_id: str,
     current_user: UserPydantic = Depends(get_current_active_user),
+    db: Database = Depends(get_db),
 ) -> WorkspaceAccess:
     """Get workspace and verify user has any access"""
     membership = await db.user_workspaces.get_by_user_and_workspace(
@@ -65,6 +68,7 @@ async def get_workspace_with_any_access(
 async def get_workspace_with_admin_access(
     workspace_id: str,
     current_user: UserPydantic = Depends(get_current_active_user),
+    db: Database = Depends(get_db),
 ) -> WorkspaceAccess:
     """Get workspace and verify user has admin/owner access"""
     membership = await db.user_workspaces.get_by_user_and_workspace(
@@ -87,6 +91,7 @@ async def get_workspace_with_admin_access(
 async def get_workspace_with_owner_access(
     workspace_id: str,
     current_user: UserPydantic = Depends(get_current_active_user),
+    db: Database = Depends(get_db),
 ) -> WorkspaceAccess:
     """Get workspace and verify user has owner access"""
     membership = await db.user_workspaces.get_by_user_and_workspace(
@@ -110,6 +115,7 @@ async def get_workspace_with_owner_access(
 async def get_workspace_with_admin_access_for_usage(
     workspace_id: str,
     current_user: UserPydantic = Depends(get_current_active_user),
+    db: Database = Depends(get_db),
 ) -> WorkspaceAccess:
     """Get workspace and verify user has admin/owner access, including deleted workspaces (for usage reporting)"""
     membership = await db.user_workspaces.get_by_user_and_workspace(
@@ -132,6 +138,7 @@ async def get_workspace_with_admin_access_for_usage(
 async def get_deployment_with_access(
     deployment_id: str,
     current_user: UserPydantic = Depends(get_current_active_user),
+    db: Database = Depends(get_db),
 ) -> ComposeDeploymentPydantic:
     """Get deployment and verify user has access (any role)"""
     deployment, role = await db.compose_deployments.get_with_workspace_access(
@@ -148,6 +155,7 @@ async def get_deployment_with_admin_access(
     deployment_id: str,
     current_user: UserPydantic = Depends(get_current_active_user),
     include_deleted: bool = False,
+    db: Database = Depends(get_db),
 ) -> ComposeDeploymentPydantic:
     """Get deployment and verify user has admin/owner access"""
     deployment, role = await db.compose_deployments.get_with_workspace_access(
@@ -166,21 +174,30 @@ async def get_deployment_with_admin_access(
 async def get_deployment_with_admin_access_for_usage(
     deployment_id: str,
     current_user: UserPydantic = Depends(get_current_active_user),
+    db: Database = Depends(get_db),
 ) -> ComposeDeploymentPydantic:
     """Get deployment with admin access, including deleted deployments for usage purposes"""
     return await get_deployment_with_admin_access(
-        deployment_id, current_user, include_deleted=True
+        deployment_id, current_user, include_deleted=True, db=db
     )
 
 
 async def get_user_product_features(
     current_user: UserPydantic = Depends(get_current_active_user),
+    db: Database = Depends(get_db),
 ) -> BaseFeatures:
     """Get product features for the current user based on their subscription."""
     subscription_service = get_subscription_service()
-    return await subscription_service.get_user_features(
-        external_customer_id=current_user.clerk_id
-    )
+    try:
+        return await subscription_service.get_user_features(
+            external_customer_id=current_user.clerk_id
+        )
+
+    except ValueError as e:
+        raise HTTPException(status_code=402, detail=str(e))
+
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
 
 
 async def check_workspace_limit(
@@ -200,6 +217,7 @@ async def check_deployment_limit(
     workspace_id: str,
     current_user: UserPydantic = Depends(get_current_active_user),
     features: BaseFeatures = Depends(get_user_product_features),
+    db: Database = Depends(get_db),
 ) -> None:
     """Check if user can create a new deployment in the workspace based on their subscription tier."""
     membership = await db.user_workspaces.get_by_user_and_workspace(
@@ -220,15 +238,12 @@ async def check_deployment_limit(
 
 async def check_deployment_features(
     compose_file: "ComposeFile",
-    compose_data: dict[str, Any],
     features: BaseFeatures,
 ) -> None:
     """Check if deployment features (services, volumes, networks, domains) are within subscription limits."""
     subscription_service = get_subscription_service()
     try:
-        await subscription_service.check_deployment_features(
-            compose_file, compose_data, features
-        )
+        await subscription_service.check_deployment_features(compose_file, features)
 
     except SubscriptionLimitError as e:
         raise HTTPException(status_code=e.status_code, detail=str(e))

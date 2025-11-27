@@ -5,7 +5,7 @@ from loguru import logger
 from pydantic import BaseModel
 
 from lazycloud_api.api.security import get_current_active_user
-from lazycloud_api.database import db
+from lazycloud_api.database import Database, get_db
 from lazycloud_api.database.invitations import WorkspaceInvitationPydantic
 from lazycloud_api.database.users import UserPydantic
 from lazycloud_api.services import (
@@ -37,6 +37,7 @@ class InvitationDetailsResponse(BaseModel):
 @invitations_router.get("/pending")
 async def get_pending_invitations(
     current_user: UserPydantic = Depends(get_current_active_user),
+    db: Database = Depends(get_db),
 ) -> list[InvitationDetailsResponse]:
     """Get all pending invitations for the current user (including ownership transfers)"""
     pending_invitations = await db.invitations.get_pending_by_email(current_user.email)
@@ -73,6 +74,7 @@ async def accept_invitation(
     current_user: UserPydantic = Depends(get_current_active_user),
     subscription_service: SubscriptionService = Depends(get_subscription_service),
     invitation_service: InvitationService = Depends(get_invitation_service),
+    db: Database = Depends(get_db),
 ) -> WorkspaceSuccessResponse:
     """Accept an invitation by ID (for logged-in users)"""
     invitation = await db.invitations.get_by_id(invitation_id)
@@ -88,7 +90,7 @@ async def accept_invitation(
 
     # Continue with acceptance logic
     return await _accept_invitation_logic(
-        invitation, current_user, subscription_service, invitation_service
+        invitation, current_user, subscription_service, invitation_service, db
     )
 
 
@@ -97,6 +99,7 @@ async def _accept_invitation_logic(
     current_user: UserPydantic,
     subscription_service: SubscriptionService,
     invitation_service: InvitationService,
+    db: Database,
 ) -> WorkspaceSuccessResponse:
     """Shared logic for accepting invitations"""
 
@@ -129,15 +132,13 @@ async def _accept_invitation_logic(
             raise HTTPException(status_code=400, detail="Workspace owner not found")
 
         # Perform ownership transfer and mark invitation as accepted in a single transaction
-        async with db.invitations.transaction() as session:
-            await db.workspaces.transfer_ownership(
-                invitation.workspace_id,
-                current_owner_membership.user_id,
-                current_user.id,
-                session=session,
-            )
+        await db.workspaces.transfer_ownership(
+            invitation.workspace_id,
+            current_owner_membership.user_id,
+            current_user.id,
+        )
 
-            await db.invitations.accept_invitation(invitation.id, session=session)
+        await db.invitations.accept_invitation(invitation.id)
 
         logger.info(
             f"User {current_user.id} accepted ownership transfer for workspace {invitation.workspace_id}"
@@ -166,6 +167,7 @@ async def _accept_invitation_logic(
 async def decline_invitation(
     invitation_id: str,
     current_user: UserPydantic = Depends(get_current_active_user),
+    db: Database = Depends(get_db),
 ) -> WorkspaceSuccessResponse:
     """Decline an invitation by ID (for logged-in users)"""
     invitation = await db.invitations.get_by_id(invitation_id)
@@ -189,8 +191,7 @@ async def decline_invitation(
     if invitation.invitation_type == InvitationType.OWNERSHIP_TRANSFER.value:
         # Ownership transfer invitations don't create INVITED user_workspace records
         # The user is already an active member, so just delete the invitation
-        async with db.invitations.transaction() as session:
-            await db.invitations.delete(invitation.id, session=session)
+        await db.invitations.delete(invitation.id)
 
         logger.info(
             f"User {current_user.id} declined ownership transfer invitation {invitation_id} for workspace {invitation.workspace_id}"
@@ -198,19 +199,17 @@ async def decline_invitation(
         return WorkspaceSuccessResponse(success=True)
 
     # Handle regular member invitations
-    # Wrap invitation deletion and user_workspace deletion in a transaction
-    async with db.invitations.transaction() as session:
-        # Delete invitation using repository method
-        await db.invitations.delete(invitation.id, session=session)
+    # Delete invitation using repository method
+    await db.invitations.delete(invitation.id)
 
-        # Also delete the user_workspace record if it exists with INVITED status
-        existing_user = await db.users.get_by_email(invitation.email)
-        if existing_user:
-            membership = await db.user_workspaces.get_by_user_and_workspace(
-                existing_user.id, invitation.workspace_id, session=session
-            )
-            if membership and membership.status == UserWorkspaceStatus.INVITED:
-                await db.user_workspaces.delete(membership.id, session=session)
+    # Also delete the user_workspace record if it exists with INVITED status
+    existing_user = await db.users.get_by_email(invitation.email)
+    if existing_user:
+        membership = await db.user_workspaces.get_by_user_and_workspace(
+            existing_user.id, invitation.workspace_id
+        )
+        if membership and membership.status == UserWorkspaceStatus.INVITED:
+            await db.user_workspaces.delete(membership.id)
 
     logger.info(
         f"User {current_user.id} declined invitation {invitation_id} for workspace {invitation.workspace_id}"

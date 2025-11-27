@@ -33,6 +33,8 @@ class DeploymentDetailsContainer(Widget):
         self._status_api: StatusAPI | None = None
         self._stream_task: Worker | None = None
         self._scroll: VerticalScroll | None = None
+        self._initial_render_done = False
+        self._stream_error: str | None = None
 
         # Store widget references for updates
         self._overview_widget: Static | None = None
@@ -53,8 +55,21 @@ class DeploymentDetailsContainer(Widget):
 
     def _show_loading(self) -> None:
         """Show loading indicator after widget is fully mounted."""
-        if self._scroll and self._scroll.is_mounted:
+        # Skip loading if we already have initial status to render
+        if self.deployment_status and self._scroll and self._scroll.is_mounted:
+            self._initial_render_done = True
+            self._render_sections(self.deployment_status)
+        elif self._scroll and self._scroll.is_mounted:
             self._scroll.mount(LoadingIndicator())
+
+    def _show_error(self, message: str) -> None:
+        """Show error message when status cannot be loaded."""
+        if not self._scroll or not self._scroll.is_mounted:
+            return
+        self._scroll.remove_children()
+        error_section = SectionContainer(f"{Icons.OVERVIEW} Status Unavailable")
+        self._scroll.mount(error_section)
+        error_section.mount(Static(f"[yellow]{message}[/yellow]", markup=True))
 
     async def on_unmount(self) -> None:
         """Clean up when unmounting."""
@@ -62,8 +77,14 @@ class DeploymentDetailsContainer(Widget):
 
     async def watch_deployment_status(self, old_value, new_value) -> None:
         """React to deployment status changes."""
-        # Only render on updates, not initial set
-        if new_value and self.is_mounted and old_value is not None:
+        if not new_value or not self.is_mounted:
+            return
+
+        # Render on initial set or updates
+        if not self._initial_render_done:
+            self._initial_render_done = True
+            self._render_sections(new_value)
+        elif old_value is not None:
             self._render_sections(new_value)
 
     async def watch_deployment_id(self, old_value, new_value) -> None:
@@ -169,6 +190,8 @@ class DeploymentDetailsContainer(Widget):
             self._stream_task.cancel()
             self._stream_task.wait()
         self._stream_task = None
+        self._initial_render_done = False
+        self._stream_error = None
 
         if self._status_api:
             await self._status_api.disconnect()
@@ -185,12 +208,12 @@ class DeploymentDetailsContainer(Widget):
             def on_update(status: DeploymentStatus | None) -> None:
                 """Handle incoming deployment status updates."""
                 if status:
-                    # Use call_later to ensure UI updates happen on the main thread
+                    self._stream_error = None
                     self.app.call_later(self.update_deployment, status)
 
-            def on_error(_: Exception) -> None:
+            def on_error(e: Exception) -> None:
                 """Handle SSE stream errors."""
-                pass
+                self._stream_error = str(e)
 
             await self._status_api.stream_deployment_status(
                 deployment_id=self.deployment_id,
@@ -198,5 +221,11 @@ class DeploymentDetailsContainer(Widget):
                 on_error=on_error,
             )
 
-        except Exception:
-            pass
+        except Exception as e:
+            self._stream_error = str(e)
+            # Show error if we don't have any status to display
+            if not self._initial_render_done and self.is_mounted:
+                self.app.call_later(
+                    self._show_error,
+                    f"Could not connect to status stream: {e}",
+                )

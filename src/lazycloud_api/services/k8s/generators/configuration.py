@@ -79,15 +79,17 @@ def generate_healthcheck_values(
 
             # Add timing configurations
             if "interval" in healthcheck:
-                probe.periodSeconds = parse_duration(healthcheck["interval"])
+                probe.period_seconds = parse_duration(healthcheck["interval"])
 
             if "timeout" in healthcheck:
-                probe.timeoutSeconds = parse_duration(healthcheck["timeout"])
+                probe.timeout_seconds = parse_duration(healthcheck["timeout"])
 
             if "start_period" in healthcheck:
-                probe.initialDelaySeconds = parse_duration(healthcheck["start_period"])
+                probe.initial_delay_seconds = parse_duration(
+                    healthcheck["start_period"]
+                )
             if "retries" in healthcheck:
-                probe.failureThreshold = healthcheck["retries"]
+                probe.failure_threshold = healthcheck["retries"]
 
             healthcheck_values.livenessProbe = probe
             healthcheck_values.readinessProbe = probe.model_copy()

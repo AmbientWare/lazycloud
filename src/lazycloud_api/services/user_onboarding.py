@@ -2,7 +2,7 @@ from typing import Optional
 
 from loguru import logger
 
-from lazycloud_api.database import db
+from lazycloud_api.database import get_db_context
 from lazycloud_api.database.api_keys import ApiKeyExpirationDays, ApiKeyPydantic
 from lazycloud_api.database.user_workspaces import (
     UserWorkspacePydantic,
@@ -44,7 +44,8 @@ class UserOnboardingService:
 
     async def _get_user_by_clerk_id(self, clerk_id: str) -> Optional[UserPydantic]:
         """Get user by clerk_id."""
-        return await db.users.get_by_clerk_id(clerk_id=clerk_id)
+        async with get_db_context() as db:
+            return await db.users.get_by_clerk_id(clerk_id=clerk_id)
 
     async def _create_user_with_entities(
         self, clerk_id: str, name: str, email: str
@@ -52,7 +53,7 @@ class UserOnboardingService:
         """Create user and all related entities in a single transaction."""
         try:
             # All database operations in one atomic transaction
-            async with db.users.transaction() as session:
+            async with get_db_context() as db:
                 # Create user
                 user = UserPydantic(
                     name=name,
@@ -62,7 +63,7 @@ class UserOnboardingService:
                     status=UserStatus.ACTIVE,
                     subscription_state=SubscriptionState.WITHIN_LIMITS,
                 )
-                user = await db.users.create(user, session=session)
+                user = await db.users.create(user)
 
                 # Create API key
                 api_key = ApiKeyPydantic(
@@ -71,14 +72,14 @@ class UserOnboardingService:
                     value=generate_api_key(),
                     expires_at=generate_api_key_expires_at(ApiKeyExpirationDays.NEVER),
                 )
-                await db.api_keys.create(api_key, session=session)
+                await db.api_keys.create(api_key)
 
                 # Create personal workspace
                 workspace = WorkspacePydantic(
                     name="Personal",
                     is_personal=True,
                 )
-                workspace = await db.workspaces.create(workspace, session=session)
+                workspace = await db.workspaces.create(workspace)
 
                 # Link user to workspace
                 user_workspace = UserWorkspacePydantic(
@@ -87,7 +88,7 @@ class UserOnboardingService:
                     role=WorkspaceRole.OWNER,
                     status=UserWorkspaceStatus.ACTIVE,
                 )
-                await db.user_workspaces.create(user_workspace, session=session)
+                await db.user_workspaces.create(user_workspace)
 
             logger.info(f"Successfully created user {clerk_id} in database")
             return user
@@ -116,6 +117,7 @@ class UserOnboardingService:
 
             if not customer:
                 logger.warning(f"Failed to create Polar customer for {user.clerk_id}")
+
             else:
                 logger.info(f"Created Polar customer for {user.clerk_id}")
 

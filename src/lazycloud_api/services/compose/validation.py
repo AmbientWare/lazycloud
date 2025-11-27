@@ -3,7 +3,7 @@
 import yaml
 
 from lazycloud_api.config import app_config
-from lazycloud_api.database import db
+from lazycloud_api.database import get_db_context
 from lazycloud_api.database.compose import ComposeDeploymentPydantic
 from lazycloud_api.prefect_app.deployment.utils import verify_quota_capacity
 from lazycloud_api.services.compose.parser import ComposeParser
@@ -18,7 +18,7 @@ from shared.models.k8s import WorkloadType
 async def validate_deployment_request(
     deployment: ComposeDeploymentPydantic,
     existing_deployment: ComposeDeploymentPydantic | None = None,
-    service_name: str | None = None,
+    service_names: list[str] | None = None,
 ) -> tuple[HelmValues, ResourceRequirements]:
     """Validate deployment request before queuing task.
 
@@ -42,13 +42,14 @@ async def validate_deployment_request(
     except Exception as e:
         raise ValueError(f"Failed to parse compose file: {str(e)}") from e
 
-    # Validate service_name if specified
-    if service_name:
-        service_names = [service.name for service in compose_file.services]
-        if service_name not in service_names:
-            available = ", ".join(service_names)
+    # Validate service_names if specified
+    if service_names:
+        available_services = [service.name for service in compose_file.services]
+        invalid_services = [s for s in service_names if s not in available_services]
+        if invalid_services:
+            available = ", ".join(available_services)
             raise ValueError(
-                f"Service '{service_name}' not found in compose file. "
+                f"Service(s) '{', '.join(invalid_services)}' not found in compose file. "
                 f"Available services: {available}"
             )
 
@@ -63,7 +64,8 @@ async def validate_deployment_request(
     # Get secrets (only if deployment exists)
     secrets = []
     if deployment.id:
-        secrets = await db.secrets.get_secrets(deployment.id)
+        async with get_db_context() as db:
+            secrets = await db.secrets.get_secrets(deployment.id)
 
     # Generate Helm values (this validates compose file)
     try:

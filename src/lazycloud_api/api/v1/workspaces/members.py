@@ -8,7 +8,7 @@ from lazycloud_api.api.dependencies import (
     get_workspace_with_owner_access,
 )
 from lazycloud_api.config import app_config
-from lazycloud_api.database import db
+from lazycloud_api.database import Database, get_db
 from lazycloud_api.database.user_workspaces import (
     UserWorkspaceStatus,
     WorkspaceRole,
@@ -39,6 +39,7 @@ members_router = APIRouter(prefix="/{workspace_id}/members", tags=["workspace-me
 @members_router.get("")
 async def get_workspace_members(
     workspace_access: WorkspaceAccess = Depends(get_workspace_with_any_access),
+    db: Database = Depends(get_db),
 ) -> list[WorkspaceMemberResponse]:
     """Get all members of a workspace"""
     workspace = workspace_access.workspace
@@ -115,6 +116,7 @@ async def get_workspace_members(
 async def update_member_role(
     request: UpdateMemberRoleRequest,
     workspace_access: WorkspaceAccess = Depends(get_workspace_with_admin_access),
+    db: Database = Depends(get_db),
 ) -> WorkspaceMemberResponse:
     """Update a member's role (requires owner or admin role)"""
     workspace = workspace_access.workspace
@@ -157,6 +159,7 @@ async def update_member_role(
 async def remove_member(
     user_id: str,
     workspace_access: WorkspaceAccess = Depends(get_workspace_with_admin_access),
+    db: Database = Depends(get_db),
 ) -> WorkspaceSuccessResponse:
     """Remove a member from a workspace (requires owner or admin role)"""
     workspace = workspace_access.workspace
@@ -174,26 +177,24 @@ async def remove_member(
     target_user = await db.users.get_by_id(user_id)
 
     # Wrap invitation deletions and membership deletion in a transaction
-    async with db.user_workspaces.transaction() as session:
-        if target_user:
-            # Cancel any pending invitations for this user in this workspace
-            pending_invitations = await db.invitations.get_by_workspace(
-                workspace.id, include_accepted=False
-            )
-            for invitation in pending_invitations:
-                if (
-                    invitation.email.lower().strip()
-                    == target_user.email.lower().strip()
-                    and not invitation.accepted_at
-                ):
-                    # Delete invitation using repository method with session
-                    await db.invitations.delete(invitation.id, session=session)
-                    logger.info(
-                        f"Cancelled pending invitation for {target_user.email} in workspace {workspace.name} (ID: {workspace.id}) when removing member"
-                    )
+    if target_user:
+        # Cancel any pending invitations for this user in this workspace
+        pending_invitations = await db.invitations.get_by_workspace(
+            workspace.id, include_accepted=False
+        )
+        for invitation in pending_invitations:
+            if (
+                invitation.email.lower().strip() == target_user.email.lower().strip()
+                and not invitation.accepted_at
+            ):
+                # Delete invitation using repository method with session
+                await db.invitations.delete(invitation.id)
+                logger.info(
+                    f"Cancelled pending invitation for {target_user.email} in workspace {workspace.name} (ID: {workspace.id}) when removing member"
+                )
 
         # Delete membership using repository method with session
-        await db.user_workspaces.delete(target_membership.id, session=session)
+        await db.user_workspaces.delete(target_membership.id)
 
     logger.info(
         f"Removed member {user_id} from workspace {workspace.name} (ID: {workspace.id})"
@@ -205,6 +206,7 @@ async def remove_member(
 @members_router.post("/leave")
 async def leave_workspace(
     workspace_access: WorkspaceAccess = Depends(get_workspace_with_any_access),
+    db: Database = Depends(get_db),
 ) -> WorkspaceSuccessResponse:
     """Leave a workspace (removes current user from workspace)"""
     workspace = workspace_access.workspace
@@ -230,24 +232,22 @@ async def leave_workspace(
             detail="Cannot leave workspace as owner. Transfer ownership first or delete the workspace.",
         )
 
-    # Wrap invitation deletions and membership deletion in a transaction
-    async with db.user_workspaces.transaction() as session:
-        # Cancel any pending invitations for this user in this workspace
-        pending_invitations = await db.invitations.get_by_workspace(
-            workspace.id, include_accepted=False
-        )
-        for invitation in pending_invitations:
-            if (
-                invitation.email.lower().strip() == current_user.email.lower().strip()
-                and not invitation.accepted_at
-            ):
-                await db.invitations.delete(invitation.id, session=session)
-                logger.info(
-                    f"Cancelled pending invitation for {current_user.email} in workspace {workspace.name} (ID: {workspace.id}) when leaving"
-                )
+    # Cancel any pending invitations for this user in this workspace
+    pending_invitations = await db.invitations.get_by_workspace(
+        workspace.id, include_accepted=False
+    )
+    for invitation in pending_invitations:
+        if (
+            invitation.email.lower().strip() == current_user.email.lower().strip()
+            and not invitation.accepted_at
+        ):
+            await db.invitations.delete(invitation.id)
+            logger.info(
+                f"Cancelled pending invitation for {current_user.email} in workspace {workspace.name} (ID: {workspace.id}) when leaving"
+            )
 
         # Delete membership using repository method with session
-        await db.user_workspaces.delete(membership.id, session=session)
+        await db.user_workspaces.delete(membership.id)
 
     logger.info(
         f"User {current_user.id} left workspace {workspace.name} (ID: {workspace.id})"
@@ -261,6 +261,7 @@ async def invite_user(
     request: InviteUserRequest,
     workspace_access: WorkspaceAccess = Depends(get_workspace_with_admin_access),
     invitation_service: InvitationService = Depends(get_invitation_service),
+    db: Database = Depends(get_db),
 ) -> InviteUserResponse:
     """Invite a user to a workspace (requires owner or admin role)"""
     workspace = workspace_access.workspace
@@ -309,6 +310,7 @@ async def invite_user(
 async def cancel_invitation(
     invitation_id: str,
     workspace_access: WorkspaceAccess = Depends(get_workspace_with_admin_access),
+    db: Database = Depends(get_db),
 ) -> WorkspaceSuccessResponse:
     """Cancel a pending invitation by invitation ID (requires owner or admin role)"""
     workspace = workspace_access.workspace
@@ -332,8 +334,7 @@ async def cancel_invitation(
                 detail="Cannot cancel an accepted ownership transfer invitation",
             )
         # Ownership transfer is pending, allow cancellation
-        async with db.invitations.transaction() as session:
-            await db.invitations.delete(invitation.id, session=session)
+        await db.invitations.delete(invitation.id)
         logger.info(
             f"Cancelled ownership transfer invitation {invitation_id} in workspace {workspace.name} (ID: {workspace.id})"
         )
@@ -359,18 +360,16 @@ async def cancel_invitation(
             detail="Cannot cancel an accepted invitation for an active member",
         )
 
-    # Wrap invitation deletion and user_workspace deletion in a transaction
-    async with db.invitations.transaction() as session:
-        # Delete invitation using repository method
-        await db.invitations.delete(invitation.id, session=session)
+    # Delete invitation using repository method
+    await db.invitations.delete(invitation.id)
 
-        # Also delete the user_workspace record if it exists with INVITED status
-        if existing_user:
-            membership = await db.user_workspaces.get_by_user_and_workspace(
-                existing_user.id, workspace.id, session=session
-            )
-            if membership and membership.status == UserWorkspaceStatus.INVITED:
-                await db.user_workspaces.delete(membership.id, session=session)
+    # Also delete the user_workspace record if it exists with INVITED status
+    if existing_user:
+        membership = await db.user_workspaces.get_by_user_and_workspace(
+            existing_user.id, workspace.id
+        )
+        if membership and membership.status == UserWorkspaceStatus.INVITED:
+            await db.user_workspaces.delete(membership.id)
 
     logger.info(
         f"Cancelled invitation {invitation_id} for {invitation.email} in workspace {workspace.name} (ID: {workspace.id})"
@@ -382,6 +381,7 @@ async def cancel_invitation(
 @members_router.get("/transfer-ownership/pending")
 async def get_pending_ownership_transfer(
     workspace_access: WorkspaceAccess = Depends(get_workspace_with_owner_access),
+    db: Database = Depends(get_db),
 ) -> WorkspaceMemberResponse | None:
     """Get pending ownership transfer invitation for a workspace (owner only)"""
     workspace = workspace_access.workspace
@@ -430,6 +430,7 @@ async def transfer_ownership(
     workspace_access: WorkspaceAccess = Depends(get_workspace_with_owner_access),
     subscription_service: SubscriptionService = Depends(get_subscription_service),
     invitation_service: InvitationService = Depends(get_invitation_service),
+    db: Database = Depends(get_db),
 ) -> InviteUserResponse:
     """Transfer workspace ownership to another user (requires owner role)"""
     workspace = workspace_access.workspace

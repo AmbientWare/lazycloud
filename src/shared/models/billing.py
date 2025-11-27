@@ -89,7 +89,7 @@ class MeterNames(StrEnum):
     CPU_USAGE = "CPU Usage"
     MEMORY_USAGE = "Memory Usage"
     STANDARD_STORAGE = "Standard Storage"
-    PREMIUM_STORAGE = "Premium Storage"
+    SHARED_STORAGE = "Shared Storage"
     BUILD_MINUTES = "Build Minutes"
     PUBLIC_ENDPOINTS = "Public Endpoints"
 
@@ -105,24 +105,24 @@ USAGE_EVENT_NAME = "lazycloud-usage"
 METER_METADATA_FIELDS = {
     MeterNames.CPU_USAGE: "cpu_core_hours",
     MeterNames.MEMORY_USAGE: "memory_gb_hours",
-    MeterNames.STANDARD_STORAGE: "s3_gb_hours",
-    MeterNames.PREMIUM_STORAGE: "efs_gb_hours",
+    MeterNames.STANDARD_STORAGE: "standard_gb_hours",
+    MeterNames.SHARED_STORAGE: "shared_gb_hours",
     MeterNames.BUILD_MINUTES: "build_minutes",
     MeterNames.PUBLIC_ENDPOINTS: "public_endpoint_hours",
 }
 
 # Storage class name constants
-STORAGE_CLASS_S3 = "s3-sc"
+STORAGE_CLASS_EBS = "ebs-sc"
 STORAGE_CLASS_EFS = "efs-sc"
 
 # Mapping from Kubernetes storage class names to meter display names
 STORAGE_CLASS_TO_METER: dict[str, str] = {
-    STORAGE_CLASS_S3: MeterNames.STANDARD_STORAGE,
-    STORAGE_CLASS_EFS: MeterNames.PREMIUM_STORAGE,
+    STORAGE_CLASS_EBS: MeterNames.STANDARD_STORAGE,
+    STORAGE_CLASS_EFS: MeterNames.SHARED_STORAGE,
 }
 
 # Mapping from storage class to short type names
 STORAGE_CLASS_TO_TYPE: dict[str, str] = {
-    STORAGE_CLASS_S3: "Standard",
-    STORAGE_CLASS_EFS: "Performance",
+    STORAGE_CLASS_EBS: "Standard",
+    STORAGE_CLASS_EFS: "Shared",
 }

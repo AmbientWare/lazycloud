@@ -22,13 +22,12 @@ metadata:
   labels:
     {{- include "lazycloud-compose.labels" $ | nindent 4 }}
     app.kubernetes.io/component: storage
-    lazycloud.io/volume: {{ $volume.name }}
+    lazycloud.dev/volume: {{ $volume.name }}
     {{- with $volume.labels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
   annotations:
     {{- include "lazycloud-compose.annotations" $ | nindent 4 }}
-    helm.sh/resource-policy: keep  # Preserve PVCs on helm upgrade
     {{- if $volume.annotations }}
     {{- toYaml $volume.annotations | nindent 4 }}
     {{- end }}

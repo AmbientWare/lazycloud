@@ -3,7 +3,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from shared.models.billing import STORAGE_CLASS_EFS, STORAGE_CLASS_S3
+from shared.models.billing import STORAGE_CLASS_EBS, STORAGE_CLASS_EFS
 
 
 class UsagePeriodInfo(BaseModel):
@@ -14,8 +14,8 @@ class UsagePeriodInfo(BaseModel):
 class UsageMetrics(BaseModel):
     cpu_core_hours: float
     memory_gb_hours: float
-    s3_gb_hours: float
-    efs_gb_hours: float
+    standard_gb_hours: float
+    shared_gb_hours: float
     build_minutes: float
     public_endpoint_hours: float
     costs: "MeterCostBreakdown | None" = None
@@ -33,7 +33,7 @@ class VolumeUsageItem(BaseModel):
     """Internal type for volume usage processing"""
 
     volume_name: str
-    storage_class: Literal[STORAGE_CLASS_S3, STORAGE_CLASS_EFS]
+    storage_class: Literal[STORAGE_CLASS_EBS, STORAGE_CLASS_EFS]
     gb_hours: float
 
 
@@ -41,8 +41,8 @@ class DailyUsageData(BaseModel):
     date: str
     cpu_core_hours: float
     memory_gb_hours: float
-    s3_gb_hours: float
-    efs_gb_hours: float
+    standard_gb_hours: float
+    shared_gb_hours: float
     build_minutes: float
     public_endpoint_hours: float
     costs: "MeterCostBreakdown | None" = None
@@ -85,8 +85,8 @@ class MeterCostBreakdown(BaseModel):
 
     cpu_cost: float
     memory_cost: float
-    s3_cost: float
-    efs_cost: float
+    standard_cost: float
+    shared_cost: float
     build_cost: float
     endpoint_cost: float
     total_cost: float
@@ -108,7 +108,7 @@ class VolumeCostBreakdown(BaseModel):
     """Cost breakdown for a single volume (estimated)."""
 
     volume_name: str
-    storage_class: Literal[STORAGE_CLASS_S3, STORAGE_CLASS_EFS]
+    storage_class: Literal[STORAGE_CLASS_EBS, STORAGE_CLASS_EFS]
     storage_cost: float
     percentage_of_total: float
 
@@ -131,3 +131,5 @@ class DeploymentUsageOverview(BaseModel):
     deployment_name: str
     usage: UsageMetrics
     status: Literal["Active", "Inactive"]
+    deployed_at: datetime | None = None
+    deleted_at: datetime | None = None

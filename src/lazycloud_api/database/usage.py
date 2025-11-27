@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import (
     UUID,
@@ -11,6 +11,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
     select,
+    update,
 )
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,7 +23,6 @@ from lazycloud_api.database.base import (
     DatabaseService,
     UUIDStr,
 )
-from lazycloud_api.database.session import session_manager
 from shared.models.billing import (
     UsageRecordStatus,
     UsageRecordType,
@@ -48,8 +48,8 @@ class UsageRecordTable(BaseTable):
     cpu_core_seconds: Mapped[float] = mapped_column(Float, default=0.0)
     memory_gb_seconds: Mapped[float] = mapped_column(Float, default=0.0)
     storage_gb_hours: Mapped[float] = mapped_column(Float, default=0.0)
-    s3_gb_hours: Mapped[float] = mapped_column(Float, default=0.0)
-    efs_gb_hours: Mapped[float] = mapped_column(Float, default=0.0)
+    standard_gb_hours: Mapped[float] = mapped_column(Float, default=0.0)
+    shared_gb_hours: Mapped[float] = mapped_column(Float, default=0.0)
     build_minutes: Mapped[float] = mapped_column(Float, default=0.0)
     public_endpoint_hours: Mapped[float] = mapped_column(Float, default=0.0)
 
@@ -269,8 +269,8 @@ class UsageRecordPydantic(BaseDbPydanticModel):
     cpu_core_seconds: float
     memory_gb_seconds: float
     storage_gb_hours: float
-    s3_gb_hours: float
-    efs_gb_hours: float
+    standard_gb_hours: float
+    shared_gb_hours: float
     build_minutes: float = 0.0
     public_endpoint_hours: float = 0.0
     compute_breakdowns: list[ComputeUsageBreakdownPydantic] = []
@@ -282,8 +282,37 @@ class UsageRecordPydantic(BaseDbPydanticModel):
 class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
     """Service for managing usage records."""
 
-    def __init__(self):
-        super().__init__(UsageRecordTable, UsageRecordPydantic)
+    # Fields to exclude when updating (relationship fields)
+    _update_exclude_fields = {
+        "id",
+        "created_at",
+        "updated_at",
+        "compute_breakdowns",
+        "storage_breakdowns",
+        "networking_breakdowns",
+        "build_breakdowns",
+    }
+
+    def __init__(self, session: AsyncSession):
+        super().__init__(UsageRecordTable, UsageRecordPydantic, session)
+
+    async def update(self, model: UsageRecordPydantic) -> UsageRecordPydantic | None:
+        """Update a usage record, excluding relationship fields."""
+
+        update_data = model.model_dump(exclude=self._update_exclude_fields)
+        update_data["updated_at"] = datetime.now(timezone.utc)
+
+        stmt = (
+            update(UsageRecordTable)
+            .where(UsageRecordTable.id == model.id)
+            .values(**update_data)
+            .returning(UsageRecordTable)
+        )
+        result = await self._session.execute(
+            stmt, execution_options={"populate_existing": True}
+        )
+        updated_model = result.scalar_one_or_none()
+        return self._to_pydantic(updated_model)
 
     async def upsert_usage_record(
         self,
@@ -293,66 +322,61 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
         cpu_core_seconds: float,
         memory_gb_seconds: float,
         storage_gb_hours: float,
-        s3_gb_hours: float = 0.0,
-        efs_gb_hours: float = 0.0,
+        standard_gb_hours: float = 0.0,
+        shared_gb_hours: float = 0.0,
         build_minutes: float = 0.0,
         public_endpoint_hours: float = 0.0,
         record_type: UsageRecordType = UsageRecordType.HOURLY,
         status: UsageRecordStatus = UsageRecordStatus.DRAFT,
-        session: AsyncSession | None = None,
     ) -> UsageRecordPydantic:
-        async def _upsert(sess: AsyncSession):
-            # Check if record exists
-            result = await sess.execute(
-                select(UsageRecordTable)
-                .where(UsageRecordTable.workspace_id == workspace_id)
-                .where(UsageRecordTable.record_type == record_type.value)
-                .where(UsageRecordTable.collection_start == collection_start)
-                .where(UsageRecordTable.collection_end == collection_end)
+        """Upsert a usage record for a workspace."""
+        result = await self._session.execute(
+            select(UsageRecordTable)
+            .where(UsageRecordTable.workspace_id == workspace_id)
+            .where(UsageRecordTable.record_type == record_type.value)
+            .where(UsageRecordTable.collection_start == collection_start)
+            .where(UsageRecordTable.collection_end == collection_end)
+        )
+        existing_record = result.scalar_one_or_none()
+
+        if existing_record:
+            # Only update if not already finalized or reported
+            if existing_record.status not in (
+                UsageRecordStatus.FINALIZED.value,
+                UsageRecordStatus.REPORTED.value,
+            ):
+                existing_record.cpu_core_seconds = cpu_core_seconds
+                existing_record.memory_gb_seconds = memory_gb_seconds
+                existing_record.storage_gb_hours = storage_gb_hours
+                existing_record.standard_gb_hours = standard_gb_hours
+                existing_record.shared_gb_hours = shared_gb_hours
+                existing_record.build_minutes = build_minutes
+                existing_record.public_endpoint_hours = public_endpoint_hours
+                existing_record.status = status.value
+
+            await self._session.flush()
+            await self._session.refresh(existing_record)
+            return existing_record.to_pydantic(UsageRecordPydantic)
+
+        else:
+            usage_record = UsageRecordTable(
+                workspace_id=workspace_id,
+                record_type=record_type.value,
+                status=status.value,
+                collection_start=collection_start,
+                collection_end=collection_end,
+                cpu_core_seconds=cpu_core_seconds,
+                memory_gb_seconds=memory_gb_seconds,
+                storage_gb_hours=storage_gb_hours,
+                standard_gb_hours=standard_gb_hours,
+                shared_gb_hours=shared_gb_hours,
+                build_minutes=build_minutes,
+                public_endpoint_hours=public_endpoint_hours,
             )
-            existing_record = result.scalar_one_or_none()
-
-            if existing_record:
-                # Update existing record
-                # Only update if not already finalized or reported to prevent data corruption
-                if existing_record.status not in (
-                    UsageRecordStatus.FINALIZED.value,
-                    UsageRecordStatus.REPORTED.value,
-                ):
-                    existing_record.cpu_core_seconds = cpu_core_seconds
-                    existing_record.memory_gb_seconds = memory_gb_seconds
-                    existing_record.storage_gb_hours = storage_gb_hours
-                    existing_record.s3_gb_hours = s3_gb_hours
-                    existing_record.efs_gb_hours = efs_gb_hours
-                    existing_record.build_minutes = build_minutes
-                    existing_record.public_endpoint_hours = public_endpoint_hours
-                    existing_record.status = status.value
-
-                await sess.flush()
-                await sess.refresh(existing_record)
-                return existing_record.to_pydantic(UsageRecordPydantic)
-            else:
-                # Create new record
-                usage_record = UsageRecordTable(
-                    workspace_id=workspace_id,
-                    record_type=record_type.value,
-                    status=status.value,
-                    collection_start=collection_start,
-                    collection_end=collection_end,
-                    cpu_core_seconds=cpu_core_seconds,
-                    memory_gb_seconds=memory_gb_seconds,
-                    storage_gb_hours=storage_gb_hours,
-                    s3_gb_hours=s3_gb_hours,
-                    efs_gb_hours=efs_gb_hours,
-                    build_minutes=build_minutes,
-                    public_endpoint_hours=public_endpoint_hours,
-                )
-                sess.add(usage_record)
-                await sess.flush()
-                await sess.refresh(usage_record)
-                return usage_record.to_pydantic(UsageRecordPydantic)
-
-        return await self._execute_in_session(_upsert, session)
+            self._session.add(usage_record)
+            await self._session.flush()
+            await self._session.refresh(usage_record)
+            return usage_record.to_pydantic(UsageRecordPydantic)
 
     async def upsert_compute_breakdown(
         self,
@@ -362,37 +386,31 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
         memory_gb_seconds: float,
         service_name: str,
         deployment_id: str,
-        session: AsyncSession | None = None,
     ) -> ComputeUsageBreakdownPydantic:
-        async def _upsert(sess: AsyncSession):
-            stmt = insert(ComputeUsageBreakdownTable).values(
-                usage_record_id=usage_record_id,
-                pod_name=pod_name,
-                cpu_core_seconds=cpu_core_seconds,
-                memory_gb_seconds=memory_gb_seconds,
-                deployment_id=deployment_id,
-                service_name=service_name,
-            )
+        """Upsert a compute usage breakdown."""
+        stmt = insert(ComputeUsageBreakdownTable).values(
+            usage_record_id=usage_record_id,
+            pod_name=pod_name,
+            cpu_core_seconds=cpu_core_seconds,
+            memory_gb_seconds=memory_gb_seconds,
+            deployment_id=deployment_id,
+            service_name=service_name,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["usage_record_id", "pod_name"],
+            set_={
+                "cpu_core_seconds": stmt.excluded.cpu_core_seconds,
+                "memory_gb_seconds": stmt.excluded.memory_gb_seconds,
+                "deployment_id": stmt.excluded.deployment_id,
+                "service_name": stmt.excluded.service_name,
+                "updated_at": func.now(),
+            },
+        ).returning(ComputeUsageBreakdownTable)
 
-            # On conflict, update the values
-            stmt = stmt.on_conflict_do_update(
-                index_elements=["usage_record_id", "pod_name"],
-                set_={
-                    "cpu_core_seconds": stmt.excluded.cpu_core_seconds,
-                    "memory_gb_seconds": stmt.excluded.memory_gb_seconds,
-                    "deployment_id": stmt.excluded.deployment_id,
-                    "service_name": stmt.excluded.service_name,
-                    "updated_at": func.now(),
-                },
-            ).returning(ComputeUsageBreakdownTable)
-
-            result = await sess.execute(stmt)
-            breakdown = result.scalar_one()
-            await sess.flush()
-
-            return breakdown.to_pydantic(ComputeUsageBreakdownPydantic)
-
-        return await self._execute_in_session(_upsert, session)
+        result = await self._session.execute(stmt)
+        breakdown = result.scalar_one()
+        await self._session.flush()
+        return breakdown.to_pydantic(ComputeUsageBreakdownPydantic)
 
     async def upsert_storage_breakdown(
         self,
@@ -401,35 +419,29 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
         storage_class: str,
         gb_hours: float,
         deployment_id: str,
-        session: AsyncSession | None = None,
     ) -> StorageUsageBreakdownPydantic:
-        async def _upsert(sess: AsyncSession):
-            stmt = insert(StorageUsageBreakdownTable).values(
-                usage_record_id=usage_record_id,
-                pvc_name=pvc_name,
-                storage_class=storage_class,
-                gb_hours=gb_hours,
-                deployment_id=deployment_id,
-            )
+        """Upsert a storage usage breakdown."""
+        stmt = insert(StorageUsageBreakdownTable).values(
+            usage_record_id=usage_record_id,
+            pvc_name=pvc_name,
+            storage_class=storage_class,
+            gb_hours=gb_hours,
+            deployment_id=deployment_id,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["usage_record_id", "pvc_name"],
+            set_={
+                "storage_class": stmt.excluded.storage_class,
+                "gb_hours": stmt.excluded.gb_hours,
+                "deployment_id": stmt.excluded.deployment_id,
+                "updated_at": func.now(),
+            },
+        ).returning(StorageUsageBreakdownTable)
 
-            # On conflict, update the values
-            stmt = stmt.on_conflict_do_update(
-                index_elements=["usage_record_id", "pvc_name"],
-                set_={
-                    "storage_class": stmt.excluded.storage_class,
-                    "gb_hours": stmt.excluded.gb_hours,
-                    "deployment_id": stmt.excluded.deployment_id,
-                    "updated_at": func.now(),
-                },
-            ).returning(StorageUsageBreakdownTable)
-
-            result = await sess.execute(stmt)
-            breakdown = result.scalar_one()
-            await sess.flush()
-
-            return breakdown.to_pydantic(StorageUsageBreakdownPydantic)
-
-        return await self._execute_in_session(_upsert, session)
+        result = await self._session.execute(stmt)
+        breakdown = result.scalar_one()
+        await self._session.flush()
+        return breakdown.to_pydantic(StorageUsageBreakdownPydantic)
 
     async def upsert_networking_breakdown(
         self,
@@ -437,64 +449,52 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
         service_name: str,
         endpoint_hours: float,
         deployment_id: str,
-        session: AsyncSession | None = None,
     ) -> NetworkingUsageBreakdownPydantic:
-        async def _upsert(sess: AsyncSession):
-            stmt = insert(NetworkingUsageBreakdownTable).values(
-                usage_record_id=usage_record_id,
-                service_name=service_name,
-                endpoint_hours=endpoint_hours,
-                deployment_id=deployment_id,
-            )
+        """Upsert a networking usage breakdown."""
+        stmt = insert(NetworkingUsageBreakdownTable).values(
+            usage_record_id=usage_record_id,
+            service_name=service_name,
+            endpoint_hours=endpoint_hours,
+            deployment_id=deployment_id,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["usage_record_id", "service_name"],
+            set_={
+                "endpoint_hours": stmt.excluded.endpoint_hours,
+                "deployment_id": stmt.excluded.deployment_id,
+                "updated_at": func.now(),
+            },
+        ).returning(NetworkingUsageBreakdownTable)
 
-            # On conflict, update the values
-            stmt = stmt.on_conflict_do_update(
-                index_elements=["usage_record_id", "service_name"],
-                set_={
-                    "endpoint_hours": stmt.excluded.endpoint_hours,
-                    "deployment_id": stmt.excluded.deployment_id,
-                    "updated_at": func.now(),
-                },
-            ).returning(NetworkingUsageBreakdownTable)
-
-            result = await sess.execute(stmt)
-            breakdown = result.scalar_one()
-            await sess.flush()
-
-            return breakdown.to_pydantic(NetworkingUsageBreakdownPydantic)
-
-        return await self._execute_in_session(_upsert, session)
+        result = await self._session.execute(stmt)
+        breakdown = result.scalar_one()
+        await self._session.flush()
+        return breakdown.to_pydantic(NetworkingUsageBreakdownPydantic)
 
     async def upsert_build_breakdown(
         self,
         usage_record_id: str,
         deployment_id: str,
         build_minutes: float,
-        session: AsyncSession | None = None,
     ) -> BuildUsageBreakdownPydantic:
-        async def _upsert(sess: AsyncSession):
-            stmt = insert(BuildUsageBreakdownTable).values(
-                usage_record_id=usage_record_id,
-                deployment_id=deployment_id,
-                build_minutes=build_minutes,
-            )
+        """Upsert a build usage breakdown."""
+        stmt = insert(BuildUsageBreakdownTable).values(
+            usage_record_id=usage_record_id,
+            deployment_id=deployment_id,
+            build_minutes=build_minutes,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["usage_record_id", "deployment_id"],
+            set_={
+                "build_minutes": stmt.excluded.build_minutes,
+                "updated_at": func.now(),
+            },
+        ).returning(BuildUsageBreakdownTable)
 
-            # On conflict, update the values
-            stmt = stmt.on_conflict_do_update(
-                index_elements=["usage_record_id", "deployment_id"],
-                set_={
-                    "build_minutes": stmt.excluded.build_minutes,
-                    "updated_at": func.now(),
-                },
-            ).returning(BuildUsageBreakdownTable)
-
-            result = await sess.execute(stmt)
-            breakdown = result.scalar_one()
-            await sess.flush()
-
-            return breakdown.to_pydantic(BuildUsageBreakdownPydantic)
-
-        return await self._execute_in_session(_upsert, session)
+        result = await self._session.execute(stmt)
+        breakdown = result.scalar_one()
+        await self._session.flush()
+        return breakdown.to_pydantic(BuildUsageBreakdownPydantic)
 
     async def get_workspace_usage(
         self,
@@ -503,63 +503,58 @@ class UsageService(DatabaseService[UsageRecordTable, UsageRecordPydantic]):
         end_date: datetime,
         record_type: UsageRecordType | None = None,
     ) -> list[UsageRecordPydantic]:
-        async with session_manager.get_session() as session:
-            query = (
-                select(UsageRecordTable)
-                .where(UsageRecordTable.workspace_id == workspace_id)
-                .where(UsageRecordTable.collection_start <= end_date)
-                .where(UsageRecordTable.collection_end >= start_date)
-                .order_by(UsageRecordTable.collection_start)
-            )
-            if record_type:
-                query = query.where(UsageRecordTable.record_type == record_type.value)
+        query = (
+            select(UsageRecordTable)
+            .where(UsageRecordTable.workspace_id == workspace_id)
+            .where(UsageRecordTable.collection_start <= end_date)
+            .where(UsageRecordTable.collection_end >= start_date)
+            .order_by(UsageRecordTable.collection_start)
+        )
+        if record_type:
+            query = query.where(UsageRecordTable.record_type == record_type.value)
 
-            result = await session.execute(query)
-            records = result.scalars().all()
-            return [record.to_pydantic(UsageRecordPydantic) for record in records]
+        result = await self._session.execute(query)
+        records = result.scalars().all()
+        return [record.to_pydantic(UsageRecordPydantic) for record in records]
 
     async def get_finalized_usage(self) -> list[UsageRecordPydantic]:
         """Get DAILY usage records that are finalized and ready for billing."""
-        async with session_manager.get_session() as session:
-            result = await session.execute(
-                select(UsageRecordTable)
-                .where(UsageRecordTable.record_type == UsageRecordType.DAILY.value)
-                .where(UsageRecordTable.status == UsageRecordStatus.FINALIZED.value)
-                .order_by(UsageRecordTable.collection_end)
-            )
-            records = result.scalars().all()
-            return [record.to_pydantic(UsageRecordPydantic) for record in records]
+        result = await self._session.execute(
+            select(UsageRecordTable)
+            .where(UsageRecordTable.record_type == UsageRecordType.DAILY.value)
+            .where(UsageRecordTable.status == UsageRecordStatus.FINALIZED.value)
+            .order_by(UsageRecordTable.collection_end)
+        )
+        records = result.scalars().all()
+        return [record.to_pydantic(UsageRecordPydantic) for record in records]
 
     async def mark_as_reported(self, usage_record_id: str) -> None:
         """Mark a usage record as reported to billing system."""
-        async with session_manager.get_session() as session:
-            result = await session.execute(
-                select(UsageRecordTable).where(UsageRecordTable.id == usage_record_id)
-            )
-            record = result.scalar_one_or_none()
-            if record:
-                record.status = UsageRecordStatus.REPORTED.value
-                await session.commit()
+        result = await self._session.execute(
+            select(UsageRecordTable).where(UsageRecordTable.id == usage_record_id)
+        )
+        record = result.scalar_one_or_none()
+        if record:
+            record.status = UsageRecordStatus.REPORTED.value
+            await self._session.flush()
 
     async def finalize_record(self, usage_record_id: str) -> None:
         """Mark a usage record as finalized and ready for billing."""
-        async with session_manager.get_session() as session:
-            result = await session.execute(
-                select(UsageRecordTable).where(UsageRecordTable.id == usage_record_id)
-            )
-            record = result.scalar_one_or_none()
-            if record:
-                record.status = UsageRecordStatus.FINALIZED.value
-                await session.commit()
+        result = await self._session.execute(
+            select(UsageRecordTable).where(UsageRecordTable.id == usage_record_id)
+        )
+        record = result.scalar_one_or_none()
+        if record:
+            record.status = UsageRecordStatus.FINALIZED.value
+            await self._session.flush()
 
     async def get_incomplete_usage(self) -> list[UsageRecordPydantic]:
         """Get DAILY usage records that are incomplete and need retry."""
-        async with session_manager.get_session() as session:
-            result = await session.execute(
-                select(UsageRecordTable)
-                .where(UsageRecordTable.record_type == UsageRecordType.DAILY.value)
-                .where(UsageRecordTable.status == UsageRecordStatus.INCOMPLETE.value)
-                .order_by(UsageRecordTable.collection_end)
-            )
-            records = result.scalars().all()
-            return [record.to_pydantic(UsageRecordPydantic) for record in records]
+        result = await self._session.execute(
+            select(UsageRecordTable)
+            .where(UsageRecordTable.record_type == UsageRecordType.DAILY.value)
+            .where(UsageRecordTable.status == UsageRecordStatus.INCOMPLETE.value)
+            .order_by(UsageRecordTable.collection_end)
+        )
+        records = result.scalars().all()
+        return [record.to_pydantic(UsageRecordPydantic) for record in records]

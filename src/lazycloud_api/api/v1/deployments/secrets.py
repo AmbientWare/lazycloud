@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from lazycloud_api.api.dependencies import get_deployment_with_admin_access
 from lazycloud_api.api.security import get_current_active_user, require_admin
-from lazycloud_api.database import db
+from lazycloud_api.database import Database, get_db
 from lazycloud_api.database.compose import ComposeDeploymentPydantic
 from lazycloud_api.database.secrets import SecretPydantic
 from lazycloud_api.database.user_workspaces import WorkspaceRole
@@ -20,6 +20,7 @@ async def _require_admin_for_secret_values(
     deployment_id: str,
     show_values: bool = False,
     current_user: UserPydantic = Depends(get_current_active_user),
+    db: Database = Depends(get_db),
 ) -> ComposeDeploymentPydantic:
     """Verify user has appropriate access to deployment secrets."""
     deployment, role = await db.compose_deployments.get_with_workspace_access(
@@ -42,6 +43,7 @@ async def get_secrets(
         default=False, description="Show actual secret values (requires admin)"
     ),
     deployment: ComposeDeploymentPydantic = Depends(_require_admin_for_secret_values),
+    db: Database = Depends(get_db),
 ) -> SecretsResponse:
     """Get secrets for a deployment"""
     secrets = await db.secrets.get_secrets(deployment.id)
@@ -63,6 +65,7 @@ async def get_secrets(
 async def get_secret_value(
     key: str,
     deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_admin_access),
+    db: Database = Depends(get_db),
 ) -> str:
     """Get a secret value for a deployment."""
     secret = await db.secrets.get_secret_by_key(deployment.id, key)
@@ -76,6 +79,7 @@ async def get_secret_value(
 async def store_secrets(
     request: SecretsRequest,
     deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_admin_access),
+    db: Database = Depends(get_db),
 ) -> SecretsStoredResponse:
     """Create secrets for a deployment"""
     secrets = request.secrets
@@ -119,6 +123,7 @@ async def store_secrets(
 async def update_secrets(
     request: SecretsRequest,
     deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_admin_access),
+    db: Database = Depends(get_db),
 ) -> SecretsStoredResponse:
     """Update existing secrets for a deployment. Does not create new secrets."""
     secrets = request.secrets
@@ -150,6 +155,7 @@ async def update_secrets(
 async def delete_secrets(
     request: SecretsRequest,
     deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_admin_access),
+    db: Database = Depends(get_db),
 ) -> SecretsStoredResponse:
     """Delete existing secrets for a deployment"""
     secrets = request.secrets

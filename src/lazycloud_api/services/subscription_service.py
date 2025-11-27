@@ -1,13 +1,12 @@
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import yaml
 from loguru import logger
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from lazycloud_api.billing.product_details.base import BASE_FEATURES
 from lazycloud_api.billing.product_details.features import BaseFeatures
-from lazycloud_api.database import db
+from lazycloud_api.database import get_db_context
 from lazycloud_api.database.users import SubscriptionState, UserPydantic
 from lazycloud_api.database.workspaces import WorkspaceStatus
 from lazycloud_api.services.compose.parser import ComposeParser
@@ -113,11 +112,12 @@ class SubscriptionService:
         self,
         user: UserPydantic,
         new_state: SubscriptionState,
-        session: AsyncSession | None,
     ) -> UserPydantic:
         """Update user's subscription_state and return updated Pydantic model."""
         user.subscription_state = new_state
-        updated = await db.users.update(user, session=session)
+        async with get_db_context() as db:
+            updated = await db.users.update(user)
+
         if updated is None:
             logger.warning(
                 f"aupdate returned None for user {user.id} - using in-memory state. "
@@ -126,19 +126,22 @@ class SubscriptionService:
         return updated or user
 
     async def _audit_and_update_subscription_state(
-        self, user_id: str, features: BaseFeatures, session: AsyncSession | None = None
+        self, user_id: str, features: BaseFeatures
     ) -> UserPydantic | None:
         """Audit user's resource usage and update subscription_state accordingly"""
-        user = await db.users.get_by_id(user_id, session=session)
-        if not user:
+        async with get_db_context() as db:
+            user = await db.users.get_by_id(user_id)
+
+        if user is None:
             return None
 
-        workspace_count = await db.workspaces.get_active_workspace_count(user_id)
+        async with get_db_context() as db:
+            workspace_count = await db.workspaces.get_active_workspace_count(user_id)
 
         if workspace_count > features.workspace.limit:
             if user.subscription_state != SubscriptionState.OVER_LIMITS:
                 user = await self._update_user_subscription_state(
-                    user, SubscriptionState.OVER_LIMITS, session
+                    user, SubscriptionState.OVER_LIMITS
                 )
                 logger.warning(
                     f"User {user.email} (ID: {user_id}) exceeded workspace limit: "
@@ -147,24 +150,25 @@ class SubscriptionService:
             return user
 
         if workspace_count > 0:
-            workspaces_with_membership = (
-                await db.workspaces.get_user_workspaces_with_membership(
-                    user_id, status=WorkspaceStatus.ACTIVE
+            async with get_db_context() as db:
+                workspaces_with_membership = (
+                    await db.workspaces.get_user_workspaces_with_membership(
+                        user_id, status=WorkspaceStatus.ACTIVE
+                    )
                 )
-            )
-            workspace_ids = [ws.id for ws, _ in workspaces_with_membership]
-            deployment_counts = (
-                await db.compose_deployments.get_deployment_counts_by_workspace(
-                    workspace_ids
+                workspace_ids = [ws.id for ws, _ in workspaces_with_membership]
+                deployment_counts = (
+                    await db.compose_deployments.get_deployment_counts_by_workspace(
+                        workspace_ids
+                    )
                 )
-            )
 
             for workspace, _membership in workspaces_with_membership:
                 deployment_count = deployment_counts.get(workspace.id, 0)
                 if deployment_count > features.workspace.deployment_limit:
                     if user.subscription_state != SubscriptionState.OVER_LIMITS:
                         user = await self._update_user_subscription_state(
-                            user, SubscriptionState.OVER_LIMITS, session
+                            user, SubscriptionState.OVER_LIMITS
                         )
                         logger.warning(
                             f"User {user.email} (ID: {user_id}) exceeded deployment limit in workspace "
@@ -174,7 +178,7 @@ class SubscriptionService:
 
         if user.subscription_state == SubscriptionState.OVER_LIMITS:
             user = await self._update_user_subscription_state(
-                user, SubscriptionState.WITHIN_LIMITS, session
+                user, SubscriptionState.WITHIN_LIMITS
             )
             logger.info(
                 f"User {user.email} (ID: {user_id}) is now within limits. "
@@ -185,7 +189,8 @@ class SubscriptionService:
 
     async def check_workspace_limit(self, user_id: str, features: BaseFeatures) -> None:
         """Check if user can create a new workspace based on their subscription tier."""
-        workspace_count = await db.workspaces.get_active_workspace_count(user_id)
+        async with get_db_context() as db:
+            workspace_count = await db.workspaces.get_active_workspace_count(user_id)
 
         if workspace_count >= features.workspace.limit:
             raise SubscriptionLimitError(
@@ -197,9 +202,10 @@ class SubscriptionService:
         self, workspace_id: str, features: BaseFeatures, user_id: str | None = None
     ) -> None:
         """Check if user can create a new deployment in the workspace based on their subscription tier."""
-        deployment_count = await db.compose_deployments.get_deployment_count(
-            workspace_id
-        )
+        async with get_db_context() as db:
+            deployment_count = await db.compose_deployments.get_deployment_count(
+                workspace_id
+            )
 
         if deployment_count >= features.workspace.deployment_limit:
             raise SubscriptionLimitError(
@@ -207,55 +213,17 @@ class SubscriptionService:
                 "Please upgrade your plan to create more deployments.",
             )
 
-    def extract_custom_domains_from_compose(
-        self, compose_data: dict[str, Any]
-    ) -> list[str]:
-        """Extract custom domains from compose file service labels.
-
-        Looks for domains in service labels like:
-        - lazycloud.domain
-        - lazycloud.ingress.domain
-        - deploy.labels with domain information
-        """
-        custom_domains = set()
-        services = compose_data.get("services", {})
-
-        for _, service_config in services.items():
-            if not isinstance(service_config, dict):
-                continue
-
-            # Check top-level labels
-            labels = service_config.get("labels", {})
-            if isinstance(labels, dict):
-                domain = labels.get("lazycloud.domain") or labels.get(
-                    "lazycloud.ingress.domain"
-                )
-                if domain:
-                    custom_domains.add(domain)
-
-            # Check deploy.labels
-            deploy = service_config.get("deploy", {})
-            if isinstance(deploy, dict):
-                deploy_labels = deploy.get("labels", {})
-                if isinstance(deploy_labels, dict):
-                    domain = deploy_labels.get("lazycloud.domain") or deploy_labels.get(
-                        "lazycloud.ingress.domain"
-                    )
-                    if domain:
-                        custom_domains.add(domain)
-
-        return list(custom_domains)
-
     async def check_deployment_features(
         self,
         compose_file: "ComposeFile",
-        compose_data: dict[str, Any],
         features: BaseFeatures,
     ) -> None:
         """Check if deployment features (services, volumes, networks, domains) are within subscription limits."""
 
-        # Extract custom domains from compose file service labels
-        custom_domains = self.extract_custom_domains_from_compose(compose_data)
+        # Get custom domains from parsed services
+        custom_domains = [
+            service.domain for service in compose_file.services if service.domain
+        ]
 
         # Count services
         service_count = len(compose_file.services)
@@ -329,7 +297,11 @@ class SubscriptionService:
     ) -> None:
         """Validate that a workspace can be transferred to a new owner based on their plan features."""
         # Check workspace limit: new owner must have room for one more workspace
-        workspace_count = await db.workspaces.get_active_workspace_count(new_owner_id)
+        async with get_db_context() as db:
+            workspace_count = await db.workspaces.get_active_workspace_count(
+                new_owner_id
+            )
+
         if workspace_count >= new_owner_features.workspace.limit:
             raise SubscriptionLimitError(
                 f"Workspace limit reached. Your plan allows {new_owner_features.workspace.limit} workspace(s), "
@@ -337,9 +309,11 @@ class SubscriptionService:
             )
 
         # Check deployment limit: workspace's deployment count must not exceed new owner's limit
-        deployment_count = await db.compose_deployments.get_deployment_count(
-            workspace_id
-        )
+        async with get_db_context() as db:
+            deployment_count = await db.compose_deployments.get_deployment_count(
+                workspace_id
+            )
+
         if deployment_count > new_owner_features.workspace.deployment_limit:
             raise SubscriptionLimitError(
                 f"Deployment limit exceeded. This workspace has {deployment_count} deployment(s), "
@@ -348,12 +322,13 @@ class SubscriptionService:
             )
 
         # Validate each deployment's features against new owner's plan
-        _, deployments = await db.compose_deployments.find_paginated(
-            filters={"workspace_id": workspace_id},
-            offset=0,
-            limit=1000,  # Get all deployments
-            include_deleted=False,
-        )
+        async with get_db_context() as db:
+            _, deployments = await db.compose_deployments.find_paginated(
+                filters={"workspace_id": workspace_id},
+                offset=0,
+                limit=1000,  # Get all deployments
+                include_deleted=False,
+            )
 
         validation_errors = []
         for deployment in deployments:
@@ -367,9 +342,7 @@ class SubscriptionService:
 
                 compose_file = ComposeParser.parse_dict(compose_data)
                 # This will raise SubscriptionLimitError if validation fails
-                await self.check_deployment_features(
-                    compose_file, compose_data, new_owner_features
-                )
+                await self.check_deployment_features(compose_file, new_owner_features)
 
             except SubscriptionLimitError as e:
                 deployment_name = deployment.name or deployment.id

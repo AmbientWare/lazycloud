@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 
 from lazycloud_api.api.security import require_admin
-from lazycloud_api.database import db
+from lazycloud_api.database import Database, get_db
 from lazycloud_api.database.api_keys import ApiKeyPydantic
 from lazycloud_api.database.utils import (
     generate_api_key,
@@ -20,6 +20,7 @@ api_keys_router = APIRouter(
 @api_keys_router.get("")
 async def get_api_keys(
     user_id: str | None = None,
+    db: Database = Depends(get_db),
 ) -> list[ApiKeyPydantic]:
     # user_id here is the Clerk ID from the frontend
     if user_id:
@@ -39,6 +40,7 @@ async def get_api_keys(
 @api_keys_router.post("")
 async def create_api_key(
     request: CreateApiKeyRequest,
+    db: Database = Depends(get_db),
 ) -> ApiKeyPydantic:
     # Look up the user by Clerk ID to get the internal UUID
     user = await db.users.get_by_clerk_id(clerk_id=request.clerk_id)
@@ -74,6 +76,7 @@ async def create_api_key(
 async def update_api_key(
     api_key_id: str,
     request: UpdateApiKeyRequest,
+    db: Database = Depends(get_db),
 ) -> ApiKeyPydantic:
     # Look up the user by Clerk ID to get the internal UUID
     user = await db.users.get_by_clerk_id(clerk_id=request.clerk_id)
@@ -99,6 +102,7 @@ async def update_api_key(
 async def delete_api_keys(
     api_key_id: str | None = None,
     clerk_id: str | None = None,
+    db: Database = Depends(get_db),
 ) -> list[ApiKeyPydantic]:
     """
     If user_id is provided, delete all api keys for the user.
@@ -108,6 +112,7 @@ async def delete_api_keys(
     filters = {}
     if api_key_id:
         filters["id"] = api_key_id
+
     if clerk_id:
         user = await db.users.get_by_clerk_id(clerk_id=clerk_id)
         if not user:

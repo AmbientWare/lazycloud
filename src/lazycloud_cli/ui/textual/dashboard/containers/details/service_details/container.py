@@ -40,6 +40,8 @@ class ServiceDetailsContainer(Widget):
         self._pods_table: PodTable | None = None
         self._stream_task: Worker | None = None
         self._scroll: VerticalScroll | None = None
+        self._initial_render_done = False
+        self._stream_error: str | None = None
 
     def compose(self) -> ComposeResult:
         """Create the initial UI structure."""
@@ -54,8 +56,23 @@ class ServiceDetailsContainer(Widget):
 
     def _show_loading(self) -> None:
         """Show loading indicator after widget is fully mounted."""
-        if self._scroll and self._scroll.is_mounted:
+        # Skip loading if we already have initial status to render
+        if self.service_status and self._scroll and self._scroll.is_mounted:
+            self._initial_render_done = True
+            self._render_sections(self.service_status)
+
+        elif self._scroll and self._scroll.is_mounted:
             self._scroll.mount(LoadingIndicator())
+
+    def _show_error(self, message: str) -> None:
+        """Show error message when status cannot be loaded."""
+        if not self._scroll or not self._scroll.is_mounted:
+            return
+
+        self._scroll.remove_children()
+        error_section = SectionContainer(f"{Icons.OVERVIEW} Status Unavailable")
+        self._scroll.mount(error_section)
+        error_section.mount(Static(f"[yellow]{message}[/yellow]", markup=True))
 
     async def on_unmount(self) -> None:
         """Clean up when unmounting."""
@@ -63,8 +80,14 @@ class ServiceDetailsContainer(Widget):
 
     async def watch_service_status(self, old_value, new_value) -> None:
         """React to service status changes."""
-        # Only render on updates, not initial set
-        if new_value and self.is_mounted and old_value is not None:
+        if not new_value or not self.is_mounted:
+            return
+
+        # Render on initial set or updates
+        if not self._initial_render_done:
+            self._initial_render_done = True
+            self._render_sections(new_value)
+        elif old_value is not None:
             self._render_sections(new_value)
 
     async def watch_service_name(self, old_value, new_value) -> None:
@@ -149,6 +172,8 @@ class ServiceDetailsContainer(Widget):
             self._stream_task.cancel()
             self._stream_task.wait()
         self._stream_task = None
+        self._initial_render_done = False
+        self._stream_error = None
 
     def _build_overview_content(self, service: ServiceStatus) -> list[str]:
         """Build service overview section content."""
@@ -304,7 +329,7 @@ class ServiceDetailsContainer(Widget):
 
                 def on_update(data: ServiceStatus) -> None:
                     """Handle incoming SSE events."""
-                    # Use call_later to ensure UI updates happen on the main thread
+                    self._stream_error = None
                     self.app.call_later(self.update_overview, data)
 
                     if data.pods:
@@ -312,6 +337,7 @@ class ServiceDetailsContainer(Widget):
 
                 def on_error(error: Exception) -> None:
                     """Handle SSE stream errors."""
+                    self._stream_error = str(error)
                     logger.warning(
                         f"SSE stream error for service {self.service_name}: {error}"
                     )
@@ -326,6 +352,7 @@ class ServiceDetailsContainer(Widget):
                 break
 
             except Exception as e:
+                self._stream_error = str(e)
                 logger.error(
                     f"SSE stream connection failed for service {self.service_name} "
                     f"(attempt {attempt + 1}/{max_reconnect_attempts}): {e}"
@@ -335,8 +362,15 @@ class ServiceDetailsContainer(Widget):
                 if attempt < max_reconnect_attempts - 1 and self.is_mounted:
                     logger.info(f"Reconnecting to SSE stream in {reconnect_delay}s...")
                     await asyncio.sleep(reconnect_delay)
+
                 else:
                     logger.error(
                         f"Failed to maintain SSE connection for service {self.service_name}"
                     )
+                    # Show error if we don't have any status to display
+                    if not self._initial_render_done and self.is_mounted:
+                        self.app.call_later(
+                            self._show_error,
+                            f"Could not connect to status stream: {e}",
+                        )
                     break

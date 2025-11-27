@@ -6,7 +6,7 @@ import httpx
 import redis.asyncio as redis
 from loguru import logger
 
-from lazycloud_api.database import db
+from lazycloud_api.database import get_db_context
 from lazycloud_api.database.compose import ComposeDeploymentPydantic
 from lazycloud_api.services.depot_token_cache import DepotTokenCache
 from shared.models.depot import DepotBuildCredentials, DepotProject, DepotProjectToken
@@ -175,13 +175,14 @@ class DepotService:
             project = DepotProject(id=project_id, name=project_name)
 
             # Save project ID to database for future lookups
-            deployment = await db.compose_deployments.get_by_id(deployment_id)
-            if deployment:
-                deployment.depot_project_id = project_id
-                await db.compose_deployments.update(deployment)
-                logger.debug(
-                    f"Saved Depot project ID {project_id} to deployment {deployment_id}"
-                )
+            async with get_db_context() as db:
+                deployment = await db.compose_deployments.get_by_id(deployment_id)
+                if deployment:
+                    deployment.depot_project_id = project_id
+                    await db.compose_deployments.update(deployment)
+                    logger.debug(
+                        f"Saved Depot project ID {project_id} to deployment {deployment_id}"
+                    )
 
             logger.info(
                 f"Created Depot project {project.id} for deployment {deployment_id}"
@@ -202,7 +203,9 @@ class DepotService:
 
         project_name = self._make_project_name(deployment_id)
 
-        deployment = await db.compose_deployments.get_by_id(deployment_id)
+        async with get_db_context() as db:
+            deployment = await db.compose_deployments.get_by_id(deployment_id)
+
         if deployment and deployment.depot_project_id:
             logger.debug(f"Using cached Depot project {deployment.depot_project_id}")
             return DepotProject(id=deployment.depot_project_id, name=project_name)
@@ -318,7 +321,9 @@ class DepotService:
                         "Either deployment or deployment_id must be provided"
                     )
 
-                deployment = await db.compose_deployments.get_by_id(deployment_id)
+                async with get_db_context() as db:
+                    deployment = await db.compose_deployments.get_by_id(deployment_id)
+
                 if not deployment:
                     logger.warning(f"Deployment {deployment_id} not found")
                     return False
@@ -333,16 +338,19 @@ class DepotService:
                 await self._token_cache.delete_deployment_tokens(deployment_id)
                 return True
 
-            # Delete project from Depot
+            # Delete project from Depot (external API call)
             success = await self.delete_project(project_id)
 
-            # Clear project ID from database
+            # Clear project ID from database (quick DB write)
             if success and deployment.depot_project_id:
-                deployment.depot_project_id = None
-                await db.compose_deployments.update(deployment)
-                logger.debug(
-                    f"Cleared Depot project ID from deployment {deployment_id}"
-                )
+                async with get_db_context() as db:
+                    deployment = await db.compose_deployments.get_by_id(deployment_id)
+                    if deployment:
+                        deployment.depot_project_id = None
+                        await db.compose_deployments.update(deployment)
+                        logger.debug(
+                            f"Cleared Depot project ID from deployment {deployment_id}"
+                        )
 
             # Always clean up cached tokens
             await self._token_cache.delete_deployment_tokens(deployment_id)
@@ -431,11 +439,13 @@ class DepotService:
                 project_id=project.id,
                 description=f"Build token for deployment {deployment_id}",
             )
+
         except Exception as e:
             logger.error(f"Failed to create project token: {e}")
             raise RuntimeError(f"Failed to create Depot project token: {e}") from e
+
         finally:
-            if lock.owned():
+            if await lock.owned():
                 await lock.release()
 
         # Store the new token in Redis with TTL
@@ -446,6 +456,7 @@ class DepotService:
                 expires_at=project_token.expires_at,
             )
             logger.debug(f"Cached new token for deployment {deployment_id}")
+
         except Exception as e:
             logger.warning(f"Failed to cache token: {e}")
 
@@ -497,7 +508,9 @@ class DepotService:
 
         try:
             # Get project ID from database
-            deployment = await db.compose_deployments.get_by_id(deployment_id)
+            async with get_db_context() as db:
+                deployment = await db.compose_deployments.get_by_id(deployment_id)
+
             if not deployment or not deployment.depot_project_id:
                 return 0.0
 
@@ -541,13 +554,14 @@ class DepotService:
         try:
             # Use pre-fetched deployments if provided, otherwise query
             if deployments is None:
-                deployments = (
-                    await db.compose_deployments.find_active_during_date_range(
-                        workspace_id=workspace_id,
-                        start_date=start_at,
-                        end_date=end_at,
+                async with get_db_context() as db:
+                    deployments = (
+                        await db.compose_deployments.find_active_during_date_range(
+                            workspace_id=workspace_id,
+                            start_date=start_at,
+                            end_date=end_at,
+                        )
                     )
-                )
 
             for deployment in deployments:
                 deployment_id = self._extract_deployment_id(deployment)

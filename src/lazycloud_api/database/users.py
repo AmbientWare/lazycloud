@@ -2,6 +2,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, List
 
 from sqlalchemy import Enum, String
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from lazycloud_api.database.base import BaseDbPydanticModel, BaseTable, DatabaseService
@@ -83,8 +84,8 @@ class UserPydantic(BaseDbPydanticModel):
 class UserService(DatabaseService[UserTable, UserPydantic]):
     """Service layer for user operations"""
 
-    def __init__(self):
-        super().__init__(UserTable, UserPydantic)
+    def __init__(self, session: AsyncSession):
+        super().__init__(UserTable, UserPydantic, session)
 
     async def get_by_clerk_id(self, clerk_id: str) -> UserPydantic | None:
         """Get user by Clerk ID"""

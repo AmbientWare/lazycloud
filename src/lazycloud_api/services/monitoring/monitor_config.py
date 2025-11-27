@@ -101,10 +101,29 @@ class LogMonitorConfig(MonitorConfigBase):
         return "logs"
 
 
+@dataclass(frozen=True)
+class DeployProgressMonitorConfig(MonitorConfigBase):
+    """Configuration for a deploy progress monitor with early failure detection."""
+
+    deployment_id: str
+    deployment_name: str
+    namespace: str
+    helm_values: HelmValues
+
+    def get_key(self) -> str:
+        """Generate unique key for this monitor."""
+        return f"deploy_progress|{self.deployment_id}"
+
+    def get_monitor_type(self) -> str:
+        """Get monitor type string."""
+        return "deploy_progress"
+
+
 # Type alias for all monitor configs (for type hints)
 MonitorConfig = (
     DeploymentMonitorConfig
     | ServiceMonitorConfig
     | TaskMonitorConfig
     | LogMonitorConfig
+    | DeployProgressMonitorConfig
 )

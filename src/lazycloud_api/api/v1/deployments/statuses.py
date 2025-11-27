@@ -4,7 +4,10 @@ from sse_starlette.sse import EventSourceResponse
 from lazycloud_api.api.dependencies import get_deployment_with_access
 from lazycloud_api.api.utils import create_sse_stream_with_subscription
 from lazycloud_api.database.compose import ComposeDeploymentPydantic
-from lazycloud_api.services.monitoring.monitor_config import DeploymentMonitorConfig
+from lazycloud_api.services.monitoring.monitor_config import (
+    DeploymentMonitorConfig,
+    DeployProgressMonitorConfig,
+)
 from shared.models.monitoring import StreamEventType
 
 status_router = APIRouter(prefix="/{deployment_id}/status")
@@ -29,5 +32,27 @@ async def stream_deployment_status(
             event_type=StreamEventType.STATUS,
             format_data=lambda status: {"data": status.model_dump(mode="json")},
             stream_id=f"deployment/{deployment.id}",
+        )
+    )
+
+
+@status_router.get("/deploy/stream")
+async def stream_deploy_progress(
+    deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_access),
+):
+    """Stream deployment progress with per-service status and early failure detection."""
+    config = DeployProgressMonitorConfig(
+        deployment_id=str(deployment.id),
+        deployment_name=deployment.name,
+        namespace=deployment.namespace,
+        helm_values=deployment.helm_values,
+    )
+
+    return EventSourceResponse(
+        create_sse_stream_with_subscription(
+            config=config,
+            event_type=StreamEventType.DEPLOY_PROGRESS,
+            format_data=lambda progress: progress.model_dump(mode="json"),
+            stream_id=f"deploy_progress/{deployment.id}",
         )
     )

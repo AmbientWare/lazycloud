@@ -36,11 +36,22 @@ class KubernetesPhase(StrEnum):
     UNKNOWN = "Unknown"
 
 
+class DeployServicePhase(StrEnum):
+    """Status phases for deploy progress - compose-friendly."""
+
+    PENDING = "pending"
+    STARTING = "starting"
+    RUNNING = "running"
+    RESTARTING = "restarting"
+    ERROR = "error"
+    EXITED = "exited"
+
+
 class StorageType(StrEnum):
     """Storage class types."""
 
     STANDARD = "Standard"
-    PREMIUM = "Premium"
+    SHARED = "Shared"
 
 
 class VolumeStatus(BaseModel):
@@ -135,7 +146,7 @@ class DeploymentStatus(BaseModel):
     status: KubernetesPhase
     ready: bool
     last_checked: datetime
-    deployed_at: datetime
+    deployed_at: datetime | None = None
 
     # Summary counts
     total_services: int

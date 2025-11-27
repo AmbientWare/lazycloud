@@ -26,4 +26,10 @@ def create_ns_name(workspace_id: str) -> str:
 
 
 def create_release_name(workspace_id: str, deployment_name: str) -> str:
-    return f"lc-{workspace_id}-{deployment_name}".lower()
+    """Create a Helm release name (max 53 chars for DNS-1123 compliance)."""
+    # Use first 8 chars of workspace ID for uniqueness + deployment name
+    # Format: lc-{ws_prefix}-{deployment_name} (max 53 chars)
+    ws_prefix = workspace_id.replace("-", "")[:8]
+    max_deploy_len = 53 - len(f"lc-{ws_prefix}-")
+    deploy_part = deployment_name[:max_deploy_len].rstrip("-")
+    return f"lc-{ws_prefix}-{deploy_part}".lower()

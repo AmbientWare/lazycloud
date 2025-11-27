@@ -6,7 +6,7 @@ import httpx
 from loguru import logger
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from shared.models.billing import STORAGE_CLASS_EFS, STORAGE_CLASS_S3
+from shared.models.billing import STORAGE_CLASS_EBS, STORAGE_CLASS_EFS
 from shared.models.metrics import (
     NamespaceBreakdown,
     NamespaceSummary,
@@ -254,25 +254,25 @@ class PrometheusMetricsService:
     async def get_storage_usage_by_class(
         self, namespace: str, start_time: datetime, end_time: datetime
     ) -> dict[str, float]:
-        """Get storage usage split by storage class (s3-sc vs efs-sc) in GB-hours"""
+        """Get storage usage split by storage class (ebs-sc vs efs-sc) in GB-hours"""
         duration_hours = (end_time - start_time).total_seconds() / 3600
 
-        # Query for S3 storage (actual usage, requires CSI drivers)
-        s3_query = f'''
+        # Query for EBS storage (actual usage, requires CSI drivers)
+        standard_query = f'''
             sum(
                 kubelet_volume_stats_used_bytes{{
                     namespace="{namespace}"
                 }}
                 * on(persistentvolumeclaim, namespace) group_left(storageclass)
                 kube_persistentvolumeclaim_info{{
-                    storageclass="{STORAGE_CLASS_S3}",
+                    storageclass="{STORAGE_CLASS_EBS}",
                     namespace="{namespace}"
                 }}
             )
         '''
 
         # Query for EFS storage (actual usage, requires CSI drivers)
-        efs_query = f'''
+        shared_query = f'''
             sum(
                 kubelet_volume_stats_used_bytes{{
                     namespace="{namespace}"
@@ -286,17 +286,23 @@ class PrometheusMetricsService:
         '''
 
         # Execute both queries concurrently
-        s3_result = await self._query_range(s3_query, start_time, end_time, step="5m")
-        efs_result = await self._query_range(efs_query, start_time, end_time, step="5m")
+        standard_result = await self._query_range(
+            standard_query, start_time, end_time, step="5m"
+        )
+        shared_result = await self._query_range(
+            shared_query, start_time, end_time, step="5m"
+        )
 
         # Process results using helper
-        s3_gb_hours = self._process_storage_result(s3_result, duration_hours)
-        efs_gb_hours = self._process_storage_result(efs_result, duration_hours)
+        standard_gb_hours = self._process_storage_result(
+            standard_result, duration_hours
+        )
+        shared_gb_hours = self._process_storage_result(shared_result, duration_hours)
 
         logger.debug(
-            f"Storage usage for {namespace}: S3={s3_gb_hours:.2f} GB-hours, EFS={efs_gb_hours:.2f} GB-hours"
+            f"Storage usage for {namespace}: Standard={standard_gb_hours:.2f} GB-hours, Shared={shared_gb_hours:.2f} GB-hours"
         )
-        return {"s3": s3_gb_hours, "efs": efs_gb_hours}
+        return {"standard": standard_gb_hours, "shared": shared_gb_hours}
 
     async def get_storage_usage_by_pvc(
         self, namespace: str, start_time: datetime, end_time: datetime
@@ -518,13 +524,13 @@ class PrometheusMetricsService:
         by_pvc = await self.get_storage_usage_by_pvc(namespace, start_time, end_time)
 
         # Calculate storage totals from PVC breakdown (eliminates 2 redundant queries)
-        s3_total = sum(
-            pvc.gb_hours for pvc in by_pvc if pvc.storage_class == STORAGE_CLASS_S3
+        standard_total = sum(
+            pvc.gb_hours for pvc in by_pvc if pvc.storage_class == STORAGE_CLASS_EBS
         )
-        efs_total = sum(
+        shared_total = sum(
             pvc.gb_hours for pvc in by_pvc if pvc.storage_class == STORAGE_CLASS_EFS
         )
-        storage_total = s3_total + efs_total
+        storage_total = standard_total + shared_total
 
         return NamespaceBreakdown(
             namespace=namespace,
@@ -537,8 +543,8 @@ class PrometheusMetricsService:
                 cpu_core_seconds=cpu_total,
                 memory_gb_seconds=memory_total,
                 storage_gb_hours=storage_total,
-                s3_gb_hours=s3_total,
-                efs_gb_hours=efs_total,
+                standard_gb_hours=standard_total,
+                shared_gb_hours=shared_total,
             ),
             by_pod=by_pod,
             by_pvc=by_pvc,
@@ -606,7 +612,7 @@ class PrometheusMetricsService:
 
             if service_name == "unknown":
                 logger.warning(
-                    f"Pod {pod_name} in namespace {namespace} missing lazycloud.io/service label. "
+                    f"Pod {pod_name} in namespace {namespace} missing lazycloud.dev/service label. "
                     "Labels may not be configured or pod may be from system namespace."
                 )
 

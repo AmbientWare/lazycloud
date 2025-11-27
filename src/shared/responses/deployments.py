@@ -3,7 +3,7 @@ from datetime import datetime
 from pydantic import BaseModel
 
 from shared.models.deployments import DeploymentStates
-from shared.models.diffs import ComposeDiff, EnvVarChanges
+from shared.models.diffs import ComposeDiff, EnvVarChanges, StorageTypeChange
 from shared.models.statuses import DeploymentStatus
 
 
@@ -11,6 +11,7 @@ class DeploymentResponse(BaseModel):
     """Response for a deployment."""
 
     id: str
+
     workspace_id: str
     name: str
     namespace: str
@@ -39,6 +40,7 @@ class DiffResponse(BaseModel):
     has_changes: bool
     diff: ComposeDiff
     env_var_changes: EnvVarChanges | None = None
+    storage_type_changes: list[StorageTypeChange] | None = None
     errors: list[str] | None = None
     warnings: list[str] | None = None
     can_deploy: bool = True
