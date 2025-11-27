@@ -12,5 +12,5 @@ metadata:
     {{- include "lazycloud-compose.labels" . | nindent 4 }}
     app.kubernetes.io/component: compose-metadata
   annotations:
-    lazycloud.io/compose-yaml: {{ .Values.compose_yaml | b64enc }}
+    lazycloud.dev/compose-yaml: {{ .Values.compose_yaml | b64enc }}
 {{- end }}

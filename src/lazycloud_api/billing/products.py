@@ -20,9 +20,11 @@ async def setup_products(organization_id: str) -> dict:
         logger.error("Polar service is not enabled")
         raise RuntimeError("Polar service is not enabled")
 
-    # Get all meters to create metered prices
+    # Get all active meters to create metered prices
     logger.info("Fetching meters from Polar...")
-    meters = await polar.meters.list_meters(organization_id=organization_id)
+    meters = await polar.meters.list_meters(
+        organization_id=organization_id, is_archived=False
+    )
 
     if not meters:
         logger.error("No meters found. Please run the meters setup script first.")

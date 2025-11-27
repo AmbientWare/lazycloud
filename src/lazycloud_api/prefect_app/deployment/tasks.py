@@ -8,7 +8,7 @@ from loguru import logger
 from prefect import task
 
 from lazycloud_api.config import app_config
-from lazycloud_api.database import db
+from lazycloud_api.database import get_db_context
 from lazycloud_api.database.compose import ComposeDeploymentPydantic
 from lazycloud_api.database.secrets import SecretPydantic
 from lazycloud_api.prefect_app.deployment.models import ValidationResult
@@ -45,82 +45,114 @@ async def check_deployment_idempotency_task(
     deployment_id: str,
 ) -> DeploymentInfo | None:
     """Check if deployment is already in progress or completed. Returns deployment if should proceed, None if should skip."""
-    async with db.compose_deployments.transaction() as session:
-        deployment = await db.compose_deployments.get_by_id(
-            deployment_id, with_lock=True, session=session
+
+    # Step 1: Quick DB read to get current state
+    async with get_db_context() as db:
+        deployment = await db.compose_deployments.get_by_id(deployment_id)
+
+    if not deployment:
+        raise ValueError(f"Deployment {deployment_id} not found")
+
+    # If already deployed and no pending changes, skip
+    if (
+        deployment.state == DeploymentStates.DEPLOYED
+        and not deployment.pending_compose_yaml
+    ):
+        logger.info(
+            f"Deployment {deployment_id} already deployed with no pending changes. Skipping."
         )
+        return None
+
+    # Step 2: If in non-terminal state, check task status (external Prefect API call - NO DB)
+    should_reset_state = False
+    reset_to_state = None
+    reset_message = None
+
+    if deployment.state in (DeploymentStates.DEPLOYING, DeploymentStates.DELETING):
+        if deployment.current_task_run_id:
+            try:
+                # External call to Prefect API - outside DB transaction
+                task_status, _ = await get_task_result(
+                    UUID(deployment.current_task_run_id)
+                )
+
+                if task_status in (TaskStatus.COMPLETED, TaskStatus.ERROR):
+                    # Task finished but state wasn't updated - need to reset
+                    logger.warning(
+                        f"Deployment {deployment_id} has task {deployment.current_task_run_id} "
+                        f"in {task_status} state but deployment is {deployment.state}. Resetting state."
+                    )
+                    should_reset_state = True
+                    if deployment.state == DeploymentStates.DEPLOYING:
+                        reset_to_state = DeploymentStates.FAILED
+                        reset_message = "Previous deployment task completed but state was not updated"
+                    elif deployment.state == DeploymentStates.DELETING:
+                        reset_to_state = DeploymentStates.DELETED
+                        reset_message = (
+                            "Previous deletion task completed but state was not updated"
+                        )
+                else:
+                    # Task is still running, block this operation
+                    logger.info(
+                        f"Deployment {deployment_id} has active task {deployment.current_task_run_id}. "
+                        f"Current state: {deployment.state}, task status: {task_status}"
+                    )
+                    return None
+
+            except Exception as e:
+                logger.warning(
+                    f"Failed to check task state for {deployment.current_task_run_id}: {e}. "
+                    f"Proceeding with deployment."
+                )
+        else:
+            # No task ID but in non-terminal state - likely stuck
+            logger.warning(
+                f"Deployment {deployment_id} is in {deployment.state} state but has no task_run_id. "
+                f"Resetting state."
+            )
+
+            should_reset_state = True
+            if deployment.state == DeploymentStates.DEPLOYING:
+                reset_to_state = DeploymentStates.FAILED
+                reset_message = (
+                    "Deployment was stuck in DEPLOYING state without active task"
+                )
+
+            elif deployment.state == DeploymentStates.DELETING:
+                reset_to_state = DeploymentStates.DELETED
+                reset_message = (
+                    "Deletion was stuck in DELETING state without active task"
+                )
+
+    # Step 3: Quick DB write to update state (with lock for safety)
+    async with get_db_context() as db:
+        deployment = await db.compose_deployments.get_by_id(
+            deployment_id, with_lock=True
+        )
+
         if not deployment:
             raise ValueError(f"Deployment {deployment_id} not found")
 
-        # If already deployed and no pending changes, skip
-        if (
-            deployment.state == DeploymentStates.DEPLOYED
-            and not deployment.pending_compose_yaml
-        ):
-            logger.info(
-                f"Deployment {deployment_id} already deployed with no pending changes. Skipping."
-            )
-            return None
+        # Apply reset if needed
+        if should_reset_state and reset_to_state:
+            deployment.state = reset_to_state
+            deployment.status_message = reset_message
+            deployment.current_task_run_id = None
+            await db.compose_deployments.update(deployment)
 
-        # If in a non-terminal state (DEPLOYING, DELETING), verify the task is still running
+        # Re-check state after potential reset (another process might have changed it)
         if deployment.state in (DeploymentStates.DEPLOYING, DeploymentStates.DELETING):
             if deployment.current_task_run_id:
-                try:
-                    task_status, _ = await get_task_result(
-                        UUID(deployment.current_task_run_id)
-                    )
-
-                    # If task is completed or failed, reset state
-                    if task_status in (TaskStatus.COMPLETED, TaskStatus.ERROR):
-                        logger.warning(
-                            f"Deployment {deployment_id} has task {deployment.current_task_run_id} "
-                            f"in {task_status} state but deployment is {deployment.state}. Resetting state."
-                        )
-                        if deployment.state == DeploymentStates.DEPLOYING:
-                            deployment.state = DeploymentStates.FAILED
-                            deployment.status_message = "Previous deployment task completed but state was not updated"
-                        elif deployment.state == DeploymentStates.DELETING:
-                            deployment.state = DeploymentStates.DELETED
-                            deployment.status_message = "Previous deletion task completed but state was not updated"
-                        deployment.current_task_run_id = None
-                        await db.compose_deployments.update(deployment, session=session)
-
-                    else:
-                        # Task is still running, block this operation
-                        logger.info(
-                            f"Deployment {deployment_id} has active task {deployment.current_task_run_id}. "
-                            f"Current state: {deployment.state}, task status: {task_status}"
-                        )
-                        return None
-
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to check task state for {deployment.current_task_run_id}: {e}. "
-                        f"Proceeding with deployment."
-                    )
-
-            else:
-                # No task ID but in non-terminal state - likely stuck, reset
-                logger.warning(
-                    f"Deployment {deployment_id} is in {deployment.state} state but has no task_run_id. "
-                    f"Resetting state."
+                # Someone else started a task while we were checking
+                logger.info(
+                    f"Deployment {deployment_id} now has active task. Skipping."
                 )
-                if deployment.state == DeploymentStates.DEPLOYING:
-                    deployment.state = DeploymentStates.FAILED
-                    deployment.status_message = (
-                        "Deployment was stuck in DEPLOYING state without active task"
-                    )
-                elif deployment.state == DeploymentStates.DELETING:
-                    deployment.state = DeploymentStates.DELETED
-                    deployment.status_message = (
-                        "Deletion was stuck in DELETING state without active task"
-                    )
-                await db.compose_deployments.update(deployment, session=session)
+                return None
 
         # Update state to deploying
         deployment.state = DeploymentStates.DEPLOYING
         deployment.status_message = "Starting deployment"
-        await db.compose_deployments.update(deployment, session=session)
+        await db.compose_deployments.update(deployment)
 
         return DeploymentInfo(
             id=deployment.id,
@@ -141,7 +173,9 @@ async def prepare_deployment_task(
             deployment_id, timeout=app_config.SECRETS_TIMEOUT_SECONDS
         )
 
-    deployment = await db.compose_deployments.get_by_id(deployment_id)
+    async with get_db_context() as db:
+        deployment = await db.compose_deployments.get_by_id(deployment_id)
+
     if not deployment:
         raise ValueError(f"Deployment {deployment_id} not found")
 
@@ -159,7 +193,9 @@ async def prepare_deployment_task(
         )
         raise ValueError(f"Failed to parse compose file: {e}") from e
 
-    secrets = await db.secrets.get_secrets(deployment_id)
+    async with get_db_context() as db:
+        secrets = await db.secrets.get_secrets(deployment_id)
+
     helm_generator = HelmValuesGenerator(deployment, secrets)
     helm_values, _ = helm_generator.generate_values(compose_file)
     helm_values.compose_yaml = compose_yaml
@@ -177,7 +213,9 @@ async def prepare_namespace_config_task(
     deployment: ComposeDeploymentPydantic,
 ) -> HelmDeploymentConfig:
     """Prepare namespace configuration with quota."""
-    owner_user = await db.workspaces.get_owner_user(deployment.workspace_id)
+    async with get_db_context() as db:
+        owner_user = await db.workspaces.get_owner_user(deployment.workspace_id)
+
     if not owner_user:
         raise ValueError(
             f"Workspace {deployment.workspace_id} has no owner. Cannot determine resource quota."
@@ -223,8 +261,8 @@ async def prepare_namespace_config_task(
         namespace=NamespaceConfig(
             name=namespace,
             labels={
-                "lazycloud.io/managed": "true",
-                "lazycloud.io/workspace-id": deployment.workspace_id,
+                "lazycloud.dev/managed": "true",
+                "lazycloud.dev/workspace-id": deployment.workspace_id,
             },
         ),
         resourceQuota={
@@ -235,7 +273,7 @@ async def prepare_namespace_config_task(
 
     namespace_config = HelmDeploymentConfig(
         release_name=namespace,
-        namespace=namespace,
+        namespace="default",  # Deploy to default, chart creates target namespace
         chart_path=str(charts.namespace),
         values=namespace_values,
         timeout="2m",
@@ -360,9 +398,9 @@ async def sync_deployment_to_db_task(
     secrets: list[SecretPydantic],
 ) -> None:
     """Sync deployment state to database after successful Helm deployment."""
-    async with db.compose_deployments.transaction() as session:
+    async with get_db_context() as db:
         deployment = await db.compose_deployments.get_by_id(
-            deployment_id, with_lock=True, session=session
+            deployment_id, with_lock=True
         )
         if deployment is None:
             raise ValueError(
@@ -384,10 +422,9 @@ async def sync_deployment_to_db_task(
 
         deployment.current_task_run_id = None
 
-        await db.compose_deployments.update(deployment, session=session)
+        await db.compose_deployments.update(deployment)
 
-    if secrets:
-        async with db.secrets.transaction() as session:
+        if secrets:
             for secret in secrets:
                 secret.state = SecretState.DEPLOYED
-                await db.secrets.update(secret, session=session)
+                await db.secrets.update(secret)

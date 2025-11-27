@@ -14,6 +14,12 @@ console = Console()
 
 def rollback(
     yes: bool = typer.Option(False, "-y", "--yes", help="Skip confirmation prompt"),
+    revision: int | None = typer.Option(
+        None,
+        "-r",
+        "--revision",
+        help="Revision number to rollback to (skips selection)",
+    ),
 ):
     """Rollback a Docker Compose deployment to a previous revision."""
     view = RollbackView(console)
@@ -45,9 +51,21 @@ def rollback(
         latest_revision = history_response.revisions[-1]
         rollbackable_revisions = history_response.revisions[:-1]
 
-        selected_revision, selected_relative = view.select_revision(
-            latest_revision, rollbackable_revisions
-        )
+        # If revision provided via flag, use it directly
+        if revision is not None:
+            valid_revisions = [r.revision for r in rollbackable_revisions]
+            if revision not in valid_revisions:
+                view.show_error(
+                    f"Invalid revision {revision}. Valid revisions: {valid_revisions}"
+                )
+                raise typer.Exit(1)
+            selected_revision = revision
+            selected_relative = latest_revision.revision - revision
+
+        else:
+            selected_revision, selected_relative = view.select_revision(
+                latest_revision, rollbackable_revisions
+            )
 
         if not selected_revision:
             view.show_cancelled()

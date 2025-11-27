@@ -1,6 +1,28 @@
+from enum import StrEnum
+
 from pydantic import BaseModel, field_validator
 
 from shared.models.k8s import RestartPolicy
+
+
+class LazyCloudLabel(StrEnum):
+    """LazyCloud-specific labels for compose files."""
+
+    # Service labels
+    IGNORE = "lazycloud.ignore"
+    DOMAIN = "lazycloud.domain"
+    INGRESS_DOMAIN = "lazycloud.ingress.domain"
+
+    # Scaling labels (in deploy.labels)
+    SCALING_ENABLED = "lazycloud.scaling.enabled"
+    SCALING_MIN = "lazycloud.scaling.min"
+    SCALING_MAX = "lazycloud.scaling.max"
+    SCALING_CPU = "lazycloud.scaling.cpu"
+    SCALING_MEMORY = "lazycloud.scaling.memory"
+
+    # Volume labels
+    VOLUME_SHARED = "lazycloud.volume.shared"
+    STORAGE_SIZE = "lazycloud.storage.size"
 
 
 class ComposePort(BaseModel):
@@ -90,14 +112,17 @@ class ComposeService(BaseModel):
     name: str
     image: str
     build: dict | str | None = None
+    entrypoint: str | list[str] | None = None
     command: str | list[str] | None = None
+    working_dir: str | None = None
+    stop_grace_period: int | None = None
     ports: list[ComposePort] | None = None
     volumes: list[ServiceVolume] | None = None
     networks: list[ServiceNetwork] | None = None
     deploy: DeployConfig = DeployConfig()
     healthcheck: HealthCheck = HealthCheck()
     scaling: ScalingConfig = ScalingConfig()
-    grace_period_seconds: int | None = None  # Kubernetes terminationGracePeriodSeconds
+    domain: str | None = None
 
 
 class ComposeNetwork(BaseModel):

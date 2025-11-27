@@ -95,9 +95,11 @@ async def create_sse_stream_with_subscription(
     except asyncio.CancelledError:
         logger.info(f"SSE cancelled: {stream_id}")
         raise
+
     except Exception as e:
         logger.error(f"SSE fatal error for {stream_id}: {e}", exc_info=True)
         yield {"event": "error", "data": json.dumps({"message": str(e)})}
+
     finally:
         # Unsubscribe from monitor
         if monitor_key is not None and subscription_id is not None:
@@ -135,9 +137,11 @@ async def create_sse_stream_direct(
     except asyncio.CancelledError:
         logger.info(f"SSE cancelled: {stream_id}")
         raise
+
     except Exception as e:
         logger.error(f"SSE fatal error for {stream_id}: {e}", exc_info=True)
         yield {"event": "error", "data": json.dumps({"message": str(e)})}
+
     finally:
         await monitor.remove_callback(callback)
         await monitor.stop()

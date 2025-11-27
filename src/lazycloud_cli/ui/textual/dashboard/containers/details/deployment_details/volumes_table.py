@@ -28,7 +28,7 @@ class VolumesTable(DataTable):
             # Highlight high performance storage
             storage_text = (
                 f"[{Colors.Hex.warning}]{volume.storage_type}[/{Colors.Hex.warning}]"
-                if volume.storage_type == StorageType.PREMIUM
+                if volume.storage_type == StorageType.SHARED
                 else str(volume.storage_type)
             )
 

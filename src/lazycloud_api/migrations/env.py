@@ -7,9 +7,9 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-# Import db to ensure all models are registered with Base.metadata
-from lazycloud_api.database import db  # noqa: F401
+# Import Base and all models to register them with metadata
 from lazycloud_api.database.base import Base
+from lazycloud_api.database.models import *  # noqa: F401, F403
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

@@ -20,6 +20,7 @@ from lazycloud_cli.ui.views.helpers.formatters import (
     format_volume_list,
 )
 from lazycloud_cli.utils.utils import format_image_name
+from shared.models.compose import LazyCloudLabel
 from shared.models.diffs import ComposeDiff, EnvVarChanges, FieldChange, ResourceSection
 from shared.models.statuses import StorageType
 
@@ -120,20 +121,16 @@ def _format_volume_changes(changes: dict[str, Any]) -> str:
             old_labels = label_change.from_value or {}
             new_labels = label_change.to_value or {}
 
-            # Check specifically for storage class changes
-            old_hp = old_labels.get("lazycloud.storage.hp")
-            new_hp = new_labels.get("lazycloud.storage.hp")
+            # Check specifically for storage class changes (shared label)
+            old_shared = old_labels.get(LazyCloudLabel.VOLUME_SHARED)
+            new_shared = new_labels.get(LazyCloudLabel.VOLUME_SHARED)
 
-            if old_hp != new_hp:
+            if old_shared != new_shared:
                 old_class = (
-                    StorageType.HIGH_PERFORMANCE
-                    if old_hp == "true"
-                    else StorageType.NORMAL
+                    StorageType.SHARED if old_shared == "true" else StorageType.STANDARD
                 )
                 new_class = (
-                    StorageType.HIGH_PERFORMANCE
-                    if new_hp == "true"
-                    else StorageType.NORMAL
+                    StorageType.SHARED if new_shared == "true" else StorageType.STANDARD
                 )
                 parts.append(f"Storage: {old_class} → {new_class}")
             elif old_labels != new_labels:
@@ -226,8 +223,8 @@ def format_service_details(details: dict[str, Any]) -> str:
         parts.append(f"Health check: {format_healthcheck(details['healthcheck'])}")
 
     # Graceful shutdown period
-    if details.get("grace_period_seconds"):
-        parts.append(f"Shutdown: {details['grace_period_seconds']}s")
+    if details.get("stop_grace_period"):
+        parts.append(f"Shutdown: {details['stop_grace_period']}s")
 
     # Command
     if details.get("command"):
@@ -244,14 +241,16 @@ def format_service_modifications(changes: dict[str, Any]) -> str:
     # Priority fields to show first
     priority_fields = [
         "image",
+        "entrypoint",
         "command",
+        "working_dir",
         "ports",
         "volumes",
         "networks",
         "deploy",
         "scaling",
         "healthcheck",
-        "grace_period_seconds",
+        "stop_grace_period",
     ]
 
     for field in priority_fields:
@@ -275,10 +274,20 @@ def format_field_change(field: str, change: Any) -> str | None:
             return f"Ports: {format_ports_list(change.from_value)} → {format_ports_list(change.to_value)}"
         elif field == "command":
             return f"Command: {format_command(change.from_value)} → {format_command(change.to_value)}"
-        elif field == "grace_period_seconds":
+        elif field == "stop_grace_period":
             from_val = f"{change.from_value}s" if change.from_value else "default"
             to_val = f"{change.to_value}s" if change.to_value else "default"
             return f"Shutdown grace period: {from_val} → {to_val}"
+        elif field == "entrypoint":
+            from_val = (
+                format_command(change.from_value) if change.from_value else "default"
+            )
+            to_val = format_command(change.to_value) if change.to_value else "default"
+            return f"Entrypoint: {from_val} → {to_val}"
+        elif field == "working_dir":
+            from_val = change.from_value or "default"
+            to_val = change.to_value or "default"
+            return f"Working dir: {from_val} → {to_val}"
         else:
             return f"{field.title()}: {format_value_summary(change.from_value)} → {format_value_summary(change.to_value)}"
 

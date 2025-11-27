@@ -1,7 +1,7 @@
 from loguru import logger
 from prefect import task
 
-from lazycloud_api.database import db
+from lazycloud_api.database import get_db_context
 from lazycloud_api.prefect_app.deployment.tasks import (
     check_deployment_idempotency_task,
     delete_existing_jobs_task,
@@ -20,12 +20,15 @@ from shared.models.secrets import SecretState
 
 @task(log_prints=True)
 async def deploy_compose_task(
-    deployment_id: str, wait_for_secrets: bool = False, service_name: str | None = None
+    deployment_id: str,
+    wait_for_secrets: bool = False,
+    service_names: list[str] | None = None,
 ) -> None:
     """Deploy a Docker Compose file to Kubernetes using modular Prefect tasks."""
+    services_str = ", ".join(service_names) if service_names else ""
     logger.info(
         f"Starting deployment flow for {deployment_id}"
-        + (f" (service: {service_name})" if service_name else "")
+        + (f" (services: {services_str})" if service_names else "")
     )
 
     try:
@@ -163,12 +166,13 @@ async def deploy_compose_task(
 
         # Reset secrets state if we have them
         try:
-            secrets_list = await db.secrets.get_secrets(deployment_id)
-            if secrets_list:
-                async with db.secrets.transaction() as session:
+            async with get_db_context() as db:
+                secrets_list = await db.secrets.get_secrets(deployment_id)
+
+                if secrets_list:
                     for secret in secrets_list:
                         secret.state = SecretState.AWAITING_DEPLOYMENT
-                        await db.secrets.update(secret, session=session)
+                        await db.secrets.update(secret)
 
         except Exception as secret_error:
             logger.warning(f"Failed to reset secrets state: {secret_error}")

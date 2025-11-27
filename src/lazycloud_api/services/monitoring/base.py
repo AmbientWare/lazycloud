@@ -14,10 +14,15 @@ class BaseMonitor(ABC, Generic[T]):
     """Watches Kubernetes resources and provides real-time status updates."""
 
     def __init__(
-        self, name: str, detail: str, callback: Callable[[T], None] | None = None
+        self,
+        name: str,
+        detail: str,
+        callback: Callable[[T], None] | None = None,
+        always_emit: bool = False,
     ):
         self._name = name
         self._detail = detail
+        self._always_emit = always_emit
         self._callbacks: list[Callable[[T], None]] = []
         if callback:
             self._callbacks.append(callback)
@@ -78,12 +83,13 @@ class BaseMonitor(ABC, Generic[T]):
         logger.info(f"Stopped monitoring {self._name} {self._detail}")
 
     async def _watch(self):
-        """Main watch loop that monitors for changes"""
+        """Main watch loop that monitors for changes."""
         while self._running:
             try:
                 task_result = await self._task()
 
-                if task_result != self._latest_result:
+                # Emit if always_emit is set or if result changed
+                if self._always_emit or task_result != self._latest_result:
                     self._latest_result = task_result
                     await self._emit(task_result)
 

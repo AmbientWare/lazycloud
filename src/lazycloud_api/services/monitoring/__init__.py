@@ -1,7 +1,11 @@
+from lazycloud_api.services.monitoring.deploy_progress_monitor import (
+    DeployProgressMonitor,
+)
 from lazycloud_api.services.monitoring.deployment_monitor import DeploymentMonitor
 from lazycloud_api.services.monitoring.log_monitor import LogMonitor
 from lazycloud_api.services.monitoring.monitor_config import (
     DeploymentMonitorConfig,
+    DeployProgressMonitorConfig,
     MonitorConfig,
     MonitorConfigBase,
     ServiceMonitorConfig,
@@ -17,6 +21,8 @@ from lazycloud_api.services.monitoring.subscription_manager import (
 from lazycloud_api.services.monitoring.task_monitor import TaskMonitor
 
 __all__ = [
+    "DeployProgressMonitor",
+    "DeployProgressMonitorConfig",
     "DeploymentMonitor",
     "DeploymentMonitorConfig",
     "LogMonitor",

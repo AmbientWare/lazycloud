@@ -2,20 +2,16 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 from uuid import uuid4
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from loguru import logger
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 from sqlalchemy.pool import AsyncAdaptedQueuePool, NullPool
 
 from lazycloud_api.config import app_config
-
-if app_config.IS_WORKER:
-    DB_URL = app_config.DATABASE_POOL_URL
-else:
-    DB_URL = app_config.DATABASE_URL
-
-
-# ensure asyncpg is used
-if not DB_URL.startswith("postgresql+asyncpg"):
-    DB_URL = DB_URL.replace("postgresql://", "postgresql+asyncpg://")
 
 
 class DatabaseSessionManager:
@@ -32,10 +28,26 @@ class DatabaseSessionManager:
         self._max_overflow = max_overflow
         self._pool_timeout = pool_timeout
         self._pool_recycle = pool_recycle
+        self._engine: AsyncEngine | None = None
+        self._async_session: async_sessionmaker[AsyncSession] | None = None
 
-        self._initialize()
+    def _get_db_url(self) -> str:
+        """Get database URL based on current config"""
+        db_url = (
+            app_config.DATABASE_POOL_URL
+            if app_config.IS_WORKER
+            else app_config.DATABASE_URL
+        )
+        if not db_url.startswith("postgresql+asyncpg"):
+            db_url = db_url.replace("postgresql://", "postgresql+asyncpg://")
 
-    def _initialize(self):
+        return db_url
+
+    def _ensure_initialized(self):
+        """Lazy initialization of engine and session maker"""
+        if self._engine is not None:
+            return
+
         connect_args = (
             {}
             if not app_config.IS_WORKER
@@ -46,16 +58,19 @@ class DatabaseSessionManager:
             }
         )
 
+        db_url = self._get_db_url()
+
         if app_config.IS_WORKER:
-            self.engine = create_async_engine(
-                DB_URL,
+            self._engine = create_async_engine(
+                db_url,
                 poolclass=NullPool,
                 future=True,
                 connect_args=connect_args,
             )
+
         else:
-            self.engine = create_async_engine(
-                DB_URL,
+            self._engine = create_async_engine(
+                db_url,
                 poolclass=AsyncAdaptedQueuePool,
                 pool_size=self._pool_size,
                 max_overflow=self._max_overflow,
@@ -63,25 +78,65 @@ class DatabaseSessionManager:
                 pool_recycle=self._pool_recycle,
             )
 
-        self.async_session = async_sessionmaker(
-            self.engine,
+        self._async_session = async_sessionmaker(
+            self._engine,
             class_=AsyncSession,
             expire_on_commit=False,
         )
 
+    @property
+    def engine(self) -> AsyncEngine:
+        """Get the database engine, initializing if necessary"""
+        self._ensure_initialized()
+        assert self._engine is not None
+        return self._engine
+
+    @property
+    def async_session(self) -> async_sessionmaker[AsyncSession]:
+        """Get the async session maker, initializing if necessary"""
+        self._ensure_initialized()
+        assert self._async_session is not None
+        return self._async_session
+
     @asynccontextmanager
     async def get_session(self) -> AsyncGenerator[AsyncSession, None]:
         """Get a database session"""
-        session = self.async_session()
+        self._ensure_initialized()
+        assert self._async_session is not None
+        session = self._async_session()
         try:
             yield session
+
         finally:
             await session.close()
 
     async def close(self):
         """Close all database connections"""
-        await self.engine.dispose()
+        if self._engine is not None:
+            await self._engine.dispose()
+            self._engine = None
+            self._async_session = None
+
+    async def reset(self):
+        """Reset the session manager (close and clear)"""
+        await self.close()
 
 
-# Global session manager instance
+# global instance
 session_manager = DatabaseSessionManager()
+
+
+async def shutdown_database():
+    """Shutdown database connections"""
+
+    try:
+        await session_manager.close()
+        logger.info("Database connections closed")
+
+    except Exception as e:
+        logger.warning(f"Error closing database connections: {e}")
+
+
+async def reset_session():
+    """Reset the global session manager (for testing)"""
+    await session_manager.reset()

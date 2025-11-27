@@ -12,10 +12,17 @@ class DeploymentCreateRequest(BaseModel):
         pattern="^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
         max_length=63,
     )
-    secrets: bool = Field(False, description="Whether to wait for secrets to be stored")
-    service_name: str | None = Field(
+
+
+class DeploymentRunRequest(BaseModel):
+    compose_yaml: str | None = Field(
         None,
-        description="Deploy only this specific service (requires existing deployment)",
+        description="Updated Docker Compose YAML content (optional, updates before deploy)",
+    )
+    secrets: bool = Field(False, description="Whether to wait for secrets to be stored")
+    service_names: list[str] | None = Field(
+        None,
+        description="Deploy only these specific services (requires existing deployment)",
     )
 
 

@@ -13,7 +13,7 @@ metadata:
     {{- include "lazycloud-compose.labels" $ | nindent 4 }}
     app.kubernetes.io/name: {{ $service.name }}
     app.kubernetes.io/component: hpa
-    lazycloud.io/service: {{ $service.name }}
+    lazycloud.dev/service: {{ $service.name }}
 spec:
   scaleTargetRef:
     apiVersion: apps/v1

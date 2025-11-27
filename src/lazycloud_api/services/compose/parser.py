@@ -1,3 +1,4 @@
+import re
 from typing import Any
 
 from loguru import logger
@@ -10,6 +11,7 @@ from shared.models.compose import (
     ComposeVolume,
     DeployConfig,
     HealthCheck,
+    LazyCloudLabel,
     ResourceConfig,
     ResourcesConfig,
     ScalingConfig,
@@ -27,7 +29,7 @@ def _should_skip_service(service_config: dict[str, Any]) -> bool:
     """Check if a service should be skipped from deployment"""
     labels = service_config.get("labels", {})
     if isinstance(labels, dict):
-        skip_value = labels.get("lazycloud.ignore", "false")
+        skip_value = labels.get(LazyCloudLabel.IGNORE, "false")
         return str(skip_value).lower() == "true"
     return False
 
@@ -155,26 +157,40 @@ class ComposeParser:
 
         healthcheck = ComposeParser._parse_healthcheck(config.get("healthcheck", {}))
 
-        # Parse graceful shutdown period from labels
-        grace_period = ComposeParser._parse_grace_period(config.get("labels", {}))
+        # Parse custom domain from labels (service labels or deploy.labels)
+        domain = ComposeParser._parse_domain(config)
+
+        # Parse stop_grace_period (duration string like "30s", "1m")
+        stop_grace_period = ComposeParser._parse_duration_to_seconds(
+            config.get("stop_grace_period")
+        )
+
+        # Parse entrypoint - keep as string or list
+        entrypoint = config.get("entrypoint")
 
         # Parse command - convert list to string if needed
         command = config.get("command")
         if isinstance(command, list):
             command = " ".join(command)
 
+        # Parse working_dir
+        working_dir = config.get("working_dir")
+
         return ComposeService(
             name=service_name,
             image=config.get("image"),
             build=config.get("build"),
+            entrypoint=entrypoint,
             command=command,
+            working_dir=working_dir,
+            stop_grace_period=stop_grace_period,
             ports=ports or None,
             volumes=service_volumes or None,
             networks=service_networks or None,
             deploy=deploy,
             healthcheck=healthcheck,
             scaling=scaling or ScalingConfig(),
-            grace_period_seconds=grace_period,
+            domain=domain,
         )
 
     @staticmethod
@@ -189,7 +205,8 @@ class ComposeParser:
             elif isinstance(port_config, dict):
                 ports.append(ComposePort(**port_config))
             elif isinstance(port_config, int):
-                ports.append(ComposePort(target=port_config))
+                # Single port means both published and target are the same
+                ports.append(ComposePort(published=port_config, target=port_config))
         return ports
 
     @staticmethod
@@ -320,36 +337,78 @@ class ComposeParser:
             return None
 
         return ScalingConfig(
-            enabled=scaling_labels.get("lazycloud.scaling.enabled", "false").lower()
+            enabled=scaling_labels.get(LazyCloudLabel.SCALING_ENABLED, "false").lower()
             == "true",
-            min=_get_int(scaling_labels, "lazycloud.scaling.min"),
-            max=_get_int(scaling_labels, "lazycloud.scaling.max"),
-            cpu=scaling_labels.get("lazycloud.scaling.cpu"),
-            memory=scaling_labels.get("lazycloud.scaling.memory"),
+            min=_get_int(scaling_labels, LazyCloudLabel.SCALING_MIN),
+            max=_get_int(scaling_labels, LazyCloudLabel.SCALING_MAX),
+            cpu=scaling_labels.get(LazyCloudLabel.SCALING_CPU),
+            memory=scaling_labels.get(LazyCloudLabel.SCALING_MEMORY),
         )
 
     @staticmethod
-    def _parse_grace_period(labels: dict) -> int | None:
-        """Parse graceful shutdown period from labels.
-
-        Returns the value of lazycloud.graceful-shutdown label as an integer,
-        or None if not specified.
-        """
-        if not isinstance(labels, dict):
+    def _parse_duration_to_seconds(duration: str | None) -> int | None:
+        """Parse Docker duration string to seconds (e.g. '30s', '1m', '1m30s', '2h')."""
+        if not duration:
             return None
 
-        grace_period_value = labels.get("lazycloud.graceful-shutdown")
-        if grace_period_value is None:
-            return None
+        total_seconds = 0
+        remaining = duration.strip()
 
-        try:
-            return int(grace_period_value)
-        except (ValueError, TypeError):
-            logger.warning(
-                f"Invalid lazycloud.graceful-shutdown value: {grace_period_value}. "
-                "Must be an integer (seconds). Ignoring."
+        # Pattern matches number followed by unit (h, m, s, ms, us, ns)
+        pattern = re.compile(r"(\d+)(h|m|s|ms|us|ns)")
+
+        while remaining:
+            match = pattern.match(remaining)
+            if not match:
+                logger.warning(
+                    f"Invalid duration format: {duration}. Expected format like '30s', '1m', '1m30s'. Ignoring."
+                )
+                return None
+
+            value = int(match.group(1))
+            unit = match.group(2)
+
+            if unit == "h":
+                total_seconds += value * 3600
+            elif unit == "m":
+                total_seconds += value * 60
+            elif unit == "s":
+                total_seconds += value
+            elif unit == "ms":
+                total_seconds += value // 1000
+            elif unit == "us":
+                pass  # Microseconds rounded to 0
+            elif unit == "ns":
+                pass  # Nanoseconds rounded to 0
+
+            remaining = remaining[match.end() :]
+
+        return total_seconds if total_seconds > 0 else None
+
+    @staticmethod
+    def _parse_domain(config: dict) -> str | None:
+        """Parse custom domain from service labels."""
+        # Check service-level labels first
+        labels = config.get("labels", {})
+        if isinstance(labels, dict):
+            domain = labels.get(LazyCloudLabel.DOMAIN) or labels.get(
+                LazyCloudLabel.INGRESS_DOMAIN
             )
-            return None
+            if domain:
+                return domain
+
+        # Check deploy.labels as fallback
+        deploy = config.get("deploy", {})
+        if isinstance(deploy, dict):
+            deploy_labels = deploy.get("labels", {})
+            if isinstance(deploy_labels, dict):
+                domain = deploy_labels.get(LazyCloudLabel.DOMAIN) or deploy_labels.get(
+                    LazyCloudLabel.INGRESS_DOMAIN
+                )
+                if domain:
+                    return domain
+
+        return None
 
     @staticmethod
     def _parse_healthcheck(healthcheck_config: dict) -> HealthCheck:
@@ -468,6 +527,7 @@ class ComposeParser:
             return ComposeNetwork(
                 name=config,
             )
+
         else:
             return ComposeNetwork(
                 name=config.get("name"),

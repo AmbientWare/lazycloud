@@ -1,7 +1,8 @@
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from shared.models.billing import STORAGE_CLASS_EBS, STORAGE_CLASS_EFS
 from shared.models.k8s import (
     PodSecurityContext,
     ProbeConfig,
@@ -143,6 +144,7 @@ class VolumeValues(BaseModel):
     enabled: bool = True
     size: str = "1Gi"
     accessModes: list[str] = ["ReadWriteOnce"]
+    storageClass: Literal[STORAGE_CLASS_EBS, STORAGE_CLASS_EFS] = STORAGE_CLASS_EBS
     labels: dict[str, str] = {}
     annotations: dict[str, str] = {}
 
@@ -184,6 +186,8 @@ class ServiceValues(BaseModel):
     annotations: dict[str, str] = {}
     workloadType: WorkloadType | None = None
     command: list[str] | None = None
+    args: list[str] | None = None
+    workingDir: str | None = None
     environment: dict[str, str] | None = None
     ports: list[PortConfig] | None = None
     volumes: list[VolumeMount] | None = None

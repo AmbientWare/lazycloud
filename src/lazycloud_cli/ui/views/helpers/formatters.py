@@ -1,9 +1,16 @@
-from datetime import timezone
+from datetime import datetime, timezone
 from typing import Any
 
 from dateutil import parser
 
 DEFAULT_DISABLED_VALUE = "Disabled"
+
+
+def format_short_date(dt: datetime | None) -> str:
+    """Format datetime as short date (e.g., 'Nov 26')."""
+    if not dt:
+        return ""
+    return dt.strftime("%b %d")
 
 
 def format_resource_limits(resources: dict[str, Any] | None) -> str:

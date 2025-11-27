@@ -26,6 +26,7 @@ class PolarService:
         self.enabled = bool(access_token)
         self.is_sandbox = is_sandbox
 
+        self.client = None
         if self.enabled:
             try:
                 self.client = Polar(
@@ -39,7 +40,6 @@ class PolarService:
                 logger.error(f"Failed to initialize Polar client: {e}")
                 self.enabled = False
         else:
-            self.client = None
             logger.warning(
                 "Polar billing service disabled: POLAR_ACCESS_TOKEN not configured"
             )

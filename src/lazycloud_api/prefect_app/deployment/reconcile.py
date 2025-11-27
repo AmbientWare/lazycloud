@@ -2,7 +2,7 @@ from loguru import logger
 from prefect import flow
 
 from lazycloud_api.config import app_config
-from lazycloud_api.database import db
+from lazycloud_api.database import get_db_context
 from lazycloud_api.services.k8s import create_release_name
 from lazycloud_api.services.k8s.helm_manager import HelmManager
 from shared.models.deployments import DeploymentStates
@@ -15,11 +15,16 @@ async def reconcile_rollback_states(
     """Reconcile Helm and database states for stuck deployments."""
     if minutes_old is None:
         minutes_old = app_config.ROLLBACK_RECONCILIATION_INTERVAL_MINUTES
+
     logger.info(
         f"Starting rollback state reconciliation (checking deployments > {minutes_old} minutes old)"
     )
 
-    stuck_deployments = await db.compose_deployments.find_stuck_deploying(minutes_old)
+    async with get_db_context() as db:
+        stuck_deployments = await db.compose_deployments.find_stuck_deploying(
+            minutes_old
+        )
+
     logger.info(
         f"Found {len(stuck_deployments)} deployments in DEPLOYING state older than {minutes_old} minutes"
     )
@@ -79,32 +84,19 @@ async def reconcile_rollback_states(
                 skipped += 1
                 continue
 
-            async with db.compose_deployments.transaction() as session:
+            async with get_db_context() as db:
                 deployment_locked = await db.compose_deployments.get_by_id(
-                    deployment.id, with_lock=True, session=session
+                    deployment.id, with_lock=True
                 )
-                if deployment_locked is None:
-                    logger.warning(
-                        f"Deployment {deployment.id} not found during reconciliation"
+                if deployment_locked:
+                    deployment_locked.current_helm_revision = helm_revision
+                    deployment_locked.state = DeploymentStates.DEPLOYED
+                    deployment_locked.status_message = (
+                        f"Reconciled: DB synced to Helm revision {helm_revision} "
+                        f"(was stuck in DEPLOYING state)"
                     )
-                    skipped += 1
-                    continue
-
-                if deployment_locked.state != DeploymentStates.DEPLOYING:
-                    logger.info(
-                        f"Deployment {deployment.id} state changed from DEPLOYING to {deployment_locked.state}. Skipping reconciliation."
-                    )
-                    skipped += 1
-                    continue
-
-                deployment_locked.current_helm_revision = helm_revision
-                deployment_locked.state = DeploymentStates.DEPLOYED
-                deployment_locked.status_message = (
-                    f"Reconciled: DB synced to Helm revision {helm_revision} "
-                    f"(was stuck in DEPLOYING state)"
-                )
-                deployment_locked.current_task_run_id = None
-                await db.compose_deployments.update(deployment_locked, session=session)
+                    deployment_locked.current_task_run_id = None
+                    await db.compose_deployments.update(deployment_locked)
 
             logger.info(
                 f"Successfully reconciled deployment {deployment.id}: synced DB revision to {helm_revision}"

@@ -1,10 +1,15 @@
 from datetime import UTC
-from typing import Any
+from typing import Any, Callable
 
 from lazycloud_cli.api.base import BaseAPI
+from lazycloud_cli.api.base_sse import SSEClient
 from lazycloud_cli.api.tasks import TasksAPI
 from lazycloud_cli.config import config
-from shared.requests.deployments import DeploymentCreateRequest, RollbackRequest
+from shared.requests.deployments import (
+    DeploymentCreateRequest,
+    DeploymentRunRequest,
+    RollbackRequest,
+)
 from shared.responses.deployments import (
     DeploymentHistoryResponse,
     DeploymentListResponse,
@@ -24,24 +29,35 @@ class DeploymentsAPI(BaseAPI):
         compose_yaml: str,
         workspace_id: str,
         name: str | None = None,
-        secrets: bool = False,
-        service_name: str | None = None,
-    ) -> DeploymentTaskStatusResponse:
-        """Create a deployment and return the task response."""
-
+    ) -> DeploymentResponse:
+        """Create or update a deployment record (does not trigger deployment)."""
         request = DeploymentCreateRequest(
             compose_yaml=compose_yaml,
             workspace_id=workspace_id,
             name=name,
-            secrets=secrets,
-            service_name=service_name,
         )
 
-        # Make the initial request
         response_data = self._post("", json=request.model_dump())
-        create_response = DeploymentTaskStatusResponse(**response_data)
+        return DeploymentResponse(**response_data)
 
-        return create_response
+    def deploy_deployment(
+        self,
+        deployment_id: str,
+        compose_yaml: str | None = None,
+        secrets: bool = False,
+        service_names: list[str] | None = None,
+    ) -> DeploymentTaskStatusResponse:
+        """Trigger deployment of a deployment record."""
+        request = DeploymentRunRequest(
+            compose_yaml=compose_yaml,
+            secrets=secrets,
+            service_names=service_names,
+        )
+
+        response_data = self._post(
+            path=f"/{deployment_id}/deploy", json=request.model_dump()
+        )
+        return DeploymentTaskStatusResponse(**response_data)
 
     async def wait_for_deployment(self, task_id: str) -> TaskStatusResponse:
         """Wait for deployment task to complete via streaming."""
@@ -143,4 +159,23 @@ class DeploymentsAPI(BaseAPI):
             deployment_id=rollback_response.deployment_id,
             status=final_status.status,
             message=final_status.message,
+        )
+
+    async def stream_deploy_progress(
+        self,
+        deployment_id: str,
+        on_progress: Callable[[dict], None],
+        on_error: Callable[[Exception], None] | None = None,
+    ) -> None:
+        """Stream deployment progress with per-service status updates."""
+        sse_client = SSEClient()
+
+        def handle_event(event_type: str, data: dict) -> None:
+            on_progress(data)
+
+        await sse_client.stream(
+            path=f"/deployments/{deployment_id}/status/deploy/stream",
+            on_event=handle_event,
+            on_error=on_error,
+            max_retries=3,
         )

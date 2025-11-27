@@ -11,7 +11,7 @@ from lazycloud_api.api.dependencies import (
 )
 from lazycloud_api.api.security import get_current_active_user
 from lazycloud_api.api.utils import normalize_usage_date_range
-from lazycloud_api.database import db
+from lazycloud_api.database import Database, get_db
 from lazycloud_api.database.user_workspaces import (
     UserWorkspacePydantic,
     UserWorkspaceStatus,
@@ -53,6 +53,7 @@ async def get_workspaces(
     end_date: datetime | None = Query(
         None, description="Optional end date for usage context"
     ),
+    db: Database = Depends(get_db),
 ) -> list[WorkspaceResponse]:
     """Get all workspaces the current user has access to.
 
@@ -84,6 +85,7 @@ async def get_workspace_with_deployments(
     workspace_access: WorkspaceAccess = Depends(get_workspace_with_any_access),
     cursor: str | None = Query(None, description="Cursor to start from"),
     limit: int = Query(100, description="Limit the number of deployments returned"),
+    db: Database = Depends(get_db),
 ) -> WorkspaceWithDeploymentsResponse:
     """Get workspace with deployment overviews (including service/volume counts)"""
     workspace = workspace_access.workspace
@@ -162,6 +164,7 @@ async def create_workspace(
     request: CreateWorkspaceRequest,
     current_user: UserPydantic = Depends(get_current_active_user),
     _: None = Depends(check_workspace_limit),
+    db: Database = Depends(get_db),
 ) -> WorkspaceResponse:
     """Create a new workspace"""
     try:
@@ -171,21 +174,20 @@ async def create_workspace(
 
     try:
         # Create workspace and membership in a single transaction
-        async with db.workspaces.transaction() as session:
-            workspace = WorkspacePydantic(
-                name=validated_name,
-                is_personal=False,
-            )
-            workspace = await db.workspaces.create(workspace, session=session)
+        workspace = WorkspacePydantic(
+            name=validated_name,
+            is_personal=False,
+        )
+        workspace = await db.workspaces.create(workspace)
 
-            # Add current user as owner
-            membership = UserWorkspacePydantic(
-                user_id=current_user.id,
-                workspace_id=workspace.id,
-                role=WorkspaceRole.OWNER,
-                status=UserWorkspaceStatus.ACTIVE,
-            )
-            membership = await db.user_workspaces.create(membership, session=session)
+        # Add current user as owner
+        membership = UserWorkspacePydantic(
+            user_id=current_user.id,
+            workspace_id=workspace.id,
+            role=WorkspaceRole.OWNER,
+            status=UserWorkspaceStatus.ACTIVE,
+        )
+        membership = await db.user_workspaces.create(membership)
 
     except Exception:
         raise HTTPException(status_code=500, detail="Failed to create workspace")
@@ -201,6 +203,7 @@ async def create_workspace(
 @workspaces_router.delete("/{workspace_id}")
 async def delete_workspace(
     workspace_access: WorkspaceAccess = Depends(get_workspace_with_owner_access),
+    db: Database = Depends(get_db),
 ) -> WorkspaceSuccessResponse:
     """Delete a workspace (requires owner role)"""
     workspace = workspace_access.workspace
@@ -212,46 +215,35 @@ async def delete_workspace(
     # Get all deployments in the workspace
     deployments = await db.compose_deployments.find({"workspace_id": workspace.id})
 
-    # Atomically mark workspace and all deployments as deleted in a single transaction
-    async with db.compose_deployments.transaction() as session:
-        # Mark workspace as deleted
-        workspace.deleted_at = datetime.now(UTC)
-        workspace.status = WorkspaceStatus.DELETED
-        await db.workspaces.update(workspace, session=session)
+    # Mark workspace as deleted first (guards against new operations)
+    workspace.deleted_at = datetime.now(UTC)
+    workspace.status = WorkspaceStatus.DELETED
+    await db.workspaces.update(workspace)
 
-        # Mark all deployments as deleted
-        if len(deployments) > 0:
-            for deployment in deployments:
-                deployment.deleted_at = datetime.now(UTC)
+    # Trigger cleanup tasks for each deployment
+    # Only mark as DELETING after task is successfully launched
+    for deployment in deployments:
+        if not deployment.id:
+            continue
+
+        try:
+            task_future = destroy_compose_task.delay(deployment_id=deployment.id)
+
+            # Update state + task_run_id atomically after task launch
+            deployment = await db.compose_deployments.get_by_id(
+                deployment.id,
+                with_lock=True,
+            )
+            if deployment:
                 deployment.state = DeploymentStates.DELETING
-                await db.compose_deployments.update(deployment, session=session)
+                deployment.current_task_run_id = task_future.task_run_id
+                await db.compose_deployments.update(deployment)
 
-    # After transaction commits, trigger cleanup tasks for each deployment (non-blocking)
-    # Set current_task_run_id to prevent duplicate triggers from cleanup cron
-    if len(deployments) > 0:
-        for deployment in deployments:
-            if deployment.id:
-                try:
-                    task_future = destroy_compose_task.delay(
-                        deployment_id=deployment.id
-                    )
-                    # Update deployment with task_run_id to prevent duplicate triggers
-                    async with db.compose_deployments.transaction() as session:
-                        deployment = await db.compose_deployments.get_by_id(
-                            deployment.id,
-                            with_lock=True,
-                            session=session,
-                            include_deleted=True,
-                        )
-                        if deployment:
-                            deployment.current_task_run_id = task_future.task_run_id
-                            await db.compose_deployments.update(
-                                deployment, session=session
-                            )
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to trigger destroy task for deployment {deployment.id}: {e}"
-                    )
+        except Exception as e:
+            # Deployment stays in previous state - cleanup cron will retry
+            logger.warning(
+                f"Failed to trigger destroy task for deployment {deployment.id}: {e}"
+            )
 
     return WorkspaceSuccessResponse(success=True)
 

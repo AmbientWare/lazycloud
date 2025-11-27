@@ -5,9 +5,10 @@ from lazycloud_cli.commands.compose.destroy import destroy
 from lazycloud_cli.commands.compose.init import init_deployment
 from lazycloud_cli.commands.compose.rollback import rollback
 from lazycloud_cli.commands.dashboard import dashboard
+from lazycloud_cli.commands.deployments import deployments_app
 from lazycloud_cli.commands.login import login
 from lazycloud_cli.commands.usage import usage_command
-from lazycloud_cli.commands.workspace import workspace_app
+from lazycloud_cli.commands.workspaces import workspace_app
 
 # Create the main app
 main_cli = typer.Typer(
@@ -17,7 +18,8 @@ main_cli = typer.Typer(
 )
 
 # Add command modules to the main app
-main_cli.add_typer(workspace_app, name="workspace")
+main_cli.add_typer(workspace_app, name="workspaces")
+main_cli.add_typer(deployments_app, name="deployments")
 main_cli.add_typer(usage_command, name="usage")
 
 # Add top-level shortcuts for compose commands

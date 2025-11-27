@@ -9,8 +9,8 @@ namespace:
   
   # Labels to apply to the namespace
   labels:
-    "lazycloud.io/managed": "true"
-    "lazycloud.io/type": "user-namespace"
+    "lazycloud.dev/managed": "true"
+    "lazycloud.dev/type": "user-namespace"
   
   # Annotations for the namespace
   annotations: {}
@@ -36,7 +36,7 @@ resourceQuota:
   objects:
     pods: "50"  # Fallback default
     services: "10"  # Fallback default
-    persistentvolumeclaims: "10"  # Fallback default (EFS/S3 scales automatically)
+    persistentvolumeclaims: "10"  # Fallback default (EBS/EFS)
     configmaps: "500"
     secrets: "500"
     count/deployments.apps: "5"  # Fallback default

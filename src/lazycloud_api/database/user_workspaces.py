@@ -68,18 +68,17 @@ class UserWorkspacePydantic(BaseDbPydanticModel):
 class UserWorkspaceService(DatabaseService[UserWorkspaceTable, UserWorkspacePydantic]):
     """Service layer for user-workspace membership operations"""
 
-    def __init__(self):
-        super().__init__(UserWorkspaceTable, UserWorkspacePydantic)
+    def __init__(self, session: AsyncSession):
+        super().__init__(UserWorkspaceTable, UserWorkspacePydantic, session)
 
     async def get_by_user_and_workspace(
         self,
         user_id: str,
         workspace_id: str,
-        session: AsyncSession | None = None,
     ) -> UserWorkspacePydantic | None:
         """Get membership by user and workspace"""
         filters = {"user_id": user_id, "workspace_id": workspace_id}
-        return await self.find_one(filters=filters, session=session)
+        return await self.find_one(filters=filters)
 
     async def get_user_memberships(self, user_id: str) -> list[UserWorkspacePydantic]:
         """Get all workspace memberships for a user"""
@@ -95,65 +94,62 @@ class UserWorkspaceService(DatabaseService[UserWorkspaceTable, UserWorkspacePyda
         self, workspace_id: str
     ) -> list[tuple[UserWorkspacePydantic, UserPydantic]]:
         """Get all members of a workspace with their user information"""
-        async with self._session_manager.get_session() as session:
-            query = (
-                select(UserWorkspaceTable, UserTable)
-                .join(UserTable, UserWorkspaceTable.user_id == UserTable.id)
-                .where(UserWorkspaceTable.workspace_id == workspace_id)
-            )
-            result = await session.execute(query)
-            rows: list[tuple[UserWorkspaceTable, UserTable]] = result.all()
+        query = (
+            select(UserWorkspaceTable, UserTable)
+            .join(UserTable, UserWorkspaceTable.user_id == UserTable.id)
+            .where(UserWorkspaceTable.workspace_id == workspace_id)
+        )
+        result = await self._session.execute(query)
+        rows: list[tuple[UserWorkspaceTable, UserTable]] = result.all()
 
-            return [
-                (self._to_pydantic(member), user.to_pydantic(UserPydantic))
-                for member, user in rows
-            ]
+        return [
+            (self._to_pydantic(member), user.to_pydantic(UserPydantic))
+            for member, user in rows
+        ]
 
     async def get_workspace_members_with_invitations(
         self, workspace_id: str
     ) -> list[tuple[UserWorkspacePydantic, UserPydantic, str | None]]:
         """Get all members of a workspace with their user information and pending invitation IDs"""
-        async with self._session_manager.get_session() as session:
-            # LEFT JOIN to get invitation_id for members with pending invitations
-            # Join on email (lowercased) and workspace_id, and filter for pending (not accepted) invitations
-            query = (
-                select(
-                    UserWorkspaceTable,
-                    UserTable,
-                    WorkspaceInvitationTable.id.label("invitation_id"),
-                )
-                .join(UserTable, UserWorkspaceTable.user_id == UserTable.id)
-                .outerjoin(
-                    WorkspaceInvitationTable,
-                    and_(
-                        func.lower(UserTable.email)
-                        == func.lower(WorkspaceInvitationTable.email),
-                        WorkspaceInvitationTable.workspace_id == workspace_id,
-                        WorkspaceInvitationTable.accepted_at.is_(None),
-                        WorkspaceInvitationTable.invitation_type
-                        != InvitationType.OWNERSHIP_TRANSFER.value,
-                    ),
-                )
-                .where(UserWorkspaceTable.workspace_id == workspace_id)
+        # LEFT JOIN to get invitation_id for members with pending invitations
+        # Join on email (lowercased) and workspace_id, and filter for pending (not accepted) invitations
+        query = (
+            select(
+                UserWorkspaceTable,
+                UserTable,
+                WorkspaceInvitationTable.id.label("invitation_id"),
             )
-            result = await session.execute(query)
-            rows = result.all()
+            .join(UserTable, UserWorkspaceTable.user_id == UserTable.id)
+            .outerjoin(
+                WorkspaceInvitationTable,
+                and_(
+                    func.lower(UserTable.email)
+                    == func.lower(WorkspaceInvitationTable.email),
+                    WorkspaceInvitationTable.workspace_id == workspace_id,
+                    WorkspaceInvitationTable.accepted_at.is_(None),
+                    WorkspaceInvitationTable.invitation_type
+                    != InvitationType.OWNERSHIP_TRANSFER.value,
+                ),
+            )
+            .where(UserWorkspaceTable.workspace_id == workspace_id)
+        )
+        result = await self._session.execute(query)
+        rows = result.all()
 
-            return [
-                (
-                    self._to_pydantic(member),
-                    user.to_pydantic(UserPydantic),
-                    str(invitation_id) if invitation_id is not None else None,
-                )
-                for member, user, invitation_id in rows
-            ]
+        return [
+            (
+                self._to_pydantic(member),
+                user.to_pydantic(UserPydantic),
+                str(invitation_id) if invitation_id is not None else None,
+            )
+            for member, user, invitation_id in rows
+        ]
 
     async def update_role(
         self,
         user_id: str,
         workspace_id: str,
         role: WorkspaceRole,
-        session: AsyncSession | None = None,
     ) -> UserWorkspacePydantic | None:
         """Update a user's role in a workspace"""
         membership = await self.get_by_user_and_workspace(user_id, workspace_id)
@@ -161,7 +157,7 @@ class UserWorkspaceService(DatabaseService[UserWorkspaceTable, UserWorkspacePyda
             return None
 
         membership.role = role
-        return await self.update(membership, session=session)
+        return await self.update(membership)
 
     async def update_status(
         self, user_id: str, workspace_id: str, status: UserWorkspaceStatus

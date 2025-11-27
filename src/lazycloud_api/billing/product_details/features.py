@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class WorkspaceFeature(BaseModel):
@@ -35,6 +35,4 @@ class BaseFeatures(BaseModel):
         description="Maximum custom domains (0 = platform domains only)"
     )
 
-    class Config:
-        # Allow extra fields to be ignored (forwards compatible)
-        extra = "ignore"
+    model_config = ConfigDict(extra="ignore")

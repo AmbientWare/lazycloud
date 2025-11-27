@@ -1,5 +1,4 @@
 import re
-from collections import defaultdict
 from typing import Any
 
 from lazycloud_api.services.k8s.generators.converters import (
@@ -116,6 +115,7 @@ class ComposeValidator:
                             suggestion=f"Consider renaming to '{sanitized}' in your compose file",
                         )
                     )
+
                 else:
                     self.errors.append(
                         ValidationError(
@@ -150,22 +150,33 @@ class ComposeValidator:
                 continue
 
             for volume in service.volumes:
-                # Check for bind mounts
-                if isinstance(volume, str) and ":" in volume:
+                # Check for bind mounts - handle both string and ServiceVolume objects
+                is_bind_mount = False
+                volume_repr = str(volume)
+
+                if hasattr(volume, "type") and volume.type == "bind":
+                    # ServiceVolume object with type="bind"
+                    is_bind_mount = True
+                    volume_repr = f"{volume.source}:{volume.target}"
+
+                elif isinstance(volume, str) and ":" in volume:
                     parts = volume.split(":")
                     if len(parts) >= 2 and (
                         parts[0].startswith("/") or parts[0].startswith(".")
                     ):
-                        self.warnings.append(
-                            ValidationError(
-                                error_type="bind_mount",
-                                message=f"Local volume mount '{volume}' are not supported",
-                                service=service.name,
-                                field="volumes",
-                                suggestion="Use defined volumes instead",
-                            )
+                        is_bind_mount = True
+
+                if is_bind_mount:
+                    self.warnings.append(
+                        ValidationError(
+                            error_type="bind_mount",
+                            message=f"Local volume mount '{volume_repr}' are not supported",
+                            service=service.name,
+                            field="volumes",
+                            suggestion="Use defined volumes instead",
                         )
-                        continue
+                    )
+                    continue
 
                 # Check for undefined volumes
                 if isinstance(volume, str) and ":" in volume:
@@ -238,11 +249,11 @@ class ComposeValidator:
                         convert_cpu_value(cpus)
 
                         # Check for reasonable values
-                        cpu_float = (
-                            float(cpus)
-                            if not isinstance(cpus, str)
-                            else float(cpus.rstrip("m")) / 1000
-                        )
+                        # Convert millicores (e.g., "1000m") to cores
+                        if isinstance(cpus, str) and cpus.endswith("m"):
+                            cpu_float = float(cpus.rstrip("m")) / 1000
+                        else:
+                            cpu_float = float(cpus)
                         if cpu_float > 16:
                             self.warnings.append(
                                 ValidationError(
@@ -253,6 +264,7 @@ class ComposeValidator:
                                     suggestion="Ensure this CPU allocation is necessary",
                                 )
                             )
+
                     except Exception as e:
                         self.errors.append(
                             ValidationError(
@@ -266,36 +278,46 @@ class ComposeValidator:
 
     def _validate_ports(self, compose: ComposeFile):
         """Validate port configurations."""
-        used_ports = defaultdict(list)
+        used_ports: dict[int, list[str]] = {}
 
         for service in compose.services:
             if not service.ports:
                 continue
 
             for port in service.ports:
-                port_str = str(port)
+                host_port: str | None = None
 
-                # Parse port to get host port
-                if ":" in port_str:
-                    parts = port_str.split(":")
-                    # Could be "8080:80" or "127.0.0.1:8080:80"
-                    if len(parts) == 2:
-                        host_port = parts[0]
-                    elif len(parts) == 3:
-                        host_port = parts[1]
-                    else:
-                        self.errors.append(
-                            ValidationError(
-                                error_type="invalid_port",
-                                message=f"Invalid port format '{port_str}'",
-                                service=service.name,
-                                field="ports",
-                                suggestion="Use format 'host:container' or 'host:container/protocol'",
+                # Handle both ComposePort objects and string ports
+                if hasattr(port, "published"):
+                    # ComposePort object
+                    host_port = str(port.published)
+                else:
+                    # String port format
+                    port_str = str(port)
+                    if ":" in port_str:
+                        parts = port_str.split(":")
+                        # Could be "8080:80" or "127.0.0.1:8080:80"
+                        if len(parts) == 2:
+                            host_port = parts[0]
+                        elif len(parts) == 3:
+                            host_port = parts[1]
+                        else:
+                            self.errors.append(
+                                ValidationError(
+                                    error_type="invalid_port",
+                                    message=f"Invalid port format '{port_str}'",
+                                    service=service.name,
+                                    field="ports",
+                                    suggestion="Use format 'host:container' or 'host:container/protocol'",
+                                )
                             )
-                        )
-                        continue
+                            continue
+                    else:
+                        # Simple port string like "80"
+                        host_port = port_str
 
-                    # Check for port conflicts
+                # Check for port conflicts
+                if host_port:
                     try:
                         port_num = int(host_port)
                         if port_num in used_ports:
@@ -309,7 +331,7 @@ class ComposeValidator:
                                 )
                             )
                         else:
-                            used_ports[port_num].append(service.name)
+                            used_ports[port_num] = [service.name]
                     except ValueError:
                         pass  # Not a simple port number
 
@@ -337,6 +359,7 @@ class ComposeValidator:
                 prefix,
             ):
                 return False
+
             return (
                 re.match(r"^[a-zA-Z0-9]([-._a-zA-Z0-9]*[a-zA-Z0-9])?$", name)
                 is not None

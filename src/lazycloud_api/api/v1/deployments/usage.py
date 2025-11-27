@@ -5,7 +5,7 @@ from loguru import logger
 
 from lazycloud_api.api.dependencies import get_deployment_with_admin_access_for_usage
 from lazycloud_api.api.security import get_current_active_user
-from lazycloud_api.database import db
+from lazycloud_api.database import Database, get_db
 from lazycloud_api.database.compose import ComposeDeploymentPydantic
 from lazycloud_api.database.users import UserPydantic
 from lazycloud_api.services import (
@@ -41,6 +41,7 @@ async def get_deployment_cost_breakdown(
     usage_service: UsageService = Depends(get_usage_service),
     polar_service: PolarService = Depends(get_polar_service),
     depot_service: DepotService = Depends(get_depot_service),
+    db: Database = Depends(get_db),
 ) -> WorkspaceCostBreakdownResponse:
     """Get detailed cost breakdown for a specific deployment with service and volume details"""
     try:
@@ -117,8 +118,8 @@ async def get_deployment_cost_breakdown(
                     external_customer_id=current_user.clerk_id,
                     cpu_core_hours=deployment_metrics.cpu_core_hours,
                     memory_gb_hours=deployment_metrics.memory_gb_hours,
-                    s3_gb_hours=deployment_metrics.s3_gb_hours,
-                    efs_gb_hours=deployment_metrics.efs_gb_hours,
+                    standard_gb_hours=deployment_metrics.standard_gb_hours,
+                    shared_gb_hours=deployment_metrics.shared_gb_hours,
                     build_minutes=deployment_metrics.build_minutes,
                     public_endpoint_hours=deployment_metrics.public_endpoint_hours,
                     service_usage=service_usage_list if service_usage_list else None,

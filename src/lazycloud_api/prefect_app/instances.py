@@ -1,7 +1,7 @@
 from loguru import logger
 from prefect import task
 
-from lazycloud_api.database import db
+from lazycloud_api.database import get_db_context
 from lazycloud_api.services.k8s.pod_manager import KubernetesPodManager
 
 
@@ -15,9 +15,10 @@ async def delete_instance_task(
     )
 
     # Get the deployment
-    deployment = await db.compose_deployments.get_by_id(deployment_id)
-    if not deployment:
-        raise Exception(f"Deployment {deployment_id} not found")
+    async with get_db_context() as db:
+        deployment = await db.compose_deployments.get_by_id(deployment_id)
+        if not deployment:
+            raise Exception(f"Deployment {deployment_id} not found")
 
     # Validate service exists in deployment
     helm_values = deployment.helm_values

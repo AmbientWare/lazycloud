@@ -15,7 +15,7 @@ metadata:
     {{- include "lazycloud-compose.labels" $ | nindent 4 }}
     app.kubernetes.io/name: {{ $service.name }}
     app.kubernetes.io/component: monitoring
-    lazycloud.io/service: {{ $service.name }}
+    lazycloud.dev/service: {{ $service.name }}
 spec:
   selector:
     matchLabels:

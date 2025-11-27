@@ -144,6 +144,7 @@ class DeployView:
         deployment_name: str,
         status: str,
         duration: int | None = None,
+        build_duration: int | None = None,
         message: str | None = None,
     ) -> None:
         """Show deployment summary."""
@@ -156,10 +157,15 @@ class DeployView:
         table.add_row("Deployment", deployment_name)
         table.add_row("Status", status_badge)
 
+        if build_duration:
+            build_mins = build_duration // 60
+            build_secs = build_duration % 60
+            table.add_row("Build Time", f"{build_mins}m {build_secs}s")
+
         if duration:
-            minutes = duration // 60
-            seconds = duration % 60
-            table.add_row("Duration", f"{minutes}m {seconds}s")
+            deploy_mins = duration // 60
+            deploy_secs = duration % 60
+            table.add_row("Deploy Time", f"{deploy_mins}m {deploy_secs}s")
 
         if message:
             table.add_row("Message", Text(message, style=Colors.Ansi.text_muted))

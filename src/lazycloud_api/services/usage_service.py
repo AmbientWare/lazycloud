@@ -4,15 +4,15 @@ from zoneinfo import ZoneInfo
 
 from loguru import logger
 
-from lazycloud_api.database import db
+from lazycloud_api.database import get_db_context
 from lazycloud_api.database.compose import ComposeDeploymentPydantic
 from lazycloud_api.database.usage import UsageRecordPydantic
 from lazycloud_api.services.cost_breakdown_service import CostBreakdownService
 from lazycloud_api.services.depot_service import DepotService
 from shared.models.billing import (
     SECONDS_PER_HOUR,
+    STORAGE_CLASS_EBS,
     STORAGE_CLASS_EFS,
-    STORAGE_CLASS_S3,
     UsageCollectionConfig,
 )
 from shared.responses.usage import (
@@ -62,25 +62,26 @@ class UsageService:
         return_records: bool = False,
     ) -> UsageMetrics | tuple[UsageMetrics, list[UsageRecordPydantic]]:
         """Aggregate workspace-level usage totals across multiple records for a date range."""
-        usage_records = await db.usage.get_workspace_usage(
-            workspace_id=workspace_id,
-            start_date=start_date,
-            end_date=end_date,
-            record_type=UsageCollectionConfig.get_record_type(),
-        )
+        async with get_db_context() as db:
+            usage_records = await db.usage.get_workspace_usage(
+                workspace_id=workspace_id,
+                start_date=start_date,
+                end_date=end_date,
+                record_type=UsageCollectionConfig.get_record_type(),
+            )
 
         total_cpu_seconds = sum(r.cpu_core_seconds for r in usage_records)
         total_memory_seconds = sum(r.memory_gb_seconds for r in usage_records)
-        total_s3_hours = sum(r.s3_gb_hours for r in usage_records)
-        total_efs_hours = sum(r.efs_gb_hours for r in usage_records)
+        total_standard_hours = sum(r.standard_gb_hours for r in usage_records)
+        total_shared_hours = sum(r.shared_gb_hours for r in usage_records)
         total_build_minutes = sum(r.build_minutes for r in usage_records)
         total_endpoint_hours = sum(r.public_endpoint_hours for r in usage_records)
 
         metrics = UsageMetrics(
             cpu_core_hours=total_cpu_seconds / SECONDS_PER_HOUR,
             memory_gb_hours=total_memory_seconds / SECONDS_PER_HOUR,
-            s3_gb_hours=total_s3_hours,
-            efs_gb_hours=total_efs_hours,
+            standard_gb_hours=total_standard_hours,
+            shared_gb_hours=total_shared_hours,
             build_minutes=total_build_minutes,
             public_endpoint_hours=total_endpoint_hours,
         )
@@ -100,8 +101,8 @@ class UsageService:
 
         deployment_cpu_seconds = 0.0
         deployment_memory_seconds = 0.0
-        deployment_s3_hours = 0.0
-        deployment_efs_hours = 0.0
+        deployment_standard_hours = 0.0
+        deployment_shared_hours = 0.0
         aggregated_services: dict[str, ServiceUsageItem] = {}
         aggregated_volumes: dict[str, VolumeUsageItem] = {}
 
@@ -129,10 +130,10 @@ class UsageService:
 
             for storage_breakdown in record.storage_breakdowns:
                 if storage_breakdown.deployment_id == deployment_id:
-                    if storage_breakdown.storage_class == STORAGE_CLASS_S3:
-                        deployment_s3_hours += storage_breakdown.gb_hours
+                    if storage_breakdown.storage_class == STORAGE_CLASS_EBS:
+                        deployment_standard_hours += storage_breakdown.gb_hours
                     elif storage_breakdown.storage_class == STORAGE_CLASS_EFS:
-                        deployment_efs_hours += storage_breakdown.gb_hours
+                        deployment_shared_hours += storage_breakdown.gb_hours
 
                     pvc_name = storage_breakdown.pvc_name
                     if pvc_name and pvc_name.strip():
@@ -153,8 +154,8 @@ class UsageService:
         metrics = UsageMetrics(
             cpu_core_hours=deployment_cpu_seconds / SECONDS_PER_HOUR,
             memory_gb_hours=deployment_memory_seconds / SECONDS_PER_HOUR,
-            s3_gb_hours=deployment_s3_hours,
-            efs_gb_hours=deployment_efs_hours,
+            standard_gb_hours=deployment_standard_hours,
+            shared_gb_hours=deployment_shared_hours,
             build_minutes=build_minutes,
             public_endpoint_hours=public_endpoint_hours,
         )
@@ -169,13 +170,14 @@ class UsageService:
         external_customer_id: str,
     ) -> AggregatedUsageResponse:
         """Get aggregated usage across all user's workspaces with workspace summaries."""
-        all_user_workspaces = (
-            await db.workspaces.get_user_workspaces_active_during_range(
-                user_id=user_id,
-                start_date=start_date,
-                end_date=end_date,
+        async with get_db_context() as db:
+            all_user_workspaces = (
+                await db.workspaces.get_user_workspaces_active_during_range(
+                    user_id=user_id,
+                    start_date=start_date,
+                    end_date=end_date,
+                )
             )
-        )
 
         results: list[
             tuple[UsageMetrics | None, list[UsageRecordPydantic]]
@@ -226,8 +228,8 @@ class UsageService:
                 total_costs = MeterCostBreakdown(
                     cpu_cost=sum(c.cpu_cost for c in cost_results if c),
                     memory_cost=sum(c.memory_cost for c in cost_results if c),
-                    s3_cost=sum(c.s3_cost for c in cost_results if c),
-                    efs_cost=sum(c.efs_cost for c in cost_results if c),
+                    standard_cost=sum(c.standard_cost for c in cost_results if c),
+                    shared_cost=sum(c.shared_cost for c in cost_results if c),
                     build_cost=sum(c.build_cost for c in cost_results if c),
                     endpoint_cost=sum(c.endpoint_cost for c in cost_results if c),
                     total_cost=sum(c.total_cost for c in cost_results if c),
@@ -256,21 +258,24 @@ class UsageService:
         """Get aggregated daily usage across all user's workspaces."""
         tz = self._parse_timezone(timezone_str)
 
-        user_workspaces = await db.workspaces.get_user_workspaces_active_during_range(
-            user_id=user_id,
-            start_date=start_date,
-            end_date=end_date,
-        )
-
-        usage_records_tasks = [
-            db.usage.get_workspace_usage(
-                workspace_id=workspace.id,
-                start_date=start_date,
-                end_date=end_date,
-                record_type=UsageCollectionConfig.get_record_type(),
+        async with get_db_context() as db:
+            user_workspaces = (
+                await db.workspaces.get_user_workspaces_active_during_range(
+                    user_id=user_id,
+                    start_date=start_date,
+                    end_date=end_date,
+                )
             )
-            for workspace, _ in user_workspaces
-        ]
+
+            usage_records_tasks = [
+                db.usage.get_workspace_usage(
+                    workspace_id=workspace.id,
+                    start_date=start_date,
+                    end_date=end_date,
+                    record_type=UsageCollectionConfig.get_record_type(),
+                )
+                for workspace, _ in user_workspaces
+            ]
 
         all_usage_records_lists = await asyncio.gather(
             *usage_records_tasks, return_exceptions=True
@@ -291,8 +296,8 @@ class UsageService:
                 else:
                     daily_data[day_key].cpu_core_hours += day_data.cpu_core_hours
                     daily_data[day_key].memory_gb_hours += day_data.memory_gb_hours
-                    daily_data[day_key].s3_gb_hours += day_data.s3_gb_hours
-                    daily_data[day_key].efs_gb_hours += day_data.efs_gb_hours
+                    daily_data[day_key].standard_gb_hours += day_data.standard_gb_hours
+                    daily_data[day_key].shared_gb_hours += day_data.shared_gb_hours
                     daily_data[day_key].build_minutes += day_data.build_minutes
                     daily_data[
                         day_key
@@ -320,12 +325,13 @@ class UsageService:
         external_customer_id: str,
     ) -> list[DeploymentUsageOverview]:
         """Build deployment overviews for a workspace with actual usage metrics."""
-        deployments = await db.compose_deployments.find_active_during_date_range(
-            workspace_id=workspace_id,
-            start_date=start_date,
-            end_date=end_date,
-            limit=100,
-        )
+        async with get_db_context() as db:
+            deployments = await db.compose_deployments.find_active_during_date_range(
+                workspace_id=workspace_id,
+                start_date=start_date,
+                end_date=end_date,
+                limit=100,
+            )
 
         if not deployments:
             return []
@@ -398,8 +404,11 @@ class UsageService:
                     deployment_name=deployment.name,
                     usage=metrics,
                     status=deployment_status,
+                    deployed_at=deployment.deployed_at,
+                    deleted_at=deployment.deleted_at,
                 )
             )
+
         return overviews
 
     async def _build_workspace_summaries(
@@ -417,8 +426,8 @@ class UsageService:
         workspace_summaries: list[WorkspaceUsageSummary] = []
         total_cpu_seconds = 0.0
         total_memory_seconds = 0.0
-        total_s3_hours = 0.0
-        total_efs_hours = 0.0
+        total_standard_hours = 0.0
+        total_shared_hours = 0.0
         total_build_minutes = 0.0
         total_endpoint_hours = 0.0
         total_records = 0
@@ -479,8 +488,8 @@ class UsageService:
 
             total_cpu_seconds += usage.cpu_core_hours * SECONDS_PER_HOUR
             total_memory_seconds += usage.memory_gb_hours * SECONDS_PER_HOUR
-            total_s3_hours += usage.s3_gb_hours
-            total_efs_hours += usage.efs_gb_hours
+            total_standard_hours += usage.standard_gb_hours
+            total_shared_hours += usage.shared_gb_hours
             total_build_minutes += usage.build_minutes
             total_endpoint_hours += usage.public_endpoint_hours
             total_records += record_counts[i]
@@ -488,8 +497,8 @@ class UsageService:
         total_usage = UsageMetrics(
             cpu_core_hours=total_cpu_seconds / SECONDS_PER_HOUR,
             memory_gb_hours=total_memory_seconds / SECONDS_PER_HOUR,
-            s3_gb_hours=total_s3_hours,
-            efs_gb_hours=total_efs_hours,
+            standard_gb_hours=total_standard_hours,
+            shared_gb_hours=total_shared_hours,
             build_minutes=total_build_minutes,
             public_endpoint_hours=total_endpoint_hours,
         )
@@ -519,8 +528,8 @@ class UsageService:
                     date=utc_midnight.strftime("%Y-%m-%dT%H:%M:%SZ"),
                     cpu_core_hours=0.0,
                     memory_gb_hours=0.0,
-                    s3_gb_hours=0.0,
-                    efs_gb_hours=0.0,
+                    standard_gb_hours=0.0,
+                    shared_gb_hours=0.0,
                     build_minutes=0.0,
                     public_endpoint_hours=0.0,
                 )
@@ -531,8 +540,8 @@ class UsageService:
             daily_data[day_key].memory_gb_hours += (
                 record.memory_gb_seconds / SECONDS_PER_HOUR
             )
-            daily_data[day_key].s3_gb_hours += record.s3_gb_hours
-            daily_data[day_key].efs_gb_hours += record.efs_gb_hours
+            daily_data[day_key].standard_gb_hours += record.standard_gb_hours
+            daily_data[day_key].shared_gb_hours += record.shared_gb_hours
             daily_data[day_key].build_minutes += record.build_minutes
             daily_data[day_key].public_endpoint_hours += record.public_endpoint_hours
 
@@ -560,8 +569,8 @@ class UsageService:
                     date=utc_midnight.strftime("%Y-%m-%dT%H:%M:%SZ"),
                     cpu_core_hours=0.0,
                     memory_gb_hours=0.0,
-                    s3_gb_hours=0.0,
-                    efs_gb_hours=0.0,
+                    standard_gb_hours=0.0,
+                    shared_gb_hours=0.0,
                     build_minutes=0.0,
                     public_endpoint_hours=0.0,
                 )

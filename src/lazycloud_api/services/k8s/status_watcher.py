@@ -9,6 +9,8 @@ from lazycloud_api.services.k8s.client import (
     get_batch_v1_api,
     get_core_v1_api,
 )
+from shared.models.billing import STORAGE_CLASS_EFS
+from shared.models.compose import LazyCloudLabel
 from shared.models.helm import (
     CurrentUsage,
     HealthCheckValues,
@@ -54,6 +56,9 @@ class StatusWatcher:
 
     async def get_service_statuses_for_deployment(self) -> list[ServiceStatus]:
         """Get the status of all services in a deployment."""
+        if not self.helm_values or not self.helm_values.services:
+            return []
+
         tasks = [
             self._get_service_status(service_config)
             for service_config in self.helm_values.services
@@ -109,6 +114,9 @@ class StatusWatcher:
 
     async def get_service_status(self, service_name: str) -> ServiceStatus | None:
         """Get the status of a specific service with pod details."""
+        if not self.helm_values or not self.helm_values.services:
+            return None
+
         for s in self.helm_values.services:
             if s.name == service_name:
                 service = s
@@ -159,13 +167,15 @@ class StatusWatcher:
 
         # Get volumes summaries
         volumes_summary = None
-        if self.helm_values.volumes:
+        if self.helm_values and self.helm_values.volumes:
             volumes_summary = []
             for v in self.helm_values.volumes:
-                # Determine storage type from labels
+                # Determine storage type from storage class
                 storage_type = StorageType.STANDARD
-                if v.labels and v.labels.get("lazycloud.storage.hp") == "true":
-                    storage_type = StorageType.PREMIUM
+                if v.storageClass == STORAGE_CLASS_EFS or (
+                    v.labels and v.labels.get(LazyCloudLabel.VOLUME_SHARED) == "true"
+                ):
+                    storage_type = StorageType.SHARED
 
                 volumes_summary.append(
                     VolumeStatusSummary(
@@ -177,7 +187,7 @@ class StatusWatcher:
 
         # Get networks summaries
         networks_summary = None
-        if self.helm_values.networks:
+        if self.helm_values and self.helm_values.networks:
             networks_summary = [
                 NetworkStatusSummary(
                     name=n.name,
@@ -209,6 +219,7 @@ class StatusWatcher:
         k8s_healthcheck = None
         resources = None
         job_status = None
+        resource_not_found = False
 
         is_job = service.workloadType == WorkloadType.JOB
 
@@ -311,16 +322,26 @@ class StatusWatcher:
                 f"Timeout getting Kubernetes resource status for {service.name}"
             )
         except ApiException as e:
-            if e.status == 404 and is_job:
-                # If Job not found and deployment is older than TTL (300s), assume it completed
-                if self.deployed_at:
-                    age_seconds = (datetime.now(UTC) - self.deployed_at).total_seconds()
-                    if age_seconds > 300:  # TTL is 300 seconds
-                        job_status = KubernetesPhase.STOPPED
+            if e.status == 404:
+                resource_not_found = True
+                if is_job:
+                    # If Job not found and deployment is older than TTL (300s), assume it completed
+                    if self.deployed_at:
+                        age_seconds = (
+                            datetime.now(UTC) - self.deployed_at
+                        ).total_seconds()
+                        if age_seconds > 300:  # TTL is 300 seconds
+                            job_status = KubernetesPhase.STOPPED
+                        else:
+                            job_status = KubernetesPhase.PENDING
                     else:
                         job_status = KubernetesPhase.PENDING
                 else:
-                    job_status = KubernetesPhase.PENDING
+                    # Deployment/resource not found - log once at debug level
+                    logger.debug(
+                        f"Kubernetes resource not found for {service.name} "
+                        f"(may be pending or deleted)"
+                    )
             else:
                 logger.error(
                     f"Kubernetes API error getting status for {service.name}: {e}"
@@ -337,6 +358,10 @@ class StatusWatcher:
         if is_job and job_status is not None:
             status_enum = job_status
             ready_replicas = 1 if job_status == KubernetesPhase.STOPPED else 0
+        elif resource_not_found and not pods:
+            # Resource doesn't exist in K8s and no pods - likely deleted or never created
+            status_enum = KubernetesPhase.UNKNOWN
+            ready_replicas = 0
         else:
             ready_replicas = (
                 len([p for p in pods if p.phase == KubernetesPhase.RUNNING])
@@ -435,16 +460,35 @@ class StatusWatcher:
                                 "InvalidImageName",
                             ]:
                                 has_container_error = True
+                            elif container_reason == "CrashLoopBackOff":
+                                has_container_error = True
+                                container_message = (
+                                    "Container keeps crashing. Your application must "
+                                    "run continuously (e.g., a web server). "
+                                    "Check logs for details."
+                                )
                         else:
                             terminated = container_status.get("state", {}).get(
                                 "terminated"
                             )
-                            if terminated and terminated.get("exitCode", 0) != 0:
-                                container_reason = (
-                                    terminated.get("reason") or "ContainerError"
-                                )
-                                container_message = terminated.get("message")
-                                has_container_error = True
+                            if terminated:
+                                exit_code = terminated.get("exitCode", 0)
+                                if exit_code != 0:
+                                    container_reason = (
+                                        terminated.get("reason") or "ContainerError"
+                                    )
+                                    container_message = terminated.get("message")
+                                    has_container_error = True
+
+                                elif restart_count > 0:
+                                    # Container exited with code 0 but has restarts
+                                    # This usually means it's not a long-running process
+                                    container_reason = "ContainerExited"
+                                    container_message = (
+                                        "Container exited immediately. Your application "
+                                        "must run continuously (e.g., a web server). Or maked as a job."
+                                    )
+                                    has_container_error = True
 
                 # Step 4: Calculate pod age from creation timestamp
                 if pod.metadata.creation_timestamp:
@@ -544,7 +588,6 @@ class StatusWatcher:
             return KubernetesPhase.STOPPED
 
         if not pods:
-            # Expected pods but none exist yet - likely just deployed
             return KubernetesPhase.PENDING
 
         # Count pods by phase
@@ -567,24 +610,25 @@ class StatusWatcher:
         if error_count > 0:
             return KubernetesPhase.ERROR
 
-        # All pods running
+        # Check for rolling update: more pods than replicas, or pending/terminating pods
+        # This MUST come before the "all running" check
+        if pending_count > 0 or terminating_count > 0:
+            return KubernetesPhase.PARTIALLY_RUNNING
+
+        # More pods than expected = rolling update in progress
+        if len(pods) > replicas:
+            return KubernetesPhase.PARTIALLY_RUNNING
+
+        # All pods running and count matches replicas
         if running_count == replicas:
             return KubernetesPhase.RUNNING
-
-        # Some pods running, some pending - partially running
-        if running_count > 0 and pending_count > 0:
-            return KubernetesPhase.PARTIALLY_RUNNING
 
         # Some pods running but not all expected
         if running_count > 0:
             return KubernetesPhase.PARTIALLY_RUNNING
 
-        # All pods pending (starting up)
-        if pending_count > 0:
-            return KubernetesPhase.PENDING
-
-        # Shouldn't reach here, but default to unknown
-        return KubernetesPhase.UNKNOWN
+        # Shouldn't reach here, but default to pending
+        return KubernetesPhase.PENDING
 
     def _calculate_average_usage(self, pods: list[PodStatus]) -> CurrentUsage | None:
         """Calculate average CPU and memory usage from pods."""

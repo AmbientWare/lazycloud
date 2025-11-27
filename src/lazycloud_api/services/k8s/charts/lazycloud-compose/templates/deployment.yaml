@@ -14,7 +14,7 @@ metadata:
     {{- include "lazycloud-compose.labels" $ | nindent 4 }}
     app.kubernetes.io/name: {{ $service.name }}
     app.kubernetes.io/component: application
-    lazycloud.io/service: {{ $service.name }}
+    lazycloud.dev/service: {{ $service.name }}
     {{- if $.Values.global.labels }}
     {{- toYaml $.Values.global.labels | nindent 4 }}
     {{- end }}
@@ -39,10 +39,10 @@ spec:
       labels:
         app.kubernetes.io/name: {{ $service.name }}
         app.kubernetes.io/instance: {{ $.Release.Name }}
-        lazycloud.io/service: {{ $service.name }}
+        lazycloud.dev/service: {{ $service.name }}
         {{- if $service.networks }}
         {{- range $network := $service.networks }}
-        lazycloud.io/network.{{ $network.name }}: "true"
+        lazycloud.dev/network.{{ $network.name }}: "true"
         {{- end }}
         {{- end }}
         {{- if $.Values.global.labels }}
@@ -101,6 +101,13 @@ spec:
             {{- else }}
             {{- toYaml $service.command | nindent 12 }}
             {{- end }}
+          {{- end }}
+          {{- if $service.args }}
+          args:
+            {{- toYaml $service.args | nindent 12 }}
+          {{- end }}
+          {{- if $service.workingDir }}
+          workingDir: {{ $service.workingDir }}
           {{- end }}
           {{- if $service.ports }}
           ports:

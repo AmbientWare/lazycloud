@@ -6,7 +6,7 @@ from kubernetes.client.exceptions import ApiException
 from loguru import logger
 
 from lazycloud_api.config import app_config
-from lazycloud_api.database import db
+from lazycloud_api.database import get_db_context
 from lazycloud_api.services import get_subscription_service
 from lazycloud_api.services.k8s.client import get_batch_v1_api
 from shared.models.deployments import DeploymentStates
@@ -93,21 +93,23 @@ async def update_deployment_state(
 ) -> None:
     """Update deployment status in database."""
     try:
-        deployment = await db.compose_deployments.get_by_id(deployment_id)
-        if deployment:
-            deployment.state = state
-            if message:
-                deployment.status_message = message[:500]
+        async with get_db_context() as db:
+            deployment = await db.compose_deployments.get_by_id(deployment_id)
 
-            # Clear task ID when reaching terminal states
-            if state in (
-                DeploymentStates.DEPLOYED,
-                DeploymentStates.FAILED,
-                DeploymentStates.DELETED,
-            ):
-                deployment.current_task_run_id = None
+            if deployment:
+                deployment.state = state
+                if message:
+                    deployment.status_message = message[:500]
 
-            await db.compose_deployments.update(deployment)
+                # Clear task ID when reaching terminal states
+                if state in (
+                    DeploymentStates.DEPLOYED,
+                    DeploymentStates.FAILED,
+                    DeploymentStates.DELETED,
+                ):
+                    deployment.current_task_run_id = None
+
+                await db.compose_deployments.update(deployment)
 
     except Exception as e:
         logger.error(f"Failed to update deployment status: {e}")
@@ -130,7 +132,9 @@ async def verify_quota_capacity(
     When updating an existing deployment, pass existing_* parameters to account for resources
     being replaced rather than added.
     """
-    owner_user = await db.workspaces.get_owner_user(workspace_id)
+    async with get_db_context() as db:
+        owner_user = await db.workspaces.get_owner_user(workspace_id)
+
     if not owner_user:
         logger.warning(f"Workspace {workspace_id} has no owner, skipping quota check")
         return
@@ -139,9 +143,11 @@ async def verify_quota_capacity(
     features = await subscription_service.get_user_features(owner_user.clerk_id)
 
     # Get current usage from database
-    deployments = await db.compose_deployments.find(
-        {"workspace_id": workspace_id, "deleted_at": None}
-    )
+    async with get_db_context() as db:
+        deployments = await db.compose_deployments.find(
+            {"workspace_id": workspace_id, "deleted_at": None}
+        )
+
     current_deployments_count = len(
         [d for d in deployments if d.state != DeploymentStates.DELETED]
     )
@@ -214,7 +220,9 @@ async def wait_for_secrets(deployment_id: str, timeout: int | None = None) -> No
     secrets = []
     while time.time() - start_time < timeout:
         await asyncio.sleep(1)
-        secrets = await db.secrets.get_secrets(deployment_id)
+        async with get_db_context() as db:
+            secrets = await db.secrets.get_secrets(deployment_id)
+
         if secrets:
             logger.info(f"Found {len(secrets)} secrets for deployment {deployment_id}")
             break

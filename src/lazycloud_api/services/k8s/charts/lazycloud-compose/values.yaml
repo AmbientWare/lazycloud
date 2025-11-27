@@ -105,8 +105,8 @@ defaultResources:
 defaultStorage:
   size: 1Gi
   accessModes:
-    - ReadWriteMany  # Both S3 and EFS CSI drivers support multi-pod access
-  storageClass: "s3-sc"  # S3-backed storage by default, use volume labels for EFS
+    - ReadWriteOnce  # EBS default, EFS uses ReadWriteMany
+  storageClass: "ebs-sc"  # EBS-backed storage by default, use volume labels for EFS
 
 # Service defaults
 defaultService:

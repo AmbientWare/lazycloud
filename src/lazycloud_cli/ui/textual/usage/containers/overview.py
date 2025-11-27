@@ -160,9 +160,9 @@ class UsageOverviewSection(Container):
             key="memory",
         )
 
-        # Storage row (combined S3 + EFS)
-        storage_hours = metrics.s3_gb_hours + metrics.efs_gb_hours
-        storage_cost = (costs.s3_cost + costs.efs_cost) if costs else None
+        # Storage row (combined EBS + EFS)
+        storage_hours = metrics.standard_gb_hours + metrics.shared_gb_hours
+        storage_cost = (costs.standard_cost + costs.shared_cost) if costs else None
         storage_cost_str = f"{storage_cost:.2f}" if storage_cost is not None else "-"
         self._metrics_table.add_row(
             "Storage (GB)",

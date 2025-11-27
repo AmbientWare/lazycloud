@@ -8,12 +8,12 @@ from rich.console import Console
 from rich.panel import Panel
 
 from minikube.constants import (
+    EBS_STORAGE_CLASS_YAML,
     EFS_STORAGE_CLASS_YAML,
     PROMETHEUS_CHART,
     PROMETHEUS_HELM_REPO,
     PROMETHEUS_HELM_REPO_URL,
     PROMETHEUS_NAMESPACE,
-    S3_STORAGE_CLASS_YAML,
 )
 from minikube.utils import is_minikube_running, run_command
 
@@ -37,8 +37,8 @@ def setup_storage_class() -> None:
     console.print("🔧 [bold]Creating EFS-compatible StorageClass...[/bold]")
 
     storage_classes = {
+        "ebs": EBS_STORAGE_CLASS_YAML,
         "efs": EFS_STORAGE_CLASS_YAML,
-        "s3": S3_STORAGE_CLASS_YAML,
     }
 
     for name, storage_class in storage_classes.items():
@@ -324,13 +324,21 @@ def setup_monitoring_stack() -> None:
                 "--set",
                 "prometheus.prometheusSpec.retentionSize=50GB",
                 "--set-json",
-                'kube-state-metrics.metricLabelsAllowlist=["pods=[lazycloud.io/service,lazycloud.io/deployment-id,lazycloud.io/workspace-id,app.kubernetes.io/instance]"]',
+                'kube-state-metrics.metricLabelsAllowlist=["pods=[lazycloud.dev/service,lazycloud.dev/deployment-id,lazycloud.dev/workspace-id,app.kubernetes.io/instance]"]',
+                # Enable Pushgateway for testing (allows pushing synthetic metrics)
+                "--set",
+                "prometheus-pushgateway.enabled=true",
+                "--set",
+                "prometheus-pushgateway.service.type=NodePort",
+                "--set",
+                "prometheus-pushgateway.service.nodePort=30091",
                 "--wait",
                 "--timeout=10m",
             ]
         )
 
         console.print("[green]✓ Monitoring stack installed successfully[/green]")
+        console.print("  Pushgateway (NodePort): $(minikube ip):30091")
 
         # Show access instructions
         console.print("\n[blue]Access instructions:[/blue]")

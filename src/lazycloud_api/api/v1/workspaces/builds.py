@@ -5,7 +5,7 @@ from lazycloud_api.api.dependencies import (
     WorkspaceAccess,
     get_workspace_with_admin_access,
 )
-from lazycloud_api.database import db
+from lazycloud_api.database import Database, get_db
 from lazycloud_api.services import (
     DepotService,
     ECRAuthService,
@@ -23,6 +23,7 @@ async def get_depot_token(
     depot_service: DepotService = Depends(get_depot_service),
     ecr_auth_service: ECRAuthService = Depends(get_ecr_auth_service),
     deployment_name: str = Query(..., description="Deployment name for the build"),
+    db: Database = Depends(get_db),
 ) -> DepotTokenResponse:
     """Get Depot project token for CLI builds.
 

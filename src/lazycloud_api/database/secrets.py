@@ -4,6 +4,7 @@ from cryptography.fernet import InvalidToken
 from pydantic import field_serializer, field_validator
 from sqlalchemy import Enum, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -88,36 +89,32 @@ class SecretService(DatabaseService[SecretTable, SecretPydantic]):
     Encryption/decryption is handled automatically by Pydantic validators/serializers.
     """
 
-    def __init__(self):
-        super().__init__(SecretTable, SecretPydantic)
+    def __init__(self, session: AsyncSession):
+        super().__init__(SecretTable, SecretPydantic, session)
 
     async def get_secrets(
         self, deployment_id: str, source: SecretSource | None = None
     ) -> list[SecretPydantic]:
         """Get secrets by deployment id."""
-        async with self._session_manager.get_session() as session:
-            query = select(SecretTable).where(
-                SecretTable.deployment_id == deployment_id
-            )
-            if source:
-                query = query.where(SecretTable.source == source)
+        query = select(SecretTable).where(SecretTable.deployment_id == deployment_id)
+        if source:
+            query = query.where(SecretTable.source == source)
 
-            result = await session.execute(query)
-            db_secrets = result.scalars().all()
-            return [self._to_pydantic(secret) for secret in db_secrets]
+        result = await self._session.execute(query)
+        db_secrets = result.scalars().all()
+        return [self._to_pydantic(secret) for secret in db_secrets]
 
     async def get_secret_by_key(
         self, deployment_id: str, key: str
     ) -> SecretPydantic | None:
         """Get a single secret by deployment_id and key."""
-        async with self._session_manager.get_session() as session:
-            query = select(SecretTable).where(
-                SecretTable.deployment_id == deployment_id,
-                SecretTable.key == key,
-            )
-            result = await session.execute(query)
-            db_secret = result.scalar_one_or_none()
-            return self._to_pydantic(db_secret) if db_secret else None
+        query = select(SecretTable).where(
+            SecretTable.deployment_id == deployment_id,
+            SecretTable.key == key,
+        )
+        result = await self._session.execute(query)
+        db_secret = result.scalar_one_or_none()
+        return self._to_pydantic(db_secret) if db_secret else None
 
     async def update_by_key(
         self,
@@ -146,15 +143,14 @@ class SecretService(DatabaseService[SecretTable, SecretPydantic]):
 
     async def delete_secret_by_key(self, deployment_id: str, key: str) -> bool:
         """Delete a single secret by deployment_id and key"""
-        async with self._session_manager.get_session() as session:
-            query = select(SecretTable).where(
-                SecretTable.deployment_id == deployment_id,
-                SecretTable.key == key,
-            )
-            result = await session.execute(query)
-            db_secret = result.scalar_one_or_none()
+        query = select(SecretTable).where(
+            SecretTable.deployment_id == deployment_id,
+            SecretTable.key == key,
+        )
+        result = await self._session.execute(query)
+        db_secret = result.scalar_one_or_none()
 
-            if db_secret:
-                await self.delete(str(db_secret.id))
-                return True
-            return False
+        if db_secret:
+            await self.delete(str(db_secret.id))
+            return True
+        return False

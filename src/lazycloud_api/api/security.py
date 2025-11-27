@@ -4,7 +4,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import exceptions as jwt_exceptions
 
 from lazycloud_api.config import ENVIRONMENT, app_config
-from lazycloud_api.database import db
+from lazycloud_api.database import Database, get_db
 from lazycloud_api.database.users import (
     UserPydantic,
     UserRole,
@@ -17,6 +17,7 @@ security = HTTPBearer(auto_error=False)
 
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
+    db: Database = Depends(get_db),
 ) -> UserPydantic:
     # Dev mode bypass
     if app_config.ENV.value == ENVIRONMENT.DEV.value and (
@@ -42,12 +43,12 @@ async def get_current_user(
 
     # Check if token is an API key (starts with sk_) or JWT
     if token.startswith("sk_"):
-        return await _authenticate_api_key(token)
+        return await _authenticate_api_key(token, db)
     else:
-        return await _authenticate_jwt(token)
+        return await _authenticate_jwt(token, db)
 
 
-async def _authenticate_api_key(api_key: str) -> UserPydantic:
+async def _authenticate_api_key(api_key: str, db: Database) -> UserPydantic:
     """Authenticate using API key (sk_ prefix)"""
     db_api_key = await db.api_keys.find_one(filters={"value": api_key})
 
@@ -69,7 +70,7 @@ async def _authenticate_api_key(api_key: str) -> UserPydantic:
     return user
 
 
-async def _authenticate_jwt(token: str) -> UserPydantic:
+async def _authenticate_jwt(token: str, db: Database) -> UserPydantic:
     """Authenticate using JWT token"""
     try:
         # Decode JWT - exp (expiration) is automatically validated

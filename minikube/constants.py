@@ -1,4 +1,4 @@
-from shared.models.billing import STORAGE_CLASS_EFS, STORAGE_CLASS_S3
+from shared.models.billing import STORAGE_CLASS_EBS, STORAGE_CLASS_EFS
 
 # Required tools for Minikube setup
 REQUIRED_TOOLS = {
@@ -22,6 +22,8 @@ PROMETHEUS_NAMESPACE = "monitoring"
 PROMETHEUS_HELM_REPO = "prometheus-community"
 PROMETHEUS_HELM_REPO_URL = "https://prometheus-community.github.io/helm-charts"
 PROMETHEUS_CHART = "kube-prometheus-stack"
+PROMETHEUS_NODEPORT = 30090
+PUSHGATEWAY_NODEPORT = 30091
 
 # Storage class YAML definitions
 EFS_STORAGE_CLASS_YAML = f"""
@@ -34,19 +36,19 @@ metadata:
 provisioner: hostpath.csi.k8s.io
 volumeBindingMode: Immediate
 allowVolumeExpansion: true
-reclaimPolicy: Retain
+reclaimPolicy: Delete
 """.strip()
 
 
-S3_STORAGE_CLASS_YAML = f"""
+EBS_STORAGE_CLASS_YAML = f"""
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
-  name: {STORAGE_CLASS_S3}
+  name: {STORAGE_CLASS_EBS}
   annotations:
     storageclass.kubernetes.io/is-default-class: "false"
 provisioner: hostpath.csi.k8s.io
 volumeBindingMode: Immediate
 allowVolumeExpansion: true
-reclaimPolicy: Retain
+reclaimPolicy: Delete
 """.strip()

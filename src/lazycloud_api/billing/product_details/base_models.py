@@ -18,8 +18,8 @@ METER_PRICE_MAP = {
     MeterNames.CPU_USAGE: 1.0,  # $1.00 per CPU core hour
     MeterNames.MEMORY_USAGE: 1.0,  # $1.00 per memory GB hour
     MeterNames.STANDARD_STORAGE: 1.0,  # $1.00 per standard storage GB hour
-    MeterNames.PREMIUM_STORAGE: 1.0,  # $1.00 per premium storage GB hour
-    MeterNames.BUILD_MINUTES: 4.50,  # $0.045 per build minute
+    MeterNames.SHARED_STORAGE: 1.0,  # $1.00 per shared (EFS) storage GB hour
+    MeterNames.BUILD_MINUTES: 4.0,  # $0.04 per build minute
     MeterNames.PUBLIC_ENDPOINTS: 0.274,  # $0.000274 per endpoint-hour ($0.20/month)
 }
 

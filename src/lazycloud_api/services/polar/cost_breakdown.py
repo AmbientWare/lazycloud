@@ -3,7 +3,7 @@
 from loguru import logger
 from pydantic import BaseModel
 
-from shared.models.billing import STORAGE_CLASS_EFS, STORAGE_CLASS_S3
+from shared.models.billing import STORAGE_CLASS_EBS, STORAGE_CLASS_EFS
 from shared.responses.usage import (
     MeterCostBreakdown,
     ServiceCostBreakdown,
@@ -38,8 +38,8 @@ class PolarCostBreakdownModule:
         external_customer_id: str,
         cpu_core_hours: float,
         memory_gb_hours: float,
-        s3_gb_hours: float,
-        efs_gb_hours: float,
+        standard_gb_hours: float,
+        shared_gb_hours: float,
         build_minutes: float,
         public_endpoint_hours: float,
         service_usage: list[ServiceUsageItem] | None = None,
@@ -59,8 +59,8 @@ class PolarCostBreakdownModule:
             prices=prices,
             cpu_core_hours=cpu_core_hours,
             memory_gb_hours=memory_gb_hours,
-            s3_gb_hours=s3_gb_hours,
-            efs_gb_hours=efs_gb_hours,
+            standard_gb_hours=standard_gb_hours,
+            shared_gb_hours=shared_gb_hours,
             build_minutes=build_minutes,
             public_endpoint_hours=public_endpoint_hours,
         )
@@ -80,7 +80,8 @@ class PolarCostBreakdownModule:
             volume_breakdown = self._calculate_volume_costs(
                 prices=prices,
                 volume_usage=volume_usage,
-                total_storage_cost=meter_breakdown.s3_cost + meter_breakdown.efs_cost,
+                total_storage_cost=meter_breakdown.standard_cost
+                + meter_breakdown.shared_cost,
             )
 
         return WorkspaceCostBreakdown(
@@ -95,27 +96,32 @@ class PolarCostBreakdownModule:
         prices: MeterPrices,
         cpu_core_hours: float,
         memory_gb_hours: float,
-        s3_gb_hours: float,
-        efs_gb_hours: float,
+        standard_gb_hours: float,
+        shared_gb_hours: float,
         build_minutes: float,
         public_endpoint_hours: float,
     ) -> MeterCostBreakdown:
         """Calculate costs by meter type"""
         cpu_cost = cpu_core_hours * prices.cpu_price_per_unit
         memory_cost = memory_gb_hours * prices.memory_price_per_unit
-        s3_cost = s3_gb_hours * prices.s3_price_per_unit
-        efs_cost = efs_gb_hours * prices.efs_price_per_unit
+        standard_cost = standard_gb_hours * prices.standard_price_per_unit
+        shared_cost = shared_gb_hours * prices.shared_price_per_unit
         build_cost = build_minutes * prices.build_minutes_price_per_unit
         endpoint_cost = public_endpoint_hours * prices.endpoint_hours_price_per_unit
         total_cost = (
-            cpu_cost + memory_cost + s3_cost + efs_cost + build_cost + endpoint_cost
+            cpu_cost
+            + memory_cost
+            + standard_cost
+            + shared_cost
+            + build_cost
+            + endpoint_cost
         )
 
         return MeterCostBreakdown(
             cpu_cost=round(cpu_cost, 4),
             memory_cost=round(memory_cost, 4),
-            s3_cost=round(s3_cost, 4),
-            efs_cost=round(efs_cost, 4),
+            standard_cost=round(standard_cost, 4),
+            shared_cost=round(shared_cost, 4),
             build_cost=round(build_cost, 4),
             endpoint_cost=round(endpoint_cost, 4),
             total_cost=round(total_cost, 4),
@@ -176,16 +182,16 @@ class PolarCostBreakdownModule:
             storage_class = volume.storage_class
 
             # Map storage class to meter price
-            if storage_class == STORAGE_CLASS_S3:
-                storage_cost = gb_hours * prices.s3_price_per_unit
+            if storage_class == STORAGE_CLASS_EBS:
+                storage_cost = gb_hours * prices.standard_price_per_unit
             elif storage_class == STORAGE_CLASS_EFS:
-                storage_cost = gb_hours * prices.efs_price_per_unit
+                storage_cost = gb_hours * prices.shared_price_per_unit
             else:
                 logger.warning(
                     f"Unknown storage class '{storage_class}' for volume {volume.volume_name}, "
-                    f"defaulting to S3 pricing"
+                    f"defaulting to EBS pricing"
                 )
-                storage_cost = gb_hours * prices.s3_price_per_unit
+                storage_cost = gb_hours * prices.standard_price_per_unit
 
             percentage = (
                 (storage_cost / total_storage_cost * 100)

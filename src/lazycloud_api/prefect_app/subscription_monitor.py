@@ -1,8 +1,7 @@
 from loguru import logger
 from prefect import flow
 
-from lazycloud_api.database import db
-from lazycloud_api.database.session import session_manager
+from lazycloud_api.database import get_db_context
 from lazycloud_api.database.users import SubscriptionState, UserStatus
 from lazycloud_api.services import get_subscription_service
 
@@ -15,9 +14,10 @@ async def monitor_subscription_states():
     logger.info("Starting subscription state monitoring")
 
     # Get all active users
-    users = await db.users.find(
-        filters={"status": UserStatus.ACTIVE},
-    )
+    async with get_db_context() as db:
+        users = await db.users.find(
+            filters={"status": UserStatus.ACTIVE},
+        )
 
     if not users:
         logger.info("No active users found")
@@ -29,35 +29,30 @@ async def monitor_subscription_states():
     overage_count = 0
     updated_count = 0
 
-    async with session_manager.get_session() as session:
-        for user in users:
-            features = await subscription_service.get_user_features(user.clerk_id)
-            state_before = user.subscription_state
+    for user in users:
+        features = await subscription_service.get_user_features(user.clerk_id)
+        state_before = user.subscription_state
 
-            user_after = (
-                await subscription_service._audit_and_update_subscription_state(
-                    user.id, features, session=session
-                )
+        user_after = await subscription_service._audit_and_update_subscription_state(
+            user.id, features
+        )
+
+        if not user_after:
+            continue
+
+        if user_after.subscription_state != state_before:
+            updated_count += 1
+            logger.info(
+                f"Updated user {user.email} (ID: {user.id}) subscription_state from "
+                f"{state_before.value} to {user_after.subscription_state.value}"
             )
 
-            if not user_after:
-                continue
-
-            if user_after.subscription_state != state_before:
-                updated_count += 1
-                logger.info(
-                    f"Updated user {user.email} (ID: {user.id}) subscription_state from "
-                    f"{state_before.value} to {user_after.subscription_state.value}"
-                )
-
-            if user_after.subscription_state == SubscriptionState.OVER_LIMITS:
-                overage_count += 1
-                logger.warning(
-                    f"User {user.email} (ID: {user.id}, Clerk ID: {user.clerk_id}) "
-                    f"has OVER_LIMITS subscription state"
-                )
-
-        await session.commit()
+        if user_after.subscription_state == SubscriptionState.OVER_LIMITS:
+            overage_count += 1
+            logger.warning(
+                f"User {user.email} (ID: {user.id}, Clerk ID: {user.clerk_id}) "
+                f"has OVER_LIMITS subscription state"
+            )
 
     logger.info(
         f"Subscription monitoring complete. Checked {len(users)} users, "

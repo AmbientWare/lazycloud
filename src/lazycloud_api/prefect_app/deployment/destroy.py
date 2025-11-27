@@ -1,7 +1,9 @@
+from datetime import UTC, datetime
+
 from loguru import logger
 from prefect import task
 
-from lazycloud_api.database import db
+from lazycloud_api.database import get_db_context
 from lazycloud_api.prefect_app.deployment.utils import update_deployment_state
 from lazycloud_api.services import get_depot_service, get_ecr_auth_service
 from lazycloud_api.services.k8s import create_release_name
@@ -16,9 +18,11 @@ async def destroy_compose_task(deployment_id: str) -> None:
     ecr_auth_service = get_ecr_auth_service()
 
     # get the deployment (include_deleted=True to access soft-deleted deployments)
-    deployment = await db.compose_deployments.get_by_id(
-        deployment_id, include_deleted=True
-    )
+    async with get_db_context() as db:
+        deployment = await db.compose_deployments.get_by_id(
+            deployment_id, include_deleted=True
+        )
+
     if not deployment:
         raise Exception(f"Deployment {deployment_id} not found")
 
@@ -80,19 +84,25 @@ async def destroy_compose_task(deployment_id: str) -> None:
             # Depot cleanup is non-fatal - log warning but continue
             logger.warning(f"Depot cleanup failed (continuing): {depot_error}")
 
-        # Step 4: Update deployment state to DELETED
+        # Step 4: Update deployment state to DELETED and set deleted_at
         # Re-fetch deployment to ensure we have latest state (may have been updated)
-        # Note: deployment.deleted_at is already set during workspace deletion
-        deployment = await db.compose_deployments.get_by_id(
-            deployment_id, include_deleted=True
-        )
+
+        async with get_db_context() as db:
+            deployment = await db.compose_deployments.get_by_id(
+                deployment_id, include_deleted=True
+            )
+
         if deployment:
-            # deployment.deleted_at is already set during workspace deletion
-            # Just update state to DELETED to mark cleanup as complete
+            # Set deleted_at if not already set (workspace deletion sets it earlier)
+            if not deployment.deleted_at:
+                deployment.deleted_at = datetime.now(UTC)
+
             deployment.state = DeploymentStates.DELETED
             deployment.status_message = "Deployment deleted"
             deployment.current_task_run_id = None
-            await db.compose_deployments.update(deployment)
+
+            async with get_db_context() as db:
+                await db.compose_deployments.update(deployment)
 
         logger.info(f"Successfully destroyed deployment {deployment_id}")
 
