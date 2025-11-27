@@ -7,6 +7,11 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from lazycloud_api.billing.product_details.features import (
+    BaseFeatures,
+    DeploymentFeature,
+    WorkspaceFeature,
+)
 from lazycloud_api.database import Database, _create_database
 from lazycloud_api.database.api_keys import ApiKeyPydantic
 from lazycloud_api.database.compose import ComposeDeploymentPydantic
@@ -24,6 +29,7 @@ from lazycloud_api.database.users import (
 from lazycloud_api.database.workspaces import WorkspacePydantic, WorkspaceStatus
 from shared.models.billing import UsageRecordStatus, UsageRecordType
 from shared.models.deployments import DeploymentStates
+from shared.models.helm import ImageConfig, ServiceValues
 from shared.models.secrets import SecretSource, SecretState
 from shared.models.workspaces import InvitationType, UserWorkspaceStatus, WorkspaceRole
 
@@ -232,6 +238,40 @@ def make_usage_record(
     )
 
 
+def make_features(
+    workspace_limit: int = 10,
+    deployment_limit: int = 5,
+    service_limit: int = 10,
+    volume_limit: int = 5,
+    network_limit: int = 3,
+    max_replicas: int = 10,
+    domain_limit: int = 3,
+) -> BaseFeatures:
+    """Create test subscription features with specified limits."""
+    return BaseFeatures(
+        workspace=WorkspaceFeature(
+            limit=workspace_limit, deployment_limit=deployment_limit
+        ),
+        deployment=DeploymentFeature(
+            service_limit=service_limit,
+            volume_limit=volume_limit,
+            network_limit=network_limit,
+            max_replicas_per_service=max_replicas,
+        ),
+        domain_limit=domain_limit,
+    )
+
+
+def make_service(name: str) -> ServiceValues:
+    """Create a ServiceValues with default image."""
+    return ServiceValues(
+        name=name,
+        enabled=True,
+        resourceName=name,
+        image=ImageConfig(repository="nginx", tag="latest", pullPolicy="IfNotPresent"),
+    )
+
+
 # Convenience fixtures that create data in the database
 
 
@@ -253,6 +293,17 @@ async def db_workspace(db: Database, db_user: UserPydantic) -> WorkspacePydantic
     workspace = await db.workspaces.create(make_workspace())
     await db.user_workspaces.create(make_user_workspace(db_user.id, workspace.id))
     return workspace
+
+
+@pytest.fixture
+async def db_user_with_workspace(
+    db: Database,
+) -> tuple[UserPydantic, WorkspacePydantic]:
+    """Create user with an owned workspace."""
+    user = await db.users.create(make_user())
+    workspace = await db.workspaces.create(make_workspace())
+    await db.user_workspaces.create(make_user_workspace(user.id, workspace.id))
+    return user, workspace
 
 
 @pytest.fixture
