@@ -1,4 +1,4 @@
-from shared.models.billing import STORAGE_CLASS_EBS, STORAGE_CLASS_EFS
+from models.billing import STORAGE_CLASS_EBS, STORAGE_CLASS_EFS
 
 # Required tools for Minikube setup
 REQUIRED_TOOLS = {
