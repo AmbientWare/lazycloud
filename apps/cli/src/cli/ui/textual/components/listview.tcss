@@ -1,0 +1,45 @@
+/* ========================================
+   LISTVIEW COMPONENT
+   ======================================== */
+
+ListView {
+    background: transparent;
+    border: none;
+    padding: 0;
+    scrollbar-size: 1 1;
+}
+
+ListItem {
+    background: transparent;
+    layout: horizontal;
+    height: 1;
+    padding: 0 1;
+}
+
+ListItem:hover {
+    background: $accent 20%;
+}
+
+ListItem.-highlight {
+    background: $accent 30%;
+}
+
+/* ListItem child label styling */
+ListItem Label {
+    height: auto;
+}
+
+ListItem Label.status-dot {
+    width: 2;
+}
+
+ListItem Label.item-name {
+    width: 1fr;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+ListItem Label.item-extra {
+    width: 8;
+    text-align: right;
+}

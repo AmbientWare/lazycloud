@@ -1,0 +1,86 @@
+/* ========================================
+   DASHBOARD FEATURE STYLES
+   Main dashboard layout and containers
+   ======================================== */
+
+/* ========================================
+   DASHBOARD LAYOUT
+   ======================================== */
+
+#layout {
+    layout: horizontal;
+    width: 100%;
+    height: 100%;
+    padding: 1;
+}
+
+#left-column {
+    width: 25%;
+    height: 100%;
+}
+
+#main-container {
+    width: 75%;
+    height: 100%;
+    padding: 1;
+}
+
+#content-scroll {
+    width: 100%;
+    height: 100%;
+}
+
+/* ========================================
+   DASHBOARD CONTAINERS
+   (Deployments, Services, Secrets, Content)
+   ======================================== */
+
+DeploymentsContainer,
+SecretsDeploymentsContainer,
+ServicesContainer,
+ContentContainer,
+SecretsContainer {
+    border: round $primary;
+    padding: 1;
+    height: 1fr;
+}
+
+SecretsContainer {
+    height: 5;
+}
+
+/* Focus states for all containers */
+DeploymentsContainer:focus,
+SecretsDeploymentsContainer:focus,
+ServicesContainer:focus,
+ContentContainer:focus,
+SecretsContainer:focus,
+DeploymentsContainer:focus-within,
+SecretsDeploymentsContainer:focus-within,
+ServicesContainer:focus-within,
+ContentContainer:focus-within,
+SecretsContainer:focus-within {
+    border: round $accent;
+}
+
+/* ========================================
+   DASHBOARD SPECIFIC TABLES
+   ======================================== */
+
+/* Remove borders from nested tables */
+#secrets-table,
+#deployment-services-table,
+#deployment-volumes-table,
+#deployment-networks-table,
+#service-resources-table {
+    border: none;
+}
+
+#secrets-table {
+    height: 100%;
+}
+
+#pods-table {
+    height: auto;
+    max-height: 50%;
+}

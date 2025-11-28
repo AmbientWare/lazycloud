@@ -8,33 +8,14 @@ volumes:
   prefect-data:
   prefect-task-storage:
   localstack-data:
-  
-x-database-environment: &lazycloud-databases
-  DATABASE_URL: postgresql+asyncpg://lc_dev:password@postgres:5432/postgres
-  REDIS_URL: redis://redis:6379
 
-x-shared-environment: &lazycloud-shared-environment
-  <<: *lazycloud-databases
-  KUBECONFIG: /root/.kube/config
-  PREFECT_API_URL: http://prefect-server:4200/api
-  PREFECT_LOGGING_LOG_PRINTS: "true"
-  PREFECT_LOCAL_STORAGE_PATH: /task-storage
-  PREFECT_RESULTS_PERSIST_BY_DEFAULT: "true"
-  # AWS Configuration (defaults to LocalStack for dev)
-  AWS_ACCOUNT_ID: "000000000000"
-  AWS_ENDPOINT_URL: http://localstack:4566
-  AWS_ACCESS_KEY_ID: test
-  AWS_SECRET_ACCESS_KEY: test
-  AWS_REGION: us-east-1
-  AWS_ECR_BASE_ROLE_ARN: arn:aws:iam::000000000000:role/LazyCloudECRBaseRole
-  # Monitoring Configuration
-  PROMETHEUS_URL: http://minikube:30090
-
-x-shared-volumes: &lazycloud-shared-volumes
-  - ./src/lazycloud_api:/src/lazycloud_api
+x-backend-volumes: &backend-volumes
+  - ./apps/backend:/workspace/apps/backend
+  - ./packages:/workspace/packages
+  - ./pyproject.toml:/workspace/pyproject.toml
+  - ./uv.lock:/workspace/uv.lock
   - "${HOME}/.kube/config-docker:/root/.kube/config:ro"
   - "${HOME}/.minikube:/root/.minikube:ro"
-  - ./src/shared:/src/shared
   - prefect-task-storage:/task-storage
 
 services:
@@ -44,20 +25,19 @@ services:
     image: lazycloud-api:latest
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: ./apps/backend/Dockerfile
       target: api
     links:
       - "localstack:localhost.localstack.cloud"
-    volumes: *lazycloud-shared-volumes
+    volumes: *backend-volumes
     env_file:
       - .env
-    environment:
-      <<: *lazycloud-shared-environment
-    command: [ "uv", "run", "python", "main.py", "--debug", "--workers", "1" ]
+    working_dir: /workspace/apps/backend
+    command: ["uv", "run", "--no-sync", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     ports:
       - 8000:8000
     healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -80,13 +60,12 @@ services:
     image: lazycloud-worker:latest
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: ./apps/backend/Dockerfile
       target: prefect-worker
-    volumes: *lazycloud-shared-volumes
+    volumes: *backend-volumes
     env_file:
       - .env
-    environment:
-      <<: *lazycloud-shared-environment
+    working_dir: /workspace/apps/backend
     restart: unless-stopped
     depends_on:
       postgres:
@@ -103,9 +82,8 @@ services:
     command: ["prefect", "server", "start"]
     volumes:
       - prefect-data:/root/.prefect
-    environment:
-      # Allow connections from other containers
-      PREFECT_SERVER_API_HOST: 0.0.0.0
+    env_file:
+      - .env
     ports:
       - 4200:4200
 
@@ -115,14 +93,13 @@ services:
     image: lazycloud-api:latest
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: ./apps/backend/Dockerfile
       target: api
-    volumes: *lazycloud-shared-volumes
+    volumes: *backend-volumes
     env_file:
       - .env
-    environment:
-      <<: *lazycloud-shared-environment
-    command: [ "uv", "run", "alembic", "upgrade", "head" ]
+    working_dir: /workspace/apps/backend
+    command: ["uv", "run", "--no-sync", "alembic", "upgrade", "head"]
     restart: "no"
     depends_on:
       postgres:
@@ -132,10 +109,9 @@ services:
     image: postgres:17
     networks:
       - lazycloud
+    env_file:
+      - .env
     environment:
-      POSTGRES_USER: lc_dev
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: postgres
       POSTGRES_KEEPALIVES: 1
       POSTGRES_KEEPALIVES_IDLE: 60
       POSTGRES_KEEPALIVES_INTERVAL: 10
@@ -143,7 +119,7 @@ services:
     volumes:
       - pg-data:/var/lib/postgresql/data
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U lc_dev -d postgres" ]
+      test: ["CMD-SHELL", "pg_isready -U lc_dev -d postgres"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -157,7 +133,7 @@ services:
     volumes:
       - redis-data:/data
     healthcheck:
-      test: [ "CMD", "redis-cli", "ping" ]
+      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -170,25 +146,17 @@ services:
     networks:
       lazycloud:
         aliases:
-          # NOTE: this is the registry url for the localstack registry
           - 000000000000.dkr.ecr.us-east-1.localhost
     ports:
       - "127.0.0.1:4566:4566"
       - "127.0.0.1:4510-4559:4510-4559"
     env_file:
-      - .env
+      - ./apps/backend/.env
     environment:
-      - DEBUG=0
-      - DOCKER_HOST=unix:///var/run/docker.sock
-      - AWS_ACCESS_KEY_ID=test
-      - AWS_SECRET_ACCESS_KEY=test
-      - AWS_DEFAULT_REGION=us-east-1
-      - AWS_ENDPOINT_URL=http://localstack:4566
-      # EKS configuration
-      - EKS_LOADBALANCER_PORT=8081
-      # NOTE: minikube is used becuase it has built in gvisor runtimeclass
-      - EKS_K8S_PROVIDER=local
-      - LOCALSTACK_HOST=localhost
+      DEBUG: 0
+      DOCKER_HOST: unix:///var/run/docker.sock
+      EKS_LOADBALANCER_PORT: 8081
+      EKS_K8S_PROVIDER: local
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock"
       - "./scripts/setup_localstack_iam.sh:/etc/localstack/init/ready.d/setup_iam.sh"
@@ -199,3 +167,28 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  web:
+    labels:
+      lazycloud.ignore: "true"
+    networks:
+      - lazycloud
+    profiles: [frontend]
+    build:
+      context: .
+      dockerfile: ./apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY}
+    env_file:
+      - ./apps/web/.env
+    ports:
+      - 3000:3000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
