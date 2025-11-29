@@ -1,6 +1,6 @@
 [project]
-name = "cli"
-version = "0.1.0"
+name = "lazycloud"
+version = "0.0.1"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -41,6 +41,7 @@ dev = [
     "pytest-mock>=3.14.0",
     "pytest-cov>=6.0.0",
     "pytest-timeout>=2.3.0",
+    "pyinstaller>=6.17.0",
 ]
 
 [tool.pytest.ini_options]
