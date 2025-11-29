@@ -1,3 +1,5 @@
+import importlib.metadata
+
 import typer
 
 from cli.commands.compose.deploy import deploy
@@ -10,13 +12,42 @@ from cli.commands.login import login
 from cli.commands.usage import usage_command
 from cli.commands.workspaces import workspace_app
 
+try:
+    __version__ = importlib.metadata.version("lazycloud")
+except importlib.metadata.PackageNotFoundError:
+    __version__ = "unknown"
+
+
+def version_callback(value: bool):
+    """Show version and exit."""
+    if value:
+        typer.echo(f"lazycloud version {__version__}")
+        raise typer.Exit()
+
 
 # Create the main app
 main_cli = typer.Typer(
     name="lazycloud",
-    help="LazyCloud CLI",
+    help="LazyCloud CLI - Deploy Docker Compose to the cloud",
     add_completion=False,
 )
+
+
+# Add global --version option
+@main_cli.callback()
+def main(
+    version: bool = typer.Option(
+        None,
+        "--version",
+        "-v",
+        callback=version_callback,
+        is_eager=True,
+        help="Show version and exit",
+    ),
+):
+    """LazyCloud CLI"""
+    pass
+
 
 # Add command modules to the main app
 main_cli.add_typer(workspace_app, name="workspaces")

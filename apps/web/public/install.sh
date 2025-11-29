@@ -57,23 +57,41 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
-# Install lazycloud via pipx or uv
+# Install lazycloud binary
 install_lazycloud() {
     info "Installing LazyCloud CLI..."
 
-    if command_exists uv; then
-        info "Using uv to install lazycloud..."
-        uv tool install lazycloud
-    elif command_exists pipx; then
-        info "Using pipx to install lazycloud..."
-        pipx install lazycloud
+    PLATFORM_ARCH=$(detect_platform)
+    PLATFORM=$(echo "$PLATFORM_ARCH" | cut -d'-' -f1)
+    ARCH=$(echo "$PLATFORM_ARCH" | cut -d'-' -f2)
+
+    # Determine download URL
+    if [ "$LAZYCLOUD_VERSION" = "latest" ]; then
+        LAZYCLOUD_URL="https://github.com/AmbientWare/lazycloud-releases/releases/latest/download/lazycloud-${PLATFORM}-${ARCH}.tar.gz"
     else
-        error "Neither uv nor pipx found. Please install one of them first:
-  - uv: curl -LsSf https://astral.sh/uv/install.sh | sh
-  - pipx: pip install pipx && pipx ensurepath"
+        LAZYCLOUD_URL="https://github.com/AmbientWare/lazycloud-releases/releases/download/${LAZYCLOUD_VERSION}/lazycloud-${PLATFORM}-${ARCH}.tar.gz"
     fi
 
-    success "LazyCloud CLI installed"
+    # Download and extract
+    TEMP_DIR=$(mktemp -d)
+    trap "rm -rf $TEMP_DIR" EXIT
+
+    info "Downloading from $LAZYCLOUD_URL..."
+    if command_exists curl; then
+        curl -fsSL "$LAZYCLOUD_URL" -o "$TEMP_DIR/lazycloud.tar.gz" || error "Failed to download LazyCloud CLI"
+    elif command_exists wget; then
+        wget -q "$LAZYCLOUD_URL" -O "$TEMP_DIR/lazycloud.tar.gz" || error "Failed to download LazyCloud CLI"
+    else
+        error "Neither curl nor wget found. Cannot download LazyCloud CLI."
+    fi
+
+    # Extract and install
+    tar -xzf "$TEMP_DIR/lazycloud.tar.gz" -C "$TEMP_DIR"
+    mkdir -p "$INSTALL_DIR"
+    mv "$TEMP_DIR/lazycloud" "$INSTALL_DIR/lazycloud"
+    chmod +x "$INSTALL_DIR/lazycloud"
+
+    success "LazyCloud CLI installed to $INSTALL_DIR/lazycloud"
 }
 
 # Install Depot CLI
@@ -186,14 +204,6 @@ main() {
     info "║       LazyCloud Installer             ║"
     info "╚═══════════════════════════════════════╝"
     echo ""
-
-    # Check Python version
-    if command_exists python3; then
-        PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-        info "Found Python $PYTHON_VERSION"
-    else
-        error "Python 3 is required but not found"
-    fi
 
     install_lazycloud
     install_depot

@@ -29,23 +29,44 @@ function Test-Command {
 function Install-LazyCloud {
     Write-Info "Installing LazyCloud CLI..."
 
-    if (Test-Command "uv") {
-        Write-Info "Using uv to install lazycloud..."
-        & uv tool install lazycloud
-    }
-    elseif (Test-Command "pipx") {
-        Write-Info "Using pipx to install lazycloud..."
-        & pipx install lazycloud
-    }
-    else {
-        Write-Err @"
-Neither uv nor pipx found. Please install one of them first:
-  - uv: irm https://astral.sh/uv/install.ps1 | iex
-  - pipx: pip install pipx && pipx ensurepath
-"@
+    $arch = Get-Architecture
+
+    # Determine download URL
+    if ($LAZYCLOUD_VERSION -eq "latest") {
+        $url = "https://github.com/AmbientWare/lazycloud-releases/releases/latest/download/lazycloud-windows-$arch.zip"
+    } else {
+        $url = "https://github.com/AmbientWare/lazycloud-releases/releases/download/$LAZYCLOUD_VERSION/lazycloud-windows-$arch.zip"
     }
 
-    Write-Success "LazyCloud CLI installed"
+    # Create install directory
+    New-Item -ItemType Directory -Force -Path $INSTALL_DIR | Out-Null
+
+    # Download
+    $tempDir = New-Item -ItemType Directory -Force -Path "$env:TEMP\lazycloud-install-cli"
+    $zipPath = "$tempDir\lazycloud.zip"
+
+    Write-Info "Downloading from $url..."
+    try {
+        Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing
+    } catch {
+        Write-Err "Failed to download LazyCloud CLI: $_"
+    }
+
+    # Extract
+    Expand-Archive -Path $zipPath -DestinationPath $tempDir -Force
+
+    # Move lazycloud.exe
+    $lazyCloudExe = Get-ChildItem -Path $tempDir -Recurse -Filter "lazycloud.exe" | Select-Object -First 1
+    if (-not $lazyCloudExe) {
+        Write-Err "Could not find lazycloud.exe in archive"
+    }
+
+    Copy-Item $lazyCloudExe.FullName -Destination "$INSTALL_DIR\lazycloud.exe" -Force
+
+    # Cleanup
+    Remove-Item -Recurse -Force $tempDir
+
+    Write-Success "LazyCloud CLI installed to $INSTALL_DIR\lazycloud.exe"
 }
 
 function Install-Depot {
@@ -125,15 +146,6 @@ function Main {
     Write-Info "║       LazyCloud Installer             ║"
     Write-Info "╚═══════════════════════════════════════╝"
     Write-Host ""
-
-    # Check Python
-    if (Test-Command "python") {
-        $pythonVersion = & python --version 2>&1
-        Write-Info "Found $pythonVersion"
-    }
-    else {
-        Write-Err "Python is required but not found"
-    }
 
     Install-LazyCloud
     Install-Depot
