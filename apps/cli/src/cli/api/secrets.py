@@ -14,7 +14,9 @@ class SecretsAPI(BaseAPI):
     ) -> SecretsResponse:
         """Get secrets for a deployment."""
         params = {"show_values": show_values} if show_values else {}
-        response_data = await self._get_async(f"/{deployment_id}/secrets", params=params)
+        response_data = await self._get_async(
+            f"/{deployment_id}/secrets", params=params
+        )
         return SecretsResponse(**response_data)
 
     async def get_secret_value(self, deployment_id: str, key: str) -> str:

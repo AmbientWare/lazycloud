@@ -10,6 +10,7 @@ from cli.commands.login import login
 from cli.commands.usage import usage_command
 from cli.commands.workspaces import workspace_app
 
+
 # Create the main app
 main_cli = typer.Typer(
     name="lazycloud",

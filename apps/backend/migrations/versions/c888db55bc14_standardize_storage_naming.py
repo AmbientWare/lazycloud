@@ -56,4 +56,3 @@ def downgrade() -> None:
             "UPDATE storage_usage_breakdown SET storage_class = 's3-sc' "
             "WHERE storage_class = 'ebs-sc'"
         )
-
