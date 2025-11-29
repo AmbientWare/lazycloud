@@ -34,6 +34,9 @@ class ContentContainer(Container):
     service: reactive[ServiceStatus | None] = reactive(None)
     secret_key: reactive[str | None] = reactive(None)
     display_mode: reactive[str] = reactive(DisplayMode.DEPLOYMENT)
+    has_deployments: reactive[bool | None] = reactive(
+        None
+    )  # None = loading, True/False = loaded
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -57,12 +60,13 @@ class ContentContainer(Container):
     def compose(self) -> ComposeResult:
         """Create the content area."""
         with VerticalScroll(id="content-scroll"):
-            yield EmptyStateWidget()
+            yield Static()  # Empty placeholder that will show loading
 
     def on_mount(self) -> None:
         """Setup the container when mounted."""
         self._update_border_subtitle()
         self.can_focus = True
+        self.loading = True
 
     async def on_unmount(self) -> None:
         """Clean up when container unmounts."""
@@ -81,10 +85,35 @@ class ContentContainer(Container):
 
         self.border_subtitle = " • ".join(parts)
 
+    async def watch_has_deployments(self, _old_value, new_value) -> None:
+        """Handle when deployments are loaded"""
+        if new_value is None:
+            # Still loading
+            return
+
+        if new_value is False:
+            # No deployments found - show empty state
+            self.loading = False
+            scroll = self.query_one(VerticalScroll)
+            scroll.remove_children()
+            scroll.mount(EmptyStateWidget())
+        else:
+            # Has deployments - loading will be turned off when deployment is selected
+            pass
+
     async def watch_deployment(self, _old_value, new_value) -> None:
         """Auto-refresh when deployment changes"""
-        if new_value and self.display_mode == DisplayMode.DEPLOYMENT:
-            await self.refresh_deployment_content()
+        if new_value:
+            # Mark that we have deployments
+            if self.has_deployments is None:
+                self.has_deployments = True
+
+            if self.display_mode == DisplayMode.DEPLOYMENT:
+                await self.refresh_deployment_content()
+        elif self.has_deployments is None:
+            # No deployment selected and we haven't determined if deployments exist
+            # Keep loading state
+            pass
 
     async def watch_service(self, _old_value, new_value) -> None:
         """Auto-refresh when service changes"""
@@ -112,6 +141,9 @@ class ContentContainer(Container):
     async def refresh_deployment_content(self) -> None:
         if not self.deployment:
             return
+
+        # Turn off loading state
+        self.loading = False
 
         self.border_title = self._get_border_title(
             f"📋 [4] Deployment Details - {self.deployment.name}"

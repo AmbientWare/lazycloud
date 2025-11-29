@@ -51,6 +51,7 @@ class DeploymentBreakdownSection(Container):
         self.styles.width = "100%"
         self.styles.height = "100%"
         self.border_title = f"{Icons.OVERVIEW} Usage Summary"
+        self.loading = True  # Show loading initially
         if self._scroll:
             self._scroll.styles.width = "100%"
             self._scroll.styles.height = "100%"
@@ -109,14 +110,12 @@ class DeploymentBreakdownSection(Container):
 
         if not self.usage_data:
             self._scroll.remove_children()
-            message_section = SectionContainer(
-                f"{Icons.OVERVIEW} Usage Breakdown", Static("Loading usage data...")
-            )
-            self._scroll.mount(message_section)
+            self.loading = True
             return
 
         if not self.selected_deployment_id:
             self._scroll.remove_children()
+            self.loading = False
             message_section = SectionContainer(
                 f"{Icons.OVERVIEW} Usage Breakdown",
                 Static("Select a deployment to view breakdown"),
@@ -152,9 +151,11 @@ class DeploymentBreakdownSection(Container):
         # This prevents jumpy UI - we show everything at once when complete
         if not breakdown:
             self._scroll.remove_children()
+            self.loading = True
             return
 
         # Clear existing sections and rebuild - only when breakdown is ready
+        self.loading = False
         self._scroll.remove_children()
 
         # Add status and cost info above the section

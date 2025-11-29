@@ -127,6 +127,14 @@
     border: round $accent;
 }
 
+#deployment-breakdown-section > LoadingIndicator {
+    background: transparent;
+}
+
+#deployment-breakdown-section.-loading {
+    background: transparent;
+}
+
 #breakdown-scroll {
     width: 100%;
     height: 100%;

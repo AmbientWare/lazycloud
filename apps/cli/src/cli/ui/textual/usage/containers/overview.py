@@ -1,4 +1,3 @@
-import asyncio
 from datetime import datetime, timezone
 
 from responses.usage import (
@@ -41,13 +40,13 @@ class UsageOverviewSection(Container):
             )
             self._metrics_table.can_focus = False
             self._metrics_table.add_columns("Metric", "Usage (unit-h)", "Cost ($)")
-            # Show loading state
-            self._metrics_table.add_row(
-                "Loading...",
-                "",
-                "",
-                key="loading",
-            )
+            # Show placeholder rows while loading
+            self._metrics_table.add_row("CPU (core)", "-", "-", key="cpu")
+            self._metrics_table.add_row("Memory (GB)", "-", "-", key="memory")
+            self._metrics_table.add_row("Storage (GB)", "-", "-", key="storage")
+            self._metrics_table.add_row("Build Minutes", "-", "-", key="build")
+            self._metrics_table.add_row("Endpoints (hours)", "-", "-", key="endpoints")
+            self._metrics_table.add_row("Total", "", "-", key="total")
             yield self._metrics_table
 
     def on_mount(self) -> None:
@@ -90,6 +89,7 @@ class UsageOverviewSection(Container):
         except Exception as e:
             self.log.error(f"Failed to fetch usage data: {e}", exc_info=True)
             if self._metrics_table:
+                self._metrics_table.loading = False
                 self._metrics_table.clear()
                 self._metrics_table.add_row(
                     "Error",
