@@ -18,11 +18,9 @@ except importlib.metadata.PackageNotFoundError:
     __version__ = "unknown"
 
 
-def version_callback(value: bool):
-    """Show version and exit."""
-    if value:
-        typer.echo(f"lazycloud version {__version__}")
-        raise typer.Exit()
+def version_command():
+    """Show the CLI version"""
+    typer.echo(f"lazycloud version {__version__}")
 
 
 # Create the main app
@@ -33,11 +31,17 @@ main_cli = typer.Typer(
 )
 
 
-# Add global --version option
-@main_cli.callback()
+def version_callback(value: bool):
+    if value:
+        version_command()
+        raise typer.Exit()
+
+
+@main_cli.callback(invoke_without_command=True)
 def main(
+    ctx: typer.Context,
     version: bool = typer.Option(
-        None,
+        False,
         "--version",
         "-v",
         callback=version_callback,
@@ -69,3 +73,6 @@ main_cli.command("login", help="Login with your LazyCloud API key")(login)
 
 # Add dashboard command to main app
 main_cli.command("dashboard", help="Launch the LazyCloud dashboard")(dashboard)
+
+# Add version command
+main_cli.command("version", help="Show the CLI version")(version_command)
