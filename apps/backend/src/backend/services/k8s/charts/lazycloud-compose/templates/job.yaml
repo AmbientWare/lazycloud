@@ -28,7 +28,7 @@ metadata:
     {{- end }}
 spec:
   backoffLimit: 3
-  ttlSecondsAfterFinished: 300
+  ttlSecondsAfterFinished: 604800  # 7 days - keep job status and logs for debugging
   template:
     metadata:
       labels:

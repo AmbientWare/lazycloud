@@ -325,12 +325,12 @@ class StatusWatcher:
             if e.status == 404:
                 resource_not_found = True
                 if is_job:
-                    # If Job not found and deployment is older than TTL (300s), assume it completed
+                    # If Job not found and deployment is older than TTL (7 days), assume it completed and expired
                     if self.deployed_at:
                         age_seconds = (
                             datetime.now(UTC) - self.deployed_at
                         ).total_seconds()
-                        if age_seconds > 300:  # TTL is 300 seconds
+                        if age_seconds > 604800:  # TTL is 7 days (604800 seconds)
                             job_status = KubernetesPhase.STOPPED
                         else:
                             job_status = KubernetesPhase.PENDING
