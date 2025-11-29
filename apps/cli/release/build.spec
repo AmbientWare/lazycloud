@@ -2,10 +2,16 @@
 # PyInstaller spec file for LazyCloud CLI
 # This file configures how PyInstaller builds the standalone binary
 
+from pathlib import Path
+
+# Get the parent directory (apps/cli) from this spec file's location
+spec_dir = Path(SPECPATH)
+cli_dir = spec_dir.parent
+
 block_cipher = None
 
 a = Analysis(
-    ['src/cli/main.py'],
+    [str(cli_dir / 'src' / 'cli' / 'main.py')],
     pathex=[],
     binaries=[],
     datas=[],

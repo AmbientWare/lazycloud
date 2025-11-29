@@ -40,20 +40,16 @@ The [release workflow](../../../.github/workflows/release.yml) will automaticall
 
 ### 4. Required Secret
 
-Add a fine-grained Personal Access Token as a GitHub secret:
+Add an admin Personal Access Token as a GitHub secret:
 
-**Secret Name:** `RELEASES_REPO_TOKEN`
+**Secret Name:** `ADMIN_TOKEN`
 
 **Permissions:**
-- Repository: `AmbientWare/lazycloud-releases`
-- Permissions: Contents (Read and Write)
+- Admin access to organization repositories
 
-To create:
-1. Go to GitHub Settings → Developer settings → Personal access tokens → Fine-grained tokens
-2. Create new token
-3. Select only `AmbientWare/lazycloud-releases` repository
-4. Grant Contents: Read and write
-5. Add as secret in main repo: Settings → Secrets and variables → Actions → New repository secret
+This token is used for:
+- Cloning and pushing to the `lazycloud-releases` repository
+- Creating GitHub releases via the API
 
 ## Release Repository Structure
 
