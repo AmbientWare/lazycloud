@@ -1,6 +1,8 @@
 import importlib.metadata
 
 import typer
+from pyfiglet import Figlet
+from rich.console import Console
 
 from cli.commands.compose.deploy import deploy
 from cli.commands.compose.destroy import destroy
@@ -11,6 +13,7 @@ from cli.commands.deployments import deployments_app
 from cli.commands.login import login
 from cli.commands.usage import usage_command
 from cli.commands.workspaces import workspace_app
+from cli.ui.colors import Colors
 
 try:
     __version__ = importlib.metadata.version("lazycloud")
@@ -20,7 +23,15 @@ except importlib.metadata.PackageNotFoundError:
 
 def version_command():
     """Show the CLI version"""
-    typer.echo(f"lazycloud version {__version__}")
+    console = Console()
+
+    # Create ASCII art
+    fig = Figlet(font="slant")
+    ascii_art = fig.renderText("LazyCloud")
+
+    # Print with colors using Rich
+    console.print(f"[{Colors.Ansi.text_muted}]{ascii_art}[/]")
+    console.print(f"[{Colors.Ansi.secondary}]version {__version__}[/]")
 
 
 # Create the main app
@@ -50,7 +61,24 @@ def main(
     ),
 ):
     """LazyCloud CLI"""
-    pass
+    # If no subcommand is provided, show ASCII art and help
+    if ctx.invoked_subcommand is None:
+        console = Console()
+
+        # Create ASCII art
+        fig = Figlet(font="slant")
+        ascii_art = fig.renderText("LazyCloud")
+
+        # Print with colors
+        console.print(f"[{Colors.Ansi.text_muted}]{ascii_art}[/]")
+        console.print(
+            f"[{Colors.Ansi.text_muted}]Deploy Docker Compose to the cloud[/]\n"
+        )
+
+        # Show quick start
+        console.print(f"[{Colors.Ansi.text}]Get started:[/] [{Colors.Ansi.secondary}]https://lazycloud.dev/docs[/]")
+        console.print(f"[{Colors.Ansi.text}]Run[/] [{Colors.Ansi.secondary}]lazycloud --help[/] [{Colors.Ansi.text}]for all commands[/]")
+        console.print()
 
 
 # Add command modules to the main app

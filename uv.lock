@@ -1159,6 +1159,7 @@ dependencies = [
     { name = "loguru" },
     { name = "models" },
     { name = "pydantic-settings" },
+    { name = "pyfiglet" },
     { name = "python-dateutil" },
     { name = "pyyaml" },
     { name = "responses" },
@@ -1185,6 +1186,7 @@ requires-dist = [
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "models", editable = "packages/models" },
     { name = "pydantic-settings", specifier = ">=2.12.0" },
+    { name = "pyfiglet", specifier = ">=1.0.4" },
     { name = "python-dateutil", specifier = ">=2.9.0.post0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "responses", editable = "packages/responses" },
@@ -2028,6 +2030,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/70/74/8040c44785d4b004cb314146ae33fafd0977ce2c64af9183e48e9caac534/pydocket-0.15.0.tar.gz", hash = "sha256:2c83dd3d979d76169bf485bdc4087be44a63bf1cc09b3dad0725d67d993add42", size = 265328, upload-time = "2025-11-25T21:23:37.067Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/4f/63/1cee9989cdce573c53f64bc142cd75c899c3830e7feb7126510d620d1fa6/pydocket-0.15.0-py3-none-any.whl", hash = "sha256:701cf063f2e32a3e5b5bd5b07b4db9698a705367e4f8b9b8143632ac02807f20", size = 56803, upload-time = "2025-11-25T21:23:35.606Z" },
+]
+
+[[package]]
+name = "pyfiglet"
+version = "1.0.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c8/e3/0a86276ad2c383ce08d76110a8eec2fe22e7051c4b8ba3fa163a0b08c428/pyfiglet-1.0.4.tar.gz", hash = "sha256:db9c9940ed1bf3048deff534ed52ff2dafbbc2cd7610b17bb5eca1df6d4278ef", size = 1560615, upload-time = "2025-08-15T18:32:47.302Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9f/5c/fe9f95abd5eaedfa69f31e450f7e2768bef121dbdf25bcddee2cd3087a16/pyfiglet-1.0.4-py3-none-any.whl", hash = "sha256:65b57b7a8e1dff8a67dc8e940a117238661d5e14c3e49121032bd404d9b2b39f", size = 1806118, upload-time = "2025-08-15T18:32:45.556Z" },
 ]
 
 [[package]]
