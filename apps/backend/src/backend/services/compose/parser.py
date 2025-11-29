@@ -79,6 +79,14 @@ class ComposeParser:
             if service_config is not None and not _should_skip_service(service_config)
         ]
 
+        # Validate that at least one service is defined
+        if not services:
+            raise ValueError(
+                "No services defined in compose file. "
+                "Please add at least one service to deploy. "
+                "Note: Services marked with 'lazycloud.ignore=true' are excluded."
+            )
+
         # Filter networks and volumes to only include those used by non-skipped services
         used_networks = set()
         used_volumes = set()

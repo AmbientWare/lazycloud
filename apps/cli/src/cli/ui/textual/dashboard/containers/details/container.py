@@ -13,6 +13,7 @@ from cli.ui.textual.components import Container, SectionContainer
 from cli.ui.textual.dashboard.containers.details.deployment_details import (
     DeploymentDetailsContainer,
 )
+from cli.ui.textual.dashboard.containers.details.empty_state import EmptyStateWidget
 from cli.ui.textual.dashboard.containers.details.secret_details.container import (
     SecretsTable,
 )
@@ -56,9 +57,7 @@ class ContentContainer(Container):
     def compose(self) -> ComposeResult:
         """Create the content area."""
         with VerticalScroll(id="content-scroll"):
-            yield SectionContainer(
-                "Overview", Static("Select a deployment to view details")
-            )
+            yield EmptyStateWidget()
 
     def on_mount(self) -> None:
         """Setup the container when mounted."""
@@ -219,10 +218,7 @@ class ContentContainer(Container):
         scroll = self.query_one(VerticalScroll)
         scroll.remove_children()
 
-        initial_section = SectionContainer(
-            "Overview", Static("Select a deployment to view details")
-        )
-        scroll.mount(initial_section)
+        scroll.mount(EmptyStateWidget())
 
     def get_focusable_widget(self):
         """Return the current focusable widget based on display mode.
