@@ -1,0 +1,1 @@
+"""Compose command unit tests"""

@@ -56,7 +56,9 @@ class ListItem(TextualListItem):
 
         # Extra text on the right (e.g., replicas count) - dimmed
         if self.item_data.extra_text:
-            yield TextualLabel(self.item_data.extra_text, classes="item-extra text-muted")
+            yield TextualLabel(
+                self.item_data.extra_text, classes="item-extra text-muted"
+            )
 
 
 class ListView(TextualListView):
