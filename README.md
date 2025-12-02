@@ -17,6 +17,7 @@ lazycloud/
 ├── deploy/               # Kubernetes Helm charts
 │   ├── api-platform/     # API + workers deployment
 │   └── web/              # Web frontend deployment
+├── infrastructure/       # AWS CDK infrastructure code
 ├── .github/workflows/    # CI/CD pipelines
 ├── pyproject.toml        # Workspace root config
 └── uv.lock              # Unified lockfile for all packages
@@ -32,6 +33,7 @@ This is a **uv workspace monorepo** with a single lockfile (`uv.lock`) for all p
 - `packages/models` - Shared models
 - `packages/api_requests` - Request schemas
 - `packages/responses` - Response schemas
+- `infrastructure` - AWS CDK infrastructure
 
 **How it works:**
 ```bash
@@ -72,6 +74,7 @@ uv sync --all-packages
 
 ### Prerequisites
 
+**For local development:**
 - **Python 3.13+**
 - **uv** - Python package manager ([install](https://docs.astral.sh/uv/))
 - **Docker & Docker Compose**
@@ -79,6 +82,10 @@ uv sync --all-packages
 - **Minikube** - For local K8s testing ([install](https://minikube.sigs.k8s.io/docs/start/))
 - **kubectl** - Kubernetes CLI ([install](https://kubernetes.io/docs/tasks/tools/))
 - **Helm** - K8s package manager ([install](https://helm.sh/docs/intro/install/))
+
+**For AWS infrastructure (production):**
+- **AWS CLI** - Configured with appropriate credentials ([install](https://aws.amazon.com/cli/))
+- **AWS CDK** - `npm install -g aws-cdk` ([docs](https://aws.amazon.com/cdk/))
 
 ### Quick Start
 
@@ -160,11 +167,16 @@ cd apps/cli && uv run pytest
 
 ### Infrastructure
 
-LazyCloud uses **trunk-based development** with **GitOps**:
-- Single `main` branch
-- Manual deployments via GitHub Actions
-- Argo CD syncs from git to Kubernetes
-- Immutable image tags (git SHA)
+LazyCloud infrastructure is managed with **AWS CDK** (Infrastructure as Code) and deployed using **GitOps**:
+
+- **AWS CDK** - Production infrastructure on AWS EKS
+  - See [infrastructure/README.md](infrastructure/README.md) for setup
+  - VPC, EKS cluster, ECR, ElastiCache, Route53
+  - ArgoCD, Prometheus, Loki for platform services
+- **Trunk-based development** - Single `main` branch
+- **Manual deployments** - GitHub Actions workflows
+- **GitOps** - Argo CD syncs from git to Kubernetes
+- **Immutable image tags** - Git SHA-based versioning
 
 ### Deploy to Staging
 
@@ -194,6 +206,25 @@ LazyCloud uses **trunk-based development** with **GitOps**:
 6. Argo CD detects change and deploys to K8s
 
 **Same image deploys to staging and production** - no rebuilds!
+
+### AWS Infrastructure Setup
+
+For production deployments on AWS, use the CDK infrastructure code:
+
+```bash
+cd infrastructure
+
+# Deploy shared infrastructure (DNS, SSL certificates)
+cdk deploy lazycloud-shared
+
+# Deploy production environment (VPC, EKS, ArgoCD, etc.)
+cdk deploy lazycloud-prod
+
+# Configure kubectl
+aws eks update-kubeconfig --region us-east-1 --name lazycloud-prod-eks
+```
+
+See [infrastructure/README.md](infrastructure/README.md) for detailed setup instructions.
 
 ### Helm Charts
 
