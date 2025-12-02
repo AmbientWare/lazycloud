@@ -188,11 +188,13 @@ class PlatformServices(Construct):
             "AlbIngressClass",
             eks_cluster=self.eks_cluster,
             name="alb",
-            group_name=f"{self.config.org_name}-{self.config.environment}-alb",
+            group_name=f"{self.config.org_name}-{self.config.environment}-{self.config.aws_region}-alb",
         )
         # Ensure ALB IngressClass and IngressClassParams are created after the Load Balancer Controller is ready
         self.alb_ingress_class.node.add_dependency(self.load_balancer_controller.chart)
-        self.alb_ingress_class.ingress_class_params.node.add_dependency(self.load_balancer_controller.chart)
+        self.alb_ingress_class.ingress_class_params.node.add_dependency(
+            self.load_balancer_controller.chart
+        )
 
     def _create_shared_secrets_sync(self) -> None:
         """Create ExternalSecret to sync shared secrets from AWS Secrets Manager to kube-system"""

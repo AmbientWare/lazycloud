@@ -3,9 +3,9 @@ from constructs import Construct
 
 from infrastructure.config.environments import EnvironmentConfig
 from infrastructure.constructs.components.platform_services import PlatformServices
-from infrastructure.stacks.shared import SharedStack
-from infrastructure.stacks.prod.infra_stack import ProdInfraStack
 from infrastructure.stacks.prod.controllers_stack import ProdControllersStack
+from infrastructure.stacks.prod.infra_stack import ProdInfraStack
+from infrastructure.stacks.shared import SharedStack
 
 
 class ProdPlatformStack(cdk.Stack):
@@ -40,27 +40,23 @@ class ProdPlatformStack(cdk.Stack):
 
         # Import values from other stacks
         self.eks_cluster = infra_stack.infrastructure.eks_cluster
-        self.load_balancer_controller = controllers_stack.controllers.load_balancer_controller
-
-        # Get shared secrets name if it exists
-        shared_secrets_name = (
-            shared_stack.shared_secrets.secret_name
-            if hasattr(shared_stack, "shared_secrets")
-            else None
+        self.load_balancer_controller = (
+            controllers_stack.controllers.load_balancer_controller
         )
 
+        # Get shared secrets name if it exists
+        shared_secrets_name = shared_stack.shared_secrets.secret_name
+
         # Create platform services (ArgoCD, monitoring, etc.)
-        # NOTE: These are currently commented out in the original stack
-        # Uncomment when ready to deploy
-        # self.platform_services = PlatformServices(
-        #     self,
-        #     "PlatformServices",
-        #     config=self.config,
-        #     eks_cluster=self.eks_cluster,
-        #     external_secrets_role_arn=self.shared_stack.iam_roles.external_secrets_role_arn,
-        #     load_balancer_controller=self.load_balancer_controller,
-        #     shared_secrets_name=shared_secrets_name,
-        # )
+        self.platform_services = PlatformServices(
+            self,
+            "PlatformServices",
+            config=self.config,
+            eks_cluster=self.eks_cluster,
+            external_secrets_role_arn=self.shared_stack.iam_roles.external_secrets_role_arn,
+            load_balancer_controller=self.load_balancer_controller,
+            shared_secrets_name=shared_secrets_name,
+        )
 
         # Add dependencies
         self.add_dependency(infra_stack)
