@@ -9,7 +9,7 @@ crons:
   replicaCount: 1
 
 image:
-  repository: 211125306000.dkr.ecr.us-east-1.amazonaws.com/lazycloud-api
+  repository: 534742592531.dkr.ecr.us-east-1.amazonaws.com/backend-api
   pullPolicy: Always
   tag: "latest"
 

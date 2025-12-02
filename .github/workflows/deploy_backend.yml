@@ -20,7 +20,7 @@ jobs:
       app_name: backend-api
       dockerfile_path: ./apps/backend/Dockerfile
       build_context: .
-      ecr_repository: lazycloud-api
+      ecr_repository: backend-api
       docker_target: api
     secrets: inherit
 
@@ -32,7 +32,7 @@ jobs:
       app_name: backend-background-worker
       dockerfile_path: ./apps/backend/Dockerfile
       build_context: .
-      ecr_repository: lazycloud-background-worker
+      ecr_repository: backend-background-workers
       docker_target: background-workers
     secrets: inherit
 
@@ -44,7 +44,7 @@ jobs:
       app_name: backend-cron-worker
       dockerfile_path: ./apps/backend/Dockerfile
       build_context: .
-      ecr_repository: lazycloud-cron-worker
+      ecr_repository: backend-crons
       docker_target: crons
     secrets: inherit
 
@@ -124,8 +124,8 @@ jobs:
           fi
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Images Built" >> $GITHUB_STEP_SUMMARY
-          echo "- \`lazycloud-api:${{ needs.build-api.outputs.image_sha }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- \`lazycloud-background-worker:${{ needs.build-background-worker.outputs.image_sha }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- \`lazycloud-cron-worker:${{ needs.build-cron-worker.outputs.image_sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`backend-api:${{ needs.build-api.outputs.image_sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`backend-background-workers:${{ needs.build-background-worker.outputs.image_sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`backend-crons:${{ needs.build-cron-worker.outputs.image_sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Argo CD will automatically sync this deployment." >> $GITHUB_STEP_SUMMARY
