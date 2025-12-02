@@ -49,12 +49,12 @@ class EksCluster(Construct):
 
     def _create_cluster(self) -> aws_eks.Cluster:
         """Create EKS cluster with managed node group for Karpenter"""
-        cluster_discovery_tag = f"{self.config.org_name}-{self.config.environment}-eks"
+        cluster_discovery_tag = f"{self.config.org_name}-{self.config.environment}-{self.config.aws_region}-eks"
 
         cluster = aws_eks.Cluster(
             self,
             "EksCluster",
-            cluster_name=f"{self.config.org_name}-{self.config.environment}-eks",
+            cluster_name=f"{self.config.org_name}-{self.config.environment}-{self.config.aws_region}-eks",
             version=aws_eks.KubernetesVersion.V1_33,
             default_capacity_type=aws_eks.DefaultCapacityType.NODEGROUP,
             default_capacity=0,
@@ -254,7 +254,7 @@ class EksCluster(Construct):
         """Get cluster name"""
         return (
             self.cluster.cluster_name
-            or f"{self.config.org_name}-{self.config.environment}-eks"
+            or f"{self.config.org_name}-{self.config.environment}-{self.config.aws_region}-eks"
         )
 
     @property

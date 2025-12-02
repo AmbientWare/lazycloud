@@ -51,23 +51,32 @@ class ProdInfraStack(cdk.Stack):
             "VpcId",
             value=self.infrastructure.vpc_id,
             description="VPC ID",
-            export_name=f"{self.config.org_name}-{self.config.environment}-vpc-id",
+            export_name=f"{self.config.org_name}-{self.config.environment}-{self.config.aws_region}-vpc-id",
         )
 
         cdk.CfnOutput(
             self,
             "VpcPrivateSubnets",
-            value=cdk.Fn.join(",", [subnet.subnet_id for subnet in self.infrastructure.vpc.private_subnets]),
+            value=cdk.Fn.join(
+                ",",
+                [
+                    subnet.subnet_id
+                    for subnet in self.infrastructure.vpc.private_subnets
+                ],
+            ),
             description="Private subnet IDs",
-            export_name=f"{self.config.org_name}-{self.config.environment}-vpc-private-subnets",
+            export_name=f"{self.config.org_name}-{self.config.environment}-{self.config.aws_region}-vpc-private-subnets",
         )
 
         cdk.CfnOutput(
             self,
             "VpcPublicSubnets",
-            value=cdk.Fn.join(",", [subnet.subnet_id for subnet in self.infrastructure.vpc.public_subnets]),
+            value=cdk.Fn.join(
+                ",",
+                [subnet.subnet_id for subnet in self.infrastructure.vpc.public_subnets],
+            ),
             description="Public subnet IDs",
-            export_name=f"{self.config.org_name}-{self.config.environment}-vpc-public-subnets",
+            export_name=f"{self.config.org_name}-{self.config.environment}-{self.config.aws_region}-vpc-public-subnets",
         )
 
         # EKS Exports
@@ -76,7 +85,7 @@ class ProdInfraStack(cdk.Stack):
             "EksClusterName",
             value=self.infrastructure.cluster_name,
             description="EKS Cluster Name",
-            export_name=f"{self.config.org_name}-{self.config.environment}-eks-cluster-name",
+            export_name=f"{self.config.org_name}-{self.config.environment}-{self.config.aws_region}-eks-cluster-name",
         )
 
         cdk.CfnOutput(
@@ -84,7 +93,7 @@ class ProdInfraStack(cdk.Stack):
             "EksClusterEndpoint",
             value=self.infrastructure.cluster_endpoint,
             description="EKS Cluster Endpoint",
-            export_name=f"{self.config.org_name}-{self.config.environment}-eks-endpoint",
+            export_name=f"{self.config.org_name}-{self.config.environment}-{self.config.aws_region}-eks-endpoint",
         )
 
         cdk.CfnOutput(
@@ -92,7 +101,7 @@ class ProdInfraStack(cdk.Stack):
             "EksClusterSecurityGroupId",
             value=self.infrastructure.eks_cluster.cluster.cluster_security_group_id,
             description="EKS Cluster Security Group ID",
-            export_name=f"{self.config.org_name}-{self.config.environment}-eks-sg-id",
+            export_name=f"{self.config.org_name}-{self.config.environment}-{self.config.aws_region}-eks-sg-id",
         )
 
         cdk.CfnOutput(
@@ -100,7 +109,7 @@ class ProdInfraStack(cdk.Stack):
             "EksOidcProviderArn",
             value=self.infrastructure.cluster_oidc_provider_arn,
             description="EKS OIDC Provider ARN",
-            export_name=f"{self.config.org_name}-{self.config.environment}-eks-oidc-arn",
+            export_name=f"{self.config.org_name}-{self.config.environment}-{self.config.aws_region}-eks-oidc-arn",
         )
 
         # Kubeconfig command

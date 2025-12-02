@@ -178,7 +178,9 @@ async def create_deployment(
         temp_deployment.id = uuid.uuid4()
 
     try:
-        _, _, _ = await validate_deployment_request(temp_deployment, existing_deployment)
+        _, _, _ = await validate_deployment_request(
+            temp_deployment, existing_deployment
+        )
 
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e

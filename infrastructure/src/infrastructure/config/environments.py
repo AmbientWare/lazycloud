@@ -33,6 +33,11 @@ class EnvironmentConfig:
     external_dns_domain_filters: list[str] | None = None  # Domains to manage
     cloudflare_proxied: bool = False  # Enable Cloudflare proxy for DDoS/CDN
 
+    # Deployment Configuration
+    is_regional: bool = (
+        True  # If True, deploys regional stacks (infra, controllers, platform)
+    )
+
     def __post_init__(self) -> None:
         """Set default values after initialization"""
         if self.availability_zones is None:
@@ -91,3 +96,12 @@ def get_environment_config(environment: str) -> EnvironmentConfig:
 def list_environments() -> list[str]:
     """List all available environments"""
     return list(ENVIRONMENTS.keys())
+
+
+def list_regional_environments() -> list[str]:
+    """List all environments that should have regional stacks deployed"""
+    return [
+        env_key
+        for env_key, env_config in ENVIRONMENTS.items()
+        if env_config.is_regional
+    ]

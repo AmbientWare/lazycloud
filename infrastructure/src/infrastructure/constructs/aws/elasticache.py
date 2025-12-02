@@ -72,7 +72,7 @@ class ElastiCacheConstruct(Construct):
             "SubnetGroup",
             description="Subnet group for ElastiCache cluster",
             subnet_ids=[subnet.subnet_id for subnet in selected_subnets],
-            cache_subnet_group_name=f"{self.config.org_name}-{self.config.environment}-cache-subnet-group",
+            cache_subnet_group_name=f"{self.config.org_name}-{self.config.environment}-{self.config.aws_region}-cache-subnet-group",
         )
 
     def _create_cluster(self) -> elasticache.CfnServerlessCache:
@@ -90,7 +90,7 @@ class ElastiCacheConstruct(Construct):
         return elasticache.CfnServerlessCache(
             self,
             "ServerlessCache",
-            serverless_cache_name=f"{self.config.org_name}-{self.config.environment}-cache",
+            serverless_cache_name=f"{self.config.org_name}-{self.config.environment}-{self.config.aws_region}-cache",
             engine="valkey",  # Use Valkey (Redis-compatible)
             description=f"Valkey serverless cache for {self.config.environment}",
             cache_usage_limits=elasticache.CfnServerlessCache.CacheUsageLimitsProperty(

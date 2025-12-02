@@ -83,7 +83,7 @@ class ControllerIAMRoles(Construct):
                     "Sid": "PassNodeIAMRole",
                     "Effect": "Allow",
                     "Action": "iam:PassRole",
-                    "Resource": f"arn:aws:iam::{cdk.Aws.ACCOUNT_ID}:role/{self.config.org_name}-{self.config.environment}-karpenter-node",
+                    "Resource": f"arn:aws:iam::{cdk.Aws.ACCOUNT_ID}:role/{self.config.org_name}-karpenter-node",
                 },
                 {
                     "Sid": "CreateNodeInstanceProfile",
@@ -103,7 +103,7 @@ class ControllerIAMRoles(Construct):
                     "Sid": "TagNodeInstanceProfile",
                     "Effect": "Allow",
                     "Action": ["iam:TagRole"],
-                    "Resource": f"arn:aws:iam::{cdk.Aws.ACCOUNT_ID}:role/{self.config.org_name}-{self.config.environment}-karpenter-node",
+                    "Resource": f"arn:aws:iam::{cdk.Aws.ACCOUNT_ID}:role/{self.config.org_name}-karpenter-node",
                 },
                 {
                     "Sid": "InterruptionQueue",
@@ -122,7 +122,7 @@ class ControllerIAMRoles(Construct):
         role = iam.CfnRole(
             self,
             "KarpenterControllerRole",
-            role_name=f"{self.config.org_name}-{self.config.environment}-karpenter-controller",
+            role_name=f"{self.config.org_name}-karpenter-controller",
             assume_role_policy_document=trust_policy,
             policies=[
                 iam.CfnRole.PolicyProperty(
@@ -158,7 +158,7 @@ class ControllerIAMRoles(Construct):
         role = iam.CfnRole(
             self,
             "KarpenterNodeRole",
-            role_name=f"{self.config.org_name}-{self.config.environment}-karpenter-node",
+            role_name=f"{self.config.org_name}-karpenter-node",
             assume_role_policy_document=trust_policy,
             managed_policy_arns=[
                 "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy",

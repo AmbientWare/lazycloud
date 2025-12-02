@@ -29,7 +29,9 @@ class SharedIAMRoles(Construct):
 
         # Create IAM role constructs by category
         self.eks_roles = EKSIAMRoles(self, "EKSRoles", config=config)
-        self.controller_roles = ControllerIAMRoles(self, "ControllerRoles", config=config)
+        self.controller_roles = ControllerIAMRoles(
+            self, "ControllerRoles", config=config
+        )
         self.platform_roles = PlatformIAMRoles(self, "PlatformRoles", config=config)
 
     # EKS IAM role properties

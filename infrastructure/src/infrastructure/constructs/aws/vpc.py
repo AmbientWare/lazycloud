@@ -77,7 +77,7 @@ class VpcConstruct(Construct):
 
     def _tag_subnets_for_karpenter(self) -> None:
         """Tag private subnets for Karpenter discovery"""
-        cluster_name = f"{self.config.org_name}-{self.config.environment}-eks"
+        cluster_name = f"{self.config.org_name}-{self.config.environment}-{self.config.aws_region}-eks"
 
         # Tag private subnets for Karpenter discovery
         for subnet in self.vpc.private_subnets:

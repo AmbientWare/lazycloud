@@ -47,7 +47,7 @@ class KarpenterConstruct(Construct):
             "settings": {
                 "clusterName": self.eks_cluster.cluster_name,
                 "clusterEndpoint": self.eks_cluster.cluster_endpoint,
-                "interruptionQueue": f"{self.config.org_name}-{self.config.environment}-karpenter",
+                "interruptionQueue": f"{self.config.org_name}-{self.config.environment}-{self.config.aws_region}-karpenter",
             },
             "serviceAccount": {
                 "name": "karpenter",
