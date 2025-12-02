@@ -29,8 +29,6 @@ class ServiceUsageItem(BaseModel):
 
 
 class VolumeUsageItem(BaseModel):
-    """Internal type for volume usage processing"""
-
     volume_name: str
     storage_class: Literal[STORAGE_CLASS_EBS, STORAGE_CLASS_EFS]
     gb_hours: float

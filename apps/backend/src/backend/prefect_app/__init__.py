@@ -1,6 +1,10 @@
+import sentry_sdk
+from loguru import logger
 from prefect import serve as flow_serve
 from prefect.task_worker import serve as task_worker_serve
+from sentry_sdk.integrations.loguru import LoguruIntegration
 
+from backend.config import app_config
 from backend.prefect_app.deployment import (
     deploy_compose_task,
     destroy_compose_task,
@@ -16,15 +20,24 @@ from backend.prefect_app.subscription_monitor import (
     monitor_subscription_states_deployment,
 )
 from backend.prefect_app.usage_collector import (
-    forward_for_billing_deployment,
-    mark_workspaces_for_backfill_deployment,
-    process_incomplete_usage_deployment,
+    alert_stuck_records_deployment,
+    catch_up_missing_intervals_deployment,
+    finalize_and_bill_deployment,
     spawn_usage_collection_deployment,
 )
 from backend.prefect_app.utils import get_task_result
 from backend.prefect_app.workspace_cleanup import (
     cleanup_orphaned_deployments_deployment,
 )
+
+# Initialize Sentry for background worker error tracking
+if app_config.SENTRY_DSN:
+    sentry_sdk.init(
+        dsn=app_config.SENTRY_DSN,
+        environment=app_config.ENV.value,
+        integrations=[LoguruIntegration()],
+    )
+    logger.info("Sentry initialized for Prefect workers")
 
 
 def serve_background_tasks():
@@ -43,9 +56,9 @@ def serve_crons():
     """Serve Prefect cron tasks."""
     flow_serve(
         spawn_usage_collection_deployment,
-        mark_workspaces_for_backfill_deployment,
-        process_incomplete_usage_deployment,
-        forward_for_billing_deployment,
+        finalize_and_bill_deployment,
+        catch_up_missing_intervals_deployment,
+        alert_stuck_records_deployment,
         monitor_subscription_states_deployment,
         reconcile_rollback_states_deployment,
         cleanup_orphaned_deployments_deployment,

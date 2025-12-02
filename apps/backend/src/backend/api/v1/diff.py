@@ -20,7 +20,6 @@ from backend.services.compose.diff_checker import (
 )
 from backend.services.compose.parser import ComposeParser
 from backend.services.compose.validation import validate_deployment_request
-from backend.services.compose.validator import ComposeValidator
 from backend.services.k8s import create_ns_name
 from backend.services.k8s.client import get_namespace_pvcs
 
@@ -65,10 +64,6 @@ async def get_deployment_diff(
     # Parse new compose file
     compose_data = yaml.safe_load(request.compose_yaml)
     compose_file = ComposeParser.parse_dict(compose_data)
-
-    # Validate the compose file
-    validator = ComposeValidator()
-    validation_result = validator.validate_to_result(compose_file)
 
     # Determine workspace_id and namespace
     workspace_id = deployment.workspace_id if deployment else request.workspace_id
@@ -118,42 +113,40 @@ async def get_deployment_diff(
         current_compose, compose_file
     )
 
-    # Perform full validation (Helm generation, quota checks) if basic validation passed
-    can_deploy = not validation_result.errors
+    # Perform full validation (Helm generation, quota checks, compose validation)
+    can_deploy = True
     full_validation_errors = []
-    if can_deploy:
-        try:
-            # Create temporary deployment for full validation
-            temp_deployment = ComposeDeploymentPydantic(
-                workspace_id=workspace_id,
-                name=request.deployment_name or "",
-                namespace=namespace,
-                compose_yaml=request.compose_yaml,
-                state=DeploymentStates.PENDING,
-            )
+    warnings = []
+    try:
+        # Create temporary deployment for full validation
+        temp_deployment = ComposeDeploymentPydantic(
+            workspace_id=workspace_id,
+            name=request.deployment_name or "",
+            namespace=namespace,
+            compose_yaml=request.compose_yaml,
+            state=DeploymentStates.PENDING,
+        )
 
-            if deployment:
-                temp_deployment.id = deployment.id
+        if deployment:
+            temp_deployment.id = deployment.id
+        else:
+            temp_deployment.id = uuid.uuid4()
 
-            else:
-                temp_deployment.id = uuid.uuid4()
+        # Run full validation (includes compose validation via HelmValuesGenerator)
+        _, _, warnings = await validate_deployment_request(temp_deployment, deployment)
 
-            # Run full validation
-            await validate_deployment_request(temp_deployment, deployment)
+    except ValueError as e:
+        # User-friendly validation errors
+        full_validation_errors = [str(e)]
+        can_deploy = False
 
-        except ValueError as e:
-            # User-friendly validation errors
-            full_validation_errors = [str(e)]
-            can_deploy = False
+    except Exception as e:
+        # Unexpected errors
+        logger.error(f"Full validation failed unexpectedly: {e}", exc_info=True)
+        full_validation_errors = [f"Validation failed: {str(e)}"]
+        can_deploy = False
 
-        except Exception as e:
-            # Unexpected errors
-            logger.error(f"Full validation failed unexpectedly: {e}", exc_info=True)
-            full_validation_errors = [f"Validation failed: {str(e)}"]
-            can_deploy = False
-
-    # Combine basic and full validation errors
-    all_errors = list(validation_result.errors or []) + full_validation_errors
+    all_errors = full_validation_errors
 
     # Detect storage type changes (EBS ↔ EFS transitions)
     storage_type_changes: list[StorageTypeChange] | None = None
@@ -181,7 +174,7 @@ async def get_deployment_diff(
         env_var_changes=env_var_changes,
         storage_type_changes=storage_type_changes,
         errors=all_errors if all_errors else None,
-        warnings=validation_result.warnings,
+        warnings=warnings,
         can_deploy=can_deploy,
         existing_compose_yaml=existing_yaml,
     )

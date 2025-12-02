@@ -16,6 +16,25 @@ class HealthCheckFilter(logging.Filter):
         return record.getMessage().find("/health") == -1
 
 
+class InterceptHandler(logging.Handler):
+    """Intercept standard logging and route to loguru."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            level = logger.level(record.levelname).name
+        except ValueError:
+            level = record.levelno
+
+        frame, depth = logging.currentframe(), 2
+        while frame.f_code.co_filename == logging.__file__:
+            frame = frame.f_back  # type: ignore
+            depth += 1
+
+        logger.opt(depth=depth, exception=record.exc_info).log(
+            level, record.getMessage()
+        )
+
+
 def setup_logger(config: dict[str, Any] | None = None) -> None:
     """Setup logger with custom configuration"""
     if config is None:
@@ -45,7 +64,14 @@ def setup_logger(config: dict[str, Any] | None = None) -> None:
     for handler in config["handlers"]:
         logger.add(**handler)
 
-    # Filter out health check logs from uvicorn access logger
+    # Intercept uvicorn loggers and route through loguru
+    for name in ["uvicorn", "uvicorn.error", "uvicorn.access"]:
+        logging_logger = logging.getLogger(name)
+        logging_logger.handlers = [InterceptHandler()]
+        logging_logger.setLevel(logging.INFO)
+        logging_logger.propagate = False
+
+    # Filter out health check logs
     logging.getLogger("uvicorn.access").addFilter(HealthCheckFilter())
 
     logger.info("Logger configured successfully")

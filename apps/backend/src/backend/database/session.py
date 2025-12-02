@@ -9,38 +9,23 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy.pool import AsyncAdaptedQueuePool, NullPool
+from sqlalchemy.pool import NullPool
 
 from backend.config import app_config
 
 
 class DatabaseSessionManager:
-    """Manages database connections and sessions"""
+    """Manages database connections and sessions. Uses NullPool for PgBouncer compatibility."""
 
-    def __init__(
-        self,
-        pool_size: int = 10,
-        max_overflow: int = 20,
-        pool_timeout: int = 30,
-        pool_recycle: int = 1800,
-    ):
-        self._pool_size = pool_size
-        self._max_overflow = max_overflow
-        self._pool_timeout = pool_timeout
-        self._pool_recycle = pool_recycle
+    def __init__(self):
         self._engine: AsyncEngine | None = None
         self._async_session: async_sessionmaker[AsyncSession] | None = None
 
     def _get_db_url(self) -> str:
-        """Get database URL based on current config"""
-        db_url = (
-            app_config.DATABASE_POOL_URL
-            if app_config.IS_WORKER
-            else app_config.DATABASE_URL
-        )
+        """Get database URL (via PgBouncer)"""
+        db_url = app_config.DATABASE_URL
         if not db_url.startswith("postgresql+asyncpg"):
             db_url = db_url.replace("postgresql://", "postgresql+asyncpg://")
-
         return db_url
 
     def _ensure_initialized(self):
@@ -48,35 +33,20 @@ class DatabaseSessionManager:
         if self._engine is not None:
             return
 
-        connect_args = (
-            {}
-            if not app_config.IS_WORKER
-            else {
-                "prepared_statement_name_func": lambda: f"__asyncpg_{uuid4()}__",
-                "statement_cache_size": 0,
-                "prepared_statement_cache_size": 0,
-            }
-        )
+        # Use NullPool - connection pooling handled by PgBouncer
+        connect_args = {
+            "prepared_statement_name_func": lambda: f"__asyncpg_{uuid4()}__",
+            "statement_cache_size": 0,
+            "prepared_statement_cache_size": 0,
+        }
 
         db_url = self._get_db_url()
 
-        if app_config.IS_WORKER:
-            self._engine = create_async_engine(
-                db_url,
-                poolclass=NullPool,
-                future=True,
-                connect_args=connect_args,
-            )
-
-        else:
-            self._engine = create_async_engine(
-                db_url,
-                poolclass=AsyncAdaptedQueuePool,
-                pool_size=self._pool_size,
-                max_overflow=self._max_overflow,
-                pool_timeout=self._pool_timeout,
-                pool_recycle=self._pool_recycle,
-            )
+        self._engine = create_async_engine(
+            db_url,
+            poolclass=NullPool,
+            connect_args=connect_args,
+        )
 
         self._async_session = async_sessionmaker(
             self._engine,
@@ -106,7 +76,6 @@ class DatabaseSessionManager:
         session = self._async_session()
         try:
             yield session
-
         finally:
             await session.close()
 

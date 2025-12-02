@@ -1,10 +1,10 @@
-name: Build and Release Binaries
+name: Build and Release CLI Binaries
 
 on:
   push:
     tags:
-      - 'v*.*.*'  # Triggers on version tags like v0.1.0, v1.2.3
-  workflow_dispatch:  # Allows manual trigger from GitHub UI
+      - 'v*.*.*'
+  workflow_dispatch:
 
 jobs:
   build:

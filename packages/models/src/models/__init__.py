@@ -1,8 +1,6 @@
 from models.billing import (
     UsageCollectionConfig,
     UsageCollectionInterval,
-    UsageRecordStatus,
-    UsageRecordType,
 )
 from models.deployments import (
     DeploymentInfo,
@@ -15,11 +13,13 @@ from models.depot import (
     DepotProject,
     DepotProjectToken,
 )
+from models.k8s import PVCInfo
 from models.metrics import (
     NamespaceBreakdown,
     NamespaceSummary,
     PodMetrics,
     PodUsage,
+    StorageUsage,
     UsagePeriod,
     UsageTotals,
 )
@@ -41,13 +41,13 @@ __all__ = [
     "NamespaceSummary",
     "PodMetrics",
     "PodUsage",
+    "PVCInfo",
     "ResourceRequirements",
+    "StorageUsage",
     "StreamEventType",
     "SubscriptionManagerStats",
     "UsageCollectionConfig",
     "UsageCollectionInterval",
     "UsagePeriod",
-    "UsageRecordStatus",
-    "UsageRecordType",
     "UsageTotals",
 ]

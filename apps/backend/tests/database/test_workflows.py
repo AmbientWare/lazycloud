@@ -1,10 +1,10 @@
 """Integration workflow tests that span multiple services."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from backend.database import Database
+from backend.database.usage import DailyUsageStatus
 from backend.database.workspaces import WorkspaceStatus
-from models.billing import UsageRecordStatus
 from models.deployments import DeploymentStates
 from models.workspaces import UserWorkspaceStatus, WorkspaceRole
 
@@ -13,7 +13,6 @@ from tests.fixtures.database import (
     make_deployment,
     make_invitation,
     make_secret,
-    make_usage_record,
     make_user,
     make_user_workspace,
     make_workspace,
@@ -246,58 +245,74 @@ class TestWorkspaceCollaborationWorkflow:
 class TestUsageTrackingWorkflow:
     """Test usage tracking workflow."""
 
-    async def test_usage_collection_and_finalization(self, db: Database):
-        """Test collecting and finalizing usage records."""
+    async def test_usage_collection_and_billing(self, db: Database):
+        """Test collecting and billing usage records."""
         user = await db.users.create(make_user())
         workspace = await db.workspaces.create(make_workspace())
         await db.user_workspaces.create(make_user_workspace(user.id, workspace.id))
 
-        now = datetime.now(timezone.utc)
+        today = datetime.now(timezone.utc).date()
 
-        for i in range(3):
-            start = now - timedelta(hours=3 - i)
-            end = now - timedelta(hours=2 - i)
-
-            record = make_usage_record(
-                workspace.id,
-                collection_start=start,
-                collection_end=end,
-                cpu_core_seconds=100.0 * (i + 1),
-            )
-            created = await db.usage.create(record)
-            await db.usage.finalize_record(created.id)
-
-        records = await db.usage.get_workspace_usage(
+        # Create and increment daily record
+        record = await db.usage.get_or_create_daily_record(
             workspace_id=workspace.id,
-            start_date=now - timedelta(hours=4),
-            end_date=now,
+            usage_date=today,
         )
 
-        finalized = [r for r in records if r.status == UsageRecordStatus.FINALIZED]
-        assert len(finalized) == 3
+        for i in range(3):
+            await db.usage.atomic_increment_usage(
+                record_id=record.id,
+                cpu_core_seconds=100.0 * (i + 1),
+                memory_gb_seconds=0.0,
+                standard_gb_hours=0.0,
+                shared_gb_hours=0.0,
+                build_minutes=0.0,
+                public_endpoint_hours=0.0,
+            )
 
-    async def test_usage_reporting_workflow(self, db: Database):
-        """Test complete usage reporting workflow."""
+        records = await db.usage.get_workspace_daily_usage(
+            workspace_id=workspace.id,
+            start_date=today,
+            end_date=today,
+        )
+
+        assert len(records) == 1
+        assert records[0].cpu_core_seconds == 600.0  # 100 + 200 + 300
+        assert records[0].intervals_collected == 3
+
+    async def test_usage_billing_workflow(self, db: Database):
+        """Test complete usage billing workflow."""
         user = await db.users.create(make_user())
         workspace = await db.workspaces.create(make_workspace())
         await db.user_workspaces.create(make_user_workspace(user.id, workspace.id))
 
-        record = make_usage_record(workspace.id, cpu_core_seconds=500.0)
-        created = await db.usage.create(record)
+        today = datetime.now(timezone.utc).date()
+        record = await db.usage.get_or_create_daily_record(
+            workspace_id=workspace.id,
+            usage_date=today,
+        )
 
-        await db.usage.finalize_record(created.id)
+        await db.usage.atomic_increment_usage(
+            record_id=record.id,
+            cpu_core_seconds=500.0,
+            memory_gb_seconds=0.0,
+            standard_gb_hours=0.0,
+            shared_gb_hours=0.0,
+            build_minutes=0.0,
+            public_endpoint_hours=0.0,
+        )
 
-        # Verify finalized status
-        finalized = await db.usage.get_by_id(created.id)
-        assert finalized is not None
-        assert finalized.status == UsageRecordStatus.FINALIZED
+        # Mark as billed
+        await db.usage.mark_as_billed(record.id, "billing-123")
 
-        await db.usage.mark_as_reported(created.id)
-
-        # Verify reported status
-        reported = await db.usage.get_by_id(created.id)
-        assert reported is not None
-        assert reported.status == UsageRecordStatus.REPORTED
+        # Verify billed status
+        records = await db.usage.get_workspace_daily_usage(
+            workspace_id=workspace.id,
+            start_date=today,
+            end_date=today,
+        )
+        assert records[0].status == DailyUsageStatus.BILLED
+        assert records[0].billing_id == "billing-123"
 
 
 @requires_db
@@ -313,7 +328,10 @@ class TestWorkspaceCleanupWorkflow:
         deployment = await db.compose_deployments.create(make_deployment(workspace.id))
 
         await db.secrets.create(make_secret(deployment.id))
-        await db.usage.create(make_usage_record(workspace.id))
+
+        # Create daily usage record
+        today = datetime.now(timezone.utc).date()
+        await db.usage.get_or_create_daily_record(workspace.id, today)
 
         await db.workspaces.update_status(workspace.id, WorkspaceStatus.DELETED)
 

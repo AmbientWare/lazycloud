@@ -11,15 +11,11 @@ from backend.services.cost_breakdown_service import CostBreakdownService
 from backend.services.depot_service import DepotService
 from backend.services.polar import PolarService
 from backend.services.usage_service import UsageService
-from models.billing import (
-    SECONDS_PER_HOUR,
-    UsageCollectionConfig,
-    UsageRecordStatus,
-)
+from models.billing import SECONDS_PER_HOUR
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from tests.billing.conftest import create_interval_records
-from tests.fixtures.database import make_deployment, requires_db
+from tests.billing.conftest import create_breakdown_events, create_daily_record
+from tests.fixtures.database import requires_db
 
 pytestmark = [
     pytest.mark.asyncio,
@@ -31,7 +27,6 @@ pytestmark = [
 @pytest.fixture
 def usage_service() -> UsageService:
     """Create a UsageService instance with mock dependencies."""
-    # Create minimal cost service (disabled Polar)
     polar_service = PolarService(access_token="", is_sandbox=True)
     cost_service = CostBreakdownService(polar_service=polar_service)
     depot_service = DepotService(api_token="", org_id="")
@@ -46,10 +41,8 @@ def mock_db_context(billing_db: Database, billing_db_session: AsyncSession):
     async def mock_context():
         try:
             yield billing_db
-            # Flush and commit like the real get_db_context does
             await billing_db_session.flush()
             await billing_db_session.commit()
-            # Expire all so subsequent queries see committed data
             billing_db_session.expire_all()
         except Exception:
             await billing_db_session.rollback()
@@ -66,7 +59,7 @@ def mock_db_context(billing_db: Database, billing_db_session: AsyncSession):
 
 
 class TestWorkspaceAggregation:
-    """Test workspace-level usage aggregation."""
+    """Test workspace-level usage aggregation from daily records."""
 
     async def test_aggregate_workspace_usage_for_range(
         self,
@@ -75,92 +68,93 @@ class TestWorkspaceAggregation:
         billing_workspace,
         usage_service: UsageService,
     ):
-        """Verify workspace-level totals for date range."""
+        """Verify workspace totals are correctly converted to hours."""
         workspace_id = str(billing_workspace.id)
-        yesterday = datetime.now(timezone.utc) - timedelta(days=1)
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
 
-        cpu_per_interval = 3600.0  # 1 core-hour worth
-        memory_per_interval = 7200.0  # 2 GB-hours worth
-        num_intervals = 24
+        # 3600 seconds = 1 hour, 7200 seconds = 2 hours
+        cpu_seconds = 3600.0
+        memory_seconds = 7200.0
 
-        await create_interval_records(
+        await create_daily_record(
             db=billing_db,
             workspace_id=workspace_id,
-            date=yesterday,
-            num_intervals=num_intervals,
-            cpu_per_interval=cpu_per_interval,
-            memory_per_interval=memory_per_interval,
+            usage_date=yesterday,
+            cpu_core_seconds=cpu_seconds,
+            memory_gb_seconds=memory_seconds,
         )
 
-        # Flush records so aggregate_workspace_usage_for_date_range can see them
         await billing_db_session.flush()
 
-        start_date = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
+        start_date = datetime.combine(yesterday, datetime.min.time()).replace(
+            tzinfo=timezone.utc
+        )
         end_date = start_date + timedelta(days=1)
 
-        # Note: aggregate_workspace_usage_for_date_range uses get_db_context internally
-        # For this test, we verify the helper function works with seeded data
         metrics = await usage_service.aggregate_workspace_usage_for_date_range(
             workspace_id=workspace_id,
             start_date=start_date,
             end_date=end_date,
         )
 
-        expected_cpu_hours = (cpu_per_interval * num_intervals) / SECONDS_PER_HOUR
-        expected_memory_hours = (memory_per_interval * num_intervals) / SECONDS_PER_HOUR
+        # Verify conversion from seconds to hours
+        assert metrics.cpu_core_hours == 1.0  # 3600 / 3600
+        assert metrics.memory_gb_hours == 2.0  # 7200 / 3600
 
-        assert metrics.cpu_core_hours == expected_cpu_hours
-        assert metrics.memory_gb_hours == expected_memory_hours
-
-    async def test_aggregate_workspace_with_return_records(
+    async def test_aggregate_workspace_multiple_days(
         self,
         billing_db: Database,
         billing_db_session,
         billing_workspace,
         usage_service: UsageService,
     ):
-        """Verify aggregation returns records when requested."""
+        """Verify aggregation sums across multiple daily records."""
         workspace_id = str(billing_workspace.id)
-        yesterday = datetime.now(timezone.utc) - timedelta(days=1)
+        today = datetime.now(timezone.utc).date()
+        yesterday = today - timedelta(days=1)
 
-        cpu_per_interval = 3600.0  # default from create_interval_records
-        num_intervals = 24
-
-        await create_interval_records(
+        # Create records for two days with different values
+        await create_daily_record(
             db=billing_db,
             workspace_id=workspace_id,
-            date=yesterday,
-            num_intervals=num_intervals,
-            cpu_per_interval=cpu_per_interval,
+            usage_date=yesterday,
+            cpu_core_seconds=1000.0,
+            standard_gb_hours=5.0,
+        )
+        await create_daily_record(
+            db=billing_db,
+            workspace_id=workspace_id,
+            usage_date=today,
+            cpu_core_seconds=2000.0,
+            standard_gb_hours=10.0,
         )
 
-        # Flush records so aggregate_workspace_usage_for_date_range can see them
         await billing_db_session.flush()
 
-        start_date = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
-        end_date = start_date + timedelta(days=1)
+        start_date = datetime.combine(yesterday, datetime.min.time()).replace(
+            tzinfo=timezone.utc
+        )
+        end_date = datetime.combine(today, datetime.max.time()).replace(
+            tzinfo=timezone.utc
+        )
 
-        result = await usage_service.aggregate_workspace_usage_for_date_range(
+        metrics = await usage_service.aggregate_workspace_usage_for_date_range(
             workspace_id=workspace_id,
             start_date=start_date,
             end_date=end_date,
-            return_records=True,
         )
 
-        metrics, records = result
-
-        # Verify correct number of records returned
-        assert len(records) == num_intervals
-
-        # Verify metrics match expected totals
-        expected_cpu_hours = (cpu_per_interval * num_intervals) / SECONDS_PER_HOUR
-        assert metrics.cpu_core_hours == expected_cpu_hours
+        # Verify sum: (1000 + 2000) / 3600 hours
+        expected_cpu_hours = 3000.0 / SECONDS_PER_HOUR
+        assert metrics.cpu_core_hours == pytest.approx(expected_cpu_hours, rel=0.001)
+        # Storage is already in hours, so just sum
+        assert metrics.standard_gb_hours == 15.0
 
 
-class TestDeploymentAggregation:
-    """Test deployment-level usage aggregation from records."""
+class TestDeploymentBreakdown:
+    """Test deployment-level usage breakdown from events."""
 
-    async def test_aggregate_deployment_usage_from_records(
+    async def test_get_deployment_breakdown_metrics(
         self,
         billing_db: Database,
         billing_db_session,
@@ -168,263 +162,264 @@ class TestDeploymentAggregation:
         billing_deployment,
         usage_service: UsageService,
     ):
-        """Verify deployment-level breakdown extraction."""
+        """Verify deployment breakdown correctly aggregates event metrics."""
         workspace_id = str(billing_workspace.id)
         deployment_id = str(billing_deployment.id)
-        yesterday = datetime.now(timezone.utc) - timedelta(days=1)
-        day_start = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
-
-        # Create a second deployment to test filtering
-        other_deployment = await billing_db.compose_deployments.create(
-            make_deployment(workspace_id)
+        today = datetime.now(timezone.utc).date()
+        interval_start = datetime.combine(today, datetime.min.time()).replace(
+            tzinfo=timezone.utc
         )
-        other_deployment_id = str(other_deployment.id)
+        interval_end = interval_start + timedelta(minutes=15)
 
-        # Create interval records with compute breakdowns
-        records = []
-        for i in range(3):
-            start_time = day_start + timedelta(hours=i)
-            end_time = start_time + timedelta(hours=1)
+        # Create 2 pods with 100 CPU each = 200 total
+        await create_breakdown_events(
+            db=billing_db,
+            workspace_id=workspace_id,
+            interval_start=interval_start,
+            interval_end=interval_end,
+            deployment_id=deployment_id,
+            num_pods=2,
+            cpu_per_pod=100.0,
+            memory_per_pod=200.0,
+            num_pvcs=1,
+            gb_hours_per_pvc=10.0,
+        )
 
-            record = await billing_db.usage.upsert_usage_record(
-                workspace_id=workspace_id,
-                collection_start=start_time,
-                collection_end=end_time,
-                cpu_core_seconds=1000.0,
-                memory_gb_seconds=2000.0,
-                storage_gb_hours=0.0,
-                record_type=UsageCollectionConfig.get_record_type(),
-                status=UsageRecordStatus.FINALIZED,
-            )
-
-            # Add compute breakdown for this deployment
-            await billing_db.usage.upsert_compute_breakdown(
-                usage_record_id=record.id,
-                pod_name="web-0",
-                cpu_core_seconds=500.0,
-                memory_gb_seconds=1000.0,
-                deployment_id=deployment_id,
-                service_name="web",
-            )
-
-            # Also add breakdown for different deployment (should be excluded)
-            await billing_db.usage.upsert_compute_breakdown(
-                usage_record_id=record.id,
-                pod_name="other-0",
-                cpu_core_seconds=500.0,
-                memory_gb_seconds=1000.0,
-                deployment_id=other_deployment_id,
-                service_name="other",
-            )
-
-            records.append(record)
-
-        # Flush records so queries can see them
         await billing_db_session.flush()
 
-        # Re-fetch records with breakdowns loaded
-        usage_records = await billing_db.usage.get_workspace_usage(
+        metrics, services, volumes = await usage_service.get_deployment_breakdown(
             workspace_id=workspace_id,
-            start_date=day_start,
-            end_date=day_start + timedelta(days=1),
-            record_type=UsageCollectionConfig.get_record_type(),
+            deployment_id=deployment_id,
+            start_date=interval_start,
+            end_date=interval_end + timedelta(hours=1),
         )
 
-        metrics, services, volumes = (
-            usage_service.aggregate_deployment_usage_from_records(
-                usage_records=usage_records,
-                deployment_id=deployment_id,
-                build_minutes=0.0,
-                public_endpoint_hours=0.0,
-            )
+        # Verify metrics: 2 pods * 100 = 200 core-seconds
+        expected_cpu_hours = 200.0 / SECONDS_PER_HOUR
+        assert metrics.cpu_core_hours == pytest.approx(expected_cpu_hours, rel=0.001)
+
+        expected_memory_hours = 400.0 / SECONDS_PER_HOUR
+        assert metrics.memory_gb_hours == pytest.approx(
+            expected_memory_hours, rel=0.001
         )
 
-        # Should only include usage for the target deployment
-        # 3 intervals * 500 core-seconds = 1500 core-seconds = 1500/3600 hours
-        expected_cpu_hours = (500.0 * 3) / SECONDS_PER_HOUR
-        expected_memory_hours = (1000.0 * 3) / SECONDS_PER_HOUR
+        assert metrics.standard_gb_hours == 10.0
 
-        assert metrics.cpu_core_hours == pytest.approx(expected_cpu_hours, rel=0.01)
-        assert metrics.memory_gb_hours == pytest.approx(expected_memory_hours, rel=0.01)
+    async def test_get_deployment_breakdown_service_list(
+        self,
+        billing_db: Database,
+        billing_db_session,
+        billing_workspace,
+        billing_deployment,
+        usage_service: UsageService,
+    ):
+        """Verify service breakdown contains correct per-service values."""
+        workspace_id = str(billing_workspace.id)
+        deployment_id = str(billing_deployment.id)
+        today = datetime.now(timezone.utc).date()
+        interval_start = datetime.combine(today, datetime.min.time()).replace(
+            tzinfo=timezone.utc
+        )
+        interval_end = interval_start + timedelta(minutes=15)
 
-        # Should have service breakdown for "web"
-        assert len(services) == 1
-        assert services[0].service_name == "web"
+        await create_breakdown_events(
+            db=billing_db,
+            workspace_id=workspace_id,
+            interval_start=interval_start,
+            interval_end=interval_end,
+            deployment_id=deployment_id,
+            num_pods=3,
+            cpu_per_pod=50.0,
+        )
+
+        await billing_db_session.flush()
+
+        metrics, services, volumes = await usage_service.get_deployment_breakdown(
+            workspace_id=workspace_id,
+            deployment_id=deployment_id,
+            start_date=interval_start,
+            end_date=interval_end + timedelta(hours=1),
+        )
+
+        # Should have 3 services (service-0, service-1, service-2)
+        assert len(services) == 3
+        for svc in services:
+            assert svc.cpu_core_seconds == 50.0
+            assert svc.service_name.startswith("service-")
+
+    async def test_get_deployment_breakdown_volume_list(
+        self,
+        billing_db: Database,
+        billing_db_session,
+        billing_workspace,
+        billing_deployment,
+        usage_service: UsageService,
+    ):
+        """Verify volume breakdown contains correct per-volume values."""
+        workspace_id = str(billing_workspace.id)
+        deployment_id = str(billing_deployment.id)
+        today = datetime.now(timezone.utc).date()
+        interval_start = datetime.combine(today, datetime.min.time()).replace(
+            tzinfo=timezone.utc
+        )
+        interval_end = interval_start + timedelta(minutes=15)
+
+        await create_breakdown_events(
+            db=billing_db,
+            workspace_id=workspace_id,
+            interval_start=interval_start,
+            interval_end=interval_end,
+            deployment_id=deployment_id,
+            num_pods=0,
+            num_pvcs=2,
+            gb_hours_per_pvc=25.0,
+        )
+
+        await billing_db_session.flush()
+
+        metrics, services, volumes = await usage_service.get_deployment_breakdown(
+            workspace_id=workspace_id,
+            deployment_id=deployment_id,
+            start_date=interval_start,
+            end_date=interval_end + timedelta(hours=1),
+        )
+
+        assert len(volumes) == 2
+        for vol in volumes:
+            assert vol.gb_hours == 25.0
+            assert vol.volume_name.startswith("pvc-")
+            assert vol.storage_class == "ebs-sc"
 
 
 class TestDailyByTimezone:
     """Test timezone-aware daily grouping."""
 
-    async def test_aggregate_records_by_day_utc(
+    async def test_aggregate_daily_records_by_day_utc(
         self,
         billing_db: Database,
         billing_db_session,
         billing_workspace,
         usage_service: UsageService,
     ):
-        """Verify records grouped by calendar day in UTC."""
+        """Verify records grouped correctly by calendar day in UTC."""
         workspace_id = str(billing_workspace.id)
-        yesterday = datetime.now(timezone.utc) - timedelta(days=1)
-        day_start = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
 
-        # Create records across midnight UTC
-        for hour in range(24):
-            start_time = day_start + timedelta(hours=hour)
-            end_time = start_time + timedelta(hours=1)
+        await create_daily_record(
+            db=billing_db,
+            workspace_id=workspace_id,
+            usage_date=yesterday,
+            cpu_core_seconds=100.0,
+        )
 
-            await billing_db.usage.upsert_usage_record(
-                workspace_id=workspace_id,
-                collection_start=start_time,
-                collection_end=end_time,
-                cpu_core_seconds=100.0,
-                memory_gb_seconds=100.0,
-                storage_gb_hours=0.0,
-                record_type=UsageCollectionConfig.get_record_type(),
-                status=UsageRecordStatus.FINALIZED,
-            )
-
-        # Flush records so queries can see them
         await billing_db_session.flush()
 
-        # Fetch records
-        records = await billing_db.usage.get_workspace_usage(
+        records = await billing_db.usage.get_workspace_daily_usage(
             workspace_id=workspace_id,
-            start_date=day_start,
-            end_date=day_start + timedelta(days=1),
-            record_type=UsageCollectionConfig.get_record_type(),
+            start_date=yesterday,
+            end_date=yesterday,
         )
 
-        # Test aggregation by day
         tz = ZoneInfo("UTC")
-        daily_data = usage_service._aggregate_records_by_day(records, tz)
+        daily_data = usage_service._aggregate_daily_records_by_day(records, tz)
 
-        # Should have exactly 1 day
         assert len(daily_data) == 1
-
-        day_key = day_start.strftime("%Y-%m-%d")
+        day_key = str(yesterday)
         assert day_key in daily_data
-        expected_hours = 24 * 100.0 / SECONDS_PER_HOUR
-        assert daily_data[day_key].cpu_core_hours == pytest.approx(
-            expected_hours, rel=1e-9
-        )
-
-    async def test_aggregate_records_by_day_with_timezone(
-        self,
-        billing_db: Database,
-        billing_workspace,
-        usage_service: UsageService,
-    ):
-        """Verify records grouped correctly in non-UTC timezone."""
-        workspace_id = str(billing_workspace.id)
-
-        # Create records at UTC midnight (which is 7pm EST previous day)
-        utc_midnight = datetime(2024, 1, 15, 0, 0, 0, tzinfo=timezone.utc)
-
-        for hour in range(6):  # 6 hours: 00:00-06:00 UTC
-            start_time = utc_midnight + timedelta(hours=hour)
-            end_time = start_time + timedelta(hours=1)
-
-            await billing_db.usage.upsert_usage_record(
-                workspace_id=workspace_id,
-                collection_start=start_time,
-                collection_end=end_time,
-                cpu_core_seconds=100.0,
-                memory_gb_seconds=100.0,
-                storage_gb_hours=0.0,
-                record_type=UsageCollectionConfig.get_record_type(),
-                status=UsageRecordStatus.FINALIZED,
-            )
-
-        records = await billing_db.usage.get_workspace_usage(
-            workspace_id=workspace_id,
-            start_date=utc_midnight,
-            end_date=utc_midnight + timedelta(hours=6),
-            record_type=UsageCollectionConfig.get_record_type(),
-        )
-
-        # In America/New_York timezone:
-        # 00:00 UTC = 19:00 EST (Jan 14)
-        # 05:00 UTC = 00:00 EST (Jan 15)
-        tz = ZoneInfo("America/New_York")
-        daily_data = usage_service._aggregate_records_by_day(records, tz)
-
-        # Should span 2 calendar days in EST
-        assert len(daily_data) == 2
+        # Verify the actual value was preserved
+        assert daily_data[day_key].cpu_core_hours == 100.0 / SECONDS_PER_HOUR
 
 
 class TestAggregationEdgeCases:
     """Test edge cases in usage aggregation."""
 
-    async def test_aggregate_empty_records(
-        self,
-        usage_service: UsageService,
-    ):
-        """Verify aggregation handles empty record list."""
-        metrics, services, volumes = (
-            usage_service.aggregate_deployment_usage_from_records(
-                usage_records=[],
-                deployment_id="test-deployment",
-                build_minutes=5.0,
-                public_endpoint_hours=10.0,
-            )
-        )
-
-        # Should return zero metrics but include build/endpoint values
-        assert metrics.cpu_core_hours == 0.0
-        assert metrics.memory_gb_hours == 0.0
-        assert metrics.build_minutes == 5.0
-        assert metrics.public_endpoint_hours == 10.0
-        assert len(services) == 0
-        assert len(volumes) == 0
-
-    async def test_aggregate_with_build_and_endpoints(
+    async def test_aggregate_empty_range_returns_zeros(
         self,
         billing_db: Database,
         billing_workspace,
-        billing_deployment,
         usage_service: UsageService,
     ):
-        """Verify build minutes and endpoint hours included in aggregation."""
+        """Verify empty date range returns zero metrics, not errors."""
         workspace_id = str(billing_workspace.id)
-        deployment_id = str(billing_deployment.id)
-        yesterday = datetime.now(timezone.utc) - timedelta(days=1)
-        day_start = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
+        future_date = datetime.now(timezone.utc) + timedelta(days=30)
 
-        record = await billing_db.usage.upsert_usage_record(
+        metrics = await usage_service.aggregate_workspace_usage_for_date_range(
             workspace_id=workspace_id,
-            collection_start=day_start,
-            collection_end=day_start + timedelta(hours=1),
+            start_date=future_date,
+            end_date=future_date + timedelta(days=1),
+        )
+
+        assert metrics.cpu_core_hours == 0.0
+        assert metrics.memory_gb_hours == 0.0
+        assert metrics.standard_gb_hours == 0.0
+        assert metrics.shared_gb_hours == 0.0
+        assert metrics.build_minutes == 0.0
+        assert metrics.public_endpoint_hours == 0.0
+
+    async def test_aggregate_with_all_metrics(
+        self,
+        billing_db: Database,
+        billing_db_session,
+        billing_workspace,
+        usage_service: UsageService,
+    ):
+        """Verify all metric types are aggregated correctly."""
+        workspace_id = str(billing_workspace.id)
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
+
+        await create_daily_record(
+            db=billing_db,
+            workspace_id=workspace_id,
+            usage_date=yesterday,
             cpu_core_seconds=1000.0,
             memory_gb_seconds=2000.0,
-            storage_gb_hours=0.0,
+            standard_gb_hours=10.0,
+            shared_gb_hours=5.0,
             build_minutes=15.0,
             public_endpoint_hours=2.0,
-            record_type=UsageCollectionConfig.get_record_type(),
-            status=UsageRecordStatus.FINALIZED,
         )
 
-        await billing_db.usage.upsert_compute_breakdown(
-            usage_record_id=record.id,
-            pod_name="web-0",
-            cpu_core_seconds=1000.0,
-            memory_gb_seconds=2000.0,
-            deployment_id=deployment_id,
-            service_name="web",
-        )
+        await billing_db_session.flush()
 
-        records = await billing_db.usage.get_workspace_usage(
+        start_date = datetime.combine(yesterday, datetime.min.time()).replace(
+            tzinfo=timezone.utc
+        )
+        end_date = start_date + timedelta(days=1)
+
+        metrics = await usage_service.aggregate_workspace_usage_for_date_range(
             workspace_id=workspace_id,
-            start_date=day_start,
-            end_date=day_start + timedelta(hours=1),
-            record_type=UsageCollectionConfig.get_record_type(),
+            start_date=start_date,
+            end_date=end_date,
         )
 
-        metrics, _, _ = usage_service.aggregate_deployment_usage_from_records(
-            usage_records=records,
-            deployment_id=deployment_id,
-            build_minutes=15.0,
-            public_endpoint_hours=2.0,
-        )
-
+        # Seconds are converted to hours
+        assert metrics.cpu_core_hours == pytest.approx(1000.0 / 3600.0, rel=0.001)
+        assert metrics.memory_gb_hours == pytest.approx(2000.0 / 3600.0, rel=0.001)
+        # GB-hours and other metrics are stored directly
+        assert metrics.standard_gb_hours == 10.0
+        assert metrics.shared_gb_hours == 5.0
         assert metrics.build_minutes == 15.0
         assert metrics.public_endpoint_hours == 2.0
+
+    async def test_nonexistent_workspace_returns_zeros(
+        self,
+        billing_db: Database,
+        usage_service: UsageService,
+    ):
+        """Verify querying unknown workspace returns empty metrics."""
+        fake_workspace_id = "00000000-0000-0000-0000-000000000000"
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
+
+        start_date = datetime.combine(yesterday, datetime.min.time()).replace(
+            tzinfo=timezone.utc
+        )
+        end_date = start_date + timedelta(days=1)
+
+        metrics = await usage_service.aggregate_workspace_usage_for_date_range(
+            workspace_id=fake_workspace_id,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+        assert metrics.cpu_core_hours == 0.0
+        assert metrics.memory_gb_hours == 0.0

@@ -3,8 +3,6 @@ from enum import IntEnum, StrEnum
 
 
 class UsageCollectionInterval(IntEnum):
-    """Intervals for usage data collection"""
-
     MINUTE = 1
     FIVE_MINUTES = 5
     FIFTEEN_MINUTES = 15
@@ -12,54 +10,15 @@ class UsageCollectionInterval(IntEnum):
     HOURLY = 60
 
 
-class UsageRecordType(StrEnum):
-    """Type of usage record for aggregation level."""
-
-    MINUTE = "minute"
-    FIVE_MINUTES = "five_minutes"
-    FIFTEEN_MINUTES = "fifteen_minutes"
-    THIRTY_MINUTES = "thirty_minutes"
-    HOURLY = "hourly"
-    DAILY = "daily"
-
-
-class UsageRecordStatus(StrEnum):
-    """Status of usage record in billing workflow."""
-
-    DRAFT = "draft"
-    INCOMPLETE = "incomplete"
-    FINALIZED = "finalized"
-    REPORTED = "reported"
-
-
 class UsageCollectionConfig:
-    """Configuration for usage data collection intervals"""
-
-    # NOTE: change this to adjust collection frequency
     COLLECTION_INTERVAL = UsageCollectionInterval.FIFTEEN_MINUTES
 
-    # Derived values
     INTERVALS_PER_HOUR = 60 // COLLECTION_INTERVAL.value
     INTERVALS_PER_DAY = 24 * INTERVALS_PER_HOUR
     COLLECTION_INTERVAL_TIMEDELTA = timedelta(minutes=COLLECTION_INTERVAL.value)
 
-    # Mapping from collection interval to record type
-    INTERVAL_TO_RECORD_TYPE = {
-        UsageCollectionInterval.MINUTE: UsageRecordType.MINUTE,
-        UsageCollectionInterval.FIVE_MINUTES: UsageRecordType.FIVE_MINUTES,
-        UsageCollectionInterval.FIFTEEN_MINUTES: UsageRecordType.FIFTEEN_MINUTES,
-        UsageCollectionInterval.THIRTY_MINUTES: UsageRecordType.THIRTY_MINUTES,
-        UsageCollectionInterval.HOURLY: UsageRecordType.HOURLY,
-    }
-
-    @classmethod
-    def get_record_type(cls) -> UsageRecordType:
-        """Get the appropriate record type for the current collection interval."""
-        return cls.INTERVAL_TO_RECORD_TYPE[cls.COLLECTION_INTERVAL]
-
     @classmethod
     def get_cron_expression(cls) -> str:
-        """Generate cron expression for the collection interval."""
         if cls.COLLECTION_INTERVAL == UsageCollectionInterval.HOURLY:
             return "15 * * * *"
         elif cls.COLLECTION_INTERVAL == UsageCollectionInterval.FIFTEEN_MINUTES:
@@ -73,12 +32,10 @@ class UsageCollectionConfig:
 
     @classmethod
     def get_minute_marks(cls) -> list[int]:
-        """Get list of minute marks to collect at (e.g., [0, 15, 30, 45])."""
         return list(range(0, 60, cls.COLLECTION_INTERVAL.value))
 
     @classmethod
     def round_time_to_interval(cls, dt: datetime) -> datetime:
-        """Round datetime down to the nearest collection interval."""
         minutes = (
             dt.minute // cls.COLLECTION_INTERVAL.value
         ) * cls.COLLECTION_INTERVAL.value
@@ -94,14 +51,10 @@ class MeterNames(StrEnum):
     PUBLIC_ENDPOINTS = "Public Endpoints"
 
 
-# Time conversion constants
 SECONDS_PER_HOUR = 3600
 
-
-# Event name for the usage metrics event
 USAGE_EVENT_NAME = "lazycloud-usage"
 
-# Metadata field names for each meter to aggregate on
 METER_METADATA_FIELDS = {
     MeterNames.CPU_USAGE: "cpu_core_hours",
     MeterNames.MEMORY_USAGE: "memory_gb_hours",
@@ -111,17 +64,14 @@ METER_METADATA_FIELDS = {
     MeterNames.PUBLIC_ENDPOINTS: "public_endpoint_hours",
 }
 
-# Storage class name constants
 STORAGE_CLASS_EBS = "ebs-sc"
 STORAGE_CLASS_EFS = "efs-sc"
 
-# Mapping from Kubernetes storage class names to meter display names
 STORAGE_CLASS_TO_METER: dict[str, str] = {
     STORAGE_CLASS_EBS: MeterNames.STANDARD_STORAGE,
     STORAGE_CLASS_EFS: MeterNames.SHARED_STORAGE,
 }
 
-# Mapping from storage class to short type names
 STORAGE_CLASS_TO_TYPE: dict[str, str] = {
     STORAGE_CLASS_EBS: "Standard",
     STORAGE_CLASS_EFS: "Shared",

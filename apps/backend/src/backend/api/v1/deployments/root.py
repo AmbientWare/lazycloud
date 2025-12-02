@@ -177,9 +177,8 @@ async def create_deployment(
         # Generate temporary ID for validation
         temp_deployment.id = uuid.uuid4()
 
-    # Basic validation (full validation happens in deploy endpoint)
     try:
-        await validate_deployment_request(temp_deployment, existing_deployment)
+        _, _, _ = await validate_deployment_request(temp_deployment, existing_deployment)
 
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -367,7 +366,7 @@ async def deploy_deployment(
 
     # Full validation (compose parsing, helm generation, quotas)
     try:
-        helm_values, _ = await validate_deployment_request(
+        helm_values, _, _ = await validate_deployment_request(
             temp_deployment,
             deployment,
             service_names=request.service_names,

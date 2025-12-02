@@ -429,21 +429,36 @@ def _load_configuration(view: DeployView):
     return lazycloud_file, lazycloud_config, compose_file_path
 
 
+def _normalize_env_file_entries(env_file_config: str | list) -> list[tuple[str, bool]]:
+    """Normalize env_file config to list of (path, required) tuples"""
+    if isinstance(env_file_config, str):
+        env_file_config = [env_file_config]
+
+    result = []
+    for entry in env_file_config:
+        if isinstance(entry, dict):
+            path = entry.get("path", "")
+            required = entry.get("required", True)
+        else:
+            path = entry
+            required = True
+        if path:
+            result.append((path, required))
+    return result
+
+
 def _read_env_files(compose_data: dict, base_path: Path) -> dict[str, str]:
     """Read all env files referenced in the compose file."""
     env_files_content = {}
 
     for _, service_config in compose_data.get("services", {}).items():
         env_file_config = service_config.get("env_file", [])
-        if isinstance(env_file_config, str):
-            env_file_config = [env_file_config]
 
-        for env_file in env_file_config:
-            env_file_path = base_path / env_file
-            if env_file_path.exists() and env_file not in env_files_content:
+        for env_path, required in _normalize_env_file_entries(env_file_config):
+            env_file_path = base_path / env_path
+            if env_file_path.exists() and env_path not in env_files_content:
                 try:
-                    env_files_content[env_file] = env_file_path.read_text()
-
+                    env_files_content[env_path] = env_file_path.read_text()
                 except Exception:
                     raise typer.Exit(1)
 
@@ -986,12 +1001,10 @@ def _extract_env_variables_for_service(
 
     # Parse env_file for this service only
     env_file_config = service_config.get("env_file", [])
-    if isinstance(env_file_config, str):
-        env_file_config = [env_file_config]
 
-    for env_file in env_file_config:
-        if env_file in env_files_content:
-            content = env_files_content[env_file]
+    for env_path, _ in _normalize_env_file_entries(env_file_config):
+        if env_path in env_files_content:
+            content = env_files_content[env_path]
             for line in content.splitlines():
                 line = line.strip()
                 # Skip empty lines and comments

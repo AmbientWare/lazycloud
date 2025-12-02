@@ -1,0 +1,97 @@
+name: Deploy Web
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+
+jobs:
+  build-web:
+    name: Build Web Image
+    uses: ./.github/workflows/_build_push.yml
+    with:
+      app_name: web
+      dockerfile_path: ./apps/web/Dockerfile
+      build_context: .
+      ecr_repository: lazycloud-web
+      build_args: |
+        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+    secrets: inherit
+
+  update-values:
+    name: Update Helm Values
+    needs: build-web
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update values file
+        run: |
+          IMAGE_SHA="${{ needs.build-web.outputs.image_sha }}"
+          ENV="${{ inputs.environment }}"
+
+          if [ "$ENV" = "production" ]; then
+            VALUES_FILE="deploy/web/values-prod.yaml"
+          else
+            VALUES_FILE="deploy/web/values-staging.yaml"
+          fi
+
+          echo "Updating $VALUES_FILE with image SHA: $IMAGE_SHA"
+          sed -i "s/tag: \".*\"/tag: \"${IMAGE_SHA}\"/" "$VALUES_FILE"
+
+      - name: Commit and push changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          ENV="${{ inputs.environment }}"
+          IMAGE_SHA="${{ needs.build-web.outputs.image_sha }}"
+
+          if [ "$ENV" = "production" ]; then
+            VALUES_FILE="deploy/web/values-prod.yaml"
+          else
+            VALUES_FILE="deploy/web/values-staging.yaml"
+          fi
+
+          git add "$VALUES_FILE"
+
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "🚀 Deploy web to $ENV: $IMAGE_SHA"
+            git push
+          fi
+
+  summary:
+    name: Deployment Summary
+    needs: [build-web, update-values]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate summary
+        run: |
+          echo "## 🚀 Web Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Image SHA:** \`${{ needs.build-web.outputs.image_sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Build Status:** ${{ needs.build-web.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Deploy Status:** ${{ needs.update-values.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ inputs.environment }}" = "production" ]; then
+            echo "🌐 **URL:** https://lazycloud.dev" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "🌐 **URL:** https://staging.lazycloud.dev" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Argo CD will automatically sync this deployment." >> $GITHUB_STEP_SUMMARY

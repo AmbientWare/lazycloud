@@ -1,0 +1,46 @@
+# Staging environment values for API Platform
+
+replicaCount: 1
+
+backgroundWorkers:
+  replicaCount: 1
+
+crons:
+  replicaCount: 1
+
+image:
+  repository: 211125306000.dkr.ecr.us-east-1.amazonaws.com/lazycloud-api
+  pullPolicy: Always
+  tag: "staging-latest"
+
+ingress:
+  hostname: api-staging.lazycloud.dev
+
+secrets:
+  name: "app-secrets-staging"
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 1Gi
+  requests:
+    cpu: 100m
+    memory: 512Mi
+
+backgroundWorkers:
+  resources:
+    limits:
+      cpu: 250m
+      memory: 1Gi
+    requests:
+      cpu: 100m
+      memory: 512Mi
+
+crons:
+  resources:
+    limits:
+      cpu: 250m
+      memory: 512Mi
+    requests:
+      cpu: 50m
+      memory: 256Mi

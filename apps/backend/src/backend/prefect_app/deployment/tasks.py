@@ -20,7 +20,7 @@ from backend.config import app_config
 from backend.database import get_db_context
 from backend.database.compose import ComposeDeploymentPydantic
 from backend.database.secrets import SecretPydantic
-from backend.prefect_app.deployment.models import ValidationResult
+from backend.prefect_app.deployment.schemas import DeploymentPreparationResult
 from backend.prefect_app.deployment.utils import (
     delete_job_with_timeout,
     update_deployment_state,
@@ -166,7 +166,7 @@ async def check_deployment_idempotency_task(
 @task(retries=0)
 async def prepare_deployment_task(
     deployment_id: str, wait_for_secrets_flag: bool = False
-) -> ValidationResult:
+) -> DeploymentPreparationResult:
     """Prepare deployment data (validation already done upfront)."""
     if wait_for_secrets_flag:
         await wait_for_secrets(
@@ -180,27 +180,41 @@ async def prepare_deployment_task(
         raise ValueError(f"Deployment {deployment_id} not found")
 
     compose_yaml = deployment.pending_compose_yaml or deployment.compose_yaml
-    # Parse YAML (validation already done upfront, but we need to parse for helm generation)
-    try:
-        compose_data = yaml.safe_load(compose_yaml)
-        compose_file = ComposeParser.parse_dict(compose_data)
 
-    except Exception as e:
-        await update_deployment_state(
-            deployment_id,
-            DeploymentStates.FAILED,
-            f"Failed to parse compose file: {str(e)}",
-        )
-        raise ValueError(f"Failed to parse compose file: {e}") from e
+    helm_values = deployment.helm_values
+    compose_file = None
 
-    async with get_db_context() as db:
-        secrets = await db.secrets.get_secrets(deployment_id)
+    if not helm_values:
+        try:
+            compose_data = yaml.safe_load(compose_yaml)
+            compose_file = ComposeParser.parse_dict(compose_data)
+        except Exception as e:
+            await update_deployment_state(
+                deployment_id,
+                DeploymentStates.FAILED,
+                f"Failed to parse compose file: {str(e)}",
+            )
+            raise ValueError(f"Failed to parse compose file: {e}") from e
 
-    helm_generator = HelmValuesGenerator(deployment, secrets)
-    helm_values, _ = helm_generator.generate_values(compose_file)
-    helm_values.compose_yaml = compose_yaml
+        async with get_db_context() as db:
+            secrets = await db.secrets.get_secrets(deployment_id)
 
-    return ValidationResult(
+        helm_generator = HelmValuesGenerator(deployment, secrets)
+        helm_values, _ = helm_generator.generate_values(compose_file)
+        helm_values.compose_yaml = compose_yaml
+    else:
+        if compose_yaml:
+            try:
+                compose_data = yaml.safe_load(compose_yaml)
+                compose_file = ComposeParser.parse_dict(compose_data)
+            except Exception as e:
+                logger.warning(f"Failed to parse compose_file for return value: {e}")
+                compose_file = None
+
+        async with get_db_context() as db:
+            secrets = await db.secrets.get_secrets(deployment_id)
+
+    return DeploymentPreparationResult(
         deployment=deployment,
         compose_file=compose_file,
         helm_values=helm_values,

@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Chart.Name }}-crons
+  labels:
+    app: {{ .Chart.Name }}-crons
+    component: cron
+spec:
+  replicas: {{ .Values.crons.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ .Chart.Name }}-crons
+  template:
+    metadata:
+      labels:
+        app: {{ .Chart.Name }}-crons
+        component: cron
+    spec:
+      containers:
+        - name: cron-worker
+          image: "{{ .Values.image.repository | replace `lazycloud-api` `lazycloud-cron-worker` }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["uv", "run", "--no-sync", "python", "-m", "backend.worker"]
+          env:
+          {{- range .Values.secrets.env }}
+            - name: {{ . }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.secrets.name }}
+                  key: {{ . }}
+          {{- end }}
+            - name: PREFECT_LOCAL_STORAGE_PATH
+              value: "/shared-storage"
+            - name: PREFECT_RESULTS_PERSIST_BY_DEFAULT
+              value: "true"
+          volumeMounts:
+            - name: prefect-storage
+              mountPath: /shared-storage
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - pgrep -f 'backend.worker' || exit 1
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            limits:
+              cpu: {{ .Values.crons.resources.limits.cpu }}
+              memory: {{ .Values.crons.resources.limits.memory }}
+            requests:
+              cpu: {{ .Values.crons.resources.requests.cpu }}
+              memory: {{ .Values.crons.resources.requests.memory }}
+      volumes:
+        - name: prefect-storage
+          persistentVolumeClaim:
+            claimName: {{ .Chart.Name }}-prefect-storage

@@ -1,28 +1,86 @@
+import asyncio
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 import yaml
 from loguru import logger
 from models.billing import (
+    STORAGE_CLASS_EBS,
+    STORAGE_CLASS_EFS,
     UsageCollectionConfig,
-    UsageRecordStatus,
-    UsageRecordType,
 )
 from models.deployments import DeploymentStates
+from models.metrics import StorageUsage
 from prefect import flow, task
+from tenacity import (
+    RetryError,
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from backend.database import get_db_context
 from backend.database.compose import ComposeDeploymentPydantic
+from backend.database.usage import (
+    BreakdownType,
+    DailyUsageRecordPydantic,
+    DailyUsageStatus,
+)
 from backend.services import (
+    get_aws_metrics_service,
     get_depot_service,
     get_metrics_service,
     get_polar_service,
 )
 from backend.services.k8s import create_ns_name, create_release_name
+from backend.services.k8s.client import get_namespace_pvcs_with_details
+from backend.services.polar import PolarService
+
+MAX_BILLING_ATTEMPTS = 5
 
 
 def sanitize_volume_name(name: str) -> str:
     return name.lower().replace("_", "-").replace(".", "-")[:63].rstrip("-")
+
+
+async def collect_storage_usage(
+    namespace: str, interval_hours: float
+) -> list[StorageUsage]:
+    """Collect storage: K8s API for EBS size, CloudWatch for EFS actual usage."""
+    pvcs = get_namespace_pvcs_with_details(namespace)
+    aws_metrics = get_aws_metrics_service()
+
+    storage_list = []
+    for pvc in pvcs:
+        if pvc.storage_class == STORAGE_CLASS_EBS:
+            size_gb = pvc.requested_size_gb
+
+        elif pvc.storage_class == STORAGE_CLASS_EFS:
+            if not aws_metrics.enabled:
+                size_gb = pvc.requested_size_gb
+            elif not pvc.volume_handle:
+                raise ValueError(f"EFS PVC {pvc.name} has no volume handle")
+            else:
+                efs_id = pvc.volume_handle.split("::")[0]
+                usage_bytes = await aws_metrics.get_efs_storage_bytes(efs_id)
+                if usage_bytes is None:
+                    raise ValueError(f"CloudWatch unavailable for EFS {efs_id}")
+                size_gb = usage_bytes / (1024**3)
+
+        else:
+            size_gb = pvc.requested_size_gb
+
+        gb_hours = size_gb * interval_hours
+        storage_list.append(
+            StorageUsage(
+                pvc_name=pvc.name,
+                storage_class=pvc.storage_class,
+                gb_hours=gb_hours,
+                storage_size_gb=size_gb,
+            )
+        )
+
+    return storage_list
 
 
 def _parse_deployment_volumes(compose_yaml: str, deployment_id: str) -> set[str]:
@@ -45,20 +103,16 @@ def _parse_deployment_volumes(compose_yaml: str, deployment_id: str) -> set[str]
 
 @dataclass
 class ServiceEndpoint:
-    """Represents an active service endpoint."""
-
     deployment_id: str
     service_name: str
 
 
 @dataclass
 class WorkspaceDeploymentContext:
-    """Cached deployment data for a workspace to avoid duplicate queries."""
-
     deployments: list[ComposeDeploymentPydantic]
-    deployment_map: dict[str, str]  # release_name -> deployment_id
-    pvc_map: dict[str, str]  # pvc_name -> deployment_id
-    active_endpoints: list[ServiceEndpoint]  # List of active service endpoints
+    deployment_map: dict[str, str]
+    pvc_map: dict[str, str]
+    active_endpoints: list[ServiceEndpoint]
 
 
 async def _build_deployment_context(workspace_id: str) -> WorkspaceDeploymentContext:
@@ -71,18 +125,15 @@ async def _build_deployment_context(workspace_id: str) -> WorkspaceDeploymentCon
     active_endpoints: list[ServiceEndpoint] = []
 
     for deployment in deployments:
-        # Build release name map
         if deployment.name:
             release_name = create_release_name(workspace_id, deployment.name)
             deployment_map[release_name] = deployment.id
 
-        # Build PVC map
         if deployment.compose_yaml:
             volumes = _parse_deployment_volumes(deployment.compose_yaml, deployment.id)
             for volume_name in volumes:
                 pvc_map[volume_name] = deployment.id
 
-        # Track endpoints from deployed services with ingress enabled
         if deployment.state == DeploymentStates.DEPLOYED and deployment.helm_values:
             for service in deployment.helm_values.services:
                 if service.ingress and service.ingress.enabled:
@@ -102,321 +153,161 @@ async def _build_deployment_context(workspace_id: str) -> WorkspaceDeploymentCon
 
 
 @task(retries=2, retry_delay_seconds=60)
-async def collect_workspace_usage_for_interval(
+async def collect_workspace_interval(
     workspace_id: str,
-    start_time: datetime,
-    end_time: datetime,
-    status: UsageRecordStatus = UsageRecordStatus.DRAFT,
+    interval_start: datetime,
+    interval_end: datetime,
 ) -> dict:
+    """Collect usage for one interval - atomic increments, append-only events."""
     metrics_service = get_metrics_service()
 
-    try:
-        # Check Prometheus health before attempting collection
-        if not await metrics_service.health_check():
-            logger.error("Prometheus is not healthy, skipping usage collection")
-            return {
-                "workspace_id": workspace_id,
-                "hour": start_time.hour,
-                "success": False,
-                "error": "Prometheus unhealthy",
-            }
+    if not await metrics_service.health_check():
+        raise RuntimeError(f"Prometheus unhealthy for {workspace_id} collection")
 
-        namespace = create_ns_name(workspace_id)
+    async with get_db_context() as db:
+        # Check idempotency - skip if already collected
+        if await db.usage.is_interval_collected(workspace_id, interval_start):
+            logger.debug(
+                f"Interval {interval_start} already collected for {workspace_id}"
+            )
+            return {"status": "already_collected", "workspace_id": workspace_id}
 
-        # Build deployment context with single query (avoids N+1 queries)
-        ctx = await _build_deployment_context(workspace_id)
-
-        # Get detailed breakdown from Prometheus
-        breakdown = await metrics_service.get_namespace_breakdown(
-            namespace, start_time, end_time
+        # Get or create daily record
+        usage_date = interval_start.date()
+        daily_record = await db.usage.get_or_create_daily_record(
+            workspace_id=workspace_id,
+            usage_date=usage_date,
+            expected_intervals=UsageCollectionConfig.INTERVALS_PER_DAY,
         )
 
-        # Collect build minutes from Depot per deployment
+        # Skip if already billed
+        if daily_record.status == DailyUsageStatus.BILLED:
+            logger.warning(
+                f"Day {usage_date} already billed for {workspace_id}, skipping"
+            )
+            return {"status": "already_billed", "workspace_id": workspace_id}
+
+        # Collect metrics from external services
+        namespace = create_ns_name(workspace_id)
+        ctx = await _build_deployment_context(workspace_id)
+
+        breakdown = await metrics_service.get_namespace_breakdown(
+            namespace, interval_start, interval_end
+        )
+
+        interval_hours = (interval_end - interval_start).total_seconds() / 3600
+        storage_list = await collect_storage_usage(namespace, interval_hours)
+
+        # Collect build minutes from Depot
         build_minutes_by_deployment: dict[str, float] = {}
         total_build_minutes = 0.0
         depot_service = get_depot_service()
         if depot_service.is_configured:
             for deployment in ctx.deployments:
                 if deployment.id:
-                    try:
-                        mins = await depot_service.get_deployment_build_minutes(
-                            deployment_id=deployment.id,
-                            start_at=start_time,
-                            end_at=end_time,
-                        )
-                        if mins > 0:
-                            build_minutes_by_deployment[deployment.id] = mins
-                            total_build_minutes += mins
+                    mins = await depot_service.get_deployment_build_minutes(
+                        deployment_id=deployment.id,
+                        start_at=interval_start,
+                        end_at=interval_end,
+                    )
+                    if mins > 0:
+                        build_minutes_by_deployment[deployment.id] = mins
+                        total_build_minutes += mins
 
-                    except Exception as e:
-                        logger.warning(
-                            f"Failed to get Depot build minutes for {deployment.id}: {e}"
-                        )
-
-        # Convert endpoint count to endpoint-hours
-        interval_hours = (end_time - start_time).total_seconds() / 3600
+        # Calculate totals
+        standard_gb_hours = sum(
+            s.gb_hours for s in storage_list if s.storage_class == STORAGE_CLASS_EBS
+        )
+        shared_gb_hours = sum(
+            s.gb_hours for s in storage_list if s.storage_class == STORAGE_CLASS_EFS
+        )
         public_endpoint_hours = len(ctx.active_endpoints) * interval_hours
 
-        # All upserts in a single atomic transaction
-        async with get_db_context() as db:
-            # Upsert usage record (update if exists, insert if not)
-            usage_record = await db.usage.upsert_usage_record(
-                workspace_id=workspace_id,
-                collection_start=start_time,
-                collection_end=end_time,
-                cpu_core_seconds=breakdown.totals.cpu_core_seconds,
-                memory_gb_seconds=breakdown.totals.memory_gb_seconds,
-                storage_gb_hours=breakdown.totals.storage_gb_hours,
-                standard_gb_hours=breakdown.totals.standard_gb_hours,
-                shared_gb_hours=breakdown.totals.shared_gb_hours,
-                build_minutes=total_build_minutes,
-                public_endpoint_hours=public_endpoint_hours,
-                record_type=UsageCollectionConfig.get_record_type(),
-                status=status,
-            )
-
-            # Upsert compute breakdowns (per pod) using cached deployment map
-            for pod_usage in breakdown.by_pod:
-                deployment_id = None
-                if pod_usage.release_name:
-                    deployment_id = ctx.deployment_map.get(pod_usage.release_name)
-
-                await db.usage.upsert_compute_breakdown(
-                    usage_record_id=usage_record.id,
-                    pod_name=pod_usage.pod,
-                    cpu_core_seconds=pod_usage.cpu_core_seconds,
-                    memory_gb_seconds=pod_usage.memory_gb_seconds,
-                    deployment_id=deployment_id,
-                    service_name=pod_usage.service,
-                )
-
-            # Upsert storage breakdowns (per PVC) using cached PVC map
-            for storage_usage in breakdown.by_pvc:
-                deployment_id = ctx.pvc_map.get(storage_usage.pvc_name)
-
-                await db.usage.upsert_storage_breakdown(
-                    usage_record_id=usage_record.id,
-                    pvc_name=storage_usage.pvc_name,
-                    storage_class=storage_usage.storage_class,
-                    gb_hours=storage_usage.gb_hours,
-                    deployment_id=deployment_id,
-                )
-
-            # Upsert networking breakdowns (per service with ingress)
-            for endpoint in ctx.active_endpoints:
-                await db.usage.upsert_networking_breakdown(
-                    usage_record_id=usage_record.id,
-                    service_name=endpoint.service_name,
-                    endpoint_hours=interval_hours,
-                    deployment_id=endpoint.deployment_id,
-                )
-
-            # Upsert build breakdowns (per deployment)
-            for deployment_id, mins in build_minutes_by_deployment.items():
-                await db.usage.upsert_build_breakdown(
-                    usage_record_id=usage_record.id,
-                    deployment_id=deployment_id,
-                    build_minutes=mins,
-                )
-
-        logger.debug(
-            f"Collected {workspace_id} [{start_time.hour:02d}:00]: "
-            f"CPU={breakdown.totals.cpu_core_seconds:.2f}s, "
-            f"Mem={breakdown.totals.memory_gb_seconds:.2f}GB-s"
+        # Atomic increment of daily record totals
+        await db.usage.atomic_increment_usage(
+            record_id=daily_record.id,
+            cpu_core_seconds=breakdown.totals.cpu_core_seconds,
+            memory_gb_seconds=breakdown.totals.memory_gb_seconds,
+            standard_gb_hours=standard_gb_hours,
+            shared_gb_hours=shared_gb_hours,
+            build_minutes=total_build_minutes,
+            public_endpoint_hours=public_endpoint_hours,
         )
 
-        return {
-            "workspace_id": workspace_id,
-            "hour": start_time.hour,
-            "success": True,
-            "usage_record_id": usage_record.id,
-        }
+        # Mark interval as collected (idempotency)
+        await db.usage.mark_interval_collected(workspace_id, interval_start)
 
-    except Exception as e:
-        logger.error(
-            f"Error collecting usage for {workspace_id} [{start_time.hour:02d}:00]: {e}"
-        )
-        return {
-            "workspace_id": workspace_id,
-            "hour": start_time.hour,
-            "success": False,
-            "error": str(e),
-        }
-
-
-@task(retries=2, retry_delay_seconds=60)
-async def collect_workspace_daily_usage(
-    workspace_id: str, day_start: datetime, day_end: datetime
-) -> dict:
-    try:
-        # Aggregate from interval records instead of re-querying Prometheus
-        async with get_db_context() as db:
-            interval_records = await db.usage.get_workspace_usage(
+        # Append breakdown events for dashboards
+        for pod in breakdown.by_pod:
+            deployment_id = (
+                ctx.deployment_map.get(pod.release_name) if pod.release_name else None
+            )
+            await db.usage.add_breakdown_event(
                 workspace_id=workspace_id,
-                start_date=day_start,
-                end_date=day_end,
-                record_type=UsageCollectionConfig.get_record_type(),
+                interval_start=interval_start,
+                interval_end=interval_end,
+                breakdown_type=BreakdownType.COMPUTE,
+                resource_name=pod.pod,
+                deployment_id=deployment_id,
+                service_name=pod.service,
+                cpu_core_seconds=pod.cpu_core_seconds,
+                memory_gb_seconds=pod.memory_gb_seconds,
             )
 
-        if not interval_records:
-            logger.warning(
-                f"No interval records found for {workspace_id} on {day_start.date()}"
-            )
-            return {
-                "workspace_id": workspace_id,
-                "date": str(day_start.date()),
-                "success": False,
-                "error": "No interval records available",
-            }
-
-        # Aggregate totals from interval records
-        total_cpu = sum(r.cpu_core_seconds for r in interval_records)
-        total_memory = sum(r.memory_gb_seconds for r in interval_records)
-        total_storage = sum(r.storage_gb_hours for r in interval_records)
-        total_standard = sum(r.standard_gb_hours for r in interval_records)
-        total_shared = sum(r.shared_gb_hours for r in interval_records)
-        total_build_minutes = sum(r.build_minutes for r in interval_records)
-        total_endpoint_hours = sum(r.public_endpoint_hours for r in interval_records)
-
-        # Aggregate compute breakdowns from all interval records
-        compute_aggregates: dict[str, dict] = {}
-        for record in interval_records:
-            for breakdown in record.compute_breakdowns:
-                if breakdown.pod_name not in compute_aggregates:
-                    compute_aggregates[breakdown.pod_name] = {
-                        "cpu_core_seconds": 0.0,
-                        "memory_gb_seconds": 0.0,
-                        "deployment_id": breakdown.deployment_id,
-                        "service_name": breakdown.service_name,
-                    }
-                compute_aggregates[breakdown.pod_name]["cpu_core_seconds"] += (
-                    breakdown.cpu_core_seconds
-                )
-                compute_aggregates[breakdown.pod_name]["memory_gb_seconds"] += (
-                    breakdown.memory_gb_seconds
-                )
-
-        # Aggregate storage breakdowns from all interval records
-        storage_aggregates: dict[tuple[str, str], dict] = {}
-        for record in interval_records:
-            for breakdown in record.storage_breakdowns:
-                key = (breakdown.pvc_name, breakdown.storage_class)
-                if key not in storage_aggregates:
-                    storage_aggregates[key] = {
-                        "gb_hours": 0.0,
-                        "deployment_id": breakdown.deployment_id,
-                    }
-                storage_aggregates[key]["gb_hours"] += breakdown.gb_hours
-
-        # Aggregate networking breakdowns from all interval records
-        networking_aggregates: dict[str, dict] = {}
-        for record in interval_records:
-            for breakdown in record.networking_breakdowns:
-                if breakdown.service_name not in networking_aggregates:
-                    networking_aggregates[breakdown.service_name] = {
-                        "endpoint_hours": 0.0,
-                        "deployment_id": breakdown.deployment_id,
-                    }
-                networking_aggregates[breakdown.service_name]["endpoint_hours"] += (
-                    breakdown.endpoint_hours
-                )
-
-        # Aggregate build breakdowns from all interval records
-        build_aggregates: dict[str, float] = {}
-        for record in interval_records:
-            for breakdown in record.build_breakdowns:
-                dep_id = str(breakdown.deployment_id)
-                build_aggregates[dep_id] = (
-                    build_aggregates.get(dep_id, 0.0) + breakdown.build_minutes
-                )
-
-        # All upserts in a single atomic transaction
-        async with get_db_context() as db:
-            # Create DAILY usage record with FINALIZED status
-            usage_record = await db.usage.upsert_usage_record(
+        for storage in storage_list:
+            deployment_id = ctx.pvc_map.get(storage.pvc_name)
+            await db.usage.add_breakdown_event(
                 workspace_id=workspace_id,
-                collection_start=day_start,
-                collection_end=day_end,
-                cpu_core_seconds=total_cpu,
-                memory_gb_seconds=total_memory,
-                storage_gb_hours=total_storage,
-                standard_gb_hours=total_standard,
-                shared_gb_hours=total_shared,
-                build_minutes=total_build_minutes,
-                public_endpoint_hours=total_endpoint_hours,
-                record_type=UsageRecordType.DAILY,
-                status=UsageRecordStatus.FINALIZED,
+                interval_start=interval_start,
+                interval_end=interval_end,
+                breakdown_type=BreakdownType.STORAGE,
+                resource_name=storage.pvc_name,
+                deployment_id=deployment_id,
+                storage_class=storage.storage_class,
+                gb_hours=storage.gb_hours,
             )
 
-            # Upsert compute breakdowns for daily record
-            for pod_name, aggregates in compute_aggregates.items():
-                await db.usage.upsert_compute_breakdown(
-                    usage_record_id=usage_record.id,
-                    pod_name=pod_name,
-                    cpu_core_seconds=aggregates["cpu_core_seconds"],
-                    memory_gb_seconds=aggregates["memory_gb_seconds"],
-                    deployment_id=aggregates["deployment_id"],
-                    service_name=aggregates["service_name"],
-                )
+        for endpoint in ctx.active_endpoints:
+            await db.usage.add_breakdown_event(
+                workspace_id=workspace_id,
+                interval_start=interval_start,
+                interval_end=interval_end,
+                breakdown_type=BreakdownType.NETWORK,
+                resource_name=endpoint.service_name,
+                deployment_id=endpoint.deployment_id,
+                endpoint_hours=interval_hours,
+            )
 
-            # Upsert storage breakdowns for daily record
-            for (pvc_name, storage_class), aggregates in storage_aggregates.items():
-                await db.usage.upsert_storage_breakdown(
-                    usage_record_id=usage_record.id,
-                    pvc_name=pvc_name,
-                    storage_class=storage_class,
-                    gb_hours=aggregates["gb_hours"],
-                    deployment_id=aggregates["deployment_id"],
-                )
+        for deployment_id, mins in build_minutes_by_deployment.items():
+            await db.usage.add_breakdown_event(
+                workspace_id=workspace_id,
+                interval_start=interval_start,
+                interval_end=interval_end,
+                breakdown_type=BreakdownType.BUILD,
+                resource_name=deployment_id,
+                deployment_id=deployment_id,
+                build_minutes=mins,
+            )
 
-            # Upsert networking breakdowns for daily record
-            for service_name, aggregates in networking_aggregates.items():
-                await db.usage.upsert_networking_breakdown(
-                    usage_record_id=usage_record.id,
-                    service_name=service_name,
-                    endpoint_hours=aggregates["endpoint_hours"],
-                    deployment_id=aggregates["deployment_id"],
-                )
+        # All changes committed together on context exit
 
-            # Upsert build breakdowns for daily record
-            for deployment_id, mins in build_aggregates.items():
-                await db.usage.upsert_build_breakdown(
-                    usage_record_id=usage_record.id,
-                    deployment_id=deployment_id,
-                    build_minutes=mins,
-                )
+    logger.debug(
+        f"Collected {workspace_id} [{interval_start.strftime('%H:%M')}]: "
+        f"CPU={breakdown.totals.cpu_core_seconds:.2f}s, "
+        f"Mem={breakdown.totals.memory_gb_seconds:.2f}GB-s"
+    )
 
-        logger.info(
-            f"Collected DAILY for {workspace_id} [{day_start.date()}]: "
-            f"CPU={total_cpu:.2f}s, "
-            f"Mem={total_memory:.2f}GB-s, "
-            f"Storage={total_storage:.2f}GB-h "
-            f"(aggregated from {len(interval_records)} interval records)"
-        )
-
-        return {
-            "workspace_id": workspace_id,
-            "date": str(day_start.date()),
-            "success": True,
-            "usage_record_id": usage_record.id,
-        }
-
-    except Exception as e:
-        logger.error(f"Error collecting daily usage for {workspace_id}: {e}")
-        return {
-            "workspace_id": workspace_id,
-            "date": str(day_start.date()),
-            "success": False,
-            "error": str(e),
-        }
+    return {
+        "status": "collected",
+        "workspace_id": workspace_id,
+        "interval": interval_start.isoformat(),
+    }
 
 
 @flow(log_prints=True)
 async def collect_interval_usage(workspace_id: str) -> dict:
-    """Collect usage for previous interval for a single workspace"""
+    """Collect usage for previous interval for a single workspace."""
     now = datetime.now(timezone.utc)
-
-    # Round down to previous interval mark
     end_time = UsageCollectionConfig.round_time_to_interval(now)
     start_time = end_time - UsageCollectionConfig.COLLECTION_INTERVAL_TIMEDELTA
 
@@ -425,227 +316,21 @@ async def collect_interval_usage(workspace_id: str) -> dict:
         f"{start_time.strftime('%H:%M')}-{end_time.strftime('%H:%M')}"
     )
 
-    result = await collect_workspace_usage_for_interval(
-        workspace_id, start_time, end_time
-    )
-
-    return result
-
-
-@flow(log_prints=True)
-async def backfill_daily_usage(
-    workspace_id: str, collection_date: date | None = None
-) -> dict:
-    """Process an INCOMPLETE daily usage record for a workspace"""
-    now = datetime.now(timezone.utc)
-    target_date = collection_date if collection_date else now.date() - timedelta(days=1)
-
-    logger.info(f"Processing daily usage backfill for {workspace_id}: {target_date}")
-
-    # Define day boundaries
-    day_start = datetime.combine(target_date, datetime.min.time()).replace(
-        tzinfo=timezone.utc
-    )
-    day_end = datetime.combine(target_date, datetime.max.time()).replace(
-        second=59, microsecond=999999, tzinfo=timezone.utc
-    )
-
-    # Get workspace to check created_at and deleted_at
-    async with get_db_context() as db:
-        workspace = await db.workspaces.get_by_id(workspace_id)
-
-    if not workspace:
-        logger.error(f"Workspace {workspace_id} not found")
+    try:
+        result = await collect_workspace_interval(workspace_id, start_time, end_time)
+        return {**result, "success": True}
+    except Exception as e:
+        logger.error(f"Failed to collect usage for {workspace_id}: {e}")
         return {
             "workspace_id": workspace_id,
-            "date": str(target_date),
-            "intervals_collected": 0,
-            "intervals_failed": 0,
-            "daily_success": False,
-            "error": "Workspace not found",
+            "success": False,
+            "error": str(e),
         }
-
-    # If workspace was created on target date, start from creation hour
-    start_hour = 0
-    if workspace.created_at.date() == target_date:
-        start_hour = workspace.created_at.hour
-        logger.info(
-            f"Workspace {workspace_id} created at {workspace.created_at}, "
-            f"starting backfill from hour {start_hour}"
-        )
-
-    # If workspace was deleted on target date, end at deletion hour
-    end_hour = 23
-    if workspace.deleted_at and workspace.deleted_at.date() == target_date:
-        end_hour = workspace.deleted_at.hour
-        logger.info(
-            f"Workspace {workspace_id} deleted at {workspace.deleted_at}, "
-            f"ending backfill at hour {end_hour}"
-        )
-
-    # Backfill only the intervals the workspace existed
-    interval_results = []
-    for hour in range(start_hour, end_hour + 1):
-        for minute in UsageCollectionConfig.get_minute_marks():
-            start_time = datetime.combine(target_date, datetime.min.time()).replace(
-                hour=hour, minute=minute, tzinfo=timezone.utc
-            )
-            end_time = start_time + UsageCollectionConfig.COLLECTION_INTERVAL_TIMEDELTA
-
-            result = await collect_workspace_usage_for_interval(
-                workspace_id, start_time, end_time, status=UsageRecordStatus.FINALIZED
-            )
-            interval_results.append(result)
-
-    intervals_collected = sum(1 for r in interval_results if r["success"])
-    intervals_failed = sum(1 for r in interval_results if not r["success"])
-    expected_intervals = (
-        end_hour - start_hour + 1
-    ) * UsageCollectionConfig.INTERVALS_PER_HOUR
-
-    # Only aggregate and mark as FINALIZED if we got ALL interval records
-    if intervals_collected == expected_intervals:
-        daily_result = await collect_workspace_daily_usage(
-            workspace_id, day_start, day_end
-        )
-
-        if daily_result["success"]:
-            logger.info(
-                f"Backfill complete for {workspace_id}: "
-                f"{intervals_collected}/{expected_intervals} interval records collected, "
-                f"daily record FINALIZED"
-            )
-            return {
-                "workspace_id": workspace_id,
-                "date": str(target_date),
-                "intervals_collected": intervals_collected,
-                "intervals_failed": intervals_failed,
-                "daily_success": True,
-                "daily_record_id": daily_result["usage_record_id"],
-                "status": "finalized",
-            }
-
-    # If we're here, either didn't collect all intervals OR daily aggregation failed
-    # INCOMPLETE record remains in DB for retry
-    logger.warning(
-        f"Backfill incomplete for {workspace_id}: "
-        f"collected {intervals_collected}/{expected_intervals} interval records, "
-        f"daily record remains INCOMPLETE"
-    )
-
-    return {
-        "workspace_id": workspace_id,
-        "date": str(target_date),
-        "intervals_collected": intervals_collected,
-        "intervals_failed": intervals_failed,
-        "daily_success": False,
-        "status": "incomplete",
-    }
-
-
-@flow(log_prints=True)
-async def forward_for_billing():
-    """Forward finalized usage data to billing service"""
-    logger.info("Starting billing forward process")
-    start_time = datetime.now(timezone.utc)
-
-    async with get_db_context() as db:
-        finalized_usage = await db.usage.get_finalized_usage()
-
-    logger.info(
-        f"Found {len(finalized_usage) if finalized_usage else 0} finalized usage records to forward"
-    )
-
-    polar_service = get_polar_service()
-
-    if not finalized_usage:
-        logger.info("No finalized usage records to forward")
-        return {"forwarded": 0, "failed": 0}
-
-    forwarded = 0
-    failed = 0
-
-    logger.info(f"Processing {len(finalized_usage)} usage records")
-    for usage in finalized_usage:
-        # bill usage to the workspace owner
-        async with get_db_context() as db:
-            workspace_owner = await db.workspaces.get_owner_user(usage.workspace_id)
-
-        if not workspace_owner:
-            logger.error(
-                f"No owner found for workspace {usage.workspace_id}, skipping usage {usage.id}"
-            )
-            failed += 1
-            continue
-
-        try:
-            logger.info(
-                f"Forwarding usage to billing: workspace={usage.workspace_id}, "
-                f"period={usage.collection_start} to {usage.collection_end}, "
-                f"CPU={usage.cpu_core_seconds:.0f}s, "
-                f"Memory={usage.memory_gb_seconds:.0f}GB-s, "
-                f"Standard={usage.standard_gb_hours:.2f}GB-h, "
-                f"Shared={usage.shared_gb_hours:.2f}GB-h"
-            )
-
-            should_mark_reported = False
-
-            if not polar_service.usage.enabled:
-                # Polar disabled - mark as reported (graceful degradation)
-                logger.debug(
-                    f"Polar disabled, marking usage {usage.id} as reported without sending"
-                )
-                should_mark_reported = True
-
-            else:
-                # Send usage data to Polar
-                success = await polar_service.usage.send_workspace_usage(
-                    usage_record=usage, external_customer_id=workspace_owner.clerk_id
-                )
-
-                # Only mark as reported if event succeeded
-                if success:
-                    should_mark_reported = True
-                    logger.info(
-                        f"Usage event sent successfully for usage {usage.id} "
-                        f"(workspace={usage.workspace_id})"
-                    )
-                else:
-                    logger.error(
-                        f"Failed to send usage event for usage {usage.id} "
-                        f"(workspace={usage.workspace_id}). Will retry on next run."
-                    )
-
-            # Mark as reported only if delivery confirmed or gracefully skipped
-            if should_mark_reported:
-                async with get_db_context() as db:
-                    await db.usage.mark_as_reported(usage.id)
-
-                forwarded += 1
-                logger.info(f"Marked usage as reported: {usage.id}")
-
-            else:
-                failed += 1
-
-        except Exception as e:
-            failed += 1
-            logger.exception(
-                f"Exception while forwarding usage {usage.id} "
-                f"(workspace={usage.workspace_id}): {e}"
-            )
-
-    elapsed_time = (datetime.now(timezone.utc) - start_time).total_seconds()
-    logger.info(
-        f"Billing forward complete: {forwarded} forwarded, {failed} failed "
-        f"(took {elapsed_time:.2f}s)"
-    )
-    return {"forwarded": forwarded, "failed": failed}
 
 
 @flow(log_prints=True)
 async def spawn_usage_collection():
-    """Spawn usage collection flows for active workspaces"""
-    # Get only active workspaces (skip deleted ones)
+    """Spawn usage collection for all active workspaces - parallel execution."""
     async with get_db_context() as db:
         active_workspaces = await db.workspaces.get_active_workspaces()
 
@@ -654,27 +339,35 @@ async def spawn_usage_collection():
         f"(interval: {UsageCollectionConfig.COLLECTION_INTERVAL.value} minutes)"
     )
 
-    # Spawn collect_interval_usage for all active workspaces
-    results = []
-    for workspace in active_workspaces:
-        result = await collect_interval_usage(str(workspace.id))
-        results.append(result)
+    # Parallel collection with concurrency limit
+    # NOTE: may need to use distributed prefect tasks for higher concurrency
+    semaphore = asyncio.Semaphore(20)
 
-    # Monitor collection failures
-    failed_count = sum(1 for r in results if not r.get("success", False))
+    async def collect_with_limit(workspace):
+        async with semaphore:
+            return await collect_interval_usage(str(workspace.id))
+
+    results = await asyncio.gather(
+        *[collect_with_limit(ws) for ws in active_workspaces],
+        return_exceptions=True,
+    )
+
+    # Count failures
+    failed_count = sum(
+        1
+        for r in results
+        if isinstance(r, Exception)
+        or (isinstance(r, dict) and not r.get("success", False))
+    )
     total_count = len(results)
 
-    if failed_count > 0:
-        logger.warning(
-            f"Usage collection completed with {failed_count}/{total_count} failures"
-        )
-
-    # Alert if failure rate is high
     if total_count > 0 and failed_count / total_count > 0.3:
         logger.critical(
             f"HIGH FAILURE RATE in usage collection: {failed_count}/{total_count} "
             f"({failed_count / total_count * 100:.1f}%) workspaces failed"
         )
+    elif failed_count > 0:
+        logger.error(f"Usage collection had {failed_count}/{total_count} failures")
 
     return {
         "total": total_count,
@@ -683,184 +376,290 @@ async def spawn_usage_collection():
     }
 
 
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=2, min=4, max=30),
+    reraise=True,
+)
+async def _send_to_polar_with_retry(
+    polar_service: PolarService,
+    record: DailyUsageRecordPydantic,
+    external_customer_id: str,
+    idempotency_key: str,
+) -> bool:
+    """Send usage to Polar with exponential backoff retry."""
+    success = await polar_service.usage.send_daily_usage(
+        record=record,
+        external_customer_id=external_customer_id,
+        idempotency_key=idempotency_key,
+    )
+    if not success:
+        raise RuntimeError(f"Polar rejected usage for workspace {record.workspace_id}")
+    return success
+
+
 @flow(log_prints=True)
-async def mark_workspaces_for_backfill():
-    """Mark workspaces that need daily usage backfill by creating INCOMPLETE records (outbox pattern)"""
-    now = datetime.now(timezone.utc)
-    yesterday = now.date() - timedelta(days=1)
-    yesterday_start = datetime.combine(yesterday, datetime.min.time()).replace(
-        tzinfo=timezone.utc
-    )
-    yesterday_end = datetime.combine(yesterday, datetime.max.time()).replace(
-        second=59, microsecond=999999, tzinfo=timezone.utc
-    )
+async def finalize_and_bill():
+    """Finalize yesterday's usage and send to Polar for billing."""
+    logger.info("Starting daily billing process")
+    start_time = datetime.now(timezone.utc)
 
-    # Efficiently get workspaces that existed yesterday (at database level):
-    # 1. Active workspaces created before today (existed yesterday)
-    # 2. Workspaces deleted yesterday (existed at some point yesterday)
-    today_start = datetime.combine(now.date(), datetime.min.time()).replace(
-        tzinfo=timezone.utc
-    )
+    yesterday = (start_time - timedelta(days=1)).date()
+
     async with get_db_context() as db:
-        active_workspaces = await db.workspaces.get_active_workspaces_before(
-            today_start
-        )
-        deleted_yesterday = await db.workspaces.get_deleted_in_range(
-            yesterday_start, yesterday_end
-        )
+        unbilled_records = await db.usage.get_unbilled_for_date(yesterday)
 
-    # Combine and deduplicate
-    candidate_workspaces = {ws.id: ws for ws in active_workspaces + deleted_yesterday}
+    logger.info(f"Found {len(unbilled_records)} unbilled records for {yesterday}")
 
-    logger.info(
-        f"Found {len(candidate_workspaces)} candidate workspaces for backfill "
-        f"({len(active_workspaces)} active, {len(deleted_yesterday)} deleted yesterday)"
-    )
+    if not unbilled_records:
+        return {"billed": 0, "failed": 0, "skipped": 0}
 
-    # Mark workspaces that need backfilling with INCOMPLETE records
-    marked = 0
-    skipped_already_done = 0
+    polar_service = get_polar_service()
+    billed = 0
+    failed = 0
+    skipped = 0
 
-    for workspace in candidate_workspaces.values():
-        # Check if already has a FINALIZED or REPORTED daily record for yesterday
+    for record in unbilled_records:
+        usage_date_str = str(record.usage_date)
+
+        # Skip records that have exceeded max attempts
+        if record.billing_attempts >= MAX_BILLING_ATTEMPTS:
+            logger.warning(
+                f"Skipping workspace {record.workspace_id} - exceeded max billing attempts "
+                f"({record.billing_attempts}/{MAX_BILLING_ATTEMPTS})"
+            )
+            async with get_db_context() as db:
+                await db.billing_audit.log_billing_skipped(
+                    workspace_id=record.workspace_id,
+                    record_id=record.id,
+                    reason=f"Exceeded max billing attempts ({MAX_BILLING_ATTEMPTS})",
+                    usage_date=usage_date_str,
+                )
+            skipped += 1
+            continue
+
+        # Require 100% collection before billing
+        if record.intervals_collected < record.expected_intervals:
+            logger.error(
+                f"INCOMPLETE USAGE - REQUIRES INVESTIGATION: "
+                f"Workspace {record.workspace_id} has {record.intervals_collected}/{record.expected_intervals} "
+                f"intervals for {yesterday}. Skipping billing until resolved."
+            )
+            async with get_db_context() as db:
+                await db.billing_audit.log_billing_skipped(
+                    workspace_id=record.workspace_id,
+                    record_id=record.id,
+                    reason=f"Incomplete intervals: {record.intervals_collected}/{record.expected_intervals}",
+                    usage_date=usage_date_str,
+                )
+            skipped += 1
+            continue
+
+        # Get workspace owner
         async with get_db_context() as db:
-            existing_records = await db.usage.get_workspace_usage(
-                workspace_id=workspace.id,
-                start_date=yesterday_start,
-                end_date=yesterday_end,
-                record_type=UsageRecordType.DAILY,
+            workspace_owner = await db.workspaces.get_owner_user(record.workspace_id)
+
+        if not workspace_owner:
+            logger.error(f"No owner found for workspace {record.workspace_id}")
+            async with get_db_context() as db:
+                await db.billing_audit.log_billing_skipped(
+                    workspace_id=record.workspace_id,
+                    record_id=record.id,
+                    reason="No workspace owner found",
+                    usage_date=usage_date_str,
+                )
+            skipped += 1
+            continue
+
+        # Use record ID as idempotency key - Polar will dedupe
+        idempotency_key = str(record.id)
+        current_attempt = record.billing_attempts + 1
+
+        # Log billing started
+        async with get_db_context() as db:
+            await db.billing_audit.log_billing_started(
+                workspace_id=record.workspace_id,
+                record_id=record.id,
+                usage_date=usage_date_str,
+                attempt=current_attempt,
             )
 
-        # Skip if already finalized or reported
-        if existing_records:
-            record_status = existing_records[0].status
-            if record_status in (
-                UsageRecordStatus.FINALIZED,
-                UsageRecordStatus.REPORTED,
-            ):
-                logger.debug(
-                    f"Skipping {workspace.id}: already has {record_status} daily record for {yesterday}"
-                )
-                skipped_already_done += 1
-                continue
-
-            # Already has INCOMPLETE or DRAFT record, no need to recreate
-            if record_status == UsageRecordStatus.INCOMPLETE:
-                logger.debug(f"Workspace {workspace.id} already marked as INCOMPLETE")
-                marked += 1
-                continue
-
-        # Create INCOMPLETE record as marker for processing
         try:
-            async with get_db_context() as db:
-                await db.usage.upsert_usage_record(
-                    workspace_id=workspace.id,
-                    collection_start=yesterday_start,
-                    collection_end=yesterday_end,
-                    cpu_core_seconds=0.0,
-                    memory_gb_seconds=0.0,
-                    storage_gb_hours=0.0,
-                    standard_gb_hours=0.0,
-                    shared_gb_hours=0.0,
-                    record_type=UsageRecordType.DAILY,
-                    status=UsageRecordStatus.INCOMPLETE,
+            if not polar_service.usage.enabled:
+                logger.debug(
+                    f"Polar disabled, marking {record.id} as billed without sending"
                 )
-            marked += 1
-            logger.debug(f"Marked workspace {workspace.id} for backfill")
+                billing_id = f"disabled-{idempotency_key}"
+            else:
+                # Increment attempt counter before trying
+                async with get_db_context() as db:
+                    await db.usage.increment_billing_attempt(record.id)
+
+                await _send_to_polar_with_retry(
+                    polar_service=polar_service,
+                    record=record,
+                    external_customer_id=workspace_owner.clerk_id,
+                    idempotency_key=idempotency_key,
+                )
+                billing_id = idempotency_key
+
+            # Mark as billed and log success
+            async with get_db_context() as db:
+                await db.usage.mark_as_billed(record.id, billing_id)
+                await db.billing_audit.log_billing_completed(
+                    workspace_id=record.workspace_id,
+                    record_id=record.id,
+                    billing_id=billing_id,
+                    usage_date=usage_date_str,
+                )
+
+            billed += 1
+            logger.info(f"Billed workspace {record.workspace_id} for {yesterday}")
+
+        except RetryError as e:
+            error_msg = str(e.last_attempt.exception()) if e.last_attempt else str(e)
+            logger.error(
+                f"Failed to bill {record.workspace_id} after retries: {error_msg}"
+            )
+            async with get_db_context() as db:
+                await db.usage.increment_billing_attempt(record.id, error=error_msg)
+                await db.billing_audit.log_billing_failed(
+                    workspace_id=record.workspace_id,
+                    record_id=record.id,
+                    error=error_msg,
+                    attempt=current_attempt,
+                    usage_date=usage_date_str,
+                )
+            failed += 1
 
         except Exception as e:
-            logger.error(f"Failed to mark workspace {workspace.id}: {e}")
+            error_msg = str(e)
+            logger.exception(f"Exception billing {record.workspace_id}: {e}")
+            async with get_db_context() as db:
+                await db.usage.increment_billing_attempt(record.id, error=error_msg)
+                await db.billing_audit.log_billing_failed(
+                    workspace_id=record.workspace_id,
+                    record_id=record.id,
+                    error=error_msg,
+                    attempt=current_attempt,
+                    usage_date=usage_date_str,
+                )
+            failed += 1
 
+    elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
     logger.info(
-        f"Marked {marked} workspaces for backfill on {yesterday} "
-        f"(skipped {skipped_already_done} already done)"
+        f"Billing complete: {billed} billed, {failed} failed, {skipped} skipped "
+        f"(took {elapsed:.2f}s)"
     )
 
-    return {
-        "date": str(yesterday),
-        "marked": marked,
-        "skipped_already_done": skipped_already_done,
-        "total_candidates": len(candidate_workspaces),
-    }
+    # Alert on high billing failure rate
+    total_attempted = billed + failed
+    if total_attempted > 0 and failed / total_attempted > 0.3:
+        logger.critical(
+            f"HIGH BILLING FAILURE RATE: {failed}/{total_attempted} "
+            f"({failed / total_attempted * 100:.1f}%) - "
+            f"date={yesterday}, billed={billed}, failed={failed}, skipped={skipped}"
+        )
+
+    return {"billed": billed, "failed": failed, "skipped": skipped}
 
 
 @flow(log_prints=True)
-async def process_incomplete_usage():
-    """Process incomplete daily usage records (outbox pattern).
+async def catch_up_missing_intervals():
+    """Catch up any missed intervals for active workspaces."""
+    now = datetime.now(timezone.utc)
+    today = now.date()
 
-    This flow handles both:
-    1. Initial backfill processing (after marking)
-    2. Retry processing (for previously failed attempts)
-    """
     async with get_db_context() as db:
-        incomplete_records = await db.usage.get_incomplete_usage()
+        active_workspaces = await db.workspaces.get_active_workspaces()
 
-    if not incomplete_records:
-        logger.info("No incomplete daily usage records to process")
-        return {"total": 0, "finalized": 0, "still_incomplete": 0, "failed": 0}
+    logger.info(f"Checking {len(active_workspaces)} workspaces for missed intervals")
 
-    logger.info(
-        f"Found {len(incomplete_records)} incomplete daily records, processing..."
-    )
+    total_caught_up = 0
 
-    finalized = 0
-    still_incomplete = 0
-    failed = 0
+    for workspace in active_workspaces:
+        workspace_id = str(workspace.id)
 
-    for record in incomplete_records:
-        # Process each incomplete record by running backfill flow
-        # Pass the collection date from the record to ensure we process the correct date
-        result = await backfill_daily_usage(
-            record.workspace_id, record.collection_start.date()
+        # Check intervals for today
+        for minute in UsageCollectionConfig.get_minute_marks():
+            for hour in range(now.hour + 1):
+                interval_start = datetime.combine(today, datetime.min.time()).replace(
+                    hour=hour, minute=minute, tzinfo=timezone.utc
+                )
+
+                # Skip future intervals
+                if interval_start >= now:
+                    continue
+
+                interval_end = (
+                    interval_start + UsageCollectionConfig.COLLECTION_INTERVAL_TIMEDELTA
+                )
+
+                async with get_db_context() as db:
+                    if not await db.usage.is_interval_collected(
+                        workspace_id, interval_start
+                    ):
+                        try:
+                            await collect_workspace_interval(
+                                workspace_id, interval_start, interval_end
+                            )
+                            total_caught_up += 1
+                            logger.debug(
+                                f"Caught up interval {interval_start} for {workspace_id}"
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                f"Failed to catch up {interval_start} for {workspace_id}: {e}"
+                            )
+
+    logger.info(f"Caught up {total_caught_up} missed intervals")
+    return {"caught_up": total_caught_up}
+
+
+@flow(log_prints=True)
+async def alert_stuck_records():
+    """Alert on records stuck in collecting status for 1+ days."""
+    today = datetime.now(timezone.utc).date()
+
+    async with get_db_context() as db:
+        stuck_records = await db.usage.get_stuck_records(before_date=today)
+
+    if stuck_records:
+        for record in stuck_records:
+            days_stuck = (today - record.usage_date).days
+            logger.critical(
+                f"STUCK USAGE RECORD - REQUIRES MANUAL INVESTIGATION: "
+                f"workspace={record.workspace_id}, date={record.usage_date}, "
+                f"intervals={record.intervals_collected}/{record.expected_intervals}, "
+                f"days_stuck={days_stuck}"
+            )
+
+        logger.critical(
+            f"STUCK BILLING RECORDS: {len(stuck_records)} require investigation - "
+            f"oldest={min(r.usage_date for r in stuck_records)}"
         )
 
-        if result.get("daily_success"):
-            finalized += 1
-        elif result.get("status") == "incomplete":
-            still_incomplete += 1
-        else:
-            failed += 1
-
-    logger.info(
-        f"Incomplete usage processing complete: "
-        f"{finalized} finalized, {still_incomplete} still incomplete, {failed} failed"
-    )
-
-    return {
-        "total": len(incomplete_records),
-        "finalized": finalized,
-        "still_incomplete": still_incomplete,
-        "failed": failed,
-    }
+    return {"stuck_count": len(stuck_records)}
 
 
-# define deployments for the flows that can be called by other flows
-collect_interval_usage_deployment = collect_interval_usage.to_deployment(
-    name="collect-interval-usage",
-)
-
-backfill_daily_usage_deployment = backfill_daily_usage.to_deployment(
-    name="backfill-daily-usage",
-)
-
-# define deployments for the flows that can be called by other flows
+# Prefect deployments
 
 spawn_usage_collection_deployment = spawn_usage_collection.to_deployment(
     name="spawn-usage-collection",
     cron=UsageCollectionConfig.get_cron_expression(),
 )
 
-mark_workspaces_for_backfill_deployment = mark_workspaces_for_backfill.to_deployment(
-    name="mark-workspaces-for-backfill",
-    cron="5,35 0,12 * * *",  # 4x daily for redundancy: 00:05, 00:35, 12:05, 12:35
+finalize_and_bill_deployment = finalize_and_bill.to_deployment(
+    name="finalize-and-bill",
+    cron="15 0 * * *",  # 00:15 UTC daily
 )
 
-process_incomplete_usage_deployment = process_incomplete_usage.to_deployment(
-    name="process-incomplete-usage",
-    cron="10,40 */3 * * *",  # Every 3 hours at :10 and :40 past the hour
+catch_up_missing_intervals_deployment = catch_up_missing_intervals.to_deployment(
+    name="catch-up-missing-intervals",
+    cron="0 */2 * * *",  # Every 2 hours
 )
 
-forward_for_billing_deployment = forward_for_billing.to_deployment(
-    name="forward-for-billing",
-    cron="0 2,14 * * *",  # Every day at 02:00 and 14:00
+alert_stuck_records_deployment = alert_stuck_records.to_deployment(
+    name="alert-stuck-records",
+    cron="0 1 * * *",  # 01:00 UTC daily (after billing)
 )

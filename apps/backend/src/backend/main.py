@@ -2,10 +2,14 @@ import argparse
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
+import sentry_sdk
 import uvicorn
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
+from sentry_sdk.integrations.fastapi import FastApiIntegration
+from sentry_sdk.integrations.loguru import LoguruIntegration
+from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
@@ -31,6 +35,20 @@ from backend.log_config import setup_logger
 # Setup logging
 setup_logger()
 
+# Initialize Sentry for error tracking and performance monitoring
+if app_config.SENTRY_DSN:
+    sentry_sdk.init(
+        dsn=app_config.SENTRY_DSN,
+        environment=app_config.ENV.value,
+        traces_sample_rate=0.1,
+        integrations=[
+            FastApiIntegration(),
+            SqlalchemyIntegration(),
+            LoguruIntegration(),
+        ],
+    )
+    logger.info("Sentry initialized for error tracking")
+
 
 class RequestIDMiddleware(BaseHTTPMiddleware):
     """Middleware to add request ID to all requests for distributed tracing."""
@@ -54,13 +72,12 @@ async def lifespan(app: FastAPI):
         )
 
     # Startup all application resources
-    startup_result = await startup_application()
-    app.state.prefect_worker_process = startup_result["prefect_worker_process"]
+    await startup_application()
 
     yield
 
     # Shutdown all application resources
-    await shutdown_application(app.state.prefect_worker_process)
+    await shutdown_application()
 
 
 # create a fastapi app

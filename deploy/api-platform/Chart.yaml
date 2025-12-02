@@ -1,0 +1,14 @@
+name: lazycloud-api-platform
+description: Helm chart for LazyCloud API Platform (API, Background Workers, Cron Workers)
+version: 0.1.0
+apiVersion: v2
+keywords:
+  - lazycloud
+  - api
+  - prefect
+  - workers
+sources:
+home:
+
+# This is the chart version. It will be updated with each release of the chart.
+appVersion: 0.1.0

@@ -76,8 +76,12 @@ def main(
         )
 
         # Show quick start
-        console.print(f"[{Colors.Ansi.text}]Get started:[/] [{Colors.Ansi.secondary}]https://lazycloud.dev/docs[/]")
-        console.print(f"[{Colors.Ansi.text}]Run[/] [{Colors.Ansi.secondary}]lazycloud --help[/] [{Colors.Ansi.text}]for all commands[/]")
+        console.print(
+            f"[{Colors.Ansi.text}]Get started:[/] [{Colors.Ansi.secondary}]https://lazycloud.dev/docs[/]"
+        )
+        console.print(
+            f"[{Colors.Ansi.text}]Run[/] [{Colors.Ansi.secondary}]lazycloud --help[/] [{Colors.Ansi.text}]for all commands[/]"
+        )
         console.print()
 
 

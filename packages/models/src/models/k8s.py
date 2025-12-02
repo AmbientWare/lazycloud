@@ -323,3 +323,12 @@ class HorizontalPodAutoscaler(BaseModel):
     metadata: ObjectMeta
     spec: dict[str, Any] | None = None
     status: HPAStatus | None = None
+
+
+class PVCInfo(BaseModel):
+    """PVC details including size and volume handle for billing."""
+
+    name: str
+    storage_class: str
+    requested_size_gb: float = 0.0
+    volume_handle: str | None = None

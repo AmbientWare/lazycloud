@@ -1,13 +1,13 @@
 """Tests for deployment usage API routes."""
 
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock
+from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock
 
 import pytest
 from backend.database import Database
+from backend.database.usage import BreakdownType
 from backend.database.users import UserPydantic
 from backend.services import (
-    get_depot_service,
     get_polar_service,
     get_usage_service,
 )
@@ -16,14 +16,12 @@ from backend.services.polar.cost_breakdown import (
     WorkspaceCostBreakdown,
 )
 from httpx import AsyncClient
-from models.billing import UsageCollectionConfig
 from models.workspaces import WorkspaceRole
 from responses.usage import UsageMetrics
 
 from tests.api.conftest import get_test_app
 from tests.fixtures.database import (
     make_deployment,
-    make_usage_record,
     make_user_workspace,
     make_workspace,
     requires_db,
@@ -51,17 +49,22 @@ class TestGetDeploymentCostBreakdown:
             make_deployment(workspace.id, name="test-deploy")
         )
 
+        # Create breakdown events for this deployment
         now = datetime.now(timezone.utc)
-        # Create usage record for current month (endpoint defaults to start of month)
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        usage_record = make_usage_record(
-            str(workspace.id),
-            collection_start=month_start,
-            collection_end=now,
+        interval_end = month_start + timedelta(minutes=15)
+
+        await api_db.usage.add_breakdown_event(
+            workspace_id=workspace.id,
+            interval_start=month_start,
+            interval_end=interval_end,
+            breakdown_type=BreakdownType.COMPUTE,
+            resource_name="web-0",
+            deployment_id=deployment.id,
+            service_name="web",
+            cpu_core_seconds=100.0,
+            memory_gb_seconds=200.0,
         )
-        # Set correct record type to match UsageCollectionConfig
-        usage_record.record_type = UsageCollectionConfig.get_record_type().value
-        await api_db.usage.create(usage_record)
 
         # Override dependencies in the app
         app = get_test_app()
@@ -86,13 +89,9 @@ class TestGetDeploymentCostBreakdown:
             return_value=mock_cost_breakdown
         )
 
-        # Mock Depot service
-        mock_depot_service = AsyncMock()
-        mock_depot_service.get_deployment_build_minutes = AsyncMock(return_value=0.0)
-
-        # Mock Usage service
-        mock_usage_service = MagicMock()
-        mock_usage_service.aggregate_deployment_usage_from_records = MagicMock(
+        # Mock Usage service with the new interface
+        mock_usage_service = AsyncMock()
+        mock_usage_service.get_deployment_breakdown = AsyncMock(
             return_value=(
                 UsageMetrics(
                     cpu_core_hours=0.0,
@@ -108,7 +107,6 @@ class TestGetDeploymentCostBreakdown:
         )
 
         app.dependency_overrides[get_polar_service] = lambda: mock_polar_service
-        app.dependency_overrides[get_depot_service] = lambda: mock_depot_service
         app.dependency_overrides[get_usage_service] = lambda: mock_usage_service
 
         response = await client.get(f"/v1/deployments/{deployment.id}/usage/breakdown")

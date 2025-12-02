@@ -19,14 +19,14 @@ async def validate_deployment_request(
     deployment: ComposeDeploymentPydantic,
     existing_deployment: ComposeDeploymentPydantic | None = None,
     service_names: list[str] | None = None,
-) -> tuple[HelmValues, ResourceRequirements]:
+) -> tuple[HelmValues, ResourceRequirements, list[str]]:
     """Validate deployment request before queuing task.
 
     Validates compose YAML, generates Helm values, calculates resources, and checks quotas.
     Raises ValueError with user-friendly message if validation fails.
 
     Returns:
-        Tuple of (helm_values, resource_requirements)
+        Tuple of (helm_values, resource_requirements, warnings)
     """
     compose_yaml = deployment.pending_compose_yaml or deployment.compose_yaml
 
@@ -70,7 +70,7 @@ async def validate_deployment_request(
     # Generate Helm values (this validates compose file)
     try:
         helm_generator = HelmValuesGenerator(deployment, secrets)
-        helm_values, _ = helm_generator.generate_values(compose_file)
+        helm_values, warnings = helm_generator.generate_values(compose_file)
         helm_values.compose_yaml = compose_yaml
 
     except ValueError as e:
@@ -156,4 +156,4 @@ async def validate_deployment_request(
         # verify_quota_capacity already provides user-friendly messages
         raise ValueError(str(e)) from e
 
-    return helm_values, requirements
+    return helm_values, requirements, warnings

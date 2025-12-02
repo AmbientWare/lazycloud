@@ -44,6 +44,10 @@ RUN uv sync --no-dev
 FROM builder AS api
 CMD ["uv", "run", "--no-sync", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
-# Prefect worker target
-FROM builder AS prefect-worker
+# Background workers target (Prefect task workers)
+FROM builder AS background-workers
+CMD ["uv", "run", "--no-sync", "python", "-m", "backend.background_worker"]
+
+# Cron workers target (Prefect flow workers)
+FROM builder AS crons
 CMD ["uv", "run", "--no-sync", "python", "-m", "backend.worker"]

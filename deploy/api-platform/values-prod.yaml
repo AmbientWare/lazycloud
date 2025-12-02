@@ -1,0 +1,41 @@
+# Production environment values for API Platform
+
+replicaCount: 3
+
+backgroundWorkers:
+  replicaCount: 2
+
+crons:
+  replicaCount: 1
+
+image:
+  repository: 211125306000.dkr.ecr.us-east-1.amazonaws.com/lazycloud-api
+  pullPolicy: Always
+  tag: "latest"
+
+# Higher resources for prod
+resources:
+  limits:
+    cpu: 2000m
+    memory: 4Gi
+  requests:
+    cpu: 500m
+    memory: 2Gi
+
+backgroundWorkers:
+  resources:
+    limits:
+      cpu: 500m
+      memory: 2Gi
+    requests:
+      cpu: 250m
+      memory: 1Gi
+
+crons:
+  resources:
+    limits:
+      cpu: 500m
+      memory: 1Gi
+    requests:
+      cpu: 100m
+      memory: 512Mi

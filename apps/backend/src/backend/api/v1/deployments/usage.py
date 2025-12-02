@@ -2,7 +2,6 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
-from models.billing import UsageCollectionConfig
 from responses.usage import (
     UsagePeriodInfo,
     WorkspaceCostBreakdownResponse,
@@ -10,22 +9,18 @@ from responses.usage import (
 
 from backend.api.dependencies import get_deployment_with_admin_access_for_usage
 from backend.api.security import get_current_active_user
-from backend.database import Database, get_db
 from backend.database.compose import ComposeDeploymentPydantic
 from backend.database.users import UserPydantic
 from backend.services import (
-    DepotService,
     PolarService,
     UsageService,
-    get_depot_service,
     get_polar_service,
     get_usage_service,
 )
 
 usage_router = APIRouter(prefix="/{deployment_id}/usage")
 
-# Constants
-MAX_DATE_RANGE_DAYS = 365  # 1 year maximum
+MAX_DATE_RANGE_DAYS = 365
 
 
 @usage_router.get("/breakdown")
@@ -40,12 +35,9 @@ async def get_deployment_cost_breakdown(
     end_date: datetime | None = Query(None, description="End date (defaults to now)"),
     usage_service: UsageService = Depends(get_usage_service),
     polar_service: PolarService = Depends(get_polar_service),
-    depot_service: DepotService = Depends(get_depot_service),
-    db: Database = Depends(get_db),
 ) -> WorkspaceCostBreakdownResponse:
     """Get detailed cost breakdown for a specific deployment with service and volume details"""
     try:
-        # Default date range to current month if not specified
         now = datetime.now(timezone.utc)
         if not start_date:
             start_date = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -53,7 +45,6 @@ async def get_deployment_cost_breakdown(
         if not end_date:
             end_date = now
 
-        # Validate date range
         if start_date >= end_date:
             raise HTTPException(
                 status_code=400,
@@ -71,41 +62,18 @@ async def get_deployment_cost_breakdown(
                 detail=f"Date range cannot exceed {MAX_DATE_RANGE_DAYS} days",
             )
 
-        # Get usage records for the date range
-        usage_records = await db.usage.get_workspace_usage(
+        # Get deployment breakdown from usage events
+        (
+            deployment_metrics,
+            service_usage_list,
+            volume_usage_list,
+        ) = await usage_service.get_deployment_breakdown(
             workspace_id=deployment.workspace_id,
+            deployment_id=deployment.id,
             start_date=start_date,
             end_date=end_date,
-            record_type=UsageCollectionConfig.get_record_type(),
         )
 
-        if not usage_records:
-            raise HTTPException(
-                status_code=404,
-                detail="No usage records found for the specified date range",
-            )
-
-        # Fetch build minutes from Depot for this deployment
-        build_minutes = await depot_service.get_deployment_build_minutes(
-            deployment_id=deployment.id,
-            start_at=start_date,
-            end_at=end_date,
-        )
-
-        # Calculate endpoint hours from usage records for this deployment
-        public_endpoint_hours = sum(r.public_endpoint_hours for r in usage_records)
-
-        # Aggregate deployment usage from records
-        deployment_metrics, service_usage_list, volume_usage_list = (
-            usage_service.aggregate_deployment_usage_from_records(
-                usage_records=usage_records,
-                deployment_id=deployment.id,
-                build_minutes=build_minutes,
-                public_endpoint_hours=public_endpoint_hours,
-            )
-        )
-
-        # Calculate full cost breakdown with service and volume details
         if not polar_service.enabled:
             raise HTTPException(
                 status_code=400,

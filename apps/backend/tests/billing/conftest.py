@@ -1,15 +1,11 @@
 """Billing test fixtures and configuration."""
 
-from datetime import datetime, timedelta
+from datetime import date, datetime
 
 import pytest
 from backend.database import Database, _create_database
 from backend.database.session import session_manager
-from backend.database.usage import UsageRecordPydantic
-from models.billing import (
-    UsageCollectionConfig,
-    UsageRecordStatus,
-)
+from backend.database.usage import BreakdownType, DailyUsageRecordPydantic
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tests.fixtures.database import (
@@ -68,40 +64,96 @@ async def billing_deployment(billing_db: Database, billing_workspace):
     return deployment
 
 
-async def create_interval_records(
+async def create_daily_record(
     db: Database,
     workspace_id: str,
-    date: datetime,
-    num_intervals: int = 24,
-    cpu_per_interval: float = 3600.0,
-    memory_per_interval: float = 3600.0,
-    standard_per_interval: float = 0.0,
-    shared_per_interval: float = 0.0,
-    build_per_interval: float = 0.0,
-    endpoint_per_interval: float = 0.0,
-) -> list[UsageRecordPydantic]:
-    """Create multiple interval records for a day (persisted to DB)."""
-    records = []
-    day_start = date.replace(hour=0, minute=0, second=0, microsecond=0)
+    usage_date: date,
+    cpu_core_seconds: float = 3600.0,
+    memory_gb_seconds: float = 3600.0,
+    standard_gb_hours: float = 0.0,
+    shared_gb_hours: float = 0.0,
+    build_minutes: float = 0.0,
+    public_endpoint_hours: float = 0.0,
+    intervals_collected: int = 1,
+    billing_attempts: int = 0,
+) -> DailyUsageRecordPydantic:
+    """Create a daily usage record for testing with specified values."""
+    record = await db.usage.get_or_create_daily_record(
+        workspace_id=workspace_id,
+        usage_date=usage_date,
+        expected_intervals=96,
+    )
 
-    for i in range(num_intervals):
-        start_time = day_start + timedelta(hours=i)
-        end_time = start_time + timedelta(hours=1)
+    # Increment usage - this adds 1 to intervals_collected
+    await db.usage.atomic_increment_usage(
+        record_id=record.id,
+        cpu_core_seconds=cpu_core_seconds,
+        memory_gb_seconds=memory_gb_seconds,
+        standard_gb_hours=standard_gb_hours,
+        shared_gb_hours=shared_gb_hours,
+        build_minutes=build_minutes,
+        public_endpoint_hours=public_endpoint_hours,
+    )
 
-        record = await db.usage.upsert_usage_record(
-            workspace_id=workspace_id,
-            collection_start=start_time,
-            collection_end=end_time,
-            cpu_core_seconds=cpu_per_interval,
-            memory_gb_seconds=memory_per_interval,
-            storage_gb_hours=standard_per_interval + shared_per_interval,
-            standard_gb_hours=standard_per_interval,
-            shared_gb_hours=shared_per_interval,
-            build_minutes=build_per_interval,
-            public_endpoint_hours=endpoint_per_interval,
-            record_type=UsageCollectionConfig.get_record_type(),
-            status=UsageRecordStatus.FINALIZED,
+    # If caller wants more intervals, add zero-value increments
+    for _ in range(intervals_collected - 1):
+        await db.usage.atomic_increment_usage(
+            record_id=record.id,
+            cpu_core_seconds=0.0,
+            memory_gb_seconds=0.0,
+            standard_gb_hours=0.0,
+            shared_gb_hours=0.0,
+            build_minutes=0.0,
+            public_endpoint_hours=0.0,
         )
-        records.append(record)
 
-    return records
+    # Set billing attempts if specified
+    for _ in range(billing_attempts):
+        await db.usage.increment_billing_attempt(record.id)
+
+    # Re-fetch to get updated values
+    records = await db.usage.get_workspace_daily_usage(
+        workspace_id=workspace_id,
+        start_date=usage_date,
+        end_date=usage_date,
+    )
+    return records[0] if records else record
+
+
+async def create_breakdown_events(
+    db: Database,
+    workspace_id: str,
+    interval_start: datetime,
+    interval_end: datetime,
+    deployment_id: str | None = None,
+    num_pods: int = 2,
+    num_pvcs: int = 1,
+    cpu_per_pod: float = 100.0,
+    memory_per_pod: float = 200.0,
+    gb_hours_per_pvc: float = 10.0,
+) -> None:
+    """Create breakdown events for testing dashboards."""
+    for i in range(num_pods):
+        await db.usage.add_breakdown_event(
+            workspace_id=workspace_id,
+            interval_start=interval_start,
+            interval_end=interval_end,
+            breakdown_type=BreakdownType.COMPUTE,
+            resource_name=f"pod-{i}",
+            deployment_id=deployment_id,
+            service_name=f"service-{i}",
+            cpu_core_seconds=cpu_per_pod,
+            memory_gb_seconds=memory_per_pod,
+        )
+
+    for i in range(num_pvcs):
+        await db.usage.add_breakdown_event(
+            workspace_id=workspace_id,
+            interval_start=interval_start,
+            interval_end=interval_end,
+            breakdown_type=BreakdownType.STORAGE,
+            resource_name=f"pvc-{i}",
+            deployment_id=deployment_id,
+            storage_class="ebs-sc",
+            gb_hours=gb_hours_per_pvc,
+        )
