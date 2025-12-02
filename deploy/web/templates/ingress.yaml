@@ -1,0 +1,35 @@
+{{- if .Values.ingress.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Chart.Name }}
+  labels:
+    app: {{ .Chart.Name }}
+    component: frontend
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/healthcheck-path: {{ .Values.ingress.healthCheckPath }}
+    alb.ingress.kubernetes.io/healthcheck-port: "{{ .Values.service.port }}"
+    alb.ingress.kubernetes.io/load-balancer-attributes: routing.http.preserve_host_header.enabled=true
+    alb.ingress.kubernetes.io/ssl-policy: ELBSecurityPolicy-TLS-1-2-2017-01
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS":443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    external-dns.alpha.kubernetes.io/hostname: {{ .Values.ingress.hostname }}
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  ingressClassName: alb
+  rules:
+    - host: {{ .Values.ingress.hostname }}
+      http:
+        paths:
+          - backend:
+              service:
+                name: {{ .Chart.Name }}
+                port:
+                  number: {{ .Values.service.port }}
+            path: /
+            pathType: Prefix
+{{- end }}

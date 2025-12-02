@@ -2,278 +2,313 @@
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from backend.database import Database
-from models.billing import UsageRecordStatus, UsageRecordType
+from backend.database.usage import BreakdownType, DailyUsageStatus
 
 from tests.fixtures.database import (
-    make_usage_record,
     make_user,
     make_user_workspace,
     make_workspace,
     requires_db,
 )
 
+pytestmark = [pytest.mark.asyncio, requires_db]
 
-@requires_db
-class TestUsageServiceCRUD:
-    """Test basic CRUD operations for UsageService."""
 
-    async def test_create_usage_record(self, db: Database):
-        """Test creating a usage record."""
+class TestDailyRecordCRUD:
+    """Test basic CRUD operations for daily usage records."""
+
+    async def test_create_daily_record(self, db: Database):
+        """Test creating a daily usage record."""
         user = await db.users.create(make_user())
         workspace = await db.workspaces.create(make_workspace())
         await db.user_workspaces.create(make_user_workspace(user.id, workspace.id))
 
-        record = make_usage_record(workspace.id, cpu_core_seconds=100.0)
-        created = await db.usage.create(record)
-
-        assert created.id is not None
-        assert created.workspace_id == workspace.id
-        assert created.cpu_core_seconds == 100.0
-        assert created.status == UsageRecordStatus.DRAFT
-
-    async def test_create_usage_record_with_memory(self, db: Database):
-        """Test creating a usage record with memory usage."""
-        user = await db.users.create(make_user())
-        workspace = await db.workspaces.create(make_workspace())
-        await db.user_workspaces.create(make_user_workspace(user.id, workspace.id))
-
-        record = make_usage_record(
-            workspace.id,
-            cpu_core_seconds=50.0,
-            memory_gb_seconds=256.0,
-        )
-        created = await db.usage.create(record)
-
-        assert created.cpu_core_seconds == 50.0
-        assert created.memory_gb_seconds == 256.0
-
-    async def test_get_usage_record_by_id(self, db: Database):
-        """Test retrieving a usage record by ID."""
-        user = await db.users.create(make_user())
-        workspace = await db.workspaces.create(make_workspace())
-        await db.user_workspaces.create(make_user_workspace(user.id, workspace.id))
-
-        record = make_usage_record(workspace.id)
-        created = await db.usage.create(record)
-
-        retrieved = await db.usage.get_by_id(created.id)
-
-        assert retrieved is not None
-        assert retrieved.id == created.id
-
-    async def test_update_usage_record(self, db: Database):
-        """Test updating a usage record."""
-        user = await db.users.create(make_user())
-        workspace = await db.workspaces.create(make_workspace())
-        await db.user_workspaces.create(make_user_workspace(user.id, workspace.id))
-
-        record = make_usage_record(workspace.id, cpu_core_seconds=100.0)
-        created = await db.usage.create(record)
-
-        created.cpu_core_seconds = 200.0
-        updated = await db.usage.update(created)
-
-        assert updated is not None
-        assert updated.cpu_core_seconds == 200.0
-
-    async def test_delete_usage_record(self, db: Database):
-        """Test deleting a usage record."""
-        user = await db.users.create(make_user())
-        workspace = await db.workspaces.create(make_workspace())
-        await db.user_workspaces.create(make_user_workspace(user.id, workspace.id))
-
-        record = make_usage_record(workspace.id)
-        created = await db.usage.create(record)
-
-        await db.usage.delete(created.id)
-
-        retrieved = await db.usage.get_by_id(created.id)
-        assert retrieved is None
-
-
-@requires_db
-class TestUsageServiceUpsert:
-    """Test upsert methods for UsageService."""
-
-    async def test_upsert_creates_new_record(self, db: Database):
-        """Test upsert creates a new record when none exists."""
-        user = await db.users.create(make_user())
-        workspace = await db.workspaces.create(make_workspace())
-        await db.user_workspaces.create(make_user_workspace(user.id, workspace.id))
-
-        now = datetime.now(timezone.utc)
-        start = now - timedelta(hours=1)
-        end = now
-
-        record = await db.usage.upsert_usage_record(
+        today = datetime.now(timezone.utc).date()
+        record = await db.usage.get_or_create_daily_record(
             workspace_id=workspace.id,
-            collection_start=start,
-            collection_end=end,
-            cpu_core_seconds=100.0,
-            memory_gb_seconds=50.0,
-            storage_gb_hours=10.0,
+            usage_date=today,
         )
 
-        assert record is not None
+        assert record.id is not None
         assert record.workspace_id == workspace.id
-        assert record.cpu_core_seconds == 100.0
+        assert record.usage_date == today
+        assert record.status == DailyUsageStatus.COLLECTING
+        assert record.intervals_collected == 0
 
-    async def test_upsert_updates_existing_record(self, db: Database):
-        """Test upsert updates an existing record."""
+    async def test_get_or_create_returns_existing(self, db: Database):
+        """Test that get_or_create returns existing record."""
         user = await db.users.create(make_user())
         workspace = await db.workspaces.create(make_workspace())
         await db.user_workspaces.create(make_user_workspace(user.id, workspace.id))
 
-        now = datetime.now(timezone.utc)
-        start = now - timedelta(hours=1)
-        end = now
-
-        first = await db.usage.upsert_usage_record(
+        today = datetime.now(timezone.utc).date()
+        first = await db.usage.get_or_create_daily_record(
             workspace_id=workspace.id,
-            collection_start=start,
-            collection_end=end,
-            cpu_core_seconds=100.0,
-            memory_gb_seconds=50.0,
-            storage_gb_hours=10.0,
+            usage_date=today,
+        )
+        second = await db.usage.get_or_create_daily_record(
+            workspace_id=workspace.id,
+            usage_date=today,
         )
 
-        second = await db.usage.upsert_usage_record(
+        assert first.id == second.id
+
+
+class TestAtomicIncrement:
+    """Test atomic increment operations."""
+
+    async def test_atomic_increment_updates_totals(self, db: Database):
+        """Test that atomic increment correctly updates totals."""
+        user = await db.users.create(make_user())
+        workspace = await db.workspaces.create(make_workspace())
+        await db.user_workspaces.create(make_user_workspace(user.id, workspace.id))
+
+        today = datetime.now(timezone.utc).date()
+        record = await db.usage.get_or_create_daily_record(
             workspace_id=workspace.id,
-            collection_start=start,
-            collection_end=end,
+            usage_date=today,
+        )
+
+        await db.usage.atomic_increment_usage(
+            record_id=record.id,
+            cpu_core_seconds=100.0,
+            memory_gb_seconds=200.0,
+            standard_gb_hours=10.0,
+            shared_gb_hours=5.0,
+            build_minutes=15.0,
+            public_endpoint_hours=2.0,
+        )
+
+        records = await db.usage.get_workspace_daily_usage(
+            workspace_id=workspace.id,
+            start_date=today,
+            end_date=today,
+        )
+
+        assert len(records) == 1
+        updated = records[0]
+        assert updated.cpu_core_seconds == 100.0
+        assert updated.memory_gb_seconds == 200.0
+        assert updated.standard_gb_hours == 10.0
+        assert updated.shared_gb_hours == 5.0
+        assert updated.build_minutes == 15.0
+        assert updated.public_endpoint_hours == 2.0
+        assert updated.intervals_collected == 1
+
+    async def test_multiple_increments_accumulate(self, db: Database):
+        """Test that multiple increments accumulate correctly."""
+        user = await db.users.create(make_user())
+        workspace = await db.workspaces.create(make_workspace())
+        await db.user_workspaces.create(make_user_workspace(user.id, workspace.id))
+
+        today = datetime.now(timezone.utc).date()
+        record = await db.usage.get_or_create_daily_record(
+            workspace_id=workspace.id,
+            usage_date=today,
+        )
+
+        # First increment
+        await db.usage.atomic_increment_usage(
+            record_id=record.id,
+            cpu_core_seconds=100.0,
+            memory_gb_seconds=0.0,
+            standard_gb_hours=0.0,
+            shared_gb_hours=0.0,
+            build_minutes=0.0,
+            public_endpoint_hours=0.0,
+        )
+
+        # Second increment
+        await db.usage.atomic_increment_usage(
+            record_id=record.id,
             cpu_core_seconds=150.0,
-            memory_gb_seconds=75.0,
-            storage_gb_hours=15.0,
+            memory_gb_seconds=0.0,
+            standard_gb_hours=0.0,
+            shared_gb_hours=0.0,
+            build_minutes=0.0,
+            public_endpoint_hours=0.0,
         )
 
-        assert second.id == first.id
-        assert second.cpu_core_seconds == 150.0
-        assert second.memory_gb_seconds == 75.0
-
-
-@requires_db
-class TestUsageServiceStatus:
-    """Test status update methods."""
-
-    async def test_finalize_record(self, db: Database):
-        """Test finalizing a usage record."""
-        user = await db.users.create(make_user())
-        workspace = await db.workspaces.create(make_workspace())
-        await db.user_workspaces.create(make_user_workspace(user.id, workspace.id))
-
-        record = make_usage_record(workspace.id)
-        created = await db.usage.create(record)
-
-        await db.usage.finalize_record(created.id)
-
-        # Verify status changed by fetching the record
-        updated = await db.usage.get_by_id(created.id)
-        assert updated is not None
-        assert updated.status == UsageRecordStatus.FINALIZED
-
-    async def test_mark_as_reported(self, db: Database):
-        """Test marking a record as reported."""
-        user = await db.users.create(make_user())
-        workspace = await db.workspaces.create(make_workspace())
-        await db.user_workspaces.create(make_user_workspace(user.id, workspace.id))
-
-        record = make_usage_record(workspace.id)
-        created = await db.usage.create(record)
-
-        await db.usage.finalize_record(created.id)
-        await db.usage.mark_as_reported(created.id)
-
-        # Verify status changed by fetching the record
-        updated = await db.usage.get_by_id(created.id)
-        assert updated is not None
-        assert updated.status == UsageRecordStatus.REPORTED
-
-    async def test_finalize_already_finalized_record(self, db: Database):
-        """Test that finalizing an already finalized record is idempotent."""
-        user = await db.users.create(make_user())
-        workspace = await db.workspaces.create(make_workspace())
-        await db.user_workspaces.create(make_user_workspace(user.id, workspace.id))
-
-        record = make_usage_record(workspace.id)
-        created = await db.usage.create(record)
-
-        await db.usage.finalize_record(created.id)
-        await db.usage.finalize_record(created.id)  # Should not error
-
-        updated = await db.usage.get_by_id(created.id)
-        assert updated.status == UsageRecordStatus.FINALIZED
-
-
-@requires_db
-class TestUsageServiceQueries:
-    """Test query methods for UsageService."""
-
-    async def test_get_workspace_usage(self, db: Database):
-        """Test getting workspace usage in a date range."""
-        user = await db.users.create(make_user())
-        workspace = await db.workspaces.create(make_workspace())
-        await db.user_workspaces.create(make_user_workspace(user.id, workspace.id))
-
-        now = datetime.now(timezone.utc)
-        start = now - timedelta(hours=2)
-        end = now
-
-        await db.usage.create(
-            make_usage_record(
-                workspace.id,
-                collection_start=start,
-                collection_end=start + timedelta(hours=1),
-                cpu_core_seconds=100.0,
-            )
-        )
-        await db.usage.create(
-            make_usage_record(
-                workspace.id,
-                collection_start=start + timedelta(hours=1),
-                collection_end=end,
-                cpu_core_seconds=150.0,
-            )
-        )
-
-        records = await db.usage.get_workspace_usage(workspace.id, start, end)
-
-        assert len(records) == 2
-        total_cpu = sum(r.cpu_core_seconds for r in records)
-        assert total_cpu == 250.0
-
-    async def test_get_finalized_usage_records(self, db: Database):
-        """Test getting finalized usage records (DAILY type only)."""
-        user = await db.users.create(make_user())
-        workspace = await db.workspaces.create(make_workspace())
-        await db.user_workspaces.create(make_user_workspace(user.id, workspace.id))
-
-        # Create DAILY record (the method only returns DAILY records)
-        now = datetime.now(timezone.utc)
-        record = await db.usage.upsert_usage_record(
+        records = await db.usage.get_workspace_daily_usage(
             workspace_id=workspace.id,
-            collection_start=now - timedelta(days=1),
-            collection_end=now,
-            cpu_core_seconds=100.0,
-            memory_gb_seconds=50.0,
-            storage_gb_hours=10.0,
-            record_type=UsageRecordType.DAILY,
+            start_date=today,
+            end_date=today,
         )
 
-        await db.usage.finalize_record(record.id)
-
-        finalized = await db.usage.get_finalized_usage()
-
-        assert len(finalized) >= 1
-        assert any(r.id == record.id for r in finalized)
+        assert records[0].cpu_core_seconds == 250.0
+        assert records[0].intervals_collected == 2
 
 
-@requires_db
-class TestUsageServiceMultipleWorkspaces:
+class TestIdempotency:
+    """Test idempotency tracking."""
+
+    async def test_mark_interval_collected(self, db: Database):
+        """Test marking an interval as collected."""
+        user = await db.users.create(make_user())
+        workspace = await db.workspaces.create(make_workspace())
+        await db.user_workspaces.create(make_user_workspace(user.id, workspace.id))
+
+        interval_start = datetime.now(timezone.utc).replace(
+            minute=0, second=0, microsecond=0
+        )
+
+        await db.usage.mark_interval_collected(workspace.id, interval_start)
+
+        is_collected = await db.usage.is_interval_collected(
+            workspace.id, interval_start
+        )
+        assert is_collected is True
+
+    async def test_is_interval_collected_returns_false(self, db: Database):
+        """Test that uncollected intervals return False."""
+        user = await db.users.create(make_user())
+        workspace = await db.workspaces.create(make_workspace())
+        await db.user_workspaces.create(make_user_workspace(user.id, workspace.id))
+
+        interval_start = datetime.now(timezone.utc)
+
+        is_collected = await db.usage.is_interval_collected(
+            workspace.id, interval_start
+        )
+        assert is_collected is False
+
+
+class TestBillingStatus:
+    """Test billing status operations."""
+
+    async def test_mark_as_billed(self, db: Database):
+        """Test marking a record as billed."""
+        user = await db.users.create(make_user())
+        workspace = await db.workspaces.create(make_workspace())
+        await db.user_workspaces.create(make_user_workspace(user.id, workspace.id))
+
+        today = datetime.now(timezone.utc).date()
+        record = await db.usage.get_or_create_daily_record(
+            workspace_id=workspace.id,
+            usage_date=today,
+        )
+
+        await db.usage.mark_as_billed(record.id, "test-billing-id")
+
+        records = await db.usage.get_workspace_daily_usage(
+            workspace_id=workspace.id,
+            start_date=today,
+            end_date=today,
+        )
+
+        assert records[0].status == DailyUsageStatus.BILLED
+        assert records[0].billing_id == "test-billing-id"
+        assert records[0].billed_at is not None
+
+    async def test_get_unbilled_for_date(self, db: Database):
+        """Test getting unbilled records for a date."""
+        user = await db.users.create(make_user())
+        workspace = await db.workspaces.create(make_workspace())
+        await db.user_workspaces.create(make_user_workspace(user.id, workspace.id))
+
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
+        record = await db.usage.get_or_create_daily_record(
+            workspace_id=workspace.id,
+            usage_date=yesterday,
+        )
+
+        unbilled = await db.usage.get_unbilled_for_date(yesterday)
+
+        assert len(unbilled) == 1
+        assert unbilled[0].id == record.id
+
+    async def test_billed_record_not_in_unbilled(self, db: Database):
+        """Test that billed records are excluded from unbilled query."""
+        user = await db.users.create(make_user())
+        workspace = await db.workspaces.create(make_workspace())
+        await db.user_workspaces.create(make_user_workspace(user.id, workspace.id))
+
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
+        record = await db.usage.get_or_create_daily_record(
+            workspace_id=workspace.id,
+            usage_date=yesterday,
+        )
+        await db.usage.mark_as_billed(record.id, "billed")
+
+        unbilled = await db.usage.get_unbilled_for_date(yesterday)
+
+        assert len(unbilled) == 0
+
+
+class TestBreakdownEvents:
+    """Test breakdown event operations."""
+
+    async def test_add_breakdown_event(self, db: Database):
+        """Test adding a breakdown event."""
+        user = await db.users.create(make_user())
+        workspace = await db.workspaces.create(make_workspace())
+        await db.user_workspaces.create(make_user_workspace(user.id, workspace.id))
+
+        now = datetime.now(timezone.utc)
+        interval_start = now.replace(minute=0, second=0, microsecond=0)
+        interval_end = interval_start + timedelta(minutes=15)
+
+        await db.usage.add_breakdown_event(
+            workspace_id=workspace.id,
+            interval_start=interval_start,
+            interval_end=interval_end,
+            breakdown_type=BreakdownType.COMPUTE,
+            resource_name="web-0",
+            service_name="web",
+            cpu_core_seconds=100.0,
+            memory_gb_seconds=200.0,
+        )
+
+        breakdown = await db.usage.get_service_breakdown(
+            workspace_id=workspace.id,
+            start_date=interval_start,
+            end_date=interval_end + timedelta(seconds=1),
+        )
+
+        assert len(breakdown) == 1
+        assert breakdown[0][0] == "web"
+        assert breakdown[0][1] == 100.0  # CPU
+        assert breakdown[0][2] == 200.0  # Memory
+
+    async def test_get_volume_breakdown(self, db: Database):
+        """Test getting volume breakdown."""
+        user = await db.users.create(make_user())
+        workspace = await db.workspaces.create(make_workspace())
+        await db.user_workspaces.create(make_user_workspace(user.id, workspace.id))
+
+        now = datetime.now(timezone.utc)
+        interval_start = now.replace(minute=0, second=0, microsecond=0)
+        interval_end = interval_start + timedelta(minutes=15)
+
+        await db.usage.add_breakdown_event(
+            workspace_id=workspace.id,
+            interval_start=interval_start,
+            interval_end=interval_end,
+            breakdown_type=BreakdownType.STORAGE,
+            resource_name="data-vol",
+            storage_class="ebs-sc",
+            gb_hours=10.0,
+        )
+
+        breakdown = await db.usage.get_volume_breakdown(
+            workspace_id=workspace.id,
+            start_date=interval_start,
+            end_date=interval_end + timedelta(seconds=1),
+        )
+
+        assert len(breakdown) == 1
+        assert breakdown[0][0] == "data-vol"
+        assert breakdown[0][1] == "ebs-sc"
+        assert breakdown[0][2] == 10.0
+
+
+class TestMultipleWorkspaces:
     """Test usage tracking across multiple workspaces."""
 
     async def test_usage_isolated_per_workspace(self, db: Database):
-        """Test that usage records are isolated per workspace."""
+        """Test that daily records are isolated per workspace."""
         user = await db.users.create(make_user())
         ws1 = await db.workspaces.create(make_workspace())
         ws2 = await db.workspaces.create(make_workspace())
@@ -281,15 +316,17 @@ class TestUsageServiceMultipleWorkspaces:
         await db.user_workspaces.create(make_user_workspace(user.id, ws1.id))
         await db.user_workspaces.create(make_user_workspace(user.id, ws2.id))
 
-        now = datetime.now(timezone.utc)
-        start = now - timedelta(hours=1)
-        end = now
+        today = datetime.now(timezone.utc).date()
 
-        await db.usage.create(make_usage_record(ws1.id, cpu_core_seconds=100.0))
-        await db.usage.create(make_usage_record(ws2.id, cpu_core_seconds=200.0))
+        # Create records for both workspaces
+        rec1 = await db.usage.get_or_create_daily_record(ws1.id, today)
+        rec2 = await db.usage.get_or_create_daily_record(ws2.id, today)
 
-        ws1_records = await db.usage.get_workspace_usage(ws1.id, start, end)
-        ws2_records = await db.usage.get_workspace_usage(ws2.id, start, end)
+        await db.usage.atomic_increment_usage(rec1.id, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        await db.usage.atomic_increment_usage(rec2.id, 200.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
-        assert sum(r.cpu_core_seconds for r in ws1_records) == 100.0
-        assert sum(r.cpu_core_seconds for r in ws2_records) == 200.0
+        ws1_records = await db.usage.get_workspace_daily_usage(ws1.id, today, today)
+        ws2_records = await db.usage.get_workspace_daily_usage(ws2.id, today, today)
+
+        assert ws1_records[0].cpu_core_seconds == 100.0
+        assert ws2_records[0].cpu_core_seconds == 200.0

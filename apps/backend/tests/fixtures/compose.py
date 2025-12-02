@@ -81,7 +81,7 @@ def complex_compose_data() -> dict[str, Any]:
             },
             "postgres": {
                 "image": "postgres:15",
-                "ports": ["5432:5432"],
+                "ports": ["6432:6432"],
                 "volumes": ["pg-data:/var/lib/postgresql/data"],
                 "networks": ["backend"],
                 "environment": {"POSTGRES_DB": "myapp"},
@@ -174,7 +174,7 @@ def complex_compose_file() -> ComposeFile:
             ComposeService(
                 name="postgres",
                 image="postgres:15",
-                ports=[ComposePort(published=5432, target=5432, protocol="tcp")],
+                ports=[ComposePort(published=6432, target=6432, protocol="tcp")],
                 volumes=[
                     ServiceVolume(
                         type="volume",

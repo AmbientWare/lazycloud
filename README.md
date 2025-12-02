@@ -1,350 +1,296 @@
 # LazyCloud
 
-LazyCloud converts Docker Compose files into Kubernetes Helm charts, making Kubernetes accessible to developers familiar with Docker Compose. Deploy your existing compose applications to Kubernetes without learning complex K8s configurations.
-
-## What is LazyCloud?
-
-LazyCloud bridges the gap between Docker Compose and Kubernetes by:
-- **Parsing** Docker Compose files and validating them for Kubernetes compatibility
-- **Converting** compose configurations to Helm charts with best practices
-- **Deploying** applications to Kubernetes clusters with a simple CLI
-- **Managing** deployments through an interactive TUI dashboard
-
-## Key Technologies
-
-- **FastAPI** - High-performance API server
-- **Textual** - Modern terminal user interface for the CLI dashboard
-- **Kubernetes & Helm** - Container orchestration and package management
-- **LocalStack** - AWS ECR emulation for development
-- **Prefect** - Workflow orchestration for async tasks
-- **PostgreSQL** - Application database
-- **Redis** - Caching and task queue
+LazyCloud converts Docker Compose files into Kubernetes Helm charts, making Kubernetes accessible to developers familiar with Docker Compose.
 
 ## Project Structure
 
 ```
 lazycloud/
-├── src/
-│   ├── lazycloud_api/      # FastAPI backend service
-│   │   ├── api/v1/          # REST API endpoints
-│   │   ├── services/        # Business logic (compose parsing, k8s generation)
-│   │   ├── database/        # SQLAlchemy models and CRUD operations
-│   │   └── prefect_app/     # Async workflow tasks
-│   ├── lazycloud_cli/       # CLI tool with TUI dashboard
-│   │   ├── commands/        # Typer CLI commands
-│   │   ├── ui/              # Textual dashboard components
-│   │   └── api/             # API client for backend communication
-│   ├── shared/              # Shared models between API and CLI
-│   └── scripts/             # Development utilities
-├── docker-compose.yml       # Development environment
-└── pyproject.toml          # Project dependencies and configuration
+├── apps/
+│   ├── backend/          # FastAPI API server
+│   ├── web/              # Next.js web frontend
+│   └── cli/              # CLI tool
+├── packages/             # Shared Python packages
+│   ├── models/           # Shared data models
+│   ├── api_requests/     # API request schemas
+│   └── responses/        # API response schemas
+├── deploy/               # Kubernetes Helm charts
+│   ├── api-platform/     # API + workers deployment
+│   └── web/              # Web frontend deployment
+├── .github/workflows/    # CI/CD pipelines
+├── pyproject.toml        # Workspace root config
+└── uv.lock              # Unified lockfile for all packages
 ```
 
-## Prerequisites
+### UV Workspace
 
-Before you begin, ensure you have the following installed:
+This is a **uv workspace monorepo** with a single lockfile (`uv.lock`) for all packages:
 
-- **Python 3.13+** - Required for the application
-- **uv** - Fast Python package manager ([installation](https://docs.astral.sh/uv/))
-- **Docker & Docker Compose** - For running services
-- **Minikube** - Local Kubernetes cluster ([installation](https://minikube.sigs.k8s.io/docs/start/))
-- **kubectl** - Kubernetes CLI ([installation](https://kubernetes.io/docs/tasks/tools/))
-- **Helm** - Kubernetes package manager ([installation](https://helm.sh/docs/intro/install/))
+**Workspace members:**
+- `apps/backend` - API server
+- `apps/cli` - CLI tool
+- `packages/models` - Shared models
+- `packages/api_requests` - Request schemas
+- `packages/responses` - Response schemas
 
-## Getting Started
+**How it works:**
+```bash
+# Add dependency to specific member
+cd apps/backend
+uv add fastapi  # Adds to apps/backend only
 
-Follow these steps to set up your LazyCloud development environment:
+# If member A depends on member B, B's deps are automatically available
+# e.g., backend depends on packages/models, so models' deps install too
 
-### Step 1: Create Docker Network
+# Sync from any directory updates venv for that workspace member
+cd apps/backend
+uv sync  # Syncs backend + its dependencies
 
-LazyCloud services communicate over a dedicated Docker network:
+cd apps/cli
+uv sync  # Syncs CLI + its dependencies
+
+# Sync everything from root
+uv sync --all-packages
+```
+
+**Benefits:**
+- Single `uv.lock` ensures consistent versions across all packages
+- Shared packages (`packages/*`) can be imported by apps
+- Fast installs with shared cache
+
+## Key Technologies
+
+- **FastAPI** - API server
+- **Next.js** - Web frontend
+- **Kubernetes & Helm** - Container orchestration
+- **Prefect** - Workflow orchestration
+- **PostgreSQL** - Database
+- **Redis** - Cache and task queue
+- **Argo CD** - GitOps deployments
+
+## Local Development
+
+### Prerequisites
+
+- **Python 3.13+**
+- **uv** - Python package manager ([install](https://docs.astral.sh/uv/))
+- **Docker & Docker Compose**
+- **Node.js 22+**
+- **Minikube** - For local K8s testing ([install](https://minikube.sigs.k8s.io/docs/start/))
+- **kubectl** - Kubernetes CLI ([install](https://kubernetes.io/docs/tasks/tools/))
+- **Helm** - K8s package manager ([install](https://helm.sh/docs/intro/install/))
+
+### Quick Start
 
 ```bash
+# 1. Create Docker network
 docker network create lazycloud
-```
 
-### Step 2: Install Dependencies
-
-Install Python dependencies using uv:
-
-```bash
+# 2. Install Python dependencies
 uv sync
+
+# 3. Start Minikube (for K8s testing)
+uv run mk-up
+
+# 4. Start backend services
+docker compose up -d
+
+# 5. Start web dev server (optional)
+cd apps/web
+npm install
+npm run dev
 ```
 
-### Step 3: Start Minikube Development Environment
+### Access Services
 
-Start a local Kubernetes cluster with all required configurations:
+- **API**: http://localhost:8000/docs
+- **Web**: http://localhost:3000
+- **Prefect**: http://localhost:4200
+- **LocalStack**: http://localhost:4566 (AWS emulation)
+
+### Minikube Commands
 
 ```bash
-# Start minikube with LazyCloud configuration
+# Start local K8s cluster
 uv run mk-up
+
+# Start fresh (delete existing cluster)
+uv run mk-up --fresh
 
 # Check cluster status
 uv run mk-status
 
-# Optional: Open Kubernetes dashboard
+# Open K8s dashboard
 uv run mk-dash
-```
 
-**What `mk-up` does:**
-- Starts Minikube with 4GB RAM, 2 CPUs, and 20GB disk
-- Connects to the `lazycloud` Docker network
-- Enables addons: ingress, storage-provisioner, metrics-server, gvisor
-- Creates an EFS-compatible StorageClass for persistent volumes
-- Sets up the `lazycloud-test` namespace
-- Configures DNS for LocalStack registry access (ECR emulation)
-
-### Step 4: Start Application Services
-
-Launch all LazyCloud services using Docker Compose:
-
-```bash
-# Start all services in detached mode
-docker compose up -d
-
-# Or rebuild and start services
-docker compose up --build -d
-```
-
-**Services started:**
-- **API Server** - Backend API (port 8000)
-- **PostgreSQL** - Application database (port 5432)
-- **Redis** - Cache and task queue (port 6379)
-- **Prefect Server** - Workflow orchestration (port 4200)
-- **LocalStack** - AWS service emulation including ECR (port 4566)
-
-### Step 5: Run Database Migrations
-
-Initialize the database schema:
-
-```bash
-uv run alembic upgrade head
-```
-
-### Step 6: Verify Setup
-
-Check that everything is running correctly:
-
-- **API Documentation**: http://localhost:8000/docs
-- **API Health**: http://localhost:8000/health
-- **Prefect UI**: http://localhost:4200
-
-## CLI Usage
-
-LazyCloud provides a powerful CLI for managing your deployments.
-
-### Authentication
-
-Before deploying, add an API key to authenticate with the LazyCloud API:
-
-```bash
-# Add a new API key
-uv run lazycloud auth add <key-name>
-
-# List all configured API keys
-uv run lazycloud auth list
-
-# Set the active API key
-uv run lazycloud auth set <key-name>
-
-# Remove an API key
-uv run lazycloud auth remove <key-name>
-```
-
-**Note:** The CLI accepts a `--server-url` flag to specify a custom API endpoint:
-```bash
-uv run lazycloud --server-url http://api.example.com deploy
-```
-
-### Deployment Workflow
-
-Deploy Docker Compose applications to Kubernetes in three simple steps:
-
-```bash
-# 1. Navigate to your compose project directory
-cd /path/to/your/compose/project
-
-# 2. Initialize LazyCloud deployment configuration
-uv run lazycloud init
-
-# 3. Deploy to Kubernetes
-uv run lazycloud deploy
-```
-
-### Interactive Dashboard
-
-Launch the TUI dashboard to monitor and manage deployments:
-
-```bash
-uv run lazycloud dashboard
-```
-
-The dashboard provides:
-- Real-time deployment status
-- Service health monitoring
-- Log streaming
-- Interactive deployment management
-
-### Destroy Deployment
-
-Remove a deployment from Kubernetes:
-
-```bash
-# Destroy the current deployment (from project directory)
-uv run lazycloud destroy
-
-# Destroy a specific deployment by name
-uv run lazycloud destroy <deployment-name>
-
-# Skip confirmation prompt
-uv run lazycloud destroy --force
-```
-
-## Development Commands
-
-### API Development
-
-Run the API server with hot reload for development:
-
-```bash
-uv run python src/lazycloud_api/main.py --debug
-```
-
-The API will reload automatically when you make changes to the source code.
-
-### Minikube Management
-
-Convenient commands for managing your local Kubernetes cluster:
-
-```bash
-# Show available commands
-uv run mk-help
-
-# Start minikube
-uv run mk-up
-
-# Delete existing cluster and start fresh
-uv run mk-up --fresh
-
-# Stop minikube (preserves cluster state)
+# Stop cluster
 uv run mk-down
 
-# Delete minikube cluster completely
+# Delete cluster completely
 uv run mk-down --delete
-
-# Show cluster status and resources
-uv run mk-status
-
-# Open Kubernetes dashboard in browser
-uv run mk-dash
 ```
 
-### Database Operations
+**What Minikube provides:**
+- Local Kubernetes cluster for testing deployments
+- gVisor runtime for container isolation
+- LocalStack ECR integration (no AWS creds needed)
+- Monitoring stack (Prometheus + Grafana)
+- EFS-compatible storage class
 
-Manage database schema changes with Alembic migrations:
+### Development Workflow
 
 ```bash
-# Create a new migration
-./scripts/db_revision.sh -m "description_of_changes"
+# Backend hot reload (auto-restart on code changes)
+cd apps/backend
+uv run uvicorn backend.main:app --reload
 
-# Apply all pending migrations
-uv run alembic upgrade head
+# Frontend dev server (auto-refresh)
+cd apps/web
+npm run dev
 
-# Check current migration version
-uv run alembic current
+# Run background workers
+docker compose up background-workers
 
-# Rollback one migration
-uv run alembic downgrade -1
+# Run tests
+cd apps/backend && uv run pytest
+cd apps/cli && uv run pytest
 ```
 
-### Testing
+## Deployment
 
-Run tests with coverage:
+### Infrastructure
+
+LazyCloud uses **trunk-based development** with **GitOps**:
+- Single `main` branch
+- Manual deployments via GitHub Actions
+- Argo CD syncs from git to Kubernetes
+- Immutable image tags (git SHA)
+
+### Deploy to Staging
 
 ```bash
-# Run all tests
-uv run pytest
+# Go to GitHub Actions → Deploy Web → Run workflow
+# Select "staging" → Run
 
-# Run with coverage report
-uv run pytest --cov=src --cov-report=html
-
-# Run specific test file
-uv run pytest src/lazycloud_api/tests/test_compose_parser.py
-
-# Run tests matching a pattern
-uv run pytest -k "test_parser"
+# Or deploy backend
+# Go to GitHub Actions → Deploy Backend → Run workflow
+# Select "staging" → Run
 ```
 
-## API Documentation
+### Deploy to Production
 
-The LazyCloud API provides comprehensive endpoints for managing deployments.
-
-### Interactive Documentation
-
-- **Swagger UI**: http://localhost:8000/docs - Interactive API testing interface
-- **ReDoc**: http://localhost:8000/redoc - Clean, readable API documentation
-
-### Key Endpoints
-
-- **Deployments** - Create, update, list, and delete deployments
-- **Services** - Query service status and configurations
-- **Secrets** - Manage Kubernetes secrets securely
-- **Registry** - Container registry authentication and management
-- **Tasks** - Monitor async deployment tasks
-- **Diff** - Preview changes before deployment
-
-## Architecture Overview
+```bash
+# Same as staging, but select "production"
+# Production deployments require approval
+```
 
 ### How It Works
 
-1. **Compose Parsing** - Your Docker Compose file is validated and parsed by the API
-2. **Helm Generation** - Compose configurations are converted to Kubernetes Helm charts
-3. **Validation** - Resources are validated for Kubernetes compatibility
-4. **Deployment** - Helm charts are deployed to your configured Kubernetes cluster
-5. **Monitoring** - Prefect workflows monitor deployment progress and health
+1. Merge code to `main`
+2. Trigger manual deployment workflow
+3. Builds Docker image with SHA: `lazycloud-api:abc1234`
+4. Updates Helm values file: `tag: "abc1234"`
+5. Commits change to git
+6. Argo CD detects change and deploys to K8s
 
-### Key Features
+**Same image deploys to staging and production** - no rebuilds!
 
-- **gVisor Security** - Enhanced container isolation using gVisor runtime class
-- **LocalStack Integration** - Emulates AWS ECR for local development without AWS credentials
-- **Automatic Dependencies** - Init containers ensure services start in the correct order
-- **Resource Management** - Automatic resource request/limit configuration
-- **Network Policies** - Secure inter-service communication
-- **Persistent Volumes** - Automatic PVC creation for compose volumes
+### Helm Charts
 
-### Design Decisions
+```bash
+# Render staging manifests
+helm template lazycloud-api-platform ./deploy/api-platform \
+  -f ./deploy/api-platform/values-staging.yaml
 
-- **Strict Validation** - Service names must be Kubernetes-compliant (lowercase, alphanumeric, hyphens)
-- **Smart Defaults** - If limits are specified without requests, requests default to 80% of limits
-- **Security First** - Non-root security contexts automatically applied where possible
-- **Async Tasks** - Long-running operations (deployments, monitoring) use Prefect workflows
+# Render production manifests
+helm template lazycloud-api-platform ./deploy/api-platform \
+  -f ./deploy/api-platform/values-prod.yaml
+```
 
-## Troubleshooting
+## CLI Usage
 
-### Common Issues
+```bash
+# Install CLI
+uv run --with lazycloud-cli lazycloud --help
 
-**Minikube won't start:**
-- Ensure Docker is running
-- Check if the `lazycloud` network exists: `docker network ls`
-- Try starting fresh: `uv run mk-up --fresh`
+# Authenticate
+uv run lazycloud auth add <key-name>
 
-**API returns 500 errors:**
-- Check database is running: `docker compose ps`
-- Verify migrations are applied: `uv run alembic current`
-- Check API logs: `docker compose logs api`
+# Deploy compose to K8s
+cd /path/to/compose/project
+uv run lazycloud init
+uv run lazycloud deploy
 
-**Deployment fails:**
-- Verify Minikube is running: `uv run mk-status`
-- Check kubectl can connect: `kubectl get nodes`
-- Ensure your compose file is valid: Check API validation errors
+# Dashboard
+uv run lazycloud dashboard
+```
 
-**LocalStack registry issues:**
-- Restart LocalStack: `docker compose restart localstack`
-- Reconfigure DNS: `uv run mk-up --fresh`
+## Development
 
-## Contributing
+### Testing
 
-Contributions are welcome! Please see `CLAUDE.md` for development guidelines and architecture details.
+```bash
+# Backend tests
+cd apps/backend
+uv run pytest
+
+# CLI tests
+cd apps/cli
+uv run pytest
+```
+
+### Database Migrations
+
+```bash
+# Create migration (with autogenerate)
+./scripts/db_revision.sh -m "description"
+
+# Apply migrations (runs automatically with docker compose up)
+# Or manually:
+docker compose up db-migration
+
+# Rollback one revision
+docker compose run --rm api uv run alembic downgrade -1
+
+# Check current version
+docker compose run --rm api uv run alembic current
+```
+
+**Note:** Migrations run automatically when you `docker compose up` - the `db-migration` service ensures the database is up to date before other services start.
+
+### Utility Scripts
+
+```bash
+# Create secret key for encryption
+uv run python scripts/create_secret_key.py
+
+# Generate admin API token
+./scripts/generate_admin_token.sh
+
+# Setup Docker network
+./scripts/setup_network.sh
+```
+
+## Architecture
+
+### Components
+
+- **API** - FastAPI backend, REST endpoints, compose parsing
+- **Web** - Next.js frontend, deployment dashboard
+- **CLI** - Typer CLI with Textual TUI
+- **Background Worker** - Prefect task workers (build/deploy jobs)
+- **Cron Worker** - Prefect flow workers (scheduled tasks)
+
+### Deployment Flow
+
+```
+Code → GitHub → CI/CD → ECR Images → Git (Helm values) → Argo CD → Kubernetes
+```
+
+### Environments
+
+- **Staging**: `staging.lazycloud.dev` / `api-staging.lazycloud.dev`
+- **Production**: `lazycloud.dev` / `api.lazycloud.dev`
 
 ## License
 

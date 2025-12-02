@@ -6,8 +6,8 @@ from backend.database.compose import ComposeDeploymentPydantic
 from backend.database.secrets import SecretPydantic
 
 
-class ValidationResult(BaseModel):
-    """Result from deployment validation task."""
+class DeploymentPreparationResult(BaseModel):
+    """Result from deployment preparation task containing parsed and processed deployment data."""
 
     deployment: ComposeDeploymentPydantic
     compose_file: ComposeFile

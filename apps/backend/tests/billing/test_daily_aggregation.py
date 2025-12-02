@@ -1,19 +1,15 @@
-"""Tests for daily usage aggregation from interval records."""
+"""Tests for daily usage finalization and billing."""
 
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from backend.database import Database
-from backend.prefect_app.usage_collector import collect_workspace_daily_usage
-from models.billing import (
-    UsageCollectionConfig,
-    UsageRecordStatus,
-    UsageRecordType,
-)
+from backend.database.usage import DailyUsageStatus
+from backend.prefect_app.usage_collector import finalize_and_bill
 
-from tests.billing.conftest import create_interval_records
+from tests.billing.conftest import create_daily_record
 from tests.fixtures.database import requires_db
 
 pytestmark = [
@@ -21,6 +17,18 @@ pytestmark = [
     pytest.mark.billing,
     requires_db,
 ]
+
+
+@pytest.fixture
+def mock_polar_service():
+    """Mock Polar service."""
+    with patch("backend.prefect_app.usage_collector.get_polar_service") as mock_get:
+        mock_service = AsyncMock()
+        mock_service.usage = AsyncMock()
+        mock_service.usage.enabled = True
+        mock_service.usage.send_daily_usage = AsyncMock(return_value=True)
+        mock_get.return_value = mock_service
+        yield mock_service
 
 
 @pytest.fixture(autouse=True)
@@ -31,10 +39,8 @@ def mock_db_context(billing_db: Database, billing_db_session):
     async def mock_context():
         try:
             yield billing_db
-            # Flush and commit like the real get_db_context does
             await billing_db_session.flush()
             await billing_db_session.commit()
-            # Expire all so subsequent queries see committed data
             billing_db_session.expire_all()
         except Exception:
             await billing_db_session.rollback()
@@ -50,581 +56,523 @@ def mock_db_context(billing_db: Database, billing_db_session):
         yield billing_db
 
 
-class TestDailyAggregationFromIntervals:
-    """Test daily record aggregation from interval records."""
+class TestDailyBilling:
+    """Test the finalize_and_bill flow."""
 
-    async def test_daily_aggregation_from_intervals(
+    async def test_bills_yesterdays_records(
         self,
         billing_db: Database,
         billing_workspace,
+        mock_polar_service,
     ):
-        """Verify daily record aggregates from interval records."""
+        """Verify billing sends yesterday's records to Polar."""
         workspace_id = str(billing_workspace.id)
-        yesterday = datetime.now(timezone.utc) - timedelta(days=1)
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
 
-        # Create 24 interval records for yesterday
-        await create_interval_records(
+        await create_daily_record(
             db=billing_db,
             workspace_id=workspace_id,
-            date=yesterday,
-            num_intervals=24,
-            cpu_per_interval=100.0,  # 100 core-seconds per hour
-            memory_per_interval=200.0,  # 200 GB-seconds per hour
+            usage_date=yesterday,
+            cpu_core_seconds=3600.0,
+            memory_gb_seconds=7200.0,
         )
 
-        # Define day boundaries
-        day_start = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
-        day_end = day_start + timedelta(days=1) - timedelta(microseconds=1)
+        result = await finalize_and_bill()
 
-        # Run daily aggregation
-        result = await collect_workspace_daily_usage(
-            workspace_id=workspace_id,
-            day_start=day_start,
-            day_end=day_end,
-        )
+        assert result["billed"] == 1
+        assert result["failed"] == 0
+        mock_polar_service.usage.send_daily_usage.assert_called_once()
 
-        assert result["success"] is True
-        assert "usage_record_id" in result
+        # Verify the call included expected data
+        call_kwargs = mock_polar_service.usage.send_daily_usage.call_args.kwargs
+        assert "record" in call_kwargs
+        assert "idempotency_key" in call_kwargs
+        assert call_kwargs["record"].cpu_core_seconds == 3600.0
+        assert call_kwargs["record"].memory_gb_seconds == 7200.0
 
-        # Verify daily record exists
-        records = await billing_db.usage.get_workspace_usage(
-            workspace_id=workspace_id,
-            start_date=day_start,
-            end_date=day_end,
-            record_type=UsageRecordType.DAILY,
-        )
-
-        assert len(records) == 1
-        daily_record = records[0]
-        assert daily_record.record_type == UsageRecordType.DAILY.value
-
-
-class TestDailyAggregationTotals:
-    """Test that daily totals correctly sum interval records."""
-
-    async def test_daily_aggregation_cpu_totals(
+    async def test_marks_record_as_billed(
         self,
         billing_db: Database,
         billing_workspace,
+        mock_polar_service,
     ):
-        """Verify CPU core-seconds summed correctly across intervals."""
+        """Verify billing marks the record as billed with correct status and ID."""
         workspace_id = str(billing_workspace.id)
-        yesterday = datetime.now(timezone.utc) - timedelta(days=1)
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
 
-        cpu_per_interval = 150.0
-        num_intervals = 24
-
-        await create_interval_records(
+        await create_daily_record(
             db=billing_db,
             workspace_id=workspace_id,
-            date=yesterday,
-            num_intervals=num_intervals,
-            cpu_per_interval=cpu_per_interval,
-            memory_per_interval=0.0,
+            usage_date=yesterday,
+            cpu_core_seconds=1800.0,
         )
 
-        day_start = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
-        day_end = day_start + timedelta(days=1) - timedelta(microseconds=1)
+        await finalize_and_bill()
 
-        result = await collect_workspace_daily_usage(
+        records = await billing_db.usage.get_workspace_daily_usage(
             workspace_id=workspace_id,
-            day_start=day_start,
-            day_end=day_end,
-        )
-
-        assert result["success"] is True
-
-        records = await billing_db.usage.get_workspace_usage(
-            workspace_id=workspace_id,
-            start_date=day_start,
-            end_date=day_end,
-            record_type=UsageRecordType.DAILY,
+            start_date=yesterday,
+            end_date=yesterday,
         )
 
         assert len(records) == 1
-        daily_record = records[0]
+        record = records[0]
+        assert record.status == DailyUsageStatus.BILLED
+        assert record.billing_id is not None
+        assert len(record.billing_id) > 0
+        assert record.billed_at is not None
+        # Verify the record wasn't modified during billing
+        assert record.cpu_core_seconds == 1800.0
 
-        expected_total_cpu = cpu_per_interval * num_intervals
-        assert daily_record.cpu_core_seconds == expected_total_cpu
-
-    async def test_daily_aggregation_memory_totals(
+    async def test_skips_already_billed_records(
         self,
         billing_db: Database,
         billing_workspace,
+        mock_polar_service,
     ):
-        """Verify memory GB-seconds summed correctly across intervals."""
+        """Verify already billed records are not sent to Polar again."""
         workspace_id = str(billing_workspace.id)
-        yesterday = datetime.now(timezone.utc) - timedelta(days=1)
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
 
-        memory_per_interval = 500.0
-        num_intervals = 24
+        # Create and manually bill a record
+        record = await billing_db.usage.get_or_create_daily_record(
+            workspace_id=workspace_id,
+            usage_date=yesterday,
+        )
+        await billing_db.usage.mark_as_billed(record.id, "existing-billing-id")
 
-        await create_interval_records(
+        result = await finalize_and_bill()
+
+        assert result["billed"] == 0
+        assert result["failed"] == 0
+        mock_polar_service.usage.send_daily_usage.assert_not_called()
+
+    async def test_only_bills_yesterday_not_today(
+        self,
+        billing_db: Database,
+        billing_workspace,
+        mock_polar_service,
+    ):
+        """Verify only yesterday's records are billed, not today's."""
+        workspace_id = str(billing_workspace.id)
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
+        today = datetime.now(timezone.utc).date()
+
+        # Create records for both days
+        await create_daily_record(
             db=billing_db,
             workspace_id=workspace_id,
-            date=yesterday,
-            num_intervals=num_intervals,
-            cpu_per_interval=0.0,
-            memory_per_interval=memory_per_interval,
+            usage_date=yesterday,
         )
-
-        day_start = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
-        day_end = day_start + timedelta(days=1) - timedelta(microseconds=1)
-
-        result = await collect_workspace_daily_usage(
-            workspace_id=workspace_id,
-            day_start=day_start,
-            day_end=day_end,
-        )
-
-        assert result["success"] is True
-
-        records = await billing_db.usage.get_workspace_usage(
-            workspace_id=workspace_id,
-            start_date=day_start,
-            end_date=day_end,
-            record_type=UsageRecordType.DAILY,
-        )
-
-        assert len(records) == 1
-        daily_record = records[0]
-
-        expected_total_memory = memory_per_interval * num_intervals
-        assert daily_record.memory_gb_seconds == expected_total_memory
-
-    async def test_daily_aggregation_storage_totals(
-        self,
-        billing_db: Database,
-        billing_workspace,
-    ):
-        """Verify storage (EBS+EFS) summed correctly across intervals."""
-        workspace_id = str(billing_workspace.id)
-        yesterday = datetime.now(timezone.utc) - timedelta(days=1)
-
-        standard_per_interval = 10.0
-        shared_per_interval = 5.0
-        num_intervals = 24
-        day_start = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
-
-        # Create intervals with storage values
-        for i in range(num_intervals):
-            start_time = day_start + timedelta(hours=i)
-            end_time = start_time + timedelta(hours=1)
-
-            await billing_db.usage.upsert_usage_record(
-                workspace_id=workspace_id,
-                collection_start=start_time,
-                collection_end=end_time,
-                cpu_core_seconds=0.0,
-                memory_gb_seconds=0.0,
-                storage_gb_hours=standard_per_interval + shared_per_interval,
-                standard_gb_hours=standard_per_interval,
-                shared_gb_hours=shared_per_interval,
-                record_type=UsageCollectionConfig.get_record_type(),
-                status=UsageRecordStatus.FINALIZED,
-            )
-
-        day_end = day_start + timedelta(days=1) - timedelta(microseconds=1)
-
-        result = await collect_workspace_daily_usage(
-            workspace_id=workspace_id,
-            day_start=day_start,
-            day_end=day_end,
-        )
-
-        assert result["success"] is True
-
-        records = await billing_db.usage.get_workspace_usage(
-            workspace_id=workspace_id,
-            start_date=day_start,
-            end_date=day_end,
-            record_type=UsageRecordType.DAILY,
-        )
-
-        assert len(records) == 1
-        daily_record = records[0]
-
-        expected_standard = standard_per_interval * num_intervals
-        expected_shared = shared_per_interval * num_intervals
-
-        assert daily_record.standard_gb_hours == expected_standard
-        assert daily_record.shared_gb_hours == expected_shared
-
-
-class TestDailyAggregationStatus:
-    """Test status handling in daily aggregation."""
-
-    async def test_daily_aggregation_sets_finalized_status(
-        self,
-        billing_db: Database,
-        billing_workspace,
-    ):
-        """Verify DAILY record gets FINALIZED status."""
-        workspace_id = str(billing_workspace.id)
-        yesterday = datetime.now(timezone.utc) - timedelta(days=1)
-
-        await create_interval_records(
+        await create_daily_record(
             db=billing_db,
             workspace_id=workspace_id,
-            date=yesterday,
-            num_intervals=24,
+            usage_date=today,
         )
 
-        day_start = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
-        day_end = day_start + timedelta(days=1) - timedelta(microseconds=1)
+        result = await finalize_and_bill()
 
-        result = await collect_workspace_daily_usage(
-            workspace_id=workspace_id,
-            day_start=day_start,
-            day_end=day_end,
-        )
-
-        assert result["success"] is True
-
-        records = await billing_db.usage.get_workspace_usage(
-            workspace_id=workspace_id,
-            start_date=day_start,
-            end_date=day_end,
-            record_type=UsageRecordType.DAILY,
-        )
-
-        assert len(records) == 1
-        daily_record = records[0]
-        assert daily_record.status == UsageRecordStatus.FINALIZED
+        # Should only bill yesterday
+        assert result["billed"] == 1
+        mock_polar_service.usage.send_daily_usage.assert_called_once()
 
 
-class TestDailyAggregationBreakdowns:
-    """Test breakdown aggregation in daily records."""
+class TestBillingWithIdempotencyKey:
+    """Test idempotency key handling for exactly-once billing."""
 
-    async def test_daily_aggregation_compute_breakdowns_summed(
+    async def test_uses_record_id_as_idempotency_key(
         self,
         billing_db: Database,
         billing_workspace,
-        billing_deployment,
+        mock_polar_service,
     ):
-        """Verify per-pod breakdowns are summed correctly across intervals."""
+        """Verify record ID is passed as idempotency key to Polar."""
         workspace_id = str(billing_workspace.id)
-        deployment_id = str(billing_deployment.id)
-        yesterday = datetime.now(timezone.utc) - timedelta(days=1)
-        day_start = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
 
-        num_intervals = 3
-        cpu_per_interval = 100.0
-        memory_per_interval = 200.0
-
-        # Create interval records with compute breakdowns
-        for i in range(num_intervals):
-            start_time = day_start + timedelta(hours=i)
-            end_time = start_time + timedelta(hours=1)
-
-            record = await billing_db.usage.upsert_usage_record(
-                workspace_id=workspace_id,
-                collection_start=start_time,
-                collection_end=end_time,
-                cpu_core_seconds=cpu_per_interval,
-                memory_gb_seconds=memory_per_interval,
-                storage_gb_hours=0.0,
-                record_type=UsageCollectionConfig.get_record_type(),
-                status=UsageRecordStatus.FINALIZED,
-            )
-
-            await billing_db.usage.upsert_compute_breakdown(
-                usage_record_id=record.id,
-                pod_name="web-0",
-                cpu_core_seconds=cpu_per_interval,
-                memory_gb_seconds=memory_per_interval,
-                deployment_id=deployment_id,
-                service_name="web",
-            )
-
-        day_end = day_start + timedelta(days=1) - timedelta(microseconds=1)
-
-        result = await collect_workspace_daily_usage(
-            workspace_id=workspace_id,
-            day_start=day_start,
-            day_end=day_end,
-        )
-
-        assert result["success"] is True
-
-        records = await billing_db.usage.get_workspace_usage(
-            workspace_id=workspace_id,
-            start_date=day_start,
-            end_date=day_end,
-            record_type=UsageRecordType.DAILY,
-        )
-
-        assert len(records) == 1
-        daily_record = records[0]
-
-        # Must have compute breakdown
-        assert len(daily_record.compute_breakdowns) == 1
-
-        # Find and verify the breakdown
-        web_breakdown = next(
-            (b for b in daily_record.compute_breakdowns if b.pod_name == "web-0"),
-            None,
-        )
-        assert web_breakdown is not None, "Missing breakdown for web-0 pod"
-
-        # Values should be summed: num_intervals * per_interval
-        expected_cpu = cpu_per_interval * num_intervals
-        expected_memory = memory_per_interval * num_intervals
-        assert web_breakdown.cpu_core_seconds == expected_cpu
-        assert web_breakdown.memory_gb_seconds == expected_memory
-
-    async def test_daily_aggregation_multiple_pods_aggregated_separately(
-        self,
-        billing_db: Database,
-        billing_workspace,
-        billing_deployment,
-    ):
-        """Verify each pod gets its own breakdown in daily aggregation."""
-        workspace_id = str(billing_workspace.id)
-        deployment_id = str(billing_deployment.id)
-        yesterday = datetime.now(timezone.utc) - timedelta(days=1)
-        day_start = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
-
-        pod_cpu_values = {"web-0": 100.0, "web-1": 200.0, "worker-0": 150.0}
-        num_intervals = 2
-
-        for i in range(num_intervals):
-            start_time = day_start + timedelta(hours=i)
-            end_time = start_time + timedelta(hours=1)
-
-            total_cpu = sum(pod_cpu_values.values())
-            record = await billing_db.usage.upsert_usage_record(
-                workspace_id=workspace_id,
-                collection_start=start_time,
-                collection_end=end_time,
-                cpu_core_seconds=total_cpu,
-                memory_gb_seconds=0.0,
-                storage_gb_hours=0.0,
-                record_type=UsageCollectionConfig.get_record_type(),
-                status=UsageRecordStatus.FINALIZED,
-            )
-
-            for pod_name, cpu_value in pod_cpu_values.items():
-                await billing_db.usage.upsert_compute_breakdown(
-                    usage_record_id=record.id,
-                    pod_name=pod_name,
-                    cpu_core_seconds=cpu_value,
-                    memory_gb_seconds=0.0,
-                    deployment_id=deployment_id,
-                    service_name=pod_name.split("-")[0],
-                )
-
-        day_end = day_start + timedelta(days=1) - timedelta(microseconds=1)
-
-        result = await collect_workspace_daily_usage(
-            workspace_id=workspace_id,
-            day_start=day_start,
-            day_end=day_end,
-        )
-
-        assert result["success"] is True
-
-        records = await billing_db.usage.get_workspace_usage(
-            workspace_id=workspace_id,
-            start_date=day_start,
-            end_date=day_end,
-            record_type=UsageRecordType.DAILY,
-        )
-
-        assert len(records) == 1
-        daily_record = records[0]
-
-        # Should have 3 separate breakdowns
-        assert len(daily_record.compute_breakdowns) == 3
-
-        # Verify each pod's breakdown is summed correctly
-        for pod_name, cpu_per_interval in pod_cpu_values.items():
-            breakdown = next(
-                (b for b in daily_record.compute_breakdowns if b.pod_name == pod_name),
-                None,
-            )
-            assert breakdown is not None, f"Missing breakdown for {pod_name}"
-            expected_cpu = cpu_per_interval * num_intervals
-            assert breakdown.cpu_core_seconds == expected_cpu
-
-    async def test_daily_aggregation_storage_breakdowns_summed(
-        self,
-        billing_db: Database,
-        billing_workspace,
-        billing_deployment,
-    ):
-        """Verify storage breakdowns are summed correctly by PVC."""
-        workspace_id = str(billing_workspace.id)
-        deployment_id = str(billing_deployment.id)
-        yesterday = datetime.now(timezone.utc) - timedelta(days=1)
-        day_start = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
-
-        gb_hours_per_interval = 5.0
-        num_intervals = 4
-
-        for i in range(num_intervals):
-            start_time = day_start + timedelta(hours=i)
-            end_time = start_time + timedelta(hours=1)
-
-            record = await billing_db.usage.upsert_usage_record(
-                workspace_id=workspace_id,
-                collection_start=start_time,
-                collection_end=end_time,
-                cpu_core_seconds=0.0,
-                memory_gb_seconds=0.0,
-                storage_gb_hours=gb_hours_per_interval,
-                standard_gb_hours=gb_hours_per_interval,
-                shared_gb_hours=0.0,
-                record_type=UsageCollectionConfig.get_record_type(),
-                status=UsageRecordStatus.FINALIZED,
-            )
-
-            await billing_db.usage.upsert_storage_breakdown(
-                usage_record_id=record.id,
-                pvc_name="data-volume",
-                storage_class="ebs-sc",
-                gb_hours=gb_hours_per_interval,
-                deployment_id=deployment_id,
-            )
-
-        day_end = day_start + timedelta(days=1) - timedelta(microseconds=1)
-
-        result = await collect_workspace_daily_usage(
-            workspace_id=workspace_id,
-            day_start=day_start,
-            day_end=day_end,
-        )
-
-        assert result["success"] is True
-
-        records = await billing_db.usage.get_workspace_usage(
-            workspace_id=workspace_id,
-            start_date=day_start,
-            end_date=day_end,
-            record_type=UsageRecordType.DAILY,
-        )
-
-        assert len(records) == 1
-        daily_record = records[0]
-
-        # Should have storage breakdown
-        assert len(daily_record.storage_breakdowns) == 1
-
-        storage_breakdown = daily_record.storage_breakdowns[0]
-        assert storage_breakdown.pvc_name == "data-volume"
-        assert storage_breakdown.storage_class == "ebs-sc"
-        expected_gb_hours = gb_hours_per_interval * num_intervals
-        assert storage_breakdown.gb_hours == expected_gb_hours
-
-
-class TestDailyAggregationEdgeCases:
-    """Test edge cases in daily aggregation."""
-
-    async def test_daily_aggregation_no_intervals_fails(
-        self,
-        billing_db: Database,
-        billing_workspace,
-    ):
-        """Verify failure when no interval records exist."""
-        workspace_id = str(billing_workspace.id)
-        yesterday = datetime.now(timezone.utc) - timedelta(days=1)
-        day_start = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
-        day_end = day_start + timedelta(days=1) - timedelta(microseconds=1)
-
-        # Don't create any interval records
-        result = await collect_workspace_daily_usage(
-            workspace_id=workspace_id,
-            day_start=day_start,
-            day_end=day_end,
-        )
-
-        # Should fail gracefully
-        assert result["success"] is False
-        assert "error" in result
-
-    async def test_daily_aggregation_partial_intervals(
-        self,
-        billing_db: Database,
-        billing_workspace,
-    ):
-        """Verify aggregation works with partial day of intervals."""
-        workspace_id = str(billing_workspace.id)
-        yesterday = datetime.now(timezone.utc) - timedelta(days=1)
-
-        # Only 12 intervals (half day)
-        await create_interval_records(
+        record = await create_daily_record(
             db=billing_db,
             workspace_id=workspace_id,
-            date=yesterday,
-            num_intervals=12,
-            cpu_per_interval=100.0,
+            usage_date=yesterday,
         )
 
-        day_start = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
-        day_end = day_start + timedelta(days=1) - timedelta(microseconds=1)
+        await finalize_and_bill()
 
-        result = await collect_workspace_daily_usage(
+        call_kwargs = mock_polar_service.usage.send_daily_usage.call_args.kwargs
+        assert call_kwargs["idempotency_key"] == str(record.id)
+
+    async def test_stores_idempotency_key_as_billing_id(
+        self,
+        billing_db: Database,
+        billing_workspace,
+        mock_polar_service,
+    ):
+        """Verify billing_id stored matches the idempotency key."""
+        workspace_id = str(billing_workspace.id)
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
+
+        original_record = await create_daily_record(
+            db=billing_db,
             workspace_id=workspace_id,
-            day_start=day_start,
-            day_end=day_end,
+            usage_date=yesterday,
         )
 
-        assert result["success"] is True
+        await finalize_and_bill()
 
-        records = await billing_db.usage.get_workspace_usage(
+        records = await billing_db.usage.get_workspace_daily_usage(
             workspace_id=workspace_id,
-            start_date=day_start,
-            end_date=day_end,
-            record_type=UsageRecordType.DAILY,
+            start_date=yesterday,
+            end_date=yesterday,
         )
 
-        assert len(records) == 1
-        daily_record = records[0]
+        assert records[0].billing_id == str(original_record.id)
 
-        # Should only sum the 12 intervals: 100 * 12 = 1200
-        assert daily_record.cpu_core_seconds == 1200.0
 
-    async def test_daily_aggregation_idempotent(
+class TestBillingErrorHandling:
+    """Test error handling in billing."""
+
+    async def test_counts_polar_failure_as_failed(
+        self,
+        billing_db: Database,
+        billing_workspace,
+        mock_polar_service,
+    ):
+        """Verify Polar send failure is counted correctly."""
+        workspace_id = str(billing_workspace.id)
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
+
+        await create_daily_record(
+            db=billing_db,
+            workspace_id=workspace_id,
+            usage_date=yesterday,
+        )
+
+        mock_polar_service.usage.send_daily_usage.return_value = False
+
+        result = await finalize_and_bill()
+
+        assert result["billed"] == 0
+        assert result["failed"] == 1
+
+        # Record should not be marked as billed
+        records = await billing_db.usage.get_workspace_daily_usage(
+            workspace_id=workspace_id,
+            start_date=yesterday,
+            end_date=yesterday,
+        )
+        assert records[0].status != DailyUsageStatus.BILLED
+
+    async def test_handles_polar_disabled(
         self,
         billing_db: Database,
         billing_workspace,
     ):
-        """Verify running aggregation twice doesn't duplicate records."""
+        """Verify records are marked billed when Polar is disabled."""
         workspace_id = str(billing_workspace.id)
-        yesterday = datetime.now(timezone.utc) - timedelta(days=1)
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
 
-        await create_interval_records(
+        await create_daily_record(
             db=billing_db,
             workspace_id=workspace_id,
-            date=yesterday,
-            num_intervals=24,
+            usage_date=yesterday,
         )
 
-        day_start = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
-        day_end = day_start + timedelta(days=1) - timedelta(microseconds=1)
+        with patch("backend.prefect_app.usage_collector.get_polar_service") as mock_get:
+            mock_service = AsyncMock()
+            mock_service.usage = AsyncMock()
+            mock_service.usage.enabled = False
+            mock_get.return_value = mock_service
 
-        # Run aggregation twice
-        result1 = await collect_workspace_daily_usage(
+            result = await finalize_and_bill()
+
+            # Should mark as billed even when Polar is disabled
+            assert result["billed"] == 1
+            assert result["failed"] == 0
+
+        # Verify record is marked billed
+        records = await billing_db.usage.get_workspace_daily_usage(
             workspace_id=workspace_id,
-            day_start=day_start,
-            day_end=day_end,
+            start_date=yesterday,
+            end_date=yesterday,
         )
+        assert records[0].status == DailyUsageStatus.BILLED
+        assert "disabled" in records[0].billing_id
 
-        result2 = await collect_workspace_daily_usage(
+
+class TestBillingRetryBehavior:
+    """Test retry behavior with exponential backoff."""
+
+    async def test_retries_on_transient_failure_then_succeeds(
+        self,
+        billing_db: Database,
+        billing_workspace,
+        mock_polar_service,
+    ):
+        """Verify billing retries on failure and eventually succeeds."""
+        workspace_id = str(billing_workspace.id)
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
+
+        await create_daily_record(
+            db=billing_db,
             workspace_id=workspace_id,
-            day_start=day_start,
-            day_end=day_end,
+            usage_date=yesterday,
         )
 
-        assert result1["success"] is True
-        assert result2["success"] is True
+        # Fail twice, succeed on third try
+        mock_polar_service.usage.send_daily_usage.side_effect = [False, False, True]
 
-        # Should still only have one daily record
-        records = await billing_db.usage.get_workspace_usage(
+        result = await finalize_and_bill()
+
+        assert result["billed"] == 1
+        assert result["failed"] == 0
+        # Should have been called 3 times due to retries
+        assert mock_polar_service.usage.send_daily_usage.call_count == 3
+
+    async def test_fails_after_max_retries(
+        self,
+        billing_db: Database,
+        billing_workspace,
+        mock_polar_service,
+    ):
+        """Verify billing fails after exhausting retries."""
+        workspace_id = str(billing_workspace.id)
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
+
+        await create_daily_record(
+            db=billing_db,
             workspace_id=workspace_id,
-            start_date=day_start,
-            end_date=day_end,
-            record_type=UsageRecordType.DAILY,
+            usage_date=yesterday,
         )
 
-        assert len(records) == 1
+        # Always fail
+        mock_polar_service.usage.send_daily_usage.return_value = False
+
+        result = await finalize_and_bill()
+
+        assert result["billed"] == 0
+        assert result["failed"] == 1
+        # Should have retried 3 times
+        assert mock_polar_service.usage.send_daily_usage.call_count == 3
+
+
+class TestBillingAttemptsTracking:
+    """Test billing attempts counter and max attempts behavior."""
+
+    async def test_increments_billing_attempts_on_failure(
+        self,
+        billing_db: Database,
+        billing_workspace,
+        mock_polar_service,
+    ):
+        """Verify billing attempts counter is incremented on failure."""
+        workspace_id = str(billing_workspace.id)
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
+
+        await create_daily_record(
+            db=billing_db,
+            workspace_id=workspace_id,
+            usage_date=yesterday,
+        )
+
+        mock_polar_service.usage.send_daily_usage.return_value = False
+
+        await finalize_and_bill()
+
+        records = await billing_db.usage.get_workspace_daily_usage(
+            workspace_id=workspace_id,
+            start_date=yesterday,
+            end_date=yesterday,
+        )
+        # Should have 2 attempts: 1 initial + 1 after retry failure
+        assert records[0].billing_attempts >= 1
+        assert records[0].last_billing_error is not None
+
+    async def test_skips_records_exceeding_max_attempts(
+        self,
+        billing_db: Database,
+        billing_workspace,
+        mock_polar_service,
+    ):
+        """Verify records are skipped when max billing attempts exceeded."""
+        workspace_id = str(billing_workspace.id)
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
+
+        # Create record with max attempts already exceeded
+        await create_daily_record(
+            db=billing_db,
+            workspace_id=workspace_id,
+            usage_date=yesterday,
+            billing_attempts=5,
+        )
+
+        result = await finalize_and_bill()
+
+        assert result["billed"] == 0
+        assert result["failed"] == 0
+        assert result["skipped"] == 1
+        mock_polar_service.usage.send_daily_usage.assert_not_called()
+
+    async def test_records_last_billing_error(
+        self,
+        billing_db: Database,
+        billing_workspace,
+        mock_polar_service,
+    ):
+        """Verify last billing error is recorded."""
+        workspace_id = str(billing_workspace.id)
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
+
+        await create_daily_record(
+            db=billing_db,
+            workspace_id=workspace_id,
+            usage_date=yesterday,
+        )
+
+        error_msg = "Test error from Polar"
+        mock_polar_service.usage.send_daily_usage.side_effect = Exception(error_msg)
+
+        await finalize_and_bill()
+
+        records = await billing_db.usage.get_workspace_daily_usage(
+            workspace_id=workspace_id,
+            start_date=yesterday,
+            end_date=yesterday,
+        )
+        assert error_msg in records[0].last_billing_error
+        assert records[0].last_billing_attempt_at is not None
+
+
+class TestBillingAuditLogging:
+    """Test billing audit log creation."""
+
+    async def test_logs_billing_started_event(
+        self,
+        billing_db: Database,
+        billing_workspace,
+        mock_polar_service,
+    ):
+        """Verify billing_started audit event is created."""
+        workspace_id = str(billing_workspace.id)
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
+
+        await create_daily_record(
+            db=billing_db,
+            workspace_id=workspace_id,
+            usage_date=yesterday,
+        )
+
+        await finalize_and_bill()
+
+        # Check audit log has billing_started event
+        from backend.database.billing_audit import BillingAuditLogTable
+        from sqlalchemy import select
+
+        result = await billing_db._session.execute(
+            select(BillingAuditLogTable)
+            .where(BillingAuditLogTable.workspace_id == workspace_id)
+            .where(BillingAuditLogTable.event_type == "billing_started")
+        )
+        events = result.scalars().all()
+        assert len(events) >= 1
+
+    async def test_logs_billing_completed_event(
+        self,
+        billing_db: Database,
+        billing_workspace,
+        mock_polar_service,
+    ):
+        """Verify billing_completed audit event is created on success."""
+        workspace_id = str(billing_workspace.id)
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
+
+        await create_daily_record(
+            db=billing_db,
+            workspace_id=workspace_id,
+            usage_date=yesterday,
+        )
+
+        await finalize_and_bill()
+
+        from backend.database.billing_audit import BillingAuditLogTable
+        from sqlalchemy import select
+
+        result = await billing_db._session.execute(
+            select(BillingAuditLogTable)
+            .where(BillingAuditLogTable.workspace_id == workspace_id)
+            .where(BillingAuditLogTable.event_type == "billing_completed")
+        )
+        events = result.scalars().all()
+        assert len(events) == 1
+        assert events[0].details.get("billing_id") is not None
+
+    async def test_logs_billing_failed_event(
+        self,
+        billing_db: Database,
+        billing_workspace,
+        mock_polar_service,
+    ):
+        """Verify billing_failed audit event is created on failure."""
+        workspace_id = str(billing_workspace.id)
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
+
+        await create_daily_record(
+            db=billing_db,
+            workspace_id=workspace_id,
+            usage_date=yesterday,
+        )
+
+        mock_polar_service.usage.send_daily_usage.return_value = False
+
+        await finalize_and_bill()
+
+        from backend.database.billing_audit import BillingAuditLogTable
+        from sqlalchemy import select
+
+        result = await billing_db._session.execute(
+            select(BillingAuditLogTable)
+            .where(BillingAuditLogTable.workspace_id == workspace_id)
+            .where(BillingAuditLogTable.event_type == "billing_failed")
+        )
+        events = result.scalars().all()
+        assert len(events) >= 1
+        assert "error" in events[0].details
+
+    async def test_logs_billing_skipped_for_incomplete_intervals(
+        self,
+        billing_db: Database,
+        billing_workspace,
+        mock_polar_service,
+    ):
+        """Verify billing_skipped audit event is created for incomplete intervals."""
+        workspace_id = str(billing_workspace.id)
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
+
+        # Create record with only 1 interval (not 96)
+        record = await billing_db.usage.get_or_create_daily_record(
+            workspace_id=workspace_id,
+            usage_date=yesterday,
+            expected_intervals=96,
+        )
+        await billing_db.usage.atomic_increment_usage(
+            record_id=record.id,
+            cpu_core_seconds=100.0,
+            memory_gb_seconds=100.0,
+            standard_gb_hours=0.0,
+            shared_gb_hours=0.0,
+            build_minutes=0.0,
+            public_endpoint_hours=0.0,
+        )
+
+        await finalize_and_bill()
+
+        from backend.database.billing_audit import BillingAuditLogTable
+        from sqlalchemy import select
+
+        result = await billing_db._session.execute(
+            select(BillingAuditLogTable)
+            .where(BillingAuditLogTable.workspace_id == workspace_id)
+            .where(BillingAuditLogTable.event_type == "billing_skipped")
+        )
+        events = result.scalars().all()
+        assert len(events) == 1
+        assert "Incomplete intervals" in events[0].details.get("reason", "")

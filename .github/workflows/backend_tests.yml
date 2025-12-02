@@ -24,9 +24,9 @@ jobs:
           --health-timeout 5s
           --health-retries 5
         ports:
-          - 5432:5432
+          - 6432:6432
     env:
-      DATABASE_URL: postgresql+asyncpg://lc_dev:password@localhost:5432/postgres
+      DATABASE_URL: postgresql+asyncpg://lc_dev:password@localhost:6432/postgres
       PREFECT_API_URL: http://localhost:4200/api
       PREFECT_LOCAL_STORAGE_PATH: /tmp/prefect-task-storage
       # these are not used in the tests, but are required by the app

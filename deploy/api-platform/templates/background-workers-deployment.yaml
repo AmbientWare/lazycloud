@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Chart.Name }}-background-workers
+  labels:
+    app: {{ .Chart.Name }}-background-workers
+    component: worker
+spec:
+  replicas: {{ .Values.backgroundWorkers.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ .Chart.Name }}-background-workers
+  template:
+    metadata:
+      labels:
+        app: {{ .Chart.Name }}-background-workers
+        component: worker
+    spec:
+      containers:
+        - name: background-worker
+          image: "{{ .Values.image.repository | replace `lazycloud-api` `lazycloud-background-worker` }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["uv", "run", "--no-sync", "python", "-m", "backend.background_worker"]
+          env:
+          {{- range .Values.secrets.env }}
+            - name: {{ . }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.secrets.name }}
+                  key: {{ . }}
+          {{- end }}
+            - name: PREFECT_LOCAL_STORAGE_PATH
+              value: "/shared-storage"
+            - name: PREFECT_RESULTS_PERSIST_BY_DEFAULT
+              value: "true"
+          volumeMounts:
+            - name: prefect-storage
+              mountPath: /shared-storage
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - pgrep -f 'backend.background_worker' || exit 1
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            limits:
+              cpu: {{ .Values.backgroundWorkers.resources.limits.cpu }}
+              memory: {{ .Values.backgroundWorkers.resources.limits.memory }}
+            requests:
+              cpu: {{ .Values.backgroundWorkers.resources.requests.cpu }}
+              memory: {{ .Values.backgroundWorkers.resources.requests.memory }}
+      volumes:
+        - name: prefect-storage
+          persistentVolumeClaim:
+            claimName: {{ .Chart.Name }}-prefect-storage

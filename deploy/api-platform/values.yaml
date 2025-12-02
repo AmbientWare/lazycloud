@@ -1,0 +1,67 @@
+# Default values for LazyCloud API Platform
+
+replicaCount: 1
+
+backgroundWorkers:
+  replicaCount: 1
+  resources:
+    limits:
+      cpu: 500m
+      memory: 2Gi
+    requests:
+      cpu: 250m
+      memory: 1Gi
+
+crons:
+  replicaCount: 1
+  resources:
+    limits:
+      cpu: 500m
+      memory: 1Gi
+    requests:
+      cpu: 100m
+      memory: 512Mi
+
+image:
+  repository: 211125306000.dkr.ecr.us-east-1.amazonaws.com/lazycloud-api
+  pullPolicy: Always
+  tag: "latest"
+
+service:
+  type: ClusterIP
+  port: 8000
+
+ingress:
+  enabled: true
+  hostname: api.lazycloud.dev
+  healthCheckPath: /health
+  annotations:
+    alb.ingress.kubernetes.io/certificate-arn: "arn:aws:acm:us-east-1:211125306000:certificate/YOUR-WILDCARD-CERT-ARN"
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 2Gi
+  requests:
+    cpu: 250m
+    memory: 1Gi
+
+storage:
+  storageClassName: efs-sc
+  size: 10Gi
+
+# Environment variables pulled from External Secrets
+secrets:
+  name: "app-secrets"
+  env:
+    - "ENV"
+    - "DATABASE_URL"
+    - "REDIS_URL"
+    - "PREFECT_API_URL"
+    - "CLERK_SECRET_KEY"
+    - "AWS_ACCESS_KEY_ID"
+    - "AWS_SECRET_ACCESS_KEY"
+    - "AWS_REGION"
+    - "DEPOT_TOKEN"
+    - "DEPOT_PROJECT_ID"
+    - "SENTRY_DSN"

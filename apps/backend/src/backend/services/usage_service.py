@@ -3,12 +3,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from loguru import logger
-from models.billing import (
-    SECONDS_PER_HOUR,
-    STORAGE_CLASS_EBS,
-    STORAGE_CLASS_EFS,
-    UsageCollectionConfig,
-)
+from models.billing import SECONDS_PER_HOUR
 from responses.usage import (
     AggregatedDailyUsageResponse,
     AggregatedUsageResponse,
@@ -23,20 +18,17 @@ from responses.usage import (
 )
 
 from backend.database import get_db_context
-from backend.database.compose import ComposeDeploymentPydantic
-from backend.database.usage import UsageRecordPydantic
+from backend.database.usage import DailyUsageRecordPydantic
 from backend.services.cost_breakdown_service import CostBreakdownService
 from backend.services.depot_service import DepotService
 
 
 def _get_calendar_day_in_timezone(utc_datetime: datetime, tz: ZoneInfo) -> str:
-    """Get the calendar day (YYYY-MM-DD) in the given timezone from a UTC datetime."""
     local_time = utc_datetime.astimezone(tz)
     return local_time.strftime("%Y-%m-%d")
 
 
 def _get_utc_midnight_for_calendar_day(calendar_day: str, tz: ZoneInfo) -> datetime:
-    """Get UTC datetime for midnight of the calendar day in the given timezone."""
     local_midnight = datetime.strptime(calendar_day, "%Y-%m-%d").replace(
         tzinfo=tz, hour=0, minute=0, second=0, microsecond=0
     )
@@ -44,8 +36,6 @@ def _get_utc_midnight_for_calendar_day(calendar_day: str, tz: ZoneInfo) -> datet
 
 
 class UsageService:
-    """Service for aggregating and processing usage data"""
-
     def __init__(
         self,
         cost_service: CostBreakdownService,
@@ -59,25 +49,23 @@ class UsageService:
         workspace_id: str,
         start_date: datetime,
         end_date: datetime,
-        return_records: bool = False,
-    ) -> UsageMetrics | tuple[UsageMetrics, list[UsageRecordPydantic]]:
-        """Aggregate workspace-level usage totals across multiple records for a date range."""
+    ) -> UsageMetrics:
+        """Aggregate workspace-level usage from daily records."""
         async with get_db_context() as db:
-            usage_records = await db.usage.get_workspace_usage(
+            daily_records = await db.usage.get_workspace_daily_usage(
                 workspace_id=workspace_id,
-                start_date=start_date,
-                end_date=end_date,
-                record_type=UsageCollectionConfig.get_record_type(),
+                start_date=start_date.date(),
+                end_date=end_date.date(),
             )
 
-        total_cpu_seconds = sum(r.cpu_core_seconds for r in usage_records)
-        total_memory_seconds = sum(r.memory_gb_seconds for r in usage_records)
-        total_standard_hours = sum(r.standard_gb_hours for r in usage_records)
-        total_shared_hours = sum(r.shared_gb_hours for r in usage_records)
-        total_build_minutes = sum(r.build_minutes for r in usage_records)
-        total_endpoint_hours = sum(r.public_endpoint_hours for r in usage_records)
+        total_cpu_seconds = sum(r.cpu_core_seconds for r in daily_records)
+        total_memory_seconds = sum(r.memory_gb_seconds for r in daily_records)
+        total_standard_hours = sum(r.standard_gb_hours for r in daily_records)
+        total_shared_hours = sum(r.shared_gb_hours for r in daily_records)
+        total_build_minutes = sum(r.build_minutes for r in daily_records)
+        total_endpoint_hours = sum(r.public_endpoint_hours for r in daily_records)
 
-        metrics = UsageMetrics(
+        return UsageMetrics(
             cpu_core_hours=total_cpu_seconds / SECONDS_PER_HOUR,
             memory_gb_hours=total_memory_seconds / SECONDS_PER_HOUR,
             standard_gb_hours=total_standard_hours,
@@ -86,81 +74,70 @@ class UsageService:
             public_endpoint_hours=total_endpoint_hours,
         )
 
-        if return_records:
-            return metrics, usage_records
-        return metrics
-
-    def aggregate_deployment_usage_from_records(
+    async def get_deployment_breakdown(
         self,
-        usage_records: list[UsageRecordPydantic],
+        workspace_id: str,
         deployment_id: str,
-        build_minutes: float,
-        public_endpoint_hours: float,
+        start_date: datetime,
+        end_date: datetime,
     ) -> tuple[UsageMetrics, list[ServiceUsageItem], list[VolumeUsageItem]]:
-        """Aggregate usage for a specific deployment across multiple usage records."""
+        """Get usage breakdown for a specific deployment."""
+        async with get_db_context() as db:
+            (
+                cpu,
+                memory,
+                standard,
+                shared,
+                endpoints,
+                build,
+            ) = await db.usage.get_deployment_usage(
+                deployment_id=deployment_id,
+                start_date=start_date,
+                end_date=end_date,
+            )
 
-        deployment_cpu_seconds = 0.0
-        deployment_memory_seconds = 0.0
-        deployment_standard_hours = 0.0
-        deployment_shared_hours = 0.0
-        aggregated_services: dict[str, ServiceUsageItem] = {}
-        aggregated_volumes: dict[str, VolumeUsageItem] = {}
+            service_breakdown = await db.usage.get_service_breakdown(
+                workspace_id=workspace_id,
+                start_date=start_date,
+                end_date=end_date,
+                deployment_id=deployment_id,
+            )
 
-        for record in usage_records:
-            for compute_breakdown in record.compute_breakdowns:
-                if compute_breakdown.deployment_id == deployment_id:
-                    deployment_cpu_seconds += compute_breakdown.cpu_core_seconds
-                    deployment_memory_seconds += compute_breakdown.memory_gb_seconds
-
-                    service_name = compute_breakdown.service_name
-                    if service_name and service_name.strip():
-                        service_name = service_name.strip()
-                        if service_name not in aggregated_services:
-                            aggregated_services[service_name] = ServiceUsageItem(
-                                service_name=service_name,
-                                cpu_core_seconds=0.0,
-                                memory_gb_seconds=0.0,
-                            )
-                        aggregated_services[
-                            service_name
-                        ].cpu_core_seconds += compute_breakdown.cpu_core_seconds
-                        aggregated_services[
-                            service_name
-                        ].memory_gb_seconds += compute_breakdown.memory_gb_seconds
-
-            for storage_breakdown in record.storage_breakdowns:
-                if storage_breakdown.deployment_id == deployment_id:
-                    if storage_breakdown.storage_class == STORAGE_CLASS_EBS:
-                        deployment_standard_hours += storage_breakdown.gb_hours
-                    elif storage_breakdown.storage_class == STORAGE_CLASS_EFS:
-                        deployment_shared_hours += storage_breakdown.gb_hours
-
-                    pvc_name = storage_breakdown.pvc_name
-                    if pvc_name and pvc_name.strip():
-                        volume_name = pvc_name.strip()
-                        if volume_name not in aggregated_volumes:
-                            aggregated_volumes[volume_name] = VolumeUsageItem(
-                                volume_name=volume_name,
-                                storage_class=storage_breakdown.storage_class,
-                                gb_hours=0.0,
-                            )
-                        aggregated_volumes[
-                            volume_name
-                        ].gb_hours += storage_breakdown.gb_hours
-
-        service_usage_list = list(aggregated_services.values())
-        volume_usage_list = list(aggregated_volumes.values())
+            volume_breakdown = await db.usage.get_volume_breakdown(
+                workspace_id=workspace_id,
+                start_date=start_date,
+                end_date=end_date,
+                deployment_id=deployment_id,
+            )
 
         metrics = UsageMetrics(
-            cpu_core_hours=deployment_cpu_seconds / SECONDS_PER_HOUR,
-            memory_gb_hours=deployment_memory_seconds / SECONDS_PER_HOUR,
-            standard_gb_hours=deployment_standard_hours,
-            shared_gb_hours=deployment_shared_hours,
-            build_minutes=build_minutes,
-            public_endpoint_hours=public_endpoint_hours,
+            cpu_core_hours=cpu / SECONDS_PER_HOUR,
+            memory_gb_hours=memory / SECONDS_PER_HOUR,
+            standard_gb_hours=standard,
+            shared_gb_hours=shared,
+            build_minutes=build,
+            public_endpoint_hours=endpoints,
         )
 
-        return metrics, service_usage_list, volume_usage_list
+        services = [
+            ServiceUsageItem(
+                service_name=name,
+                cpu_core_seconds=cpu_secs,
+                memory_gb_seconds=mem_secs,
+            )
+            for name, cpu_secs, mem_secs in service_breakdown
+        ]
+
+        volumes = [
+            VolumeUsageItem(
+                volume_name=name,
+                storage_class=storage_class,
+                gb_hours=gb_hours,
+            )
+            for name, storage_class, gb_hours in volume_breakdown
+        ]
+
+        return metrics, services, volumes
 
     async def get_aggregated_usage_with_summaries(
         self,
@@ -179,12 +156,10 @@ class UsageService:
                 )
             )
 
-        results: list[
-            tuple[UsageMetrics | None, list[UsageRecordPydantic]]
-        ] = await asyncio.gather(
+        results = await asyncio.gather(
             *[
                 self.aggregate_workspace_usage_for_date_range(
-                    workspace.id, start_date, end_date, return_records=True
+                    workspace.id, start_date, end_date
                 )
                 for workspace, _ in all_user_workspaces
             ],
@@ -192,20 +167,12 @@ class UsageService:
         )
 
         workspace_usage_results: list[UsageMetrics | None] = []
-        usage_records_list: list[list[UsageRecordPydantic]] = []
-        record_counts: list[int] = []
-
         for result in results:
             if isinstance(result, Exception):
                 logger.warning(f"Failed to fetch usage: {result}", exc_info=True)
                 workspace_usage_results.append(None)
-                usage_records_list.append([])
-                record_counts.append(0)
             else:
-                metrics, records = result
-                workspace_usage_results.append(metrics)
-                usage_records_list.append(records)
-                record_counts.append(len(records))
+                workspace_usage_results.append(result)
 
         cost_results = await self.cost_service.calculate_costs_batch(
             workspace_usage_results, external_customer_id
@@ -214,8 +181,6 @@ class UsageService:
         workspace_summaries, total_usage = await self._build_workspace_summaries(
             all_user_workspaces,
             workspace_usage_results,
-            usage_records_list,
-            record_counts,
             cost_results,
             start_date,
             end_date,
@@ -243,7 +208,7 @@ class UsageService:
             period=UsagePeriodInfo(start=start_date, end=end_date),
             usage=total_usage,
             workspace_count=len(all_user_workspaces),
-            record_count=sum(record_counts),
+            record_count=len([u for u in workspace_usage_results if u]),
             workspaces=workspace_summaries,
         )
 
@@ -268,11 +233,10 @@ class UsageService:
             )
 
             usage_records_tasks = [
-                db.usage.get_workspace_usage(
+                db.usage.get_workspace_daily_usage(
                     workspace_id=workspace.id,
-                    start_date=start_date,
-                    end_date=end_date,
-                    record_type=UsageCollectionConfig.get_record_type(),
+                    start_date=start_date.date(),
+                    end_date=end_date.date(),
                 )
                 for workspace, _ in user_workspaces
             ]
@@ -289,7 +253,7 @@ class UsageService:
                 )
                 continue
 
-            workspace_daily = self._aggregate_records_by_day(usage_records, tz)
+            workspace_daily = self._aggregate_daily_records_by_day(usage_records, tz)
             for day_key, day_data in workspace_daily.items():
                 if day_key not in daily_data:
                     daily_data[day_key] = day_data
@@ -319,7 +283,6 @@ class UsageService:
     async def _build_deployment_overviews(
         self,
         workspace_id: str,
-        usage_records: list[UsageRecordPydantic],
         start_date: datetime,
         end_date: datetime,
         external_customer_id: str,
@@ -336,53 +299,28 @@ class UsageService:
         if not deployments:
             return []
 
-        # Aggregate endpoint_hours from networking_breakdowns by deployment_id
-        endpoint_hours_by_deployment: dict[str, float] = {}
-        for record in usage_records:
-            for breakdown in record.networking_breakdowns:
-                if breakdown.deployment_id:
-                    dep_id = str(breakdown.deployment_id)
-                    endpoint_hours_by_deployment[dep_id] = (
-                        endpoint_hours_by_deployment.get(dep_id, 0.0)
-                        + breakdown.endpoint_hours
-                    )
-
-        # Aggregate build_minutes from stored build_breakdowns
-        build_minutes_by_deployment: dict[str, float] = {}
-        for record in usage_records:
-            for breakdown in record.build_breakdowns:
-                dep_id = str(breakdown.deployment_id)
-                build_minutes_by_deployment[dep_id] = (
-                    build_minutes_by_deployment.get(dep_id, 0.0)
-                    + breakdown.build_minutes
-                )
-
-        # Aggregate usage for all deployments and build a mapping
         deployment_metrics_map: dict[str, UsageMetrics] = {}
-        valid_deployments: list[ComposeDeploymentPydantic] = []
+        valid_deployments = []
+
         for deployment in deployments:
             if not deployment.id or not deployment.name:
                 continue
 
             valid_deployments.append(deployment)
-            deployment_metrics, _, _ = self.aggregate_deployment_usage_from_records(
-                usage_records=usage_records,
+            metrics, _, _ = await self.get_deployment_breakdown(
+                workspace_id=workspace_id,
                 deployment_id=deployment.id,
-                build_minutes=build_minutes_by_deployment.get(deployment.id, 0.0),
-                public_endpoint_hours=endpoint_hours_by_deployment.get(
-                    deployment.id, 0.0
-                ),
+                start_date=start_date,
+                end_date=end_date,
             )
-            deployment_metrics_map[deployment.id] = deployment_metrics
+            deployment_metrics_map[deployment.id] = metrics
 
-        # Calculate costs in parallel
         deployment_metrics_list = list(deployment_metrics_map.values())
         cost_results = await self.cost_service.calculate_costs_batch(
             usages=deployment_metrics_list,
             external_customer_id=external_customer_id,
         )
 
-        # Build overviews with costs
         overviews: list[DeploymentUsageOverview] = []
         cost_idx = 0
         for deployment in valid_deployments:
@@ -393,7 +331,6 @@ class UsageService:
 
             metrics = deployment_metrics_map[deployment_id]
 
-            # Attach costs if available
             if cost_idx < len(cost_results) and cost_results[cost_idx] is not None:
                 metrics.costs = cost_results[cost_idx]
             cost_idx += 1
@@ -415,8 +352,6 @@ class UsageService:
         self,
         workspaces: list,
         usages: list[UsageMetrics | None],
-        usage_records_list: list[list[UsageRecordPydantic]],
-        record_counts: list[int],
         cost_results: list[MeterCostBreakdown | None],
         start_date: datetime,
         end_date: datetime,
@@ -430,7 +365,6 @@ class UsageService:
         total_shared_hours = 0.0
         total_build_minutes = 0.0
         total_endpoint_hours = 0.0
-        total_records = 0
 
         deployment_overview_tasks = []
         valid_workspace_indices = []
@@ -446,11 +380,9 @@ class UsageService:
                 cost_idx += 1
 
             valid_workspace_indices.append(i)
-            usage_records = usage_records_list[i] if i < len(usage_records_list) else []
             deployment_overview_tasks.append(
                 self._build_deployment_overviews(
                     workspace.id,
-                    usage_records,
                     start_date,
                     end_date,
                     external_customer_id=external_customer_id,
@@ -481,7 +413,7 @@ class UsageService:
                     workspace_name=workspace.name or "Unnamed Workspace",
                     workspace_status=workspace_status,
                     usage=usage,
-                    record_count=record_counts[i],
+                    record_count=1,
                     deployments=deployment_overviews,
                 )
             )
@@ -492,7 +424,6 @@ class UsageService:
             total_shared_hours += usage.shared_gb_hours
             total_build_minutes += usage.build_minutes
             total_endpoint_hours += usage.public_endpoint_hours
-            total_records += record_counts[i]
 
         total_usage = UsageMetrics(
             cpu_core_hours=total_cpu_seconds / SECONDS_PER_HOUR,
@@ -506,22 +437,21 @@ class UsageService:
         return workspace_summaries, total_usage
 
     def _parse_timezone(self, timezone_str: str) -> ZoneInfo:
-        """Parse timezone string, defaulting to UTC on error."""
         try:
             return ZoneInfo(timezone_str) if timezone_str else ZoneInfo("UTC")
         except Exception:
             logger.warning(f"Invalid timezone '{timezone_str}', defaulting to UTC")
             return ZoneInfo("UTC")
 
-    def _aggregate_records_by_day(
+    def _aggregate_daily_records_by_day(
         self,
-        usage_records: list[UsageRecordPydantic],
+        daily_records: list[DailyUsageRecordPydantic],
         tz: ZoneInfo,
     ) -> dict[str, DailyUsageData]:
-        """Aggregate usage records by calendar day in the given timezone."""
+        """Aggregate daily records by calendar day in the given timezone."""
         daily_data: dict[str, DailyUsageData] = {}
-        for record in usage_records:
-            day_key = _get_calendar_day_in_timezone(record.collection_start, tz)
+        for record in daily_records:
+            day_key = str(record.usage_date)
             if day_key not in daily_data:
                 utc_midnight = _get_utc_midnight_for_calendar_day(day_key, tz)
                 daily_data[day_key] = DailyUsageData(

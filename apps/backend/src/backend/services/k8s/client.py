@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 from functools import lru_cache
 
 import urllib3
@@ -13,8 +14,49 @@ from kubernetes_asyncio.client import ApiClient as AsyncApiClient
 from kubernetes_asyncio.client import Configuration as AsyncConfiguration
 from kubernetes_asyncio.client.api.core_v1_api import CoreV1Api as AsyncCoreV1Api
 from loguru import logger
+from models.k8s import PVCInfo
 
 from backend.config import app_config
+
+
+def parse_k8s_size_to_gb(size_str: str) -> float:
+    """Parse Kubernetes size string (e.g., '10Gi', '500Mi') to GB."""
+    if not size_str:
+        return 0.0
+
+    match = re.match(r"^(\d+(?:\.\d+)?)\s*([A-Za-z]*)$", size_str.strip())
+    if not match:
+        logger.warning(f"Could not parse size string: {size_str}")
+        return 0.0
+
+    value = float(match.group(1))
+    unit = match.group(2).lower() if match.group(2) else ""
+
+    # Binary units (powers of 1024)
+    if unit in ("gi", "gib"):
+        return value * (1024**3) / (1000**3)  # Convert GiB to GB
+    elif unit in ("mi", "mib"):
+        return value * (1024**2) / (1000**3)  # Convert MiB to GB
+    elif unit in ("ki", "kib"):
+        return value * 1024 / (1000**3)  # Convert KiB to GB
+    elif unit in ("ti", "tib"):
+        return value * (1024**4) / (1000**3)  # Convert TiB to GB
+    # Decimal units (powers of 1000)
+    elif unit == "g":
+        return value
+    elif unit == "m":
+        return value / 1000
+    elif unit == "k":
+        return value / (1000**2)
+    elif unit == "t":
+        return value * 1000
+    elif unit == "":
+        # Assume bytes
+        return value / (1000**3)
+    else:
+        logger.warning(f"Unknown size unit: {unit}")
+        return value
+
 
 urllib3.disable_warnings()
 
@@ -158,3 +200,44 @@ def get_namespace_pvcs(namespace: str) -> dict[str, str]:
     except Exception as e:
         logger.warning(f"Failed to get PVCs for namespace {namespace}: {e}")
         return {}
+
+
+def get_namespace_pvcs_with_details(namespace: str) -> list[PVCInfo]:
+    """Get PVC details including size and bound PV info."""
+    try:
+        core_v1 = get_core_v1_api()
+        pvcs = core_v1.list_namespaced_persistent_volume_claim(namespace=namespace)
+
+        pvc_infos = []
+        for pvc in pvcs.items:
+            # Get requested size from PVC spec
+            size_str = ""
+            if pvc.spec.resources and pvc.spec.resources.requests:
+                size_str = pvc.spec.resources.requests.get("storage", "")
+
+            requested_size_gb = parse_k8s_size_to_gb(size_str)
+
+            # Get volume handle from bound PV (for EFS file system ID)
+            volume_handle = None
+            if pvc.spec.volume_name:
+                try:
+                    pv = core_v1.read_persistent_volume(name=pvc.spec.volume_name)
+                    if pv.spec.csi and pv.spec.csi.volume_handle:
+                        volume_handle = pv.spec.csi.volume_handle
+                except Exception as e:
+                    logger.debug(f"Could not get PV for {pvc.spec.volume_name}: {e}")
+
+            pvc_infos.append(
+                PVCInfo(
+                    name=pvc.metadata.name,
+                    storage_class=pvc.spec.storage_class_name or "",
+                    requested_size_gb=requested_size_gb,
+                    volume_handle=volume_handle,
+                )
+            )
+
+        return pvc_infos
+
+    except Exception as e:
+        logger.warning(f"Failed to get PVC details for namespace {namespace}: {e}")
+        return []

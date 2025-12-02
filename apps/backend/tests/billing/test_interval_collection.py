@@ -1,8 +1,7 @@
 """Tests for interval usage collection logic.
 
 These tests mock the Prometheus service to test our transformation and
-persistence logic with known, deterministic values. This isolates our
-business logic from external infrastructure timing issues.
+persistence logic with known, deterministic values.
 """
 
 from contextlib import asynccontextmanager
@@ -11,17 +10,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from backend.database import Database
-from backend.prefect_app.usage_collector import (
-    collect_workspace_usage_for_interval,
-)
-from models.billing import (
-    UsageCollectionConfig,
-    UsageRecordStatus,
-)
+from backend.prefect_app.usage_collector import collect_workspace_interval
 from models.metrics import (
     NamespaceBreakdown,
     PodUsage,
-    StorageUsage,
     UsagePeriod,
     UsageTotals,
 )
@@ -41,10 +33,7 @@ def make_namespace_breakdown(
     end_time: datetime,
     cpu_core_seconds: float = 0.0,
     memory_gb_seconds: float = 0.0,
-    standard_gb_hours: float = 0.0,
-    shared_gb_hours: float = 0.0,
     pods: list[PodUsage] | None = None,
-    pvcs: list[StorageUsage] | None = None,
 ) -> NamespaceBreakdown:
     """Create a mock NamespaceBreakdown for testing."""
     return NamespaceBreakdown(
@@ -57,12 +46,8 @@ def make_namespace_breakdown(
         totals=UsageTotals(
             cpu_core_seconds=cpu_core_seconds,
             memory_gb_seconds=memory_gb_seconds,
-            storage_gb_hours=standard_gb_hours + shared_gb_hours,
-            standard_gb_hours=standard_gb_hours,
-            shared_gb_hours=shared_gb_hours,
         ),
         by_pod=pods or [],
-        by_pvc=pvcs or [],
     )
 
 
@@ -86,6 +71,14 @@ def mock_depot_service():
         yield mock_service
 
 
+@pytest.fixture
+def mock_storage_collection():
+    """Mock storage collection to return empty list."""
+    with patch("backend.prefect_app.usage_collector.collect_storage_usage") as mock:
+        mock.return_value = []
+        yield mock
+
+
 @pytest.fixture(autouse=True)
 def mock_db_context(billing_db: Database, billing_db_session):
     """Mock get_db_context to use the test's database session."""
@@ -94,10 +87,8 @@ def mock_db_context(billing_db: Database, billing_db_session):
     async def mock_context():
         try:
             yield billing_db
-            # Flush and commit like the real get_db_context does
             await billing_db_session.flush()
             await billing_db_session.commit()
-            # Expire all so subsequent queries see committed data
             billing_db_session.expire_all()
         except Exception:
             await billing_db_session.rollback()
@@ -113,159 +104,25 @@ def mock_db_context(billing_db: Database, billing_db_session):
         yield billing_db
 
 
-class TestIntervalCollectionTransformation:
-    """Test that Prometheus data is correctly transformed and stored."""
+class TestIntervalCollection:
+    """Test interval collection with atomic increments."""
 
-    async def test_stores_cpu_core_seconds_from_prometheus(
+    async def test_creates_daily_record_on_first_collection(
         self,
         billing_db: Database,
         billing_workspace,
         mock_prometheus_healthy,
         mock_depot_service,
+        mock_storage_collection,
     ):
-        """Verify CPU core-seconds from Prometheus are stored exactly."""
+        """Verify daily record is created with correct initial values."""
         workspace_id = str(billing_workspace.id)
         start_time = datetime.now(timezone.utc).replace(
             minute=0, second=0, microsecond=0
         )
-        end_time = start_time + timedelta(hours=1)
-
-        expected_cpu = 3600.0  # 1 core for 1 hour
-
-        mock_prometheus_healthy.get_namespace_breakdown = AsyncMock(
-            return_value=make_namespace_breakdown(
-                namespace=f"lc-{workspace_id[:8]}",
-                start_time=start_time,
-                end_time=end_time,
-                cpu_core_seconds=expected_cpu,
-            )
-        )
-
-        result = await collect_workspace_usage_for_interval(
-            workspace_id=workspace_id,
-            start_time=start_time,
-            end_time=end_time,
-        )
-
-        assert result["success"] is True
-
-        records = await billing_db.usage.get_workspace_usage(
-            workspace_id=workspace_id,
-            start_date=start_time,
-            end_date=end_time,
-            record_type=UsageCollectionConfig.get_record_type(),
-        )
-
-        assert len(records) == 1
-        assert records[0].cpu_core_seconds == expected_cpu
-
-    async def test_stores_memory_gb_seconds_from_prometheus(
-        self,
-        billing_db: Database,
-        billing_workspace,
-        mock_prometheus_healthy,
-        mock_depot_service,
-    ):
-        """Verify memory GB-seconds from Prometheus are stored exactly."""
-        workspace_id = str(billing_workspace.id)
-        start_time = datetime.now(timezone.utc).replace(
-            minute=0, second=0, microsecond=0
-        )
-        end_time = start_time + timedelta(hours=1)
-
-        expected_memory = 7200.0  # 2 GB for 1 hour
-
-        mock_prometheus_healthy.get_namespace_breakdown = AsyncMock(
-            return_value=make_namespace_breakdown(
-                namespace=f"lc-{workspace_id[:8]}",
-                start_time=start_time,
-                end_time=end_time,
-                memory_gb_seconds=expected_memory,
-            )
-        )
-
-        result = await collect_workspace_usage_for_interval(
-            workspace_id=workspace_id,
-            start_time=start_time,
-            end_time=end_time,
-        )
-
-        assert result["success"] is True
-
-        records = await billing_db.usage.get_workspace_usage(
-            workspace_id=workspace_id,
-            start_date=start_time,
-            end_date=end_time,
-            record_type=UsageCollectionConfig.get_record_type(),
-        )
-
-        assert len(records) == 1
-        assert records[0].memory_gb_seconds == expected_memory
-
-    async def test_stores_storage_split_by_class(
-        self,
-        billing_db: Database,
-        billing_workspace,
-        mock_prometheus_healthy,
-        mock_depot_service,
-    ):
-        """Verify EBS and EFS storage are stored in separate fields."""
-        workspace_id = str(billing_workspace.id)
-        start_time = datetime.now(timezone.utc).replace(
-            minute=0, second=0, microsecond=0
-        )
-        end_time = start_time + timedelta(hours=1)
-
-        expected_standard = 10.0
-        expected_shared = 5.0
-
-        mock_prometheus_healthy.get_namespace_breakdown = AsyncMock(
-            return_value=make_namespace_breakdown(
-                namespace=f"lc-{workspace_id[:8]}",
-                start_time=start_time,
-                end_time=end_time,
-                standard_gb_hours=expected_standard,
-                shared_gb_hours=expected_shared,
-            )
-        )
-
-        result = await collect_workspace_usage_for_interval(
-            workspace_id=workspace_id,
-            start_time=start_time,
-            end_time=end_time,
-        )
-
-        assert result["success"] is True
-
-        records = await billing_db.usage.get_workspace_usage(
-            workspace_id=workspace_id,
-            start_date=start_time,
-            end_date=end_time,
-            record_type=UsageCollectionConfig.get_record_type(),
-        )
-
-        assert len(records) == 1
-        assert records[0].standard_gb_hours == expected_standard
-        assert records[0].shared_gb_hours == expected_shared
-
-    async def test_stores_all_metrics_together(
-        self,
-        billing_db: Database,
-        billing_workspace,
-        mock_prometheus_healthy,
-        mock_depot_service,
-    ):
-        """Verify all metrics are stored correctly in single record."""
-        workspace_id = str(billing_workspace.id)
-        start_time = datetime.now(timezone.utc).replace(
-            minute=0, second=0, microsecond=0
-        )
-        end_time = start_time + timedelta(hours=1)
-
-        expected_cpu = 1800.0
-        expected_memory = 3600.0
-        expected_standard = 2.5
-        expected_shared = 1.5
+        end_time = start_time + timedelta(minutes=15)
+        expected_cpu = 100.0
+        expected_memory = 200.0
 
         mock_prometheus_healthy.get_namespace_breakdown = AsyncMock(
             return_value=make_namespace_breakdown(
@@ -274,73 +131,227 @@ class TestIntervalCollectionTransformation:
                 end_time=end_time,
                 cpu_core_seconds=expected_cpu,
                 memory_gb_seconds=expected_memory,
-                standard_gb_hours=expected_standard,
-                shared_gb_hours=expected_shared,
             )
         )
 
-        result = await collect_workspace_usage_for_interval(
+        result = await collect_workspace_interval(
             workspace_id=workspace_id,
-            start_time=start_time,
-            end_time=end_time,
+            interval_start=start_time,
+            interval_end=end_time,
         )
 
-        assert result["success"] is True
+        assert result["status"] == "collected"
+        assert result["workspace_id"] == workspace_id
 
-        records = await billing_db.usage.get_workspace_usage(
+        records = await billing_db.usage.get_workspace_daily_usage(
             workspace_id=workspace_id,
-            start_date=start_time,
-            end_date=end_time,
-            record_type=UsageCollectionConfig.get_record_type(),
+            start_date=start_time.date(),
+            end_date=start_time.date(),
         )
 
         assert len(records) == 1
         record = records[0]
         assert record.cpu_core_seconds == expected_cpu
         assert record.memory_gb_seconds == expected_memory
-        assert record.standard_gb_hours == expected_standard
-        assert record.shared_gb_hours == expected_shared
+        assert record.intervals_collected == 1
+        assert record.usage_date == start_time.date()
 
-
-class TestIntervalCollectionBreakdowns:
-    """Test that per-pod breakdowns are stored correctly."""
-
-    async def test_stores_compute_breakdown_per_pod(
+    async def test_increments_existing_daily_record(
         self,
         billing_db: Database,
         billing_workspace,
-        billing_deployment,
         mock_prometheus_healthy,
         mock_depot_service,
+        mock_storage_collection,
     ):
-        """Verify each pod gets a breakdown record with correct values."""
+        """Verify multiple intervals accumulate correctly in daily record."""
+        workspace_id = str(billing_workspace.id)
+        base_time = datetime.now(timezone.utc).replace(
+            hour=10, minute=0, second=0, microsecond=0
+        )
+
+        # First interval: 100 CPU, 200 memory
+        mock_prometheus_healthy.get_namespace_breakdown = AsyncMock(
+            return_value=make_namespace_breakdown(
+                namespace=f"lc-{workspace_id[:8]}",
+                start_time=base_time,
+                end_time=base_time + timedelta(minutes=15),
+                cpu_core_seconds=100.0,
+                memory_gb_seconds=200.0,
+            )
+        )
+
+        await collect_workspace_interval(
+            workspace_id=workspace_id,
+            interval_start=base_time,
+            interval_end=base_time + timedelta(minutes=15),
+        )
+
+        # Second interval: 150 CPU, 300 memory
+        interval2_start = base_time + timedelta(minutes=15)
+        mock_prometheus_healthy.get_namespace_breakdown = AsyncMock(
+            return_value=make_namespace_breakdown(
+                namespace=f"lc-{workspace_id[:8]}",
+                start_time=interval2_start,
+                end_time=interval2_start + timedelta(minutes=15),
+                cpu_core_seconds=150.0,
+                memory_gb_seconds=300.0,
+            )
+        )
+
+        await collect_workspace_interval(
+            workspace_id=workspace_id,
+            interval_start=interval2_start,
+            interval_end=interval2_start + timedelta(minutes=15),
+        )
+
+        records = await billing_db.usage.get_workspace_daily_usage(
+            workspace_id=workspace_id,
+            start_date=base_time.date(),
+            end_date=base_time.date(),
+        )
+
+        assert len(records) == 1
+        record = records[0]
+        # Verify atomic increment worked: 100 + 150 = 250
+        assert record.cpu_core_seconds == 250.0
+        assert record.memory_gb_seconds == 500.0
+        assert record.intervals_collected == 2
+
+
+class TestIdempotency:
+    """Test that collection is idempotent - same interval never counted twice."""
+
+    async def test_skips_already_collected_interval(
+        self,
+        billing_db: Database,
+        billing_workspace,
+        mock_prometheus_healthy,
+        mock_depot_service,
+        mock_storage_collection,
+    ):
+        """Verify duplicate collection returns already_collected and doesn't increment."""
         workspace_id = str(billing_workspace.id)
         start_time = datetime.now(timezone.utc).replace(
             minute=0, second=0, microsecond=0
         )
-        end_time = start_time + timedelta(hours=1)
+        end_time = start_time + timedelta(minutes=15)
+
+        mock_prometheus_healthy.get_namespace_breakdown = AsyncMock(
+            return_value=make_namespace_breakdown(
+                namespace=f"lc-{workspace_id[:8]}",
+                start_time=start_time,
+                end_time=end_time,
+                cpu_core_seconds=100.0,
+            )
+        )
+
+        # First collection
+        result1 = await collect_workspace_interval(
+            workspace_id=workspace_id,
+            interval_start=start_time,
+            interval_end=end_time,
+        )
+        assert result1["status"] == "collected"
+
+        # Second collection of same interval
+        result2 = await collect_workspace_interval(
+            workspace_id=workspace_id,
+            interval_start=start_time,
+            interval_end=end_time,
+        )
+        assert result2["status"] == "already_collected"
+
+        # Verify no double-counting occurred
+        records = await billing_db.usage.get_workspace_daily_usage(
+            workspace_id=workspace_id,
+            start_date=start_time.date(),
+            end_date=start_time.date(),
+        )
+
+        assert len(records) == 1
+        assert records[0].cpu_core_seconds == 100.0  # Not 200
+        assert records[0].intervals_collected == 1  # Not 2
+
+    async def test_idempotency_tracked_per_interval(
+        self,
+        billing_db: Database,
+        billing_workspace,
+        mock_prometheus_healthy,
+        mock_depot_service,
+        mock_storage_collection,
+    ):
+        """Verify different intervals are tracked independently."""
+        workspace_id = str(billing_workspace.id)
+        base_time = datetime.now(timezone.utc).replace(
+            hour=12, minute=0, second=0, microsecond=0
+        )
+
+        mock_prometheus_healthy.get_namespace_breakdown = AsyncMock(
+            return_value=make_namespace_breakdown(
+                namespace=f"lc-{workspace_id[:8]}",
+                start_time=base_time,
+                end_time=base_time + timedelta(minutes=15),
+                cpu_core_seconds=50.0,
+            )
+        )
+
+        # Collect interval 1
+        await collect_workspace_interval(
+            workspace_id=workspace_id,
+            interval_start=base_time,
+            interval_end=base_time + timedelta(minutes=15),
+        )
+
+        # Collect interval 2 (different time)
+        interval2_start = base_time + timedelta(minutes=15)
+        result = await collect_workspace_interval(
+            workspace_id=workspace_id,
+            interval_start=interval2_start,
+            interval_end=interval2_start + timedelta(minutes=15),
+        )
+
+        # Should be collected, not skipped
+        assert result["status"] == "collected"
+
+        records = await billing_db.usage.get_workspace_daily_usage(
+            workspace_id=workspace_id,
+            start_date=base_time.date(),
+            end_date=base_time.date(),
+        )
+        assert records[0].intervals_collected == 2
+
+
+class TestBreakdownEvents:
+    """Test that breakdown events are appended correctly for dashboards."""
+
+    async def test_appends_compute_breakdown_events(
+        self,
+        billing_db: Database,
+        billing_workspace,
+        mock_prometheus_healthy,
+        mock_depot_service,
+        mock_storage_collection,
+    ):
+        """Verify per-service breakdown events are stored with correct values."""
+        workspace_id = str(billing_workspace.id)
+        start_time = datetime.now(timezone.utc).replace(
+            minute=0, second=0, microsecond=0
+        )
+        end_time = start_time + timedelta(minutes=15)
 
         pods = [
             PodUsage(
                 pod="web-0",
                 service="web",
-                release_name=f"lc-{workspace_id[:8]}-test",
-                cpu_core_seconds=1000.0,
-                memory_gb_seconds=2000.0,
-            ),
-            PodUsage(
-                pod="web-1",
-                service="web",
-                release_name=f"lc-{workspace_id[:8]}-test",
-                cpu_core_seconds=1500.0,
-                memory_gb_seconds=3000.0,
+                cpu_core_seconds=50.0,
+                memory_gb_seconds=100.0,
             ),
             PodUsage(
                 pod="worker-0",
                 service="worker",
-                release_name=f"lc-{workspace_id[:8]}-test",
-                cpu_core_seconds=500.0,
-                memory_gb_seconds=1000.0,
+                cpu_core_seconds=75.0,
+                memory_gb_seconds=150.0,
             ),
         ]
 
@@ -349,387 +360,92 @@ class TestIntervalCollectionBreakdowns:
                 namespace=f"lc-{workspace_id[:8]}",
                 start_time=start_time,
                 end_time=end_time,
-                cpu_core_seconds=3000.0,
-                memory_gb_seconds=6000.0,
+                cpu_core_seconds=125.0,
+                memory_gb_seconds=250.0,
                 pods=pods,
             )
         )
 
-        result = await collect_workspace_usage_for_interval(
+        await collect_workspace_interval(
             workspace_id=workspace_id,
-            start_time=start_time,
-            end_time=end_time,
+            interval_start=start_time,
+            interval_end=end_time,
         )
 
-        assert result["success"] is True
-
-        records = await billing_db.usage.get_workspace_usage(
+        # Query and verify breakdown events
+        service_breakdown = await billing_db.usage.get_service_breakdown(
             workspace_id=workspace_id,
             start_date=start_time,
-            end_date=end_time,
-            record_type=UsageCollectionConfig.get_record_type(),
+            end_date=end_time + timedelta(seconds=1),
         )
 
-        assert len(records) == 1
-        record = records[0]
+        assert len(service_breakdown) == 2
+        services = {name: (cpu, mem) for name, cpu, mem in service_breakdown}
 
-        # Should have 3 breakdown records
-        assert len(record.compute_breakdowns) == 3
+        assert "web" in services
+        assert services["web"][0] == 50.0  # CPU
+        assert services["web"][1] == 100.0  # Memory
 
-        # Verify each pod's values
-        breakdown_by_pod = {b.pod_name: b for b in record.compute_breakdowns}
+        assert "worker" in services
+        assert services["worker"][0] == 75.0  # CPU
+        assert services["worker"][1] == 150.0  # Memory
 
-        assert "web-0" in breakdown_by_pod
-        assert breakdown_by_pod["web-0"].cpu_core_seconds == 1000.0
-        assert breakdown_by_pod["web-0"].memory_gb_seconds == 2000.0
 
-        assert "web-1" in breakdown_by_pod
-        assert breakdown_by_pod["web-1"].cpu_core_seconds == 1500.0
-        assert breakdown_by_pod["web-1"].memory_gb_seconds == 3000.0
+class TestBilledDayProtection:
+    """Test that billed days cannot be modified."""
 
-        assert "worker-0" in breakdown_by_pod
-        assert breakdown_by_pod["worker-0"].cpu_core_seconds == 500.0
-        assert breakdown_by_pod["worker-0"].memory_gb_seconds == 1000.0
-
-    async def test_stores_storage_breakdown_per_pvc(
+    async def test_skips_collection_for_billed_day(
         self,
         billing_db: Database,
         billing_workspace,
         mock_prometheus_healthy,
         mock_depot_service,
+        mock_storage_collection,
     ):
-        """Verify each PVC gets a storage breakdown record."""
+        """Verify collection returns already_billed and doesn't modify billed record."""
         workspace_id = str(billing_workspace.id)
-        start_time = datetime.now(timezone.utc).replace(
-            minute=0, second=0, microsecond=0
-        )
-        end_time = start_time + timedelta(hours=1)
+        usage_date = datetime.now(timezone.utc).date()
 
-        pvcs = [
-            StorageUsage(pvc_name="data-vol", storage_class="ebs-sc", gb_hours=10.0),
-            StorageUsage(pvc_name="shared-vol", storage_class="efs-sc", gb_hours=5.0),
-        ]
+        # Create and bill a daily record
+        record = await billing_db.usage.get_or_create_daily_record(
+            workspace_id=workspace_id,
+            usage_date=usage_date,
+        )
+        original_cpu = record.cpu_core_seconds
+        await billing_db.usage.mark_as_billed(record.id, "test-billing-id")
+
+        start_time = datetime.combine(usage_date, datetime.min.time()).replace(
+            tzinfo=timezone.utc
+        )
+        end_time = start_time + timedelta(minutes=15)
 
         mock_prometheus_healthy.get_namespace_breakdown = AsyncMock(
             return_value=make_namespace_breakdown(
                 namespace=f"lc-{workspace_id[:8]}",
                 start_time=start_time,
                 end_time=end_time,
-                standard_gb_hours=10.0,
-                shared_gb_hours=5.0,
-                pvcs=pvcs,
+                cpu_core_seconds=9999.0,  # This should NOT be added
             )
         )
 
-        result = await collect_workspace_usage_for_interval(
+        result = await collect_workspace_interval(
             workspace_id=workspace_id,
-            start_time=start_time,
-            end_time=end_time,
+            interval_start=start_time,
+            interval_end=end_time,
         )
 
-        assert result["success"] is True
+        assert result["status"] == "already_billed"
 
-        records = await billing_db.usage.get_workspace_usage(
+        # Verify record was not modified
+        records = await billing_db.usage.get_workspace_daily_usage(
             workspace_id=workspace_id,
-            start_date=start_time,
-            end_date=end_time,
-            record_type=UsageCollectionConfig.get_record_type(),
+            start_date=usage_date,
+            end_date=usage_date,
         )
-
-        assert len(records) == 1
-        record = records[0]
-
-        # Should have 2 storage breakdown records
-        assert len(record.storage_breakdowns) == 2
-
-        breakdown_by_pvc = {b.pvc_name: b for b in record.storage_breakdowns}
-
-        assert "data-vol" in breakdown_by_pvc
-        assert breakdown_by_pvc["data-vol"].storage_class == "ebs-sc"
-        assert breakdown_by_pvc["data-vol"].gb_hours == 10.0
-
-        assert "shared-vol" in breakdown_by_pvc
-        assert breakdown_by_pvc["shared-vol"].storage_class == "efs-sc"
-        assert breakdown_by_pvc["shared-vol"].gb_hours == 5.0
+        assert records[0].cpu_core_seconds == original_cpu
 
 
-class TestIntervalCollectionMetadata:
-    """Test record metadata is set correctly."""
-
-    async def test_sets_correct_time_window(
-        self,
-        billing_db: Database,
-        billing_workspace,
-        mock_prometheus_healthy,
-        mock_depot_service,
-    ):
-        """Verify collection_start and collection_end match input."""
-        workspace_id = str(billing_workspace.id)
-        start_time = datetime(2024, 6, 15, 14, 0, 0, tzinfo=timezone.utc)
-        end_time = datetime(2024, 6, 15, 15, 0, 0, tzinfo=timezone.utc)
-
-        mock_prometheus_healthy.get_namespace_breakdown = AsyncMock(
-            return_value=make_namespace_breakdown(
-                namespace=f"lc-{workspace_id[:8]}",
-                start_time=start_time,
-                end_time=end_time,
-            )
-        )
-
-        await collect_workspace_usage_for_interval(
-            workspace_id=workspace_id,
-            start_time=start_time,
-            end_time=end_time,
-        )
-
-        records = await billing_db.usage.get_workspace_usage(
-            workspace_id=workspace_id,
-            start_date=start_time,
-            end_date=end_time,
-            record_type=UsageCollectionConfig.get_record_type(),
-        )
-
-        assert len(records) == 1
-        assert records[0].collection_start == start_time
-        assert records[0].collection_end == end_time
-
-    async def test_sets_interval_record_type(
-        self,
-        billing_db: Database,
-        billing_workspace,
-        mock_prometheus_healthy,
-        mock_depot_service,
-    ):
-        """Verify record_type matches the configured collection interval."""
-        workspace_id = str(billing_workspace.id)
-        start_time = datetime.now(timezone.utc).replace(
-            minute=0, second=0, microsecond=0
-        )
-        end_time = start_time + timedelta(hours=1)
-
-        mock_prometheus_healthy.get_namespace_breakdown = AsyncMock(
-            return_value=make_namespace_breakdown(
-                namespace=f"lc-{workspace_id[:8]}",
-                start_time=start_time,
-                end_time=end_time,
-            )
-        )
-
-        await collect_workspace_usage_for_interval(
-            workspace_id=workspace_id,
-            start_time=start_time,
-            end_time=end_time,
-        )
-
-        records = await billing_db.usage.get_workspace_usage(
-            workspace_id=workspace_id,
-            start_date=start_time,
-            end_date=end_time,
-            record_type=UsageCollectionConfig.get_record_type(),
-        )
-
-        assert len(records) == 1
-        assert records[0].record_type == UsageCollectionConfig.get_record_type().value
-
-    async def test_respects_status_parameter(
-        self,
-        billing_db: Database,
-        billing_workspace,
-        mock_prometheus_healthy,
-        mock_depot_service,
-    ):
-        """Verify status parameter is applied to record."""
-        workspace_id = str(billing_workspace.id)
-        start_time = datetime.now(timezone.utc).replace(
-            minute=0, second=0, microsecond=0
-        )
-        end_time = start_time + timedelta(hours=1)
-
-        mock_prometheus_healthy.get_namespace_breakdown = AsyncMock(
-            return_value=make_namespace_breakdown(
-                namespace=f"lc-{workspace_id[:8]}",
-                start_time=start_time,
-                end_time=end_time,
-            )
-        )
-
-        await collect_workspace_usage_for_interval(
-            workspace_id=workspace_id,
-            start_time=start_time,
-            end_time=end_time,
-            status=UsageRecordStatus.FINALIZED,
-        )
-
-        records = await billing_db.usage.get_workspace_usage(
-            workspace_id=workspace_id,
-            start_date=start_time,
-            end_date=end_time,
-            record_type=UsageCollectionConfig.get_record_type(),
-        )
-
-        assert len(records) == 1
-        assert records[0].status == UsageRecordStatus.FINALIZED
-
-
-class TestIntervalCollectionUpsert:
-    """Test upsert behavior (idempotent collection)."""
-
-    async def test_upsert_returns_same_record_id(
-        self,
-        billing_db: Database,
-        billing_workspace,
-        mock_prometheus_healthy,
-        mock_depot_service,
-    ):
-        """Verify re-collection updates existing record, not creates new."""
-        workspace_id = str(billing_workspace.id)
-        start_time = datetime.now(timezone.utc).replace(
-            minute=0, second=0, microsecond=0
-        )
-        end_time = start_time + timedelta(hours=1)
-
-        mock_prometheus_healthy.get_namespace_breakdown = AsyncMock(
-            return_value=make_namespace_breakdown(
-                namespace=f"lc-{workspace_id[:8]}",
-                start_time=start_time,
-                end_time=end_time,
-                cpu_core_seconds=1000.0,
-            )
-        )
-
-        # First collection
-        result1 = await collect_workspace_usage_for_interval(
-            workspace_id=workspace_id,
-            start_time=start_time,
-            end_time=end_time,
-        )
-        first_id = result1["usage_record_id"]
-
-        # Update mock to return different values
-        mock_prometheus_healthy.get_namespace_breakdown = AsyncMock(
-            return_value=make_namespace_breakdown(
-                namespace=f"lc-{workspace_id[:8]}",
-                start_time=start_time,
-                end_time=end_time,
-                cpu_core_seconds=2000.0,  # Different value
-            )
-        )
-
-        # Second collection (same time window)
-        result2 = await collect_workspace_usage_for_interval(
-            workspace_id=workspace_id,
-            start_time=start_time,
-            end_time=end_time,
-        )
-        second_id = result2["usage_record_id"]
-
-        assert first_id == second_id
-
-    async def test_upsert_updates_values(
-        self,
-        billing_db: Database,
-        billing_workspace,
-        mock_prometheus_healthy,
-        mock_depot_service,
-    ):
-        """Verify upsert updates the stored values."""
-        workspace_id = str(billing_workspace.id)
-        start_time = datetime.now(timezone.utc).replace(
-            minute=0, second=0, microsecond=0
-        )
-        end_time = start_time + timedelta(hours=1)
-
-        # First collection with initial values
-        mock_prometheus_healthy.get_namespace_breakdown = AsyncMock(
-            return_value=make_namespace_breakdown(
-                namespace=f"lc-{workspace_id[:8]}",
-                start_time=start_time,
-                end_time=end_time,
-                cpu_core_seconds=1000.0,
-                memory_gb_seconds=2000.0,
-            )
-        )
-
-        await collect_workspace_usage_for_interval(
-            workspace_id=workspace_id,
-            start_time=start_time,
-            end_time=end_time,
-        )
-
-        # Update mock to return different values
-        new_cpu = 1500.0
-        new_memory = 3000.0
-        mock_prometheus_healthy.get_namespace_breakdown = AsyncMock(
-            return_value=make_namespace_breakdown(
-                namespace=f"lc-{workspace_id[:8]}",
-                start_time=start_time,
-                end_time=end_time,
-                cpu_core_seconds=new_cpu,
-                memory_gb_seconds=new_memory,
-            )
-        )
-
-        # Second collection
-        await collect_workspace_usage_for_interval(
-            workspace_id=workspace_id,
-            start_time=start_time,
-            end_time=end_time,
-        )
-
-        records = await billing_db.usage.get_workspace_usage(
-            workspace_id=workspace_id,
-            start_date=start_time,
-            end_date=end_time,
-            record_type=UsageCollectionConfig.get_record_type(),
-        )
-
-        # Should still be one record
-        assert len(records) == 1
-        # Values should be updated
-        assert records[0].cpu_core_seconds == new_cpu
-        assert records[0].memory_gb_seconds == new_memory
-
-    async def test_only_one_record_per_time_window(
-        self,
-        billing_db: Database,
-        billing_workspace,
-        mock_prometheus_healthy,
-        mock_depot_service,
-    ):
-        """Verify multiple collections for same window don't create duplicates."""
-        workspace_id = str(billing_workspace.id)
-        start_time = datetime.now(timezone.utc).replace(
-            minute=0, second=0, microsecond=0
-        )
-        end_time = start_time + timedelta(hours=1)
-
-        mock_prometheus_healthy.get_namespace_breakdown = AsyncMock(
-            return_value=make_namespace_breakdown(
-                namespace=f"lc-{workspace_id[:8]}",
-                start_time=start_time,
-                end_time=end_time,
-            )
-        )
-
-        # Collect 5 times
-        for _ in range(5):
-            await collect_workspace_usage_for_interval(
-                workspace_id=workspace_id,
-                start_time=start_time,
-                end_time=end_time,
-            )
-
-        records = await billing_db.usage.get_workspace_usage(
-            workspace_id=workspace_id,
-            start_date=start_time,
-            end_date=end_time,
-            record_type=UsageCollectionConfig.get_record_type(),
-        )
-
-        assert len(records) == 1
-
-
-class TestIntervalCollectionErrorHandling:
+class TestErrorHandling:
     """Test error handling scenarios."""
 
     async def test_fails_when_prometheus_unhealthy(
@@ -737,13 +453,14 @@ class TestIntervalCollectionErrorHandling:
         billing_db: Database,
         billing_workspace,
         mock_depot_service,
+        mock_storage_collection,
     ):
-        """Verify collection fails gracefully when Prometheus is down."""
+        """Verify collection raises RuntimeError when Prometheus is down."""
         workspace_id = str(billing_workspace.id)
         start_time = datetime.now(timezone.utc).replace(
             minute=0, second=0, microsecond=0
         )
-        end_time = start_time + timedelta(hours=1)
+        end_time = start_time + timedelta(minutes=15)
 
         with patch(
             "backend.prefect_app.usage_collector.get_metrics_service"
@@ -752,55 +469,12 @@ class TestIntervalCollectionErrorHandling:
             mock_service.health_check = AsyncMock(return_value=False)
             mock_get.return_value = mock_service
 
-            result = await collect_workspace_usage_for_interval(
-                workspace_id=workspace_id,
-                start_time=start_time,
-                end_time=end_time,
-            )
+            with pytest.raises(RuntimeError) as exc_info:
+                await collect_workspace_interval(
+                    workspace_id=workspace_id,
+                    interval_start=start_time,
+                    interval_end=end_time,
+                )
 
-        assert result["success"] is False
-        assert "Prometheus unhealthy" in result.get("error", "")
-
-
-class TestIntervalCollectionEndpointHours:
-    """Test public endpoint hour calculation."""
-
-    async def test_no_endpoints_yields_zero_hours(
-        self,
-        billing_db: Database,
-        billing_workspace,
-        mock_prometheus_healthy,
-        mock_depot_service,
-    ):
-        """Verify zero endpoint hours when no public endpoints exist."""
-        workspace_id = str(billing_workspace.id)
-        start_time = datetime.now(timezone.utc).replace(
-            minute=0, second=0, microsecond=0
-        )
-        end_time = start_time + timedelta(hours=1)
-
-        mock_prometheus_healthy.get_namespace_breakdown = AsyncMock(
-            return_value=make_namespace_breakdown(
-                namespace=f"lc-{workspace_id[:8]}",
-                start_time=start_time,
-                end_time=end_time,
-            )
-        )
-
-        result = await collect_workspace_usage_for_interval(
-            workspace_id=workspace_id,
-            start_time=start_time,
-            end_time=end_time,
-        )
-
-        assert result["success"] is True
-
-        records = await billing_db.usage.get_workspace_usage(
-            workspace_id=workspace_id,
-            start_date=start_time,
-            end_date=end_time,
-            record_type=UsageCollectionConfig.get_record_type(),
-        )
-
-        assert len(records) == 1
-        assert records[0].public_endpoint_hours == 0.0
+            assert "Prometheus unhealthy" in str(exc_info.value)
+            assert workspace_id in str(exc_info.value)

@@ -502,41 +502,31 @@ class DepotService:
         start_at: datetime,
         end_at: datetime,
     ) -> float:
-        """Get build minutes for a specific deployment."""
+        """Get build minutes for a specific deployment. Raises on API failure."""
         if not self.is_configured:
             return 0.0
 
-        try:
-            # Get project ID from database
-            async with get_db_context() as db:
-                deployment = await db.compose_deployments.get_by_id(deployment_id)
+        async with get_db_context() as db:
+            deployment = await db.compose_deployments.get_by_id(deployment_id)
 
-            if not deployment or not deployment.depot_project_id:
-                return 0.0
-
-            usage = await self.get_project_usage(
-                deployment.depot_project_id, start_at, end_at
-            )
-
-            # Depot returns usage in seconds, convert to minutes
-            build_seconds = usage.get("buildDurationSeconds", 0)
-            if isinstance(build_seconds, str):
-                build_seconds = int(build_seconds)
-
-            build_minutes = build_seconds / 60.0
-
-            logger.debug(
-                f"Deployment {deployment_id} build minutes from {start_at} to {end_at}: "
-                f"{build_minutes:.2f}"
-            )
-            return build_minutes
-
-        except Exception as e:
-            logger.warning(
-                f"Failed to get build minutes for deployment {deployment_id}: {e}",
-                exc_info=True,
-            )
+        if not deployment or not deployment.depot_project_id:
             return 0.0
+
+        usage = await self.get_project_usage(
+            deployment.depot_project_id, start_at, end_at
+        )
+
+        build_seconds = usage.get("buildDurationSeconds", 0)
+        if isinstance(build_seconds, str):
+            build_seconds = int(build_seconds)
+
+        build_minutes = build_seconds / 60.0
+
+        logger.debug(
+            f"Deployment {deployment_id} build minutes from {start_at} to {end_at}: "
+            f"{build_minutes:.2f}"
+        )
+        return build_minutes
 
     async def get_workspace_build_minutes(
         self,
@@ -545,37 +535,29 @@ class DepotService:
         end_at: datetime,
         deployments: list[ComposeDeploymentPydantic] | None = None,
     ) -> float:
-        """Get total build minutes for all deployments in a workspace."""
+        """Get total build minutes for all deployments in a workspace. Raises on API failure."""
         if not self.is_configured:
             return 0.0
 
-        total_minutes = 0.0
-
-        try:
-            # Use pre-fetched deployments if provided, otherwise query
-            if deployments is None:
-                async with get_db_context() as db:
-                    deployments = (
-                        await db.compose_deployments.find_active_during_date_range(
-                            workspace_id=workspace_id,
-                            start_date=start_at,
-                            end_date=end_at,
-                        )
+        if deployments is None:
+            async with get_db_context() as db:
+                deployments = (
+                    await db.compose_deployments.find_active_during_date_range(
+                        workspace_id=workspace_id,
+                        start_date=start_at,
+                        end_date=end_at,
                     )
-
-            for deployment in deployments:
-                deployment_id = self._extract_deployment_id(deployment)
-                build_minutes = await self.get_deployment_build_minutes(
-                    deployment_id=deployment_id,
-                    start_at=start_at,
-                    end_at=end_at,
                 )
-                total_minutes += build_minutes
 
-            logger.debug(f"Workspace {workspace_id} build minutes: {total_minutes:.2f}")
+        total_minutes = 0.0
+        for deployment in deployments:
+            deployment_id = self._extract_deployment_id(deployment)
+            build_minutes = await self.get_deployment_build_minutes(
+                deployment_id=deployment_id,
+                start_at=start_at,
+                end_at=end_at,
+            )
+            total_minutes += build_minutes
 
-            return total_minutes
-
-        except Exception as e:
-            logger.error(f"Failed to get workspace build minutes: {e}")
-            return 0.0
+        logger.debug(f"Workspace {workspace_id} build minutes: {total_minutes:.2f}")
+        return total_minutes

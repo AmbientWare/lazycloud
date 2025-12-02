@@ -20,6 +20,7 @@ class StorageUsage(BaseModel):
     pvc_name: str
     storage_class: str
     gb_hours: float = Field(default=0.0)
+    storage_size_gb: float = Field(default=0.0)
 
 
 class UsageTotals(BaseModel):

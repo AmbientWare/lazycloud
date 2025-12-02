@@ -1,0 +1,131 @@
+name: Deploy Backend
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+
+jobs:
+  # Build API image
+  build-api:
+    name: Build API Image
+    uses: ./.github/workflows/_build_push.yml
+    with:
+      app_name: backend-api
+      dockerfile_path: ./apps/backend/Dockerfile
+      build_context: .
+      ecr_repository: lazycloud-api
+      docker_target: api
+    secrets: inherit
+
+  # Build background worker image
+  build-background-worker:
+    name: Build Background Worker Image
+    uses: ./.github/workflows/_build_push.yml
+    with:
+      app_name: backend-background-worker
+      dockerfile_path: ./apps/backend/Dockerfile
+      build_context: .
+      ecr_repository: lazycloud-background-worker
+      docker_target: background-workers
+    secrets: inherit
+
+  # Build cron worker image
+  build-cron-worker:
+    name: Build Cron Worker Image
+    uses: ./.github/workflows/_build_push.yml
+    with:
+      app_name: backend-cron-worker
+      dockerfile_path: ./apps/backend/Dockerfile
+      build_context: .
+      ecr_repository: lazycloud-cron-worker
+      docker_target: crons
+    secrets: inherit
+
+  # Update Helm values after all images are built
+  update-values:
+    name: Update Helm Values
+    needs: [build-api, build-background-worker, build-cron-worker]
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update values file
+        run: |
+          IMAGE_SHA="${{ needs.build-api.outputs.image_sha }}"
+          ENV="${{ inputs.environment }}"
+
+          if [ "$ENV" = "production" ]; then
+            VALUES_FILE="deploy/api-platform/values-prod.yaml"
+          else
+            VALUES_FILE="deploy/api-platform/values-staging.yaml"
+          fi
+
+          echo "Updating $VALUES_FILE with image SHA: $IMAGE_SHA"
+          sed -i "s/tag: \".*\"/tag: \"${IMAGE_SHA}\"/" "$VALUES_FILE"
+
+      - name: Commit and push changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          ENV="${{ inputs.environment }}"
+          IMAGE_SHA="${{ needs.build-api.outputs.image_sha }}"
+
+          if [ "$ENV" = "production" ]; then
+            VALUES_FILE="deploy/api-platform/values-prod.yaml"
+          else
+            VALUES_FILE="deploy/api-platform/values-staging.yaml"
+          fi
+
+          git add "$VALUES_FILE"
+
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "🚀 Deploy backend to $ENV: $IMAGE_SHA"
+            git push
+          fi
+
+  summary:
+    name: Deployment Summary
+    needs: [build-api, build-background-worker, build-cron-worker, update-values]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate summary
+        run: |
+          echo "## 🚀 Backend Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Image SHA:** \`${{ needs.build-api.outputs.image_sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Build Status" >> $GITHUB_STEP_SUMMARY
+          echo "- API: ${{ needs.build-api.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Background Worker: ${{ needs.build-background-worker.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Cron Worker: ${{ needs.build-cron-worker.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Deploy: ${{ needs.update-values.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ inputs.environment }}" = "production" ]; then
+            echo "🌐 **API URL:** https://api.lazycloud.dev" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "🌐 **API URL:** https://api-staging.lazycloud.dev" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Images Built" >> $GITHUB_STEP_SUMMARY
+          echo "- \`lazycloud-api:${{ needs.build-api.outputs.image_sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`lazycloud-background-worker:${{ needs.build-background-worker.outputs.image_sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`lazycloud-cron-worker:${{ needs.build-cron-worker.outputs.image_sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Argo CD will automatically sync this deployment." >> $GITHUB_STEP_SUMMARY

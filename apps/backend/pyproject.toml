@@ -9,7 +9,6 @@ dependencies = [
     "cachetools>=6.2.2",
     "dotenv>=0.9.9",
     "fastapi>=0.122.0",
-    "jwt>=1.4.0",
     "kubernetes>=34.1.0",
     "loguru>=0.7.3",
     "models",
@@ -28,6 +27,8 @@ dependencies = [
     "petname>=2.6",
     "resend>=2.19.0",
     "alembic>=1.17.2",
+    "sentry-sdk[fastapi]>=2.46.0",
+    "pyjwt>=2.10.1",
 ]
 
 [tool.uv.sources]
@@ -60,7 +61,7 @@ markers = [
     "billing: billing flow tests",
 ]
 env = [
-    "DATABASE_URL=postgresql+asyncpg://lc_dev:password@localhost:5432/postgres",
+    "DATABASE_URL=postgresql+asyncpg://lc_dev:password@localhost:6432/postgres",
     "PREFECT_API_URL=http://localhost:4200/api",
     "PREFECT_LOCAL_STORAGE_PATH=/tmp/prefect-task-storage",
 ]

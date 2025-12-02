@@ -31,9 +31,12 @@ services:
       - "localstack:localhost.localstack.cloud"
     volumes: *backend-volumes
     env_file:
-      - .env
+      - path: ./apps/backend/.env
+        required: false
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://lc_dev:lc_dev@pgbouncer:6432/lazycloud}
     working_dir: /workspace/apps/backend
-    command: ["uv", "run", "--no-sync", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    command: ["uv", "run", "--no-sync", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--no-access-log"]
     ports:
       - 8000:8000
     healthcheck:
@@ -47,33 +50,64 @@ services:
         condition: service_completed_successfully
       localstack:
         condition: service_healthy
-      postgres:
+      pgbouncer:
         condition: service_healthy
       redis:
         condition: service_started
       prefect-server:
         condition: service_started
 
-  prefect-worker:
+  crons:
     networks:
       - lazycloud
     image: lazycloud-worker:latest
     build:
       context: .
       dockerfile: ./apps/backend/Dockerfile
-      target: prefect-worker
+      target: crons
     volumes: *backend-volumes
     env_file:
-      - .env
+      - path: ./apps/backend/.env
+        required: false
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://lc_dev:lc_dev@pgbouncer:6432/lazycloud}
     working_dir: /workspace/apps/backend
     restart: unless-stopped
     depends_on:
-      postgres:
+      pgbouncer:
         condition: service_healthy
       db-migration:
         condition: service_completed_successfully
       prefect-server:
         condition: service_started
+
+  background-workers:
+    networks:
+      - lazycloud
+    image: lazycloud-background-worker:latest
+    build:
+      context: .
+      dockerfile: ./apps/backend/Dockerfile
+      target: background-workers
+    volumes: *backend-volumes
+    env_file:
+      - path: ./apps/backend/.env
+        required: false
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://lc_dev:lc_dev@pgbouncer:6432/lazycloud}
+    working_dir: /workspace/apps/backend
+    restart: unless-stopped
+    depends_on:
+      prefect-server:
+        condition: service_started
+      pgbouncer:
+        condition: service_healthy
+      db-migration:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+      localstack:
+        condition: service_healthy
 
   prefect-server:
     image: prefecthq/prefect:3-latest
@@ -83,7 +117,8 @@ services:
     volumes:
       - prefect-data:/root/.prefect
     env_file:
-      - .env
+      - path: ./apps/backend/.env
+        required: false
     ports:
       - 4200:4200
 
@@ -97,12 +132,15 @@ services:
       target: api
     volumes: *backend-volumes
     env_file:
-      - .env
+      - path: ./apps/backend/.env
+        required: false
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://lc_dev:lc_dev@pgbouncer:6432/lazycloud}
     working_dir: /workspace/apps/backend
     command: ["uv", "run", "--no-sync", "alembic", "upgrade", "head"]
     restart: "no"
     depends_on:
-      postgres:
+      pgbouncer:
         condition: service_healthy
 
   postgres:
@@ -110,8 +148,12 @@ services:
     networks:
       - lazycloud
     env_file:
-      - .env
+      - path: ./apps/backend/.env
+        required: false
     environment:
+      POSTGRES_USER: ${POSTGRES_USER:-lc_dev}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lc_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-lazycloud}
       POSTGRES_KEEPALIVES: 1
       POSTGRES_KEEPALIVES_IDLE: 60
       POSTGRES_KEEPALIVES_INTERVAL: 10
@@ -125,6 +167,30 @@ services:
       retries: 5
     ports:
       - 5432:5432
+
+  pgbouncer:
+    image: edoburu/pgbouncer:latest
+    networks:
+      - lazycloud
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-lc_dev}:${POSTGRES_PASSWORD:-lc_dev}@postgres:5432/${POSTGRES_DB:-lazycloud}
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: 100
+      DEFAULT_POOL_SIZE: 20
+      MIN_POOL_SIZE: 5
+      RESERVE_POOL_SIZE: 5
+      LISTEN_PORT: 6432
+      AUTH_TYPE: scram-sha-256
+    ports:
+      - 6432:6432
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "localhost", "-p", "6432"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:latest
@@ -151,7 +217,8 @@ services:
       - "127.0.0.1:4566:4566"
       - "127.0.0.1:4510-4559:4510-4559"
     env_file:
-      - ./apps/backend/.env
+      - path: ./apps/backend/.env
+        required: false
     environment:
       DEBUG: 0
       DOCKER_HOST: unix:///var/run/docker.sock
@@ -178,9 +245,10 @@ services:
       context: .
       dockerfile: ./apps/web/Dockerfile
       args:
-        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY}
+        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-placeholder}
     env_file:
-      - ./apps/web/.env
+      - path: ./apps/web/.env
+        required: false
     ports:
       - 3000:3000
     healthcheck:

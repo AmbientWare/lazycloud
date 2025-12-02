@@ -1,0 +1,23 @@
+# Staging environment values for Web
+
+replicaCount: 1
+
+image:
+  repository: 211125306000.dkr.ecr.us-east-1.amazonaws.com/lazycloud-web
+  pullPolicy: Always
+  tag: "staging-latest"
+
+ingress:
+  hostname: staging.lazycloud.dev
+
+# Lower resources for staging
+resources:
+  limits:
+    cpu: 250m
+    memory: 256Mi
+  requests:
+    cpu: 50m
+    memory: 128Mi
+
+secrets:
+  name: "app-secrets-staging"

@@ -1,7 +1,6 @@
 import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jwt import exceptions as jwt_exceptions
 
 from backend.config import ENVIRONMENT, app_config
 from backend.database import Database, get_db
@@ -99,13 +98,13 @@ async def _authenticate_jwt(token: str, db: Database) -> UserPydantic:
 
         return user
 
-    except jwt_exceptions.ExpiredSignatureError:
+    except jwt.ExpiredSignatureError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token has expired",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    except jwt_exceptions.InvalidTokenError as e:
+    except jwt.InvalidTokenError as e:
         # Sanitize error details in production to avoid leaking implementation info
         if app_config.ENV == ENVIRONMENT.DEV:
             detail = f"Invalid token: {str(e)}"

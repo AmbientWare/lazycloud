@@ -352,6 +352,8 @@ class StatusWatcher:
 
         # Get pods and calculate average resource usage
         pods = await self._get_service_pods(service)
+        if pods is None:
+            pods = []
         current_usage = self._calculate_average_usage(pods) if pods else None
 
         # Determine status: use job status for Jobs, otherwise use pod status
@@ -420,6 +422,18 @@ class StatusWatcher:
             pod_list = await asyncio.wait_for(
                 asyncio.to_thread(_list_pods), timeout=2.0
             )
+
+            if pod_list is None:
+                logger.debug(
+                    f"No pod list returned for {service_config.name} (may be starting up)"
+                )
+                return []
+
+            if pod_list.items is None:
+                logger.debug(
+                    f"No pods found for {service_config.name} (may be starting up)"
+                )
+                return []
 
             # Start all metrics tasks in parallel
             metrics_tasks = {
@@ -554,13 +568,20 @@ class StatusWatcher:
             return pods
 
         except asyncio.TimeoutError:
-            logger.warning(f"Timeout getting pods for {service_config.name}")
+            logger.debug(
+                f"Timeout getting pods for {service_config.name} (may be starting up)"
+            )
             return []
 
         except ApiException as e:
-            logger.error(
-                f"Kubernetes API error getting pods for {service_config.name}: {e}"
-            )
+            if e.status == 404:
+                logger.debug(
+                    f"No pods found for {service_config.name} (may be starting up)"
+                )
+            else:
+                logger.error(
+                    f"Kubernetes API error getting pods for {service_config.name}: {e}"
+                )
             return []
 
         except Exception as e:
@@ -581,7 +602,7 @@ class StatusWatcher:
             return f"{minutes}m"
 
     def _determine_status_from_pods(
-        self, pods: list[PodStatus], replicas: int
+        self, pods: list[PodStatus] | None, replicas: int
     ) -> KubernetesPhase:
         """Determine service status based on actual pod phases."""
         if replicas == 0:

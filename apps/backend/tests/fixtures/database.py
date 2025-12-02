@@ -5,13 +5,6 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from models.billing import UsageRecordStatus, UsageRecordType
-from models.deployments import DeploymentStates
-from models.helm import ImageConfig, ServiceValues
-from models.secrets import SecretSource, SecretState
-from models.workspaces import InvitationType, UserWorkspaceStatus, WorkspaceRole
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from backend.billing.product_details.features import (
     BaseFeatures,
     DeploymentFeature,
@@ -23,7 +16,7 @@ from backend.database.compose import ComposeDeploymentPydantic
 from backend.database.invitations import WorkspaceInvitationPydantic
 from backend.database.secrets import SecretPydantic
 from backend.database.session import session_manager
-from backend.database.usage import UsageRecordPydantic
+from backend.database.usage import DailyUsageRecordPydantic, DailyUsageStatus
 from backend.database.user_workspaces import UserWorkspacePydantic
 from backend.database.users import (
     SubscriptionState,
@@ -32,12 +25,17 @@ from backend.database.users import (
     UserStatus,
 )
 from backend.database.workspaces import WorkspacePydantic, WorkspaceStatus
+from models.deployments import DeploymentStates
+from models.helm import ImageConfig, ServiceValues
+from models.secrets import SecretSource, SecretState
+from models.workspaces import InvitationType, UserWorkspaceStatus, WorkspaceRole
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 def is_db_available() -> bool:
     """Check if the test database is available."""
     try:
-        sock = socket.create_connection(("localhost", 5432), timeout=1)
+        sock = socket.create_connection(("localhost", 6432), timeout=1)
         sock.close()
         return True
     except (socket.timeout, ConnectionRefusedError, OSError):
@@ -212,29 +210,29 @@ def make_invitation(
     )
 
 
-def make_usage_record(
+def make_daily_usage_record(
     workspace_id: str,
-    collection_start: datetime | None = None,
-    collection_end: datetime | None = None,
+    usage_date: datetime | None = None,
     cpu_core_seconds: float = 0.0,
     memory_gb_seconds: float = 0.0,
-    storage_gb_hours: float = 0.0,
-) -> UsageRecordPydantic:
-    """Create a UsageRecordPydantic model (not persisted)."""
-    now = datetime.now(timezone.utc)
-    return UsageRecordPydantic(
+    standard_gb_hours: float = 0.0,
+    shared_gb_hours: float = 0.0,
+    build_minutes: float = 0.0,
+    public_endpoint_hours: float = 0.0,
+) -> DailyUsageRecordPydantic:
+    """Create a DailyUsageRecordPydantic model (not persisted)."""
+    return DailyUsageRecordPydantic(
         workspace_id=workspace_id,
-        record_type=UsageRecordType.HOURLY.value,
-        status=UsageRecordStatus.DRAFT,
-        collection_start=collection_start or now - timedelta(hours=1),
-        collection_end=collection_end or now,
+        usage_date=(usage_date or datetime.now(timezone.utc)).date(),
+        status=DailyUsageStatus.COLLECTING,
         cpu_core_seconds=cpu_core_seconds,
         memory_gb_seconds=memory_gb_seconds,
-        storage_gb_hours=storage_gb_hours,
-        standard_gb_hours=0.0,
-        shared_gb_hours=0.0,
-        build_minutes=0.0,
-        public_endpoint_hours=0.0,
+        standard_gb_hours=standard_gb_hours,
+        shared_gb_hours=shared_gb_hours,
+        build_minutes=build_minutes,
+        public_endpoint_hours=public_endpoint_hours,
+        intervals_collected=0,
+        expected_intervals=96,
     )
 
 

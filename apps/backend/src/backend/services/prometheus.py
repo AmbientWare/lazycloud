@@ -4,13 +4,11 @@ from typing import Any
 
 import httpx
 from loguru import logger
-from models.billing import STORAGE_CLASS_EBS, STORAGE_CLASS_EFS
 from models.metrics import (
     NamespaceBreakdown,
     NamespaceSummary,
     PodMetrics,
     PodUsage,
-    StorageUsage,
     UsagePeriod,
     UsageTotals,
 )
@@ -179,204 +177,6 @@ class PrometheusMetricsService:
         logger.debug(f"Memory usage for {namespace}: {gb_seconds:.2f} GB-seconds")
         return gb_seconds
 
-    async def get_storage_usage(
-        self, namespace: str, start_time: datetime, end_time: datetime
-    ) -> float:
-        """Get storage usage in GB-hours for namespace PVCs"""
-        duration_hours = (end_time - start_time).total_seconds() / 3600
-
-        # Query: sum of actual PVC usage (requires CSI drivers)
-        query = f'''
-            sum(
-                kubelet_volume_stats_used_bytes{{
-                    namespace="{namespace}"
-                }}
-            )
-        '''
-
-        result = await self._query_range(query, start_time, end_time, step="5m")
-
-        if not result or "result" not in result:
-            logger.warning(f"No storage usage data for namespace {namespace}")
-            return 0.0
-
-        values = result["result"]
-        if not values or len(values) == 0:
-            return 0.0
-
-        # Calculate average storage
-        total_bytes = 0.0
-        count = 0
-        for series in values:
-            for _, value in series.get("values", []):
-                try:
-                    total_bytes += float(value)
-                    count += 1
-                except (ValueError, TypeError):
-                    continue
-
-        if count == 0:
-            return 0.0
-
-        avg_bytes = total_bytes / count
-        # Convert bytes to GB
-        avg_gb = avg_bytes / (1024**3)
-        gb_hours = avg_gb * duration_hours
-
-        logger.debug(f"Storage usage for {namespace}: {gb_hours:.2f} GB-hours")
-        return gb_hours
-
-    def _process_storage_result(
-        self, result: dict[str, Any], duration_hours: float
-    ) -> float:
-        """Helper to process storage query result and return GB-hours."""
-        if not result or "result" not in result or not result["result"]:
-            return 0.0
-
-        total_bytes = 0.0
-        count = 0
-        for series in result["result"]:
-            for _, value in series.get("values", []):
-                try:
-                    total_bytes += float(value)
-                    count += 1
-                except (ValueError, TypeError):
-                    continue
-
-        if count == 0:
-            return 0.0
-
-        avg_bytes = total_bytes / count
-        avg_gb = avg_bytes / (1024**3)
-        return avg_gb * duration_hours
-
-    async def get_storage_usage_by_class(
-        self, namespace: str, start_time: datetime, end_time: datetime
-    ) -> dict[str, float]:
-        """Get storage usage split by storage class (ebs-sc vs efs-sc) in GB-hours"""
-        duration_hours = (end_time - start_time).total_seconds() / 3600
-
-        # Query for EBS storage (actual usage, requires CSI drivers)
-        standard_query = f'''
-            sum(
-                kubelet_volume_stats_used_bytes{{
-                    namespace="{namespace}"
-                }}
-                * on(persistentvolumeclaim, namespace) group_left(storageclass)
-                kube_persistentvolumeclaim_info{{
-                    storageclass="{STORAGE_CLASS_EBS}",
-                    namespace="{namespace}"
-                }}
-            )
-        '''
-
-        # Query for EFS storage (actual usage, requires CSI drivers)
-        shared_query = f'''
-            sum(
-                kubelet_volume_stats_used_bytes{{
-                    namespace="{namespace}"
-                }}
-                * on(persistentvolumeclaim, namespace) group_left(storageclass)
-                kube_persistentvolumeclaim_info{{
-                    storageclass="{STORAGE_CLASS_EFS}",
-                    namespace="{namespace}"
-                }}
-            )
-        '''
-
-        # Execute both queries concurrently
-        standard_result = await self._query_range(
-            standard_query, start_time, end_time, step="5m"
-        )
-        shared_result = await self._query_range(
-            shared_query, start_time, end_time, step="5m"
-        )
-
-        # Process results using helper
-        standard_gb_hours = self._process_storage_result(
-            standard_result, duration_hours
-        )
-        shared_gb_hours = self._process_storage_result(shared_result, duration_hours)
-
-        logger.debug(
-            f"Storage usage for {namespace}: Standard={standard_gb_hours:.2f} GB-hours, Shared={shared_gb_hours:.2f} GB-hours"
-        )
-        return {"standard": standard_gb_hours, "shared": shared_gb_hours}
-
-    async def get_storage_usage_by_pvc(
-        self, namespace: str, start_time: datetime, end_time: datetime
-    ) -> list[StorageUsage]:
-        """Get storage usage per PVC with storage class
-
-        TODO: This requires CSI drivers that expose kubelet_volume_stats_used_bytes.
-        Test with EKS and proper EFS/EBS CSI drivers for accurate usage tracking.
-        Without CSI drivers (e.g., Minikube hostpath), this will return empty results.
-        """
-        duration_hours = (end_time - start_time).total_seconds() / 3600
-
-        # Query actual disk usage (requires CSI drivers in production)
-        query = f'''
-            kubelet_volume_stats_used_bytes{{
-                namespace="{namespace}"
-            }}
-            * on(persistentvolumeclaim, namespace) group_left(storageclass)
-            kube_persistentvolumeclaim_info{{
-                namespace="{namespace}"
-            }}
-        '''
-
-        result = await self._query_range(query, start_time, end_time, step="5m")
-
-        # Process results grouped by PVC and storage class
-        pvc_usage: dict[tuple[str, str], list[float]] = {}
-
-        if result and result.get("result"):
-            for series in result["result"]:
-                pvc_name = series["metric"].get("persistentvolumeclaim")
-                storage_class = series["metric"].get("storageclass")
-
-                if not pvc_name or not storage_class:
-                    continue
-
-                key = (pvc_name, storage_class)
-                if key not in pvc_usage:
-                    pvc_usage[key] = []
-
-                # Collect all used bytes values
-                for value in series["values"]:
-                    try:
-                        used_bytes = float(value[1])
-                        pvc_usage[key].append(used_bytes)
-                    except (ValueError, IndexError):
-                        continue
-        else:
-            logger.warning(
-                f"kubelet_volume_stats_used_bytes not available for {namespace}. "
-                f"This metric requires CSI drivers (e.g., AWS EFS/EBS CSI drivers in EKS). "
-                f"Storage usage data will be unavailable."
-            )
-
-        # Calculate gb_hours for each PVC
-        storage_list = []
-        for (pvc_name, storage_class), used_values in pvc_usage.items():
-            if used_values:
-                avg_bytes = sum(used_values) / len(used_values)
-                avg_gb = avg_bytes / (1024**3)
-                gb_hours = avg_gb * duration_hours
-
-                storage_list.append(
-                    StorageUsage(
-                        pvc_name=pvc_name,
-                        storage_class=storage_class,
-                        gb_hours=gb_hours,
-                    )
-                )
-
-        logger.debug(
-            f"Storage breakdown for {namespace}: {len(storage_list)} PVCs tracked"
-        )
-        return storage_list
-
     async def get_pod_metrics(self, namespace: str, pod_name: str) -> PodMetrics:
         cpu_query = f'''
             sum(
@@ -508,9 +308,10 @@ class PrometheusMetricsService:
     async def get_namespace_breakdown(
         self, namespace: str, start_time: datetime, end_time: datetime
     ) -> NamespaceBreakdown:
+        """Get CPU and memory breakdowns"""
         duration_seconds = (end_time - start_time).total_seconds()
 
-        # Get overall totals
+        # Get CPU and memory from Prometheus
         cpu_total = await self.get_cpu_usage(namespace, start_time, end_time)
         memory_total = await self.get_memory_usage(namespace, start_time, end_time)
 
@@ -518,18 +319,6 @@ class PrometheusMetricsService:
         by_pod = await self._get_usage_by_pod(
             namespace, start_time, end_time, duration_seconds
         )
-
-        # Get breakdown by PVC
-        by_pvc = await self.get_storage_usage_by_pvc(namespace, start_time, end_time)
-
-        # Calculate storage totals from PVC breakdown (eliminates 2 redundant queries)
-        standard_total = sum(
-            pvc.gb_hours for pvc in by_pvc if pvc.storage_class == STORAGE_CLASS_EBS
-        )
-        shared_total = sum(
-            pvc.gb_hours for pvc in by_pvc if pvc.storage_class == STORAGE_CLASS_EFS
-        )
-        storage_total = standard_total + shared_total
 
         return NamespaceBreakdown(
             namespace=namespace,
@@ -541,12 +330,8 @@ class PrometheusMetricsService:
             totals=UsageTotals(
                 cpu_core_seconds=cpu_total,
                 memory_gb_seconds=memory_total,
-                storage_gb_hours=storage_total,
-                standard_gb_hours=standard_total,
-                shared_gb_hours=shared_total,
             ),
             by_pod=by_pod,
-            by_pvc=by_pvc,
         )
 
     async def _get_usage_by_pod(

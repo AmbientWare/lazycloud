@@ -3,10 +3,9 @@
 from datetime import datetime, timezone
 
 import pytest
+from cli.commands.deployments import deployments_app
 from models.deployments import DeploymentStates
 from typer.testing import CliRunner
-
-from cli.commands.deployments import deployments_app
 
 runner = CliRunner()
 

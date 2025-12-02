@@ -23,7 +23,6 @@ class AppConfig(BaseModel):
     ENV: ENVIRONMENT = ENVIRONMENT(ENV)
     ADMIN_API_KEY: str = os.getenv("ADMIN_API_KEY", "")
     RATE_LIMIT: str = os.getenv("RATE_LIMIT", "50/minute")
-    IS_WORKER: bool = os.getenv("IS_WORKER", "false").lower() == "true"
 
     # Logging Configuration
     LOG_LEVEL: str = "DEBUG" if ENV == ENVIRONMENT.DEV else "INFO"
@@ -74,6 +73,7 @@ class AppConfig(BaseModel):
 
     # Monitoring Configuration
     PROMETHEUS_URL: str = os.getenv("PROMETHEUS_URL", "http://localhost:9090")
+    SENTRY_DSN: str | None = os.getenv("SENTRY_DSN")
 
     # Kubernetes Configuration
     K8S_CONNECTION_POOL_SIZE: int = int(os.getenv("K8S_CONNECTION_POOL_SIZE", "100"))
@@ -137,13 +137,6 @@ class AppConfig(BaseModel):
             raise ValueError(
                 f"Missing required environment variables: {', '.join(missing_vars)}"
             )
-
-        # validate that if IS_WORKER, we have a DATABASE_POOL_URL otherwise we have a DATABASE_URL
-        if self.IS_WORKER and not self.DATABASE_POOL_URL:
-            raise ValueError("DATABASE_POOL_URL is required when IS_WORKER is true")
-
-        elif not self.IS_WORKER and not self.DATABASE_URL:
-            raise ValueError("DATABASE_URL is required when IS_WORKER is false")
 
         if not self.PROMETHEUS_URL:
             raise ValueError("PROMETHEUS_URL is required")
