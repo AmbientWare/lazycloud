@@ -1,0 +1,14 @@
+{
+  "app": "python main.py",
+  "watch": {
+    "include": [
+      "**"
+    ],
+    "exclude": [
+      "README.md",
+      "cdk*.json",
+      "**/__pycache__",
+      "**/*.pyc"
+    ]
+  }
+}
