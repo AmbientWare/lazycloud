@@ -3,7 +3,7 @@
 replicaCount: 3
 
 image:
-  repository: 211125306000.dkr.ecr.us-east-1.amazonaws.com/lazycloud-web
+  repository: 534742592531.dkr.ecr.us-east-1.amazonaws.com/web
   pullPolicy: Always
   tag: "v0.1.0"  # Should be updated by CI/CD
 

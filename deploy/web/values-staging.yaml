@@ -3,7 +3,7 @@
 replicaCount: 1
 
 image:
-  repository: 211125306000.dkr.ecr.us-east-1.amazonaws.com/lazycloud-web
+  repository: 534742592531.dkr.ecr.us-east-1.amazonaws.com/web
   pullPolicy: Always
   tag: "staging-latest"
 

@@ -4,7 +4,10 @@ from infrastructure.config.environments import EnvironmentConfig
 from infrastructure.constructs.aws import MultiServiceECRRepositories
 
 SERVICES = [
-    # TODO: add services here by name
+    "backend-api",
+    "backend-background-workers",
+    "backend-crons",
+    "web",
 ]
 
 

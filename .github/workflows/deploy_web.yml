@@ -19,7 +19,7 @@ jobs:
       app_name: web
       dockerfile_path: ./apps/web/Dockerfile
       build_context: .
-      ecr_repository: lazycloud-web
+      ecr_repository: web
       build_args: |
         NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
     secrets: inherit
