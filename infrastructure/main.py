@@ -1,5 +1,10 @@
 import aws_cdk as cdk
-from infrastructure.stacks import ProdStack, SharedStack
+from infrastructure.stacks import SharedStack
+from infrastructure.stacks.prod import (
+    ProdInfraStack,
+    ProdControllersStack,
+    ProdPlatformStack,
+)
 from infrastructure.config.environments import (
     get_environment_config,
     PossibleEnvironments,
@@ -7,7 +12,16 @@ from infrastructure.config.environments import (
 
 
 def main() -> None:
-    """Main application entry point"""
+    """Main application entry point
+
+    4-Stack Architecture (Industry Standard):
+    1. shared         - IAM, ECR, Secrets (cross-environment)
+    2. prod-infra     - VPC + EKS cluster (stable foundation)
+    3. prod-controllers - Karpenter, ALB Controller, EBS CSI (AWS controllers)
+    4. prod-platform  - ArgoCD, monitoring, apps (frequently updated)
+
+    Deployment order: shared → infra → controllers → platform
+    """
     app = cdk.App()
 
     # Create shared infrastructure stack (deploy once, not per environment)
@@ -34,26 +48,57 @@ def main() -> None:
         config = get_environment_config(env_name.value)
 
         if env_name == PossibleEnvironments.PROD:
-            stack = ProdStack(
+            # Stack 1: Infrastructure (VPC + EKS)
+            infra_stack = ProdInfraStack(
                 app,
-                f"{config.org_name}-{env_name.value}",
+                f"{config.org_name}-{env_name.value}-infra",
                 config=config,
                 shared_stack=shared_stack,
-                description=f"Lazycloud Infrastructure - {config.environment.title()} Environment",
+                description=f"Lazycloud Infrastructure - {config.environment.title()} - Core (VPC + EKS)",
                 env=cdk.Environment(
                     account=config.aws_account_id,
                     region=config.aws_region,
                 ),
             )
 
+            # Stack 2: Controllers (Karpenter, ALB Controller)
+            controllers_stack = ProdControllersStack(
+                app,
+                f"{config.org_name}-{env_name.value}-controllers",
+                config=config,
+                shared_stack=shared_stack,
+                infra_stack=infra_stack,
+                description=f"Lazycloud Infrastructure - {config.environment.title()} - Controllers (Karpenter, ALB)",
+                env=cdk.Environment(
+                    account=config.aws_account_id,
+                    region=config.aws_region,
+                ),
+            )
+
+            # Stack 3: Platform (ArgoCD, monitoring, apps)
+            platform_stack = ProdPlatformStack(
+                app,
+                f"{config.org_name}-{env_name.value}-platform",
+                config=config,
+                shared_stack=shared_stack,
+                infra_stack=infra_stack,
+                controllers_stack=controllers_stack,
+                description=f"Lazycloud Infrastructure - {config.environment.title()} - Platform (ArgoCD, Apps)",
+                env=cdk.Environment(
+                    account=config.aws_account_id,
+                    region=config.aws_region,
+                ),
+            )
+
+            # Add environment-specific tags to all stacks
+            for stack in [infra_stack, controllers_stack, platform_stack]:
+                cdk.Tags.of(stack).add("Environment", config.environment)
+                cdk.Tags.of(stack).add("Organization", config.org_name)
+                cdk.Tags.of(stack).add("ManagedBy", "AWS-CDK")
+                cdk.Tags.of(stack).add("Project", "lazycloud-infrastructure")
+
         else:
             raise ValueError(f"Invalid environment: {env_name}")
-
-        # Add environment-specific tags
-        cdk.Tags.of(stack).add("Environment", config.environment)
-        cdk.Tags.of(stack).add("Organization", config.org_name)
-        cdk.Tags.of(stack).add("ManagedBy", "AWS-CDK")
-        cdk.Tags.of(stack).add("Project", "lazycloud-infrastructure")
 
     app.synth()
 
