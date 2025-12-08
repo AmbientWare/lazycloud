@@ -18,6 +18,14 @@ class DeploymentFeature(BaseModel):
         default=10,
         description="Maximum replicas allowed per service (for scaling limits)",
     )
+    max_cpu_per_service: float | None = Field(
+        default=None,
+        description="Maximum CPU cores per service (None = unlimited)",
+    )
+    max_memory_per_service: int | None = Field(
+        default=None,
+        description="Maximum memory GB per service (None = unlimited)",
+    )
 
 
 class BaseFeatures(BaseModel):
@@ -33,6 +41,14 @@ class BaseFeatures(BaseModel):
     deployment: DeploymentFeature
     domain_limit: int = Field(
         description="Maximum custom domains (0 = platform domains only)"
+    )
+    max_team_members: int | None = Field(
+        default=1,
+        description="Maximum team members per workspace (None = unlimited)",
+    )
+    support_level: str = Field(
+        default="community",
+        description="Support tier: community, email, priority",
     )
 
     model_config = ConfigDict(extra="ignore")

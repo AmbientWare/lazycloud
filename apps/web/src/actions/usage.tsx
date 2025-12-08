@@ -4,6 +4,7 @@ import type {
   AggregatedUsageResponse,
   AggregatedDailyUsageResponse,
   WorkspaceCostBreakdownResponse,
+  MeterPricingResponse,
 } from "@/interfaces/usage";
 import lazycloudApi from "@/server/lazycloud_api";
 import { getUserId } from "./utils";
@@ -37,4 +38,8 @@ export async function getDeploymentCostBreakdown(
     startDate,
     endDate,
   );
+}
+
+export async function getMeterPricing(): Promise<MeterPricingResponse> {
+  return lazycloudApi.getMeterPricing();
 }

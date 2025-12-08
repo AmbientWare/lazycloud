@@ -1,6 +1,5 @@
-from typing import TYPE_CHECKING
-
 from fastapi import Depends, HTTPException
+from models.compose import ComposeFile
 
 from backend.api.security import get_current_active_user
 from backend.billing.product_details.features import BaseFeatures
@@ -11,9 +10,6 @@ from backend.database.users import UserPydantic
 from backend.models.workspace_access import WorkspaceAccess
 from backend.services import get_subscription_service
 from backend.services.subscription_service import SubscriptionLimitError
-
-if TYPE_CHECKING:
-    from models.compose import ComposeFile
 
 
 async def require_workspace_member(
@@ -237,12 +233,16 @@ async def check_deployment_limit(
 
 
 async def check_deployment_features(
-    compose_file: "ComposeFile",
+    compose_file: ComposeFile,
     features: BaseFeatures,
 ) -> None:
     """Check if deployment features (services, volumes, networks, domains) are within subscription limits."""
     subscription_service = get_subscription_service()
     try:
+        # Apply tier-appropriate resource defaults before checking limits
+        subscription_service.apply_tier_defaults(compose_file, features)
+
+        # Check that the deployment is within limits
         await subscription_service.check_deployment_features(compose_file, features)
 
     except SubscriptionLimitError as e:

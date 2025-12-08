@@ -1,8 +1,9 @@
 import json
-from typing import TYPE_CHECKING
 
 import yaml
 from loguru import logger
+from models.compose import ComposeFile
+from models.workspaces import InvitationType
 
 from backend.billing.product_details.base import BASE_FEATURES
 from backend.billing.product_details.features import BaseFeatures
@@ -10,10 +11,11 @@ from backend.database import get_db_context
 from backend.database.users import SubscriptionState, UserPydantic
 from backend.database.workspaces import WorkspaceStatus
 from backend.services.compose.parser import ComposeParser
+from backend.services.k8s.generators.converters import (
+    parse_cpu_to_cores,
+    parse_memory_to_gb,
+)
 from backend.services.polar import PolarService
-
-if TYPE_CHECKING:
-    from models.compose import ComposeFile
 
 
 class SubscriptionLimitError(Exception):
@@ -213,9 +215,82 @@ class SubscriptionService:
                 "Please upgrade your plan to create more deployments.",
             )
 
-    async def check_deployment_features(
+    async def check_team_member_limit(
+        self,
+        workspace_id: str,
+        email: str,
+        features: BaseFeatures,
+    ) -> None:
+        """Check if inviting a new member would exceed the team member limit.
+
+        Args:
+            workspace_id: The workspace to check
+            email: Email of the user being invited (to detect resends)
+            features: Subscription features with max_team_members limit
+        """
+
+        if features.max_team_members is None:
+            return
+
+        async with get_db_context() as db:
+            # Check if this email already has a pending invitation (resend case)
+            existing_invitation = (
+                await db.invitations.get_by_workspace_and_email_and_type(
+                    workspace_id, email.lower().strip(), InvitationType.MEMBER.value
+                )
+            )
+            if existing_invitation and not existing_invitation.accepted_at:
+                # Resending to same email doesn't count as new member
+                return
+
+            current_members = await db.user_workspaces.get_workspace_members(
+                workspace_id
+            )
+            pending_invitations = await db.invitations.get_by_workspace(
+                workspace_id, include_accepted=False
+            )
+
+            total_members = len(current_members)
+            total_pending = len(
+                [
+                    inv
+                    for inv in pending_invitations
+                    if inv.invitation_type != InvitationType.OWNERSHIP_TRANSFER.value
+                ]
+            )
+            total_count = total_members + total_pending
+
+            if total_count >= features.max_team_members:
+                raise SubscriptionLimitError(
+                    f"Team member limit reached. Your plan allows {features.max_team_members} member(s), "
+                    f"and you currently have {total_count} (including pending invitations). "
+                    "Please upgrade your plan to add more team members.",
+                )
+
+    def apply_tier_defaults(
         self,
         compose_file: "ComposeFile",
+        features: BaseFeatures,
+    ) -> None:
+        """Apply tier-appropriate resource defaults to services that don't specify resources."""
+        for service in compose_file.services:
+            # Apply CPU default if not specified
+            if service.deploy.resources.limits.cpus is None:
+                if features.deployment.max_cpu_per_service is not None:
+                    service.deploy.resources.limits.cpus = str(
+                        features.deployment.max_cpu_per_service
+                    )
+
+            # Apply memory default if not specified
+            if service.deploy.resources.limits.memory is None:
+                if features.deployment.max_memory_per_service is not None:
+                    service.deploy.resources.limits.memory = (
+                        f"{features.deployment.max_memory_per_service}G"
+                    )
+
+    async def check_deployment_features(
+        self,
+        compose_file: ComposeFile,
         features: BaseFeatures,
     ) -> None:
         """Check if deployment features (services, volumes, networks, domains) are within subscription limits."""
@@ -285,6 +360,38 @@ class SubscriptionService:
                     f"HPA max replica limit exceeded for service '{service.name}'. Your plan allows {max_replicas} replica(s) per service, "
                     f"but HPA max is set to {service.scaling.max}. Please upgrade your plan or reduce the max replicas.",
                 )
+
+        # Check CPU limits
+        if features.deployment.max_cpu_per_service is not None:
+            for service in compose_file.services:
+                cpu_str = service.deploy.resources.limits.cpus
+                if cpu_str is not None:
+                    # Parse CPU value (handles formats like "0.5", "2", "500m")
+                    cpu_cores = parse_cpu_to_cores(cpu_str)
+
+                    if cpu_cores > features.deployment.max_cpu_per_service:
+                        raise SubscriptionLimitError(
+                            f"CPU limit exceeded for service '{service.name}'. "
+                            f"Your plan allows {features.deployment.max_cpu_per_service} CPU cores per service, "
+                            f"but this service requests {cpu_cores} cores. "
+                            "Please upgrade your plan or reduce CPU allocation."
+                        )
+
+        # Check Memory limits
+        if features.deployment.max_memory_per_service is not None:
+            for service in compose_file.services:
+                memory_str = service.deploy.resources.limits.memory
+                if memory_str is not None:
+                    # Parse memory value to GB (handles formats like "512Mi", "2Gi", "1G", "1024M")
+                    memory_gb = parse_memory_to_gb(memory_str)
+
+                    if memory_gb > features.deployment.max_memory_per_service:
+                        raise SubscriptionLimitError(
+                            f"Memory limit exceeded for service '{service.name}'. "
+                            f"Your plan allows {features.deployment.max_memory_per_service}GB per service, "
+                            f"but this service requests {memory_gb:.2f}GB. "
+                            "Please upgrade your plan or reduce memory allocation."
+                        )
 
         # Check custom domains
         if features.domain_limit == 0 and len(custom_domains) > 0:

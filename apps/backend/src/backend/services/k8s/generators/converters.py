@@ -48,6 +48,65 @@ def convert_memory_value(memory_value: str | int) -> str:
             return str(memory_value)
 
 
+def parse_cpu_to_cores(cpu_str: str | float | int) -> float:
+    """Parse CPU value to number of cores (handles formats like '0.5', '2', '500m')."""
+    if isinstance(cpu_str, (float, int)):
+        return float(cpu_str)
+
+    cpu_str = str(cpu_str).strip()
+
+    # Handle millicores (e.g., '500m' = 0.5 cores)
+    if cpu_str.endswith("m"):
+        return float(cpu_str[:-1]) / 1000
+
+    # Handle regular format (e.g., '0.5', '2')
+    return float(cpu_str)
+
+
+def parse_memory_to_gb(memory_str: str | int) -> float:
+    """Parse memory value to GB (handles formats like '512Mi', '2Gi', '1G', '1024M')."""
+    if isinstance(memory_str, int):
+        # Assume bytes, convert to GB
+        return memory_str / (1024**3)
+
+    memory_str = str(memory_str).strip()
+
+    # Handle Mebibytes (MiB)
+    if memory_str.endswith("Mi"):
+        return float(memory_str[:-2]) / 1024
+
+    # Handle Gibibytes (GiB)
+    if memory_str.endswith("Gi"):
+        return float(memory_str[:-2])
+
+    # Handle Tebibytes (TiB)
+    if memory_str.endswith("Ti"):
+        return float(memory_str[:-2]) * 1024
+
+    # Handle Kibibytes (KiB)
+    if memory_str.endswith("Ki"):
+        return float(memory_str[:-2]) / (1024 * 1024)
+
+    # Handle Megabytes (MB)
+    if memory_str.endswith("M"):
+        return float(memory_str[:-1]) / 1000
+
+    # Handle Gigabytes (GB)
+    if memory_str.endswith("G"):
+        return float(memory_str[:-1])
+
+    # Handle Terabytes (TB)
+    if memory_str.endswith("T"):
+        return float(memory_str[:-1]) * 1000
+
+    # Handle Kilobytes (KB)
+    if memory_str.endswith("K"):
+        return float(memory_str[:-1]) / (1000 * 1000)
+
+    # Default: assume GB
+    return float(memory_str)
+
+
 def parse_duration(duration_str: str) -> int:
     """Parse Docker duration string to seconds."""
     if not duration_str:

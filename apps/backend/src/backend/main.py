@@ -19,6 +19,7 @@ from starlette.responses import Response
 
 from backend.api.v1 import (
     api_keys_router,
+    billing_router,
     cli_version_router,
     deployments_router,
     diff_router,
@@ -128,6 +129,7 @@ versionsed_routes.include_router(deployments_router)
 versionsed_routes.include_router(workspaces_router)
 versionsed_routes.include_router(invitations_router)
 versionsed_routes.include_router(diff_router)
+versionsed_routes.include_router(billing_router)
 app.include_router(versionsed_routes)
 
 # include non versioned routes that are not part of the main api

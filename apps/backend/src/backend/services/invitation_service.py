@@ -32,7 +32,7 @@ class InvitationService:
         invited_by_user_id: str,
         invitation_type: InvitationType = InvitationType.MEMBER,
     ) -> str:
-        """Create a new invitation or resend an existing one, return the token"""
+        """Create a new invitation or resend an existing one, return the token."""
         email = email.lower().strip()
 
         async with get_db_context() as db:

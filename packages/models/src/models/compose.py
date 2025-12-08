@@ -1,7 +1,8 @@
 from enum import StrEnum
 
-from models.k8s import RestartPolicy
 from pydantic import BaseModel, field_validator
+
+from models.k8s import RestartPolicy
 
 
 class LazyCloudLabel(StrEnum):
@@ -74,8 +75,8 @@ class HealthCheck(BaseModel):
 class ResourceConfig(BaseModel):
     """Resource configuration."""
 
-    cpus: str = "0.5"
-    memory: str = "512M"
+    cpus: str | None = None
+    memory: str | None = None
 
 
 class ResourcesConfig(BaseModel):

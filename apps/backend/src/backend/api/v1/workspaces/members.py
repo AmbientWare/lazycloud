@@ -261,6 +261,7 @@ async def invite_user(
     request: InviteUserRequest,
     workspace_access: WorkspaceAccess = Depends(get_workspace_with_admin_access),
     invitation_service: InvitationService = Depends(get_invitation_service),
+    subscription_service: SubscriptionService = Depends(get_subscription_service),
     db: Database = Depends(get_db),
 ) -> InviteUserResponse:
     """Invite a user to a workspace (requires owner or admin role)"""
@@ -272,7 +273,19 @@ async def invite_user(
             status_code=400, detail="Cannot invite users to personal workspaces"
         )
 
+    # Get workspace owner's subscription features for limit check
+    owner_user = await db.workspaces.get_owner_user(workspace.id)
+    if not owner_user:
+        raise HTTPException(status_code=500, detail="Workspace owner not found")
+
+    owner_features = await subscription_service.get_user_features(owner_user.clerk_id)
+
     try:
+        # Check team member limit
+        await subscription_service.check_team_member_limit(
+            workspace.id, request.email, owner_features
+        )
+
         token = await invitation_service.create_or_resend_invitation(
             workspace_id=workspace.id,
             email=request.email,
@@ -301,6 +314,9 @@ async def invite_user(
             f"Created/resent invitation for email: {request.email} to workspace: {workspace.name} (ID: {workspace.id}) with role: {request.role.value}"
         )
         return InviteUserResponse(success=True, token=token)
+
+    except SubscriptionLimitError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e))
 
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

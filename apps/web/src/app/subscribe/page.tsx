@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { ProductsCards } from "@/app/(landing)/pricing/_components/products-cards";
 import { ProductsCardsSkeleton } from "@/app/(landing)/pricing/_components/products-skeleton";
 import { EnterpriseSection } from "@/app/(landing)/pricing/_components/enterprise-section";
+import { PricingTransparency } from "@/app/(landing)/pricing/_components/pricing-transparency";
 import { UserButton } from "@clerk/nextjs";
 import HeaderBar from "@/components/shared/header-bar";
 
@@ -31,6 +32,8 @@ export default function SubscribePage() {
           <Suspense fallback={<ProductsCardsSkeleton />}>
             <ProductsCards />
           </Suspense>
+
+          <PricingTransparency />
 
           <EnterpriseSection />
 
