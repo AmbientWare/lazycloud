@@ -123,13 +123,22 @@ class EksCluster(Construct):
             cluster_name=cluster.cluster_name,
         )
 
-        # Add VPC CNI add-on
+        # Add VPC CNI add-on with custom IPAM for secondary CIDR
+        # Configure VPC CNI to use secondary CIDR (100.64.0.0/16) for pod IPs
+        vpc_cni_config = {
+            "env": {
+                "ENABLE_PREFIX_DELEGATION": "true",  # Enable prefix delegation for more pods per node
+                "WARM_PREFIX_TARGET": "1",  # Keep one extra prefix warm
+            }
+        }
+
         aws_eks.CfnAddon(
             self,
             "VPCCNI",
             addon_name="vpc-cni",
             addon_version="v1.20.3-eksbuild.1",
             cluster_name=cluster.cluster_name,
+            configuration_values=json.dumps(vpc_cni_config),
         )
 
         # Add metrics server add-on

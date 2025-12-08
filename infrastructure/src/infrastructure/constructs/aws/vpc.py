@@ -23,6 +23,9 @@ class VpcConstruct(Construct):
         # Create VPC
         self.vpc = self._create_vpc()
 
+        # Add secondary CIDR for pod networking
+        self._add_secondary_cidr()
+
         # Tag subnets for Karpenter discovery
         self._tag_subnets_for_karpenter()
 
@@ -74,6 +77,45 @@ class VpcConstruct(Construct):
     def public_subnets(self) -> list[ec2.ISubnet]:
         """Get public subnets"""
         return self.vpc.public_subnets
+
+    def _add_secondary_cidr(self) -> None:
+        """Add secondary CIDR block for pod networking"""
+        if self.config.availability_zones is None:
+            raise ValueError("Availability zones are required")
+
+        # Add secondary CIDR block using RFC 6598 space for pod networking
+        cidr_block = ec2.CfnVPCCidrBlock(
+            self,
+            "SecondaryCIDR",
+            vpc_id=self.vpc.vpc_id,
+            cidr_block="100.64.0.0/16",
+        )
+
+        # Create pod subnets in each AZ using the secondary CIDR
+        # Using /19 gives us 8,192 IPs per AZ (3 AZs = ~24,576 pod IPs)
+        for i, az in enumerate(self.config.availability_zones):
+            # Calculate CIDR for this AZ: 100.64.0.0/19, 100.64.32.0/19, 100.64.64.0/19
+            cidr_offset = i * 32  # Each /19 uses 32 in the third octet
+            subnet_cidr = f"100.64.{cidr_offset}.0/19"
+
+            subnet = ec2.PrivateSubnet(
+                self,
+                f"PodSubnet{i + 1}",
+                vpc_id=self.vpc.vpc_id,
+                availability_zone=az,
+                cidr_block=subnet_cidr,
+            )
+
+            # Ensure subnet waits for secondary CIDR to be attached
+            subnet.node.add_dependency(cidr_block)
+
+            # Tag for EKS pod networking
+            cdk.Tags.of(subnet).add("kubernetes.io/role/internal-elb", "1")
+            cdk.Tags.of(subnet).add(
+                "kubernetes.io/cluster/"
+                + f"{self.config.org_name}-{self.config.environment}-{self.config.aws_region}-eks",
+                "shared",
+            )
 
     def _tag_subnets_for_karpenter(self) -> None:
         """Tag private subnets for Karpenter discovery"""
