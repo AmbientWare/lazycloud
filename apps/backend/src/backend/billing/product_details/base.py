@@ -23,8 +23,12 @@ BASE_FEATURES = BaseFeatures(
         volume_limit=3,
         network_limit=1,
         max_replicas_per_service=1,  # No auto-scaling
+        max_cpu_per_service=1.0,  # 1 CPU core per service
+        max_memory_per_service=2,  # 2GB RAM per service
     ),
     domain_limit=0,  # Platform-generated domain only
+    max_team_members=1,  # Only yourself
+    support_level="community",  # Community support (GitHub/Discord)
 )
 
 DESCRITPION_MARKDOWN = f"""
@@ -32,10 +36,11 @@ Perfect for getting started. Pay only for what you use.
 
 - 1 Personal workspace
 - {BASE_FEATURES.workspace.deployment_limit} Deployment per workspace
-- {BASE_FEATURES.deployment.service_limit} Services per deployment
+- {BASE_FEATURES.deployment.service_limit} Services per deployment (max 1 CPU, 2GB RAM each)
 - {BASE_FEATURES.deployment.volume_limit} Volumes per deployment
 - {BASE_FEATURES.deployment.network_limit} Network per deployment
-- Platform-generated domains names
+- Platform-generated domain names
+- Community support
 """
 
 base_product = ProductDefinition(

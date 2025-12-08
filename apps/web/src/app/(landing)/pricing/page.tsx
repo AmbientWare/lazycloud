@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import { ProductsCards } from "./_components/products-cards";
 import { ProductsCardsSkeleton } from "./_components/products-skeleton";
 import { EnterpriseSection } from "./_components/enterprise-section";
+import { PricingTransparency } from "./_components/pricing-transparency";
 
 export default function PricingPage() {
   return (
@@ -19,6 +20,8 @@ export default function PricingPage() {
         <Suspense fallback={<ProductsCardsSkeleton />}>
           <ProductsCards />
         </Suspense>
+
+        <PricingTransparency />
 
         <EnterpriseSection />
 

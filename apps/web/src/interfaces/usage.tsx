@@ -142,3 +142,15 @@ export type WorkspaceCostBreakdownResponse = z.infer<
 export type DeploymentUsageOverview = z.infer<
   typeof DeploymentUsageOverviewSchema
 >;
+
+// Meter pricing schema
+export const MeterPricingResponseSchema = z.object({
+  cpu_usage: z.number(),
+  memory_usage: z.number(),
+  standard_storage: z.number(),
+  shared_storage: z.number(),
+  build_minutes: z.number(),
+  public_endpoints: z.number(),
+});
+
+export type MeterPricingResponse = z.infer<typeof MeterPricingResponseSchema>;

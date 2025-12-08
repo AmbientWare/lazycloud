@@ -11,6 +11,7 @@ import type {
   AggregatedUsageResponse,
   AggregatedDailyUsageResponse,
   WorkspaceCostBreakdownResponse,
+  MeterPricingResponse,
 } from "@/interfaces/usage";
 import type { UserFeaturesResponse } from "@/interfaces/users";
 import { generateJwtToken } from "@/server/jwt";
@@ -447,6 +448,10 @@ class LazyCloudAPIClass {
       `/deployments/${deploymentId}/usage/breakdown${queryString}`,
       { userId },
     );
+  }
+
+  async getMeterPricing(): Promise<MeterPricingResponse> {
+    return await this.get<MeterPricingResponse>("/billing/meter-pricing");
   }
 
   async acceptInvitation(

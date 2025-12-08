@@ -14,12 +14,12 @@ class MeterPrice:
 
 
 METER_PRICE_MAP = {
-    MeterNames.CPU_USAGE: 1.0,  # $1.00 per CPU core hour
-    MeterNames.MEMORY_USAGE: 1.0,  # $1.00 per memory GB hour
-    MeterNames.STANDARD_STORAGE: 1.0,  # $1.00 per standard storage GB hour
-    MeterNames.SHARED_STORAGE: 1.0,  # $1.00 per shared (EFS) storage GB hour
-    MeterNames.BUILD_MINUTES: 4.0,  # $0.04 per build minute
-    MeterNames.PUBLIC_ENDPOINTS: 0.274,  # $0.000274 per endpoint-hour ($0.20/month)
+    MeterNames.CPU_USAGE: 4.0,  # $0.04 per CPU core hour
+    MeterNames.MEMORY_USAGE: 0.6,  # $0.006 per memory GB hour
+    MeterNames.STANDARD_STORAGE: 0.015,  # $0.00015 per standard storage GB hour (~$0.11/GB-month)
+    MeterNames.SHARED_STORAGE: 0.06,  # $0.0006 per shared (EFS) storage GB hour (~$0.43/GB-month)
+    MeterNames.BUILD_MINUTES: 4.0,  # $0.04 per build minute (matches Depot overage)
+    MeterNames.PUBLIC_ENDPOINTS: 0.07,  # $0.007 per endpoint-hour (~$0.50/month, 400% markup over Cloudflare)
 }
 
 METER_PRICES = [
