@@ -11,9 +11,15 @@ from cli.commands.compose.rollback import rollback
 from cli.commands.dashboard import dashboard
 from cli.commands.deployments import deployments_app
 from cli.commands.login import login
+from cli.commands.logout import logout
 from cli.commands.usage import usage_command
 from cli.commands.workspaces import workspace_app
+from cli.config import config
 from cli.ui.colors import Colors
+from cli.ui.components.info_cards import ErrorCard
+
+# Commands that don't require authentication
+PUBLIC_COMMANDS = {"login", "logout", "version", "init", None}
 
 try:
     __version__ = importlib.metadata.version("lazycloud")
@@ -61,10 +67,22 @@ def main(
     ),
 ):
     """LazyCloud CLI"""
+    console = Console()
+
+    # Check authentication for protected commands
+    if ctx.invoked_subcommand not in PUBLIC_COMMANDS:
+        is_authenticated, error_message = config.check_authentication()
+        if not is_authenticated:
+            error_card = ErrorCard(
+                message=error_message,
+                title="Authentication Required",
+                suggestion="Run 'lazycloud login' to authenticate.",
+            )
+            console.print(error_card)
+            raise typer.Exit(1)
+
     # If no subcommand is provided, show ASCII art and help
     if ctx.invoked_subcommand is None:
-        console = Console()
-
         # Create ASCII art
         fig = Figlet(font="slant")
         ascii_art = fig.renderText("LazyCloud")
@@ -100,8 +118,9 @@ main_cli.command("rollback", help="Rollback a deployment to a previous revision"
     rollback
 )
 
-# Add authentication command
-main_cli.command("login", help="Login with your LazyCloud API key")(login)
+# Add authentication commands
+main_cli.command("login", help="Login to LazyCloud via browser")(login)
+main_cli.command("logout", help="Logout and clear stored credentials")(logout)
 
 # Add dashboard command to main app
 main_cli.command("dashboard", help="Launch the LazyCloud dashboard")(dashboard)

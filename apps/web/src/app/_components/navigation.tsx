@@ -38,10 +38,6 @@ export default function Navigation(props: NavigationProps) {
       href: "/usage",
     },
     {
-      label: "API Key",
-      href: "/api-key",
-    },
-    {
       label: "Docs",
       href: "/docs",
     },

@@ -19,6 +19,7 @@ from starlette.responses import Response
 
 from backend.api.v1 import (
     api_keys_router,
+    auth_config_router,
     billing_router,
     cli_version_router,
     deployments_router,
@@ -136,6 +137,7 @@ app.include_router(versionsed_routes)
 non_versionsed_routes = APIRouter()
 non_versionsed_routes.include_router(health_router)
 non_versionsed_routes.include_router(cli_version_router)
+non_versionsed_routes.include_router(auth_config_router)
 app.include_router(non_versionsed_routes)
 
 

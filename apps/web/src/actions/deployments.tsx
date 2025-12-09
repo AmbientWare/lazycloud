@@ -4,11 +4,11 @@ import type {
   DeploymentStatusResponse,
 } from "@/interfaces/deployments";
 import lazycloudApi from "@/server/lazycloud_api";
-import { getUserId } from "./utils";
+import { getAuthToken } from "./utils";
 
 export async function getDeploymentStatus(
   deploymentId: string,
 ): Promise<DeploymentStatusResponse> {
-  const userId = await getUserId();
-  return lazycloudApi.getDeploymentStatus(userId, deploymentId);
+  const accessToken = await getAuthToken();
+  return lazycloudApi.getDeploymentStatus(accessToken, deploymentId);
 }

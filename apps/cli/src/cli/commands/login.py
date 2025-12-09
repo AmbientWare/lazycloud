@@ -1,74 +1,111 @@
+import webbrowser
+
+import httpx
 import typer
 from rich.console import Console
-from rich.prompt import Prompt
 from rich.text import Text
 
 from cli.api import api
 from cli.config import config
 from cli.ui.colors import Colors
 from cli.ui.components.card import Card
-from cli.ui.components.info_cards import (
-    ActionProgressCard,
-    ErrorCard,
-    SuccessDetailsCard,
-)
+from cli.ui.components.info_cards import ErrorCard, SuccessDetailsCard
+from cli.ui.textual.theme import Icons
 
-app = typer.Typer(help="Login with API key")
+app = typer.Typer(help="Login to LazyCloud")
 console = Console()
 
 
 @app.command()
-def login(
-    api_key: str = typer.Argument(
-        None,
-        help="API key to use for authentication (will prompt if not provided)",
-    ),
-):
-    """Login with your LazyCloud API key"""
+def login():
+    """Login to LazyCloud via browser authentication"""
     try:
-        # If no API key provided, prompt for it
-        if not api_key:
-            # Show informational card
-            info_card = Card(
-                content=Text(
-                    "Please enter your LazyCloud API key.\n\n"
-                    "You can find your API key at:\n"
-                    "  • https://lazycloud.dev/settings/api-keys\n\n"
-                    "The key will be hidden as you type for security.",
-                    style=Colors.Ansi.text_muted,
-                ),
-                title="🔑 API Key Required",
-                border_style=Colors.Ansi.info,
-            )
-            console.print(info_card)
-
-            # Prompt for API key
-            api_key = Prompt.ask(
-                Text("API Key", style=f"bold {Colors.Ansi.primary}"),
-                password=True,
-                show_default=False,
-            )
-            console.print()
-
-        if not api_key or not api_key.strip():
+        # Fetch auth config from backend
+        try:
+            auth_config = api.auth.get_config()
+            client_id = auth_config["workos_client_id"]
+        except httpx.HTTPStatusError as e:
             error_card = ErrorCard(
-                message="API key cannot be empty", title="🔑 Invalid Input"
+                message=f"Failed to connect to LazyCloud: {e.response.status_code}",
+                title="Connection Error",
+                suggestion="Check your internet connection and try again.",
+            )
+            console.print(error_card)
+            raise typer.Exit(1)
+        except httpx.RequestError as e:
+            error_card = ErrorCard(
+                message=f"Failed to connect to LazyCloud: {e}",
+                title="Connection Error",
+                suggestion="Check your internet connection and try again.",
             )
             console.print(error_card)
             raise typer.Exit(1)
 
-        # Validate the API key
-        validating_card = ActionProgressCard(action="Validating API key", icon="🔍")
-        console.print(validating_card)
+        # Request device authorization
+        try:
+            auth_data = api.auth.request_device_authorization(client_id)
+        except httpx.HTTPStatusError as e:
+            error_card = ErrorCard(
+                message=f"Failed to initiate login: {e.response.text}",
+                title="Authentication Error",
+            )
+            console.print(error_card)
+            raise typer.Exit(1)
 
-        # Store the API key temporarily to test it
-        config.set_api_key(api_key.strip())
+        device_code = auth_data["device_code"]
+        user_code = auth_data["user_code"]
+        verification_uri = auth_data["verification_uri"]
+        verification_uri_complete = auth_data["verification_uri_complete"]
+        expires_in = auth_data.get("expires_in", 300)
+        interval = auth_data.get("interval", 5)
+
+        # Show verification code first
+        content = Text()
+        content.append("Your code: ", style=Colors.Ansi.text_muted)
+        content.append(f"{user_code}\n\n", style=f"bold {Colors.Ansi.text_white}")
+        content.append(
+            "If the browser doesn't open, visit:\n", style=Colors.Ansi.text_muted
+        )
+        content.append(f"{verification_uri}\n\n", style=Colors.Ansi.secondary)
+        content.append(
+            "Waiting for authentication...", style=f"italic {Colors.Ansi.text_muted}"
+        )
+
+        auth_card = Card(
+            content=content,
+            title=f"{Icons.LOCK_KEY} Login",
+            border_style=Colors.Ansi.info,
+        )
+        console.print(auth_card)
+
+        # Then try to open browser
+        try:
+            webbrowser.open(verification_uri_complete)
+        except Exception:
+            pass  # Browser opening is optional
+
+        # Poll for tokens
+        try:
+            token_data = api.auth.poll_for_tokens(
+                client_id, device_code, expires_in, interval
+            )
+        except Exception as e:
+            error_card = ErrorCard(
+                message=str(e),
+                title="Authentication Failed",
+                suggestion="Please try again with 'lazycloud login'",
+            )
+            console.print(error_card)
+            raise typer.Exit(1)
+
+        # Store tokens
+        access_token = token_data["access_token"]
+        refresh_token = token_data.get("refresh_token")
+        config.set_tokens(access_token, refresh_token)
 
         try:
-            # Test the API key by fetching workspaces
             workspaces = api.workspaces.list_workspaces()
 
-            # Find the personal workspace
             personal_workspace = next(
                 (ws for ws in workspaces if ws.get("is_personal")), None
             )
@@ -76,47 +113,45 @@ def login(
             if not personal_workspace:
                 error_card = ErrorCard(
                     message="Could not find personal workspace.\n\nPlease contact support if this issue persists.",
-                    title="🔑 Configuration Error",
+                    title="Configuration Error",
                 )
                 console.print(error_card)
-                # Clean up the key before exiting
-                config.clear_api_key()
+                config.clear_tokens()
                 raise typer.Exit(1)
 
-            # Set the personal workspace as active
             config.set_active_workspace(
                 personal_workspace["id"], personal_workspace["name"]
             )
 
-            # Show success
+            # Get user info from token response
+            user_info = token_data.get("user", {})
+            user_name = user_info.get("first_name") or user_info.get("email", "User")
+
             success_card = SuccessDetailsCard(
-                title="🔑 Login Successful",
-                message="Successfully logged in!",
+                title=f"{Icons.CHECKMARK}  Login Successful",
+                message=f"Welcome, {user_name}!",
                 details={
                     "Active workspace": personal_workspace["name"],
-                    "Role": personal_workspace.get("role", "unknown"),
                 },
             )
             console.print(success_card)
 
         except typer.Exit:
-            # Re-raise typer.Exit to allow it to propagate
             raise
-        except Exception as e:
-            # If validation fails, remove the key
-            config.clear_api_key()
 
+        except Exception as e:
+            config.clear_tokens()
             error_card = ErrorCard(
-                message=f"The API key is invalid or could not connect to the server.\n\nError: {e}",
-                title="🔑 Invalid API Key",
-                suggestion="Please check the key and try again.",
+                message=f"Failed to configure workspace: {e}",
+                title="Configuration Error",
             )
             console.print(error_card)
             raise typer.Exit(1)
 
     except typer.Exit:
         raise
+
     except Exception as e:
-        error_card = ErrorCard(message=f"Login failed: {e}", title="🔑 Error")
+        error_card = ErrorCard(message=f"Login failed: {e}", title="Error")
         console.print(error_card)
         raise typer.Exit(1)

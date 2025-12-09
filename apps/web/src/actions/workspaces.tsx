@@ -7,48 +7,48 @@ import type {
   WorkspaceWithDeploymentsResponse,
 } from "@/interfaces/workspaces";
 import lazycloudApi from "@/server/lazycloud_api";
-import { getUserId } from "./utils";
+import { getAuthToken } from "./utils";
 import { env } from "@/env";
 
 export async function getWorkspaces(
   startDate?: string,
   endDate?: string,
 ): Promise<Workspace[]> {
-  const userId = await getUserId();
-  return lazycloudApi.getWorkspaces(userId, startDate, endDate);
+  const accessToken = await getAuthToken();
+  return lazycloudApi.getWorkspaces(accessToken, startDate, endDate);
 }
 
 export async function getWorkspaceWithDeployments(
   workspaceId: string,
 ): Promise<WorkspaceWithDeploymentsResponse> {
-  const userId = await getUserId();
-  return lazycloudApi.getWorkspaceWithDeployments(userId, workspaceId);
+  const accessToken = await getAuthToken();
+  return lazycloudApi.getWorkspaceWithDeployments(accessToken, workspaceId);
 }
 
 export async function createWorkspace(name: string): Promise<Workspace> {
-  const userId = await getUserId();
-  return lazycloudApi.createWorkspace(userId, name);
+  const accessToken = await getAuthToken();
+  return lazycloudApi.createWorkspace(accessToken, name);
 }
 
 export async function deleteWorkspace(
   workspaceId: string,
 ): Promise<{ success: boolean }> {
-  const userId = await getUserId();
-  return lazycloudApi.deleteWorkspace(userId, workspaceId);
+  const accessToken = await getAuthToken();
+  return lazycloudApi.deleteWorkspace(accessToken, workspaceId);
 }
 
 export async function leaveWorkspace(
   workspaceId: string,
 ): Promise<{ success: boolean }> {
-  const userId = await getUserId();
-  return lazycloudApi.leaveWorkspace(userId, workspaceId);
+  const accessToken = await getAuthToken();
+  return lazycloudApi.leaveWorkspace(accessToken, workspaceId);
 }
 
 export async function getWorkspaceMembers(
   workspaceId: string,
 ): Promise<WorkspaceMember[]> {
-  const userId = await getUserId();
-  return lazycloudApi.getWorkspaceMembers(userId, workspaceId);
+  const accessToken = await getAuthToken();
+  return lazycloudApi.getWorkspaceMembers(accessToken, workspaceId);
 }
 
 export async function inviteUser(
@@ -56,10 +56,10 @@ export async function inviteUser(
   email: string,
   role: WorkspaceRole = "member",
 ): Promise<{ success: boolean }> {
-  const userId = await getUserId();
+  const accessToken = await getAuthToken();
   const acceptanceUrl = `${env.APP_URL}/workspaces`;
-  
-  return lazycloudApi.inviteUser(userId, workspaceId, email, role, acceptanceUrl);
+
+  return lazycloudApi.inviteUser(accessToken, workspaceId, email, role, acceptanceUrl);
 }
 
 export async function updateMemberRole(
@@ -67,39 +67,39 @@ export async function updateMemberRole(
   memberUserId: string,
   role: WorkspaceRole,
 ): Promise<WorkspaceMember> {
-  const userId = await getUserId();
-  return lazycloudApi.updateMemberRole(userId, workspaceId, memberUserId, role);
+  const accessToken = await getAuthToken();
+  return lazycloudApi.updateMemberRole(accessToken, workspaceId, memberUserId, role);
 }
 
 export async function removeMember(
   workspaceId: string,
   memberUserId: string,
 ): Promise<{ success: boolean }> {
-  const userId = await getUserId();
-  return lazycloudApi.removeMember(userId, workspaceId, memberUserId);
+  const accessToken = await getAuthToken();
+  return lazycloudApi.removeMember(accessToken, workspaceId, memberUserId);
 }
 
 export async function transferOwnership(
   workspaceId: string,
   newOwnerUserId: string,
 ): Promise<{ success: boolean }> {
-  const userId = await getUserId();
+  const accessToken = await getAuthToken();
   const acceptanceUrl = `${env.APP_URL}/workspaces`;
-  return lazycloudApi.transferOwnership(userId, workspaceId, newOwnerUserId, acceptanceUrl);
+  return lazycloudApi.transferOwnership(accessToken, workspaceId, newOwnerUserId, acceptanceUrl);
 }
 
 export async function acceptInvitation(
   invitationId: string,
 ): Promise<{ success: boolean }> {
-  const userId = await getUserId();
-  return lazycloudApi.acceptInvitation(userId, invitationId);
+  const accessToken = await getAuthToken();
+  return lazycloudApi.acceptInvitation(accessToken, invitationId);
 }
 
 export async function declineInvitation(
   invitationId: string,
 ): Promise<{ success: boolean }> {
-  const userId = await getUserId();
-  return lazycloudApi.declineInvitation(userId, invitationId);
+  const accessToken = await getAuthToken();
+  return lazycloudApi.declineInvitation(accessToken, invitationId);
 }
 
 export async function getPendingInvitations(): Promise<{
@@ -112,21 +112,21 @@ export async function getPendingInvitations(): Promise<{
   invitation_type?: string;
   invitation_id: string;
 }[]> {
-  const userId = await getUserId();
-  return lazycloudApi.getPendingInvitations(userId);
+  const accessToken = await getAuthToken();
+  return lazycloudApi.getPendingInvitations(accessToken);
 }
 
 export async function cancelInvitation(
   workspaceId: string,
   invitationId: string,
 ): Promise<{ success: boolean }> {
-  const userId = await getUserId();
-  return lazycloudApi.cancelInvitation(userId, workspaceId, invitationId);
+  const accessToken = await getAuthToken();
+  return lazycloudApi.cancelInvitation(accessToken, workspaceId, invitationId);
 }
 
 export async function getPendingOwnershipTransfer(
   workspaceId: string,
 ): Promise<WorkspaceMember | null> {
-  const userId = await getUserId();
-  return lazycloudApi.getPendingOwnershipTransfer(userId, workspaceId);
+  const accessToken = await getAuthToken();
+  return lazycloudApi.getPendingOwnershipTransfer(accessToken, workspaceId);
 }
