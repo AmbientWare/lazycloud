@@ -10,6 +10,3 @@ from tests.fixtures.database import *  # noqa: F401, F403
 
 # K8s fixtures (helm_generator, conversion cases, etc.)
 from tests.fixtures.k8s import *  # noqa: F401, F403
-
-TEST_JWT_SECRET = "test-secret-key"
-TEST_JWT_ALGORITHM = "HS256"

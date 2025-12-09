@@ -1,6 +1,6 @@
 "use client";
 
-import { Book, BarChart, Folder, Key } from "lucide-react";
+import { Book, BarChart, Folder } from "lucide-react";
 import Link from "next/link";
 import {
   Sidebar,
@@ -28,11 +28,6 @@ const items = [
     title: "Usage and Billing",
     url: "/usage",
     icon: BarChart,
-  },
-  {
-    title: "API Key",
-    url: "/api-key",
-    icon: Key,
   },
   {
     title: "Docs",

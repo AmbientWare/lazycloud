@@ -1,5 +1,4 @@
 import { env } from "@/env";
-import type { ApiKey, ApiKeyExpiresAtOptions } from "@/interfaces/apiKeys";
 import type {
   Workspace,
   WorkspaceMember,
@@ -14,7 +13,6 @@ import type {
   MeterPricingResponse,
 } from "@/interfaces/usage";
 import type { UserFeaturesResponse } from "@/interfaces/users";
-import { generateJwtToken } from "@/server/jwt";
 
 class LazyCloudAPIClass {
   private static adminApiKey = env.ADMIN_API_KEY || null;
@@ -25,7 +23,7 @@ class LazyCloudAPIClass {
   private async fetchWithApiUrl<T>(
     endpoint: string,
     options?: RequestInit,
-    authOptions?: { useAdmin?: boolean; userId?: string },
+    authOptions?: { useAdmin?: boolean; accessToken?: string },
   ): Promise<T> {
     const headers = new Headers(options?.headers);
 
@@ -37,14 +35,12 @@ class LazyCloudAPIClass {
     const useAdmin = authOptions?.useAdmin ?? false;
     const token = useAdmin
       ? LazyCloudAPIClass.adminApiKey
-      : authOptions?.userId
-        ? generateJwtToken(authOptions.userId)
-        : null;
+      : authOptions?.accessToken ?? null;
 
     if (token) {
       headers.set("Authorization", `Bearer ${token}`);
-    } else if (authOptions !== undefined && (authOptions.userId !== undefined || authOptions.useAdmin)) {
-      // Only require auth if userId or useAdmin was explicitly provided
+    } else if (authOptions !== undefined && (authOptions.accessToken !== undefined || authOptions.useAdmin)) {
+      // Only require auth if accessToken or useAdmin was explicitly provided
       throw new Error("No authentication token provided");
     }
 
@@ -89,7 +85,7 @@ class LazyCloudAPIClass {
 
   private async get<T>(
     endpoint: string,
-    authOptions?: { useAdmin?: boolean; userId?: string },
+    authOptions?: { useAdmin?: boolean; accessToken?: string },
   ): Promise<T> {
     return await this.fetchWithApiUrl<T>(
       endpoint,
@@ -103,7 +99,7 @@ class LazyCloudAPIClass {
   private async post<T>(
     endpoint: string,
     data: Record<string, unknown>,
-    authOptions?: { useAdmin?: boolean; userId?: string },
+    authOptions?: { useAdmin?: boolean; accessToken?: string },
   ): Promise<T> {
     return await this.fetchWithApiUrl<T>(
       endpoint,
@@ -115,24 +111,9 @@ class LazyCloudAPIClass {
     );
   }
 
-  private async put<T>(
-    endpoint: string,
-    data: Record<string, unknown>,
-    authOptions?: { useAdmin?: boolean; userId?: string },
-  ): Promise<T> {
-    return await this.fetchWithApiUrl<T>(
-      endpoint,
-      {
-        method: "PUT",
-        body: JSON.stringify(data),
-      },
-      authOptions,
-    );
-  }
-
   private async delete<T>(
     endpoint: string,
-    authOptions?: { useAdmin?: boolean; userId?: string },
+    authOptions?: { useAdmin?: boolean; accessToken?: string },
   ): Promise<T> {
     return await this.fetchWithApiUrl<T>(
       endpoint,
@@ -163,55 +144,10 @@ class LazyCloudAPIClass {
     return res.success;
   }
 
-  // Api Keys Methods
-
-  async getApiKeys(userId: string): Promise<ApiKey[]> {
-    return await this.get<ApiKey[]>(`/api-keys?user_id=${userId}`, { userId });
-  }
-
-  async createApiKey(
-    userId: string,
-    name: string,
-    expiresAt: ApiKeyExpiresAtOptions = "30",
-  ): Promise<ApiKey> {
-    const data = {
-      name: name,
-      workos_id: userId,
-      expires_at: expiresAt,
-    };
-    return await this.post<ApiKey>(`/api-keys`, data, { userId });
-  }
-
-  async updateApiKey(
-    userId: string,
-    apiKeyId: string,
-    expiresAt: ApiKeyExpiresAtOptions = "30",
-  ): Promise<ApiKey> {
-    const data = {
-      workos_id: userId,
-      expires_at: expiresAt,
-    };
-    return await this.put<ApiKey>(`/api-keys/${apiKeyId}`, data, { userId });
-  }
-
-  async deleteApiKey(userId: string, apiKeyId: string): Promise<ApiKey> {
-    const params = new URLSearchParams({
-      workos_id: userId,
-      api_key_id: apiKeyId,
-    }).toString();
-
-    const deletedKeys = await this.delete<ApiKey[]>(`/api-keys?${params}`, {
-      userId,
-    });
-    const deletedKey = deletedKeys[0];
-    if (!deletedKey) throw new Error("No API key was deleted");
-    return deletedKey;
-  }
-
   // Workspace Methods
 
   async getWorkspaces(
-    userId: string,
+    accessToken: string,
     startDate?: string,
     endDate?: string,
   ): Promise<Workspace[]> {
@@ -219,11 +155,11 @@ class LazyCloudAPIClass {
     if (startDate) params.append("start_date", startDate);
     if (endDate) params.append("end_date", endDate);
     const queryString = params.toString() ? `?${params.toString()}` : "";
-    return await this.get<Workspace[]>(`/workspaces${queryString}`, { userId });
+    return await this.get<Workspace[]>(`/workspaces${queryString}`, { accessToken });
   }
 
-  async getWorkspace(userId: string, workspaceId: string): Promise<Workspace> {
-    const workspaces = await this.getWorkspaces(userId);
+  async getWorkspace(accessToken: string, workspaceId: string): Promise<Workspace> {
+    const workspaces = await this.getWorkspaces(accessToken);
     const workspace = workspaces.find((w) => w.id === workspaceId);
     if (!workspace) {
       throw new Error("Workspace not found");
@@ -232,64 +168,64 @@ class LazyCloudAPIClass {
   }
 
   async getWorkspaceWithDeployments(
-    userId: string,
+    accessToken: string,
     workspaceId: string,
   ): Promise<WorkspaceWithDeploymentsResponse> {
     return await this.get<WorkspaceWithDeploymentsResponse>(
       `/workspaces/${workspaceId}/with-deployments`,
-      { userId },
+      { accessToken },
     );
   }
 
-  async createWorkspace(userId: string, name: string): Promise<Workspace> {
+  async createWorkspace(accessToken: string, name: string): Promise<Workspace> {
     const data = {
       name: name,
     };
-    return await this.post<Workspace>(`/workspaces`, data, { userId });
+    return await this.post<Workspace>(`/workspaces`, data, { accessToken });
   }
 
   async deleteWorkspace(
-    userId: string,
+    accessToken: string,
     workspaceId: string,
   ): Promise<{ success: boolean }> {
     return await this.delete<{ success: boolean }>(
       `/workspaces/${workspaceId}`,
-      { userId },
+      { accessToken },
     );
   }
 
   async leaveWorkspace(
-    userId: string,
+    accessToken: string,
     workspaceId: string,
   ): Promise<{ success: boolean }> {
     return await this.post<{ success: boolean }>(
       `/workspaces/${workspaceId}/members/leave`,
       {},
-      { userId },
+      { accessToken },
     );
   }
 
-  async getCurrentUser(userId: string): Promise<{ id: string }> {
-    return await this.get<{ id: string }>(`/users/current`, { userId });
+  async getCurrentUser(accessToken: string): Promise<{ id: string }> {
+    return await this.get<{ id: string }>(`/users/current`, { accessToken });
   }
 
-  async getUserFeatures(userId: string): Promise<UserFeaturesResponse> {
-    return await this.get<UserFeaturesResponse>(`/users/features`, { userId });
+  async getUserFeatures(accessToken: string): Promise<UserFeaturesResponse> {
+    return await this.get<UserFeaturesResponse>(`/users/features`, { accessToken });
   }
 
   async getWorkspaceMembers(
-    userId: string,
+    accessToken: string,
     workspaceId: string,
   ): Promise<WorkspaceMember[]> {
     const response = await this.get<WorkspaceMember[]>(
       `/workspaces/${workspaceId}/members`,
-      { userId },
+      { accessToken },
     );
     return response.map((member) => WorkspaceMemberSchema.parse(member));
   }
 
   async inviteUser(
-    userId: string,
+    accessToken: string,
     workspaceId: string,
     email: string,
     role = "member",
@@ -303,12 +239,12 @@ class LazyCloudAPIClass {
     return await this.post<{ success: boolean; token?: string }>(
       `/workspaces/${workspaceId}/members/invite`,
       data,
-      { userId },
+      { accessToken },
     );
   }
 
   async updateMemberRole(
-    userId: string,
+    accessToken: string,
     workspaceId: string,
     memberUserId: string,
     role: string,
@@ -320,12 +256,12 @@ class LazyCloudAPIClass {
     return await this.patch<WorkspaceMember>(
       `/workspaces/${workspaceId}/members/${memberUserId}/role`,
       data,
-      { userId },
+      { accessToken },
     );
   }
 
   async transferOwnership(
-    userId: string,
+    accessToken: string,
     workspaceId: string,
     newOwnerUserId: string,
     acceptanceUrl?: string,
@@ -337,46 +273,46 @@ class LazyCloudAPIClass {
     return await this.post<{ success: boolean }>(
       `/workspaces/${workspaceId}/members/transfer-ownership`,
       data,
-      { userId },
+      { accessToken },
     );
   }
 
   async removeMember(
-    userId: string,
+    accessToken: string,
     workspaceId: string,
     memberUserId: string,
   ): Promise<{ success: boolean }> {
     return await this.delete<{ success: boolean }>(
       `/workspaces/${workspaceId}/members/${memberUserId}`,
-      { userId },
+      { accessToken },
     );
   }
 
   async cancelInvitation(
-    userId: string,
+    accessToken: string,
     workspaceId: string,
     invitationId: string,
   ): Promise<{ success: boolean }> {
     return await this.delete<{ success: boolean }>(
       `/workspaces/${workspaceId}/members/invitations/${invitationId}`,
-      { userId },
+      { accessToken },
     );
   }
 
   async getPendingOwnershipTransfer(
-    userId: string,
+    accessToken: string,
     workspaceId: string,
   ): Promise<WorkspaceMember | null> {
     return await this.get<WorkspaceMember | null>(
       `/workspaces/${workspaceId}/members/transfer-ownership/pending`,
-      { userId },
+      { accessToken },
     );
   }
 
   private async patch<T>(
     endpoint: string,
     data: Record<string, unknown>,
-    authOptions?: { useAdmin?: boolean; userId?: string },
+    authOptions?: { useAdmin?: boolean; accessToken?: string },
   ): Promise<T> {
     return await this.fetchWithApiUrl<T>(
       endpoint,
@@ -391,19 +327,19 @@ class LazyCloudAPIClass {
   // Deployment Methods
 
   async getDeploymentStatus(
-    userId: string,
+    accessToken: string,
     deploymentId: string,
   ): Promise<DeploymentStatusResponse> {
     return await this.get<DeploymentStatusResponse>(
       `/deployments/${deploymentId}/status`,
-      { userId },
+      { accessToken },
     );
   }
 
   // Usage Methods
 
   async getAggregatedUsage(
-    userId: string,
+    accessToken: string,
     startDate?: string,
     endDate?: string,
   ): Promise<AggregatedUsageResponse> {
@@ -413,12 +349,12 @@ class LazyCloudAPIClass {
     const queryString = params.toString() ? `?${params.toString()}` : "";
     return await this.get<AggregatedUsageResponse>(
       `/workspaces/usage/all${queryString}`,
-      { userId },
+      { accessToken },
     );
   }
 
   async getAggregatedDailyUsage(
-    userId: string,
+    accessToken: string,
     startDate?: string,
     endDate?: string,
     timezone?: string,
@@ -430,12 +366,12 @@ class LazyCloudAPIClass {
     const queryString = params.toString() ? `?${params.toString()}` : "";
     return await this.get<AggregatedDailyUsageResponse>(
       `/workspaces/usage/all/daily${queryString}`,
-      { userId },
+      { accessToken },
     );
   }
 
   async getDeploymentCostBreakdown(
-    userId: string,
+    accessToken: string,
     deploymentId: string,
     startDate?: string,
     endDate?: string,
@@ -446,7 +382,7 @@ class LazyCloudAPIClass {
     const queryString = params.toString() ? `?${params.toString()}` : "";
     return await this.get<WorkspaceCostBreakdownResponse>(
       `/deployments/${deploymentId}/usage/breakdown${queryString}`,
-      { userId },
+      { accessToken },
     );
   }
 
@@ -455,18 +391,18 @@ class LazyCloudAPIClass {
   }
 
   async acceptInvitation(
-    userId: string,
+    accessToken: string,
     invitationId: string,
   ): Promise<{ success: boolean }> {
     return await this.post<{ success: boolean }>(
       `/invitations/${invitationId}/accept`,
       {},
-      { userId },
+      { accessToken },
     );
   }
 
   async getPendingInvitations(
-    userId: string,
+    accessToken: string,
   ): Promise<{
     workspace_id: string;
     workspace_name: string;
@@ -488,17 +424,17 @@ class LazyCloudAPIClass {
         invitation_type?: string;
         invitation_id: string;
       }[]
-    >(`/invitations/pending`, { userId });
+    >(`/invitations/pending`, { accessToken });
   }
 
   async declineInvitation(
-    userId: string,
+    accessToken: string,
     invitationId: string,
   ): Promise<{ success: boolean }> {
     return await this.post<{ success: boolean }>(
       `/invitations/${invitationId}/decline`,
       {},
-      { userId },
+      { accessToken },
     );
   }
 }

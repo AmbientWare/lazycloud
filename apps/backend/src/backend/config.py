@@ -55,9 +55,8 @@ class AppConfig(BaseModel):
     DATABASE_POOL_URL: str = os.getenv("DATABASE_POOL_URL", "")
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379")
 
-    # JWT Configuration
-    JWT_SECRET: str = os.getenv("JWT_SECRET", "secret-key")
-    JWT_ALGORITHM: str = os.getenv("JWT_ALGORITHM", "HS256")
+    # WorkOS Configuration (for token validation via JWKS)
+    WORKOS_CLIENT_ID: str = os.getenv("WORKOS_CLIENT_ID", "")
 
     # Registry Configuration
     REGISTRY_TYPE: str = os.getenv("REGISTRY_TYPE", "docker_hub")

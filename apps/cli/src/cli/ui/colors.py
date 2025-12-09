@@ -5,6 +5,7 @@ class Colors:
         text = "#d8dee9"
         text_muted = "#4c566a"
         text_dim = "#3b4252"
+        text_white = "#ffffff"
 
         background = "#000000"
         surface = "#1a1a1a"
@@ -23,6 +24,7 @@ class Colors:
         text = "default"
         text_muted = "bright_black"
         text_dim = "black"
+        text_white = "white"
 
         background = "default"
         surface = "default"

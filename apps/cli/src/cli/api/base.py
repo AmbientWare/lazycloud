@@ -2,6 +2,7 @@ from typing import Any, Callable
 
 import httpx
 
+from cli.api.token_refresh import attempt_token_refresh
 from cli.api.utils import Spinner, StatusSpinner
 from cli.config import config
 
@@ -25,9 +26,10 @@ class BaseAPI:
     def _get_headers(self) -> dict[str, str]:
         """Get authentication headers"""
         headers = {}
-        api_key = config.api_key
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
+        access_token = config.access_token
+        if access_token:
+            headers["Authorization"] = f"Bearer {access_token}"
+
         return headers
 
     def _get_client(self) -> httpx.Client:
@@ -44,8 +46,9 @@ class BaseAPI:
         url: str,
         json: dict[str, Any] | None = None,
         params: dict | None = None,
+        _retry_after_refresh: bool = True,
     ) -> Any:
-        """Make a request to the API"""
+        """Make a request to the API with automatic token refresh on 401."""
         client = self._get_client()
         try:
             response = client.request(method, url, json=json, params=params)
@@ -53,6 +56,14 @@ class BaseAPI:
             return response.json()
 
         except httpx.HTTPStatusError as e:
+            # On 401, attempt token refresh and retry once
+            if e.response.status_code == 401 and _retry_after_refresh:
+                if attempt_token_refresh():
+                    # Retry with new token (but don't retry again if it fails)
+                    return self._make_request(
+                        method, url, json, params, _retry_after_refresh=False
+                    )
+
             # Try to get error message from response JSON
             try:
                 error_data = e.response.json()
@@ -83,8 +94,9 @@ class BaseAPI:
         url: str,
         json: dict[str, Any] | None = None,
         params: dict | None = None,
+        _retry_after_refresh: bool = True,
     ) -> Any:
-        """Make an async request to the API"""
+        """Make an async request to the API with automatic token refresh on 401."""
         async with self._get_async_client() as client:
             try:
                 response = await client.request(method, url, json=json, params=params)
@@ -92,6 +104,14 @@ class BaseAPI:
                 return response.json()
 
             except httpx.HTTPStatusError as e:
+                # On 401, attempt token refresh and retry once
+                if e.response.status_code == 401 and _retry_after_refresh:
+                    if attempt_token_refresh():
+                        # Retry with new token (but don't retry again if it fails)
+                        return await self._make_request_async(
+                            method, url, json, params, _retry_after_refresh=False
+                        )
+
                 # Try to get error message from response JSON
                 try:
                     error_data = e.response.json()

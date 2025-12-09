@@ -3,23 +3,23 @@
 import type { UserFeaturesResponse } from "@/interfaces/users";
 import lazycloudApi from "@/server/lazycloud_api";
 import polarService from "@/server/polar";
-import { getUserId } from "./utils";
+import { getAuthToken, getUserId } from "./utils";
 
 export async function getCurrentUserInternalId(): Promise<string> {
-  const userId = await getUserId();
-  const currentUser = await lazycloudApi.getCurrentUser(userId);
+  const accessToken = await getAuthToken();
+  const currentUser = await lazycloudApi.getCurrentUser(accessToken);
   return currentUser.id;
 }
 
 export async function getUserFeatures(): Promise<UserFeaturesResponse> {
-  const userId = await getUserId();
-  return lazycloudApi.getUserFeatures(userId);
+  const accessToken = await getAuthToken();
+  return lazycloudApi.getUserFeatures(accessToken);
 }
 
 export async function getUserSubscriptionTier(): Promise<string | undefined> {
-  const userId = await getUserId();
+  const accessToken = await getAuthToken();
   try {
-    const customerState = await polarService.getCustomerStateExternal(userId);
+    const customerState = await polarService.getCustomerStateExternal(accessToken);
     const activeSub = customerState.activeSubscriptions[0];
     if (!activeSub?.productId) return undefined;
 

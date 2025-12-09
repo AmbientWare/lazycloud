@@ -10,17 +10,6 @@ console = Console()
 
 def dashboard():
     """Launch the LazyCloud dashboard."""
-    # Check authentication before launching
-    is_authenticated, error_message = config.check_authentication()
-    if not is_authenticated:
-        error_card = ErrorCard(
-            message=error_message,
-            title="🚫 Authentication Required",
-            suggestion="Run 'lazycloud login' to authenticate.",
-        )
-        console.print(error_card)
-        raise typer.Exit(1)
-
     try:
         run_dashboard()
     except KeyboardInterrupt:

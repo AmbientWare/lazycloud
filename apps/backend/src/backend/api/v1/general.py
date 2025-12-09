@@ -13,6 +13,7 @@ from backend.database.session import session_manager
 
 health_router = APIRouter(prefix="/health", tags=["health"])
 cli_version_router = APIRouter(prefix="/cli-version", tags=["cli-version"])
+auth_config_router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 class HealthCheckResult(BaseModel):
@@ -94,3 +95,15 @@ async def cli_version() -> CLIVersionResponse:
     except Exception:
         pkg_version = "0.0.1"
     return CLIVersionResponse(version=pkg_version)
+
+
+class AuthConfigResponse(BaseModel):
+    """Response for auth configuration (public endpoint for CLI)."""
+
+    workos_client_id: str
+
+
+@auth_config_router.get("/config")
+async def auth_config() -> AuthConfigResponse:
+    """Get authentication configuration for CLI login."""
+    return AuthConfigResponse(workos_client_id=app_config.WORKOS_CLIENT_ID)
