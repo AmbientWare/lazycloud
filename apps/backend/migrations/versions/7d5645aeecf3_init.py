@@ -8,8 +8,8 @@ Create Date: 2025-11-30 20:35:00.547494
 
 from typing import Sequence, Union
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
@@ -148,7 +148,7 @@ def upgrade() -> None:
         "users",
         sa.Column("name", sa.String(), nullable=False),
         sa.Column("email", sa.String(), nullable=False),
-        sa.Column("clerk_id", sa.String(), nullable=False),
+        sa.Column("workos_id", sa.String(), nullable=False),
         sa.Column("role", sa.Enum("ADMIN", "USER", name="userrole"), nullable=False),
         sa.Column(
             "status",
@@ -171,7 +171,7 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("clerk_id"),
+        sa.UniqueConstraint("workos_id"),
     )
     op.create_index(op.f("ix_users_role"), "users", ["role"], unique=False)
     op.create_index(op.f("ix_users_status"), "users", ["status"], unique=False)

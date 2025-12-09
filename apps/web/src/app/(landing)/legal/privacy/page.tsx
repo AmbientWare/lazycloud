@@ -80,7 +80,7 @@ const sections = [
         </h3>
         <p>
           If you create an account, we require some basic information at the
-          time of account creation. We use Clerk, a third-party authentication
+          time of account creation. We use WorkOS, a third-party authentication
           service, to manage user accounts and session management. You will
           create your own user name and password, and we will ask you for a
           valid email account. You also have the option to give us more
@@ -130,7 +130,7 @@ const sections = [
             first.
           </li>
           <li>
-            We use Clerk to securely manage your authentication and session
+            We use WorkOS to securely manage your authentication and session
             data, ensuring your account remains protected.
           </li>
         </ul>
@@ -224,10 +224,10 @@ const sections = [
         </p>
 
         <p>
-          We use Clerk as a third-party authentication service to manage user
+          We use WorkOS as a third-party authentication service to manage user
           accounts and session data. When you sign up or sign in to LazyCloud,
-          Clerk processes your authentication information in accordance with
-          their own privacy policy. We recommend reviewing Clerk&apos;s privacy
+          WorkOS processes your authentication information in accordance with
+          their own privacy policy. We recommend reviewing WorkOS&apos;s privacy
           policy to understand how they handle your data.
         </p>
 
@@ -269,7 +269,7 @@ const sections = [
           will not be able to log in or use LazyCloud&apos;s services.
         </p>
         <p>
-          Our authentication service, Clerk, also uses cookies and similar
+          Our authentication service, WorkOS, also uses cookies and similar
           technologies to manage your session and authentication state. These
           cookies are essential for the secure operation of your account and
           cannot be disabled if you wish to use LazyCloud&apos;s services.

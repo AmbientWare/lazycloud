@@ -27,29 +27,29 @@ class UserOnboardingService:
     def __init__(self, polar_service: PolarService):
         self.polar_service = polar_service
 
-    async def onboard_user(self, clerk_id: str, name: str, email: str) -> UserPydantic:
+    async def onboard_user(self, workos_id: str, name: str, email: str) -> UserPydantic:
         """Onboard a new user with proper transaction handling."""
 
         # Check if user already exists
-        existing_user = await self._get_user_by_clerk_id(clerk_id)
+        existing_user = await self._get_user_by_workos_id(workos_id)
         if existing_user:
-            raise ValueError(f"User with clerk_id {clerk_id} already exists")
+            raise ValueError(f"User with workos_id {workos_id} already exists")
 
         # Create user with all related entities in a transaction
-        user = await self._create_user_with_entities(clerk_id, name, email)
+        user = await self._create_user_with_entities(workos_id, name, email)
 
         # Create Polar customer AFTER transaction commits (external service)
         await self._create_polar_customer(user)
 
         return user
 
-    async def _get_user_by_clerk_id(self, clerk_id: str) -> Optional[UserPydantic]:
-        """Get user by clerk_id."""
+    async def _get_user_by_workos_id(self, workos_id: str) -> Optional[UserPydantic]:
+        """Get user by workos_id."""
         async with get_db_context() as db:
-            return await db.users.get_by_clerk_id(clerk_id=clerk_id)
+            return await db.users.get_by_workos_id(workos_id=workos_id)
 
     async def _create_user_with_entities(
-        self, clerk_id: str, name: str, email: str
+        self, workos_id: str, name: str, email: str
     ) -> UserPydantic:
         """Create user and all related entities in a single transaction."""
         try:
@@ -59,7 +59,7 @@ class UserOnboardingService:
                 user = UserPydantic(
                     name=name,
                     email=email,
-                    clerk_id=clerk_id,
+                    workos_id=workos_id,
                     role=UserRole.ADMIN,
                     status=UserStatus.ACTIVE,
                     subscription_state=SubscriptionState.WITHIN_LIMITS,
@@ -91,11 +91,11 @@ class UserOnboardingService:
                 )
                 await db.user_workspaces.create(user_workspace)
 
-            logger.info(f"Successfully created user {clerk_id} in database")
+            logger.info(f"Successfully created user {workos_id} in database")
             return user
 
         except Exception as e:
-            logger.error(f"Failed to onboard user {clerk_id}: {e}")
+            logger.error(f"Failed to onboard user {workos_id}: {e}")
             raise
 
     async def _create_polar_customer(self, user: UserPydantic) -> None:
@@ -103,26 +103,26 @@ class UserOnboardingService:
         try:
             # Check if customer already exists (idempotency)
             existing_customer = await self.polar_service.customers.get_customer(
-                external_id=user.clerk_id
+                external_id=user.workos_id
             )
             if existing_customer:
-                logger.info(f"Polar customer already exists for {user.clerk_id}")
+                logger.info(f"Polar customer already exists for {user.workos_id}")
                 return
 
             customer = await self.polar_service.customers.create_customer(
                 email=user.email,
-                external_id=user.clerk_id,
+                external_id=user.workos_id,
                 name=user.name,
-                metadata={"clerk_id": user.clerk_id, "user_id": user.id},
+                metadata={"workos_id": user.workos_id, "user_id": user.id},
             )
 
             if not customer:
-                logger.warning(f"Failed to create Polar customer for {user.clerk_id}")
+                logger.warning(f"Failed to create Polar customer for {user.workos_id}")
 
             else:
-                logger.info(f"Created Polar customer for {user.clerk_id}")
+                logger.info(f"Created Polar customer for {user.workos_id}")
 
         except Exception as e:
-            logger.error(f"Failed to create Polar customer for {user.clerk_id}: {e}")
+            logger.error(f"Failed to create Polar customer for {user.workos_id}: {e}")
             # Don't fail the entire onboarding for external service issues
             # This is a common pattern - external services are best-effort

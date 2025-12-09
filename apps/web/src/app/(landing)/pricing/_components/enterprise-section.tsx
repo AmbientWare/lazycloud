@@ -17,7 +17,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { sendEnterpriseInquiry } from "@/actions/email";
 import { useTransition } from "react";
 import { toast } from "sonner";
-import { useAuth, useUser } from "@clerk/nextjs";
+import { useAuth } from "@workos-inc/authkit-nextjs/components";
 import { Mail, Building2, Loader2 } from "lucide-react";
 
 export function EnterpriseSection() {
@@ -26,17 +26,15 @@ export function EnterpriseSection() {
   const [name, setName] = useState("");
   const [message, setMessage] = useState("");
   const [isPending, startTransition] = useTransition();
-  const { isSignedIn } = useAuth();
-  const { user } = useUser();
+  const { user } = useAuth();
+  const isSignedIn = !!user;
 
   const handleContactSales = () => {
     setIsDialogOpen(true);
     // Pre-fill email and name if signed in
     if (isSignedIn && user) {
-      const userEmail = user.primaryEmailAddress?.emailAddress ?? user.emailAddresses[0]?.emailAddress ?? "";
-      const userName = user.fullName ?? user.firstName ?? "";
-      setEmail(userEmail);
-      setName(userName);
+      setEmail(user.email);
+      setName(`${user.firstName ?? ""} ${user.lastName ?? ""}`.trim());
     }
   };
 
@@ -157,7 +155,7 @@ export function EnterpriseSection() {
                 <Label htmlFor="email">Email *</Label>
                 {isSignedIn && user ? (
                   <div className="text-muted-foreground rounded-md border bg-muted px-3 py-2 text-sm">
-                    {user.primaryEmailAddress?.emailAddress ?? user.emailAddresses[0]?.emailAddress ?? "Not available"}
+                    {user.email}
                   </div>
                 ) : (
                   <Input
@@ -172,7 +170,7 @@ export function EnterpriseSection() {
                   />
                 )}
               </div>
-              {(!isSignedIn || !user?.fullName) && (
+              {(!isSignedIn || !(user?.firstName && user?.lastName)) && (
                 <div className="grid gap-2">
                   <Label htmlFor="name">
                     Name <span className="text-muted-foreground">(optional)</span>

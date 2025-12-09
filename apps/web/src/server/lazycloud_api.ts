@@ -146,12 +146,12 @@ class LazyCloudAPIClass {
   // onboarding methods
 
   async onboardUser(
-    clerkId: string,
+    workosId: string,
     name: string,
     email: string,
   ): Promise<boolean> {
     const data = {
-      clerk_id: clerkId,
+      workos_id: workosId,
       name: name,
       email: email,
     };
@@ -176,7 +176,7 @@ class LazyCloudAPIClass {
   ): Promise<ApiKey> {
     const data = {
       name: name,
-      clerk_id: userId,
+      workos_id: userId,
       expires_at: expiresAt,
     };
     return await this.post<ApiKey>(`/api-keys`, data, { userId });
@@ -188,7 +188,7 @@ class LazyCloudAPIClass {
     expiresAt: ApiKeyExpiresAtOptions = "30",
   ): Promise<ApiKey> {
     const data = {
-      clerk_id: userId,
+      workos_id: userId,
       expires_at: expiresAt,
     };
     return await this.put<ApiKey>(`/api-keys/${apiKeyId}`, data, { userId });
@@ -196,7 +196,7 @@ class LazyCloudAPIClass {
 
   async deleteApiKey(userId: string, apiKeyId: string): Promise<ApiKey> {
     const params = new URLSearchParams({
-      clerk_id: userId,
+      workos_id: userId,
       api_key_id: apiKeyId,
     }).toString();
 

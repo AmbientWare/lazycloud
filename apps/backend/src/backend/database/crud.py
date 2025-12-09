@@ -27,7 +27,7 @@ async def update_admin_api_keys():
     """Create or update admin user and API keys."""
     async with get_db_context() as db:
         # Check if we have an admin user
-        user = await db.users.get_by_clerk_id(clerk_id="lzy_admin")
+        user = await db.users.get_by_workos_id(workos_id="lzy_admin")
 
         if not user:
             # Create admin user with workspace
@@ -36,7 +36,7 @@ async def update_admin_api_keys():
                 id=uuid.uuid4(),
                 name="admin user",
                 email="admin@lazycloud.com",
-                clerk_id="lzy_admin",
+                workos_id="lzy_admin",
                 role=UserRole.ADMIN,
                 status=UserStatus.ACTIVE,
                 subscription_state=SubscriptionState.WITHIN_LIMITS,
@@ -137,19 +137,21 @@ async def update_admin_api_keys():
     polar_service = get_polar_service()
 
     try:
-        customer = await polar_service.customers.get_customer(external_id=user.clerk_id)
+        customer = await polar_service.customers.get_customer(
+            external_id=user.workos_id
+        )
         if not customer:
             customer = await polar_service.customers.create_customer(
                 email=user.email,
-                external_id=user.clerk_id,
+                external_id=user.workos_id,
                 name=user.name,
                 metadata={"user_id": user.id},
             )
             if customer:
-                logger.info(f"Created Polar customer for admin user: {user.clerk_id}")
+                logger.info(f"Created Polar customer for admin user: {user.workos_id}")
         else:
             logger.info(
-                f"Polar customer already exists for admin user: {user.clerk_id}"
+                f"Polar customer already exists for admin user: {user.workos_id}"
             )
 
     except Exception as e:

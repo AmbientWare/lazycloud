@@ -264,7 +264,7 @@ async def get_aggregated_usage(
             user_id=current_user.id,
             start_date=start_date,
             end_date=end_date,
-            external_customer_id=current_user.clerk_id,
+            external_customer_id=current_user.workos_id,
         )
     except Exception as e:
         logger.error(f"Error getting aggregated usage: {e}", exc_info=True)
@@ -294,7 +294,7 @@ async def get_aggregated_daily_usage(
             start_date=start_date,
             end_date=end_date,
             timezone_str=timezone_str,
-            external_customer_id=current_user.clerk_id,
+            external_customer_id=current_user.workos_id,
         )
     except Exception as e:
         logger.error(f"Error getting aggregated daily usage: {e}")

@@ -236,7 +236,7 @@ async def prepare_namespace_config_task(
         )
 
     subscription_service = get_subscription_service()
-    features = await subscription_service.get_user_features(owner_user.clerk_id)
+    features = await subscription_service.get_user_features(owner_user.workos_id)
 
     max_replicas = features.deployment.max_replicas_per_service
     # Set quotas much higher than limits as a safety net

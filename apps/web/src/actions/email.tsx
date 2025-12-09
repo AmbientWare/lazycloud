@@ -83,7 +83,7 @@ export async function sendSupportEmail(email: string, description: string) {
 export async function sendEnterpriseInquiry(
   email: string,
   name?: string,
-  clerkId?: string,
+  workosId?: string,
   message?: string
 ) {
   const result = emailSchema.safeParse(email);
@@ -102,8 +102,8 @@ export async function sendEnterpriseInquiry(
   if (name) {
     body += `\nName: ${name}`;
   }
-  if (clerkId) {
-    body += `\nClerk ID: ${clerkId}`;
+  if (workosId) {
+    body += `\nWorkOS ID: ${workosId}`;
   }
   if (message?.trim()) {
     body += `\n\nMessage:\n${message.trim()}`;

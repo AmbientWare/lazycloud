@@ -115,7 +115,7 @@ async def _accept_invitation_logic(
     if invitation.invitation_type == InvitationType.OWNERSHIP_TRANSFER.value:
         # Re-validate workspace for new owner (in case plan changed since invitation)
         new_owner_features = await subscription_service.get_user_features(
-            current_user.clerk_id
+            current_user.workos_id
         )
         try:
             await subscription_service.validate_workspace_for_owner(

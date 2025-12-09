@@ -278,7 +278,7 @@ async def invite_user(
     if not owner_user:
         raise HTTPException(status_code=500, detail="Workspace owner not found")
 
-    owner_features = await subscription_service.get_user_features(owner_user.clerk_id)
+    owner_features = await subscription_service.get_user_features(owner_user.workos_id)
 
     try:
         # Check team member limit
@@ -488,7 +488,7 @@ async def transfer_ownership(
 
     # Get new owner's subscription features
     new_owner_features = await subscription_service.get_user_features(
-        new_owner_user.clerk_id
+        new_owner_user.workos_id
     )
 
     # Validate workspace can be transferred to new owner

@@ -3,7 +3,7 @@ import "@/styles/globals.css";
 import { GeistSans } from "geist/font/sans";
 import { type Metadata } from "next";
 
-import { ClerkProvider } from "@clerk/nextjs";
+import { AuthKitProvider } from '@workos-inc/authkit-nextjs/components';
 import { GridBackground } from "@/components/backgrounds/GridBackground";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
@@ -20,7 +20,7 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <ClerkProvider>
+    <AuthKitProvider>
       <UserProvider>
         <html lang="en" className={`${GeistSans.variable} h-full`} suppressHydrationWarning>
           <body className="h-full">
@@ -44,6 +44,6 @@ export default function RootLayout({
           </body>
         </html>
       </UserProvider>
-    </ClerkProvider>
+    </AuthKitProvider>
   );
 }

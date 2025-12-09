@@ -22,7 +22,7 @@ async def get_current_user(
     if app_config.ENV.value == ENVIRONMENT.DEV.value and (
         credentials is None or not credentials.credentials
     ):
-        user = await db.users.get_by_clerk_id(clerk_id="lzy_admin")
+        user = await db.users.get_by_workos_id(workos_id="lzy_admin")
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -80,15 +80,15 @@ async def _authenticate_jwt(token: str, db: Database) -> UserPydantic:
         )
 
         # Get user ID from 'sub' (subject) claim
-        clerk_id = payload.get("sub")
-        if not clerk_id:
+        workos_id = payload.get("sub")
+        if not workos_id:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid token: missing subject",
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
-        user = await db.users.get_by_clerk_id(clerk_id=clerk_id)
+        user = await db.users.get_by_workos_id(workos_id=workos_id)
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,

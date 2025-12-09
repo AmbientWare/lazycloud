@@ -186,7 +186,7 @@ async def get_user_product_features(
     subscription_service = get_subscription_service()
     try:
         return await subscription_service.get_user_features(
-            external_customer_id=current_user.clerk_id
+            external_customer_id=current_user.workos_id
         )
 
     except ValueError as e:

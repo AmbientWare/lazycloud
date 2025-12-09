@@ -21,7 +21,7 @@ jobs:
       build_context: .
       ecr_repository: web
       build_args: |
-        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+        NEXT_PUBLIC_WORKOS_REDIRECT_URI=${{ secrets.NEXT_PUBLIC_WORKOS_REDIRECT_URI }}
     secrets: inherit
 
   update-values:

@@ -1,12 +1,8 @@
 "use server";
 
-import { auth } from "@clerk/nextjs/server";
+import { withAuth } from "@workos-inc/authkit-nextjs";
 
 export async function getUserId() {
-  const { userId } = await auth();
-  if (!userId) {
-    throw new Error("User not found");
-  }
-
-  return userId;
+  const { user } = await withAuth({ ensureSignedIn: true });
+  return user.id;
 }

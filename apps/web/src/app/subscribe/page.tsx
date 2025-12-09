@@ -5,14 +5,14 @@ import { ProductsCards } from "@/app/(landing)/pricing/_components/products-card
 import { ProductsCardsSkeleton } from "@/app/(landing)/pricing/_components/products-skeleton";
 import { EnterpriseSection } from "@/app/(landing)/pricing/_components/enterprise-section";
 import { PricingTransparency } from "@/app/(landing)/pricing/_components/pricing-transparency";
-import { UserButton } from "@clerk/nextjs";
+import { CustomUserButton } from "@/app/_components/custom-user-button";
 import HeaderBar from "@/components/shared/header-bar";
 
 export default function SubscribePage() {
   return (
     <div className="flex min-h-screen flex-col">
       <HeaderBar>
-        <UserButton />
+        <CustomUserButton />
       </HeaderBar>
 
       <div className="flex min-h-screen w-full items-start justify-center px-4 py-12">

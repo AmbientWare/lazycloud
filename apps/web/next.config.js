@@ -14,11 +14,7 @@ const config = {
     remotePatterns: [
       {
         protocol: "https",
-        hostname: "img.clerk.com",
-      },
-      {
-        protocol: "https",
-        hostname: "*.clerk.accounts.dev",
+        hostname: "workoscdn.com",
       },
     ],
   },

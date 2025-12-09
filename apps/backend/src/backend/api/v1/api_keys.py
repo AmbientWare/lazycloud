@@ -22,10 +22,10 @@ async def get_api_keys(
     user_id: str | None = None,
     db: Database = Depends(get_db),
 ) -> list[ApiKeyPydantic]:
-    # user_id here is the Clerk ID from the frontend
+    # user_id here is the WorkOS ID from the frontend
     if user_id:
-        # Look up the user by Clerk ID to get the internal UUID
-        user = await db.users.get_by_clerk_id(clerk_id=user_id)
+        # Look up the user by WorkOS ID to get the internal UUID
+        user = await db.users.get_by_workos_id(workos_id=user_id)
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
 
@@ -42,8 +42,8 @@ async def create_api_key(
     request: CreateApiKeyRequest,
     db: Database = Depends(get_db),
 ) -> ApiKeyPydantic:
-    # Look up the user by Clerk ID to get the internal UUID
-    user = await db.users.get_by_clerk_id(clerk_id=request.clerk_id)
+    # Look up the user by WorkOS ID to get the internal UUID
+    user = await db.users.get_by_workos_id(workos_id=request.workos_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -78,8 +78,8 @@ async def update_api_key(
     request: UpdateApiKeyRequest,
     db: Database = Depends(get_db),
 ) -> ApiKeyPydantic:
-    # Look up the user by Clerk ID to get the internal UUID
-    user = await db.users.get_by_clerk_id(clerk_id=request.clerk_id)
+    # Look up the user by WorkOS ID to get the internal UUID
+    user = await db.users.get_by_workos_id(workos_id=request.workos_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -101,7 +101,7 @@ async def update_api_key(
 @api_keys_router.delete("")
 async def delete_api_keys(
     api_key_id: str | None = None,
-    clerk_id: str | None = None,
+    workos_id: str | None = None,
     db: Database = Depends(get_db),
 ) -> list[ApiKeyPydantic]:
     """
@@ -113,8 +113,8 @@ async def delete_api_keys(
     if api_key_id:
         filters["id"] = api_key_id
 
-    if clerk_id:
-        user = await db.users.get_by_clerk_id(clerk_id=clerk_id)
+    if workos_id:
+        user = await db.users.get_by_workos_id(workos_id=workos_id)
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
         filters["user_id"] = user.id

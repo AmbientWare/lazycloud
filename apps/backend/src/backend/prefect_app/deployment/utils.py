@@ -140,7 +140,7 @@ async def verify_quota_capacity(
         return
 
     subscription_service = get_subscription_service()
-    features = await subscription_service.get_user_features(owner_user.clerk_id)
+    features = await subscription_service.get_user_features(owner_user.workos_id)
 
     # Get current usage from database
     async with get_db_context() as db:

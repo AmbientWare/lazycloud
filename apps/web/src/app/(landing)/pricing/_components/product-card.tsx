@@ -12,7 +12,7 @@ import { sendEnterpriseInquiry } from "@/actions/email";
 import { useTransition } from "react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
-import { useAuth, useUser } from "@clerk/nextjs";
+import { useAuth } from "@workos-inc/authkit-nextjs/components";
 
 function formatPrice(priceAmount: number): string {
   return `$${(priceAmount / 100).toFixed(0)}`;
@@ -26,44 +26,31 @@ export function ProductCard({ product, isEnterprise }: { product: PolarProduct; 
   const monthlyPrice = fixedPrice ? formatPrice(fixedPrice.priceAmount) : null;
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
-  const { isSignedIn, userId } = useAuth();
-  const { user } = useUser();
+  const { user } = useAuth();
+  const userId = user?.id;
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    
+
     if (isEnterprise) {
-      if (!isSignedIn) {
-        toast.info("Please sign in to continue");
-        router.push(`/sign-in?redirect_url=${encodeURIComponent(window.location.pathname)}`);
+      if (!user) {
+        router.push("/login");
         return;
       }
 
       startTransition(async () => {
         const toastId = toast.loading("Sending inquiry...");
         try {
-        const email = user?.primaryEmailAddress?.emailAddress ?? user?.emailAddresses[0]?.emailAddress ?? "";
-        const name = user?.fullName ?? user?.firstName ?? undefined;
-          
-          if (!email) {
-            throw new Error("Email address is required. Please ensure your account has an email address.");
-          }
+          const email = user.email;
+          const name = `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim() || undefined;
 
           await sendEnterpriseInquiry(email, name, userId || undefined);
           toast.success("Inquiry sent! We'll be in touch soon.", { id: toastId });
         } catch (error) {
-          console.error("Error sending enterprise inquiry:", error);
           const errorMessage = error instanceof Error ? error.message : String(error);
           toast.error(errorMessage || "Failed to send inquiry", { id: toastId });
         }
       });
-      return;
-    }
-    
-    // Check if user is signed in before attempting checkout
-    if (!isSignedIn) {
-      toast.info("Please sign in to continue");
-      router.push(`/sign-in?redirect_url=${encodeURIComponent(window.location.pathname)}`);
       return;
     }
 
@@ -71,25 +58,16 @@ export function ProductCard({ product, isEnterprise }: { product: PolarProduct; 
       const toastId = toast.loading("Creating checkout session...");
       try {
         const result = await createCheckoutUrl(product.id);
-        
+
         if (!result?.url) {
           throw new Error("No checkout URL returned");
         }
 
         toast.success("Redirecting to checkout...", { id: toastId });
-        
-        // Use replace instead of href to avoid adding to browser history
         window.location.replace(result.url);
       } catch (error) {
-        console.error("Error creating checkout:", error);
         const errorMessage = error instanceof Error ? error.message : String(error);
-        
-        if (errorMessage === "AUTHENTICATION_REQUIRED") {
-          toast.info("Please sign in to continue");
-          router.push(`/sign-in?redirect_url=${encodeURIComponent(window.location.pathname)}`);
-        } else {
-          toast.error("Failed to create checkout session", { id: toastId });
-        }
+        toast.error(errorMessage || "Failed to create checkout session", { id: toastId });
       }
     });
   };

@@ -33,7 +33,7 @@ class TestListAPIKeys:
         user = await api_db.users.create(make_user("test"))
         await api_db.api_keys.create(make_api_key(str(user.id), name="user-key"))
 
-        response = await admin_client.get(f"/v1/api-keys?user_id={user.clerk_id}")
+        response = await admin_client.get(f"/v1/api-keys?user_id={user.workos_id}")
 
         assert response.status_code == 200
         keys = response.json()
@@ -53,7 +53,7 @@ class TestCreateAPIKey:
         response = await admin_client.post(
             "/v1/api-keys",
             json={
-                "clerk_id": user.clerk_id,
+                "workos_id": user.workos_id,
                 "name": "test-key",
                 "expires_at": ApiKeyExpirationDays.THIRTY_DAYS.value,
             },
@@ -75,7 +75,7 @@ class TestCreateAPIKey:
         response = await admin_client.post(
             "/v1/api-keys",
             json={
-                "clerk_id": user.clerk_id,
+                "workos_id": user.workos_id,
                 "name": "existing",
                 "expires_at": ApiKeyExpirationDays.THIRTY_DAYS.value,
             },
@@ -99,7 +99,7 @@ class TestUpdateAPIKey:
         response = await admin_client.put(
             f"/v1/api-keys/{api_key.id}",
             json={
-                "clerk_id": user.clerk_id,
+                "workos_id": user.workos_id,
                 "expires_at": ApiKeyExpirationDays.THIRTY_DAYS.value,
             },
         )
