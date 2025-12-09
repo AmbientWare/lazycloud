@@ -1,11 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { SignInButton } from "@clerk/nextjs";
 import { StyledButton } from "@/components/shared/styled-button";
 import { useUserContext } from "@/contexts/UserContext";
 import Navigation from "./navigation";
-import { Zap } from "lucide-react";
+import { ChevronRight, Zap } from "lucide-react";
 import HeaderBar from "@/components/shared/header-bar";
 import { LANDING_ROUTES, USER_HOME } from "@/lib/constants";
 import { usePathname } from "next/navigation";
@@ -35,18 +34,22 @@ export default function Header() {
                 Deploy Now
               </StyledButton>
             ) : (
-              <SignInButton mode="modal">
+              <Link href="/login">
                 <StyledButton variant="primary">
                   <Zap size={18} className="group-hover:animate-pulse" />
                   Deploy Now
                 </StyledButton>
-              </SignInButton>
+              </Link>
             )
           ) : (
             <Link href={USER_HOME}>
               <StyledButton variant="primary">
                 <Zap size={18} className="group-hover:animate-pulse" />
-                Go to Dashboard
+                Monitore Workspaces
+                <ChevronRight
+                  size={20}
+                  className="transition-transform group-hover:translate-x-1"
+                />
               </StyledButton>
             </Link>
           )}

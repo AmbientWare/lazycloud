@@ -1,21 +1,19 @@
-import {
-  clerkMiddleware,
-  createRouteMatcher,
-} from "@clerk/nextjs/server";
+import { authkit } from '@workos-inc/authkit-nextjs';
 import { type NextRequest, NextResponse } from "next/server";
 import polarService from "./server/polar";
 import {
   PUBLIC_ROUTES,
-  ONBOARDING_ROUTES,
   CHECKOUT_ROUTES,
   SUBSCRIBE_ROUTES,
 } from "./lib/constants";
 import { ratelimit } from "./lib/rate-limit";
 
-const isOnboardingRoute = createRouteMatcher(ONBOARDING_ROUTES);
-const isCheckoutRoute = createRouteMatcher(CHECKOUT_ROUTES);
-const isSubscribeRoute = createRouteMatcher(SUBSCRIBE_ROUTES);
-const isPublicRoute = createRouteMatcher(PUBLIC_ROUTES);
+function matchesRoute(pathname: string, routes: string[]): boolean {
+  return routes.some((route) => {
+    if (route === "/") return pathname === "/";
+    return pathname === route || pathname.startsWith(route + "/");
+  });
+}
 
 async function handleRateLimit(req: NextRequest): Promise<{
   response: NextResponse | null;
@@ -52,109 +50,65 @@ async function handleRateLimit(req: NextRequest): Promise<{
   return { response: null, remaining: remaining ?? 0 };
 }
 
-function handlePublicRoute(
-  req: NextRequest,
-  remaining: number,
-): NextResponse | null {
-  if (isPublicRoute(req)) {
+export default async function middleware(req: NextRequest) {
+  const { session, headers: authkitHeaders, authorizationUrl } = await authkit(req);
+  const { pathname } = req.nextUrl;
+
+
+  // Apply authkit headers to every response for session management
+  const withAuthHeaders = (response: NextResponse) => {
+    for (const [key, value] of authkitHeaders) {
+      key.toLowerCase() === 'set-cookie'
+        ? response.headers.append(key, value)
+        : response.headers.set(key, value);
+    }
+    return response;
+  };
+
+  // Rate limiting
+  const { response: rateLimitResponse, remaining } = await handleRateLimit(req);
+  if (rateLimitResponse) return withAuthHeaders(rateLimitResponse);
+
+  // Allow callback route (always public)
+  if (pathname === "/callback") {
     const response = NextResponse.next();
     response.headers.set("X-RateLimit-Remaining", String(remaining));
-    return response;
+    return withAuthHeaders(response);
   }
-  return null;
-}
 
-function handleUnauthenticated(
-  isAuthenticated: boolean,
-  redirectToSignIn: (options: { returnBackUrl: string }) => void,
-  req: NextRequest,
-): NextResponse | null {
-  if (!isAuthenticated) {
-    return redirectToSignIn({
-      returnBackUrl: req.url,
-    }) as unknown as NextResponse;
-  }
-  return null;
-}
-
-function handleExemptRoutes(req: NextRequest): NextResponse | null {
-  if (isOnboardingRoute(req) || isCheckoutRoute(req) || isSubscribeRoute(req)) {
-    return NextResponse.next();
-  }
-  return null;
-}
-
-function handleOnboardingCheck(
-  sessionClaims:
-    | { metadata?: { onboardingComplete?: boolean } }
-    | null
-    | undefined,
-  req: NextRequest,
-): NextResponse | null {
-  if (!sessionClaims?.metadata?.onboardingComplete) {
-    const onboardingUrl = new URL("/onboarding", req.url);
-    onboardingUrl.searchParams.set(
-      "returnTo",
-      req.nextUrl.pathname + req.nextUrl.search,
+  // Allow public routes for unauthenticated users only
+  if (!session.user) {
+    if (matchesRoute(pathname, PUBLIC_ROUTES)) {
+      const response = NextResponse.next();
+      response.headers.set("X-RateLimit-Remaining", String(remaining));
+      return withAuthHeaders(response);
+    }
+    // Require authentication for non-public routes
+    return withAuthHeaders(
+      authorizationUrl
+        ? NextResponse.redirect(authorizationUrl)
+        : NextResponse.json({ error: "Authentication required" }, { status: 401 })
     );
-    return NextResponse.redirect(onboardingUrl);
   }
-  return null;
-}
 
-async function handleSubscriptionCheck(
-  userId: string,
-  req: NextRequest,
-): Promise<NextResponse | null> {
+  // Allow authenticated access to checkout and subscribe pages
+  const exemptRoutes = [...CHECKOUT_ROUTES, ...SUBSCRIBE_ROUTES];
+  if (matchesRoute(pathname, exemptRoutes)) {
+    return withAuthHeaders(NextResponse.next());
+  }
+
+  // Enforce active subscription
   try {
-    const customerState = await polarService.getCustomerStateExternal(userId);
-
+    const customerState = await polarService.getCustomerStateExternal(session.user.id);
     if (!customerState.activeSubscriptions.length) {
-      return NextResponse.redirect(new URL("/subscribe", req.url));
+      return withAuthHeaders(NextResponse.redirect(new URL("/subscribe", req.url)));
     }
   } catch {
-    return NextResponse.redirect(new URL("/subscribe", req.url));
+    return withAuthHeaders(NextResponse.redirect(new URL("/subscribe", req.url)));
   }
 
-  return null;
+  return withAuthHeaders(NextResponse.next());
 }
-
-export default clerkMiddleware(async (auth, req: NextRequest) => {
-  const { isAuthenticated, userId, sessionClaims, redirectToSignIn } =
-    await auth();
-
-  // 1. Rate limiting
-  const { response: rateLimitResponse, remaining } = await handleRateLimit(req);
-  if (rateLimitResponse) return rateLimitResponse;
-
-  // 2. Public routes
-  const publicRouteResponse = handlePublicRoute(req, remaining);
-  if (publicRouteResponse) return publicRouteResponse;
-
-  // 3. Authentication check
-  const unauthResponse = handleUnauthenticated(
-    isAuthenticated,
-    redirectToSignIn,
-    req,
-  );
-  if (unauthResponse) return unauthResponse;
-
-  // 4. Exempt routes (onboarding, checkout, subscribe)
-  const exemptRouteResponse = handleExemptRoutes(req);
-  if (exemptRouteResponse) return exemptRouteResponse;
-
-  // 5. Onboarding status check
-  const onboardingResponse = handleOnboardingCheck(sessionClaims, req);
-  if (onboardingResponse) return onboardingResponse;
-
-  // 6. Subscription check
-  if (userId) {
-    const subscriptionResponse = await handleSubscriptionCheck(userId, req);
-    if (subscriptionResponse) return subscriptionResponse;
-  }
-
-  return NextResponse.next();
-});
 
 export const config = {
   matcher: [

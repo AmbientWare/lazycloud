@@ -2,24 +2,11 @@
 
 import { env } from "@/env";
 import polarService from "@/server/polar";
-import { auth } from "@clerk/nextjs/server";
-import { completeOnboarding } from "@/actions/onboarding";
+import { withAuth } from "@workos-inc/authkit-nextjs";
 
 export async function createCheckoutUrl(productId: string) {
-  const { userId, sessionClaims } = await auth();
-
-  if (!userId) {
-    throw new Error("Unauthorized");
-  }
-
-  if (!sessionClaims?.metadata?.onboardingComplete) {
-    const name = sessionClaims?.fullName as string;
-    const email = sessionClaims?.email as string;
-
-    if (name && email) {
-      await completeOnboarding(userId, name, email);
-    }
-  }
+  const { user } = await withAuth({ ensureSignedIn: true });
+  const userId = user.id;
 
   try {
     const checkout = await polarService.createCheckout({

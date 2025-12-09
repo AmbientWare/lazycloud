@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
 import { StyledButton } from "@/components/shared/styled-button";
-import { useUser } from "@clerk/nextjs";
+import { useAuth } from "@workos-inc/authkit-nextjs/components";
 import Link from "next/link";
 import NodesBackground from "@/components/backgrounds/NodesBackground";
 import { ChevronRight } from "lucide-react";
@@ -11,7 +11,9 @@ import { USER_HOME } from "@/lib/constants";
 import RequestAccessDialog from "@/app/_components/request-access-dialot";
 
 export default function Hero() {
-  const { isSignedIn } = useUser();
+  const { user } = useAuth();
+  const isSignedIn = !!user;
+  
   const [dialogOpen, setDialogOpen] = useState(false);
 
   return (
@@ -64,7 +66,7 @@ export default function Hero() {
                 asChild
               >
                 <Link href={USER_HOME}>
-                  Go to Dashboard
+                  Monitore Workspaces
                   <ChevronRight
                     size={20}
                     className="transition-transform group-hover:translate-x-1"

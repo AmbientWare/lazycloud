@@ -83,7 +83,7 @@ async def get_deployment_cost_breakdown(
         try:
             workspace_cost_breakdown = (
                 await polar_service.cost_breakdown.calculate_workspace_costs(
-                    external_customer_id=current_user.clerk_id,
+                    external_customer_id=current_user.workos_id,
                     cpu_core_hours=deployment_metrics.cpu_core_hours,
                     memory_gb_hours=deployment_metrics.memory_gb_hours,
                     standard_gb_hours=deployment_metrics.standard_gb_hours,

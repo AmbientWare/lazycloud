@@ -4,10 +4,6 @@ import uuid
 from datetime import UTC, datetime
 
 import pytest
-from models.deployments import DeploymentStates
-from models.secrets import SecretSource, SecretState
-from models.workspaces import UserWorkspaceStatus, WorkspaceRole
-
 from backend.database.compose import ComposeDeploymentPydantic
 from backend.database.secrets import SecretPydantic
 from backend.database.user_workspaces import UserWorkspacePydantic
@@ -18,6 +14,9 @@ from backend.database.users import (
     UserStatus,
 )
 from backend.database.workspaces import WorkspacePydantic, WorkspaceStatus
+from models.deployments import DeploymentStates
+from models.secrets import SecretSource, SecretState
+from models.workspaces import UserWorkspaceStatus, WorkspaceRole
 
 TEST_USER_ID = str(uuid.uuid4())
 TEST_WORKSPACE_ID = str(uuid.uuid4())
@@ -31,7 +30,7 @@ def test_user() -> UserPydantic:
         id=uuid.UUID(TEST_USER_ID),
         name="Test User",
         email="test@example.com",
-        clerk_id="clerk_test_123",
+        workos_id="workos_test_123",
         role=UserRole.USER,
         status=UserStatus.ACTIVE,
         subscription_state=SubscriptionState.WITHIN_LIMITS,
@@ -47,7 +46,7 @@ def admin_user() -> UserPydantic:
         id=uuid.uuid4(),
         name="Admin User",
         email="admin@example.com",
-        clerk_id="clerk_admin_123",
+        workos_id="workos_admin_123",
         role=UserRole.ADMIN,
         status=UserStatus.ACTIVE,
         subscription_state=SubscriptionState.WITHIN_LIMITS,
@@ -63,7 +62,7 @@ def member_user() -> UserPydantic:
         id=uuid.uuid4(),
         name="Member User",
         email="member@example.com",
-        clerk_id="clerk_member_123",
+        workos_id="workos_member_123",
         role=UserRole.USER,
         status=UserStatus.ACTIVE,
         subscription_state=SubscriptionState.WITHIN_LIMITS,
@@ -79,7 +78,7 @@ def inactive_user() -> UserPydantic:
         id=uuid.uuid4(),
         name="Inactive User",
         email="inactive@example.com",
-        clerk_id="clerk_inactive_123",
+        workos_id="workos_inactive_123",
         role=UserRole.USER,
         status=UserStatus.INACTIVE,
         subscription_state=SubscriptionState.WITHIN_LIMITS,

@@ -1,18 +1,17 @@
 "use client";
 
 import { useEffect } from "react";
-import { useUser } from "@clerk/nextjs";
+import { useAuth } from "@workos-inc/authkit-nextjs/components";
 import { USER_HOME } from "@/lib/constants";
 
 export default function CheckoutSuccessPage() {
-  const { user } = useUser();
+  const { user } = useAuth();
 
   useEffect(() => {
     const handleSuccess = async () => {
       if (!user) return;
 
-      await user.reload();
-
+      // Wait a moment for session to update
       await new Promise((resolve) => setTimeout(resolve, 500));
 
       window.location.href = USER_HOME;

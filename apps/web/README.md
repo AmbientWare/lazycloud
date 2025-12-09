@@ -9,7 +9,7 @@ A modern web application built with Next.js, featuring authentication, database 
   - TypeScript for type safety
   - Tailwind CSS for styling
   - Drizzle ORM for database operations
-  - Clerk for authentication
+  - WorkOS for authentication
   - React Query for data fetching
   - MDX support for content
 
@@ -94,6 +94,17 @@ This will start both the web application and an ngrok tunnel for external access
 
 Required environment variables (see `.env.example` for full list):
 
-- `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` - Clerk authentication public key
-- Database connection details
-- Other service-specific configurations
+### Authentication (WorkOS)
+- `WORKOS_API_KEY` - WorkOS API key for server-side operations
+- `WORKOS_CLIENT_ID` - WorkOS client ID
+- `WORKOS_COOKIE_PASSWORD` - Secure password for session cookies (min 32 characters)
+- `NEXT_PUBLIC_WORKOS_REDIRECT_URI` - OAuth callback URL (e.g., `http://localhost:3000/callback`)
+
+### Database
+- `DATABASE_URL` - PostgreSQL connection string
+
+### Other Services
+- `POLAR_ACCESS_TOKEN` - Polar.sh API token for billing
+- `RESEND_API_KEY` - Resend API key for emails
+- `UPSTASH_REDIS_REST_URL` - Upstash Redis URL (optional, for rate limiting)
+- `UPSTASH_REDIS_REST_TOKEN` - Upstash Redis token (optional)

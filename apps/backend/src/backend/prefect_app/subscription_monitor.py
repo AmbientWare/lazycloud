@@ -30,7 +30,7 @@ async def monitor_subscription_states():
     updated_count = 0
 
     for user in users:
-        features = await subscription_service.get_user_features(user.clerk_id)
+        features = await subscription_service.get_user_features(user.workos_id)
         state_before = user.subscription_state
 
         user_after = await subscription_service._audit_and_update_subscription_state(
@@ -50,7 +50,7 @@ async def monitor_subscription_states():
         if user_after.subscription_state == SubscriptionState.OVER_LIMITS:
             overage_count += 1
             logger.warning(
-                f"User {user.email} (ID: {user.id}, Clerk ID: {user.clerk_id}) "
+                f"User {user.email} (ID: {user.id}, WorkOS ID: {user.workos_id}) "
                 f"has OVER_LIMITS subscription state"
             )
 

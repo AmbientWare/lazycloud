@@ -498,7 +498,7 @@ async def finalize_and_bill():
                 await _send_to_polar_with_retry(
                     polar_service=polar_service,
                     record=record,
-                    external_customer_id=workspace_owner.clerk_id,
+                    external_customer_id=workspace_owner.workos_id,
                     idempotency_key=idempotency_key,
                 )
                 billing_id = idempotency_key

@@ -95,7 +95,7 @@ def make_user(unique_id: str | None = None) -> UserPydantic:
     return UserPydantic(
         name=f"Test User {unique_id}",
         email=f"test_{unique_id}@example.com",
-        clerk_id=f"clerk_test_{unique_id}",
+        workos_id=f"workos_test_{unique_id}",
         role=UserRole.USER,
         status=UserStatus.ACTIVE,
         subscription_state=SubscriptionState.WITHIN_LIMITS,
@@ -108,7 +108,7 @@ def make_admin_user(unique_id: str | None = None) -> UserPydantic:
     return UserPydantic(
         name=f"Admin User {unique_id}",
         email=f"admin_{unique_id}@example.com",
-        clerk_id=f"clerk_admin_{unique_id}",
+        workos_id=f"workos_admin_{unique_id}",
         role=UserRole.ADMIN,
         status=UserStatus.ACTIVE,
         subscription_state=SubscriptionState.WITHIN_LIMITS,

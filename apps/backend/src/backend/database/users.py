@@ -40,10 +40,10 @@ class UserTable(BaseTable):
 
     __tablename__ = "users"
 
-    # Clerk user ID
+    # WorkOS user ID
     name: Mapped[str] = mapped_column(String)
     email: Mapped[str] = mapped_column(String)
-    clerk_id: Mapped[str] = mapped_column(String, unique=True)
+    workos_id: Mapped[str] = mapped_column(String, unique=True)
     role: Mapped[UserRole] = mapped_column(
         Enum(UserRole), default=UserRole.USER, index=True
     )
@@ -75,7 +75,7 @@ class UserPydantic(BaseDbPydanticModel):
 
     name: str
     email: str
-    clerk_id: str
+    workos_id: str
     role: UserRole
     status: UserStatus
     subscription_state: SubscriptionState
@@ -87,9 +87,9 @@ class UserService(DatabaseService[UserTable, UserPydantic]):
     def __init__(self, session: AsyncSession):
         super().__init__(UserTable, UserPydantic, session)
 
-    async def get_by_clerk_id(self, clerk_id: str) -> UserPydantic | None:
-        """Get user by Clerk ID"""
-        filters = {"clerk_id": clerk_id}
+    async def get_by_workos_id(self, workos_id: str) -> UserPydantic | None:
+        """Get user by WorkOS ID"""
+        filters = {"workos_id": workos_id}
         return await self.find_one(filters=filters)
 
     async def get_by_email(self, email: str) -> UserPydantic | None:

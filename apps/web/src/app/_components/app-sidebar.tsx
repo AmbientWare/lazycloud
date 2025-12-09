@@ -14,7 +14,6 @@ import {
   SidebarFooter,
 } from "@/components/ui/sidebar";
 import TextLogo from "../_components/textLogo";
-import { SignedIn } from "@clerk/nextjs";
 import { CustomUserButton } from "./custom-user-button";
 import { CurrentYear } from "@/components/shared/CurrentYear";
 
@@ -68,9 +67,7 @@ export function AppSidebar() {
       </SidebarContent>
       <SidebarFooter className="border-border/40 border-t px-4 pt-4 pb-6">
         <div className="flex flex-col space-y-4">
-          <SignedIn>
-            <CustomUserButton />
-          </SignedIn>
+          <CustomUserButton showDetails />
 
           <div className="text-muted-foreground/60 pt-1 text-xs">
             <p>© <CurrentYear /> LazyCloud</p>

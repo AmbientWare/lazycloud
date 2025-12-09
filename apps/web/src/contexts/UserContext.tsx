@@ -1,8 +1,9 @@
 "use client";
 
 import * as React from "react";
-import { UserButton, useUser } from "@clerk/nextjs";
+import { useAuth } from "@workos-inc/authkit-nextjs/components";
 import { Skeleton } from "@/components/ui/skeleton";
+import { CustomUserButton } from "@/app/_components/custom-user-button";
 
 interface UserContextType {
   isSignedIn: boolean;
@@ -13,25 +14,19 @@ interface UserContextType {
 const UserContext = React.createContext<UserContextType | null>(null);
 
 export function UserProvider({ children }: { children: React.ReactNode }) {
-  const { isSignedIn = false, isLoaded } = useUser();
+  const { user, loading } = useAuth();
+  const isSignedIn = !!user;
+  const isLoaded = !loading;
 
   const userButton = React.useMemo(() => {
-    if (!isLoaded) {
+    if (loading) {
       return <Skeleton className="h-10 w-10 rounded-full" />;
     }
-    if (!isSignedIn) {
+    if (!user) {
       return null;
     }
-    return (
-      <UserButton
-        appearance={{
-          elements: {
-            avatarBox: "w-10 h-10",
-          },
-        }}
-      />
-    );
-  }, [isLoaded, isSignedIn]);
+    return <CustomUserButton />;
+  }, [loading, user]);
 
   const value = React.useMemo(
     () => ({

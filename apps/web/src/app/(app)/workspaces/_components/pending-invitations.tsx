@@ -39,9 +39,10 @@ export function PendingInvitations() {
     const loadInvitations = async () => {
       try {
         const data = await getPendingInvitations();
-        setInvitations(data);
+        setInvitations(data ?? []);
       } catch (error) {
         console.error("Failed to load pending invitations:", error);
+        setInvitations([]);
       } finally {
         setIsLoading(false);
       }

@@ -26,7 +26,7 @@ class TestUserServiceCRUD:
         assert created.id is not None
         assert created.name == user.name
         assert created.email == user.email
-        assert created.clerk_id == user.clerk_id
+        assert created.workos_id == user.workos_id
         assert created.role == UserRole.USER
         assert created.status == UserStatus.ACTIVE
         assert created.subscription_state == SubscriptionState.WITHIN_LIMITS
@@ -84,20 +84,20 @@ class TestUserServiceCRUD:
 class TestUserServiceQueries:
     """Test custom query methods for UserService."""
 
-    async def test_get_by_clerk_id(self, db: Database):
-        """Test retrieving a user by Clerk ID."""
+    async def test_get_by_workos_id(self, db: Database):
+        """Test retrieving a user by WorkOS ID."""
         user = make_user()
         created = await db.users.create(user)
 
-        retrieved = await db.users.get_by_clerk_id(created.clerk_id)
+        retrieved = await db.users.get_by_workos_id(created.workos_id)
 
         assert retrieved is not None
         assert retrieved.id == created.id
-        assert retrieved.clerk_id == created.clerk_id
+        assert retrieved.workos_id == created.workos_id
 
-    async def test_get_by_clerk_id_not_found(self, db: Database):
-        """Test retrieving by non-existent Clerk ID returns None."""
-        result = await db.users.get_by_clerk_id("non_existent_clerk_id")
+    async def test_get_by_workos_id_not_found(self, db: Database):
+        """Test retrieving by non-existent WorkOS ID returns None."""
+        result = await db.users.get_by_workos_id("non_existent_workos_id")
         assert result is None
 
     async def test_get_by_email(self, db: Database):

@@ -8,9 +8,8 @@ export const PUBLIC_ROUTES: string[] = [
   "/docs/:path*",
   "/install.sh",
   "/install.ps1",
+  "/auth-panel",
 ];
-
-export const ONBOARDING_ROUTES: string[] = ["/onboarding"];
 
 export const CHECKOUT_ROUTES: string[] = ["/checkout/success"];
 
@@ -18,4 +17,4 @@ export const SUBSCRIBE_ROUTES: string[] = ["/subscribe"];
 
 export const LANDING_ROUTES: string[] = ["/", "/pricing", "/docs", "/support"];
 
-export const USER_HOME = "/usage";
+export const USER_HOME = "/workspaces";
