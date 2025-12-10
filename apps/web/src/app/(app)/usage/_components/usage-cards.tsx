@@ -135,7 +135,7 @@ export const VolumeCard = forwardRef<HTMLDivElement, VolumeCardProps>(
         <div className="flex flex-col">
           <span className="text-xs font-semibold">{name}</span>
           <span className="text-muted-foreground mt-0.5 text-[10px] tracking-wide uppercase">
-            {storageClass}
+            {storageClass === "ebs" ? "Standard" : "Shared"}
           </span>
         </div>
         <div className="flex flex-col items-end gap-0.5">
