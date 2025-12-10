@@ -9,7 +9,12 @@ from models.k8s import ResourceRequirements, Resources, SecurityCapabilities
 from backend.services.k8s.generators.converters import (
     convert_cpu_value,
     convert_memory_value,
+    parse_cpu_to_cores,
+    parse_memory_to_gb,
 )
+
+MIN_CPU_REQUEST_MILLICORES = 250
+MIN_MEMORY_REQUEST_MI = 256
 
 
 def parse_image(image_string: str) -> ImageConfig:
@@ -74,27 +79,26 @@ def generate_resources_values(
     elif resources.limits:
         requests = ResourceRequirements()
 
-        # CPU: Default to 50% of limit
         if resources.limits.cpu:
             cpu_limit = resources.limits.cpu
-            # Parse CPU value (could be "1", "1.5", "1000m", etc.)
             if cpu_limit.endswith("m"):
-                # Millicores
                 cpu_limit_value = float(cpu_limit[:-1])
                 requests.cpu = f"{int(cpu_limit_value * 0.5)}m"
             else:
-                # Cores
                 cpu_limit_value = float(cpu_limit)
                 requests.cpu = str(cpu_limit_value * 0.5)
 
-        # Memory: Default to 80% of limit
         if resources.limits.memory:
             memory_limit = resources.limits.memory
-            # Parse memory value to calculate percentage
             requests.memory = _calculate_memory_request(memory_limit, 0.8)
 
         if requests.cpu or requests.memory:
             resources.requests = requests
+
+    # Enforce minimum requests
+    if resources.requests:
+        resources.requests.cpu = _enforce_min_cpu(resources.requests.cpu)
+        resources.requests.memory = _enforce_min_memory(resources.requests.memory)
 
     return resources if resources.limits or resources.requests else None
 
@@ -165,5 +169,24 @@ def _calculate_memory_request(memory_limit: str, percentage: float = 0.8) -> str
             value = int(memory_limit)
             return str(int(value * percentage))
         except ValueError:
-            # If we can't parse it, return a conservative default
             return "128Mi"
+
+
+def _enforce_min_cpu(cpu_value: str | None) -> str:
+    """Ensure CPU request meets minimum threshold."""
+    if not cpu_value:
+        return f"{MIN_CPU_REQUEST_MILLICORES}m"
+
+    cores = parse_cpu_to_cores(cpu_value)
+    millicores = int(cores * 1000)
+    return f"{max(millicores, MIN_CPU_REQUEST_MILLICORES)}m"
+
+
+def _enforce_min_memory(memory_value: str | None) -> str:
+    """Ensure memory request meets minimum threshold."""
+    if not memory_value:
+        return f"{MIN_MEMORY_REQUEST_MI}Mi"
+
+    gb = parse_memory_to_gb(memory_value)
+    mi_value = int(gb * 1024)
+    return f"{max(mi_value, MIN_MEMORY_REQUEST_MI)}Mi"
