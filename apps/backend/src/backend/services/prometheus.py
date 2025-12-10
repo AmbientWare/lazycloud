@@ -1,3 +1,4 @@
+import asyncio
 from asyncio import Semaphore
 from datetime import datetime, timezone
 from typing import Any
@@ -177,6 +178,109 @@ class PrometheusMetricsService:
         logger.debug(f"Memory usage for {namespace}: {gb_seconds:.2f} GB-seconds")
         return gb_seconds
 
+    async def get_cpu_requests(
+        self, namespace: str, start_time: datetime, end_time: datetime
+    ) -> float:
+        """Get total CPU requests (reserved) in core-seconds for namespace.
+
+        Uses kube_pod_container_resource_requests from kube-state-metrics.
+        """
+        duration_seconds = (end_time - start_time).total_seconds()
+
+        # Query: sum of CPU requests for running pods
+        query = f'''
+            sum(
+                kube_pod_container_resource_requests{{
+                    namespace="{namespace}",
+                    resource="cpu",
+                    container!=""
+                }}
+                * on(pod, namespace) group_left()
+                (kube_pod_status_phase{{phase="Running"}} == 1)
+            )
+        '''
+
+        result = await self._query_range(query, start_time, end_time, step="60s")
+
+        if not result or "result" not in result:
+            logger.warning(f"No CPU requests data for namespace {namespace}")
+            return 0.0
+
+        values = result["result"]
+        if not values or len(values) == 0:
+            return 0.0
+
+        total = 0.0
+        count = 0
+        for series in values:
+            for _, value in series.get("values", []):
+                try:
+                    total += float(value)
+                    count += 1
+                except (ValueError, TypeError):
+                    continue
+
+        if count == 0:
+            return 0.0
+
+        avg_cores = total / count
+        core_seconds = avg_cores * duration_seconds
+
+        logger.debug(f"CPU requests for {namespace}: {core_seconds:.2f} core-seconds")
+        return core_seconds
+
+    async def get_memory_requests(
+        self, namespace: str, start_time: datetime, end_time: datetime
+    ) -> float:
+        """Get total memory requests (reserved) in GB-seconds for namespace.
+
+        Uses kube_pod_container_resource_requests from kube-state-metrics.
+        """
+        duration_seconds = (end_time - start_time).total_seconds()
+
+        # Query: sum of memory requests for running pods (in bytes)
+        query = f'''
+            sum(
+                kube_pod_container_resource_requests{{
+                    namespace="{namespace}",
+                    resource="memory",
+                    container!=""
+                }}
+                * on(pod, namespace) group_left()
+                (kube_pod_status_phase{{phase="Running"}} == 1)
+            )
+        '''
+
+        result = await self._query_range(query, start_time, end_time, step="60s")
+
+        if not result or "result" not in result:
+            logger.warning(f"No memory requests data for namespace {namespace}")
+            return 0.0
+
+        values = result["result"]
+        if not values or len(values) == 0:
+            return 0.0
+
+        total_bytes = 0.0
+        count = 0
+        for series in values:
+            for _, value in series.get("values", []):
+                try:
+                    total_bytes += float(value)
+                    count += 1
+                except (ValueError, TypeError):
+                    continue
+
+        if count == 0:
+            return 0.0
+
+        avg_bytes = total_bytes / count
+        avg_gb = avg_bytes / (1024**3)
+        gb_seconds = avg_gb * duration_seconds
+
+        logger.debug(f"Memory requests for {namespace}: {gb_seconds:.2f} GB-seconds")
+        return gb_seconds
+
     async def get_pod_metrics(self, namespace: str, pod_name: str) -> PodMetrics:
         cpu_query = f'''
             sum(
@@ -311,14 +415,23 @@ class PrometheusMetricsService:
         """Get CPU and memory breakdowns"""
         duration_seconds = (end_time - start_time).total_seconds()
 
-        # Get CPU and memory from Prometheus
-        cpu_total = await self.get_cpu_usage(namespace, start_time, end_time)
-        memory_total = await self.get_memory_usage(namespace, start_time, end_time)
-
-        # Get breakdown by pod
-        by_pod = await self._get_usage_by_pod(
-            namespace, start_time, end_time, duration_seconds
+        (
+            cpu_usage,
+            memory_usage,
+            cpu_requests,
+            memory_requests,
+            by_pod,
+        ) = await asyncio.gather(
+            self.get_cpu_usage(namespace, start_time, end_time),
+            self.get_memory_usage(namespace, start_time, end_time),
+            self.get_cpu_requests(namespace, start_time, end_time),
+            self.get_memory_requests(namespace, start_time, end_time),
+            self._get_usage_by_pod(namespace, start_time, end_time, duration_seconds),
         )
+
+        # Bill for max(reserved, actual)
+        cpu_total = max(cpu_usage, cpu_requests)
+        memory_total = max(memory_usage, memory_requests)
 
         return NamespaceBreakdown(
             namespace=namespace,
@@ -391,7 +504,7 @@ class PrometheusMetricsService:
                 return
 
             pod_labels = pod_labels_map.get(pod_name, {})
-            service_name = pod_labels.get("label_lazycloud_io_service", "unknown")
+            service_name = pod_labels.get("label_lazycloud_dev_service", "unknown")
             release_name = pod_labels.get("label_app_kubernetes_io_instance")
 
             if service_name == "unknown":
