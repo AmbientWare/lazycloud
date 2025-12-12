@@ -13,7 +13,6 @@ import {
 import {
   SidebarInset,
   SidebarProvider,
-  SidebarTrigger,
 } from "@/components/ui/sidebar";
 import { usePathname } from "next/navigation";
 import { UserProvider } from "@/contexts/UserContext";
@@ -55,7 +54,6 @@ function DocsHeader() {
     <div className="z-50 w-full">
       <div className="border-border/60 bg-background/80 flex h-14 items-center justify-between rounded-2xl border px-4 shadow-lg backdrop-blur-md">
         <div className="flex min-w-0 flex-1 items-center gap-3">
-          <SidebarTrigger className="shrink-0" />
           <Breadcrumb className="min-w-0">
             <BreadcrumbList className="flex-wrap">
               {breadcrumbs.map((crumb) => (

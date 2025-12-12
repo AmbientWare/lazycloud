@@ -103,21 +103,15 @@ export function DocsSidebar() {
   return (
     <Sidebar>
       <SidebarHeader>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton>
-              <div className="flex items-center gap-3">
-                <div className="bg-lazycloud/10 flex aspect-square size-8 items-center justify-center rounded-lg">
-                  <BookOpen className="text-lazycloud size-4" />
-                </div>
-                <div className="flex flex-col gap-0.5 leading-none">
-                  <span className="font-semibold">Documentation</span>
-                  <span className="text-muted-foreground text-xs">LazyCloud CLI</span>
-                </div>
-              </div>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
+        <div className="flex items-center gap-3 px-2 py-2">
+          <div className="bg-lazycloud/10 flex aspect-square size-8 items-center justify-center rounded-lg">
+            <BookOpen className="text-lazycloud size-4" />
+          </div>
+          <div className="flex flex-col gap-0.5 leading-none">
+            <span className="font-semibold">Documentation</span>
+            <span className="text-muted-foreground text-xs">LazyCloud</span>
+          </div>
+        </div>
       </SidebarHeader>
       <SidebarContent>
         <SidebarGroup>
