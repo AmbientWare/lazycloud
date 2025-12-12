@@ -1,4 +1,4 @@
-import uuid
+import asyncio
 
 import yaml
 from api_requests.deployments import DiffRequest, DiffType
@@ -130,7 +130,8 @@ async def get_deployment_diff(
         if deployment:
             temp_deployment.id = deployment.id
         else:
-            temp_deployment.id = uuid.uuid4()
+            # For new deployments, don't set id to avoid unnecessary DB secret lookup
+            temp_deployment.id = None
 
         # Run full validation (includes compose validation via HelmValuesGenerator)
         _, _, warnings = await validate_deployment_request(temp_deployment, deployment)
@@ -152,14 +153,24 @@ async def get_deployment_diff(
     storage_type_changes: list[StorageTypeChange] | None = None
     if deployment and request.diff_type == DiffType.EXISTING:
         try:
-            existing_pvcs = get_namespace_pvcs(namespace)
+            existing_pvcs = await asyncio.wait_for(
+                get_namespace_pvcs(namespace),
+                timeout=3.0,
+            )
             if existing_pvcs:
                 changes = detect_storage_type_changes(compose_file, existing_pvcs)
                 if changes:
                     storage_type_changes = changes
-
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"Timed out detecting storage type changes for namespace {namespace}"
+            )
+            warnings.append(
+                "Could not detect storage type changes: Kubernetes API timeout"
+            )
         except Exception as e:
             logger.warning(f"Failed to detect storage type changes: {e}")
+            warnings.append(f"Could not detect storage type changes: {str(e)}")
 
     # Only return existing_compose_yaml if it has content (empty means nothing deployed yet)
     existing_yaml = None

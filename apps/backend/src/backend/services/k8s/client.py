@@ -185,15 +185,17 @@ async def close_async_api_client():
         logger.info("Closed async Kubernetes API client")
 
 
-def get_namespace_pvcs(namespace: str) -> dict[str, str]:
+async def get_namespace_pvcs(namespace: str) -> dict[str, str]:
     """Get existing PVCs in a namespace with their storage classes.
 
     Returns:
         Dict mapping PVC name to storage class name
     """
     try:
-        core_v1 = get_core_v1_api()
-        pvcs = core_v1.list_namespaced_persistent_volume_claim(namespace=namespace)
+        core_v1 = await get_async_core_v1_api()
+        pvcs = await core_v1.list_namespaced_persistent_volume_claim(
+            namespace=namespace
+        )
         return {
             pvc.metadata.name: pvc.spec.storage_class_name or "" for pvc in pvcs.items
         }
