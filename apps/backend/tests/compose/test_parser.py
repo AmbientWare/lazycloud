@@ -837,7 +837,7 @@ class TestVolumeDefinitionParsing:
             "volumes": {
                 "data": {
                     "labels": {
-                        "lazycloud.storage.size": "20Gi",
+                        "lazycloud.volume.size": "20Gi",
                         "lazycloud.volume.shared": "true",
                     },
                 },
@@ -846,7 +846,7 @@ class TestVolumeDefinitionParsing:
 
         result = ComposeParser.parse_dict(data)
 
-        assert result.volumes[0].labels["lazycloud.storage.size"] == "20Gi"
+        assert result.volumes[0].labels["lazycloud.volume.size"] == "20Gi"
         assert result.volumes[0].labels["lazycloud.volume.shared"] == "true"
 
     def test_parse_external_volume(self):

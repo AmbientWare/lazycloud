@@ -1,0 +1,27 @@
+# Workspaces
+
+Workspaces organize your deployments. A personal workspace is created automatically when you login.
+
+## Commands
+
+```bash
+# List workspaces
+lazycloud workspaces list
+
+# Create a workspace
+lazycloud workspaces create my-team
+
+# Switch workspace
+lazycloud workspaces activate my-team
+
+# Delete workspace (destroys all deployments in it)
+lazycloud workspaces destroy my-team
+```
+
+## When to Use Multiple Workspaces
+
+- **Teams** - Share deployments with collaborators
+- **Environments** - Separate production, staging, dev
+- **Billing** - Each workspace tracks usage independently
+
+All commands operate on your active workspace. Check which is active with `lazycloud workspaces list`.

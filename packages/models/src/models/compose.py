@@ -22,7 +22,7 @@ class LazyCloudLabel(StrEnum):
 
     # Volume labels
     VOLUME_SHARED = "lazycloud.volume.shared"
-    STORAGE_SIZE = "lazycloud.storage.size"
+    VOLUME_SIZE = "lazycloud.volume.size"
 
 
 class ComposePort(BaseModel):

@@ -2,6 +2,7 @@ import type { MDXComponents } from "mdx/types";
 import { cn } from "@/lib/utils";
 import type { ClassValue } from "clsx";
 import Link from "next/link";
+import { CodeBlock } from "@/components/shared/code-block";
 
 export function useMDXComponents(components: MDXComponents): MDXComponents {
   return {
@@ -17,7 +18,7 @@ export function useMDXComponents(components: MDXComponents): MDXComponents {
     h2: ({ className, ...props }: { className?: ClassValue }) => (
       <h2
         className={cn(
-          "text-foreground mt-10 scroll-m-20 border-b pb-2 text-3xl font-semibold tracking-tight first:mt-0",
+          "text-foreground mt-10 scroll-m-20 text-2xl font-semibold tracking-tight first:mt-0",
           className,
         )}
         {...props}
@@ -26,7 +27,7 @@ export function useMDXComponents(components: MDXComponents): MDXComponents {
     h3: ({ className, ...props }: { className?: ClassValue }) => (
       <h3
         className={cn(
-          "text-foreground mt-8 scroll-m-20 text-2xl font-semibold tracking-tight",
+          "text-foreground mt-8 scroll-m-20 text-xl font-semibold tracking-tight",
           className,
         )}
         {...props}
@@ -35,7 +36,7 @@ export function useMDXComponents(components: MDXComponents): MDXComponents {
     h4: ({ className, ...props }: { className?: ClassValue }) => (
       <h4
         className={cn(
-          "text-foreground mt-8 scroll-m-20 text-xl font-semibold tracking-tight",
+          "text-foreground mt-6 scroll-m-20 text-lg font-semibold tracking-tight",
           className,
         )}
         {...props}
@@ -71,7 +72,7 @@ export function useMDXComponents(components: MDXComponents): MDXComponents {
     blockquote: ({ className, ...props }: { className?: ClassValue }) => (
       <blockquote
         className={cn(
-          "border-primary/20 text-muted-foreground mt-6 border-l-2 pl-6 italic",
+          "border-lazycloud/50 bg-lazycloud/5 text-muted-foreground mt-6 rounded-r-lg border-l-4 py-3 pl-4 pr-4",
           className,
         )}
         {...props}
@@ -98,7 +99,7 @@ export function useMDXComponents(components: MDXComponents): MDXComponents {
       <hr className="border-muted-foreground/20 my-8" {...props} />
     ),
     table: ({ className, ...props }: { className?: ClassValue }) => (
-      <div className="bg-card my-6 w-full overflow-y-auto rounded-lg border">
+      <div className="bg-card/90 backdrop-blur-md border-border/60 my-6 w-full overflow-y-auto rounded-lg border shadow-sm shadow-black/30 dark:shadow-white/10">
         <table className={cn("w-full", className)} {...props} />
       </div>
     ),
@@ -126,24 +127,42 @@ export function useMDXComponents(components: MDXComponents): MDXComponents {
         {...props}
       />
     ),
-    pre: ({ className, ...props }: { className?: ClassValue }) => (
-      <pre
-        className={cn(
-          "bg-card mt-6 mb-4 overflow-x-auto rounded-lg border p-4 text-sm shadow-sm",
-          className,
-        )}
-        {...props}
-      />
+    pre: ({
+      className,
+      children,
+      ...props
+    }: {
+      className?: ClassValue;
+      children?: React.ReactNode;
+    }) => (
+      <CodeBlock className={className} {...props}>
+        {children}
+      </CodeBlock>
     ),
-    code: ({ className, ...props }: { className?: ClassValue }) => (
-      <code
-        className={cn(
-          "bg-muted text-foreground relative rounded px-[0.3rem] py-[0.2rem] font-mono text-sm",
-          className,
-        )}
-        {...props}
-      />
-    ),
+    code: ({ className, ...props }: { className?: ClassValue }) => {
+      // Check if code is inside a pre block (has language class)
+      const isCodeBlock = typeof className === "string" && className.includes("language-");
+
+      if (isCodeBlock) {
+        return (
+          <code
+            className={cn("text-foreground font-mono", className)}
+            {...props}
+          />
+        );
+      }
+
+      // Inline code styling
+      return (
+        <code
+          className={cn(
+            "bg-muted text-foreground rounded px-1.5 py-0.5 font-mono text-sm",
+            className,
+          )}
+          {...props}
+        />
+      );
+    },
     a: ({
       className,
       href,
@@ -157,49 +176,17 @@ export function useMDXComponents(components: MDXComponents): MDXComponents {
       const isExternal = href?.startsWith("http");
       const Component = isExternal ? "a" : Link;
 
-      // Handle Markdown-style links [text](url)
-      // If children is a string and contains markdown-style link, extract the text and href
-      let linkText = children;
-      let linkHref = href;
-
-      if (
-        typeof children === "string" &&
-        children.includes("](") &&
-        children.includes(")")
-      ) {
-        const regex = /\[(.*?)\]\((.*?)\)/;
-        const match = regex.exec(children);
-        if (match) {
-          linkText = match[1];
-          linkHref = match[2];
-          // Update isExternal check with the new href
-          const isExternalLink = linkHref?.startsWith("http");
-          const LinkComponent = isExternalLink ? "a" : Link;
-          return (
-            <LinkComponent
-              href={linkHref ?? "#"}
-              className={cn(
-                "text-primary hover:text-primary/80 font-medium underline underline-offset-4",
-                className,
-              )}
-              {...props}
-            >
-              {linkText}
-            </LinkComponent>
-          );
-        }
-      }
-
       return (
         <Component
-          href={linkHref ?? "#"}
+          href={href ?? "#"}
           className={cn(
             "text-primary hover:text-primary/80 font-medium underline underline-offset-4",
             className,
           )}
+          {...(isExternal ? { target: "_blank", rel: "noopener noreferrer" } : {})}
           {...props}
         >
-          {linkText}
+          {children}
         </Component>
       );
     },

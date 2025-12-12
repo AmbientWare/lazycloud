@@ -1,0 +1,51 @@
+# lazycloud deploy
+
+Deploys your Docker Compose app to the cloud.
+
+```bash
+lazycloud deploy
+```
+
+## Options
+
+| Option | Description |
+|--------|-------------|
+| `-s, --service` | Deploy specific services only |
+| `-y, --yes` | Skip confirmation |
+| `--env` | Env var source: file path, `shell`, or `none` |
+
+## Examples
+
+```bash
+# Deploy everything
+lazycloud deploy
+
+# Skip confirmation
+lazycloud deploy -y
+
+# Deploy specific services
+lazycloud deploy -s api -s worker
+
+# Use env vars from shell
+lazycloud deploy --env shell
+
+# Use specific .env file
+lazycloud deploy --env .env.production
+```
+
+## What Happens
+
+1. Shows a diff of changes
+2. Prompts for new environment variables
+3. Builds images remotely (if compose has `build:` configs)
+4. Deploys with real-time progress
+
+## Environment Variables
+
+New env vars are prompted interactively. Use `--env` to provide them automatically:
+
+- `--env shell` - reads from your shell
+- `--env .env.prod` - reads from a file
+- `--env none` - skips collection
+
+Variables are stored as encrypted secrets.
