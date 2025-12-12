@@ -1,6 +1,9 @@
 """Validation functions for deployments that run before queuing tasks."""
 
+import asyncio
+
 import yaml
+from loguru import logger
 from models.deployments import ResourceRequirements
 from models.helm import HelmValues
 from models.k8s import WorkloadType
@@ -104,9 +107,29 @@ async def validate_deployment_request(
     if existing_deployment:
         helm_manager = HelmManager()
         name = create_release_name(deployment.workspace_id, deployment.name)
-        release_exists, _ = helm_manager.check_release_status(
-            name, deployment.namespace
-        )
+
+        # Use async Helm subprocess call with timeout
+        release_exists = False
+        try:
+            release_exists, _ = await asyncio.wait_for(
+                helm_manager.check_release_status_async(
+                    name,
+                    deployment.namespace,
+                ),
+                timeout=5.0,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"Helm status check timed out for release {name} in namespace {deployment.namespace}"
+            )
+            warnings.append(
+                "Could not verify existing deployment status: Helm check timeout"
+            )
+        except Exception as e:
+            logger.warning(
+                f"Helm status check failed for release {name} in namespace {deployment.namespace}: {e}"
+            )
+            warnings.append(f"Could not verify existing deployment status: {str(e)}")
 
         if release_exists:
             if existing_deployment.helm_values:

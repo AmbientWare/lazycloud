@@ -2,12 +2,6 @@
 
 replicaCount: 3
 
-backgroundWorkers:
-  replicaCount: 2
-
-crons:
-  replicaCount: 1
-
 image:
   repository: 534742592531.dkr.ecr.us-east-1.amazonaws.com/backend-api
   pullPolicy: Always
@@ -23,6 +17,7 @@ resources:
     memory: 2Gi
 
 backgroundWorkers:
+  replicaCount: 2
   resources:
     limits:
       cpu: 500m
@@ -32,6 +27,7 @@ backgroundWorkers:
       memory: 1Gi
 
 crons:
+  replicaCount: 1
   resources:
     limits:
       cpu: 500m

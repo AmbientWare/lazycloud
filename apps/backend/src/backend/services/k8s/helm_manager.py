@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import subprocess
@@ -413,6 +414,56 @@ class HelmManager:
         """Check if a release exists and its deployment status."""
         cmd = ["helm", "status", release_name, "-n", namespace, "-o", "json"]
         result = self._run_helm_command(cmd, suppress_not_found_warning=True)
+
+        if result.returncode != 0:
+            return False, False
+
+        try:
+            status = json.loads(result.stdout)
+            info = status.get("info", {})
+            return True, info.get("status", "").lower() == "deployed"
+
+        except (json.JSONDecodeError, KeyError):
+            return True, False
+
+    async def _run_helm_command_async(
+        self, cmd: list[str], suppress_not_found_warning: bool = False
+    ) -> subprocess.CompletedProcess:
+        """Run a Helm command asynchronously with proper error handling."""
+        logger.debug(f"Running command (async): {' '.join(cmd)}")
+
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=os.environ,
+        )
+
+        stdout, stderr = await process.communicate()
+
+        result = subprocess.CompletedProcess(
+            args=cmd,
+            returncode=process.returncode,
+            stdout=stdout.decode("utf-8") if stdout else "",
+            stderr=stderr.decode("utf-8") if stderr else "",
+        )
+
+        if result.returncode != 0:
+            if suppress_not_found_warning and "not found" in result.stderr.lower():
+                logger.debug(f"Command returned not found (expected): {result.stderr}")
+            else:
+                logger.warning(f"Command failed: {result.stderr}")
+
+        return result
+
+    async def check_release_status_async(
+        self, release_name: str, namespace: str
+    ) -> tuple[bool, bool]:
+        """Check if a release exists and its deployment status (async)."""
+        cmd = ["helm", "status", release_name, "-n", namespace, "-o", "json"]
+        result = await self._run_helm_command_async(
+            cmd, suppress_not_found_warning=True
+        )
 
         if result.returncode != 0:
             return False, False
