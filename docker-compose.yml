@@ -260,3 +260,15 @@ services:
     depends_on:
       api:
         condition: service_healthy
+
+  ngrok:
+    image: ngrok/ngrok:latest
+    networks:
+      - lazycloud
+    profiles: [frontend]
+    command: ["http", "http://web:3000", "--domain=lazycloud.ambientware.co"]
+    environment:
+      NGROK_AUTHTOKEN: 2Qsvi3pRhAqRK6m3c2BKo3bNaMT_5DfkN6TiBfzZTha8yg4ZP
+    depends_on:
+      web:
+        condition: service_healthy
