@@ -68,12 +68,6 @@ const data = {
           title: "Dashboard",
           url: "/docs/dashboard",
         },
-      ],
-    },
-    {
-      title: "Resources",
-      url: "/docs/workspaces",
-      items: [
         {
           title: "Workspaces",
           url: "/docs/workspaces",
