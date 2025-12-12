@@ -160,7 +160,7 @@ export function DeploymentCard({ deployment }: { deployment: DeploymentWithStatu
                     {services.map((service) => (
                       <div
                         key={service.name}
-                        className="bg-muted/50 rounded-md border border-border/50 p-3 shadow-sm transition-colors hover:bg-muted/70 hover:border-border/70 hover:shadow"
+                        className="bg-muted/50 rounded-md border border-border/50 p-3 shadow-sm transition-colors"
                       >
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex min-w-0 flex-1 items-center gap-2">
@@ -217,7 +217,7 @@ export function DeploymentCard({ deployment }: { deployment: DeploymentWithStatu
                     {volumes.map((volume) => (
                       <div
                         key={volume.name}
-                        className="bg-muted/50 rounded-md border border-border/50 p-3 shadow-sm transition-colors hover:bg-muted/70 hover:border-border/70 hover:shadow"
+                        className="bg-muted/50 rounded-md border border-border/50 p-3 shadow-sm transition-colors"
                       >
                       <div className="flex items-center justify-between gap-2">
                         <span className="min-w-0 flex-1 truncate text-sm font-medium">
@@ -259,7 +259,7 @@ export function DeploymentCard({ deployment }: { deployment: DeploymentWithStatu
                   {networks.map((network) => (
                     <div
                       key={network.name}
-                      className="bg-muted/50 rounded-md border border-border/50 p-3 shadow-sm transition-colors hover:bg-muted/70 hover:border-border/70 hover:shadow"
+                      className="bg-muted/50 rounded-md border border-border/50 p-3 shadow-sm transition-colors"
                     >
                       <div className="flex items-center justify-between gap-2">
                         <span className="min-w-0 flex-1 truncate text-sm font-medium">

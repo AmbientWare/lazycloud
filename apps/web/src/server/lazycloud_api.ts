@@ -1,4 +1,5 @@
 import { env } from "@/env";
+import type { ApiKey } from "@/interfaces/apiKeys";
 import type {
   Workspace,
   WorkspaceMember,
@@ -119,6 +120,21 @@ class LazyCloudAPIClass {
       endpoint,
       {
         method: "DELETE",
+      },
+      authOptions,
+    );
+  }
+
+  private async put<T>(
+    endpoint: string,
+    data: Record<string, unknown>,
+    authOptions?: { useAdmin?: boolean; accessToken?: string },
+  ): Promise<T> {
+    return await this.fetchWithApiUrl<T>(
+      endpoint,
+      {
+        method: "PUT",
+        body: JSON.stringify(data),
       },
       authOptions,
     );
@@ -436,6 +452,16 @@ class LazyCloudAPIClass {
       {},
       { accessToken },
     );
+  }
+
+  // API Key Methods
+
+  async getApiKeys(accessToken: string): Promise<ApiKey[]> {
+    return await this.get<ApiKey[]>(`/api-keys`, { accessToken });
+  }
+
+  async regenerateApiKey(accessToken: string, apiKeyId: string): Promise<ApiKey> {
+    return await this.put<ApiKey>(`/api-keys/${apiKeyId}`, {}, { accessToken });
   }
 }
 

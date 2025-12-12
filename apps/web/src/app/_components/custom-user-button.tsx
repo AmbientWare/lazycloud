@@ -9,12 +9,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { LogOut, CreditCard, Loader2 } from "lucide-react";
+import { LogOut, CreditCard, Key } from "lucide-react";
+import { Spinner } from "@/components/shared/spinner";
 import { useState, useEffect } from "react";
 import { getCustomerPortalUrl } from "@/actions/customer-portal";
 import { getUserSubscriptionTier } from "@/actions/users";
 import { toast } from "sonner";
 import Image from "next/image";
+import { ApiKeyDialog } from "./api-key-dialog";
 
 interface CustomUserButtonProps {
   showDetails?: boolean;
@@ -24,6 +26,7 @@ export function CustomUserButton({ showDetails = false }: CustomUserButtonProps)
   const { user } = useAuth();
   const [isLoadingPortal, setIsLoadingPortal] = useState(false);
   const [subscriptionTier, setSubscriptionTier] = useState<string | undefined>();
+  const [apiKeyDialogOpen, setApiKeyDialogOpen] = useState(false);
 
   useEffect(() => {
     if (showDetails) {
@@ -37,16 +40,12 @@ export function CustomUserButton({ showDetails = false }: CustomUserButtonProps)
 
   const handleCustomerPortal = async () => {
     setIsLoadingPortal(true);
-    const toastId = toast.loading("Opening customer portal...");
     try {
       const result = await getCustomerPortalUrl();
-      toast.success("Redirecting to customer portal...", { id: toastId });
-      setTimeout(() => {
-        window.location.href = result.url;
-      }, 500);
+      window.location.href = result.url;
     } catch (error) {
       console.error("Error opening customer portal:", error);
-      toast.error("Failed to open customer portal", { id: toastId });
+      toast.error("Failed to open customer portal");
       setIsLoadingPortal(false);
     }
   };
@@ -98,10 +97,24 @@ export function CustomUserButton({ showDetails = false }: CustomUserButtonProps)
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
-        <DropdownMenuItem onClick={handleCustomerPortal} disabled={isLoadingPortal} className="cursor-pointer">
-          <CreditCard className="mr-2 size-4" />
-          {isLoadingPortal ? "Loading..." : "Customer Portal"}
-          {isLoadingPortal && <Loader2 className="ml-auto size-4 animate-spin" />}
+        <DropdownMenuItem onClick={() => setApiKeyDialogOpen(true)} className="cursor-pointer">
+          <Key className="mr-2 size-4" />
+          API Key
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          onSelect={(e) => {
+            e.preventDefault();
+            handleCustomerPortal();
+          }}
+          disabled={isLoadingPortal}
+          className="cursor-pointer"
+        >
+          {isLoadingPortal ? (
+            <Spinner size="sm" className="mr-2" />
+          ) : (
+            <CreditCard className="mr-2 size-4" />
+          )}
+          Customer Portal
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={handleSignOut} variant="destructive" className="cursor-pointer">
@@ -109,6 +122,7 @@ export function CustomUserButton({ showDetails = false }: CustomUserButtonProps)
           Sign Out
         </DropdownMenuItem>
       </DropdownMenuContent>
+      <ApiKeyDialog open={apiKeyDialogOpen} onOpenChange={setApiKeyDialogOpen} />
     </DropdownMenu>
   );
 }

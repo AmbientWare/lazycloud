@@ -49,6 +49,10 @@ def attempt_token_refresh() -> bool:
 
     Returns True if refresh was successful, False otherwise.
     """
+    if config.access_token and config.access_token.startswith("sk_"):
+        # API key check - no refresh needed
+        return False
+
     refresh_token = config.refresh_token
     if not refresh_token:
         return False

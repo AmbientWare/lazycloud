@@ -4,10 +4,8 @@ from pydantic import BaseModel
 
 class CreateApiKeyRequest(BaseModel):
     name: str
-    workos_id: str
-    expires_at: ApiKeyExpirationDays
+    expires_at: ApiKeyExpirationDays = ApiKeyExpirationDays.NEVER
 
 
 class UpdateApiKeyRequest(BaseModel):
-    workos_id: str
-    expires_at: ApiKeyExpirationDays
+    expires_at: ApiKeyExpirationDays = ApiKeyExpirationDays.NEVER
