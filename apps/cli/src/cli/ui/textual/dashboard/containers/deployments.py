@@ -127,6 +127,9 @@ class DeploymentsContainer(Container):
                     message="Your session has expired or is invalid.\n\nPlease run 'lazycloud login' again.",
                     icon=Icons.LOCK_KEY,
                 )
+                # Exit the app when auth error modal is dismissed
+                self.app.push_screen(error_modal, callback=lambda _: self.app.exit(1))
+                return
             elif e.status_code and 500 <= e.status_code < 600:
                 error_modal = ErrorModal(
                     title="Server Error",

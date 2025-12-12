@@ -60,15 +60,16 @@ class CLIConfig(BaseSettings):
         """Get the access token.
 
         Checks in order:
-        1. Stored access token from config file
-        2. LAZYCLOUD_ACCESS_TOKEN environment variable
+        1. LAZYCLOUD_API_KEY environment variable (for CI/CD)
+        2. Stored access token from config file
         """
+        # API key takes precedence (CI/CD use case)
+        api_key = os.getenv("LAZYCLOUD_API_KEY")
+        if api_key:
+            return api_key
+
         if self._access_token:
             return self._access_token
-
-        env_token = os.getenv("LAZYCLOUD_ACCESS_TOKEN")
-        if env_token:
-            return env_token
 
         return None
 
