@@ -9,9 +9,12 @@ import { usePathname } from "next/navigation";
 
 export default function TextLogo() {
   const [imageLoaded, setImageLoaded] = useState(false);
+  const pathname = usePathname();
 
-  const isLandingRoute = LANDING_ROUTES.includes(usePathname());
-  const isSubscribeRoute = SUBSCRIBE_ROUTES.includes(usePathname());
+  const isLandingRoute = LANDING_ROUTES.some(
+    (route) => pathname === route || pathname.startsWith(route + "/"),
+  );
+  const isSubscribeRoute = SUBSCRIBE_ROUTES.includes(pathname);
 
   return (
     <motion.div

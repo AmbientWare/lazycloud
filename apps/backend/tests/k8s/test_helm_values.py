@@ -305,7 +305,7 @@ class TestVolumeValuesGeneration:
         self,
         helm_generator: HelmValuesGenerator,
     ):
-        """Test volume size from lazycloud.storage.size label."""
+        """Test volume size from lazycloud.volume.size label."""
         compose = ComposeFile(
             services=[
                 ComposeService(
@@ -317,7 +317,7 @@ class TestVolumeValuesGeneration:
                 )
             ],
             volumes=[
-                ComposeVolume(name="data", labels={"lazycloud.storage.size": "50Gi"})
+                ComposeVolume(name="data", labels={"lazycloud.volume.size": "50Gi"})
             ],
         )
 

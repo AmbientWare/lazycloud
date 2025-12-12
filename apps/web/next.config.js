@@ -21,7 +21,9 @@ const config = {
 };
 
 const withMDX = createMDX({
-  // Add markdown plugins here, as desired
+  options: {
+    remarkPlugins: ["remark-gfm"],
+  },
 });
 
 // Merge MDX config with Next.js config
