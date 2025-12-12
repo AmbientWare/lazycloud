@@ -1,5 +1,8 @@
+"use client";
+
 import * as React from "react";
 import { BookOpen } from "lucide-react";
+import { usePathname } from "next/navigation";
 
 import {
   Sidebar,
@@ -14,6 +17,7 @@ import {
   SidebarRail,
 } from "@/components/ui/sidebar";
 import Link from "next/link";
+import { cn } from "@/lib/utils";
 
 const data = {
   navMain: [
@@ -88,6 +92,14 @@ const data = {
 };
 
 export function DocsSidebar() {
+  const pathname = usePathname();
+
+  const isActive = (url: string) => pathname === url;
+  const isParentActive = (item: (typeof data.navMain)[0]) => {
+    if (pathname === item.url) return true;
+    return item.items?.some((sub) => pathname === sub.url) ?? false;
+  };
+
   return (
     <Sidebar>
       <SidebarHeader>
@@ -112,8 +124,14 @@ export function DocsSidebar() {
           <SidebarMenu>
             {data.navMain.map((item) => (
               <SidebarMenuItem key={item.title}>
-                <SidebarMenuButton asChild>
-                  <Link href={item.url} className="font-medium">
+                <SidebarMenuButton asChild isActive={isActive(item.url)}>
+                  <Link
+                    href={item.url}
+                    className={cn(
+                      "font-medium",
+                      isParentActive(item) && "text-lazycloud"
+                    )}
+                  >
                     {item.title}
                   </Link>
                 </SidebarMenuButton>
@@ -121,8 +139,13 @@ export function DocsSidebar() {
                   <SidebarMenuSub>
                     {item.items.map((subItem) => (
                       <SidebarMenuSubItem key={subItem.title}>
-                        <SidebarMenuButton asChild>
-                          <Link href={subItem.url}>
+                        <SidebarMenuButton asChild isActive={isActive(subItem.url)}>
+                          <Link
+                            href={subItem.url}
+                            className={cn(
+                              isActive(subItem.url) && "text-lazycloud font-medium"
+                            )}
+                          >
                             <span>{subItem.title}</span>
                           </Link>
                         </SidebarMenuButton>
