@@ -29,6 +29,10 @@ const titleMap: Record<string, string> = {
   workspaces: "Workspaces",
   deployments: "Deployments",
   usage: "Usage",
+  labels: "Compose Labels",
+  service: "Service Labels",
+  scaling: "Scaling Labels",
+  volume: "Volume Labels",
 };
 
 function DocsHeader() {

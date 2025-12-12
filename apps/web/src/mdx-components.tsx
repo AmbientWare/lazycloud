@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 import type { ClassValue } from "clsx";
 import Link from "next/link";
 import { CodeBlock } from "@/components/shared/code-block";
+import { Callout, Note, Warning, Tip, Danger } from "@/components/shared/callout";
 
 export function useMDXComponents(components: MDXComponents): MDXComponents {
   return {
@@ -141,14 +142,12 @@ export function useMDXComponents(components: MDXComponents): MDXComponents {
     ),
     code: ({ className, ...props }: { className?: ClassValue }) => {
       // Check if code is inside a pre block (has language class)
-      const isCodeBlock = typeof className === "string" && className.includes("language-");
+      const isCodeBlock =
+        typeof className === "string" && className.includes("language-");
 
       if (isCodeBlock) {
         return (
-          <code
-            className={cn("text-foreground font-mono", className)}
-            {...props}
-          />
+          <code className={cn("text-foreground font-mono", className)} {...props} />
         );
       }
 
@@ -190,6 +189,12 @@ export function useMDXComponents(components: MDXComponents): MDXComponents {
         </Component>
       );
     },
+    // Callout components for notes, warnings, tips
+    Callout,
+    Note,
+    Warning,
+    Tip,
+    Danger,
     ...components,
   };
 }
