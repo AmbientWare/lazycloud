@@ -39,13 +39,13 @@ class UsageOverviewSection(Container):
                 zebra_stripes=True,
             )
             self._metrics_table.can_focus = False
-            self._metrics_table.add_columns("Metric", "Usage (unit-h)", "Cost ($)")
+            self._metrics_table.add_columns("Metric", "Usage", "Cost ($)")
             # Show placeholder rows while loading
-            self._metrics_table.add_row("CPU (core)", "-", "-", key="cpu")
-            self._metrics_table.add_row("Memory (GB)", "-", "-", key="memory")
-            self._metrics_table.add_row("Storage (GB)", "-", "-", key="storage")
-            self._metrics_table.add_row("Build Minutes", "-", "-", key="build")
-            self._metrics_table.add_row("Endpoints (hours)", "-", "-", key="endpoints")
+            self._metrics_table.add_row("CPU (core-hrs)", "-", "-", key="cpu")
+            self._metrics_table.add_row("Memory (GB-hrs)", "-", "-", key="memory")
+            self._metrics_table.add_row("Storage (GB-hrs)", "-", "-", key="storage")
+            self._metrics_table.add_row("Build (minutes)", "-", "-", key="build")
+            self._metrics_table.add_row("Endpoints (hrs)", "-", "-", key="endpoints")
             self._metrics_table.add_row("Total", "", "-", key="total")
             yield self._metrics_table
 
@@ -120,7 +120,7 @@ class UsageOverviewSection(Container):
         # CPU row
         cpu_cost_str = f"{costs.cpu_cost:.2f}" if costs else "-"
         self._metrics_table.add_row(
-            "CPU (core)",
+            "CPU (core-hrs)",
             f"{metrics.cpu_core_hours:.2f}",
             cpu_cost_str,
             key="cpu",
@@ -129,7 +129,7 @@ class UsageOverviewSection(Container):
         # Memory row
         memory_cost_str = f"{costs.memory_cost:.2f}" if costs else "-"
         self._metrics_table.add_row(
-            "Memory (GB)",
+            "Memory (GB-hrs)",
             f"{metrics.memory_gb_hours:.2f}",
             memory_cost_str,
             key="memory",
@@ -140,7 +140,7 @@ class UsageOverviewSection(Container):
         storage_cost = (costs.standard_cost + costs.shared_cost) if costs else None
         storage_cost_str = f"{storage_cost:.2f}" if storage_cost is not None else "-"
         self._metrics_table.add_row(
-            "Storage (GB)",
+            "Storage (GB-hrs)",
             f"{storage_hours:.2f}",
             storage_cost_str,
             key="storage",
@@ -149,7 +149,7 @@ class UsageOverviewSection(Container):
         # Build Minutes row
         build_cost_str = f"{costs.build_cost:.2f}" if costs else "-"
         self._metrics_table.add_row(
-            "Build Minutes",
+            "Build (minutes)",
             f"{metrics.build_minutes:.2f}",
             build_cost_str,
             key="build",
@@ -158,7 +158,7 @@ class UsageOverviewSection(Container):
         # Endpoints row
         endpoint_cost_str = f"{costs.endpoint_cost:.2f}" if costs else "-"
         self._metrics_table.add_row(
-            "Endpoints (hours)",
+            "Endpoints (hrs)",
             f"{metrics.public_endpoint_hours:.2f}",
             endpoint_cost_str,
             key="endpoints",

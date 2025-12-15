@@ -11,7 +11,7 @@ class UsageMetricsTable(DataTable):
         self.can_focus = False
         self.show_cursor = False
         self.zebra_stripes = True
-        self.add_columns("Metric", "Usage (unit-h)", "Cost ($)")
+        self.add_columns("Metric", "Usage", "Cost ($)")
 
     def update_metrics(
         self,
@@ -43,18 +43,18 @@ class UsageMetricsTable(DataTable):
         build_cost_str = f"{build_cost:.2f}" if build_cost is not None else "-"
         endpoint_cost_str = f"{endpoint_cost:.2f}" if endpoint_cost is not None else "-"
 
-        self.add_row("CPU (core)", f"{cpu_hours:.2f}", cpu_cost_str, key="cpu")
+        self.add_row("CPU (core-hrs)", f"{cpu_hours:.2f}", cpu_cost_str, key="cpu")
         self.add_row(
-            "Memory (GB)", f"{memory_hours:.2f}", memory_cost_str, key="memory"
+            "Memory (GB-hrs)", f"{memory_hours:.2f}", memory_cost_str, key="memory"
         )
         self.add_row(
-            "Storage (GB)", f"{storage_hours:.2f}", storage_cost_str, key="storage"
+            "Storage (GB-hrs)", f"{storage_hours:.2f}", storage_cost_str, key="storage"
         )
         self.add_row(
-            "Build Minutes", f"{build_minutes:.2f}", build_cost_str, key="build"
+            "Build (minutes)", f"{build_minutes:.2f}", build_cost_str, key="build"
         )
         self.add_row(
-            "Endpoints (hours)",
+            "Endpoints (hrs)",
             f"{public_endpoint_hours:.2f}",
             endpoint_cost_str,
             key="endpoints",
