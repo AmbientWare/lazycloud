@@ -266,19 +266,19 @@ export function UsageOverviewWithChart({
                 />
               )}
               <UsageMetricCard
-                label="CPU (core)"
+                label="CPU"
                 value={usage.cpu_core_hours}
                 unit="core-hrs"
                 cost={usage.costs?.cpu_cost}
               />
               <UsageMetricCard
-                label="Memory (GB)"
+                label="Memory"
                 value={usage.memory_gb_hours}
                 unit="GB-hrs"
                 cost={usage.costs?.memory_cost}
               />
               <UsageMetricCard
-                label="Storage (GB)"
+                label="Storage"
                 value={usage.standard_gb_hours + usage.shared_gb_hours}
                 unit="GB-hrs"
                 cost={
@@ -288,13 +288,13 @@ export function UsageOverviewWithChart({
                 }
               />
               <UsageMetricCard
-                label="Build Minutes"
+                label="Build"
                 value={usage.build_minutes}
-                unit="min"
+                unit="minutes"
                 cost={usage.costs?.build_cost}
               />
               <UsageMetricCard
-                label="Endpoints (hours)"
+                label="Endpoints"
                 value={usage.public_endpoint_hours}
                 unit="hrs"
                 cost={usage.costs?.endpoint_cost}

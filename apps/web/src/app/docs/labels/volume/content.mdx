@@ -4,7 +4,7 @@ Configure persistent storage for your volumes. Add these to the top-level `volum
 
 ## lazycloud.volume.size
 
-Set the storage size for a volume.
+Set the storage size for a volume. **This label only applies to standard volumes.**
 
 ```yaml
 volumes:
@@ -26,6 +26,10 @@ services:
 - `Gi` - gibibytes (e.g., `50Gi`)
 - `Ti` - tebibytes (e.g., `1Ti`)
 
+<Note>
+Shared volumes automatically scale up and down to match requested storage and do not require a volume size specification.
+</Note>
+
 ---
 
 ## lazycloud.volume.shared
@@ -37,13 +41,16 @@ volumes:
   shared-assets:
     labels:
       lazycloud.volume.shared: "true"
-      lazycloud.volume.size: "20Gi"
 ```
 
 | Value | Storage Type | Use Case |
 |-------|--------------|----------|
 | `"false"` (default) | Standard | Single-replica services |
 | `"true"` | Shared | Multi-replica or multi-service access |
+
+<Note>
+Shared volumes automatically scale up and down to match requested storage. They do not require a `lazycloud.volume.size` specification.
+</Note>
 
 <Note>
 If a volume is mounted by multiple services, it's automatically marked as shared.
@@ -61,7 +68,6 @@ volumes:
 
   shared-assets:
     labels:
-      lazycloud.volume.size: "20Gi"
       lazycloud.volume.shared: "true"
 
 services:
@@ -78,7 +84,7 @@ services:
   worker:
     image: myapp-worker:latest
     volumes:
-      - shared-assets:/assets  # Same volume, needs shared storage
+      - shared-assets:/assets  # Same volume, automatically scales
 ```
 
 ---
@@ -87,5 +93,5 @@ services:
 
 | Label | Default | Description |
 |-------|---------|-------------|
-| `lazycloud.volume.size` | `"10Gi"` | Volume size |
-| `lazycloud.volume.shared` | `"false"` | Use shared storage |
+| `lazycloud.volume.size` | `"10Gi"` | Volume size (standard volumes only) |
+| `lazycloud.volume.shared` | `"false"` | Use shared storage (auto-scales) |

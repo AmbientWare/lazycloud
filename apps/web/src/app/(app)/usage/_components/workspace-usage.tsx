@@ -282,9 +282,6 @@ export function WorkspaceUsageCard({
                                   <th className="text-left p-3 font-semibold">Metric</th>
                                   <th className="text-right p-3 font-semibold">
                                     Usage
-                                    <span className="text-muted-foreground font-normal text-xs ml-1">
-                                      (unit-hrs)
-                                    </span>
                                   </th>
                                   <th className="text-right p-3 font-semibold">
                                     Cost
@@ -297,7 +294,7 @@ export function WorkspaceUsageCard({
                               <tbody>
                                 <tr className="border-b bg-card">
                                   <td className="p-3">
-                                    <span className="font-medium">CPU (core)</span>
+                                    <span className="font-medium">CPU (core-hrs)</span>
                                   </td>
                                   <td className="p-3 text-right">
                                     {formatUsageValue(deploymentWithBreakdown.usage.cpu_core_hours)}
@@ -314,7 +311,7 @@ export function WorkspaceUsageCard({
                                 </tr>
                                 <tr className="border-b bg-card">
                                   <td className="p-3">
-                                    <span className="font-medium">Memory (GB)</span>
+                                    <span className="font-medium">Memory (GB-hrs)</span>
                                   </td>
                                   <td className="p-3 text-right">
                                     {formatUsageValue(deploymentWithBreakdown.usage.memory_gb_hours)}
@@ -331,7 +328,7 @@ export function WorkspaceUsageCard({
                                 </tr>
                                 <tr className="border-b bg-card">
                                   <td className="p-3">
-                                    <span className="font-medium">Storage (GB)</span>
+                                    <span className="font-medium">Storage (GB-hrs)</span>
                                   </td>
                                   <td className="p-3 text-right">
                                     {formatUsageValue(
@@ -354,7 +351,7 @@ export function WorkspaceUsageCard({
                                 </tr>
                                 <tr className="border-b bg-card">
                                   <td className="p-3">
-                                    <span className="font-medium">Build Minutes</span>
+                                    <span className="font-medium">Build (minutes)</span>
                                   </td>
                                   <td className="p-3 text-right">
                                     {formatUsageValue(deploymentWithBreakdown.usage.build_minutes)}
@@ -371,7 +368,7 @@ export function WorkspaceUsageCard({
                                 </tr>
                                 <tr className="border-b last:border-b-0 bg-card">
                                   <td className="p-3">
-                                    <span className="font-medium">Endpoints (hours)</span>
+                                    <span className="font-medium">Endpoints (hrs)</span>
                                   </td>
                                   <td className="p-3 text-right">
                                     {formatUsageValue(deploymentWithBreakdown.usage.public_endpoint_hours)}

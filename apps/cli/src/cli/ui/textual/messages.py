@@ -76,3 +76,15 @@ class DisplayModeChanged(Message):
     def __init__(self, mode: DisplayMode) -> None:
         super().__init__()
         self.mode = mode
+
+
+class DeploymentsLoaded(Message):
+    """Posted when deployments have been loaded from the API.
+
+    Attributes:
+        has_deployments: Whether any deployments were found
+    """
+
+    def __init__(self, has_deployments: bool) -> None:
+        super().__init__()
+        self.has_deployments = has_deployments

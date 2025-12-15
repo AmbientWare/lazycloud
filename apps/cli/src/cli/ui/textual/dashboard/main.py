@@ -11,7 +11,12 @@ from cli.ui.textual.dashboard.containers import (
 from cli.ui.textual.dashboard.containers.details.service_details import (
     RestartServiceModal,
 )
-from cli.ui.textual.messages import DeploymentSelected, SecretSelected, ServiceSelected
+from cli.ui.textual.messages import (
+    DeploymentSelected,
+    DeploymentsLoaded,
+    SecretSelected,
+    ServiceSelected,
+)
 from cli.ui.textual.theme import lazycloud_theme
 
 
@@ -118,6 +123,11 @@ class DashboardApp(App):
         focusable_widget = content_container.get_focusable_widget()
         if focusable_widget:
             self.set_focus(focusable_widget)
+
+    def on_deployments_loaded(self, message: DeploymentsLoaded) -> None:
+        """Handle deployments loaded - update content container."""
+        content = self.query_one(ContentContainer)
+        content.has_deployments = message.has_deployments
 
     def on_deployment_selected(self, message: DeploymentSelected) -> None:
         """Handle deployment selection - coordinate updates between components."""

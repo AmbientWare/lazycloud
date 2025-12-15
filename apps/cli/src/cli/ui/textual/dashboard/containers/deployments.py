@@ -9,7 +9,7 @@ from cli.config import config
 from cli.ui.textual.components import Container, ListItemData, ListView
 from cli.ui.textual.components.listview import ListItem
 from cli.ui.textual.components.modals import ErrorModal
-from cli.ui.textual.messages import DeploymentSelected
+from cli.ui.textual.messages import DeploymentSelected, DeploymentsLoaded
 from cli.ui.textual.theme import Icons
 
 
@@ -116,9 +116,13 @@ class DeploymentsContainer(Container):
 
             self._list_view.update_items(items)
 
+            # Post message indicating whether deployments were found
+            self.post_message(DeploymentsLoaded(has_deployments=len(items) > 0))
+
         except APIError as e:
             self._list_view.update_items([])
             self._list_view.hide_loading()
+            self.post_message(DeploymentsLoaded(has_deployments=False))
 
             # Show appropriate error message based on status code
             if e.status_code == 401:
@@ -149,6 +153,7 @@ class DeploymentsContainer(Container):
         except ConnectionError:
             self._list_view.update_items([])
             self._list_view.hide_loading()
+            self.post_message(DeploymentsLoaded(has_deployments=False))
 
             error_modal = ErrorModal(
                 title="Connection Error",
@@ -163,6 +168,7 @@ class DeploymentsContainer(Container):
             self.log.error(f"Unexpected error loading deployments: {e}")
             self._list_view.update_items([])
             self._list_view.show_empty_message()
+            self.post_message(DeploymentsLoaded(has_deployments=False))
 
         finally:
             self._list_view.hide_loading()

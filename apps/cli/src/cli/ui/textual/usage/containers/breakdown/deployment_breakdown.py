@@ -14,6 +14,7 @@ from cli.api.usage import UsageAPI
 from cli.ui.colors import Colors
 from cli.ui.textual.components import Container
 from cli.ui.textual.components.section import SectionContainer
+from cli.ui.textual.dashboard.containers.details.empty_state import EmptyStateWidget
 from cli.ui.textual.theme import Icons
 from cli.ui.textual.usage.containers.breakdown.tables import (
     ServicesCostTable,
@@ -111,6 +112,13 @@ class DeploymentBreakdownSection(Container):
         if not self.usage_data:
             self._scroll.remove_children()
             self.loading = True
+            return
+
+        # Check if there are no deployments at all
+        if not self.usage_data.deployments:
+            self._scroll.remove_children()
+            self.loading = False
+            self._scroll.mount(EmptyStateWidget())
             return
 
         if not self.selected_deployment_id:

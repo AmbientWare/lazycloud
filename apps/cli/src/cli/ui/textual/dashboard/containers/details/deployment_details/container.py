@@ -1,3 +1,6 @@
+import asyncio
+
+from loguru import logger
 from models.statuses import DeploymentStatus
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
@@ -208,30 +211,54 @@ class DeploymentDetailsContainer(Widget):
         if not self.deployment_id:
             return
 
-        try:
-            self._status_api = StatusAPI()
+        max_reconnect_attempts = 5
+        reconnect_delay = 3  # seconds
 
-            def on_update(status: DeploymentStatus | None) -> None:
-                """Handle incoming deployment status updates."""
-                if status:
-                    self._stream_error = None
-                    self.app.call_later(self.update_deployment, status)
+        for attempt in range(max_reconnect_attempts):
+            try:
+                self._status_api = StatusAPI()
 
-            def on_error(e: Exception) -> None:
-                """Handle SSE stream errors."""
-                self._stream_error = str(e)
+                def on_update(status: DeploymentStatus | None) -> None:
+                    """Handle incoming deployment status updates."""
+                    if status:
+                        self._stream_error = None
+                        self.app.call_later(self.update_deployment, status)
 
-            await self._status_api.stream_deployment_status(
-                deployment_id=self.deployment_id,
-                on_update=on_update,
-                on_error=on_error,
-            )
+                def on_error(e: Exception) -> None:
+                    """Handle SSE stream errors."""
+                    self._stream_error = str(e)
+                    logger.warning(
+                        f"SSE stream error for deployment {self.deployment_id}: {e}"
+                    )
 
-        except Exception as e:
-            self._stream_error = str(e)
-            # Show error if we don't have any status to display
-            if not self._initial_render_done and self.is_mounted:
-                self.app.call_later(
-                    self._show_error,
-                    f"Could not connect to status stream: {e}",
+                await self._status_api.stream_deployment_status(
+                    deployment_id=self.deployment_id,
+                    on_update=on_update,
+                    on_error=on_error,
                 )
+
+                break
+
+            except Exception as e:
+                self._stream_error = str(e)
+                logger.error(
+                    f"SSE stream connection failed for deployment {self.deployment_id} "
+                    f"(attempt {attempt + 1}/{max_reconnect_attempts}): {e}"
+                )
+
+                # Only reconnect if still mounted and not on last attempt
+                if attempt < max_reconnect_attempts - 1 and self.is_mounted:
+                    logger.info(f"Reconnecting to SSE stream in {reconnect_delay}s...")
+                    await asyncio.sleep(reconnect_delay)
+
+                else:
+                    logger.error(
+                        f"Failed to maintain SSE connection for deployment {self.deployment_id}"
+                    )
+                    # Show error if we don't have any status to display
+                    if not self._initial_render_done and self.is_mounted:
+                        self.app.call_later(
+                            self._show_error,
+                            f"Could not connect to status stream: {e}",
+                        )
+                    break
