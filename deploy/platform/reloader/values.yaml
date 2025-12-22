@@ -1,0 +1,13 @@
+# Reloader values
+# Automatically restarts pods when ConfigMaps or Secrets change
+
+reloader:
+  reloader:
+    watchGlobally: true
+    resources:
+      limits:
+        cpu: 100m
+        memory: 128Mi
+      requests:
+        cpu: 10m
+        memory: 64Mi

@@ -55,7 +55,7 @@ class EksCluster(Construct):
             self,
             "EksCluster",
             cluster_name=f"{self.config.org_name}-{self.config.environment}-{self.config.aws_region}-eks",
-            version=aws_eks.KubernetesVersion.V1_33,
+            version=aws_eks.KubernetesVersion.V1_34,
             default_capacity_type=aws_eks.DefaultCapacityType.NODEGROUP,
             default_capacity=0,
             vpc=self.vpc,
@@ -71,13 +71,6 @@ class EksCluster(Construct):
                 "Autoscaling": "karpenter",
                 "Organization": self.config.org_name,
             },
-        )
-
-        # Create OIDC provider for IRSA (IAM Roles for Service Accounts)
-        self.oidc_provider = aws_eks.OpenIdConnectProvider(
-            self,
-            "OIDCProvider",
-            url=cluster.cluster_open_id_connect_issuer_url,
         )
 
         # Add AL2023 managed node group for system components (kube-system, karpenter)
@@ -110,7 +103,7 @@ class EksCluster(Construct):
             self,
             "KubeProxy",
             addon_name="kube-proxy",
-            addon_version="v1.33.3-eksbuild.10",
+            addon_version="v1.34.1-eksbuild.2",
             cluster_name=cluster.cluster_name,
         )
 
@@ -119,7 +112,7 @@ class EksCluster(Construct):
             self,
             "PodIdentity",
             addon_name="eks-pod-identity-agent",
-            addon_version="v1.3.8-eksbuild.2",
+            addon_version="v1.3.10-eksbuild.2",
             cluster_name=cluster.cluster_name,
         )
 
@@ -136,7 +129,7 @@ class EksCluster(Construct):
             self,
             "VPCCNI",
             addon_name="vpc-cni",
-            addon_version="v1.20.3-eksbuild.1",
+            addon_version="v1.21.1-eksbuild.1",
             cluster_name=cluster.cluster_name,
             configuration_values=json.dumps(vpc_cni_config),
         )
@@ -146,7 +139,7 @@ class EksCluster(Construct):
             self,
             "MetricsServer",
             addon_name="metrics-server",
-            addon_version="v0.8.0-eksbuild.2",
+            addon_version="v0.8.0-eksbuild.6",
             cluster_name=cluster.cluster_name,
         )
 
@@ -203,7 +196,7 @@ class EksCluster(Construct):
             self,
             "ExternalDNS",
             addon_name="external-dns",
-            addon_version="v0.19.0-eksbuild.2",
+            addon_version="v0.20.0-eksbuild.2",
             cluster_name=cluster.cluster_name,
             pod_identity_associations=[
                 aws_eks.CfnAddon.PodIdentityAssociationProperty(
@@ -219,7 +212,7 @@ class EksCluster(Construct):
             self,
             "EBSCSI",
             addon_name="aws-ebs-csi-driver",
-            addon_version="v1.50.0-eksbuild.1",
+            addon_version="v1.54.0-eksbuild.1",
             cluster_name=cluster.cluster_name,
             pod_identity_associations=[
                 aws_eks.CfnAddon.PodIdentityAssociationProperty(
@@ -234,7 +227,7 @@ class EksCluster(Construct):
             self,
             "EFSCSI",
             addon_name="aws-efs-csi-driver",
-            addon_version="v2.1.12-eksbuild.1",
+            addon_version="v2.1.15-eksbuild.1",
             cluster_name=cluster.cluster_name,
             pod_identity_associations=[
                 aws_eks.CfnAddon.PodIdentityAssociationProperty(

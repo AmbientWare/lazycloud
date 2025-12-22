@@ -1,0 +1,24 @@
+# External Secrets values
+# Infrastructure values (orgName, environment, region) are injected
+# from /infrastructure-values/external-secrets.yaml
+
+# Cloudflare secret settings (for ExternalDNS)
+cloudflare:
+  enabled: true
+  awsSecretName: lazycloud/shared-secrets
+
+# External Secrets chart values
+external-secrets:
+  nameOverride: external-secrets
+  fullnameOverride: external-secrets
+  installCRDs: true
+  serviceAccount:
+    create: true
+    name: external-secrets
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi

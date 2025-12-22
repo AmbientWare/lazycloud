@@ -1,168 +1,80 @@
-# Lazycloud Infrastructure - AWS CDK
+# LazyCloud Infrastructure - AWS CDK
 
-Modern Infrastructure as Code using AWS CDK and Python for the lazycloud platform.
+## Architecture
 
-## 🏗️ Architecture
+**2-Stack Architecture** with manual ArgoCD installation:
 
-This infrastructure includes:
+```
+CDK (AWS Resources)              Manual (K8s Bootstrap)
+────────────────────             ─────────────────────
+lazycloud-shared
+  └─ IAM, ECR, Secrets
 
-- **Shared Infrastructure**: DNS/Route53 hosted zone, SSL certificates (deployed once, shared across environments)
-- **Environment Components**: VPC, EKS Cluster, S3 buckets, ElastiCache, ArgoCD
+lazycloud-prod-infra
+  └─ VPC, EKS, Pod Identity
+  └─ ConfigMap ──────────────────→ helm install argocd
+                                   kubectl apply root-app.yaml
+                                         │
+                                         └─→ ArgoCD syncs everything
+                                              ├─ aws-load-balancer-controller
+                                              ├─ karpenter
+                                              ├─ external-secrets
+                                              ├─ prometheus-stack
+                                              └─ services
+```
 
-## 📋 Prerequisites
-
-1. **Python 3.13+** with `uv` package manager
-2. **AWS CLI** configured with appropriate credentials
-3. **AWS CDK** installed globally: `npm install -g aws-cdk`
-4. **kubectl** for Kubernetes managementinfras
-
-## 🚀 Quick Start
-
-### 1. Install Dependencies
+## Quick Start
 
 ```bash
+cd infrastructure
 uv sync
-```
 
-### 2. Deploy Infrastructure
+# Deploy stacks
+uv run cdk deploy lazycloud-shared
+uv run cdk deploy lazycloud-prod-us-east-1-infra
 
-**First Time CDK Initialization**
-```bash
-# only run if repo has not been initialized
-cdk init
-```
+# Configure kubectl
+aws eks update-kubeconfig --region us-east-1 --name lazycloud-prod-us-east-1-eks
 
-```bash
-# List available stacks
-cdk list
+# Install ArgoCD
+helm repo add argo https://argoproj.github.io/argo-helm
+helm install argocd argo/argo-cd -n argocd --create-namespace \
+    -f argocd-values.yaml --wait --timeout 15m
 
-# Deploy shared infrastructure first (DNS, SSL certificates)
-cdk deploy lazycloud-shared
+# Apply root application (starts GitOps sync)
+kubectl apply -f ../deploy/argocd-apps/root-app.yaml
 
-# Deploy dev environment
-cdk deploy lazycloud-dev
-
-# Deploy production environment
-cdk deploy lazycloud-prod
-
-# Deploy all stacks
-cdk deploy --all
-```
-
-### 3. Configure kubectl
-
-```bash
-# For dev:
-aws eks update-kubeconfig --region us-east-1 --name lazycloud-dev-eks
-
-# For production:
-aws eks update-kubeconfig --region us-east-1 --name lazycloud-prod-eks
-```
-
-### 4. Access ArgoCD
-
-```bash
-# Port-forward to ArgoCD UI
-kubectl port-forward -n argocd svc/argocd-server 8080:80
-
-# Get admin password
+# Access ArgoCD
+kubectl port-forward -n argocd svc/argocd-server 8080:443
 kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d
-
-# Access UI at: http://localhost:8080
-# Username: admin
 ```
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 infrastructure/
-├── app.py                      # CDK app entry point
-├── cdk.json                    # CDK configuration
-├── infrastructure/
-│   ├── config/
-│   │   └── environments.py     # Environment configurations
-│   ├── stacks/
-│   │   ├── dev/
-│   │   │   └── stack.py        # Dev stack orchestration
-│   │   ├── prod/
-│   │   │   └── stack.py        # Production stack orchestration
-│   │   └── shared/
-│   │       ├── stack.py        # Shared stack (DNS, SSL)
-│   │       └── shared.py       # DNS/Route53 infrastructure
-│   └── constructs/
-│       ├── components/         # Consolidated components
-│       │   ├── shared_infrastructure.py    # VPC + EKS
-│       │   ├── storage_services.py         # S3 + ElastiCache
-│       │   └── platform_services.py        # ArgoCD + Helm
-│       ├── aws/                # Low-level AWS constructs
-│       ├── helm/               # Helm chart constructs
-│       └── apps/               # Application constructs
+├── main.py                           # CDK app entry point
+├── argocd-values.yaml                # ArgoCD Helm values
+└── src/infrastructure/
+    ├── config/environments.py        # Environment configs
+    ├── stacks/
+    │   ├── shared/                   # IAM, ECR, Secrets
+    │   └── prod/infra_stack.py       # VPC + EKS + Pod Identity + ConfigMap
+    └── constructs/
+        ├── aws/                      # VPC, EKS, ECR
+        ├── iam/                      # IAM roles
+        └── components/
+            ├── infrastructure.py     # VPC + EKS
+            └── controllers.py        # Pod Identity + ConfigMap
 ```
 
-## 🔧 Configuration
-
-Environment settings are in `infrastructure/config/environments.py`:
-
-- VPC CIDR blocks and subnets
-- EKS cluster settings
-- ElastiCache capacity limits
-- ArgoCD configuration
-
-Shared DNS configuration is in `infrastructure/stacks/shared/shared.py`:
-
-- Domain: lazycloud.com
-- Wildcard SSL certificate: *.lazyclous.dev
-- DNS records (currently commented out - configure as needed)
-
-## 🎯 Environment Differences
-
-| Component | Production | Development |
-|-----------|------------|-------------|
-| VPC CIDR | 10.0.0.0/16 | 10.2.0.0/16 |
-| NAT Gateways | Multi-AZ (HA) | Single (cost optimized) |
-| ElastiCache | 50GB, 20K ECPU | 10GB, 5K ECPU |
-
-## 🛠️ Development Workflow
+## Cleanup
 
 ```bash
-# Check changes before deploy
-cdk diff lazycloud-dev
+# Remove ArgoCD first
+helm uninstall argocd -n argocd
 
-# Synthesize CloudFormation templates
-cdk synth
-
-# Format code
-ruff format .
-
-# Deploy specific environment
-cdk deploy lazycloud-dev
+# Destroy stacks
+uv run cdk destroy lazycloud-prod-us-east-1-infra
+uv run cdk destroy lazycloud-shared
 ```
-
-## 🔐 Security Features
-
-- VPC with private subnets for workloads
-- EKS and private API endpoint
-- S3 encryption at rest, block public access
-- ElastiCache VPC-only access
-- IAM least privilege access
-
-## 🗑️ Cleanup
-
-```bash
-# Destroy specific environment
-cdk destroy lazycloud-dev
-cdk destroy lazycloud-prod
-```
-
-## 💰 Cost Estimates
-
-- **Development**: ~$120-150/month
-- **Production**: ~$200-400/month
-
-## 🚨 Troubleshooting
-
-1. **EKS issues**: Check AWS service limits and IAM permissions
-2. **ArgoCD access**: Use `kubectl port-forward` if LoadBalancer fails
-3. **ElastiCache**: Verify security group rules and VPC connectivity
-
-For detailed debugging: `CDK_DEBUG=true cdk deploy`

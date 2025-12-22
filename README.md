@@ -14,9 +14,18 @@ lazycloud/
 │   ├── models/           # Shared data models
 │   ├── api_requests/     # API request schemas
 │   └── responses/        # API response schemas
-├── deploy/               # Kubernetes Helm charts
-│   ├── api-platform/     # API + workers deployment
-│   └── web/              # Web frontend deployment
+├── deploy/               # Kubernetes deployments (GitOps)
+│   ├── argocd-apps/      # ArgoCD Application manifests
+│   │   ├── root-app.yaml # App of Apps entry point
+│   │   └── platform/     # Platform component apps
+│   ├── platform/         # Platform Helm charts (ArgoCD-managed)
+│   │   ├── karpenter/
+│   │   ├── external-secrets/
+│   │   ├── prometheus-stack/
+│   │   └── ...
+│   └── services/         # Application Helm charts
+│       ├── api-platform/ # API + workers deployment
+│       └── web/          # Web frontend deployment
 ├── infrastructure/       # AWS CDK infrastructure code
 ├── .github/workflows/    # CI/CD pipelines
 ├── pyproject.toml        # Workspace root config
@@ -167,16 +176,22 @@ cd apps/cli && uv run pytest
 
 ### Infrastructure
 
-LazyCloud infrastructure is managed with **AWS CDK** (Infrastructure as Code) and deployed using **GitOps**:
+**2-Stack CDK + Manual ArgoCD**:
 
-- **AWS CDK** - Production infrastructure on AWS EKS
-  - See [infrastructure/README.md](infrastructure/README.md) for setup
-  - VPC, EKS cluster, ECR, ElastiCache, Route53
-  - ArgoCD, Prometheus, Loki for platform services
-- **Trunk-based development** - Single `main` branch
-- **Manual deployments** - GitHub Actions workflows
-- **GitOps** - Argo CD syncs from git to Kubernetes
-- **Immutable image tags** - Git SHA-based versioning
+```
+CDK                              Manual Install
+───                              ──────────────
+lazycloud-shared
+  └─ IAM, ECR, Secrets
+
+lazycloud-prod-infra             helm install argocd
+  └─ VPC, EKS, Pod Identity      kubectl apply root-app.yaml
+  └─ ConfigMap ────────────────→       │
+                                       └─→ ArgoCD syncs everything
+```
+
+- See [infrastructure/README.md](infrastructure/README.md) for detailed setup
+- **GitOps** - ArgoCD syncs from git to Kubernetes
 
 ### Deploy to Staging
 
@@ -209,33 +224,35 @@ LazyCloud infrastructure is managed with **AWS CDK** (Infrastructure as Code) an
 
 ### AWS Infrastructure Setup
 
-For production deployments on AWS, use the CDK infrastructure code:
-
 ```bash
 cd infrastructure
 
-# Deploy shared infrastructure (DNS, SSL certificates)
-cdk deploy lazycloud-shared
-
-# Deploy production environment (VPC, EKS, ArgoCD, etc.)
-cdk deploy lazycloud-prod
+# Deploy CDK stacks
+uv run cdk deploy lazycloud-shared
+uv run cdk deploy lazycloud-prod-us-east-1-infra
 
 # Configure kubectl
-aws eks update-kubeconfig --region us-east-1 --name lazycloud-prod-eks
+aws eks update-kubeconfig --region us-east-1 --name lazycloud-prod-us-east-1-eks
+
+# Install ArgoCD
+helm repo add argo https://argoproj.github.io/argo-helm
+helm install argocd argo/argo-cd -n argocd --create-namespace \
+    -f argocd-values.yaml --wait --timeout 15m
+kubectl apply -f ../deploy/argocd-apps/root-app.yaml
 ```
 
-See [infrastructure/README.md](infrastructure/README.md) for detailed setup instructions.
+See [infrastructure/README.md](infrastructure/README.md) for details.
 
 ### Helm Charts
 
 ```bash
 # Render staging manifests
-helm template lazycloud-api-platform ./deploy/api-platform \
-  -f ./deploy/api-platform/values-staging.yaml
+helm template lazycloud-api-platform ./deploy/services/api-platform \
+  -f ./deploy/services/api-platform/values-staging.yaml
 
 # Render production manifests
-helm template lazycloud-api-platform ./deploy/api-platform \
-  -f ./deploy/api-platform/values-prod.yaml
+helm template lazycloud-api-platform ./deploy/services/api-platform \
+  -f ./deploy/services/api-platform/values-prod.yaml
 ```
 
 ## CLI Usage
@@ -315,7 +332,14 @@ uv run python scripts/create_secret_key.py
 ### Deployment Flow
 
 ```
-Code → GitHub → CI/CD → ECR Images → Git (Helm values) → Argo CD → Kubernetes
+Code → GitHub → CI/CD → ECR Images → Git (Helm values) → ArgoCD → Kubernetes
+                                                              ↓
+                                            deploy/argocd-apps/root-app.yaml
+                                                     ↓
+                                     ┌───────────────┴───────────────┐
+                                     ↓                               ↓
+                            deploy/platform/                 deploy/services/
+                         (karpenter, prometheus...)       (api-platform, web)
 ```
 
 ### Environments
