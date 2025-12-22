@@ -8,7 +8,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/AmbientWare/lazycloud
+    repoURL: git@github.com:AmbientWare/lazycloud.git
     targetRevision: production
     path: deploy/services/web
     helm:
