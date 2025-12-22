@@ -7,6 +7,19 @@ cloudflare:
   enabled: true
   awsSecretName: lazycloud/shared-secrets
 
+# App secrets settings (for lazycloud apps)
+appSecrets:
+  prod:
+    enabled: true
+    namespace: lazycloud-prod
+    awsSecretName: lazycloud/prod-secrets
+    targetSecretName: app-secrets
+  staging:
+    enabled: true
+    namespace: lazycloud-staging
+    awsSecretName: lazycloud/staging-secrets
+    targetSecretName: app-secrets
+
 # External Secrets chart values
 external-secrets:
   nameOverride: external-secrets
