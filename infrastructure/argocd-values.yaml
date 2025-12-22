@@ -1,0 +1,96 @@
+nameOverride: argocd
+fullnameOverride: argocd
+
+server:
+  service:
+    type: ClusterIP
+  ingress:
+    enabled: true
+    ingressClassName: alb
+    hostname: argocd.lazycloud.dev
+    annotations:
+      alb.ingress.kubernetes.io/scheme: internet-facing
+      alb.ingress.kubernetes.io/target-type: ip
+      alb.ingress.kubernetes.io/backend-protocol: HTTPS
+      alb.ingress.kubernetes.io/healthcheck-protocol: HTTPS
+      alb.ingress.kubernetes.io/healthcheck-path: /healthz
+      alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+      alb.ingress.kubernetes.io/ssl-redirect: "443"
+      external-dns.alpha.kubernetes.io/hostname: argocd.lazycloud.dev
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 512Mi
+    requests:
+      cpu: 250m
+      memory: 256Mi
+  metrics:
+    enabled: true
+
+controller:
+  resources:
+    limits:
+      cpu: 2000m
+      memory: 1Gi
+    requests:
+      cpu: 500m
+      memory: 512Mi
+  metrics:
+    enabled: true
+
+dex:
+  enabled: true
+  resources:
+    limits:
+      cpu: 50m
+      memory: 64Mi
+    requests:
+      cpu: 10m
+      memory: 32Mi
+
+redis:
+  resources:
+    limits:
+      cpu: 200m
+      memory: 128Mi
+    requests:
+      cpu: 100m
+      memory: 64Mi
+
+repoServer:
+  resources:
+    limits:
+      cpu: 2000m
+      memory: 1Gi
+    requests:
+      cpu: 250m
+      memory: 256Mi
+  metrics:
+    enabled: true
+  podAnnotations:
+    configmap.reloader.stakater.com/reload: infrastructure-values
+  volumes:
+    - name: infrastructure-values
+      configMap:
+        name: infrastructure-values
+  volumeMounts:
+    - name: infrastructure-values
+      mountPath: /infrastructure-values
+
+applicationSet:
+  enabled: true
+  resources:
+    limits:
+      cpu: 100m
+      memory: 128Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+notifications:
+  enabled: false
+
+configs:
+  cm:
+    users.anonymous.enabled: "false"
+    helm.enableOCI: "true"

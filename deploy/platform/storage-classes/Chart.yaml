@@ -1,0 +1,6 @@
+apiVersion: v2
+name: storage-classes
+description: Kubernetes StorageClasses for EBS volumes
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

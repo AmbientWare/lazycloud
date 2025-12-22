@@ -1,23 +1,24 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: lazycloud-web-staging
+  name: prometheus-stack
   namespace: argocd
   finalizers:
     - resources-finalizer.argocd.argoproj.io
+  annotations:
+    argocd.argoproj.io/sync-wave: "6"
 spec:
   project: default
   source:
     repoURL: https://github.com/AmbientWare/lazycloud
-    targetRevision: staging
-    path: deploy/services/web
+    targetRevision: main
+    path: deploy/platform/prometheus-stack
     helm:
       valueFiles:
         - values.yaml
-        - values-staging.yaml
   destination:
     server: https://kubernetes.default.svc
-    namespace: lazycloud-staging
+    namespace: monitoring
   syncPolicy:
     automated:
       prune: true
@@ -25,6 +26,7 @@ spec:
       allowEmpty: false
     syncOptions:
       - CreateNamespace=true
+      - ServerSideApply=true
     retry:
       limit: 5
       backoff:

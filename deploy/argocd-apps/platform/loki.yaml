@@ -1,23 +1,25 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: lazycloud-web-staging
+  name: loki
   namespace: argocd
   finalizers:
     - resources-finalizer.argocd.argoproj.io
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
 spec:
   project: default
   source:
     repoURL: https://github.com/AmbientWare/lazycloud
-    targetRevision: staging
-    path: deploy/services/web
+    targetRevision: main
+    path: deploy/platform/loki
     helm:
+      releaseName: loki-stack-prod
       valueFiles:
         - values.yaml
-        - values-staging.yaml
   destination:
     server: https://kubernetes.default.svc
-    namespace: lazycloud-staging
+    namespace: monitoring
   syncPolicy:
     automated:
       prune: true

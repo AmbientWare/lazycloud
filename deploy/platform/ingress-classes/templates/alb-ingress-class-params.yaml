@@ -1,0 +1,12 @@
+{{- if .Values.ingressClasses.alb.enabled }}
+apiVersion: eks.amazonaws.com/v1
+kind: IngressClassParams
+metadata:
+  name: {{ .Values.ingressClasses.alb.name }}
+spec:
+  scheme: {{ .Values.ingressClasses.alb.scheme }}
+  {{- if .Values.ingressClasses.alb.groupName }}
+  group:
+    name: {{ .Values.ingressClasses.alb.groupName }}
+  {{- end }}
+{{- end }}

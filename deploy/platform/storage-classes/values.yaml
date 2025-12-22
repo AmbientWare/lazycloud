@@ -1,0 +1,18 @@
+# Storage Classes values
+
+storageClasses:
+  ebsGp3:
+    enabled: true
+    name: ebs-gp3
+    isDefault: true
+    reclaimPolicy: Delete
+    volumeBindingMode: WaitForFirstConsumer
+    allowVolumeExpansion: true
+
+  ebsGp2:
+    enabled: true
+    name: ebs-gp2
+    isDefault: false
+    reclaimPolicy: Delete
+    volumeBindingMode: WaitForFirstConsumer
+    allowVolumeExpansion: true

@@ -41,9 +41,9 @@ jobs:
           ENV="${{ inputs.environment }}"
 
           if [ "$ENV" = "production" ]; then
-            VALUES_FILE="deploy/web/values-prod.yaml"
+            VALUES_FILE="deploy/services/web/values-prod.yaml"
           else
-            VALUES_FILE="deploy/web/values-staging.yaml"
+            VALUES_FILE="deploy/services/web/values-staging.yaml"
           fi
 
           echo "Updating $VALUES_FILE with image SHA: $IMAGE_SHA"
@@ -58,9 +58,9 @@ jobs:
           IMAGE_SHA="${{ needs.build-web.outputs.image_sha }}"
 
           if [ "$ENV" = "production" ]; then
-            VALUES_FILE="deploy/web/values-prod.yaml"
+            VALUES_FILE="deploy/services/web/values-prod.yaml"
           else
-            VALUES_FILE="deploy/web/values-staging.yaml"
+            VALUES_FILE="deploy/services/web/values-staging.yaml"
           fi
 
           git add "$VALUES_FILE"

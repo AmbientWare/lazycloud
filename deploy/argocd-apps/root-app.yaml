@@ -1,7 +1,7 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: lazycloud-web-staging
+  name: root-apps
   namespace: argocd
   finalizers:
     - resources-finalizer.argocd.argoproj.io
@@ -9,22 +9,22 @@ spec:
   project: default
   source:
     repoURL: https://github.com/AmbientWare/lazycloud
-    targetRevision: staging
-    path: deploy/services/web
-    helm:
-      valueFiles:
-        - values.yaml
-        - values-staging.yaml
+    targetRevision: main
+    path: deploy/argocd-apps
+    directory:
+      recurse: true
+      include: '*.yaml'
+      exclude: 'root-app.yaml'
   destination:
     server: https://kubernetes.default.svc
-    namespace: lazycloud-staging
+    namespace: argocd
   syncPolicy:
     automated:
-      prune: true
+      prune: false  # Don't auto-delete apps - this is the root app
       selfHeal: true
       allowEmpty: false
     syncOptions:
-      - CreateNamespace=true
+      - CreateNamespace=false
     retry:
       limit: 5
       backoff:

@@ -1,0 +1,39 @@
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata:
+  name: gvisor
+spec:
+  role: {{ .Values.nodeRoleName }}
+  amiSelectorTerms:
+    - alias: al2023@latest
+  subnetSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: {{ .Values.karpenter.settings.clusterName }}
+  securityGroupSelectorTerms:
+    - id: {{ .Values.clusterSecurityGroupId }}
+  userData: |
+    #!/bin/bash
+    set -ex
+    ARCH=$(uname -m)
+    URL=https://storage.googleapis.com/gvisor/releases/release/latest/${ARCH}
+    cd /tmp
+    wget ${URL}/runsc ${URL}/runsc.sha512 ${URL}/containerd-shim-runsc-v1 ${URL}/containerd-shim-runsc-v1.sha512
+    sha512sum -c runsc.sha512
+    sha512sum -c containerd-shim-runsc-v1.sha512
+    rm -f *.sha512
+    chmod a+rx runsc containerd-shim-runsc-v1
+    mv runsc containerd-shim-runsc-v1 /usr/local/bin/
+    while [ ! -f /etc/containerd/config.toml ]; do
+      sleep 2
+    done
+    cat <<'GVISOR_EOF' >> /etc/containerd/config.toml
+    [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc]
+      runtime_type = "io.containerd.runsc.v1"
+    GVISOR_EOF
+    systemctl restart containerd
+  blockDeviceMappings:
+    - deviceName: /dev/xvda
+      ebs:
+        volumeSize: 150Gi
+        volumeType: gp3
+        deleteOnTermination: true

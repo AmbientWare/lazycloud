@@ -8,9 +8,9 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/lazycloud/lazycloud
+    repoURL: https://github.com/AmbientWare/lazycloud
     targetRevision: production
-    path: deploy/web
+    path: deploy/services/web
     helm:
       valueFiles:
         - values.yaml
