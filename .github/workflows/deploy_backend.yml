@@ -83,9 +83,9 @@ jobs:
           IMAGE_SHA="${{ needs.build-api.outputs.image_sha }}"
 
           if [ "$ENV" = "production" ]; then
-            VALUES_FILE="deploy/api-platform/values-prod.yaml"
+            VALUES_FILE="deploy/services/api-platform/values-prod.yaml"
           else
-            VALUES_FILE="deploy/api-platform/values-staging.yaml"
+            VALUES_FILE="deploy/services/api-platform/values-staging.yaml"
           fi
 
           git add "$VALUES_FILE"

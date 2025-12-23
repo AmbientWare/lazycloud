@@ -12,8 +12,18 @@ on:
           - production
 
 jobs:
+  setup:
+    name: Setup
+    runs-on: ubuntu-latest
+    environment: shared
+    outputs:
+      workos_redirect_uri: ${{ inputs.environment == 'production' && vars.WORKOS_REDIRECT_URI_PROD || vars.WORKOS_REDIRECT_URI_STAGING }}
+    steps:
+      - run: echo "Environment ${{ inputs.environment }}"
+
   build-web:
     name: Build Web Image
+    needs: setup
     uses: ./.github/workflows/_build_push.yml
     with:
       app_name: web
@@ -21,7 +31,7 @@ jobs:
       build_context: .
       ecr_repository: web
       build_args: |
-        NEXT_PUBLIC_WORKOS_REDIRECT_URI=${{ secrets.NEXT_PUBLIC_WORKOS_REDIRECT_URI }}
+        NEXT_PUBLIC_WORKOS_REDIRECT_URI=${{ needs.setup.outputs.workos_redirect_uri }}
     secrets: inherit
 
   update-values:
