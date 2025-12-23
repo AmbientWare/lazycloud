@@ -15,8 +15,8 @@ export interface PolarProduct {
 }
 
 async function getProductsWithCache(): Promise<PolarProduct[]> {
-  'use cache: remote'
-  cacheLife({ expire: 300 }) // 5 minutes
+  'use cache'
+  cacheLife({ expire: 60 }) // 1 minute
 
   try {
     const { result } = await polarService.listProducts({
@@ -62,7 +62,7 @@ async function getProductsWithCache(): Promise<PolarProduct[]> {
 export async function getProducts(): Promise<PolarProduct[]> {
   try {
     // connection() rejects during prerendering - this is expected behavior
-    // The route will be dynamic at runtime, allowing remote cache to work
+    // The route will be dynamic at runtime, allowing cache to work
     try {
       await connection();
     } catch (error) {
