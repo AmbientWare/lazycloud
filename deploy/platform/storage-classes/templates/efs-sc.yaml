@@ -1,0 +1,14 @@
+{{- if .Values.storageClasses.efs.enabled }}
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ .Values.storageClasses.efs.name }}
+provisioner: efs.csi.aws.com
+parameters:
+  provisioningMode: efs-ap
+  fileSystemId: {{ .Values.storageClasses.efs.fileSystemId }}
+  directoryPerms: "700"
+  basePath: "/dynamic_provisioning"
+reclaimPolicy: {{ .Values.storageClasses.efs.reclaimPolicy }}
+volumeBindingMode: {{ .Values.storageClasses.efs.volumeBindingMode }}
+{{- end }}

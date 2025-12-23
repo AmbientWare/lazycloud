@@ -55,16 +55,29 @@ storage:
 secrets:
   name: "app-secrets"
   env:
+    # Required
     - "ENV"
-    - "DATABASE_URL"
+    - "ADMIN_API_KEY"
     - "REDIS_URL"
-    - "PREFECT_API_URL"
-    - "WORKOS_API_KEY"
-    - "WORKOS_CLIENT_ID"
-    - "WORKOS_COOKIE_PASSWORD"
+    - "AWS_ACCOUNT_ID"
     - "AWS_ACCESS_KEY_ID"
+    - "AWS_ECR_BASE_ROLE_ARN"
     - "AWS_SECRET_ACCESS_KEY"
     - "AWS_REGION"
-    - "DEPOT_TOKEN"
-    - "DEPOT_PROJECT_ID"
-    - "SENTRY_DSN"
+    - "DB_SECRET_KEY"
+    - "RESEND_API_KEY"
+    - "PROMETHEUS_URL"
+    # Database
+    - "DATABASE_URL"
+    # Auth
+    - "WORKOS_CLIENT_ID"
+    # Billing
+    - "POLAR_ACCESS_TOKEN"
+    - "POLAR_ORGANIZATION_ID"
+    - "IS_POLAR_SANDBOX"
+    # Depot (remote builds)
+    - "DEPOT_API_TOKEN"
+    - "DEPOT_ORG_ID"
+    # Prefect
+    - "PREFECT_API_URL"
+    - "PREFECT_API_KEY"

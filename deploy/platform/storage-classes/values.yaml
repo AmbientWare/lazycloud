@@ -16,3 +16,10 @@ storageClasses:
     reclaimPolicy: Delete
     volumeBindingMode: WaitForFirstConsumer
     allowVolumeExpansion: true
+
+  efs:
+    enabled: true
+    name: efs-sc
+    fileSystemId: ""  # Set via regional values file after CDK deploy
+    reclaimPolicy: Delete
+    volumeBindingMode: Immediate
