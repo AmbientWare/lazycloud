@@ -42,13 +42,7 @@ class SharedSecretsConstruct(Construct):
 
 
 class EnvironmentSecretsConstruct(Construct):
-    """App secrets for each environment (namespace) this cluster hosts.
-
-    Creates secrets based on config.app_environments list.
-    Populate via AWS CLI:
-        aws secretsmanager put-secret-value --secret-id lazycloud/prod-secrets \\
-            --secret-string '{"DATABASE_URL":"...", "REDIS_URL":"..."}'
-    """
+    """App secrets for each environment (namespace) this cluster hosts."""
 
     def __init__(
         self,
@@ -61,7 +55,6 @@ class EnvironmentSecretsConstruct(Construct):
         self.config = config
         self.secrets: dict[str, secretsmanager.Secret] = {}
 
-        # Create a secret for each app environment this cluster hosts
         app_envs = config.app_environments or [config.environment]
         for app_env in app_envs:
             secret = secretsmanager.Secret(
@@ -80,5 +73,4 @@ class EnvironmentSecretsConstruct(Construct):
             self.secrets[app_env] = secret
 
     def get_secret(self, app_env: str) -> secretsmanager.Secret:
-        """Get secret for a specific app environment"""
         return self.secrets[app_env]

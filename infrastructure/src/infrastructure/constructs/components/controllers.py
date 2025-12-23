@@ -49,20 +49,3 @@ class ControllersConstruct(Construct):
             service_account="aws-load-balancer-controller",
             role_arn=shared_stack.iam_roles.load_balancer_controller_role_arn,
         )
-
-        self._create_argocd_namespace()
-
-    def _create_argocd_namespace(self):
-        """Create argocd namespace for ArgoCD installation."""
-        namespace_manifest = {
-            "apiVersion": "v1",
-            "kind": "Namespace",
-            "metadata": {
-                "name": "argocd",
-                "labels": {"app.kubernetes.io/managed-by": "cdk"},
-            },
-        }
-
-        return self.eks_cluster.cluster.add_manifest(
-            "ArgoCDNamespace", namespace_manifest
-        )

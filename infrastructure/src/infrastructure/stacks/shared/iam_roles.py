@@ -2,8 +2,8 @@ from constructs import Construct
 
 from infrastructure.config.environments import EnvironmentConfig
 from infrastructure.constructs.iam import (
-    EKSIAMRoles,
     ControllerIAMRoles,
+    EKSIAMRoles,
     PlatformIAMRoles,
 )
 
@@ -91,3 +91,13 @@ class SharedIAMRoles(Construct):
     def external_secrets_role_arn(self) -> str:
         """Get the external secrets role ARN"""
         return self.platform_roles.external_secrets_role_arn
+
+    @property
+    def ecr_base_role(self):
+        """Get the ECR base role"""
+        return self.platform_roles.ecr_base_role
+
+    @property
+    def ecr_base_role_arn(self) -> str:
+        """Get the ECR base role ARN"""
+        return self.platform_roles.ecr_base_role_arn

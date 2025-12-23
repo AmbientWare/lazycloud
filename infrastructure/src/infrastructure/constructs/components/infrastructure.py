@@ -33,25 +33,16 @@ class InfrastructureConstruct(Construct):
             config=self.config,
         )
 
-        # Get shared secrets ARN (contains Cloudflare API token and other secrets)
-        shared_secrets_arn = (
-            shared_stack.shared_secrets.secret_arn
-            if hasattr(shared_stack, "shared_secrets")
-            else None
-        )
-
         # Create EKS Cluster
         self.eks_cluster = EksCluster(
             self,
             "EksCluster",
             vpc=self.vpc_construct.vpc,
             config=self.config,
-            external_dns_role=shared_stack.iam_roles.external_dns_role,
             ebs_csi_role=shared_stack.iam_roles.ebs_csi_role,
             efs_csi_role=shared_stack.iam_roles.efs_csi_role,
             load_balancer_controller_role=shared_stack.iam_roles.load_balancer_controller_role,
             karpenter_node_role=shared_stack.iam_roles.karpenter_node_role,
-            cloudflare_secret_arn=shared_secrets_arn,
         )
 
     @property
