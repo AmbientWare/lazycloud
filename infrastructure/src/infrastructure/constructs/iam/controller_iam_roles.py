@@ -412,6 +412,7 @@ class ControllerIAMRoles(Construct):
                         "elasticloadbalancing:AddListenerCertificates",
                         "elasticloadbalancing:RemoveListenerCertificates",
                         "elasticloadbalancing:ModifyRule",
+                        "elasticloadbalancing:SetRulePriorities",
                     ],
                     "Resource": "*",
                 },
