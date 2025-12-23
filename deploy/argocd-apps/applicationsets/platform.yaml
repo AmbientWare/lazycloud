@@ -20,7 +20,7 @@ spec:
                   syncWave: "1"
                   createNamespace: "false"
                   serverSideApply: "true"
-                  hasRegionValues: "false"
+                  hasRegionValues: "true"
                 - app: reloader
                   namespace: kube-system
                   syncWave: "1"

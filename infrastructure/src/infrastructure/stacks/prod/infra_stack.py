@@ -162,3 +162,11 @@ class ProdInfraStack(cdk.Stack):
             description="ACM wildcard certificate ARN for ALB ingress",
             export_name=f"{self.config.org_name}-{self.config.environment}-{self.config.aws_region}-certificate-arn",
         )
+
+        cdk.CfnOutput(
+            self,
+            "EfsFileSystemId",
+            value=self.infrastructure.efs_file_system_id,
+            description="EFS file system ID for persistent shared storage",
+            export_name=f"{self.config.org_name}-{self.config.environment}-{self.config.aws_region}-efs-id",
+        )

@@ -2,7 +2,7 @@ import aws_cdk as cdk
 from constructs import Construct
 
 from infrastructure.config.environments import EnvironmentConfig
-from infrastructure.constructs.aws import EksCluster, VpcConstruct
+from infrastructure.constructs.aws import EfsConstruct, EksCluster, VpcConstruct
 from infrastructure.stacks.shared import SharedStack
 
 
@@ -45,6 +45,15 @@ class InfrastructureConstruct(Construct):
             karpenter_node_role=shared_stack.iam_roles.karpenter_node_role,
         )
 
+        # Create EFS for shared persistent storage
+        self.efs = EfsConstruct(
+            self,
+            "Efs",
+            vpc=self.vpc_construct.vpc,
+            config=self.config,
+            eks_security_group_id=self.eks_cluster.cluster.cluster_security_group_id,
+        )
+
     @property
     def vpc(self):
         """Get the VPC instance"""
@@ -69,3 +78,8 @@ class InfrastructureConstruct(Construct):
     def cluster_oidc_provider_arn(self):
         """Get the EKS cluster OIDC provider ARN"""
         return self.eks_cluster.cluster.open_id_connect_provider.open_id_connect_provider_arn
+
+    @property
+    def efs_file_system_id(self):
+        """Get the EFS file system ID"""
+        return self.efs.file_system_id
