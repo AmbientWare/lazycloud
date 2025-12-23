@@ -1,0 +1,45 @@
+prefect-server:
+  fullnameOverride: prefect-server
+
+  postgresql:
+    enabled: true
+    auth:
+      username: prefect
+      existingSecret: prefect-secrets
+      secretKeys:
+        userPasswordKey: PREFECT_DB_PASSWORD
+      database: prefect
+    primary:
+      persistence:
+        enabled: true
+        size: 10Gi
+        storageClass: ebs-gp3
+
+  server:
+    basicAuth:
+      enabled: true
+      existingSecret: prefect-secrets
+    replicaCount: 1
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: 1000m
+        memory: 1Gi
+    uiConfig:
+      prefectUiApiUrl: "https://prefect.lazycloud.dev/api"
+
+  ingress:
+    enabled: true
+    className: alb
+    host:
+      hostname: prefect.lazycloud.dev
+      path: /
+      pathType: Prefix
+    annotations:
+      alb.ingress.kubernetes.io/scheme: internet-facing
+      alb.ingress.kubernetes.io/target-type: ip
+      alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+      alb.ingress.kubernetes.io/ssl-redirect: "443"
+      external-dns.alpha.kubernetes.io/hostname: prefect.lazycloud.dev

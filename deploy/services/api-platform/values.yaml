@@ -78,6 +78,6 @@ secrets:
     # Depot (remote builds)
     - "DEPOT_API_TOKEN"
     - "DEPOT_ORG_ID"
-    # Prefect
+    # Prefect (self-hosted with basic auth)
     - "PREFECT_API_URL"
-    - "PREFECT_API_KEY"
+    - "PREFECT_API_AUTH_STRING"

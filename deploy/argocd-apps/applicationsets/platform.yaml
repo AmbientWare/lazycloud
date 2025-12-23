@@ -63,6 +63,12 @@ spec:
                   createNamespace: "true"
                   serverSideApply: "true"
                   hasRegionValues: "false"
+                - app: prefect
+                  namespace: prefect
+                  syncWave: "8"
+                  createNamespace: "true"
+                  serverSideApply: "false"
+                  hasRegionValues: "false"
   templatePatch: |
     spec:
       source:
