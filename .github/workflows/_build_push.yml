@@ -30,6 +30,11 @@ on:
         required: false
         type: string
         default: ''
+      tag_prefix:
+        description: 'Optional prefix for the image tag (e.g., staging-, prod-)'
+        required: false
+        type: string
+        default: ''
     outputs:
       image_tag:
         description: 'Full ECR image tag with SHA'
@@ -69,10 +74,11 @@ jobs:
           SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
           ECR_REGISTRY=${{ steps.login-ecr.outputs.registry }}
           ECR_REPOSITORY=${{ inputs.ecr_repository }}
-          IMAGE_TAG="${ECR_REGISTRY}/${ECR_REPOSITORY}:${SHORT_SHA}"
+          TAG_PREFIX="${{ inputs.tag_prefix }}"
+          IMAGE_TAG="${ECR_REGISTRY}/${ECR_REPOSITORY}:${TAG_PREFIX}${SHORT_SHA}"
 
           echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
-          echo "image_sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
+          echo "image_sha=${TAG_PREFIX}${SHORT_SHA}" >> $GITHUB_OUTPUT
           echo "Generated image tag: ${IMAGE_TAG}"
 
       - name: Parse build args

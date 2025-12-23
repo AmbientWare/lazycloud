@@ -12,9 +12,10 @@ on:
           - production
 
 jobs:
-  # Build API image
+  # Only build images for staging - production promotes staging images
   build-api:
     name: Build API Image
+    if: inputs.environment == 'staging'
     uses: ./.github/workflows/_build_push.yml
     with:
       app_name: backend-api
@@ -24,9 +25,9 @@ jobs:
       docker_target: api
     secrets: inherit
 
-  # Build background worker image
   build-background-worker:
     name: Build Background Worker Image
+    if: inputs.environment == 'staging'
     uses: ./.github/workflows/_build_push.yml
     with:
       app_name: backend-background-worker
@@ -36,9 +37,9 @@ jobs:
       docker_target: background-workers
     secrets: inherit
 
-  # Build cron worker image
   build-cron-worker:
     name: Build Cron Worker Image
+    if: inputs.environment == 'staging'
     uses: ./.github/workflows/_build_push.yml
     with:
       app_name: backend-cron-worker
@@ -48,21 +49,41 @@ jobs:
       docker_target: crons
     secrets: inherit
 
-  # Update Helm values after all images are built
   update-values:
     name: Update Helm Values
     needs: [build-api, build-background-worker, build-cron-worker]
+    if: always() && (inputs.environment == 'production' || (needs.build-api.result == 'success' && needs.build-background-worker.result == 'success' && needs.build-cron-worker.result == 'success'))
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
+    outputs:
+      image_sha: ${{ steps.get-sha.outputs.image_sha }}
     steps:
-      - name: Checkout code
+      - name: Checkout environment branch
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ inputs.environment }}
+          fetch-depth: 0
+
+      - name: Get image SHA
+        id: get-sha
+        run: |
+          ENV="${{ inputs.environment }}"
+          if [ "$ENV" = "production" ]; then
+            # For production, get the SHA from staging branch's values file
+            git fetch origin staging
+            IMAGE_SHA=$(git show origin/staging:deploy/services/api-platform/values-staging.yaml | grep -oP 'tag: "\K[^"]+')
+            echo "Promoting staging image: $IMAGE_SHA"
+          else
+            # For staging, use the newly built image SHA
+            IMAGE_SHA="${{ needs.build-api.outputs.image_sha }}"
+            echo "Using new build: $IMAGE_SHA"
+          fi
+          echo "image_sha=$IMAGE_SHA" >> $GITHUB_OUTPUT
 
       - name: Update values file
         run: |
-          IMAGE_SHA="${{ needs.build-api.outputs.image_sha }}"
+          IMAGE_SHA="${{ steps.get-sha.outputs.image_sha }}"
           ENV="${{ inputs.environment }}"
 
           if [ "$ENV" = "production" ]; then
@@ -74,13 +95,13 @@ jobs:
           echo "Updating $VALUES_FILE with image SHA: $IMAGE_SHA"
           sed -i "s/tag: \".*\"/tag: \"${IMAGE_SHA}\"/" "$VALUES_FILE"
 
-      - name: Commit and push changes
+      - name: Commit and push to environment branch
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           ENV="${{ inputs.environment }}"
-          IMAGE_SHA="${{ needs.build-api.outputs.image_sha }}"
+          IMAGE_SHA="${{ steps.get-sha.outputs.image_sha }}"
 
           if [ "$ENV" = "production" ]; then
             VALUES_FILE="deploy/services/api-platform/values-prod.yaml"
@@ -94,7 +115,7 @@ jobs:
             echo "No changes to commit"
           else
             git commit -m "🚀 Deploy backend to $ENV: $IMAGE_SHA"
-            git push
+            git push origin "$ENV"
           fi
 
   summary:
@@ -108,12 +129,20 @@ jobs:
           echo "## 🚀 Backend Deployment Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Environment:** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Image SHA:** \`${{ needs.build-api.outputs.image_sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch:** \`${{ inputs.environment }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Image SHA:** \`${{ needs.update-values.outputs.image_sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Build Status" >> $GITHUB_STEP_SUMMARY
-          echo "- API: ${{ needs.build-api.result }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Background Worker: ${{ needs.build-background-worker.result }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Cron Worker: ${{ needs.build-cron-worker.result }}" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ inputs.environment }}" = "staging" ]; then
+            echo "### Build Status" >> $GITHUB_STEP_SUMMARY
+            echo "- API: ${{ needs.build-api.result }}" >> $GITHUB_STEP_SUMMARY
+            echo "- Background Worker: ${{ needs.build-background-worker.result }}" >> $GITHUB_STEP_SUMMARY
+            echo "- Cron Worker: ${{ needs.build-cron-worker.result }}" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### Promotion" >> $GITHUB_STEP_SUMMARY
+            echo "Promoted staging image to production (no rebuild)" >> $GITHUB_STEP_SUMMARY
+          fi
+
           echo "- Deploy: ${{ needs.update-values.result }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
@@ -122,10 +151,5 @@ jobs:
           else
             echo "🌐 **API URL:** https://api-staging.lazycloud.dev" >> $GITHUB_STEP_SUMMARY
           fi
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Images Built" >> $GITHUB_STEP_SUMMARY
-          echo "- \`backend-api:${{ needs.build-api.outputs.image_sha }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- \`backend-background-workers:${{ needs.build-background-worker.outputs.image_sha }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- \`backend-crons:${{ needs.build-cron-worker.outputs.image_sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Argo CD will automatically sync this deployment." >> $GITHUB_STEP_SUMMARY
