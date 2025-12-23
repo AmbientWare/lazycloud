@@ -33,6 +33,7 @@ prefect-server:
       path: /
       pathType: Prefix
     annotations:
+      alb.ingress.kubernetes.io/group.name: lazycloud-prod-us-east-1-alb
       alb.ingress.kubernetes.io/scheme: internet-facing
       alb.ingress.kubernetes.io/target-type: ip
       alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
