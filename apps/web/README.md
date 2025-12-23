@@ -98,7 +98,7 @@ Required environment variables (see `.env.example` for full list):
 - `WORKOS_API_KEY` - WorkOS API key for server-side operations
 - `WORKOS_CLIENT_ID` - WorkOS client ID
 - `WORKOS_COOKIE_PASSWORD` - Secure password for session cookies (min 32 characters)
-- `NEXT_PUBLIC_WORKOS_REDIRECT_URI` - OAuth callback URL (e.g., `http://localhost:3000/callback`)
+- `WORKOS_REDIRECT_URI` - OAuth callback URL (e.g., `http://localhost:3000/callback`)
 
 ### Database
 - `DATABASE_URL` - PostgreSQL connection string

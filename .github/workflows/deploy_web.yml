@@ -12,42 +12,53 @@ on:
           - production
 
 jobs:
-  setup:
-    name: Setup
-    runs-on: ubuntu-latest
-    environment: shared
-    outputs:
-      workos_redirect_uri: ${{ inputs.environment == 'production' && vars.WORKOS_REDIRECT_URI_PROD || vars.WORKOS_REDIRECT_URI_STAGING }}
-    steps:
-      - run: echo "Environment ${{ inputs.environment }}"
-
+  # Only build image for staging - production promotes staging image
   build-web:
     name: Build Web Image
-    needs: setup
+    if: inputs.environment == 'staging'
     uses: ./.github/workflows/_build_push.yml
     with:
       app_name: web
       dockerfile_path: ./apps/web/Dockerfile
       build_context: .
       ecr_repository: web
-      build_args: |
-        NEXT_PUBLIC_WORKOS_REDIRECT_URI=${{ needs.setup.outputs.workos_redirect_uri }}
     secrets: inherit
 
   update-values:
     name: Update Helm Values
-    needs: build-web
+    needs: [build-web]
+    if: always() && (inputs.environment == 'production' || needs.build-web.result == 'success')
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
+    outputs:
+      image_sha: ${{ steps.get-sha.outputs.image_sha }}
     steps:
-      - name: Checkout code
+      - name: Checkout environment branch
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ inputs.environment }}
+          fetch-depth: 0
+
+      - name: Get image SHA
+        id: get-sha
+        run: |
+          ENV="${{ inputs.environment }}"
+          if [ "$ENV" = "production" ]; then
+            # For production, get the SHA from staging branch's values file
+            git fetch origin staging
+            IMAGE_SHA=$(git show origin/staging:deploy/services/web/values-staging.yaml | grep -oP 'tag: "\K[^"]+')
+            echo "Promoting staging image: $IMAGE_SHA"
+          else
+            # For staging, use the newly built image SHA
+            IMAGE_SHA="${{ needs.build-web.outputs.image_sha }}"
+            echo "Using new build: $IMAGE_SHA"
+          fi
+          echo "image_sha=$IMAGE_SHA" >> $GITHUB_OUTPUT
 
       - name: Update values file
         run: |
-          IMAGE_SHA="${{ needs.build-web.outputs.image_sha }}"
+          IMAGE_SHA="${{ steps.get-sha.outputs.image_sha }}"
           ENV="${{ inputs.environment }}"
 
           if [ "$ENV" = "production" ]; then
@@ -59,13 +70,13 @@ jobs:
           echo "Updating $VALUES_FILE with image SHA: $IMAGE_SHA"
           sed -i "s/tag: \".*\"/tag: \"${IMAGE_SHA}\"/" "$VALUES_FILE"
 
-      - name: Commit and push changes
+      - name: Commit and push to environment branch
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           ENV="${{ inputs.environment }}"
-          IMAGE_SHA="${{ needs.build-web.outputs.image_sha }}"
+          IMAGE_SHA="${{ steps.get-sha.outputs.image_sha }}"
 
           if [ "$ENV" = "production" ]; then
             VALUES_FILE="deploy/services/web/values-prod.yaml"
@@ -79,7 +90,7 @@ jobs:
             echo "No changes to commit"
           else
             git commit -m "🚀 Deploy web to $ENV: $IMAGE_SHA"
-            git push
+            git push origin "$ENV"
           fi
 
   summary:
@@ -93,9 +104,19 @@ jobs:
           echo "## 🚀 Web Deployment Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Environment:** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Image SHA:** \`${{ needs.build-web.outputs.image_sha }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Build Status:** ${{ needs.build-web.result }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Deploy Status:** ${{ needs.update-values.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch:** \`${{ inputs.environment }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Image SHA:** \`${{ needs.update-values.outputs.image_sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ inputs.environment }}" = "staging" ]; then
+            echo "### Build Status" >> $GITHUB_STEP_SUMMARY
+            echo "- Web: ${{ needs.build-web.result }}" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### Promotion" >> $GITHUB_STEP_SUMMARY
+            echo "Promoted staging image to production (no rebuild)" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "- Deploy: ${{ needs.update-values.result }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
           if [ "${{ inputs.environment }}" = "production" ]; then

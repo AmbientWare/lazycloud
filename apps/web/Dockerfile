@@ -17,8 +17,6 @@ RUN \
 ##### BUILDER
 
 FROM --platform=linux/amd64 node:22-alpine AS builder
-ARG NEXT_PUBLIC_WORKOS_REDIRECT_URI
-ENV NEXT_PUBLIC_WORKOS_REDIRECT_URI=${NEXT_PUBLIC_WORKOS_REDIRECT_URI}
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY apps/web/ .

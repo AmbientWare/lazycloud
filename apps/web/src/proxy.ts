@@ -51,7 +51,9 @@ async function handleRateLimit(req: NextRequest): Promise<{
 }
 
 export default async function middleware(req: NextRequest) {
-  const { session, headers: authkitHeaders, authorizationUrl } = await authkit(req);
+  const { session, headers: authkitHeaders, authorizationUrl } = await authkit(req, {
+    redirectUri: process.env.WORKOS_REDIRECT_URI,
+  });
   const { pathname } = req.nextUrl;
 
 
