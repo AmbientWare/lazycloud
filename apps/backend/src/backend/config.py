@@ -40,7 +40,6 @@ class AppConfig(BaseModel):
     AWS_ACCESS_KEY_ID: str = os.getenv("AWS_ACCESS_KEY_ID", "")
     AWS_SECRET_ACCESS_KEY: str = os.getenv("AWS_SECRET_ACCESS_KEY", "")
     AWS_REGION: str = os.getenv("AWS_REGION", "")
-    AWS_ROUTE53_ZONES: dict[str, str] = json.loads(os.getenv("AWS_ROUTE53_ZONES", "{}"))
     AWS_ENDPOINT_URL: str = os.getenv("AWS_ENDPOINT_URL", None)
     AWS_ECR_BASE_ROLE_ARN: str = os.getenv("AWS_ECR_BASE_ROLE_ARN", "")
 
@@ -118,7 +117,6 @@ class AppConfig(BaseModel):
         "AWS_ECR_BASE_ROLE_ARN",
         "AWS_SECRET_ACCESS_KEY",
         "AWS_REGION",
-        "AWS_ROUTE53_ZONES",
         "DB_SECRET_KEY",
         "RESEND_API_KEY",
     ]

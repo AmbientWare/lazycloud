@@ -22,30 +22,21 @@ class EksCluster(Construct):
         construct_id: str,
         vpc: ec2.Vpc,
         config: EnvironmentConfig,
-        external_dns_role: iam.CfnRole,
         ebs_csi_role: iam.CfnRole,
         efs_csi_role: iam.CfnRole,
         load_balancer_controller_role: iam.CfnRole,
         karpenter_node_role: iam.CfnRole,
-        cloudflare_secret_arn: str | None = None,
     ) -> None:
         super().__init__(scope, construct_id)
 
         self.config = config
         self.vpc = vpc
-        self.external_dns_role = external_dns_role
         self.ebs_csi_role = ebs_csi_role
         self.efs_csi_role = efs_csi_role
         self.load_balancer_controller_role = load_balancer_controller_role
         self.karpenter_node_role = karpenter_node_role
-        self.cloudflare_secret_arn = cloudflare_secret_arn
 
-        # Create EKS cluster with Karpenter
         self.cluster = self._create_cluster()
-
-        # Note: Kubernetes secrets for ExternalDNS (like cloudflare-api-token)
-        # are created by External Secrets Operator syncing from AWS Secrets Manager
-        # See the platform services stack for ExternalSecret resources
 
     def _create_cluster(self) -> aws_eks.Cluster:
         """Create EKS cluster with managed node group for Karpenter"""
@@ -141,71 +132,6 @@ class EksCluster(Construct):
             addon_name="metrics-server",
             addon_version="v0.8.0-eksbuild.6",
             cluster_name=cluster.cluster_name,
-        )
-
-        # Configure ExternalDNS based on provider (Cloudflare or Route53)
-        # Base configuration following EKS addon schema
-        external_dns_config = {
-            "txtSuffix": "-registry",
-            "txtOwnerId": "external-dns",
-            "sources": ["service", "ingress"],
-            "policy": "upsert-only",
-            "interval": "5s",
-        }
-
-        # Add provider-specific configuration
-        if self.config.external_dns_provider == "cloudflare":
-            # Cloudflare provider configuration via extraArgs and env
-            extra_args = ["--provider=cloudflare"]
-
-            # Add Cloudflare proxy setting if enabled
-            if self.config.cloudflare_proxied:
-                extra_args.append("--cloudflare-proxied")
-
-            external_dns_config["extraArgs"] = extra_args
-
-            # Set CF_API_TOKEN environment variable from Kubernetes secret
-            external_dns_config["env"] = [
-                {
-                    "name": "CF_API_TOKEN",
-                    "valueFrom": {
-                        "secretKeyRef": {
-                            "name": "cloudflare-api-token",
-                            "key": "apiToken",
-                        }
-                    },
-                }
-            ]
-
-            # Add domain filters if specified
-            if self.config.external_dns_domain_filters:
-                external_dns_config["domainFilters"] = (
-                    self.config.external_dns_domain_filters
-                )
-        else:
-            # Route53 configuration (default AWS provider)
-            external_dns_config["extraArgs"] = ["--provider=aws"]
-
-            # Add domain filters for Route53 if specified
-            if self.config.external_dns_domain_filters:
-                external_dns_config["domainFilters"] = (
-                    self.config.external_dns_domain_filters
-                )
-
-        # Add external-dns add-on with Pod Identity
-        aws_eks.CfnAddon(
-            self,
-            "ExternalDNS",
-            addon_name="external-dns",
-            addon_version="v0.20.0-eksbuild.2",
-            cluster_name=cluster.cluster_name,
-            pod_identity_associations=[
-                aws_eks.CfnAddon.PodIdentityAssociationProperty(
-                    role_arn=self.external_dns_role.attr_arn,
-                    service_account="external-dns",
-                )
-            ],
-            configuration_values=json.dumps(external_dns_config),
         )
 
         # Add EBS CSI driver add-on with Pod Identity

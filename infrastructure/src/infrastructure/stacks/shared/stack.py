@@ -70,3 +70,11 @@ class SharedStack(cdk.Stack):
             value=self.iam_roles.external_dns_role_arn,
             description="ARN of the external DNS role for EKS clusters (Cloudflare)",
         )
+
+        # ECR Base Role Output
+        cdk.CfnOutput(
+            stack,
+            "ECRBaseRoleArn",
+            value=self.iam_roles.ecr_base_role_arn,
+            description="ARN of the ECR base role for backend API (scoped via session policy)",
+        )
