@@ -11,10 +11,13 @@ on:
           - staging
           - production
       services:
-        description: 'Services to deploy (comma-separated, or "all")'
+        description: 'Services to deploy'
         required: true
-        type: string
-        default: 'all'
+        type: choice
+        options:
+          - all
+          - web
+          - backend
 
 env:
   AWS_REGION: us-east-1
