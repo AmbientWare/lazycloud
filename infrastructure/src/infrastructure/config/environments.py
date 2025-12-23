@@ -21,6 +21,11 @@ class EnvironmentConfig:
     domain_name: str
     aws_account_id: str
 
+    # Multi-Cluster Configuration
+    cluster_id: str = ""
+    is_hub: bool = False
+    ecr_regions: list[str] | None = None
+
     # VPC Configuration
     vpc_cidr: str = "10.0.0.0/16"
     availability_zones: list[str] | None = None
@@ -37,6 +42,10 @@ class EnvironmentConfig:
     is_regional: bool = (
         True  # If True, deploys regional stacks (infra, controllers, platform)
     )
+
+    # App environments (namespaces) this cluster hosts
+    # Each will get its own AWS secret: {org_name}/{env}-secrets
+    app_environments: list[str] | None = None
 
     def __post_init__(self) -> None:
         """Set default values after initialization"""
@@ -59,6 +68,9 @@ ENVIRONMENTS: dict[str, EnvironmentConfig] = {
     "prod": EnvironmentConfig(
         aws_region="us-east-1",
         environment="prod",
+        cluster_id="use1",
+        is_hub=True,
+        ecr_regions=["us-west-2"],
         vpc_cidr="10.0.0.0/16",
         single_nat_gateway=False,
         aws_account_id=os.getenv("CDK_DEFAULT_ACCOUNT"),
@@ -67,19 +79,24 @@ ENVIRONMENTS: dict[str, EnvironmentConfig] = {
         external_dns_provider="cloudflare",
         external_dns_domain_filters=["lazycloud.dev"],
         cloudflare_proxied=False,
+        app_environments=["prod", "staging"],
     ),
-    "dev": EnvironmentConfig(
-        aws_region="us-east-1",
-        environment="dev",
-        vpc_cidr="10.2.0.0/16",
-        single_nat_gateway=True,
-        aws_account_id=os.getenv("CDK_DEFAULT_ACCOUNT"),
-        org_name="lazycloud",
-        domain_name="lazycloud.dev",
-        external_dns_provider="cloudflare",
-        external_dns_domain_filters=["lazycloud.dev"],
-        cloudflare_proxied=False,
-    ),
+    # "prod-usw2": EnvironmentConfig(
+    #     aws_region="us-west-2",
+    #     environment="prod",
+    #     cluster_id="usw2",
+    #     is_hub=False,
+    #     ecr_regions=None,
+    #     vpc_cidr="10.1.0.0/16",
+    #     single_nat_gateway=False,
+    #     aws_account_id=os.getenv("CDK_DEFAULT_ACCOUNT"),
+    #     org_name="lazycloud",
+    #     domain_name="lazycloud.dev",
+    #     external_dns_provider="cloudflare",
+    #     external_dns_domain_filters=["lazycloud.dev"],
+    #     cloudflare_proxied=False,
+    #     app_environments=["prod"],
+    # ),
 }
 
 

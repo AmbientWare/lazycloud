@@ -3,11 +3,8 @@
 replicaCount: 3
 
 image:
-  repository: 534742592531.dkr.ecr.us-east-1.amazonaws.com/backend-api
-  pullPolicy: Always
   tag: "latest"
 
-# Higher resources for prod
 resources:
   limits:
     cpu: 2000m

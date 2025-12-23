@@ -1,9 +1,7 @@
-# Default values for LazyCloud Web
-
 replicaCount: 1
 
 image:
-  repository: 534742592531.dkr.ecr.us-east-1.amazonaws.com/web
+  name: web
   pullPolicy: Always
   tag: "latest"
 
@@ -15,8 +13,7 @@ ingress:
   enabled: true
   hostname: lazycloud.dev
   healthCheckPath: /api/health
-  annotations:
-    alb.ingress.kubernetes.io/certificate-arn: "arn:aws:acm:us-east-1:211125306000:certificate/YOUR-WILDCARD-CERT-ARN"
+  annotations: {}
 
 resources:
   limits:

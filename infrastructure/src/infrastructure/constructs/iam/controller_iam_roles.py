@@ -224,6 +224,7 @@ class ControllerIAMRoles(Construct):
                         "elasticloadbalancing:DescribeLoadBalancers",
                         "elasticloadbalancing:DescribeLoadBalancerAttributes",
                         "elasticloadbalancing:DescribeListeners",
+                        "elasticloadbalancing:DescribeListenerAttributes",
                         "elasticloadbalancing:DescribeListenerCertificates",
                         "elasticloadbalancing:DescribeSSLPolicies",
                         "elasticloadbalancing:DescribeRules",

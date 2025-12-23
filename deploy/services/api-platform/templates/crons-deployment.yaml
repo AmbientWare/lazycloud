@@ -18,7 +18,7 @@ spec:
     spec:
       containers:
         - name: cron-worker
-          image: "{{ .Values.image.repository | replace `lazycloud-api` `lazycloud-cron-worker` }}:{{ .Values.image.tag }}"
+          image: "{{ .Values.image.registry }}/{{ .Values.crons.image.name }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["uv", "run", "--no-sync", "python", "-m", "backend.worker"]
           env:

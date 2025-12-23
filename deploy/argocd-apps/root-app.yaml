@@ -10,11 +10,10 @@ spec:
   source:
     repoURL: git@github.com:AmbientWare/lazycloud.git
     targetRevision: main
-    path: deploy/argocd-apps
+    path: deploy/argocd-apps/applicationsets
     directory:
-      recurse: true
+      recurse: false
       include: '*.yaml'
-      exclude: 'root-app.yaml'
   destination:
     server: https://kubernetes.default.svc
     namespace: argocd

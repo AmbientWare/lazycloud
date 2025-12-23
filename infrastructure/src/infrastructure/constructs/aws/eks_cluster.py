@@ -148,8 +148,9 @@ class EksCluster(Construct):
         external_dns_config = {
             "txtSuffix": "-registry",
             "txtOwnerId": "external-dns",
-            "sources": ["service", "ingress"],  # Kubernetes resources to monitor
-            "policy": "upsert-only",  # Don't delete existing DNS records
+            "sources": ["service", "ingress"],
+            "policy": "upsert-only",
+            "interval": "5s",
         }
 
         # Add provider-specific configuration

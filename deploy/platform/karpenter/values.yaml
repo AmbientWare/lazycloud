@@ -1,8 +1,6 @@
-# Karpenter values
-# Infrastructure values (nodeRoleName, clusterSecurityGroupId, karpenter.settings.*)
-# are injected from /infrastructure-values/karpenter.yaml
+# Shared across all regions
+nodeRoleName: lazycloud-karpenter-node
 
-# Karpenter chart values (static config only)
 karpenter:
   serviceAccount:
     name: karpenter

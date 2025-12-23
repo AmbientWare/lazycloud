@@ -1,0 +1,107 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: lazycloud-platform
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - matrix:
+        generators:
+          - clusters:
+              selector:
+                matchLabels:
+                  argocd.argoproj.io/secret-type: cluster
+          - list:
+              elements:
+                - app: storage-classes
+                  namespace: kube-system
+                  syncWave: "1"
+                  createNamespace: "false"
+                  serverSideApply: "true"
+                  hasRegionValues: "false"
+                - app: reloader
+                  namespace: kube-system
+                  syncWave: "1"
+                  createNamespace: "false"
+                  serverSideApply: "false"
+                  hasRegionValues: "false"
+                - app: external-secrets
+                  namespace: external-secrets-system
+                  syncWave: "2"
+                  createNamespace: "true"
+                  serverSideApply: "false"
+                  hasRegionValues: "true"
+                - app: ingress-classes
+                  namespace: kube-system
+                  syncWave: "3"
+                  createNamespace: "false"
+                  serverSideApply: "true"
+                  hasRegionValues: "true"
+                - app: karpenter
+                  namespace: kube-system
+                  syncWave: "4"
+                  createNamespace: "false"
+                  serverSideApply: "false"
+                  hasRegionValues: "true"
+                - app: loki
+                  namespace: monitoring
+                  syncWave: "5"
+                  createNamespace: "true"
+                  serverSideApply: "false"
+                  hasRegionValues: "false"
+                - app: prometheus-stack
+                  namespace: monitoring
+                  syncWave: "6"
+                  createNamespace: "true"
+                  serverSideApply: "true"
+                  hasRegionValues: "false"
+  templatePatch: |
+    spec:
+      source:
+        helm:
+          valueFiles:
+            - values.yaml
+            {{- if eq .hasRegionValues "true" }}
+            - values-{{ index .metadata.labels "region" }}.yaml
+            {{- end }}
+      syncPolicy:
+        syncOptions:
+          - CreateNamespace={{ .createNamespace }}
+          {{- if eq .serverSideApply "true" }}
+          - ServerSideApply=true
+          {{- end }}
+  template:
+    metadata:
+      name: '{{ .name }}-{{ .app }}'
+      namespace: argocd
+      annotations:
+        argocd.argoproj.io/sync-wave: '{{ .syncWave }}'
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io
+    spec:
+      project: default
+      source:
+        repoURL: git@github.com:AmbientWare/lazycloud.git
+        targetRevision: main
+        path: 'deploy/platform/{{ .app }}'
+        helm:
+          valueFiles:
+            - values.yaml
+      destination:
+        server: '{{ .server }}'
+        namespace: '{{ .namespace }}'
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+          allowEmpty: false
+        syncOptions:
+          - CreateNamespace=false
+        retry:
+          limit: 5
+          backoff:
+            duration: 5s
+            factor: 2
+            maxDuration: 3m
