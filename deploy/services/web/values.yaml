@@ -29,6 +29,7 @@ secrets:
   name: "app-secrets"
   env:
     - "NODE_ENV"
+    - "APP_URL"
     - "DATABASE_URL"
     - "WORKOS_API_KEY"
     - "WORKOS_CLIENT_ID"
@@ -41,3 +42,5 @@ secrets:
     - "ADMIN_API_KEY"
     - "RESEND_API_KEY"
     - "SUPPORT_EMAIL"
+    - "UPSTASH_REDIS_REST_URL"
+    - "UPSTASH_REDIS_REST_TOKEN"
