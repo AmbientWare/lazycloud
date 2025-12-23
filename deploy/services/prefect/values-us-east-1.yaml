@@ -1,0 +1,6 @@
+# Region-specific values for us-east-1
+
+prefect-server:
+  ingress:
+    annotations:
+      alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-east-1:534742592531:certificate/5ae60e35-8970-4b33-9ffb-abfd3fed05c6
