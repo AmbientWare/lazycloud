@@ -61,17 +61,12 @@ async function getProductsWithCache(): Promise<PolarProduct[]> {
 
 export async function getProducts(): Promise<PolarProduct[]> {
   try {
-    // connection() rejects during prerendering - this is expected behavior
-    // The route will be dynamic at runtime, allowing cache to work
+    // connection() rejects during prerendering - return empty to skip API call
     try {
       await connection();
     } catch (error) {
-      if (error instanceof Error && error.message.includes('prerendering')) {
-        // Silently continue - prerendering will fail but runtime will work
-      } else {
-        // Re-throw unexpected errors
-        throw error;
-      }
+      // During prerendering or warmup, skip the Polar API call entirely
+      return [];
     }
     return await getProductsWithCache();
   } catch (error) {
