@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cluster-local
+  namespace: argocd
+  labels:
+    argocd.argoproj.io/secret-type: cluster
+    region: us-east-1
+    cluster-id: use1
+    is-hub: "true"
+    supports-staging: "true"
+type: Opaque
+stringData:
+  name: local
+  server: https://kubernetes.default.svc

@@ -67,15 +67,6 @@ repoServer:
       memory: 256Mi
   metrics:
     enabled: true
-  podAnnotations:
-    configmap.reloader.stakater.com/reload: infrastructure-values
-  volumes:
-    - name: infrastructure-values
-      configMap:
-        name: infrastructure-values
-  volumeMounts:
-    - name: infrastructure-values
-      mountPath: /infrastructure-values
 
 applicationSet:
   enabled: true

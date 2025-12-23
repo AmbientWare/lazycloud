@@ -6,14 +6,46 @@ from infrastructure.config.environments import EnvironmentConfig
 
 
 class SharedSecretsConstruct(Construct):
-    """Manages shared secrets in AWS Secrets Manager.
+    """Shared secrets for all environments (Cloudflare API token, etc.)"""
 
-    Creates empty secrets that should be populated manually via AWS CLI:
-    - {org_name}/shared-secrets: Cloudflare API token, etc.
-    - {org_name}/prod-secrets: Production app secrets (DATABASE_URL, etc.)
-    - {org_name}/staging-secrets: Staging app secrets
+    def __init__(
+        self,
+        scope: Construct,
+        construct_id: str,
+        config: EnvironmentConfig,
+    ) -> None:
+        super().__init__(scope, construct_id)
 
-    Example to populate:
+        self.config = config
+
+        self.shared_secrets = secretsmanager.Secret(
+            self,
+            "SharedSecrets",
+            secret_name=f"{config.org_name}/shared-secrets",
+            description=f"Shared secrets (Cloudflare, etc.) for {config.org_name}",
+            generate_secret_string=secretsmanager.SecretStringGenerator(
+                secret_string_template="{}",
+                generate_string_key="__placeholder__",
+            ),
+        )
+        cdk.Tags.of(self.shared_secrets).add("Environment", "shared")
+        cdk.Tags.of(self.shared_secrets).add("Organization", config.org_name)
+        cdk.Tags.of(self.shared_secrets).add("ManagedBy", "ExternalSecretsOperator")
+
+    @property
+    def secret_arn(self) -> str:
+        return self.shared_secrets.secret_arn
+
+    @property
+    def secret_name(self) -> str:
+        return self.shared_secrets.secret_name
+
+
+class EnvironmentSecretsConstruct(Construct):
+    """App secrets for each environment (namespace) this cluster hosts.
+
+    Creates secrets based on config.app_environments list.
+    Populate via AWS CLI:
         aws secretsmanager put-secret-value --secret-id lazycloud/prod-secrets \\
             --secret-string '{"DATABASE_URL":"...", "REDIS_URL":"..."}'
     """
@@ -27,52 +59,26 @@ class SharedSecretsConstruct(Construct):
         super().__init__(scope, construct_id)
 
         self.config = config
+        self.secrets: dict[str, secretsmanager.Secret] = {}
 
-        # Shared secrets (Cloudflare, etc.)
-        self.shared_secrets = self._create_secret(
-            "SharedSecrets",
-            f"{config.org_name}/shared-secrets",
-            "Shared secrets (Cloudflare, etc.) - synced to kube-system",
-            "shared",
-        )
+        # Create a secret for each app environment this cluster hosts
+        app_envs = config.app_environments or [config.environment]
+        for app_env in app_envs:
+            secret = secretsmanager.Secret(
+                self,
+                f"AppSecrets-{app_env}",
+                secret_name=f"{config.org_name}/{app_env}-secrets",
+                description=f"App secrets for {config.org_name} - synced to lazycloud-{app_env} namespace",
+                generate_secret_string=secretsmanager.SecretStringGenerator(
+                    secret_string_template="{}",
+                    generate_string_key="__placeholder__",
+                ),
+            )
+            cdk.Tags.of(secret).add("Environment", app_env)
+            cdk.Tags.of(secret).add("Organization", config.org_name)
+            cdk.Tags.of(secret).add("ManagedBy", "ExternalSecretsOperator")
+            self.secrets[app_env] = secret
 
-        # Prod app secrets
-        self.prod_secrets = self._create_secret(
-            "ProdSecrets",
-            f"{config.org_name}/prod-secrets",
-            "Production app secrets - synced to lazycloud-prod namespace",
-            "prod",
-        )
-
-        # Staging app secrets
-        self.staging_secrets = self._create_secret(
-            "StagingSecrets",
-            f"{config.org_name}/staging-secrets",
-            "Staging app secrets - synced to lazycloud-staging namespace",
-            "staging",
-        )
-
-    def _create_secret(
-        self, construct_id: str, secret_name: str, description: str, environment: str
-    ) -> secretsmanager.Secret:
-        """Create a secret with standard tags."""
-        secret = secretsmanager.Secret(
-            self,
-            construct_id,
-            secret_name=secret_name,
-            description=f"{description} for {self.config.org_name}",
-        )
-        cdk.Tags.of(secret).add("Environment", environment)
-        cdk.Tags.of(secret).add("Organization", self.config.org_name)
-        cdk.Tags.of(secret).add("ManagedBy", "ExternalSecretsOperator")
-        return secret
-
-    @property
-    def secret_arn(self) -> str:
-        """Get the shared secret ARN"""
-        return self.shared_secrets.secret_arn
-
-    @property
-    def secret_name(self) -> str:
-        """Get the shared secret name"""
-        return self.shared_secrets.secret_name
+    def get_secret(self, app_env: str) -> secretsmanager.Secret:
+        """Get secret for a specific app environment"""
+        return self.secrets[app_env]

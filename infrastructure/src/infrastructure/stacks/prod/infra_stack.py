@@ -1,18 +1,23 @@
 import aws_cdk as cdk
+from aws_cdk import aws_certificatemanager as acm
 from constructs import Construct
 
 from infrastructure.config.environments import EnvironmentConfig
+from infrastructure.constructs.aws import EnvironmentSecretsConstruct
 from infrastructure.constructs.components.controllers import ControllersConstruct
 from infrastructure.constructs.components.infrastructure import InfrastructureConstruct
 from infrastructure.stacks.shared import SharedStack
 
 
 class ProdInfraStack(cdk.Stack):
-    """Production infrastructure stack: VPC + EKS + Pod Identity + ConfigMap
+    """Production infrastructure stack: VPC + EKS + ACM Cert + Pod Identity + Secrets
 
-    After deployment, install ArgoCD manually:
+    After deployment:
+    1. Add ACM certificate DNS validation CNAME to Cloudflare (one-time)
+    2. Wait for certificate to be validated
+    3. Install ArgoCD:
         helm repo add argo https://argoproj.github.io/argo-helm
-        helm install argocd argo/argo-cd -n argocd --create-namespace \\
+        helm install argocd argo/argo-cd -n argocd \\
             -f infrastructure/argocd-values.yaml --wait --timeout 15m
         kubectl apply -f deploy/argocd-apps/root-app.yaml
     """
@@ -30,6 +35,22 @@ class ProdInfraStack(cdk.Stack):
         self.config = config
         self.shared_stack = shared_stack
 
+        # Environment-specific secrets (DATABASE_URL, REDIS_URL, etc.)
+        self.env_secrets = EnvironmentSecretsConstruct(
+            self,
+            "EnvSecrets",
+            config=self.config,
+        )
+
+        # Wildcard ACM certificate for ALB ingress
+        self.certificate = acm.Certificate(
+            self,
+            "WildcardCertificate",
+            domain_name=f"*.{self.config.domain_name}",
+            subject_alternative_names=[self.config.domain_name],
+            validation=acm.CertificateValidation.from_dns(),
+        )
+
         self.infrastructure = InfrastructureConstruct(
             self,
             "Infrastructure",
@@ -43,7 +64,6 @@ class ProdInfraStack(cdk.Stack):
             config=self.config,
             shared_stack=self.shared_stack,
             eks_cluster=self.infrastructure.eks_cluster,
-            vpc_id=self.infrastructure.vpc_id,
         )
 
         self._create_exports()
@@ -133,4 +153,12 @@ class ProdInfraStack(cdk.Stack):
             "-f infrastructure/argocd-values.yaml --wait --timeout 15m && "
             "kubectl apply -f deploy/argocd-apps/root-app.yaml",
             description="Commands to install ArgoCD after deployment",
+        )
+
+        cdk.CfnOutput(
+            self,
+            "CertificateArn",
+            value=self.certificate.certificate_arn,
+            description="ACM wildcard certificate ARN for ALB ingress",
+            export_name=f"{self.config.org_name}-{self.config.environment}-{self.config.aws_region}-certificate-arn",
         )

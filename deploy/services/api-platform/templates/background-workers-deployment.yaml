@@ -18,7 +18,7 @@ spec:
     spec:
       containers:
         - name: background-worker
-          image: "{{ .Values.image.repository | replace `lazycloud-api` `lazycloud-background-worker` }}:{{ .Values.image.tag }}"
+          image: "{{ .Values.image.registry }}/{{ .Values.backgroundWorkers.image.name }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["uv", "run", "--no-sync", "python", "-m", "backend.background_worker"]
           env:

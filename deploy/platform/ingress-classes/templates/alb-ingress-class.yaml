@@ -8,9 +8,9 @@ metadata:
     ingressclass.kubernetes.io/is-default-class: "true"
   {{- end }}
 spec:
-  controller: eks.amazonaws.com/alb
+  controller: ingress.k8s.aws/alb
   parameters:
-    apiGroup: eks.amazonaws.com
+    apiGroup: elbv2.k8s.aws
     kind: IngressClassParams
     name: {{ .Values.ingressClasses.alb.name }}
 {{- end }}

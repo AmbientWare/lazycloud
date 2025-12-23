@@ -1,6 +1,9 @@
 # External Secrets values
-# Infrastructure values (orgName, environment, region) are injected
-# from /infrastructure-values/external-secrets.yaml
+# Region-specific values (region) are in values-{region}.yaml
+
+# Shared across all regions
+orgName: lazycloud
+environment: prod
 
 # Cloudflare secret settings (for ExternalDNS)
 cloudflare:

@@ -8,12 +8,11 @@ GitOps-managed Kubernetes resources deployed via ArgoCD.
 deploy/
 ├── argocd-apps/                    # ArgoCD Application manifests
 │   ├── root-app.yaml               # App of Apps entry point
-│   ├── platform/                   # Platform applications
-│   └── *-prod.yaml, *-staging.yaml # Service applications
+│   └── applicationsets/            # ApplicationSets for multi-cluster
 ├── platform/                       # Platform Helm charts
 │   ├── karpenter/
 │   ├── external-secrets/
-│   ├── prometheus-stack/
+│   ├── aws-load-balancer-controller/
 │   └── ...
 └── services/                       # Application Helm charts
     ├── api-platform/
@@ -40,19 +39,20 @@ kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.pas
 
 ## How It Works
 
-1. `root-app.yaml` watches `deploy/argocd-apps/` for Application manifests
-2. ArgoCD syncs all platform and service apps automatically
-3. Platform apps get infrastructure values from ConfigMap at `/infrastructure-values/`
+1. `root-app.yaml` watches `deploy/argocd-apps/applicationsets/` for ApplicationSet manifests
+2. ApplicationSets generate Applications for each cluster using cluster labels
+3. Each chart uses `values.yaml` (shared) + `values-{region}.yaml` (region-specific)
 
 ## Adding Components
 
 **New platform component:**
 1. Create chart in `deploy/platform/<name>/`
-2. Create Application in `deploy/argocd-apps/platform/<name>.yaml`
-3. If needs infra values, add to CDK ConfigMap in `controllers.py`
+2. Add entry to `deploy/argocd-apps/applicationsets/platform.yaml`
+3. If region-specific, create `values-{region}.yaml` and set `hasRegionValues: "true"`
 
 **New service:**
 1. Create chart in `deploy/services/<name>/`
-2. Create Applications in `deploy/argocd-apps/`:
-   - `<name>-staging.yaml`
-   - `<name>-prod.yaml`
+2. Add to ApplicationSets in `deploy/argocd-apps/applicationsets/`:
+   - `services-staging.yaml`
+   - `services-prod.yaml`
+3. Create `values-{region}.yaml` for region-specific values (ECR registry, certificates)

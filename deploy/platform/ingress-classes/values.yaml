@@ -1,6 +1,5 @@
 # Ingress Classes values
-# Infrastructure values (orgName, environment, region, ingressClasses.alb.groupName)
-# are injected from /infrastructure-values/ingress-classes.yaml
+# Region-specific values (ingressClasses.alb.groupName) are in values-{region}.yaml
 
 ingressClasses:
   alb:
@@ -8,4 +7,3 @@ ingressClasses:
     name: alb
     isDefault: true
     scheme: internet-facing
-    # groupName is injected from infrastructure values

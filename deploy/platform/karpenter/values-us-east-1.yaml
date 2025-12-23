@@ -1,0 +1,7 @@
+clusterSecurityGroupId: sg-0cc8010a9d0e39f76
+
+karpenter:
+  settings:
+    clusterName: lazycloud-prod-us-east-1-eks
+    clusterEndpoint: https://C88AD0F29880698411134B05700C47EC.gr7.us-east-1.eks.amazonaws.com
+    interruptionQueue: lazycloud-prod-us-east-1-karpenter
