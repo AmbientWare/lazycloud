@@ -1,19 +1,14 @@
 prefect-server:
   fullnameOverride: prefect-server
 
+  # Disable bundled PostgreSQL - using external PlanetScale database
   postgresql:
-    enabled: true
-    auth:
-      username: prefect
-      existingSecret: prefect-secrets
-      secretKeys:
-        userPasswordKey: PREFECT_DB_PASSWORD
-      database: prefect
-    primary:
-      persistence:
-        enabled: true
-        size: 10Gi
-        storageClass: ebs-gp3
+    enabled: false
+
+  # External database connection
+  secret:
+    create: false
+    name: prefect-db-secret
 
   server:
     basicAuth:

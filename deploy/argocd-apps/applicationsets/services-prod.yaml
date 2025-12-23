@@ -17,6 +17,7 @@ spec:
               elements:
                 - service: api-platform
                 - service: web
+                - service: prefect
   template:
     metadata:
       name: '{{ .name }}-{{ .service }}-prod'
