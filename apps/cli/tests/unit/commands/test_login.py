@@ -1,176 +1,144 @@
 """Unit tests for login command"""
 
 import pytest
-from cli.commands.login import app
 from typer.testing import CliRunner
+
+import cli.config
+from cli.commands.login import app
 
 runner = CliRunner()
 
 
 @pytest.mark.unit
 class TestLoginCommand:
-    """Tests for login command"""
+    """Tests for login command with OAuth device flow"""
 
-    def test_login_with_valid_api_key(self, mock_home_dir, sample_workspaces, mocker):
-        """Test login with valid API key as argument"""
-        # Mock the API client
+    def test_login_success(self, mock_config_dir, sample_workspaces, mocker):
+        """Test successful login flow"""
+        # Mock API calls
         mock_api = mocker.patch("cli.commands.login.api")
+        mock_api.auth.get_config.return_value = {"workos_client_id": "test_client"}
+        mock_api.auth.request_device_authorization.return_value = {
+            "device_code": "device_123",
+            "user_code": "ABC-123",
+            "verification_uri": "https://auth.example.com/verify",
+            "verification_uri_complete": "https://auth.example.com/verify?code=ABC-123",
+            "expires_in": 300,
+            "interval": 5,
+        }
+        mock_api.auth.poll_for_tokens.return_value = {
+            "access_token": "access_token_123",
+            "refresh_token": "refresh_token_456",
+            "user": {"first_name": "Test", "email": "test@example.com"},
+        }
         mock_api.workspaces.list_workspaces.return_value = sample_workspaces
 
-        result = runner.invoke(app, ["test_key_123"])
-
-        assert result.exit_code == 0
-        # Verify API was called
-        mock_api.workspaces.list_workspaces.assert_called_once()
-
-        # Verify config was saved (actual behavior, not UI text)
-        config_file = mock_home_dir / ".lazycloud"
-        assert config_file.exists()
-        assert "API_KEY=test_key_123" in config_file.read_text()
-
-    def test_login_with_empty_api_key(self, mock_home_dir, mocker):
-        """Test login with empty API key as argument"""
-        # Mock console to avoid rich output issues
-        mocker.patch("cli.commands.login.console")
-
-        # Mock Prompt to prevent interactive blocking
-        mock_prompt = mocker.patch("cli.commands.login.Prompt")
-        mock_prompt.ask.return_value = ""
+        # Mock webbrowser to prevent actual browser opening
+        mocker.patch("cli.commands.login.webbrowser")
 
         result = runner.invoke(app, [])
 
-        assert result.exit_code == 1
+        assert result.exit_code == 0
 
-    def test_login_with_whitespace_api_key(self, mock_home_dir):
-        """Test login with whitespace-only API key"""
-        result = runner.invoke(app, ["   "])
+        # Verify config was saved
+        assert cli.config.CONFIG_FILE.exists()
+        content = cli.config.CONFIG_FILE.read_text()
+        assert 'access_token = "access_token_123"' in content
+        assert 'refresh_token = "refresh_token_456"' in content
+        assert 'id = "ws_123456"' in content
 
-        assert result.exit_code == 1
-
-    def test_login_with_invalid_api_key(self, mock_home_dir, mocker):
-        """Test login with invalid API key that fails validation"""
-        # Mock the API client to raise an exception
-        mock_api = mocker.patch("cli.commands.login.api")
-        mock_api.workspaces.list_workspaces.side_effect = Exception(
-            "Unauthorized: Invalid API key"
-        )
-
-        result = runner.invoke(app, ["invalid_key"])
-
-        assert result.exit_code == 1
-
-        # Verify the API key was not saved (cleared after failure)
-        from cli.config import config
-
-        # Need to reload config to see cleared state
-        config._load_config()
-        assert config.api_key is None
-
-    def test_login_no_personal_workspace(self, mock_home_dir, mocker):
-        """Test login when no personal workspace is found"""
-        # Mock the API to return workspaces without a personal one
-        mock_api = mocker.patch("cli.commands.login.api")
-        mock_api.workspaces.list_workspaces.return_value = [
-            {
-                "id": "ws_123",
-                "name": "Team Workspace",
-                "is_personal": False,
-                "role": "member",
-            }
-        ]
-
-        result = runner.invoke(app, ["valid_key"])
-
-        assert result.exit_code == 1
-
-        # Verify API key was cleared (important behavior)
-        from cli.config import config
-
-        config._load_config()
-        assert config.api_key is None
-
-    def test_login_network_error(self, mock_home_dir, mocker):
-        """Test login with network error"""
+    def test_login_connection_error(self, mock_config_dir, mocker):
+        """Test login with connection error"""
         import httpx
 
         mock_api = mocker.patch("cli.commands.login.api")
-        mock_api.workspaces.list_workspaces.side_effect = httpx.ConnectError(
-            "Connection refused"
-        )
-
-        result = runner.invoke(app, ["test_key"])
-
-        assert result.exit_code == 1
-
-        # Verify API key was cleared after network error
-        from cli.config import config
-
-        config._load_config()
-        assert config.api_key is None
-
-    def test_login_saves_workspace_info(self, mock_home_dir, sample_workspaces, mocker):
-        """Test that login saves workspace information to config"""
-        mock_api = mocker.patch("cli.commands.login.api")
-        mock_api.workspaces.list_workspaces.return_value = sample_workspaces
-
-        result = runner.invoke(app, ["test_key_123"])
-
-        assert result.exit_code == 0
-
-        # Verify config file was created with workspace info
-        config_file = mock_home_dir / ".lazycloud"
-        assert config_file.exists()
-
-        content = config_file.read_text()
-        assert "API_KEY=test_key_123" in content
-        assert "ACTIVE_WORKSPACE_ID=ws_123456" in content
-        assert "ACTIVE_WORKSPACE_NAME=My Workspace" in content
-
-    def test_login_interactive_mode(self, mock_home_dir, sample_workspaces, mocker):
-        """Test login with interactive prompt (no argument)"""
-        mock_api = mocker.patch("cli.commands.login.api")
-        mock_api.workspaces.list_workspaces.return_value = sample_workspaces
-
-        # Mock Prompt.ask to return a key without blocking
-        mock_prompt = mocker.patch("cli.commands.login.Prompt")
-        mock_prompt.ask.return_value = "interactive_key"
+        mock_api.auth.get_config.side_effect = httpx.RequestError("Connection refused")
 
         result = runner.invoke(app, [])
 
-        assert result.exit_code == 0
+        assert result.exit_code == 1
 
-        # Verify the key from interactive prompt was saved
-        config_file = mock_home_dir / ".lazycloud"
-        assert "API_KEY=interactive_key" in config_file.read_text()
+    def test_login_auth_server_error(self, mock_config_dir, mocker):
+        """Test login with auth server error"""
+        import httpx
 
-    def test_login_clears_api_key_on_failure(self, mock_home_dir, mocker):
-        """Test that failed login clears the API key"""
         mock_api = mocker.patch("cli.commands.login.api")
-        mock_api.workspaces.list_workspaces.side_effect = Exception("API Error")
+        mock_api.auth.get_config.return_value = {"workos_client_id": "test_client"}
 
-        result = runner.invoke(app, ["failed_key"])
+        response = httpx.Response(500, text="Internal Server Error")
+        mock_api.auth.request_device_authorization.side_effect = (
+            httpx.HTTPStatusError("Error", request=None, response=response)
+        )
+
+        result = runner.invoke(app, [])
 
         assert result.exit_code == 1
 
-        # Verify API key was cleared
-        from cli.config import config
-
-        config._load_config()
-        assert config.api_key is None
-
-    def test_login_strips_whitespace_from_key(
-        self, mock_home_dir, sample_workspaces, mocker
-    ):
-        """Test that login strips whitespace from API key"""
+    def test_login_no_personal_workspace(self, mock_config_dir, mocker):
+        """Test login when no personal workspace is found"""
         mock_api = mocker.patch("cli.commands.login.api")
-        mock_api.workspaces.list_workspaces.return_value = sample_workspaces
+        mock_api.auth.get_config.return_value = {"workos_client_id": "test_client"}
+        mock_api.auth.request_device_authorization.return_value = {
+            "device_code": "device_123",
+            "user_code": "ABC-123",
+            "verification_uri": "https://auth.example.com/verify",
+            "verification_uri_complete": "https://auth.example.com/verify?code=ABC-123",
+        }
+        mock_api.auth.poll_for_tokens.return_value = {
+            "access_token": "access_token_123",
+        }
+        # Return only non-personal workspaces
+        mock_api.workspaces.list_workspaces.return_value = [
+            {"id": "ws_team", "name": "Team Workspace", "is_personal": False}
+        ]
 
-        result = runner.invoke(app, ["  test_key_with_spaces  "])
+        mocker.patch("cli.commands.login.webbrowser")
 
-        assert result.exit_code == 0
+        result = runner.invoke(app, [])
 
-        # Verify stripped key was saved
-        config_file = mock_home_dir / ".lazycloud"
-        content = config_file.read_text()
-        assert "API_KEY=test_key_with_spaces" in content
-        assert "API_KEY=  test_key_with_spaces  " not in content
+        assert result.exit_code == 1
+
+    def test_login_token_polling_failure(self, mock_config_dir, mocker):
+        """Test login when token polling fails"""
+        mock_api = mocker.patch("cli.commands.login.api")
+        mock_api.auth.get_config.return_value = {"workos_client_id": "test_client"}
+        mock_api.auth.request_device_authorization.return_value = {
+            "device_code": "device_123",
+            "user_code": "ABC-123",
+            "verification_uri": "https://auth.example.com/verify",
+            "verification_uri_complete": "https://auth.example.com/verify?code=ABC-123",
+        }
+        mock_api.auth.poll_for_tokens.side_effect = Exception("Token polling timeout")
+
+        mocker.patch("cli.commands.login.webbrowser")
+
+        result = runner.invoke(app, [])
+
+        assert result.exit_code == 1
+
+    def test_login_clears_tokens_on_workspace_error(self, mock_config_dir, mocker):
+        """Test that tokens are cleared if workspace configuration fails"""
+        mock_api = mocker.patch("cli.commands.login.api")
+        mock_api.auth.get_config.return_value = {"workos_client_id": "test_client"}
+        mock_api.auth.request_device_authorization.return_value = {
+            "device_code": "device_123",
+            "user_code": "ABC-123",
+            "verification_uri": "https://auth.example.com/verify",
+            "verification_uri_complete": "https://auth.example.com/verify?code=ABC-123",
+        }
+        mock_api.auth.poll_for_tokens.return_value = {
+            "access_token": "access_token_123",
+        }
+        mock_api.workspaces.list_workspaces.side_effect = Exception("API Error")
+
+        mocker.patch("cli.commands.login.webbrowser")
+
+        result = runner.invoke(app, [])
+
+        assert result.exit_code == 1
+
+        # Verify tokens were cleared
+        from cli.config import CLIConfig
+
+        config = CLIConfig()
+        assert config.access_token is None

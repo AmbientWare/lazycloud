@@ -7,6 +7,16 @@ import pytest
 
 
 @pytest.fixture
+def mock_config_dir(tmp_path, monkeypatch):
+    """Mock the config directory to use a temporary directory"""
+    config_dir = tmp_path / "config" / "lazycloud"
+    config_dir.mkdir(parents=True)
+    monkeypatch.setattr("cli.config.CONFIG_DIR", config_dir)
+    monkeypatch.setattr("cli.config.CONFIG_FILE", config_dir / "config.toml")
+    return config_dir
+
+
+@pytest.fixture
 def mock_home_dir(tmp_path, monkeypatch):
     """Mock the home directory to use a temporary directory"""
     home = tmp_path / "home"
@@ -16,20 +26,35 @@ def mock_home_dir(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def mock_config_file(mock_home_dir):
-    """Create a mock .lazycloud config file"""
-    config_file = mock_home_dir / ".lazycloud"
+def mock_config_file(mock_config_dir):
+    """Create a mock config.toml file"""
+    config_file = mock_config_dir / "config.toml"
 
-    def _create_config(api_key=None, workspace_id=None, workspace_name=None):
-        lines = []
-        if api_key:
-            lines.append(f"API_KEY={api_key}")
+    def _create_config(
+        access_token=None,
+        refresh_token=None,
+        workspace_id=None,
+        workspace_name=None,
+        api_base_url=None,
+    ):
+        lines = ["[api]"]
+        lines.append(f'base_url = "{api_base_url or "https://api.lazycloud.dev"}"')
+        lines.append('version = "v1"')
+        lines.append('registry_type = "ecr"')
+        lines.append("")
+        lines.append("[auth]")
+        if access_token:
+            lines.append(f'access_token = "{access_token}"')
+        if refresh_token:
+            lines.append(f'refresh_token = "{refresh_token}"')
+        lines.append("")
+        lines.append("[workspace]")
         if workspace_id:
-            lines.append(f"ACTIVE_WORKSPACE_ID={workspace_id}")
+            lines.append(f'id = "{workspace_id}"')
         if workspace_name:
-            lines.append(f"ACTIVE_WORKSPACE_NAME={workspace_name}")
+            lines.append(f'name = "{workspace_name}"')
 
-        config_file.write_text("\n".join(lines) + "\n" if lines else "")
+        config_file.write_text("\n".join(lines) + "\n")
         return config_file
 
     return _create_config
