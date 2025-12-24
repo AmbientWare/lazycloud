@@ -92,8 +92,16 @@ const data = {
       url: "/docs/examples",
       items: [
         {
-          title: "FastAPI",
-          url: "/docs/examples/fastapi",
+          title: "FastAPI LLM",
+          url: "/docs/examples/fastapi-llm",
+        },
+        {
+          title: "Go API",
+          url: "/docs/examples/go-api",
+        },
+        {
+          title: "Next.js",
+          url: "/docs/examples/nextjs",
         },
       ],
     },

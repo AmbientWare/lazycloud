@@ -1,6 +1,0 @@
-services:
-  api:
-    build: .
-    labels:
-      lazycloud.expose: "8000"
-      lazycloud.healthcheck.path: "/health"
