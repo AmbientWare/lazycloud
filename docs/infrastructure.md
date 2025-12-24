@@ -51,6 +51,36 @@ Configure DNS in Cloudflare dashboard:
 - Add CNAME: `*.lazycloud.dev` → `<tunnel-id>.cfargotunnel.com`
 - Add CNAME: `lazycloud.dev` → `<tunnel-id>.cfargotunnel.com`
 
+#### Cloudflare for SaaS (Custom Domains)
+
+Enable SSL for SaaS in Cloudflare dashboard:
+1. Go to SSL/TLS → Custom Hostnames
+2. Enable Custom Hostnames (requires paid plan)
+3. Set fallback origin: `lazycloud.dev`
+
+Create API token with permissions:
+- Zone > SSL and Certificates > Edit
+- Zone Resources: Include > Specific zone > lazycloud.dev
+
+Add credentials to `lazycloud/prod-secrets`:
+```json
+{
+  "CLOUDFLARE_API_KEY": "<api-token>",
+  "CLOUDFLARE_ZONE_ID": "<zone-id-from-dashboard-overview>",
+  "CLOUDFLARE_ACCOUNT_ID": "<account-id-from-dashboard-url>"
+}
+```
+
+Note: Zone ID is on the domain overview page. Account ID is in the dashboard URL.
+
+These are referenced in `deploy/services/api-platform/values.yaml`.
+
+Customer flow:
+1. Customer adds custom domain in app
+2. Backend calls `CloudflareService.add_saas_domain()`
+3. Customer adds CNAME: `customerdomain.com` → `lazycloud.dev`
+4. Cloudflare issues SSL cert automatically
+
 ### 3. Deploy CDK Infra Stack
 
 ```bash
@@ -142,4 +172,6 @@ cloudflared tunnel delete lazycloud-prod
 | Platform apps | `deploy/argocd-apps/applicationsets/platform.yaml` |
 | Service apps | `deploy/argocd-apps/applicationsets/services-*.yaml` |
 | Cloudflare tunnel | `deploy/platform/cloudflare-tunnel/` |
+| Cloudflare SaaS service | `apps/backend/src/backend/services/cloudflare.py` |
+| API platform config | `deploy/services/api-platform/values.yaml` |
 | Karpenter | `deploy/platform/karpenter/` |

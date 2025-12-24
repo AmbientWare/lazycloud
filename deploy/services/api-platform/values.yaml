@@ -81,3 +81,7 @@ secrets:
     # Prefect (self-hosted with basic auth)
     - "PREFECT_API_URL"
     - "PREFECT_API_AUTH_STRING"
+    # Cloudflare
+    - "CLOUDFLARE_API_KEY"
+    - "CLOUDFLARE_ZONE_ID"
+    - "CLOUDFLARE_ACCOUNT_ID"

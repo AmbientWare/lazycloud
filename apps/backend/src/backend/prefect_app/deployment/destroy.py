@@ -1,12 +1,15 @@
 from datetime import UTC, datetime
 
+import yaml
 from loguru import logger
 from models.deployments import DeploymentStates
 from prefect import task
 
 from backend.database import get_db_context
+from backend.prefect_app.deployment.tasks import unregister_custom_domains_task
 from backend.prefect_app.deployment.utils import update_deployment_state
 from backend.services import get_depot_service, get_ecr_auth_service
+from backend.services.compose.parser import ComposeParser
 from backend.services.k8s import create_release_name
 from backend.services.k8s.helm_manager import HelmManager
 
@@ -30,6 +33,21 @@ async def destroy_compose_task(deployment_id: str) -> None:
     await update_deployment_state(
         deployment_id, DeploymentStates.DELETING, "Starting deletion"
     )
+
+    # Step 0: Unregister custom domains from Cloudflare (non-fatal)
+    compose_yaml = deployment.compose_yaml or deployment.pending_compose_yaml
+    if compose_yaml:
+        try:
+            compose_data = yaml.safe_load(compose_yaml)
+            compose_file = ComposeParser.parse_dict(compose_data)
+            custom_domains = [
+                service.domain for service in compose_file.services if service.domain
+            ]
+            if custom_domains:
+                await unregister_custom_domains_task(custom_domains)
+
+        except Exception as cf_error:
+            logger.warning(f"Cloudflare domain cleanup failed (continuing): {cf_error}")
 
     # Initialize Helm manager
     helm_manager = HelmManager()

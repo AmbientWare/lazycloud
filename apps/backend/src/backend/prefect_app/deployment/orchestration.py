@@ -11,6 +11,7 @@ from backend.prefect_app.deployment.tasks import (
     deploy_namespace_resources_task,
     prepare_deployment_task,
     prepare_namespace_config_task,
+    register_custom_domains_task,
     sync_deployment_to_db_task,
     update_deployment_state_task,
 )
@@ -75,7 +76,16 @@ async def deploy_compose_task(
             name, deployment.namespace, helm_values
         )
 
-        # Step 7: Sync to database
+        # Step 7: Register custom domains with Cloudflare (non-blocking)
+        custom_domains = [
+            service.domain
+            for service in validation_result.compose_file.services
+            if service.domain
+        ]
+        if custom_domains:
+            await register_custom_domains_task(custom_domains)
+
+        # Step 8: Sync to database
         try:
             await sync_deployment_to_db_task(
                 deployment_id,
