@@ -15,14 +15,14 @@ from cli.commands.dashboard import dashboard
 class TestDashboard:
     """Tests for dashboard command"""
 
-    def test_dashboard_requires_authentication(self, mock_home_dir, mocker):
-        """Test dashboard function checks authentication before launching"""
-        # Mock console and config
+    def test_dashboard_fails_without_config(self, mock_config_dir, mocker):
+        """Test dashboard fails gracefully when config is not set up"""
+        # Mock console and run_dashboard to simulate missing config
         mock_console = mocker.patch("cli.commands.dashboard.console")
-        mock_config = mocker.patch("cli.commands.dashboard.config")
-        mock_config.check_authentication.return_value = (False, "Not logged in")
+        mock_run_dashboard = mocker.patch("cli.commands.dashboard.run_dashboard")
+        mock_run_dashboard.side_effect = ValueError("No active workspace ID found")
 
-        # Should raise Exit(1) when not authenticated
+        # Should raise Exit(1) when config is missing
         with pytest.raises(typer.Exit) as exc_info:
             dashboard()
 
@@ -33,7 +33,7 @@ class TestDashboard:
     def test_dashboard_launches_when_authenticated(self, mock_config_file, mocker):
         """Test dashboard launches when properly authenticated"""
         mock_config_file(
-            api_key="test_key",
+            access_token="test_key",
             workspace_id="ws_123",
             workspace_name="Test Workspace",
         )
@@ -48,7 +48,7 @@ class TestDashboard:
     def test_dashboard_keyboard_interrupt(self, mock_config_file, mocker):
         """Test dashboard handles keyboard interrupt gracefully"""
         mock_config_file(
-            api_key="test_key",
+            access_token="test_key",
             workspace_id="ws_123",
             workspace_name="Test Workspace",
         )
@@ -63,7 +63,7 @@ class TestDashboard:
     def test_dashboard_connection_error(self, mock_config_file, mocker):
         """Test dashboard handles connection errors"""
         mock_config_file(
-            api_key="test_key",
+            access_token="test_key",
             workspace_id="ws_123",
             workspace_name="Test Workspace",
         )
@@ -83,7 +83,7 @@ class TestDashboard:
     def test_dashboard_generic_error(self, mock_config_file, mocker):
         """Test dashboard handles generic errors"""
         mock_config_file(
-            api_key="test_key",
+            access_token="test_key",
             workspace_id="ws_123",
             workspace_name="Test Workspace",
         )

@@ -1,4 +1,6 @@
 import asyncio
+import os
+import platform
 import shutil
 import subprocess
 import threading
@@ -1137,7 +1139,7 @@ def _run_depot_build(
     )
 
     env = {
-        **dict(subprocess.os.environ),
+        **dict(os.environ),
         "DEPOT_TOKEN": depot_token.token,
     }
 
@@ -1624,10 +1626,15 @@ def _handle_builds(
     depot_available = _is_depot_available()
 
     if not depot_available:
+        if platform.system() == "Windows":
+            install_cmd = "irm https://lazycloud.dev/install.ps1 | iex"
+        else:
+            install_cmd = "curl -LsSf https://lazycloud.dev/install.sh | sh"
+
         error_card = ErrorCard(
             message="Remote build service is not available.",
             title="🔨 Build Error",
-            suggestion="Install LazyCloud with all dependencies:\n  curl -LsSf https://lazycloud.dev/install.sh | sh",
+            suggestion=f"Install LazyCloud with all dependencies:\n  {install_cmd}",
         )
         console.print(error_card)
         raise typer.Exit(code=1)
