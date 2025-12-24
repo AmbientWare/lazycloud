@@ -426,8 +426,8 @@ class TestIngressGeneration:
 
         assert result is None
 
-    def test_ingress_uses_alb_class(self):
-        """Test ingress uses ALB ingress class."""
+    def test_ingress_uses_nginx_class(self):
+        """Test ingress uses NGINX ingress class for Cloudflare Tunnel routing."""
         service = ComposeService(
             name="web",
             image="nginx:latest",
@@ -437,7 +437,7 @@ class TestIngressGeneration:
 
         result = generate_ingress_values(service, deployment_id)
 
-        assert result.className == "alb"
+        assert result.className == "nginx"
 
     def test_ingress_hostname_includes_deployment_id(self):
         """Test ingress hostname includes short deployment ID for uniqueness."""

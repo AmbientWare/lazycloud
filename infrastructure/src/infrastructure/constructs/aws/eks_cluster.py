@@ -24,7 +24,6 @@ class EksCluster(Construct):
         config: EnvironmentConfig,
         ebs_csi_role: iam.CfnRole,
         efs_csi_role: iam.CfnRole,
-        load_balancer_controller_role: iam.CfnRole,
         karpenter_node_role: iam.CfnRole,
     ) -> None:
         super().__init__(scope, construct_id)
@@ -33,7 +32,6 @@ class EksCluster(Construct):
         self.vpc = vpc
         self.ebs_csi_role = ebs_csi_role
         self.efs_csi_role = efs_csi_role
-        self.load_balancer_controller_role = load_balancer_controller_role
         self.karpenter_node_role = karpenter_node_role
 
         self.cluster = self._create_cluster()

@@ -33,11 +33,17 @@ spec:
                   createNamespace: "true"
                   serverSideApply: "false"
                   hasRegionValues: "true"
-                - app: ingress-classes
-                  namespace: kube-system
+                - app: nginx-ingress
+                  namespace: ingress-nginx
                   syncWave: "3"
-                  createNamespace: "false"
-                  serverSideApply: "true"
+                  createNamespace: "true"
+                  serverSideApply: "false"
+                  hasRegionValues: "false"
+                - app: cloudflare-tunnel
+                  namespace: cloudflare-system
+                  syncWave: "4"
+                  createNamespace: "true"
+                  serverSideApply: "false"
                   hasRegionValues: "true"
                 - app: karpenter
                   namespace: kube-system

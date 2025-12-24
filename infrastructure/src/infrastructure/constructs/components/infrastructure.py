@@ -41,7 +41,6 @@ class InfrastructureConstruct(Construct):
             config=self.config,
             ebs_csi_role=shared_stack.iam_roles.ebs_csi_role,
             efs_csi_role=shared_stack.iam_roles.efs_csi_role,
-            load_balancer_controller_role=shared_stack.iam_roles.load_balancer_controller_role,
             karpenter_node_role=shared_stack.iam_roles.karpenter_node_role,
         )
 

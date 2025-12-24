@@ -33,11 +33,6 @@ class EnvironmentConfig:
     enable_dns_support: bool = True
     single_nat_gateway: bool = False
 
-    # ExternalDNS Configuration
-    external_dns_provider: str = "cloudflare"  # cloudflare or route53
-    external_dns_domain_filters: list[str] | None = None  # Domains to manage
-    cloudflare_proxied: bool = False  # Enable Cloudflare proxy for DDoS/CDN
-
     # Deployment Configuration
     is_regional: bool = (
         True  # If True, deploys regional stacks (infra, controllers, platform)
@@ -76,27 +71,8 @@ ENVIRONMENTS: dict[str, EnvironmentConfig] = {
         aws_account_id=os.getenv("CDK_DEFAULT_ACCOUNT"),
         org_name="lazycloud",
         domain_name="lazycloud.dev",
-        external_dns_provider="cloudflare",
-        external_dns_domain_filters=["lazycloud.dev"],
-        cloudflare_proxied=False,
         app_environments=["prod", "staging"],
     ),
-    # "prod-usw2": EnvironmentConfig(
-    #     aws_region="us-west-2",
-    #     environment="prod",
-    #     cluster_id="usw2",
-    #     is_hub=False,
-    #     ecr_regions=None,
-    #     vpc_cidr="10.1.0.0/16",
-    #     single_nat_gateway=False,
-    #     aws_account_id=os.getenv("CDK_DEFAULT_ACCOUNT"),
-    #     org_name="lazycloud",
-    #     domain_name="lazycloud.dev",
-    #     external_dns_provider="cloudflare",
-    #     external_dns_domain_filters=["lazycloud.dev"],
-    #     cloudflare_proxied=False,
-    #     app_environments=["prod"],
-    # ),
 }
 
 

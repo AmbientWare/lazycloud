@@ -16,7 +16,8 @@ lazycloud-prod-infra
                                    kubectl apply root-app.yaml
                                          │
                                          └─→ ArgoCD syncs everything
-                                              ├─ aws-load-balancer-controller
+                                              ├─ nginx-ingress
+                                              ├─ cloudflare-tunnel
                                               ├─ karpenter
                                               ├─ external-secrets
                                               ├─ prometheus-stack

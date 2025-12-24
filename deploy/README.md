@@ -10,9 +10,10 @@ deploy/
 │   ├── root-app.yaml               # App of Apps entry point
 │   └── applicationsets/            # ApplicationSets for multi-cluster
 ├── platform/                       # Platform Helm charts
+│   ├── nginx-ingress/
+│   ├── cloudflare-tunnel/
 │   ├── karpenter/
 │   ├── external-secrets/
-│   ├── aws-load-balancer-controller/
 │   └── ...
 └── services/                       # Application Helm charts
     ├── api-platform/

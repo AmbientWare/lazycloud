@@ -1,4 +1,0 @@
-aws-load-balancer-controller:
-  clusterName: lazycloud-prod-us-east-1-eks
-  region: us-east-1
-  vpcId: vpc-03f69097f561b6ef7

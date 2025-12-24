@@ -28,9 +28,6 @@ metadata:
     {{- if $service.ingress.annotations }}
     {{- toYaml $service.ingress.annotations | nindent 4 }}
     {{- end }}
-    {{- if eq ($service.ingress.className | default "nginx") "alb" }}
-    alb.ingress.kubernetes.io/target-type: ip
-    {{- end }}
 spec:
   ingressClassName: {{ $service.ingress.className | default "nginx" }}
   {{- if and $service.ingress.tls $service.ingress.tls.enabled }}

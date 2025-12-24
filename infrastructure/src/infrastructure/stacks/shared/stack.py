@@ -21,8 +21,8 @@ class SharedStack(cdk.Stack):
 
         self.config = config
 
-        # NOTE: DNS is managed by Cloudflare, not Route53
-        # ExternalDNS will automatically create DNS records in Cloudflare
+        # NOTE: DNS is managed by Cloudflare with wildcard DNS
+        # Traffic routes through Cloudflare Tunnel to NGINX Ingress
 
         # Create IAM roles
         self.iam_roles = SharedIAMRoles(
@@ -61,14 +61,6 @@ class SharedStack(cdk.Stack):
             "SharedSecretsArn",
             value=self.shared_secrets.secret_arn,
             description="ARN of the shared secrets in AWS Secrets Manager",
-        )
-
-        # External DNS Role Output
-        cdk.CfnOutput(
-            stack,
-            "ExternalDNSRoleArn",
-            value=self.iam_roles.external_dns_role_arn,
-            description="ARN of the external DNS role for EKS clusters (Cloudflare)",
         )
 
         # ECR Base Role Output

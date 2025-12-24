@@ -5,11 +5,6 @@
 orgName: lazycloud
 environment: prod
 
-# Cloudflare secret settings (for ExternalDNS)
-cloudflare:
-  enabled: true
-  awsSecretName: lazycloud/shared-secrets
-
 # App secrets settings (for lazycloud apps)
 appSecrets:
   prod:
