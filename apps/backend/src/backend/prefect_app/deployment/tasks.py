@@ -27,7 +27,7 @@ from backend.prefect_app.deployment.utils import (
     wait_for_secrets,
 )
 from backend.prefect_app.utils import get_task_result
-from backend.services import get_subscription_service
+from backend.services import get_cloudflare_service, get_subscription_service
 from backend.services.compose.parser import ComposeParser
 from backend.services.k8s import get_chart_paths
 from backend.services.k8s.helm_manager import (
@@ -392,6 +392,71 @@ async def deploy_application_task(
         raise Exception(f"Failed to deploy application: {app_result.error}")
 
     return DeploymentResult(revision=app_result.revision)
+
+
+@task(retries=2, retry_delay_seconds=5)
+async def register_custom_domains_task(
+    domains: list[str],
+) -> None:
+    """Register custom domains with Cloudflare for SaaS SSL.
+
+    Only runs in production when Cloudflare is configured.
+    Skipped in local development.
+    """
+    if not domains:
+        return
+
+    # Skip if Cloudflare is not configured (local dev)
+    if not app_config.CLOUDFLARE_API_KEY:
+        logger.debug("Skipping Cloudflare domain registration (not configured)")
+        return
+
+    cloudflare = get_cloudflare_service()
+    async with cloudflare:
+        for domain in domains:
+            try:
+                # Check if domain already exists
+                try:
+                    await cloudflare.get_domain_status(domain)
+                    logger.info(
+                        f"Custom domain {domain} already registered with Cloudflare"
+                    )
+                    continue
+
+                except Exception:
+                    pass  # Domain doesn't exist, proceed to create
+
+                await cloudflare.add_saas_domain(domain)
+                logger.info(f"Registered custom domain {domain} with Cloudflare")
+            except Exception as e:
+                logger.error(f"Failed to register domain {domain} with Cloudflare: {e}")
+                # Don't fail deployment for Cloudflare errors - domain can be retried
+                # Customer will see SSL pending until they add CNAME
+
+
+@task(retries=2, retry_delay_seconds=5)
+async def unregister_custom_domains_task(
+    domains: list[str],
+) -> None:
+    """Remove custom domains from Cloudflare for SaaS SSL.
+
+    Only runs in production when Cloudflare is configured.
+    """
+    if not domains:
+        return
+
+    if not app_config.CLOUDFLARE_API_KEY:
+        logger.debug("Skipping Cloudflare domain removal (not configured)")
+        return
+
+    cloudflare = get_cloudflare_service()
+    async with cloudflare:
+        for domain in domains:
+            try:
+                await cloudflare.delete_saas_domain(domain)
+                logger.info(f"Removed custom domain {domain} from Cloudflare")
+            except Exception as e:
+                logger.warning(f"Failed to remove domain {domain} from Cloudflare: {e}")
 
 
 @task(retries=2, retry_delay_seconds=5)
