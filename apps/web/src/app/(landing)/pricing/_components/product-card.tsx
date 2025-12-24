@@ -9,10 +9,10 @@ import { type PolarProduct } from "@/actions/products";
 import { cn } from "@/lib/utils";
 import { createCheckoutUrl } from "@/actions/checkout";
 import { sendEnterpriseInquiry } from "@/actions/email";
-import { useState, useTransition } from "react";
+import { useTransition } from "react";
 import { toast } from "sonner";
 import { useAuth } from "@workos-inc/authkit-nextjs/components";
-import RequestAccessDialog from "@/app/_components/request-access-dialot";
+import { useRouter } from "next/navigation";
 
 function formatPrice(priceAmount: number): string {
   return `$${(priceAmount / 100).toFixed(0)}`;
@@ -25,15 +25,15 @@ export function ProductCard({ product, isEnterprise }: { product: PolarProduct; 
   const isMostPopular = isHobby;
   const monthlyPrice = fixedPrice ? formatPrice(fixedPrice.priceAmount) : null;
   const [isPending, startTransition] = useTransition();
-  const [dialogOpen, setDialogOpen] = useState(false);
   const { user } = useAuth();
   const userId = user?.id;
+  const router = useRouter();
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
 
     if (!user) {
-      setDialogOpen(true);
+      router.push("/request-access");
       return;
     }
 
@@ -196,7 +196,6 @@ export function ProductCard({ product, isEnterprise }: { product: PolarProduct; 
           </form>
         </div>
       </StyledCardContent>
-      <RequestAccessDialog open={dialogOpen} onOpenChange={setDialogOpen} />
     </StyledCard>
   );
 }

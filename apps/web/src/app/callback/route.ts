@@ -1,8 +1,11 @@
 import { handleAuth } from '@workos-inc/authkit-nextjs';
 import lazycloudApi from '@/server/lazycloud_api';
 import { USER_HOME } from '@/lib/constants';
+import { env } from '@/env';
+import { NextResponse } from 'next/server';
 
 export const GET = handleAuth({
+  baseURL: env.APP_URL,
   returnPathname: USER_HOME,
   onSuccess: async ({ user }) => {
     if (!user) return;
@@ -16,5 +19,9 @@ export const GET = handleAuth({
         console.error('Onboarding error:', errorMessage);
       }
     }
+  },
+  onError: async ({ error }) => {
+    console.error('Auth error:', error);
+    return NextResponse.redirect(new URL('/request-access', env.APP_URL));
   },
 });
