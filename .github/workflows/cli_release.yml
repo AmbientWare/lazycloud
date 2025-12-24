@@ -144,6 +144,14 @@ jobs:
       - name: Display structure
         run: ls -R artifacts
 
+      - name: Checkout releases repo for tag deletion
+        uses: actions/checkout@v4
+        with:
+          repository: AmbientWare/lazycloud-releases
+          token: ${{ secrets.ADMIN_TOKEN }}
+          path: releases-repo
+          fetch-depth: 0
+
       - name: Create GitHub Release in releases repo
         env:
           GH_TOKEN: ${{ secrets.ADMIN_TOKEN }}
@@ -151,11 +159,14 @@ jobs:
           mkdir -p release-assets
           find artifacts -type f -name "lazycloud-*" -exec cp {} release-assets/ \;
 
-          # Delete existing release if it exists
-          gh release delete "v${{ inputs.version }}" --repo AmbientWare/lazycloud-releases --yes || true
+          # Delete existing release if it exists (with --cleanup-tag to remove the tag)
+          gh release delete "v${{ inputs.version }}" --repo AmbientWare/lazycloud-releases --yes --cleanup-tag || true
 
-          # Delete existing tag if it exists (even if release was already deleted)
-          gh api --method DELETE "repos/AmbientWare/lazycloud-releases/git/refs/tags/v${{ inputs.version }}" || true
+          # Also try to delete the tag via git push in case the release was already deleted
+          # but the tag still exists (handles edge cases the API doesn't)
+          cd releases-repo
+          git push origin --delete "v${{ inputs.version }}" 2>/dev/null || true
+          cd ..
 
           gh release create "v${{ inputs.version }}" \
             --repo AmbientWare/lazycloud-releases \
