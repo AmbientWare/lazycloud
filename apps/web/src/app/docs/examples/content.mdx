@@ -1,37 +1,32 @@
 # Examples
 
-Complete example applications ready to deploy with LazyCloud.
+Complete applications ready to deploy. Each example includes a Dockerfile, compose.yaml, and working application code.
 
-Each example includes all the files you need: application code, Dockerfile, and compose.yaml with LazyCloud labels configured.
-
-## Available Examples
-
-| Example | Language | Description |
-|---------|----------|-------------|
-| [FastAPI LLM](/docs/examples/fastapi-llm) | Python | API with OpenAI integration |
-| [Go API](/docs/examples/go-api) | Go | Simple REST API |
-| [Next.js](/docs/examples/nextjs) | TypeScript | Landing page with App Router |
+| Example | Stack | Features Demonstrated |
+|---------|-------|----------------------|
+| [FastAPI LLM](/docs/examples/fastapi-llm) | Python, FastAPI, OpenAI | Secret injection, uv builds |
+| [Go API](/docs/examples/go-api) | Go | Multi-stage builds, minimal images |
+| [Next.js](/docs/examples/nextjs) | TypeScript, React | Standalone output, SSR |
 
 ## Quick Start
 
 ```bash
-# Clone the examples
 git clone https://github.com/AmbientWare/lazycloud-releases.git
 cd lazycloud-releases/examples/fastapi-llm
 
-# Deploy
 lazycloud init
 lazycloud deploy
 ```
 
-## Example Structure
+## Structure
 
-Each example follows the same structure:
+Each example follows standard Docker Compose conventions:
 
 ```
 example-name/
-├── README.md        # Overview and instructions
-├── compose.yaml     # Docker Compose with LazyCloud labels
-├── Dockerfile       # Container build instructions
-└── ...              # Application source code
+├── compose.yaml     # Services, ports, health checks
+├── Dockerfile       # Container build
+└── ...              # Application source
 ```
+
+No LazyCloud-specific configuration required. If it runs with `docker compose up`, it deploys with `lazycloud deploy`.

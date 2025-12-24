@@ -1,8 +1,34 @@
-# Next.js Example
+# Next.js
 
-A Next.js landing page ready to deploy with LazyCloud.
+A Next.js application using the App Router and standalone output mode. Demonstrates deploying server-rendered React applications with optimized Docker builds.
 
-## Files
+## Deploy
+
+```bash
+git clone https://github.com/AmbientWare/lazycloud-releases.git
+cd lazycloud-releases/examples/nextjs
+
+lazycloud init
+lazycloud deploy
+```
+
+## Usage
+
+Open your deployment URL in a browser. The page is server-rendered on each request.
+
+Health check:
+
+```bash
+curl https://your-app.lazycloud.dev/api/health
+```
+
+```json
+{"status": "healthy"}
+```
+
+---
+
+## Code
 
 ### app/page.tsx
 
@@ -21,6 +47,8 @@ export default function Home() {
 
 ### app/api/health/route.ts
 
+API route for health checks:
+
 ```typescript
 import { NextResponse } from "next/server";
 
@@ -30,6 +58,8 @@ export async function GET() {
 ```
 
 ### next.config.ts
+
+The `standalone` output mode is required for containerized deployments:
 
 ```typescript
 import type { NextConfig } from "next";
@@ -41,7 +71,11 @@ const nextConfig: NextConfig = {
 export default nextConfig;
 ```
 
+This produces a self-contained build that doesn't require `node_modules` at runtime.
+
 ### Dockerfile
+
+Multi-stage build separating dependencies, build, and runtime:
 
 ```dockerfile
 FROM node:22-alpine AS builder
@@ -68,6 +102,8 @@ EXPOSE 3000
 CMD ["node", "server.js"]
 ```
 
+The builder stage installs dependencies and runs `next build`. The runner stage contains only the standalone output—no `node_modules` or source files.
+
 ### compose.yaml
 
 ```yaml
@@ -83,17 +119,7 @@ services:
       retries: 3
 ```
 
-## Deploy
-
-```bash
-# Get the example
-git clone https://github.com/AmbientWare/lazycloud-releases.git
-cd lazycloud-releases/examples/nextjs
-
-# Initialize and deploy
-lazycloud init
-lazycloud deploy
-```
+Port 3000 is exposed as HTTPS. The `/api/health` route is polled for container health monitoring.
 
 ## Local Development
 
@@ -101,5 +127,3 @@ lazycloud deploy
 npm install
 npm run dev
 ```
-
-Visit http://localhost:3000 to see your app running locally.

@@ -1,8 +1,40 @@
-# Go API Example
+# Go API
 
-A simple Go REST API ready to deploy with LazyCloud.
+A minimal Go REST API. Demonstrates multi-stage Docker builds for small production images and health check configuration.
 
-## Files
+## Deploy
+
+```bash
+git clone https://github.com/AmbientWare/lazycloud-releases.git
+cd lazycloud-releases/examples/go-api
+
+lazycloud init
+lazycloud deploy
+```
+
+## Usage
+
+```bash
+curl https://your-app.lazycloud.dev/
+```
+
+```json
+{"message": "Hello from LazyCloud!"}
+```
+
+Health check:
+
+```bash
+curl https://your-app.lazycloud.dev/health
+```
+
+```json
+{"status": "healthy"}
+```
+
+---
+
+## Code
 
 ### main.go
 
@@ -55,6 +87,8 @@ go 1.23
 
 ### Dockerfile
 
+Multi-stage build produces a minimal Alpine-based image (~15MB):
+
 ```dockerfile
 FROM golang:1.23-alpine AS builder
 
@@ -72,6 +106,8 @@ COPY --from=builder /app/server .
 CMD ["./server"]
 ```
 
+The builder stage compiles the binary. The final stage copies only the binary into a clean Alpine image—no Go toolchain included.
+
 ### compose.yaml
 
 ```yaml
@@ -87,22 +123,10 @@ services:
       retries: 3
 ```
 
-## Deploy
-
-```bash
-# Get the example
-git clone https://github.com/AmbientWare/lazycloud-releases.git
-cd lazycloud-releases/examples/go-api
-
-# Initialize and deploy
-lazycloud init
-lazycloud deploy
-```
+Port 8080 is exposed as HTTPS on your deployment URL. The health check endpoint is polled every 30 seconds; failed containers are automatically restarted.
 
 ## Local Development
 
 ```bash
 go run main.go
 ```
-
-Visit http://localhost:8080 to see your API running locally.
