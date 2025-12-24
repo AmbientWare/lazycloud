@@ -22,7 +22,7 @@ jobs:
             python-arch: x64
           - os: darwin
             arch: amd64
-            runner: macos-13
+            runner: macos-15-intel
             python-arch: x64
           - os: darwin
             arch: arm64
