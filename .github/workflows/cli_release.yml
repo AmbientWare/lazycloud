@@ -16,25 +16,18 @@ jobs:
     strategy:
       matrix:
         include:
-          # Linux AMD64
           - os: linux
             arch: amd64
             runner: ubuntu-latest
             python-arch: x64
-
-          # macOS Intel
           - os: darwin
             arch: amd64
-            runner: macos-15-intel
+            runner: macos-13
             python-arch: x64
-
-          # macOS Apple Silicon
           - os: darwin
             arch: arm64
             runner: macos-latest
             python-arch: arm64
-
-          # Windows
           - os: windows
             arch: amd64
             runner: windows-latest
@@ -54,35 +47,34 @@ jobs:
         uses: astral-sh/setup-uv@v1
 
       - name: Install dependencies
+        working-directory: apps/cli
         run: |
-          cd apps/cli
           uv sync
           uv pip install pyinstaller
 
       - name: Build binary with PyInstaller
-        run: |
-          cd apps/cli
-          uv run pyinstaller release/build.spec --clean
+        working-directory: apps/cli
+        run: uv run pyinstaller release/build.spec --clean
 
       - name: Create tarball (Linux)
         if: matrix.os == 'linux'
+        working-directory: apps/cli/dist
         run: |
-          cd apps/cli/dist
           tar -czf lazycloud-${{ matrix.os }}-${{ matrix.arch }}.tar.gz lazycloud
           sha256sum lazycloud-${{ matrix.os }}-${{ matrix.arch }}.tar.gz > lazycloud-${{ matrix.os }}-${{ matrix.arch }}.tar.gz.sha256
 
       - name: Create tarball (macOS)
         if: matrix.os == 'darwin'
+        working-directory: apps/cli/dist
         run: |
-          cd apps/cli/dist
           tar -czf lazycloud-${{ matrix.os }}-${{ matrix.arch }}.tar.gz lazycloud
           shasum -a 256 lazycloud-${{ matrix.os }}-${{ matrix.arch }}.tar.gz | awk '{print $1}' > lazycloud-${{ matrix.os }}-${{ matrix.arch }}.tar.gz.sha256
 
       - name: Create zip (Windows)
         if: matrix.os == 'windows'
+        working-directory: apps/cli/dist
         shell: pwsh
         run: |
-          cd apps/cli/dist
           Compress-Archive -Path lazycloud.exe -DestinationPath lazycloud-${{ matrix.os }}-${{ matrix.arch }}.zip
           (Get-FileHash lazycloud-${{ matrix.os }}-${{ matrix.arch }}.zip -Algorithm SHA256).Hash.ToLower() | Out-File -NoNewline -FilePath lazycloud-${{ matrix.os }}-${{ matrix.arch }}.zip.sha256
 
@@ -90,8 +82,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: lazycloud-${{ matrix.os }}-${{ matrix.arch }}
-          path: |
-            apps/cli/dist/lazycloud-*
+          path: apps/cli/dist/lazycloud-*
 
   sync:
     name: Sync Examples and README
@@ -110,15 +101,11 @@ jobs:
           token: ${{ secrets.ADMIN_TOKEN }}
           path: releases-repo
 
-      - name: Configure git
+      - name: Sync README and examples
         working-directory: releases-repo
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
-      - name: Sync README and examples
-        working-directory: releases-repo
-        run: |
           cp ../apps/cli/release/release_readme.md README.md
           rm -rf examples
           cp -r ../examples .
@@ -141,32 +128,15 @@ jobs:
         with:
           path: artifacts
 
-      - name: Display structure
-        run: ls -R artifacts
-
-      - name: Checkout releases repo for tag deletion
-        uses: actions/checkout@v4
-        with:
-          repository: AmbientWare/lazycloud-releases
-          token: ${{ secrets.ADMIN_TOKEN }}
-          path: releases-repo
-          fetch-depth: 0
-
-      - name: Create GitHub Release in releases repo
+      - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.ADMIN_TOKEN }}
         run: |
           mkdir -p release-assets
           find artifacts -type f -name "lazycloud-*" -exec cp {} release-assets/ \;
 
-          # Delete existing release if it exists (with --cleanup-tag to remove the tag)
-          gh release delete "v${{ inputs.version }}" --repo AmbientWare/lazycloud-releases --yes --cleanup-tag || true
-
-          # Also try to delete the tag via git push in case the release was already deleted
-          # but the tag still exists (handles edge cases the API doesn't)
-          cd releases-repo
-          git push origin --delete "v${{ inputs.version }}" 2>/dev/null || true
-          cd ..
+          # Delete existing release if retrying (only works for unpublished/draft releases)
+          gh release delete "v${{ inputs.version }}" --repo AmbientWare/lazycloud-releases --yes --cleanup-tag 2>/dev/null || true
 
           gh release create "v${{ inputs.version }}" \
             --repo AmbientWare/lazycloud-releases \
