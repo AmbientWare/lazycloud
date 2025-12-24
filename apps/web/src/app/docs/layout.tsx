@@ -32,6 +32,8 @@ const titleMap: Record<string, string> = {
   service: "Service Labels",
   scaling: "Scaling Labels",
   volume: "Volume Labels",
+  examples: "Examples",
+  fastapi: "FastAPI",
 };
 
 function DocsHeader() {

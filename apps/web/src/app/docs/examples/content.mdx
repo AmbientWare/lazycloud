@@ -1,0 +1,35 @@
+# Examples
+
+Complete example applications ready to deploy with LazyCloud.
+
+Each example includes all the files you need: application code, Dockerfile, and compose.yaml with LazyCloud labels configured.
+
+## Available Examples
+
+| Example | Description |
+|---------|-------------|
+| [FastAPI](/docs/examples/fastapi) | Python API with health checks |
+
+## Quick Start
+
+```bash
+# Clone the examples
+git clone https://github.com/AmbientWare/lazycloud-releases.git
+cd lazycloud-releases/examples/fastapi
+
+# Deploy
+lazycloud init
+lazycloud deploy
+```
+
+## Example Structure
+
+Each example follows the same structure:
+
+```
+example-name/
+├── README.md        # Overview and instructions
+├── compose.yaml     # Docker Compose with LazyCloud labels
+├── Dockerfile       # Container build instructions
+└── ...              # Application source code
+```

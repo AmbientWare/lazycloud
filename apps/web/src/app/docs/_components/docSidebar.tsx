@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { BookOpen } from "lucide-react";
+import { BookOpen, ChevronRight } from "lucide-react";
 import { usePathname } from "next/navigation";
 
 import {
@@ -16,6 +16,11 @@ import {
   SidebarMenuSubItem,
   SidebarRail,
 } from "@/components/ui/sidebar";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 
@@ -82,6 +87,16 @@ const data = {
         },
       ],
     },
+    {
+      title: "Examples",
+      url: "/docs/examples",
+      items: [
+        {
+          title: "FastAPI",
+          url: "/docs/examples/fastapi",
+        },
+      ],
+    },
   ],
 };
 
@@ -110,39 +125,66 @@ export function DocsSidebar() {
       <SidebarContent>
         <SidebarGroup>
           <SidebarMenu>
-            {data.navMain.map((item) => (
-              <SidebarMenuItem key={item.title}>
-                <SidebarMenuButton asChild isActive={isActive(item.url)}>
-                  <Link
-                    href={item.url}
-                    className={cn(
-                      "font-medium",
-                      isParentActive(item) && "text-lazycloud"
-                    )}
-                  >
-                    {item.title}
-                  </Link>
-                </SidebarMenuButton>
-                {item.items?.length ? (
-                  <SidebarMenuSub>
-                    {item.items.map((subItem) => (
-                      <SidebarMenuSubItem key={subItem.title}>
-                        <SidebarMenuButton asChild isActive={isActive(subItem.url)}>
-                          <Link
-                            href={subItem.url}
-                            className={cn(
-                              isActive(subItem.url) && "text-lazycloud font-medium"
-                            )}
-                          >
-                            <span>{subItem.title}</span>
-                          </Link>
-                        </SidebarMenuButton>
-                      </SidebarMenuSubItem>
-                    ))}
-                  </SidebarMenuSub>
-                ) : null}
-              </SidebarMenuItem>
-            ))}
+            {data.navMain.map((item) =>
+              item.items?.length ? (
+                <Collapsible
+                  key={item.title}
+                  asChild
+                  defaultOpen={isParentActive(item)}
+                  className="group/collapsible"
+                >
+                  <SidebarMenuItem>
+                    <CollapsibleTrigger asChild>
+                      <SidebarMenuButton
+                        className={cn(
+                          "font-medium",
+                          isParentActive(item) && "text-lazycloud"
+                        )}
+                      >
+                        {item.title}
+                        <ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
+                      </SidebarMenuButton>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent>
+                      <SidebarMenuSub>
+                        {item.items.map((subItem) => (
+                          <SidebarMenuSubItem key={subItem.title}>
+                            <SidebarMenuButton
+                              asChild
+                              isActive={isActive(subItem.url)}
+                            >
+                              <Link
+                                href={subItem.url}
+                                className={cn(
+                                  isActive(subItem.url) &&
+                                    "text-lazycloud font-medium"
+                                )}
+                              >
+                                <span>{subItem.title}</span>
+                              </Link>
+                            </SidebarMenuButton>
+                          </SidebarMenuSubItem>
+                        ))}
+                      </SidebarMenuSub>
+                    </CollapsibleContent>
+                  </SidebarMenuItem>
+                </Collapsible>
+              ) : (
+                <SidebarMenuItem key={item.title}>
+                  <SidebarMenuButton asChild isActive={isActive(item.url)}>
+                    <Link
+                      href={item.url}
+                      className={cn(
+                        "font-medium",
+                        isParentActive(item) && "text-lazycloud"
+                      )}
+                    >
+                      {item.title}
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              )
+            )}
           </SidebarMenu>
         </SidebarGroup>
       </SidebarContent>
