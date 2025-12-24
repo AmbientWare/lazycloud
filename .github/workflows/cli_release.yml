@@ -1,39 +1,16 @@
-name: Build and Release CLI Binaries
+name: Update Releases Repo
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to release (e.g., 0.2.0)'
-        required: true
+        description: 'Version to release (e.g., 0.2.0). Leave empty to only sync examples/README.'
+        required: false
         type: string
 
 jobs:
-  version-bump:
-    name: Bump Version
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.ADMIN_TOKEN }}
-
-      - name: Update version in pyproject.toml
-        run: |
-          sed -i 's/^version = ".*"/version = "${{ inputs.version }}"/' apps/cli/pyproject.toml
-          echo "Updated version to ${{ inputs.version }}"
-          grep '^version = ' apps/cli/pyproject.toml
-
-      - name: Commit and push version bump
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add apps/cli/pyproject.toml
-          git commit -m "CLI: bump version to ${{ inputs.version }}"
-          git push
-
   build:
-    needs: version-bump
+    if: ${{ inputs.version != '' }}
     name: Build ${{ matrix.os }}-${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -66,8 +43,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          ref: main  # Get the latest code after version bump
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -118,31 +93,15 @@ jobs:
           path: |
             apps/cli/dist/lazycloud-*
 
-  release:
-    name: Publish to Releases Repo
+  sync:
+    name: Sync Examples and README
+    if: ${{ always() && (inputs.version == '' || needs.build.result == 'success') }}
     needs: build
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout main repo
         uses: actions/checkout@v4
-        with:
-          ref: main  # Get the latest code after version bump
-
-      - name: Read version from pyproject.toml
-        id: version
-        run: |
-          VERSION=$(grep '^version = ' apps/cli/pyproject.toml | sed 's/version = "\(.*\)"/v\1/')
-          echo "tag=$VERSION" >> $GITHUB_OUTPUT
-          echo "Using version: $VERSION"
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Display structure
-        run: ls -R artifacts
 
       - name: Checkout releases repo
         uses: actions/checkout@v4
@@ -157,24 +116,46 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Update README if changed
+      - name: Sync README and examples
         working-directory: releases-repo
         run: |
           cp ../apps/cli/release/release_readme.md README.md
-          git add README.md
-          git diff --staged --quiet || git commit -m "Update README for ${{ steps.version.outputs.tag }}"
+          rm -rf examples
+          cp -r ../examples .
+          git add README.md examples
+          git diff --staged --quiet || git commit -m "Sync examples and README"
           git push
+
+  release:
+    name: Create GitHub Release
+    if: ${{ inputs.version != '' }}
+    needs: [build, sync]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout main repo
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Display structure
+        run: ls -R artifacts
 
       - name: Create GitHub Release in releases repo
         env:
           GH_TOKEN: ${{ secrets.ADMIN_TOKEN }}
         run: |
-          # Flatten artifacts into a single directory
           mkdir -p release-assets
           find artifacts -type f -name "lazycloud-*" -exec cp {} release-assets/ \;
 
-          gh release create ${{ steps.version.outputs.tag }} \
+          # Delete existing release if it exists
+          gh release delete "v${{ inputs.version }}" --repo AmbientWare/lazycloud-releases --yes || true
+
+          gh release create "v${{ inputs.version }}" \
             --repo AmbientWare/lazycloud-releases \
-            --title "Release ${{ steps.version.outputs.tag }}" \
+            --title "Release v${{ inputs.version }}" \
             --notes-file apps/cli/release/release_readme.md \
             release-assets/*
