@@ -203,6 +203,9 @@ class ServiceDetailsContainer(Widget):
             completion_text,
         ]
 
+        if service.endpoint:
+            content.append(f"Endpoint:     [cyan]{service.endpoint}[/cyan]")
+
         if service.current_usage:
             if service.current_usage.cpu:
                 formatted_cpu = format_cpu(service.current_usage.cpu)

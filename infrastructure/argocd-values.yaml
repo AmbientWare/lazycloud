@@ -16,7 +16,6 @@ server:
       alb.ingress.kubernetes.io/healthcheck-path: /healthz
       alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
       alb.ingress.kubernetes.io/ssl-redirect: "443"
-      external-dns.alpha.kubernetes.io/hostname: argocd.lazycloud.dev
   resources:
     limits:
       cpu: 1000m

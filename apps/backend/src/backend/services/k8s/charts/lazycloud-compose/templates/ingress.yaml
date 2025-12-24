@@ -36,7 +36,7 @@ spec:
   {{- if and $service.ingress.tls $service.ingress.tls.enabled }}
   tls:
     - hosts:
-        - {{ $service.ingress.hostnamePrefix }}.{{ $service.ingress.domain | default "example.com" }}
+        - {{ $service.ingress.hostname }}
       {{- if $service.ingress.tls.secretName }}
       secretName: {{ $service.ingress.tls.secretName }}
       {{- else }}
@@ -44,7 +44,7 @@ spec:
       {{- end }}
   {{- end }}
   rules:
-    - host: {{ $service.ingress.hostnamePrefix }}.{{ $service.ingress.domain | default "example.com" }}
+    - host: {{ $service.ingress.hostname }}
       http:
         paths:
           {{- range $service.ports }}

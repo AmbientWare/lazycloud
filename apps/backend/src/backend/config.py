@@ -76,6 +76,9 @@ class AppConfig(BaseModel):
     # Kubernetes Configuration
     K8S_CONNECTION_POOL_SIZE: int = int(os.getenv("K8S_CONNECTION_POOL_SIZE", "100"))
 
+    # Ingress Configuration
+    BASE_DOMAIN: str = os.getenv("BASE_DOMAIN", "lazycloud.dev")
+
     # Usage Tracking Configuration
     USAGE_COLLECTION_INTERVAL_HOURS: int = int(
         os.getenv("USAGE_COLLECTION_INTERVAL_HOURS", "1")

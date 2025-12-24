@@ -95,9 +95,18 @@ class CloudflareService:
     async def add_saas_domain(
         self,
         domain: str,
+        origin_server: str | None = None,
         ssl_settings: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Create a custom hostname for SSL for SaaS"""
+        """Create a custom hostname for SSL for SaaS
+
+        Args:
+            domain: The custom domain to add (e.g., "api.example.com")
+            origin_server: Optional origin server hostname to route traffic to
+                          (e.g., "api-abc12.lazycloud.dev"). If not provided,
+                          traffic routes to the zone's default origin.
+            ssl_settings: Optional SSL configuration override
+        """
         # Default SSL settings for SaaS
         default_ssl_settings = {
             "method": "http",
@@ -107,12 +116,16 @@ class CloudflareService:
 
         ssl_config = ssl_settings or default_ssl_settings
 
-        payload = {
+        payload: dict[str, Any] = {
             "hostname": domain,
             "ssl": ssl_config,
         }
 
-        logger.info(f"Adding custom hostname: {domain}")
+        # Add custom origin server if specified (for routing to specific service)
+        if origin_server:
+            payload["custom_origin_server"] = origin_server
+
+        logger.info(f"Adding custom hostname: {domain}" + (f" -> {origin_server}" if origin_server else ""))
         result = await self._make_request(
             method="POST",
             endpoint=f"/zones/{self._zone_id}/custom_hostnames",

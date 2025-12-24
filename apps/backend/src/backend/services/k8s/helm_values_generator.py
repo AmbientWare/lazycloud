@@ -245,7 +245,7 @@ class HelmValuesGenerator:
             service_values.healthcheck = healthcheck_values
 
         # Add ingress configuration
-        ingress_config = generate_ingress_values(service)
+        ingress_config = generate_ingress_values(service, self.deployment.id)
         if ingress_config:
             service_values.ingress = ingress_config
 

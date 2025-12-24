@@ -151,6 +151,7 @@ class StatusWatcher:
                     image=service.image,
                     ports=service.ports,
                     restarts=service.total_restarts,
+                    endpoint=service.endpoint,
                 )
             )
 
@@ -385,6 +386,11 @@ class StatusWatcher:
                 for v in service.volumes
             ]
 
+        # Extract endpoint from ingress config if available
+        endpoint = None
+        if service.ingress and service.ingress.enabled:
+            endpoint = service.ingress.hostname
+
         return ServiceStatus(
             name=service.name,
             image=f"{service.image.repository}:{service.image.tag}",
@@ -401,6 +407,7 @@ class StatusWatcher:
             healthcheck=k8s_healthcheck,
             total_restarts=sum(pod.restart_count for pod in pods) if pods else 0,
             last_checked=datetime.now(UTC),
+            endpoint=endpoint,
         )
 
     async def _get_service_pods(self, service_config: ServiceValues) -> list[PodStatus]:

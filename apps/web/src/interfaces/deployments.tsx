@@ -24,6 +24,7 @@ export const ServiceStatusSummarySchema = z.object({
   image: z.string().nullable(),
   ports: z.array(z.string()).nullable(),
   restarts: z.number(),
+  endpoint: z.string().nullable(),
 });
 
 export const VolumeStatusSummarySchema = z.object({
