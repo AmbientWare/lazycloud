@@ -18,7 +18,7 @@ NC='\033[0m'
 info() { printf "${CYAN}$1${NC}\n"; }
 success() { printf "${GREEN}✓ $1${NC}\n"; }
 error() { printf "${RED}✗ $1${NC}\n"; exit 1; }
-debug() { [ "$VERBOSE" = "true" ] && printf "  $1\n"; }
+debug() { [ "$VERBOSE" = "true" ] && printf "  $1\n" || true; }
 
 detect_platform() {
     OS=$(uname -s | tr '[:upper:]' '[:lower:]')
