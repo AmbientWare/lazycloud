@@ -151,8 +151,8 @@ jobs:
           mkdir -p release-assets
           find artifacts -type f -name "lazycloud-*" -exec cp {} release-assets/ \;
 
-          # Delete existing release if it exists
-          gh release delete "v${{ inputs.version }}" --repo AmbientWare/lazycloud-releases --yes || true
+          # Delete existing release and tag if they exist
+          gh release delete "v${{ inputs.version }}" --repo AmbientWare/lazycloud-releases --yes --cleanup-tag || true
 
           gh release create "v${{ inputs.version }}" \
             --repo AmbientWare/lazycloud-releases \
