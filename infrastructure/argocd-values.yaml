@@ -2,15 +2,16 @@ nameOverride: argocd
 fullnameOverride: argocd
 
 server:
+  # Run in insecure mode - Cloudflare handles TLS termination
+  extraArgs:
+    - --insecure
   service:
     type: ClusterIP
   ingress:
     enabled: true
     ingressClassName: nginx
     hostname: argocd.lazycloud.dev
-    annotations:
-      # ArgoCD uses HTTPS backend
-      nginx.ingress.kubernetes.io/backend-protocol: HTTPS
+    annotations: {}
   resources:
     limits:
       cpu: 1000m
