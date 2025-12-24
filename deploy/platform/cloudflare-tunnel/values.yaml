@@ -11,8 +11,10 @@ tunnel:
 secrets:
   # ClusterSecretStore name (from external-secrets chart)
   secretStoreName: lazycloud-prod-secrets
-  # AWS Secrets Manager key containing tunnel credentials JSON
-  awsSecretName: lazycloud/cloudflare-tunnel
+  # AWS Secrets Manager secret name
+  awsSecretName: lazycloud/shared-secrets
+  # Property within the secret containing the tunnel token
+  awsSecretProperty: CLOUDFLARE_TUNNEL_TOKEN
 
 # Ingress rules for the tunnel
 # Routes traffic to NGINX Ingress Controller

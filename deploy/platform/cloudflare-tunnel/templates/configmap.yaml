@@ -6,7 +6,6 @@ metadata:
 data:
   config.yaml: |
     tunnel: {{ .Values.tunnel.id }}
-    credentials-file: /etc/cloudflared/credentials.json
     metrics: 0.0.0.0:2000
     no-autoupdate: true
     ingress:
