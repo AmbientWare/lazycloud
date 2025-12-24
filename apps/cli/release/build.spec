@@ -3,6 +3,7 @@
 # This file configures how PyInstaller builds the standalone binary
 
 from pathlib import Path
+from PyInstaller.utils.hooks import collect_data_files
 
 # Get the parent directory (apps/cli) from this spec file's location
 spec_dir = Path(SPECPATH)
@@ -10,16 +11,20 @@ cli_dir = spec_dir.parent
 
 block_cipher = None
 
+# Collect pyfiglet fonts
+pyfiglet_datas = collect_data_files('pyfiglet')
+
 a = Analysis(
     [str(cli_dir / 'src' / 'cli' / 'main.py')],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=pyfiglet_datas,
     hiddenimports=[
         # Workspace packages
         'models',
         'api_requests',
         'responses',
+        'pyfiglet.fonts',
     ],
     hookspath=[],
     hooksconfig={},
