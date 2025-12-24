@@ -30,6 +30,14 @@ spec:
             - --config
             - /etc/cloudflared/config.yaml
             - run
+            - --token
+            - $(TUNNEL_TOKEN)
+          env:
+            - name: TUNNEL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: cloudflare-tunnel-credentials
+                  key: token
           ports:
             - name: metrics
               containerPort: 2000
@@ -53,10 +61,6 @@ spec:
               mountPath: /etc/cloudflared/config.yaml
               subPath: config.yaml
               readOnly: true
-            - name: credentials
-              mountPath: /etc/cloudflared/credentials.json
-              subPath: credentials.json
-              readOnly: true
           securityContext:
             readOnlyRootFilesystem: true
             runAsNonRoot: true
@@ -69,9 +73,6 @@ spec:
         - name: config
           configMap:
             name: cloudflare-tunnel-config
-        - name: credentials
-          secret:
-            secretName: cloudflare-tunnel-credentials
       {{- if .Values.topologySpreadConstraints.enabled }}
       topologySpreadConstraints:
         - maxSkew: 1
