@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import { motion } from "framer-motion";
 import { StyledButton } from "@/components/shared/styled-button";
 import { useAuth } from "@workos-inc/authkit-nextjs/components";
@@ -8,13 +7,10 @@ import Link from "next/link";
 import NodesBackground from "@/components/backgrounds/NodesBackground";
 import { ChevronRight } from "lucide-react";
 import { USER_HOME } from "@/lib/constants";
-import RequestAccessDialog from "@/app/_components/request-access-dialot";
 
 export default function Hero() {
   const { user } = useAuth();
   const isSignedIn = !!user;
-  
-  const [dialogOpen, setDialogOpen] = useState(false);
 
   return (
     <div className="relative flex h-screen w-full items-center justify-center">
@@ -50,13 +46,15 @@ export default function Hero() {
                 variant="primary"
                 size="lg"
                 className="text-lg"
-                onClick={() => setDialogOpen(true)}
+                asChild
               >
-                Request Early Access
-                <ChevronRight
-                  size={20}
-                  className="transition-transform group-hover:translate-x-1"
-                />
+                <Link href="/request-access">
+                  Request Access
+                  <ChevronRight
+                    size={20}
+                    className="transition-transform group-hover:translate-x-1"
+                  />
+                </Link>
               </StyledButton>
             ) : (
               <StyledButton
@@ -75,7 +73,6 @@ export default function Hero() {
               </StyledButton>
             )}
           </motion.div>
-          <RequestAccessDialog open={dialogOpen} onOpenChange={setDialogOpen} />
         </div>
       </NodesBackground>
     </div>
