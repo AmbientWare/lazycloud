@@ -17,10 +17,7 @@ lazycloud init
 lazycloud deploy
 ```
 
-Set your OpenAI API key:
-```bash
-lazycloud env set OPENAI_API_KEY=sk-...
-```
+You'll be prompted for any environment variables defined in compose.yaml.
 
 ## Usage
 
