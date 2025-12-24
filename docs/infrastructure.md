@@ -51,6 +51,15 @@ Configure DNS in Cloudflare dashboard:
 - Add CNAME: `*.lazycloud.dev` → `<tunnel-id>.cfargotunnel.com`
 - Add CNAME: `lazycloud.dev` → `<tunnel-id>.cfargotunnel.com`
 
+#### Security Rule for Install Scripts
+
+Cloudflare's Security Level blocks curl/wget requests by default. To allow CLI install scripts:
+
+1. Go to Security → Security rules
+2. Create rule with expression: `starts_with(http.request.uri.path, "/install")`
+3. Action: **Skip** → check **Security Level**
+4. Deploy
+
 #### Cloudflare for SaaS (Custom Domains)
 
 Enable SSL for SaaS in Cloudflare dashboard:
