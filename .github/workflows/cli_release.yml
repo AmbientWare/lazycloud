@@ -1,13 +1,39 @@
 name: Build and Release CLI Binaries
 
 on:
-  push:
-    tags:
-      - 'v*.*.*'
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 0.2.0)'
+        required: true
+        type: string
 
 jobs:
+  version-bump:
+    name: Bump Version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.ADMIN_TOKEN }}
+
+      - name: Update version in pyproject.toml
+        run: |
+          sed -i 's/^version = ".*"/version = "${{ inputs.version }}"/' apps/cli/pyproject.toml
+          echo "Updated version to ${{ inputs.version }}"
+          grep '^version = ' apps/cli/pyproject.toml
+
+      - name: Commit and push version bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add apps/cli/pyproject.toml
+          git commit -m "CLI: bump version to ${{ inputs.version }}"
+          git push
+
   build:
+    needs: version-bump
     name: Build ${{ matrix.os }}-${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -40,6 +66,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ref: main  # Get the latest code after version bump
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -98,6 +126,8 @@ jobs:
     steps:
       - name: Checkout main repo
         uses: actions/checkout@v4
+        with:
+          ref: main  # Get the latest code after version bump
 
       - name: Read version from pyproject.toml
         id: version
@@ -127,31 +157,24 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Copy README and artifacts
-        run: |
-          # Copy release README as main README
-          cp apps/cli/release/release_readme.md releases-repo/README.md
-
-          # Create release directory if it doesn't exist
-          mkdir -p releases-repo/${{ steps.version.outputs.tag }}
-
-          # Copy all binaries to release directory
-          find artifacts -type f -name "lazycloud-*" -exec cp {} releases-repo/${{ steps.version.outputs.tag }}/ \;
-
-      - name: Commit and push to releases repo
+      - name: Update README if changed
         working-directory: releases-repo
         run: |
-          git add .
-          git commit -m "Release ${{ steps.version.outputs.tag }}" || echo "No changes to commit"
+          cp ../apps/cli/release/release_readme.md README.md
+          git add README.md
+          git diff --staged --quiet || git commit -m "Update README for ${{ steps.version.outputs.tag }}"
           git push
 
       - name: Create GitHub Release in releases repo
         env:
           GH_TOKEN: ${{ secrets.ADMIN_TOKEN }}
         run: |
-          cd releases-repo
+          # Flatten artifacts into a single directory
+          mkdir -p release-assets
+          find artifacts -type f -name "lazycloud-*" -exec cp {} release-assets/ \;
+
           gh release create ${{ steps.version.outputs.tag }} \
             --repo AmbientWare/lazycloud-releases \
             --title "Release ${{ steps.version.outputs.tag }}" \
-            --notes-file ../apps/cli/release/release_readme.md \
-            ${{ steps.version.outputs.tag }}/*
+            --notes-file apps/cli/release/release_readme.md \
+            release-assets/*
