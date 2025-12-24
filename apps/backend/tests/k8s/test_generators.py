@@ -404,12 +404,14 @@ class TestIngressGeneration:
             image="myapp:latest",
             ports=[ComposePort(published=8080, target=8080, protocol="tcp")],
         )
+        deployment_id = "abc123def456"
 
-        result = generate_ingress_values(service)
+        result = generate_ingress_values(service, deployment_id)
 
         assert result is not None
         assert result.enabled is True
-        assert result.hostnamePrefix == "api"
+        # Hostname should include service name, short deployment ID, and base domain
+        assert result.hostname == "api-abc12.lazycloud.dev"
 
     def test_ingress_not_generated_without_ports(self):
         """Test ingress is not generated for service without ports."""
@@ -418,8 +420,9 @@ class TestIngressGeneration:
             image="worker:latest",
             ports=None,
         )
+        deployment_id = "abc123def456"
 
-        result = generate_ingress_values(service)
+        result = generate_ingress_values(service, deployment_id)
 
         assert result is None
 
@@ -430,10 +433,39 @@ class TestIngressGeneration:
             image="nginx:latest",
             ports=[ComposePort(published=80, target=80, protocol="tcp")],
         )
+        deployment_id = "xyz789ghi012"
 
-        result = generate_ingress_values(service)
+        result = generate_ingress_values(service, deployment_id)
 
         assert result.className == "alb"
+
+    def test_ingress_hostname_includes_deployment_id(self):
+        """Test ingress hostname includes short deployment ID for uniqueness."""
+        service = ComposeService(
+            name="myservice",
+            image="app:latest",
+            ports=[ComposePort(published=3000, target=3000, protocol="tcp")],
+        )
+        deployment_id = "deploy12345"
+
+        result = generate_ingress_values(service, deployment_id)
+
+        assert result.hostname == "myservice-deplo.lazycloud.dev"
+
+    def test_ingress_uses_custom_domain_when_specified(self):
+        """Test ingress uses custom domain from service.domain if specified."""
+        service = ComposeService(
+            name="api",
+            image="myapp:latest",
+            ports=[ComposePort(published=8080, target=8080, protocol="tcp")],
+            domain="api.example.com",
+        )
+        deployment_id = "abc123def456"
+
+        result = generate_ingress_values(service, deployment_id)
+
+        assert result is not None
+        assert result.hostname == "api.example.com"
 
 
 class TestPetnameGeneration:

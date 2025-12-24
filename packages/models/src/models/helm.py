@@ -1,5 +1,7 @@
 from typing import Any, Literal
 
+from pydantic import BaseModel, Field
+
 from models.billing import STORAGE_CLASS_EBS, STORAGE_CLASS_EFS
 from models.k8s import (
     PodSecurityContext,
@@ -11,7 +13,6 @@ from models.k8s import (
     VolumeMount,
     WorkloadType,
 )
-from pydantic import BaseModel, Field
 
 
 class PortConfig(BaseModel):
@@ -93,7 +94,7 @@ class IngressValues(BaseModel):
 
     enabled: bool = True
     className: str = "alb"
-    hostnamePrefix: str
+    hostname: str
     tls: IngressTLS | None = None
     annotations: dict[str, str] = {}
 

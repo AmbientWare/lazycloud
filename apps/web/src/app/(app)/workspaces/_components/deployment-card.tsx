@@ -1,7 +1,7 @@
 import type { DeploymentWithStatus } from "@/interfaces/deployments";
 import { StyledAccordionItem, StyledAccordionTrigger, StyledAccordionContent } from "@/components/shared/styled-accordion";
 import { Badge } from "@/components/ui/badge";
-import { Server, HardDrive, Network } from "lucide-react";
+import { Server, HardDrive, Network, ExternalLink } from "lucide-react";
 import { Spinner } from "@/components/shared/spinner";
 
 
@@ -185,6 +185,17 @@ export function DeploymentCard({ deployment }: { deployment: DeploymentWithStatu
                           )}
                         </div>
                       </div>
+                      {service.endpoint && (
+                        <a
+                          href={`https://${service.endpoint}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="mt-2 flex items-center gap-1.5 text-xs text-cyan-500 hover:text-cyan-400 transition-colors"
+                        >
+                          <ExternalLink className="h-3 w-3" />
+                          <span className="truncate">{service.endpoint}</span>
+                        </a>
+                      )}
                     </div>
                   ))}
                 </div>

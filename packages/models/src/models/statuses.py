@@ -1,13 +1,14 @@
 from datetime import datetime
 from enum import StrEnum
 
+from pydantic import BaseModel
+
 from models.helm import (
     CurrentUsage,
     HealthCheckValues,
     HPAValues,
 )
 from models.k8s import Resources, WorkloadType
-from pydantic import BaseModel
 
 JOB_CONDITION_COMPLETE = "Complete"
 JOB_CONDITION_FAILED = "Failed"
@@ -122,6 +123,7 @@ class ServiceStatus(BaseModel):
     healthcheck: HealthCheckValues | None = None
     total_restarts: int = 0
     last_checked: datetime
+    endpoint: str | None = None
 
 
 class ServiceStatusSummary(BaseModel):
@@ -134,6 +136,7 @@ class ServiceStatusSummary(BaseModel):
     image: str | None = None
     ports: list[str] | None = None
     restarts: int = 0
+    endpoint: str | None = None
 
 
 class DeploymentStatus(BaseModel):

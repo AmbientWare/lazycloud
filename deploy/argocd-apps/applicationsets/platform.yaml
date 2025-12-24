@@ -39,27 +39,21 @@ spec:
                   createNamespace: "false"
                   serverSideApply: "true"
                   hasRegionValues: "true"
-                - app: external-dns
-                  namespace: kube-system
-                  syncWave: "4"
-                  createNamespace: "false"
-                  serverSideApply: "false"
-                  hasRegionValues: "false"
                 - app: karpenter
                   namespace: kube-system
-                  syncWave: "5"
+                  syncWave: "4"
                   createNamespace: "false"
                   serverSideApply: "false"
                   hasRegionValues: "true"
                 - app: loki
                   namespace: monitoring
-                  syncWave: "6"
+                  syncWave: "5"
                   createNamespace: "true"
                   serverSideApply: "false"
                   hasRegionValues: "false"
                 - app: prometheus-stack
                   namespace: monitoring
-                  syncWave: "7"
+                  syncWave: "6"
                   createNamespace: "true"
                   serverSideApply: "true"
                   hasRegionValues: "false"

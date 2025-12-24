@@ -15,6 +15,8 @@ from models.helm import (
     PortConfig,
 )
 
+from backend.config import app_config
+
 VALID_PROTOCOLS = ["tcp", "udp", "sctp"]
 
 
@@ -149,26 +151,33 @@ def generate_ports_values(ports: list[str | int | ComposePort]) -> list[PortConf
     return ports_values
 
 
-def generate_ingress_values(service: ComposeService) -> IngressValues | None:
+def generate_ingress_values(
+    service: ComposeService, deployment_id: str
+) -> IngressValues | None:
     """Generate ingress configuration from service labels."""
     # No ports means no ingress
     if not service.ports:
         return None
 
+    # Determine the hostname
+    if service.domain:
+        # Use custom domain directly
+        hostname = service.domain
+    else:
+        # Generate hostname with deployment ID for DNS uniqueness
+        # Format: {service_name}-{short_deployment_id}.{base_domain}
+        short_id = deployment_id[:5]
+        hostname_prefix = f"{service.name}-{short_id}" if service.name else generate_petname(
+            deployment_id
+        )
+        hostname = f"{hostname_prefix}.{app_config.BASE_DOMAIN}"
+
     ingress_config = IngressValues(
         enabled=True,
         className="alb",  # Default to ALB for AWS
-        hostnamePrefix="",  # Will be set below
+        hostname=hostname,
+        tls=IngressTLS(enabled=True),
     )
-
-    # Generate hostname prefix
-    hostname_prefix = service.name
-    if not hostname_prefix:
-        # Generate unique petname if no prefix specified
-        hostname_prefix = generate_petname(service.name)
-
-    ingress_config.hostnamePrefix = hostname_prefix
-    ingress_config.tls = IngressTLS(enabled=True)
 
     # check if the port needs alb (not a tcp port)
     for port in service.ports:
@@ -178,11 +187,8 @@ def generate_ingress_values(service: ComposeService) -> IngressValues | None:
 
     # AWS ALB specific annotations
     if ingress_config.className == "alb":
-        # TODO: get domain from config
-        domain = "lazycloud.com"
         ingress_config.annotations = {
             "alb.ingress.kubernetes.io/scheme": "internet-facing",
-            "external-dns.alpha.kubernetes.io/hostname": f"{hostname_prefix}.{domain}",
         }
     else:
         ingress_config.annotations = {
