@@ -1,21 +1,42 @@
 import os
+import tomllib
 from pathlib import Path
 
+import platformdirs
 from pydantic import PrivateAttr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Platform-based config directory:
+# - Linux: ~/.config/lazycloud/
+# - macOS: ~/Library/Application Support/lazycloud/
+# - Windows: C:\Users\<user>\AppData\Roaming\lazycloud\
+CONFIG_DIR = Path(platformdirs.user_config_dir("lazycloud"))
+CONFIG_FILE = CONFIG_DIR / "config.toml"
+
 
 class CLIConfig(BaseSettings):
-    """CLI Configuration"""
+    """CLI Configuration
+
+    Priority (highest wins):
+    1. Environment variables (LAZYCLOUD_API_BASE_URL, etc.)
+    2. Config file (~/.config/lazycloud/config.toml)
+    3. Defaults
+
+    Example config.toml:
+        [api]
+        base_url = "http://localhost:8000"
+        version = "v1"
+        registry_type = "ecr"
+    """
 
     model_config = SettingsConfigDict(env_prefix="LAZYCLOUD_")
 
     # API Configuration
-    api_base_url: str = "http://localhost:8000"
+    api_base_url: str = "https://api.lazycloud.dev"
     api_version: str = "v1"
     registry_type: str = "ecr"
 
-    # Private attributes for OAuth token management (WorkOS CLI Auth)
+    # Private attributes for OAuth token management
     _access_token: str | None = PrivateAttr(default=None)
     _refresh_token: str | None = PrivateAttr(default=None)
 
@@ -24,36 +45,64 @@ class CLIConfig(BaseSettings):
     _active_workspace_name: str | None = PrivateAttr(default=None)
 
     def __init__(self, **data):
-        super().__init__(**data)
-        self._load_config()
+        # Load config file values, env vars override via pydantic-settings
+        file_config = self._read_config_file()
 
-    def _load_config(self):
-        """Load configuration from the config file"""
-        config_path = Path.home() / ".lazycloud"
-        if config_path.exists():
-            with open(config_path) as f:
-                for line in f:
-                    if line.startswith("ACCESS_TOKEN="):
-                        self._access_token = line.strip().split("=", 1)[1]
-                    elif line.startswith("REFRESH_TOKEN="):
-                        self._refresh_token = line.strip().split("=", 1)[1]
-                    elif line.startswith("ACTIVE_WORKSPACE_ID="):
-                        self._active_workspace_id = line.strip().split("=", 1)[1]
-                    elif line.startswith("ACTIVE_WORKSPACE_NAME="):
-                        self._active_workspace_name = line.strip().split("=", 1)[1]
+        # Apply file config for fields not set via env vars
+        for key in ["api_base_url", "api_version", "registry_type"]:
+            env_key = f"LAZYCLOUD_{key.upper()}"
+            if key not in data and env_key not in os.environ:
+                if value := file_config.get("api", {}).get(key.replace("api_", "")):
+                    data[key] = value
+
+        super().__init__(**data)
+
+        # Load auth tokens from file
+        auth = file_config.get("auth", {})
+        self._access_token = auth.get("access_token")
+        self._refresh_token = auth.get("refresh_token")
+
+        # Load workspace from file
+        workspace = file_config.get("workspace", {})
+        self._active_workspace_id = workspace.get("id")
+        self._active_workspace_name = workspace.get("name")
+
+    @staticmethod
+    def _read_config_file() -> dict:
+        """Read config from TOML file."""
+        if CONFIG_FILE.exists():
+            with open(CONFIG_FILE, "rb") as f:
+                return tomllib.load(f)
+        return {}
 
     def _save_config(self):
-        """Save configuration to the config file"""
-        config_path = Path.home() / ".lazycloud"
-        with open(config_path, "w") as f:
-            if self._access_token:
-                f.write(f"ACCESS_TOKEN={self._access_token}\n")
-            if self._refresh_token:
-                f.write(f"REFRESH_TOKEN={self._refresh_token}\n")
-            if self._active_workspace_id:
-                f.write(f"ACTIVE_WORKSPACE_ID={self._active_workspace_id}\n")
-            if self._active_workspace_name:
-                f.write(f"ACTIVE_WORKSPACE_NAME={self._active_workspace_name}\n")
+        """Save configuration to TOML file."""
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+
+        lines = [
+            "[api]",
+            f'base_url = "{self.api_base_url}"',
+            f'version = "{self.api_version}"',
+            f'registry_type = "{self.registry_type}"',
+            "",
+            "[auth]",
+        ]
+
+        if self._access_token:
+            lines.append(f'access_token = "{self._access_token}"')
+        if self._refresh_token:
+            lines.append(f'refresh_token = "{self._refresh_token}"')
+
+        lines.append("")
+        lines.append("[workspace]")
+
+        if self._active_workspace_id:
+            lines.append(f'id = "{self._active_workspace_id}"')
+        if self._active_workspace_name:
+            lines.append(f'name = "{self._active_workspace_name}"')
+
+        with open(CONFIG_FILE, "w") as f:
+            f.write("\n".join(lines) + "\n")
 
     @property
     def access_token(self) -> str | None:
@@ -63,15 +112,9 @@ class CLIConfig(BaseSettings):
         1. LAZYCLOUD_API_KEY environment variable (for CI/CD)
         2. Stored access token from config file
         """
-        # API key takes precedence (CI/CD use case)
-        api_key = os.getenv("LAZYCLOUD_API_KEY")
-        if api_key:
+        if api_key := os.getenv("LAZYCLOUD_API_KEY"):
             return api_key
-
-        if self._access_token:
-            return self._access_token
-
-        return None
+        return self._access_token
 
     @property
     def refresh_token(self) -> str | None:
@@ -79,45 +122,39 @@ class CLIConfig(BaseSettings):
         return self._refresh_token
 
     def set_tokens(self, access_token: str, refresh_token: str | None = None):
-        """Set the OAuth tokens"""
+        """Set the OAuth tokens."""
         self._access_token = access_token
         if refresh_token:
             self._refresh_token = refresh_token
         self._save_config()
 
     def clear_tokens(self):
-        """Clear the OAuth tokens"""
+        """Clear the OAuth tokens."""
         self._access_token = None
         self._refresh_token = None
         self._save_config()
 
     @property
     def api_url(self) -> str:
-        """Get the full API URL"""
+        """Get the full API URL."""
         return f"{self.api_base_url}/{self.api_version}"
 
     @field_validator("api_base_url")
     @classmethod
     def validate_api_base_url(cls, v: str) -> str:
-        """Validate the API base URL"""
+        """Validate the API base URL."""
         if not v.startswith(("http://", "https://")):
             raise ValueError("API base URL must start with http:// or https://")
         return v.rstrip("/")
 
-    # Workspace management methods
     @property
     def active_workspace_id(self) -> str:
-        """Get the currently active workspace ID.
-
-        Can fall back to LAZYCLOUD_WORKSPACE_ID env var for CI/CD usage.
-        """
+        """Get the currently active workspace ID."""
         if self._active_workspace_id is not None:
             return self._active_workspace_id
 
-        # Fall back to env var for CI/CD
-        env_workspace_id = os.getenv("LAZYCLOUD_WORKSPACE_ID")
-        if env_workspace_id:
-            return env_workspace_id
+        if env_id := os.getenv("LAZYCLOUD_WORKSPACE_ID"):
+            return env_id
 
         raise ValueError(
             "No active workspace ID found. Set LAZYCLOUD_WORKSPACE_ID or run 'lazycloud login'"
@@ -125,35 +162,31 @@ class CLIConfig(BaseSettings):
 
     @property
     def active_workspace_name(self) -> str:
-        """Get the currently active workspace name"""
+        """Get the currently active workspace name."""
         if self._active_workspace_name is None:
             raise ValueError("No active workspace name found")
-
         return self._active_workspace_name
 
     def set_active_workspace(self, workspace_id: str, workspace_name: str):
-        """Set the active workspace"""
+        """Set the active workspace."""
         self._active_workspace_id = workspace_id
         self._active_workspace_name = workspace_name
         self._save_config()
 
     def clear_active_workspace(self):
-        """Clear the active workspace"""
+        """Clear the active workspace."""
         self._active_workspace_id = None
         self._active_workspace_name = None
         self._save_config()
 
     def check_authentication(self) -> tuple[bool, str]:
         """Check if user is properly authenticated and configured."""
-        # Check for access token (stored or env var)
         if not self.access_token:
             return (
                 False,
                 "Not logged in. Please run 'lazycloud login' first or set LAZYCLOUD_ACCESS_TOKEN.",
             )
 
-        # Check for workspace configuration (only required for stored tokens)
-        # Env var usage (CI/CD) can skip workspace config
         if self._access_token and not self._active_workspace_id:
             return False, "No workspace configured. Please run 'lazycloud login' again."
 
