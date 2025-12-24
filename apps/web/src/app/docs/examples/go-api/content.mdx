@@ -1,0 +1,108 @@
+# Go API Example
+
+A simple Go REST API ready to deploy with LazyCloud.
+
+## Files
+
+### main.go
+
+```go
+package main
+
+import (
+	"encoding/json"
+	"log"
+	"net/http"
+	"os"
+)
+
+type Response struct {
+	Message string `json:"message"`
+}
+
+type HealthResponse struct {
+	Status string `json:"status"`
+}
+
+func main() {
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(Response{Message: "Hello from LazyCloud!"})
+	})
+
+	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(HealthResponse{Status: "healthy"})
+	})
+
+	log.Printf("Server starting on port %s", port)
+	log.Fatal(http.ListenAndServe(":"+port, nil))
+}
+```
+
+### go.mod
+
+```go
+module go-api
+
+go 1.23
+```
+
+### Dockerfile
+
+```dockerfile
+FROM golang:1.23-alpine AS builder
+
+WORKDIR /app
+COPY go.mod ./
+COPY main.go ./
+
+RUN go build -o server .
+
+FROM alpine:latest
+
+WORKDIR /app
+COPY --from=builder /app/server .
+
+CMD ["./server"]
+```
+
+### compose.yaml
+
+```yaml
+services:
+  api:
+    build: .
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+```
+
+## Deploy
+
+```bash
+# Get the example
+git clone https://github.com/AmbientWare/lazycloud-releases.git
+cd lazycloud-releases/examples/go-api
+
+# Initialize and deploy
+lazycloud init
+lazycloud deploy
+```
+
+## Local Development
+
+```bash
+go run main.go
+```
+
+Visit http://localhost:8080 to see your API running locally.

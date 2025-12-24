@@ -1,0 +1,105 @@
+# Next.js Example
+
+A Next.js landing page ready to deploy with LazyCloud.
+
+## Files
+
+### app/page.tsx
+
+```tsx
+export default function Home() {
+  return (
+    <main className="flex min-h-screen flex-col items-center justify-center p-24">
+      <h1 className="text-4xl font-bold">Welcome to LazyCloud</h1>
+      <p className="mt-4 text-lg text-gray-600">
+        Your Next.js app is running!
+      </p>
+    </main>
+  );
+}
+```
+
+### app/api/health/route.ts
+
+```typescript
+import { NextResponse } from "next/server";
+
+export async function GET() {
+  return NextResponse.json({ status: "healthy" });
+}
+```
+
+### next.config.ts
+
+```typescript
+import type { NextConfig } from "next";
+
+const nextConfig: NextConfig = {
+  output: "standalone",
+};
+
+export default nextConfig;
+```
+
+### Dockerfile
+
+```dockerfile
+FROM node:22-alpine AS builder
+
+WORKDIR /app
+
+COPY package.json ./
+RUN npm install
+
+COPY . .
+RUN npm run build
+
+FROM node:22-alpine AS runner
+
+WORKDIR /app
+
+ENV NODE_ENV=production
+
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
+
+EXPOSE 3000
+
+CMD ["node", "server.js"]
+```
+
+### compose.yaml
+
+```yaml
+services:
+  web:
+    build: .
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+```
+
+## Deploy
+
+```bash
+# Get the example
+git clone https://github.com/AmbientWare/lazycloud-releases.git
+cd lazycloud-releases/examples/nextjs
+
+# Initialize and deploy
+lazycloud init
+lazycloud deploy
+```
+
+## Local Development
+
+```bash
+npm install
+npm run dev
+```
+
+Visit http://localhost:3000 to see your app running locally.
