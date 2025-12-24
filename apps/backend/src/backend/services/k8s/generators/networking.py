@@ -167,33 +167,20 @@ def generate_ingress_values(
         # Generate hostname with deployment ID for DNS uniqueness
         # Format: {service_name}-{short_deployment_id}.{base_domain}
         short_id = deployment_id[:5]
-        hostname_prefix = f"{service.name}-{short_id}" if service.name else generate_petname(
-            deployment_id
+        hostname_prefix = (
+            f"{service.name}-{short_id}"
+            if service.name
+            else generate_petname(deployment_id)
         )
         hostname = f"{hostname_prefix}.{app_config.BASE_DOMAIN}"
 
     ingress_config = IngressValues(
         enabled=True,
-        className="alb",  # Default to ALB for AWS
+        className="nginx",
         hostname=hostname,
         tls=IngressTLS(enabled=True),
+        annotations={},
     )
-
-    # check if the port needs alb (not a tcp port)
-    for port in service.ports:
-        if port.protocol != "tcp":
-            ingress_config.className = "alb"
-            break
-
-    # AWS ALB specific annotations
-    if ingress_config.className == "alb":
-        ingress_config.annotations = {
-            "alb.ingress.kubernetes.io/scheme": "internet-facing",
-        }
-    else:
-        ingress_config.annotations = {
-            "service.beta.kubernetes.io/aws-load-balancer-type": "nlb",
-        }
 
     return ingress_config
 

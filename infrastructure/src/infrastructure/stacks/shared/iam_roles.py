@@ -13,8 +13,8 @@ class SharedIAMRoles(Construct):
 
     This construct aggregates IAM roles from different service categories:
     - EKS roles: CSI drivers (EBS, EFS)
-    - Controller roles: Karpenter, AWS Load Balancer Controller
-    - Platform roles: External DNS, External Secrets
+    - Controller roles: Karpenter
+    - Platform roles: External Secrets, ECR
     """
 
     def __init__(
@@ -61,27 +61,7 @@ class SharedIAMRoles(Construct):
         """Get the Karpenter node role"""
         return self.controller_roles.karpenter_node_role
 
-    @property
-    def load_balancer_controller_role(self):
-        """Get the Load Balancer Controller role"""
-        return self.controller_roles.load_balancer_controller_role
-
-    @property
-    def load_balancer_controller_role_arn(self) -> str:
-        """Get the Load Balancer Controller role ARN"""
-        return self.controller_roles.load_balancer_controller_role_arn
-
     # Platform IAM role properties
-    @property
-    def external_dns_role(self):
-        """Get the External DNS role"""
-        return self.platform_roles.external_dns_role
-
-    @property
-    def external_dns_role_arn(self) -> str:
-        """Get the external DNS role ARN"""
-        return self.platform_roles.external_dns_role_arn
-
     @property
     def external_secrets_role(self):
         """Get the External Secrets role"""

@@ -40,12 +40,3 @@ class ControllersConstruct(Construct):
             service_account="external-secrets",
             role_arn=shared_stack.iam_roles.external_secrets_role_arn,
         )
-
-        self.alb_controller_pod_identity = eks.CfnPodIdentityAssociation(
-            self,
-            "ALBControllerPodIdentity",
-            cluster_name=self.eks_cluster.cluster_name,
-            namespace="kube-system",
-            service_account="aws-load-balancer-controller",
-            role_arn=shared_stack.iam_roles.load_balancer_controller_role_arn,
-        )

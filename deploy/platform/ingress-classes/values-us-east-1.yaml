@@ -1,3 +1,0 @@
-ingressClasses:
-  alb:
-    groupName: lazycloud-prod-us-east-1-alb

@@ -1,9 +1,0 @@
-# Ingress Classes values
-# Region-specific values (ingressClasses.alb.groupName) are in values-{region}.yaml
-
-ingressClasses:
-  alb:
-    enabled: true
-    name: alb
-    isDefault: true
-    scheme: internet-facing

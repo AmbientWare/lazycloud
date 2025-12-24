@@ -1,6 +1,0 @@
-apiVersion: v2
-name: ingress-classes
-description: Kubernetes IngressClasses for AWS Load Balancer Controller
-type: application
-version: 0.1.0
-appVersion: "1.0.0"

@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cloudflare-tunnel-config
+  namespace: {{ .Release.Namespace }}
+data:
+  config.yaml: |
+    tunnel: {{ .Values.tunnel.id }}
+    credentials-file: /etc/cloudflared/credentials.json
+    metrics: 0.0.0.0:2000
+    no-autoupdate: true
+    ingress:
+      {{- range .Values.ingress }}
+      - hostname: {{ .hostname | default "" | quote }}
+        service: {{ .service }}
+        {{- if .originRequest }}
+        originRequest:
+          {{- toYaml .originRequest | nindent 10 }}
+        {{- end }}
+      {{- end }}

@@ -6,16 +6,11 @@ server:
     type: ClusterIP
   ingress:
     enabled: true
-    ingressClassName: alb
+    ingressClassName: nginx
     hostname: argocd.lazycloud.dev
     annotations:
-      alb.ingress.kubernetes.io/scheme: internet-facing
-      alb.ingress.kubernetes.io/target-type: ip
-      alb.ingress.kubernetes.io/backend-protocol: HTTPS
-      alb.ingress.kubernetes.io/healthcheck-protocol: HTTPS
-      alb.ingress.kubernetes.io/healthcheck-path: /healthz
-      alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
-      alb.ingress.kubernetes.io/ssl-redirect: "443"
+      # ArgoCD uses HTTPS backend
+      nginx.ingress.kubernetes.io/backend-protocol: HTTPS
   resources:
     limits:
       cpu: 1000m

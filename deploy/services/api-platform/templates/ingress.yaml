@@ -7,19 +7,11 @@ metadata:
     app: {{ .Chart.Name }}-api
     component: api
   annotations:
-    alb.ingress.kubernetes.io/scheme: internet-facing
-    alb.ingress.kubernetes.io/target-type: ip
-    alb.ingress.kubernetes.io/healthcheck-path: {{ .Values.ingress.healthCheckPath }}
-    alb.ingress.kubernetes.io/healthcheck-port: "{{ .Values.service.port }}"
-    alb.ingress.kubernetes.io/load-balancer-attributes: routing.http.preserve_host_header.enabled=true
-    alb.ingress.kubernetes.io/ssl-policy: ELBSecurityPolicy-TLS-1-2-2017-01
-    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS":443}]'
-    alb.ingress.kubernetes.io/ssl-redirect: "443"
     {{- with .Values.ingress.annotations }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
 spec:
-  ingressClassName: alb
+  ingressClassName: nginx
   rules:
     - host: {{ .Values.ingress.hostname }}
       http:
