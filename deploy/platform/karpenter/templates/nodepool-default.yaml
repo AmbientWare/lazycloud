@@ -17,7 +17,7 @@ spec:
           values: ["spot", "on-demand"]
         - key: karpenter.k8s.aws/instance-category
           operator: In
-          values: ["t", "c", "m", "r"]
+          values: ["t"]
         - key: karpenter.k8s.aws/instance-generation
           operator: Gt
           values: ["2"]
