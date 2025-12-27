@@ -1,11 +1,14 @@
 import { Ratelimit } from "@upstash/ratelimit";
 import { redis } from "./redis";
 
+const ephemeralCache = new Map();
+
 export const ratelimit = redis
   ? new Ratelimit({
       redis,
       limiter: Ratelimit.slidingWindow(100, "1 m"),
-      analytics: true,
+      ephemeralCache,
+      analytics: false,
     })
   : null;
 
@@ -13,6 +16,7 @@ export const supportRatelimit = redis
   ? new Ratelimit({
       redis,
       limiter: Ratelimit.slidingWindow(3, "1 h"),
-      analytics: true,
+      ephemeralCache,
+      analytics: false,
     })
   : null;

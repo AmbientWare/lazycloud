@@ -10,10 +10,9 @@ from loguru import logger
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.loguru import LoguruIntegration
 from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
-from slowapi.util import get_remote_address
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
@@ -33,6 +32,7 @@ from backend.api.v1 import (
 from backend.config import ENVIRONMENT, app_config
 from backend.lifecycle import shutdown_application, startup_application
 from backend.log_config import setup_logger
+from backend.rate_limit import limiter
 
 # Setup logging
 setup_logger()
@@ -93,12 +93,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Add rate limiting middleware, use redis to store the rate limit data
-limiter = Limiter(
-    key_func=get_remote_address,
-    default_limits=[app_config.RATE_LIMIT],
-    storage_uri=app_config.REDIS_URL,
-)
+# Add rate limiting middleware
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore
 app.add_middleware(SlowAPIMiddleware)

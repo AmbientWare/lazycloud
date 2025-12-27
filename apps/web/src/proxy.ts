@@ -57,6 +57,10 @@ export default async function middleware(req: NextRequest) {
   });
   const { pathname } = req.nextUrl;
 
+  // Skip rate limiting for health endpoints (called frequently by k8s probes)
+  if (pathname === "/api/health") {
+    return NextResponse.next();
+  }
 
   // Apply authkit headers to every response for session management
   const withAuthHeaders = (response: NextResponse) => {
