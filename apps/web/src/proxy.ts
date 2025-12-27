@@ -6,7 +6,6 @@ import {
   SUBSCRIBE_ROUTES,
 } from "./lib/constants";
 import { ratelimit } from "./lib/rate-limit";
-import { getCustomerState } from "./actions/subscriptions";
 
 function matchesRoute(pathname: string, routes: string[]): boolean {
   return routes.some((route) => {
@@ -99,17 +98,7 @@ export default async function middleware(req: NextRequest) {
     return withAuthHeaders(NextResponse.next());
   }
 
-  const userId = session.user.id;
-  if (!userId) {
-    return withAuthHeaders(NextResponse.redirect(new URL("/login", req.url)));
-  }
-
-  // Enforce active subscription (only if user exists in LazyCloud database)
-  const customerState = await getCustomerState(userId);
-  if (!customerState?.activeSubscriptions?.length) {
-    return withAuthHeaders(NextResponse.redirect(new URL("/subscribe", req.url)));
-  }
-
+  // Subscription check is handled in (app)/layout.tsx where caching works
   return withAuthHeaders(NextResponse.next());
 }
 
