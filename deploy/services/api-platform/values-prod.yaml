@@ -1,6 +1,6 @@
 # Production environment values for API Platform
 
-replicaCount: 3
+replicaCount: 2
 
 image:
   tag: "latest"

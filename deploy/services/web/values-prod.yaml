@@ -1,6 +1,6 @@
 # Production environment values for Web
 
-replicaCount: 3
+replicaCount: 2
 
 image:
   tag: "v0.1.0"
