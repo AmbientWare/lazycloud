@@ -135,12 +135,12 @@ services:
       - path: ./apps/backend/.env
         required: false
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://lc_dev:lc_dev@pgbouncer:6432/lazycloud}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://lc_dev:lc_dev@postgres:5432/lazycloud}
     working_dir: /workspace/apps/backend
     command: ["uv", "run", "--no-sync", "alembic", "upgrade", "head"]
     restart: "no"
     depends_on:
-      pgbouncer:
+      postgres:
         condition: service_healthy
 
   postgres:
@@ -187,7 +187,7 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "pg_isready", "-h", "localhost", "-p", "6432"]
+      test: ["CMD", "pg_isready", "-h", "localhost", "-p", "6432", "-U", "lc_dev"]
       interval: 10s
       timeout: 5s
       retries: 5

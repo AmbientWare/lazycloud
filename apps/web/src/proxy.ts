@@ -1,12 +1,12 @@
 import { authkit } from '@workos-inc/authkit-nextjs';
 import { type NextRequest, NextResponse } from "next/server";
-import polarService from "./server/polar";
 import {
   PUBLIC_ROUTES,
   CHECKOUT_ROUTES,
   SUBSCRIBE_ROUTES,
 } from "./lib/constants";
 import { ratelimit } from "./lib/rate-limit";
+import { getCustomerState } from "./actions/subscriptions";
 
 function matchesRoute(pathname: string, routes: string[]): boolean {
   return routes.some((route) => {
@@ -99,13 +99,14 @@ export default async function middleware(req: NextRequest) {
     return withAuthHeaders(NextResponse.next());
   }
 
-  // Enforce active subscription
-  try {
-    const customerState = await polarService.getCustomerStateExternal(session.user.id);
-    if (!customerState.activeSubscriptions.length) {
-      return withAuthHeaders(NextResponse.redirect(new URL("/subscribe", req.url)));
-    }
-  } catch {
+  const userId = session.user.id;
+  if (!userId) {
+    return withAuthHeaders(NextResponse.redirect(new URL("/login", req.url)));
+  }
+
+  // Enforce active subscription (only if user exists in LazyCloud database)
+  const customerState = await getCustomerState(userId);
+  if (!customerState?.activeSubscriptions?.length) {
     return withAuthHeaders(NextResponse.redirect(new URL("/subscribe", req.url)));
   }
 
