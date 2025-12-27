@@ -1,21 +1,10 @@
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { AppSidebar } from "../_components/app-sidebar";
 import { Toaster } from "@/components/ui/sonner";
-import { withAuth } from "@workos-inc/authkit-nextjs";
-import { redirect } from "next/navigation";
-import { getCustomerState } from "@/actions/subscriptions";
 
-export default async function AppLayout({
+export default function AppLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
-  const { user } = await withAuth({ ensureSignedIn: true });
-
-  const customerState = await getCustomerState(user.id);
-  if (!customerState?.activeSubscriptions?.length) {
-    // users are required to have a active subscription to access the app
-    redirect("/subscribe");
-  }
-
   return (
     <SidebarProvider>
       <div className="flex h-screen w-full">
