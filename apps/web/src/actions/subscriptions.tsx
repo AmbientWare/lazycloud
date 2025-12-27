@@ -1,3 +1,5 @@
+"use server";
+
 import { cacheLife } from 'next/cache'
 import polarService from "@/server/polar";
 
