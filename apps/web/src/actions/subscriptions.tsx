@@ -1,10 +1,15 @@
 "use server";
 
-// Mock data - in a real application, this would come from an API or database
-const remainingCredits = 1000;
+import { cacheLife } from 'next/cache'
+import polarService from "@/server/polar";
 
-export async function getSubscriptionData() {
-  return {
-    remainingCredits,
-  };
+export async function getCustomerState( userId: string) {
+  "use cache";
+  cacheLife('minutes')
+  try {
+    const customerState = await polarService.getCustomerStateExternal(userId);
+    return customerState;
+  } catch {
+    return null;
+  }
 }

@@ -67,8 +67,8 @@ class EksCluster(Construct):
         cluster.add_nodegroup_capacity(
             "SystemNodes",
             instance_types=[ec2.InstanceType("m5.large")],
-            min_size=3,
-            desired_size=3,
+            min_size=1,
+            desired_size=1,
             max_size=10,
             ami_type=aws_eks.NodegroupAmiType.AL2023_X86_64_STANDARD,
             capacity_type=aws_eks.CapacityType.ON_DEMAND,

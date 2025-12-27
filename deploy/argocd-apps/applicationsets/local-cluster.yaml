@@ -8,7 +8,7 @@ metadata:
     region: us-east-1
     cluster-id: use1
     is-hub: "true"
-    supports-staging: "true"
+    supports-staging: "false" # NOTE: enable later for staging
 type: Opaque
 stringData:
   name: local
