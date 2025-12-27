@@ -6,6 +6,8 @@ import {
   SUBSCRIBE_ROUTES,
 } from "./lib/constants";
 import { ratelimit } from "./lib/rate-limit";
+import { redis } from "./lib/redis";
+import polarService from "./server/polar";
 
 function matchesRoute(pathname: string, routes: string[]): boolean {
   return routes.some((route) => {
@@ -98,7 +100,37 @@ export default async function middleware(req: NextRequest) {
     return withAuthHeaders(NextResponse.next());
   }
 
-  // Subscription check is handled in (app)/layout.tsx where caching works
+  // Check subscription status with Redis caching (5 min TTL)
+  const userId = session.user.id;
+  const cacheKey = `subscription:${userId}`;
+
+  let hasActiveSubscription = false;
+
+  try {
+    // Try to get from cache first
+    const cached = redis ? await redis.get<{ active: boolean }>(cacheKey) : null;
+
+    if (cached !== null) {
+      hasActiveSubscription = cached.active;
+    } else {
+      // Cache miss - fetch from Polar
+      const customerState = await polarService.getCustomerStateExternal(userId);
+      hasActiveSubscription = (customerState?.activeSubscriptions?.length ?? 0) > 0;
+
+      // Cache the result with 5 min TTL
+      if (redis) {
+        await redis.set(cacheKey, { active: hasActiveSubscription }, { ex: 300 });
+      }
+    }
+  } catch {
+    // On error, allow access (fail open) - subscription will be checked elsewhere
+    hasActiveSubscription = true;
+  }
+
+  if (!hasActiveSubscription) {
+    return withAuthHeaders(NextResponse.redirect(new URL("/subscribe", req.url)));
+  }
+
   return withAuthHeaders(NextResponse.next());
 }
 
