@@ -10,6 +10,7 @@ from sqlalchemy import text
 
 from backend.config import app_config
 from backend.database.session import session_manager
+from backend.rate_limit import limiter
 
 health_router = APIRouter(prefix="/health", tags=["health"])
 cli_version_router = APIRouter(prefix="/cli-version", tags=["cli-version"])
@@ -31,12 +32,14 @@ class ReadinessResponse(BaseModel):
 
 
 @health_router.get("")
+@limiter.exempt
 async def health() -> dict:
     """Liveness check - simple check that the service is running."""
     return {"status": "ok"}
 
 
 @health_router.get("/ready", response_model=ReadinessResponse)
+@limiter.exempt
 async def readiness() -> ReadinessResponse:
     """Readiness check - verifies all dependencies are accessible."""
     checks: dict[str, HealthCheckResult] = {}
