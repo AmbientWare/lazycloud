@@ -183,10 +183,17 @@ class ComposeParser:
         # Parse working_dir
         working_dir = config.get("working_dir")
 
+        # If build is specified but no image, generate a default image name
+        # The CLI will replace this with the actual built image before deployment
+        image = config.get("image")
+        build = config.get("build")
+        if build and not image:
+            image = f"{service_name}:latest"
+
         return ComposeService(
             name=service_name,
-            image=config.get("image"),
-            build=config.get("build"),
+            image=image,
+            build=build,
             entrypoint=entrypoint,
             command=command,
             working_dir=working_dir,

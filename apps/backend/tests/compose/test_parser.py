@@ -891,12 +891,11 @@ class TestEdgeCases:
     """Tests for edge cases and error handling."""
 
     def test_parse_empty_services(self):
-        """Test parsing with empty services."""
+        """Test parsing with empty services raises error."""
         data = {"services": {}}
 
-        result = ComposeParser.parse_dict(data)
-
-        assert len(result.services) == 0
+        with pytest.raises(ValueError, match="No services defined"):
+            ComposeParser.parse_dict(data)
 
     def test_parse_null_service_skipped(self):
         """Test that null service configs are skipped."""
@@ -912,17 +911,19 @@ class TestEdgeCases:
         assert len(result.services) == 1
         assert result.services[0].name == "web"
 
-    def test_parse_missing_image_raises_error(self):
-        """Test parsing service without image raises error."""
+    def test_parse_build_without_image_generates_default(self):
+        """Test parsing service with build but no image generates default image name."""
         data = {
             "services": {
                 "web": {"build": "."},
             },
         }
 
-        # LazyCloud requires an image - build-only services are not supported
-        with pytest.raises(ValueError):
-            ComposeParser.parse_dict(data)
+        result = ComposeParser.parse_dict(data)
+
+        # Parser should auto-generate image name from service name
+        assert result.services[0].image == "web:latest"
+        assert result.services[0].build == "."
 
     def test_volumes_filtered_to_used_only(self):
         """Test that volumes list only includes used volumes."""
