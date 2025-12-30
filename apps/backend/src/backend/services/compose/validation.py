@@ -78,9 +78,11 @@ async def validate_deployment_request(
 
     except ValueError as e:
         # ComposeValidator errors are already user-friendly
+        logger.exception(f"ComposeValidator error: {e}")
         raise ValueError(str(e)) from e
 
     except Exception as e:
+        logger.exception(f"Helm generation failed: {e}")
         raise ValueError(
             f"Failed to generate deployment configuration: {str(e)}"
         ) from e

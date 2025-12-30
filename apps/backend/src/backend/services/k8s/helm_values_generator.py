@@ -1,3 +1,5 @@
+from loguru import logger
+
 from models.billing import STORAGE_CLASS_EBS, STORAGE_CLASS_EFS
 from models.compose import (
     ComposeFile,
@@ -143,6 +145,7 @@ class HelmValuesGenerator:
         ecr_auth_service = get_ecr_auth_service()
 
         if not service.image:
+            logger.error(f"Service '{service.name}' has no image! Full service: {service.model_dump()}")
             raise ValueError(f"Service {service.name} has no image")
 
         image_info = parse_image(service.image)
@@ -319,7 +322,7 @@ class HelmValuesGenerator:
         )
 
         # Size from label or default 10Gi
-        size = volume_labels.get(LazyCloudLabel.STORAGE_SIZE, "10Gi")
+        size = volume_labels.get(LazyCloudLabel.VOLUME_SIZE, "10Gi")
 
         # Select storage class and access mode based on shared status
         storage_class = STORAGE_CLASS_EFS if use_shared else STORAGE_CLASS_EBS

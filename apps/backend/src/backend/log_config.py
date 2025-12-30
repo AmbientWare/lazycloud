@@ -6,7 +6,7 @@ from loguru import logger
 
 logger.remove()
 
-LOG_FORMAT = "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>"
+LOG_FORMAT = "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>\n{exception}"
 
 
 class HealthCheckFilter(logging.Filter):
@@ -45,6 +45,8 @@ def setup_logger(config: dict[str, Any] | None = None) -> None:
                     "format": LOG_FORMAT,
                     "level": "INFO",
                     "colorize": True,
+                    "backtrace": True,
+                    "diagnose": True,
                 },
                 {
                     "sink": "logs/app.log",
@@ -53,6 +55,8 @@ def setup_logger(config: dict[str, Any] | None = None) -> None:
                     "rotation": "500 MB",
                     "retention": "10 days",
                     "compression": "zip",
+                    "backtrace": True,
+                    "diagnose": True,
                 },
             ]
         }
