@@ -346,7 +346,7 @@ class ComposeValidator:
                         message="No image specified",
                         service=service.name,
                         field="image",
-                        suggestion="Specify an image for the service",
+                        suggestion="Specify an image for the service, or add a build section",
                     )
                 )
                 continue

@@ -110,7 +110,7 @@ class ComposeService(BaseModel):
     """Docker Compose service definition."""
 
     name: str
-    image: str
+    image: str | None = None
     build: dict | str | None = None
     entrypoint: str | list[str] | None = None
     command: str | list[str] | None = None
