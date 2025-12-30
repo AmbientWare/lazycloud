@@ -1,44 +1,30 @@
 ##### DEPENDENCIES
 
-FROM --platform=linux/amd64 node:22-alpine AS deps
+FROM --platform=linux/amd64 oven/bun:1-alpine AS deps
 RUN apk add --no-cache libc6-compat openssl
 WORKDIR /app
 
-# Install dependencies based on the preferred package manager
-COPY apps/web/package.json apps/web/yarn.lock* apps/web/package-lock.json* apps/web/pnpm-lock.yaml* apps/web/.npmrc* ./
+# Install dependencies
+COPY apps/web/package.json apps/web/bun.lock ./
 
-RUN \
-    if [ -f yarn.lock ]; then yarn --frozen-lockfile; \
-    elif [ -f package-lock.json ]; then npm ci; \
-    elif [ -f pnpm-lock.yaml ]; then npm install -g pnpm && pnpm i; \
-    else echo "Lockfile not found." && exit 1; \
-    fi
+RUN bun install --frozen-lockfile
 
 ##### BUILDER
 
-FROM --platform=linux/amd64 node:22-alpine AS builder
+FROM --platform=linux/amd64 oven/bun:1-alpine AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY apps/web/ .
 
-# ENV NEXT_TELEMETRY_DISABLED 1
-
-RUN \
-    if [ -f yarn.lock ]; then SKIP_ENV_VALIDATION=1 yarn build; \
-    elif [ -f package-lock.json ]; then SKIP_ENV_VALIDATION=1 npm run build; \
-    elif [ -f pnpm-lock.yaml ]; then npm install -g pnpm && SKIP_ENV_VALIDATION=1 pnpm run build; \
-    else echo "Lockfile not found." && exit 1; \
-    fi
+RUN SKIP_ENV_VALIDATION=1 bun run build
 
 ##### RUNNER
 
-FROM --platform=linux/amd64 node:22-alpine AS runner
+FROM --platform=linux/amd64 oven/bun:1-alpine AS runner
 RUN apk add --no-cache curl
 WORKDIR /app
 
-ENV NODE_ENV production
-
-# ENV NEXT_TELEMETRY_DISABLED 1
+ENV NODE_ENV=production
 
 COPY --from=builder /app/next.config.js ./
 COPY --from=builder /app/public ./public
@@ -48,7 +34,7 @@ COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 
 EXPOSE 3000
-ENV PORT 3000
-ENV HOSTNAME 0.0.0.0
+ENV PORT=3000
+ENV HOSTNAME=0.0.0.0
 
-CMD ["node", "server.js"]
+CMD ["bun", "server.js"]

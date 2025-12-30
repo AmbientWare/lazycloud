@@ -18,7 +18,7 @@ jobs:
         include:
           - os: linux
             arch: amd64
-            runner: ubuntu-latest
+            runner: depot-ubuntu-24.04
             python-arch: x64
           - os: darwin
             arch: amd64
