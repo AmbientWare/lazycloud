@@ -131,7 +131,8 @@ async def get_deployment_diff(
         )
 
         if deployment:
-            temp_deployment.id = deployment.id
+            # Ensure id is string (direct assignment bypasses Pydantic validators)
+            temp_deployment.id = str(deployment.id)
         else:
             # For new deployments, don't set id to avoid unnecessary DB secret lookup
             temp_deployment.id = None
@@ -141,13 +142,13 @@ async def get_deployment_diff(
 
     except ValueError as e:
         # User-friendly validation errors
-        logger.error(f"Validation ValueError: {e}", exc_info=True)
+        logger.exception(f"Validation ValueError: {e}")
         full_validation_errors = [str(e)]
         can_deploy = False
 
     except Exception as e:
         # Unexpected errors
-        logger.error(f"Full validation failed unexpectedly: {e}", exc_info=True)
+        logger.exception(f"Full validation failed unexpectedly: {e}")
         full_validation_errors = [f"Validation failed: {str(e)}"]
         can_deploy = False
 
