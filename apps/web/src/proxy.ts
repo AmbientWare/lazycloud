@@ -57,7 +57,7 @@ async function handleRateLimit(req: NextRequest): Promise<{
   return { response: null, remaining: remaining ?? 0 };
 }
 
-export default async function middleware(req: NextRequest) {
+export default async function proxy(req: NextRequest) {
   let session: { user: { id: string } | null } = { user: null };
   let authkitHeaders: Headers = new Headers();
   let authorizationUrl: string | undefined;
