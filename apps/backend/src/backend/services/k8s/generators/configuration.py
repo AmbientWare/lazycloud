@@ -65,35 +65,46 @@ def generate_service_volumes_values(
 
 
 def generate_healthcheck_values(
-    healthcheck: dict[str, Any], service_name: str | None = None
+    healthcheck: dict[str, Any] | Any, service_name: str | None = None
 ) -> HealthCheckValues:
-    """Generate Helm values for health checks."""
+    """Generate Helm values for health checks.
+
+    Args:
+        healthcheck: Either a dict or a HealthCheck Pydantic model
+        service_name: Name of the service for hostname conversion
+    """
     healthcheck_values = HealthCheckValues(enabled=True)
 
-    if "test" in healthcheck:
-        test_cmd = healthcheck["test"]
-        if isinstance(test_cmd, list) and test_cmd[0] == "CMD":
-            command = test_cmd[1:]
+    # Convert Pydantic model to dict if needed
+    if hasattr(healthcheck, "model_dump"):
+        healthcheck = healthcheck.model_dump()
 
-            # Try to detect HTTP health checks and convert them to httpGet probes
-            probe = _parse_healthcheck_command(command, service_name)
+    if not healthcheck:
+        return healthcheck_values
 
-            # Add timing configurations
-            if "interval" in healthcheck:
-                probe.period_seconds = parse_duration(healthcheck["interval"])
+    test_cmd = healthcheck.get("test")
+    if test_cmd and isinstance(test_cmd, list) and test_cmd[0] == "CMD":
+        command = test_cmd[1:]
 
-            if "timeout" in healthcheck:
-                probe.timeout_seconds = parse_duration(healthcheck["timeout"])
+        # Try to detect HTTP health checks and convert them to httpGet probes
+        probe = _parse_healthcheck_command(command, service_name)
 
-            if "start_period" in healthcheck:
-                probe.initial_delay_seconds = parse_duration(
-                    healthcheck["start_period"]
-                )
-            if "retries" in healthcheck:
-                probe.failure_threshold = healthcheck["retries"]
+        # Add timing configurations
+        if healthcheck.get("interval"):
+            probe.period_seconds = parse_duration(healthcheck["interval"])
 
-            healthcheck_values.livenessProbe = probe
-            healthcheck_values.readinessProbe = probe.model_copy()
+        if healthcheck.get("timeout"):
+            probe.timeout_seconds = parse_duration(healthcheck["timeout"])
+
+        if healthcheck.get("start_period"):
+            probe.initial_delay_seconds = parse_duration(
+                healthcheck["start_period"]
+            )
+        if healthcheck.get("retries"):
+            probe.failure_threshold = healthcheck["retries"]
+
+        healthcheck_values.livenessProbe = probe
+        healthcheck_values.readinessProbe = probe.model_copy()
 
     return healthcheck_values
 
