@@ -170,12 +170,11 @@ async def create_deployment(
         compose_yaml=request.compose_yaml,
         state=DeploymentStates.PENDING,
     )
-    # Set ID if updating (needed for secrets lookup)
     if existing_deployment:
-        temp_deployment.id = existing_deployment.id
+        temp_deployment.id = str(existing_deployment.id)
     else:
         # Generate temporary ID for validation
-        temp_deployment.id = uuid.uuid4()
+        temp_deployment.id = str(uuid.uuid4())
 
     try:
         _, _, _ = await validate_deployment_request(
@@ -186,7 +185,7 @@ async def create_deployment(
         raise HTTPException(status_code=400, detail=str(e)) from e
 
     except Exception as e:
-        logger.error(f"Validation failed unexpectedly: {e}", exc_info=True)
+        logger.exception(f"Validation failed unexpectedly: {e}")
         raise HTTPException(
             status_code=500, detail="Failed to validate deployment configuration"
         ) from e
@@ -364,7 +363,7 @@ async def deploy_deployment(
         compose_yaml=compose_yaml,
         state=deployment.state,
     )
-    temp_deployment.id = deployment.id
+    temp_deployment.id = str(deployment.id)
 
     # Full validation (compose parsing, helm generation, quotas)
     try:
@@ -378,7 +377,7 @@ async def deploy_deployment(
         raise HTTPException(status_code=400, detail=str(e)) from e
 
     except Exception as e:
-        logger.error(f"Validation failed unexpectedly: {e}", exc_info=True)
+        logger.exception(f"Validation failed unexpectedly: {e}")
         raise HTTPException(
             status_code=500, detail="Failed to validate deployment configuration"
         ) from e
