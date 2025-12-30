@@ -6,8 +6,14 @@ import {
   SUBSCRIBE_ROUTES,
 } from "./lib/constants";
 import { ratelimit } from "./lib/rate-limit";
-import { redis } from "./lib/redis";
+import {
+  getSubscriptionStatus,
+  setSubscriptionStatus,
+} from "./lib/subscription-cache";
 import polarService from "./server/polar";
+
+// In-memory lock to prevent cache stampede (per-instance)
+const subscriptionLocks = new Map<string, Promise<boolean>>();
 
 function matchesRoute(pathname: string, routes: string[]): boolean {
   return routes.some((route) => {
@@ -52,9 +58,25 @@ async function handleRateLimit(req: NextRequest): Promise<{
 }
 
 export default async function middleware(req: NextRequest) {
-  const { session, headers: authkitHeaders, authorizationUrl } = await authkit(req, {
-    redirectUri: process.env.WORKOS_REDIRECT_URI,
-  });
+  let session: { user: { id: string } | null } = { user: null };
+  let authkitHeaders: Headers = new Headers();
+  let authorizationUrl: string | undefined;
+
+  try {
+    const result = await authkit(req, {
+      debug: process.env.NODE_ENV === "development",
+      redirectUri: process.env.WORKOS_REDIRECT_URI,
+    });
+    session = result.session;
+    authkitHeaders = result.headers;
+    authorizationUrl = result.authorizationUrl;
+  } catch (error) {
+    console.error("AuthKit middleware error:", error);
+    // If cookie decryption fails, clear the cookie and redirect to home
+    const response = NextResponse.redirect(new URL("/", req.url));
+    response.cookies.delete("wos-session");
+    return response;
+  }
   const { pathname } = req.nextUrl;
 
   // Skip rate limiting for health endpoints (called frequently by k8s probes)
@@ -62,68 +84,80 @@ export default async function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 
-  // Apply authkit headers to every response for session management
-  const withAuthHeaders = (response: NextResponse) => {
+  // Apply authkit headers and rate limit info to every response
+  const withHeaders = (response: NextResponse, rateLimitRemaining?: number) => {
     for (const [key, value] of authkitHeaders) {
       key.toLowerCase() === 'set-cookie'
         ? response.headers.append(key, value)
         : response.headers.set(key, value);
+    }
+    if (rateLimitRemaining !== undefined) {
+      response.headers.set("X-RateLimit-Remaining", String(rateLimitRemaining));
     }
     return response;
   };
 
   // Rate limiting
   const { response: rateLimitResponse, remaining } = await handleRateLimit(req);
-  if (rateLimitResponse) return withAuthHeaders(rateLimitResponse);
+  if (rateLimitResponse) return withHeaders(rateLimitResponse);
 
   // Allow callback route (always public)
   if (pathname === "/callback") {
-    const response = NextResponse.next();
-    response.headers.set("X-RateLimit-Remaining", String(remaining));
-    return withAuthHeaders(response);
+    return withHeaders(NextResponse.next(), remaining);
   }
 
   // Allow public routes for unauthenticated users only
   if (!session.user) {
     if (matchesRoute(pathname, PUBLIC_ROUTES)) {
-      const response = NextResponse.next();
-      response.headers.set("X-RateLimit-Remaining", String(remaining));
-      return withAuthHeaders(response);
+      return withHeaders(NextResponse.next(), remaining);
     }
     // Require authentication for non-public routes
-    return withAuthHeaders(
+    return withHeaders(
       authorizationUrl
         ? NextResponse.redirect(authorizationUrl)
-        : NextResponse.json({ error: "Authentication required" }, { status: 401 })
+        : NextResponse.json({ error: "Authentication required" }, { status: 401 }),
+      remaining
     );
   }
 
   // Allow authenticated access to checkout and subscribe pages
   const exemptRoutes = [...CHECKOUT_ROUTES, ...SUBSCRIBE_ROUTES];
   if (matchesRoute(pathname, exemptRoutes)) {
-    return withAuthHeaders(NextResponse.next());
+    return withHeaders(NextResponse.next(), remaining);
   }
 
-  // Check subscription status with Redis caching (5 min TTL)
+  // Check subscription status with Redis caching and stampede protection
   const userId = session.user.id;
-  const cacheKey = `subscription:${userId}`;
 
   let hasActiveSubscription = false;
 
   try {
     // Try to get from cache first
-    const cached = redis ? await redis.get<{ active: boolean }>(cacheKey) : null;
+    const cachedStatus = await getSubscriptionStatus(userId);
 
-    if (cached !== null) {
-      hasActiveSubscription = cached.active;
+    if (cachedStatus !== null) {
+      hasActiveSubscription = cachedStatus;
     } else {
-      // Cache miss - fetch from Polar
-      const customerState = await polarService.getCustomerStateExternal(userId);
-      hasActiveSubscription = (customerState?.activeSubscriptions?.length ?? 0) > 0;
+      // Cache miss - check if there's already a request in flight (stampede protection)
+      const existingRequest = subscriptionLocks.get(userId);
+      if (existingRequest) {
+        hasActiveSubscription = await existingRequest;
+      } else {
+        // Create a new request and store the promise
+        const fetchPromise = (async () => {
+          const customerState = await polarService.getCustomerStateExternal(userId);
+          const isActive = (customerState?.activeSubscriptions?.length ?? 0) > 0;
+          await setSubscriptionStatus(userId, isActive);
+          return isActive;
+        })();
 
-      // Cache the result with 5 min TTL
-      if (redis) {
-        await redis.set(cacheKey, { active: hasActiveSubscription }, { ex: 300 });
+        subscriptionLocks.set(userId, fetchPromise);
+
+        try {
+          hasActiveSubscription = await fetchPromise;
+        } finally {
+          subscriptionLocks.delete(userId);
+        }
       }
     }
   } catch {
@@ -132,10 +166,10 @@ export default async function middleware(req: NextRequest) {
   }
 
   if (!hasActiveSubscription) {
-    return withAuthHeaders(NextResponse.redirect(new URL("/subscribe", req.url)));
+    return withHeaders(NextResponse.redirect(new URL("/subscribe", req.url)), remaining);
   }
 
-  return withAuthHeaders(NextResponse.next());
+  return withHeaders(NextResponse.next(), remaining);
 }
 
 export const config = {

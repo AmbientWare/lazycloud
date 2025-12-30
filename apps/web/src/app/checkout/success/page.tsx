@@ -1,18 +1,25 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useAuth } from "@workos-inc/authkit-nextjs/components";
 import { USER_HOME } from "@/lib/constants";
+import { invalidateSubscriptionCacheAction } from "@/actions/subscription";
 
 export default function CheckoutSuccessPage() {
   const { user } = useAuth();
+  const hasInvalidated = useRef(false);
 
   useEffect(() => {
     const handleSuccess = async () => {
-      if (!user) return;
+      if (!user || hasInvalidated.current) return;
+      hasInvalidated.current = true;
 
-      // Wait a moment for session to update
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      try {
+        // Invalidate the subscription cache so middleware sees the new status
+        await invalidateSubscriptionCacheAction();
+      } catch (error) {
+        console.error("Failed to invalidate subscription cache:", error);
+      }
 
       window.location.href = USER_HOME;
     };
