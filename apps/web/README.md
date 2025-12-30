@@ -2,10 +2,10 @@
 
 A modern web application built with Next.js, featuring authentication, database integration, and a beautiful UI.
 
-## 🚀 Features
+## Features
 
 - **Modern Tech Stack**
-  - Next.js 15 with App Router
+  - Next.js 16 with App Router
   - TypeScript for type safety
   - Tailwind CSS for styling
   - Drizzle ORM for database operations
@@ -19,14 +19,13 @@ A modern web application built with Next.js, featuring authentication, database 
   - TypeScript for type checking
   - Docker support for containerization
 
-## 📋 Prerequisites
+## Prerequisites
 
-- Node.js (Latest LTS version recommended)
-- npm (v10.8.3 or higher)
+- Bun (v1.3.5 or higher)
 - Docker and Docker Compose (for containerized deployment)
 - PostgreSQL database
 
-## 🛠️ Installation
+## Installation
 
 1. Clone the repository:
    ```bash
@@ -36,7 +35,7 @@ A modern web application built with Next.js, featuring authentication, database 
 
 2. Install dependencies:
    ```bash
-   npm install
+   bun install
    ```
 
 3. Set up environment variables:
@@ -45,28 +44,28 @@ A modern web application built with Next.js, featuring authentication, database 
    ```
    Fill in the required environment variables in the `.env` file.
 
-## 🚀 Development
+## Development
 
 Start the development server:
 ```bash
-npm run dev
+bun dev
 ```
 
 The application will be available at `http://localhost:3000`.
 
-## 🏗️ Building for Production
+## Building for Production
 
 Build the application:
 ```bash
-npm run build
+bun run build
 ```
 
 Start the production server:
 ```bash
-npm run start
+bun start
 ```
 
-## 🐳 Docker Deployment
+## Docker Deployment
 
 The application can be deployed using Docker Compose:
 
@@ -76,21 +75,21 @@ docker compose up -d
 
 This will start both the web application and an ngrok tunnel for external access.
 
-## 📝 Available Scripts
+## Available Scripts
 
-- `npm run dev` - Start development server with Turbopack
-- `npm run build` - Build the application
-- `npm run start` - Start production server
-- `npm run lint` - Run ESLint
-- `npm run lint:fix` - Fix ESLint errors
-- `npm run format:check` - Check code formatting
-- `npm run format:write` - Format code
-- `npm run typecheck` - Run TypeScript type checking
-- `npm run db:generate` - Generate database migrations
-- `npm run db:push` - Push database changes
-- `npm run db:studio` - Open Drizzle Studio
+- `bun dev` - Start development server with Turbopack
+- `bun run build` - Build the application
+- `bun start` - Start production server
+- `bun lint` - Run ESLint
+- `bun lint:fix` - Fix ESLint errors
+- `bun format:check` - Check code formatting
+- `bun format:write` - Format code
+- `bun typecheck` - Run TypeScript type checking
+- `bun db:generate` - Generate database migrations
+- `bun db:push` - Push database changes
+- `bun db:studio` - Open Drizzle Studio
 
-## 🔧 Environment Variables
+## Environment Variables
 
 Required environment variables (see `.env.example` for full list):
 
