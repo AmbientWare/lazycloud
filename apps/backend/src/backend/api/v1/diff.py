@@ -63,6 +63,9 @@ async def get_deployment_diff(
 
     # Parse new compose file
     compose_data = yaml.safe_load(request.compose_yaml)
+    logger.info(f"Diff endpoint received compose_yaml with services: {list(compose_data.get('services', {}).keys())}")
+    for svc_name, svc_config in compose_data.get('services', {}).items():
+        logger.info(f"  Service '{svc_name}': image={svc_config.get('image')}, build={svc_config.get('build')}")
     compose_file = ComposeParser.parse_dict(compose_data)
 
     # Determine workspace_id and namespace
@@ -138,6 +141,7 @@ async def get_deployment_diff(
 
     except ValueError as e:
         # User-friendly validation errors
+        logger.error(f"Validation ValueError: {e}", exc_info=True)
         full_validation_errors = [str(e)]
         can_deploy = False
 

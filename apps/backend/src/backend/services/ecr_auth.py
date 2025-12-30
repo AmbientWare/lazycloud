@@ -32,8 +32,9 @@ class ECRAuthService:
         self.base_role_arn = base_role_arn
         self.ttl_seconds = ttl_seconds
         self.pull_policy = pull_policy
-        self.is_localstack = (
-            "localhost" in self.endpoint_url or "localstack" in self.endpoint_url
+        self.is_localstack = bool(
+            self.endpoint_url
+            and ("localhost" in self.endpoint_url or "localstack" in self.endpoint_url)
         )
 
         # Configure boto3 clients with appropriate settings
