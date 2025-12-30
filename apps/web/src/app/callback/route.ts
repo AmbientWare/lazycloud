@@ -22,6 +22,11 @@ export const GET = handleAuth({
   },
   onError: async ({ error }) => {
     console.error('Auth error:', error);
-    return NextResponse.redirect(new URL('/request-access', env.APP_URL));
+    const errorCode = error instanceof Error && error.message.includes('access_denied')
+      ? 'access_denied'
+      : 'auth_failed';
+    const redirectUrl = new URL('/request-access', env.APP_URL);
+    redirectUrl.searchParams.set('error', errorCode);
+    return NextResponse.redirect(redirectUrl);
   },
 });

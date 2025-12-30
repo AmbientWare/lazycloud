@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useSearchParams } from "next/navigation";
 import { motion } from "framer-motion";
 import { StyledButton } from "@/components/shared/styled-button";
 import { StyledCard } from "@/components/shared/styled-card";
@@ -9,12 +10,25 @@ import { requestAccessEmail } from "@/actions/email";
 import { Loader2, Zap, CheckCircle2 } from "lucide-react";
 import Link from "next/link";
 
+const AUTH_ERROR_MESSAGES: Record<string, string> = {
+  access_denied: "Access denied. You may not have permission to sign in yet.",
+  auth_failed: "Authentication failed. Please try again or request access below.",
+};
+
 export default function RequestAccessPage() {
+  const searchParams = useSearchParams();
   const [email, setEmail] = useState("");
   const [honeypot, setHoneypot] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+
+  useEffect(() => {
+    const authError = searchParams.get("error");
+    if (authError && AUTH_ERROR_MESSAGES[authError]) {
+      setError(AUTH_ERROR_MESSAGES[authError]);
+    }
+  }, [searchParams]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -129,6 +143,7 @@ export default function RequestAccessPage() {
                 Already have an account?{" "}
                 <Link
                   href="/login"
+                  prefetch={false}
                   className="text-foreground underline hover:text-foreground/80"
                 >
                   Sign in
