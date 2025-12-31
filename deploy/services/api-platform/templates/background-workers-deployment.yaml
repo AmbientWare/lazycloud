@@ -16,6 +16,7 @@ spec:
         app: {{ .Chart.Name }}-background-workers
         component: worker
     spec:
+      serviceAccountName: {{ .Chart.Name }}
       containers:
         - name: background-worker
           image: "{{ .Values.image.registry }}/{{ .Values.backgroundWorkers.image.name }}:{{ .Values.image.tag }}"
