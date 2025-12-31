@@ -401,3 +401,20 @@ class ComposeDeploymentService(
         result = await self._session.execute(query)
         db_models = list(result.scalars().all())
         return [self._to_pydantic(db_model) for db_model in db_models]
+
+    async def find_stale_pending(
+        self, threshold: datetime
+    ) -> list[ComposeDeploymentPydantic]:
+        """Find PENDING deployments older than threshold.
+
+        These are likely orphaned from failed builds or abandoned deploys.
+        """
+        query = (
+            select(ComposeDeploymentTable)
+            .where(ComposeDeploymentTable.state == DeploymentStates.PENDING)
+            .where(ComposeDeploymentTable.created_at < threshold)
+            .where(ComposeDeploymentTable.deleted_at.is_(None))
+        )
+        result = await self._session.execute(query)
+        db_models = list(result.scalars().all())
+        return [self._to_pydantic(db_model) for db_model in db_models]
