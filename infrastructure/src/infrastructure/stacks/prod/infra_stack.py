@@ -3,7 +3,7 @@ from aws_cdk import aws_certificatemanager as acm
 from constructs import Construct
 
 from infrastructure.config.environments import EnvironmentConfig
-from infrastructure.constructs.aws import EnvironmentSecretsConstruct
+from infrastructure.constructs.aws import EnvironmentSecretsConstruct, GvisorAmiConstruct
 from infrastructure.constructs.components.controllers import ControllersConstruct
 from infrastructure.constructs.components.infrastructure import InfrastructureConstruct
 from infrastructure.stacks.shared import SharedStack
@@ -64,6 +64,14 @@ class ProdInfraStack(cdk.Stack):
             config=self.config,
             shared_stack=self.shared_stack,
             eks_cluster=self.infrastructure.eks_cluster,
+        )
+
+        # gVisor AMI Image Builder pipeline
+        self.gvisor_ami = GvisorAmiConstruct(
+            self,
+            "GvisorAmi",
+            config=self.config,
+            vpc=self.infrastructure.vpc,
         )
 
         self._create_exports()
