@@ -4,6 +4,7 @@ metadata:
   name: gvisor
 spec:
   role: {{ .Values.nodeRoleName }}
+  amiFamily: AL2023
   amiSelectorTerms:
     # Pre-built AL2023 AMI with gVisor installed
     - id: {{ required "gvisorAmiId is required - build with Image Builder first" .Values.gvisorAmiId }}
