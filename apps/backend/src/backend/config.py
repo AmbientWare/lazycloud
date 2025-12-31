@@ -35,13 +35,11 @@ class AppConfig(BaseModel):
         os.getenv("CORS_ORIGINS", '["http://localhost:3000"]')
     )
 
-    # AWS Configuration
-    AWS_ACCOUNT_ID: str = os.getenv("AWS_ACCOUNT_ID", "")
+    # AWS Configuration (for CloudWatch metrics)
     AWS_ACCESS_KEY_ID: str = os.getenv("AWS_ACCESS_KEY_ID", "")
     AWS_SECRET_ACCESS_KEY: str = os.getenv("AWS_SECRET_ACCESS_KEY", "")
     AWS_REGION: str = os.getenv("AWS_REGION", "")
     AWS_ENDPOINT_URL: str = os.getenv("AWS_ENDPOINT_URL", None)
-    AWS_ECR_BASE_ROLE_ARN: str = os.getenv("AWS_ECR_BASE_ROLE_ARN", "")
 
     # Cloudflare Configuration
     CLOUDFLARE_API_KEY: str = os.getenv("CLOUDFLARE_API_KEY", "")
@@ -68,6 +66,7 @@ class AppConfig(BaseModel):
     DEPOT_ENABLED: bool = os.getenv("DEPOT_ENABLED", "true").lower() == "true"
     DEPOT_API_TOKEN: str = os.getenv("DEPOT_API_TOKEN", "")
     DEPOT_ORG_ID: str = os.getenv("DEPOT_ORG_ID", "")
+    DEPOT_REGISTRY_URL: str = os.getenv("DEPOT_REGISTRY_URL", "registry.depot.dev")
 
     # Monitoring Configuration
     PROMETHEUS_URL: str = os.getenv("PROMETHEUS_URL", "http://localhost:9090")
@@ -115,9 +114,7 @@ class AppConfig(BaseModel):
     required_env_vars: List[str] = [
         "ADMIN_API_KEY",
         "REDIS_URL",
-        "AWS_ACCOUNT_ID",
         "AWS_ACCESS_KEY_ID",
-        "AWS_ECR_BASE_ROLE_ARN",
         "AWS_SECRET_ACCESS_KEY",
         "AWS_REGION",
         "DB_SECRET_KEY",

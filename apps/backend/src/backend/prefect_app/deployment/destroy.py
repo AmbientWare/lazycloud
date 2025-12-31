@@ -8,7 +8,7 @@ from prefect import task
 from backend.database import get_db_context
 from backend.prefect_app.deployment.tasks import unregister_custom_domains_task
 from backend.prefect_app.deployment.utils import update_deployment_state
-from backend.services import get_depot_service, get_ecr_auth_service
+from backend.services import get_depot_service
 from backend.services.compose.parser import ComposeParser
 from backend.services.k8s import create_release_name
 from backend.services.k8s.helm_manager import HelmManager
@@ -18,7 +18,6 @@ from backend.services.k8s.helm_manager import HelmManager
 async def destroy_compose_task(deployment_id: str) -> None:
     """Destroy a Docker Compose deployment from Kubernetes."""
     logger.info(f"Starting destruction of deployment {deployment_id}")
-    ecr_auth_service = get_ecr_auth_service()
 
     # get the deployment (include_deleted=True to access soft-deleted deployments)
     async with get_db_context() as db:
@@ -72,26 +71,7 @@ async def destroy_compose_task(deployment_id: str) -> None:
                 f"Failed to destroy namespace resources: {namespace_result.error}"
             )
 
-        # Step 3: Clean up ECR repositories
-        logger.info(f"Cleaning up ECR repositories for deployment {deployment.name}")
-        try:
-            deleted_repos = await ecr_auth_service.delete_deployment_repositories(
-                deployment.workspace_id, deployment.name
-            )
-
-            if deleted_repos:
-                logger.info(
-                    f"Deleted {len(deleted_repos)} ECR repositories: {deleted_repos}"
-                )
-
-            else:
-                logger.info("No ECR repositories found to delete")
-
-        except Exception as ecr_error:
-            # ECR cleanup is non-fatal - log warning but continue
-            logger.warning(f"ECR cleanup failed (continuing): {ecr_error}")
-
-        # Step 3.5: Clean up Depot project (non-fatal)
+        # Step 3: Clean up Depot project (non-fatal)
         logger.info(f"Cleaning up Depot project for deployment {deployment_id}")
         try:
             depot_service = get_depot_service()

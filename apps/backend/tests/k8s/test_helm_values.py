@@ -47,18 +47,12 @@ class TestHelmValuesGeneratorBasic:
         simple_compose_file: ComposeFile,
     ):
         """Test generating Helm values from simple compose file."""
-        with patch(
-            "backend.services.k8s.helm_values_generator.get_ecr_auth_service"
-        ) as mock_ecr:
-            mock_ecr_service = MagicMock()
-            mock_ecr.return_value = mock_ecr_service
+        values, warnings = helm_generator.generate_values(simple_compose_file)
 
-            values, warnings = helm_generator.generate_values(simple_compose_file)
-
-            assert len(values.services) == 1
-            assert values.services[0].name == "web"
-            assert values.services[0].image.repository == "nginx"
-            assert values.services[0].image.tag == "latest"
+        assert len(values.services) == 1
+        assert values.services[0].name == "web"
+        assert values.services[0].image.repository == "nginx"
+        assert values.services[0].image.tag == "latest"
 
     def test_generate_values_includes_global_values(
         self,
@@ -66,8 +60,7 @@ class TestHelmValuesGeneratorBasic:
         simple_compose_file: ComposeFile,
     ):
         """Test global values include deployment/workspace IDs."""
-        with patch("backend.services.k8s.helm_values_generator.get_ecr_auth_service"):
-            values, _ = helm_generator.generate_values(simple_compose_file)
+        values, _ = helm_generator.generate_values(simple_compose_file)
 
             assert values.global_values is not None
             assert values.global_values.deploymentId is not None
@@ -80,8 +73,7 @@ class TestHelmValuesGeneratorBasic:
         complex_compose_file: ComposeFile,
     ):
         """Test generating Helm values from complex compose file."""
-        with patch("backend.services.k8s.helm_values_generator.get_ecr_auth_service"):
-            values, _ = helm_generator.generate_values(complex_compose_file)
+        values, _ = helm_generator.generate_values(complex_compose_file)
 
             assert len(values.services) == 3
             service_names = [s.name for s in values.services]
@@ -99,8 +91,7 @@ class TestServiceValuesGeneration:
         simple_compose_file: ComposeFile,
     ):
         """Test service values include proper labels."""
-        with patch("backend.services.k8s.helm_values_generator.get_ecr_auth_service"):
-            values, _ = helm_generator.generate_values(simple_compose_file)
+        values, _ = helm_generator.generate_values(simple_compose_file)
 
             service = values.services[0]
             assert "lazycloud.dev/workspace-id" in service.labels
@@ -113,8 +104,7 @@ class TestServiceValuesGeneration:
         simple_compose_file: ComposeFile,
     ):
         """Test service values include port configuration."""
-        with patch("backend.services.k8s.helm_values_generator.get_ecr_auth_service"):
-            values, _ = helm_generator.generate_values(simple_compose_file)
+        values, _ = helm_generator.generate_values(simple_compose_file)
 
             service = values.services[0]
             assert service.ports is not None
@@ -141,8 +131,7 @@ class TestServiceValuesGeneration:
             ]
         )
 
-        with patch("backend.services.k8s.helm_values_generator.get_ecr_auth_service"):
-            values, _ = helm_generator.generate_values(compose)
+        values, _ = helm_generator.generate_values(compose)
 
             service = values.services[0]
             assert service.resources is not None
@@ -164,8 +153,7 @@ class TestServiceValuesGeneration:
             ]
         )
 
-        with patch("backend.services.k8s.helm_values_generator.get_ecr_auth_service"):
-            values, _ = helm_generator.generate_values(compose)
+        values, _ = helm_generator.generate_values(compose)
 
             assert values.services[0].replicas == 3
 
@@ -182,8 +170,7 @@ class TestWorkloadTypeGeneration:
             services=[ComposeService(name="web", image="nginx:latest")]
         )
 
-        with patch("backend.services.k8s.helm_values_generator.get_ecr_auth_service"):
-            values, _ = helm_generator.generate_values(compose)
+        values, _ = helm_generator.generate_values(compose)
 
             assert values.services[0].workloadType == WorkloadType.DEPLOYMENT
 
@@ -202,8 +189,7 @@ class TestWorkloadTypeGeneration:
             ]
         )
 
-        with patch("backend.services.k8s.helm_values_generator.get_ecr_auth_service"):
-            values, _ = helm_generator.generate_values(compose)
+        values, _ = helm_generator.generate_values(compose)
 
             assert values.services[0].workloadType == WorkloadType.JOB
 
@@ -231,8 +217,7 @@ class TestVolumeValuesGeneration:
             volumes=[ComposeVolume(name="data")],
         )
 
-        with patch("backend.services.k8s.helm_values_generator.get_ecr_auth_service"):
-            values, _ = helm_generator.generate_values(compose)
+        values, _ = helm_generator.generate_values(compose)
 
             assert len(values.volumes) == 1
             assert values.volumes[0].name == "data"
@@ -256,8 +241,7 @@ class TestVolumeValuesGeneration:
             volumes=[ComposeVolume(name="data")],
         )
 
-        with patch("backend.services.k8s.helm_values_generator.get_ecr_auth_service"):
-            values, _ = helm_generator.generate_values(compose)
+        values, _ = helm_generator.generate_values(compose)
 
             # Single-service volume should use EBS (ReadWriteOnce)
             assert values.volumes[0].storageClass == STORAGE_CLASS_EBS
@@ -269,12 +253,11 @@ class TestVolumeValuesGeneration:
         shared_volume_compose_file: ComposeFile,
     ):
         """Test EFS storage class for shared volume."""
-        with patch("backend.services.k8s.helm_values_generator.get_ecr_auth_service"):
-            values, _ = helm_generator.generate_values(shared_volume_compose_file)
+        values, _ = helm_generator.generate_values(shared_volume_compose_file)
 
-            # Shared volume should use EFS (ReadWriteMany)
-            assert values.volumes[0].storageClass == STORAGE_CLASS_EFS
-            assert "ReadWriteMany" in values.volumes[0].accessModes
+        # Shared volume should use EFS (ReadWriteMany)
+        assert values.volumes[0].storageClass == STORAGE_CLASS_EFS
+        assert "ReadWriteMany" in values.volumes[0].accessModes
 
     def test_volume_efs_from_label(
         self,
@@ -296,8 +279,7 @@ class TestVolumeValuesGeneration:
             ],
         )
 
-        with patch("backend.services.k8s.helm_values_generator.get_ecr_auth_service"):
-            values, _ = helm_generator.generate_values(compose)
+        values, _ = helm_generator.generate_values(compose)
 
             assert values.volumes[0].storageClass == STORAGE_CLASS_EFS
 
@@ -321,8 +303,7 @@ class TestVolumeValuesGeneration:
             ],
         )
 
-        with patch("backend.services.k8s.helm_values_generator.get_ecr_auth_service"):
-            values, _ = helm_generator.generate_values(compose)
+        values, _ = helm_generator.generate_values(compose)
 
             assert values.volumes[0].size == "50Gi"
 
@@ -346,8 +327,7 @@ class TestNetworkValuesGeneration:
             networks=[ComposeNetwork(name="backend")],
         )
 
-        with patch("backend.services.k8s.helm_values_generator.get_ecr_auth_service"):
-            values, _ = helm_generator.generate_values(compose)
+        values, _ = helm_generator.generate_values(compose)
 
             assert len(values.networks) == 1
             assert values.networks[0].name == "backend"
@@ -363,12 +343,11 @@ class TestSecretsGeneration:
         simple_compose_file: ComposeFile,
     ):
         """Test generating secrets values."""
-        with patch("backend.services.k8s.helm_values_generator.get_ecr_auth_service"):
-            values, _ = helm_generator_with_secrets.generate_values(simple_compose_file)
+        values, _ = helm_generator_with_secrets.generate_values(simple_compose_file)
 
-            assert len(values.secrets) == 1
-            assert values.secrets[0].enabled is True
-            assert "TEST_SECRET" in values.secrets[0].data
+        assert len(values.secrets) == 1
+        assert values.secrets[0].enabled is True
+        assert "TEST_SECRET" in values.secrets[0].data
 
 
 class TestScalingGeneration:
@@ -396,8 +375,7 @@ class TestScalingGeneration:
             ]
         )
 
-        with patch("backend.services.k8s.helm_values_generator.get_ecr_auth_service"):
-            values, _ = helm_generator.generate_values(compose)
+        values, _ = helm_generator.generate_values(compose)
 
             service = values.services[0]
             assert service.hpa is not None
@@ -424,8 +402,7 @@ class TestIngressGeneration:
             ]
         )
 
-        with patch("backend.services.k8s.helm_values_generator.get_ecr_auth_service"):
-            values, _ = helm_generator.generate_values(compose)
+        values, _ = helm_generator.generate_values(compose)
 
             service = values.services[0]
             assert service.ingress is not None
@@ -450,8 +427,7 @@ class TestGracePeriodGeneration:
             ]
         )
 
-        with patch("backend.services.k8s.helm_values_generator.get_ecr_auth_service"):
-            values, _ = helm_generator.generate_values(compose)
+        values, _ = helm_generator.generate_values(compose)
 
             assert values.services[0].terminationGracePeriodSeconds == 60
 
@@ -488,11 +464,11 @@ class TestValidationErrors:
 class TestBuildImageHandling:
     """Tests for build image handling."""
 
-    def test_build_image_uses_ecr_repository(
+    def test_build_image_uses_depot_registry(
         self,
         helm_generator: HelmValuesGenerator,
     ):
-        """Test build images use ECR repository URL."""
+        """Test build images use Depot registry URL."""
         compose = ComposeFile(
             services=[
                 ComposeService(
@@ -503,23 +479,15 @@ class TestBuildImageHandling:
             ]
         )
 
-        with patch(
-            "backend.services.k8s.helm_values_generator.get_ecr_auth_service"
-        ) as mock_ecr:
-            mock_ecr_service = MagicMock()
-            mock_ecr_service.get_pull_policy.return_value = "Always"
-            mock_ecr_service.get_repository_url.return_value = (
-                "123456789.dkr.ecr.us-east-1.amazonaws.com/myapp"
-            )
-            mock_ecr.return_value = mock_ecr_service
+        values, _ = helm_generator.generate_values(compose)
 
-            values, _ = helm_generator.generate_values(compose)
-
-            # Should use ECR repository URL for build images
-            assert (
-                "dkr.ecr" in values.services[0].image.repository
-                or "myapp" in values.services[0].image.repository
-            )
+        # Should use Depot registry URL for build images
+        # Format: registry.depot.dev/<project_id>/<image>
+        assert "registry.depot.dev" in values.services[0].image.repository
+        assert "test-depot-project" in values.services[0].image.repository
+        assert values.services[0].image.pullPolicy == "Always"
+        # Should have imagePullSecrets for Depot registry
+        assert values.services[0].imagePullSecrets == [{"name": "depot-registry"}]
 
 
 class TestCommandGeneration:
@@ -540,8 +508,7 @@ class TestCommandGeneration:
             ]
         )
 
-        with patch("backend.services.k8s.helm_values_generator.get_ecr_auth_service"):
-            values, _ = helm_generator.generate_values(compose)
+        values, _ = helm_generator.generate_values(compose)
 
             # Command list should be split
             assert "nginx" in values.services[0].command
@@ -561,8 +528,7 @@ class TestCommandGeneration:
             ]
         )
 
-        with patch("backend.services.k8s.helm_values_generator.get_ecr_auth_service"):
-            values, _ = helm_generator.generate_values(compose)
+        values, _ = helm_generator.generate_values(compose)
 
             assert "python" in values.services[0].command
             assert "manage.py" in values.services[0].command
@@ -576,8 +542,7 @@ class TestEndToEndPipeline:
         case = BASIC_SERVICE
         compose_file = ComposeParser.parse_dict(case["data"])
 
-        with patch("backend.services.k8s.helm_values_generator.get_ecr_auth_service"):
-            values, _ = helm_generator.generate_values(compose_file)
+        values, _ = helm_generator.generate_values(compose_file)
 
         expected = case["expected_helm"]
         service = values.services[0]
@@ -596,8 +561,7 @@ class TestEndToEndPipeline:
         case = ENTRYPOINT_ONLY
         compose_file = ComposeParser.parse_dict(case["data"])
 
-        with patch("backend.services.k8s.helm_values_generator.get_ecr_auth_service"):
-            values, _ = helm_generator.generate_values(compose_file)
+        values, _ = helm_generator.generate_values(compose_file)
 
         expected = case["expected_helm"]
         service = values.services[0]
@@ -610,8 +574,7 @@ class TestEndToEndPipeline:
         case = ENTRYPOINT_STRING
         compose_file = ComposeParser.parse_dict(case["data"])
 
-        with patch("backend.services.k8s.helm_values_generator.get_ecr_auth_service"):
-            values, _ = helm_generator.generate_values(compose_file)
+        values, _ = helm_generator.generate_values(compose_file)
 
         expected = case["expected_helm"]
         service = values.services[0]
@@ -624,8 +587,7 @@ class TestEndToEndPipeline:
         case = COMMAND_ONLY
         compose_file = ComposeParser.parse_dict(case["data"])
 
-        with patch("backend.services.k8s.helm_values_generator.get_ecr_auth_service"):
-            values, _ = helm_generator.generate_values(compose_file)
+        values, _ = helm_generator.generate_values(compose_file)
 
         expected = case["expected_helm"]
         service = values.services[0]
@@ -639,8 +601,7 @@ class TestEndToEndPipeline:
         case = COMMAND_LIST_ONLY
         compose_file = ComposeParser.parse_dict(case["data"])
 
-        with patch("backend.services.k8s.helm_values_generator.get_ecr_auth_service"):
-            values, _ = helm_generator.generate_values(compose_file)
+        values, _ = helm_generator.generate_values(compose_file)
 
         expected = case["expected_helm"]
         service = values.services[0]
@@ -653,8 +614,7 @@ class TestEndToEndPipeline:
         case = ENTRYPOINT_AND_COMMAND
         compose_file = ComposeParser.parse_dict(case["data"])
 
-        with patch("backend.services.k8s.helm_values_generator.get_ecr_auth_service"):
-            values, _ = helm_generator.generate_values(compose_file)
+        values, _ = helm_generator.generate_values(compose_file)
 
         expected = case["expected_helm"]
         service = values.services[0]
@@ -669,8 +629,7 @@ class TestEndToEndPipeline:
         case = WORKING_DIR
         compose_file = ComposeParser.parse_dict(case["data"])
 
-        with patch("backend.services.k8s.helm_values_generator.get_ecr_auth_service"):
-            values, _ = helm_generator.generate_values(compose_file)
+        values, _ = helm_generator.generate_values(compose_file)
 
         expected = case["expected_helm"]
         service = values.services[0]
@@ -682,8 +641,7 @@ class TestEndToEndPipeline:
         case = STOP_GRACE_PERIOD_COMBINED
         compose_file = ComposeParser.parse_dict(case["data"])
 
-        with patch("backend.services.k8s.helm_values_generator.get_ecr_auth_service"):
-            values, _ = helm_generator.generate_values(compose_file)
+        values, _ = helm_generator.generate_values(compose_file)
 
         expected = case["expected_helm"]
         service = values.services[0]
@@ -699,8 +657,7 @@ class TestEndToEndPipeline:
         case = ALL_NEW_FIELDS
         compose_file = ComposeParser.parse_dict(case["data"])
 
-        with patch("backend.services.k8s.helm_values_generator.get_ecr_auth_service"):
-            values, _ = helm_generator.generate_values(compose_file)
+        values, _ = helm_generator.generate_values(compose_file)
 
         expected = case["expected_helm"]
         service = values.services[0]
@@ -719,8 +676,7 @@ class TestEndToEndPipeline:
         case = COMPLEX_MULTI_SERVICE
         compose_file = ComposeParser.parse_dict(case["data"])
 
-        with patch("backend.services.k8s.helm_values_generator.get_ecr_auth_service"):
-            values, _ = helm_generator.generate_values(compose_file)
+        values, _ = helm_generator.generate_values(compose_file)
 
         expected_services = case["expected_helm"]["services"]
 
@@ -753,8 +709,7 @@ class TestEndToEndPipeline:
         """Parametrized test for all single-service cases through full pipeline."""
         compose_file = ComposeParser.parse_dict(case["data"])
 
-        with patch("backend.services.k8s.helm_values_generator.get_ecr_auth_service"):
-            values, _ = helm_generator.generate_values(compose_file)
+        values, _ = helm_generator.generate_values(compose_file)
 
         expected = case["expected_helm"]
         service = values.services[0]

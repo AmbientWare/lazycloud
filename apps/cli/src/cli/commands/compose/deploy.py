@@ -1094,41 +1094,22 @@ def _run_depot_build(
     dockerfile_path = context_path / build_info["dockerfile"]
     service_name = build_info["service_name"]
 
-    # Construct the full image URL with registry
+    # Construct the full image URL using Depot registry
+    # Format: registry.depot.dev/<project_id>/<image>
     image_tag = build_info["image_name"]
-    # The registry already handles namespacing, so we get the full URL from the API
-    # For now, we'll get upload credentials to get the proper image URL
-    try:
-        credentials = api.registry.get_upload_intent(
-            deployment_name=build_info.get("deployment_name", ""),
-            repo_name=image_tag,
-        )
-        full_image_url = credentials.repository
+    full_image_url = f"{depot_token.registry_url}/{depot_token.project_id}/{image_tag}"
 
-    except Exception:
-        # Fallback: construct URL manually
-        full_image_url = f"{depot_token.registry_url}/{image_tag}"
-
-    # Check if registry is localhost/localstack - Depot can't push to localhost from remote servers
-    # In this case, we'll use --load to load the image locally, then push it ourselves
-    is_local_registry = "localhost" in full_image_url or "127.0.0.1" in full_image_url
-    use_load = is_local_registry
-
-    # Build depot command
+    # Build depot command with --save to store in Depot's registry
     depot_cmd = [
         "depot",
         "build",
         "--project",
         depot_token.project_id,
         "--progress=plain",  # Force plain text output for pipes (not TTY)
+        "--save",  # make sure image saves to depot
+        "--tag",
+        full_image_url,
     ]
-
-    if use_load:
-        # Load image locally instead of pushing (for localhost registries)
-        depot_cmd.extend(["--load", "--tag", full_image_url])
-    else:
-        # Push directly to remote registry
-        depot_cmd.extend(["--push", "--tag", full_image_url])
 
     depot_cmd.extend(
         [
@@ -1287,48 +1268,6 @@ def _run_depot_build(
 
             return False, "Build failed due to an unexpected error. Please try again."
 
-    # Build succeeded - if we used --load for a local registry, push it now
-    if use_load:
-        push_output_lines = []
-
-        try:
-            push_process = subprocess.Popen(
-                ["docker", "push", full_image_url],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-            )
-
-            # Collect push output (no Live display - main thread handles that)
-            for line in iter(push_process.stdout.readline, ""):
-                if not line:
-                    break
-
-                line = line.rstrip()
-                if line:
-                    push_output_lines.append(line)
-                    # Also add to build output so it shows in the status panel
-                    with build_state_lock:
-                        output_lines.append(f"[push] {line}")
-
-            push_process.wait()
-
-            if push_process.returncode != 0:
-                return (
-                    False,
-                    "Failed to push image to registry. Please check your registry configuration.",
-                )
-
-        except FileNotFoundError:
-            return False, "Docker CLI not found. Cannot push to local registry."
-
-        except Exception:
-            return (
-                False,
-                "Failed to push image to registry. Please check your registry configuration.",
-            )
-
     return True, ""
 
 
@@ -1342,23 +1281,8 @@ def _handle_builds_with_depot(
     """Handle builds using Depot remote builder with parallel execution."""
     view = DeployView(console)
 
-    # Add deployment_name to each build_info for registry URL construction
-    for build_info in services_to_build:
-        build_info["deployment_name"] = deployment_name
-
-    # Check which images already exist
-    all_image_names = [build_info["image_name"] for build_info in services_to_build]
-    image_exists_map = api.registry.check_images_exist(
-        deployment_name=deployment_name,
-        image_names=all_image_names,
-    ).exists_map
-
-    # Filter to only images that need building
-    builds_needed = []
-    for i, build_info in enumerate(services_to_build):
-        image_name = build_info["image_name"]
-        if not image_exists_map.get(image_name, False):
-            builds_needed.append((i, build_info))
+    # Build all services - Depot handles layer caching internally
+    builds_needed = [(i, build_info) for i, build_info in enumerate(services_to_build)]
 
     if not builds_needed:
         return yaml.dump(compose_data, default_flow_style=False)

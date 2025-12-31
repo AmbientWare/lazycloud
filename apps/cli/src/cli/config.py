@@ -26,7 +26,6 @@ class CLIConfig(BaseSettings):
         [api]
         base_url = "http://localhost:8000"
         version = "v1"
-        registry_type = "ecr"
     """
 
     model_config = SettingsConfigDict(env_prefix="LAZYCLOUD_")
@@ -34,7 +33,6 @@ class CLIConfig(BaseSettings):
     # API Configuration
     api_base_url: str = "https://api.lazycloud.dev"
     api_version: str = "v1"
-    registry_type: str = "ecr"
 
     # Private attributes for OAuth token management
     _access_token: str | None = PrivateAttr(default=None)
@@ -49,7 +47,7 @@ class CLIConfig(BaseSettings):
         file_config = self._read_config_file()
 
         # Apply file config for fields not set via env vars
-        for key in ["api_base_url", "api_version", "registry_type"]:
+        for key in ["api_base_url", "api_version"]:
             env_key = f"LAZYCLOUD_{key.upper()}"
             if key not in data and env_key not in os.environ:
                 if value := file_config.get("api", {}).get(key.replace("api_", "")):
@@ -83,7 +81,6 @@ class CLIConfig(BaseSettings):
             "[api]",
             f'base_url = "{self.api_base_url}"',
             f'version = "{self.api_version}"',
-            f'registry_type = "{self.registry_type}"',
             "",
             "[auth]",
         ]

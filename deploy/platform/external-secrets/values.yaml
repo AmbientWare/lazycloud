@@ -5,6 +5,11 @@
 orgName: lazycloud
 environment: prod
 
+# Depot registry secret (for user deployment image pulls)
+depotRegistry:
+  enabled: true
+  awsSecretName: lazycloud/shared-secrets
+
 # App secrets settings (for lazycloud apps)
 appSecrets:
   prod:

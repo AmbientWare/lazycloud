@@ -5,7 +5,6 @@ from cli.api.deployments import DeploymentsAPI
 from cli.api.diff import DiffAPI
 from cli.api.instances import InstancesAPI
 from cli.api.logs import LogsAPI
-from cli.api.registry import RegistryAPI
 from cli.api.secrets import SecretsAPI
 from cli.api.services import ServicesAPI
 from cli.api.status import StatusAPI
@@ -29,7 +28,6 @@ class API:
         self.diff = DiffAPI()
         self.instances = InstancesAPI()
         self.services = ServicesAPI()
-        self.registry = RegistryAPI()
         self.workspaces = WorkspacesAPI()
         self.usage = UsageAPI()
         self.builds = BuildsAPI()

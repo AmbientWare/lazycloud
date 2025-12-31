@@ -35,7 +35,6 @@ from backend.database.session import session_manager
 from backend.database.users import UserPydantic, UserRole
 from backend.services import (
     get_depot_service,
-    get_ecr_auth_service,
     get_invitation_service,
     get_subscription_service,
     get_usage_service,
@@ -211,20 +210,6 @@ def make_mock_depot_service() -> AsyncMock:
     return mock
 
 
-def make_mock_ecr_auth_service() -> AsyncMock:
-    """Create mock ECRAuthService."""
-    mock = AsyncMock()
-    mock.get_upload_intent = AsyncMock(
-        return_value={
-            "registry": "123456789012.dkr.ecr.us-east-1.amazonaws.com",
-            "username": "AWS",
-            "password": "mock-password",
-        }
-    )
-    mock.check_images_exist = AsyncMock(return_value={"exists": True})
-    return mock
-
-
 @pytest.fixture
 async def api_admin_user(api_db: Database) -> UserPydantic:
     """Create an admin user for API key tests."""
@@ -299,27 +284,13 @@ async def client(api_db: Database, api_user: UserPydantic) -> AsyncClient:
     app.dependency_overrides[get_subscription_service] = make_mock_subscription_service
     app.dependency_overrides[get_invitation_service] = make_mock_invitation_service
     app.dependency_overrides[get_depot_service] = make_mock_depot_service
-    app.dependency_overrides[get_ecr_auth_service] = make_mock_ecr_auth_service
 
     # Mock quota capacity checks to bypass limits in tests
-    # Also mock ECR auth service for HelmValuesGenerator (called directly, not via DI)
-    mock_ecr_auth = make_mock_ecr_auth_service()
-    mock_ecr_auth.get_pull_policy = MagicMock(return_value="IfNotPresent")
-    mock_ecr_auth.get_repository_url = MagicMock(
-        side_effect=lambda workspace_id,
-        deployment_name,
-        image_name: f"{workspace_id}/{deployment_name}/{image_name}"
-    )
-
     with (
         patch(
             "backend.services.compose.validation.verify_quota_capacity",
             new_callable=AsyncMock,
         ) as mock_verify_quota,
-        patch(
-            "backend.services.k8s.helm_values_generator.get_ecr_auth_service",
-            return_value=mock_ecr_auth,
-        ),
     ):
         mock_verify_quota.return_value = None
 
