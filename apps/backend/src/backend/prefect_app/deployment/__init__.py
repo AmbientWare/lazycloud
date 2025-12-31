@@ -1,3 +1,4 @@
+from backend.prefect_app.deployment.cleanup import cleanup_stale_pending_deployment
 from backend.prefect_app.deployment.destroy import destroy_compose_task
 from backend.prefect_app.deployment.orchestration import deploy_compose_task
 from backend.prefect_app.deployment.reconcile import (
@@ -26,6 +27,7 @@ __all__ = [
     "destroy_compose_task",
     "rollback_compose_task",
     "reconcile_rollback_states_deployment",
+    "cleanup_stale_pending_deployment",
     "check_deployment_idempotency_task",
     "prepare_deployment_task",
     "prepare_namespace_config_task",

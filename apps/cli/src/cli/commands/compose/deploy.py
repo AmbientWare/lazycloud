@@ -362,6 +362,8 @@ def deploy(
         view.show_error(f"Failed to create deployment: {e}")
         raise typer.Exit(1)
 
+    # Wrap build/deploy in try/except for cleanup on failure
+    # If build or deploy fails, delete the PENDING deployment record to release quota
     try:
         # Handle image building AFTER deployment record created
         services_to_build = _get_services_to_build_from_diff(
@@ -378,16 +380,7 @@ def deploy(
             target_services=services_to_build if services_to_build else None,
         )
 
-    except typer.Exit:
-        # Re-raise typer.Exit from build failures
-        raise
-
-    except Exception as e:
-        view.show_error(f"Build stage failed: {e}")
-        raise typer.Exit(1)
-
-    # Deploy (updates compose_yaml and triggers deployment in one call)
-    try:
+        # Deploy (updates compose_yaml and triggers deployment in one call)
         _deploy(
             deployment_id=str(deployment.id),
             deployment_name=deployment_name,
@@ -398,12 +391,29 @@ def deploy(
         )
 
     except typer.Exit:
-        # Re-raise typer.Exit from deployment failures
+        # Build or deploy failed - clean up the PENDING deployment record
+        _cleanup_failed_deployment(str(deployment.id), view)
         raise
 
     except Exception as e:
-        view.show_error(f"Deployment stage failed: {e}")
+        # Unexpected error - clean up and show error
+        _cleanup_failed_deployment(str(deployment.id), view)
+        view.show_error(f"Deployment failed: {e}")
         raise typer.Exit(1)
+
+
+def _cleanup_failed_deployment(deployment_id: str, view: DeployView) -> None:
+    """Clean up a failed deployment by deleting the PENDING record.
+
+    This releases the quota slot that was reserved when the deployment
+    record was created. Best-effort cleanup - errors are logged but don't
+    prevent the original error from propagating.
+    """
+    try:
+        api.deployments.delete_deployment_sync(deployment_id)
+    except Exception as cleanup_error:
+        # Log but don't fail - the original error is more important
+        view.show_warning(f"Could not clean up deployment record: {cleanup_error}")
 
 
 def _load_configuration(view: DeployView):

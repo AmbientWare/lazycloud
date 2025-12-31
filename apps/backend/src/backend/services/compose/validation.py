@@ -160,6 +160,12 @@ async def validate_deployment_request(
                 existing_requirements = ResourceRequirements(
                     deployments=1, services=0, pvcs=0
                 )
+        else:
+            # DB record exists but no helm release yet (first deploy after create_deployment)
+            # Still need to account for the deployment slot being used by this record
+            existing_requirements = ResourceRequirements(
+                deployments=1, services=0, pvcs=0
+            )
 
     # Verify quota capacity
     try:
@@ -174,7 +180,9 @@ async def validate_deployment_request(
             existing_services=existing_requirements.services
             if existing_requirements
             else 0,
-            existing_pvcs=existing_requirements.pvcs if existing_requirements else 0,
+            existing_pvcs=existing_requirements.pvcs
+            if existing_requirements
+            else 0,
         )
 
     except ValueError as e:

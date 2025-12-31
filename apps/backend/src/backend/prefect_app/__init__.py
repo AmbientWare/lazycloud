@@ -6,6 +6,7 @@ from sentry_sdk.integrations.loguru import LoguruIntegration
 
 from backend.config import app_config
 from backend.prefect_app.deployment import (
+    cleanup_stale_pending_deployment,
     deploy_compose_task,
     destroy_compose_task,
     reconcile_rollback_states_deployment,
@@ -62,6 +63,7 @@ def serve_crons():
         monitor_subscription_states_deployment,
         reconcile_rollback_states_deployment,
         cleanup_orphaned_deployments_deployment,
+        cleanup_stale_pending_deployment,
     )
 
 

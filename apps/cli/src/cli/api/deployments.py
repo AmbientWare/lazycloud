@@ -82,6 +82,14 @@ class DeploymentsAPI(BaseAPI):
             message=final_status.message,
         )
 
+    def delete_deployment_sync(self, deployment_id: str) -> None:
+        """Delete a deployment without waiting for completion.
+
+        Used for cleanup on build/deploy failures - fires the delete request
+        but doesn't wait for the destroy task to complete.
+        """
+        self._delete(path=f"/{deployment_id}")
+
     def get_deployment(
         self,
         deployment_id: str | None = None,
