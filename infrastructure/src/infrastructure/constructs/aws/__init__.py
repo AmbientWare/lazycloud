@@ -3,6 +3,7 @@ from .vpc import VpcConstruct
 from .ecr_repository import MultiServiceECRRepositories
 from .secrets import SharedSecretsConstruct, EnvironmentSecretsConstruct
 from .efs import EfsConstruct
+from .gvisor_ami import GvisorAmiConstruct
 
 __all__ = [
     "EksCluster",
@@ -11,4 +12,5 @@ __all__ = [
     "SharedSecretsConstruct",
     "EnvironmentSecretsConstruct",
     "EfsConstruct",
+    "GvisorAmiConstruct",
 ]
