@@ -93,7 +93,7 @@ class ECRAuthService:
                         "ecr:DescribeImages",
                         "ecr:GetAuthorizationToken",
                     ],
-                    "Resource": f"arn:aws:ecr:{self.region}:{self.account_id}:repository/{self.get_repository_path(workspace_id, deployment_name, repo_name)}/*",
+                    "Resource": f"arn:aws:ecr:{self.region}:{self.account_id}:repository/{self.get_repository_path(workspace_id, deployment_name, repo_name)}",
                 },
                 {
                     "Effect": "Allow",
@@ -399,6 +399,7 @@ class ECRAuthService:
                     # Repository doesn't exist, all images don't exist
                     for _, image_name in images:
                         result[image_name] = False
+
                 elif error_code == "ImageNotFoundException":
                     # Some images not found, check which ones individually
                     for image_name, tag in images:
@@ -412,6 +413,14 @@ class ECRAuthService:
                             )
                         except Exception:
                             result[image_name] = False
+
+                elif error_code == "AccessDeniedException":
+                    # Re-raise access denied errors - deployment should fail early
+                    logger.error(
+                        f"Access denied checking images in {full_repo_name}: {e}"
+                    )
+                    raise
+
                 else:
                     # On other errors, assume doesn't exist
                     logger.warning(f"Error checking images in {full_repo_name}: {e}")

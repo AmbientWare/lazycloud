@@ -81,3 +81,23 @@ class SharedIAMRoles(Construct):
     def ecr_base_role_arn(self) -> str:
         """Get the ECR base role ARN"""
         return self.platform_roles.ecr_base_role_arn
+
+    @property
+    def backend_service_user(self):
+        """Get the backend service IAM user"""
+        return self.platform_roles.backend_service_user
+
+    @property
+    def backend_service_user_arn(self) -> str:
+        """Get the backend service user ARN"""
+        return self.platform_roles.backend_service_user_arn
+
+    @property
+    def platform_credentials_secret(self):
+        """Get the platform credentials secret"""
+        return self.platform_roles.platform_credentials_secret
+
+    @property
+    def platform_credentials_secret_arn(self) -> str:
+        """Get the platform credentials secret ARN"""
+        return self.platform_roles.platform_credentials_secret_arn

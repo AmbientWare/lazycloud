@@ -1,5 +1,6 @@
 import aws_cdk as cdk
 from aws_cdk import aws_iam as iam
+from aws_cdk import aws_secretsmanager as secretsmanager
 from constructs import Construct
 
 from infrastructure.config.environments import EnvironmentConfig
@@ -21,6 +22,9 @@ class PlatformIAMRoles(Construct):
         # Create platform IAM roles
         self.external_secrets_role = self._create_external_secrets_role()
         self.ecr_base_role = self._create_ecr_base_role()
+        self.backend_service_user = self._create_backend_service_user()
+        self.backend_service_access_key = self._create_backend_service_access_key()
+        self.platform_credentials_secret = self._create_platform_credentials_secret()
 
     def _create_external_secrets_role(self) -> iam.CfnRole:
         """
@@ -161,6 +165,110 @@ class PlatformIAMRoles(Construct):
 
         return role
 
+    def _create_backend_service_user(self) -> iam.CfnUser:
+        """
+        Create IAM user for the backend API service.
+        This user can assume the ECR base role and manage ECR repositories.
+        """
+        # Policy to assume the ECR base role
+        assume_role_policy = {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Action": "sts:AssumeRole",
+                    "Resource": self.ecr_base_role.attr_arn,
+                }
+            ],
+        }
+
+        # Direct ECR permissions for repo management (before assuming role)
+        ecr_management_policy = {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Action": [
+                        "ecr:GetAuthorizationToken",
+                        "ecr:DescribeRepositories",
+                    ],
+                    "Resource": "*",
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": [
+                        "ecr:CreateRepository",
+                        "ecr:DeleteRepository",
+                        "ecr:DescribeImages",
+                        "ecr:ListImages",
+                        "ecr:PutLifecyclePolicy",
+                        "ecr:TagResource",
+                    ],
+                    "Resource": f"arn:aws:ecr:*:{cdk.Aws.ACCOUNT_ID}:repository/lc-*",
+                },
+            ],
+        }
+
+        user = iam.CfnUser(
+            self,
+            "BackendServiceUser",
+            user_name=f"{self.config.org_name}-backend-service",
+            policies=[
+                iam.CfnUser.PolicyProperty(
+                    policy_name="AssumeECRBaseRole",
+                    policy_document=assume_role_policy,
+                ),
+                iam.CfnUser.PolicyProperty(
+                    policy_name="ECRManagement",
+                    policy_document=ecr_management_policy,
+                ),
+            ],
+        )
+
+        # Add tags
+        cdk.Tags.of(user).add("Purpose", "BackendService")
+        cdk.Tags.of(user).add("Environment", "shared")
+        cdk.Tags.of(user).add("Organization", self.config.org_name)
+
+        return user
+
+    def _create_backend_service_access_key(self) -> iam.CfnAccessKey:
+        """
+        Create access key for the backend service user.
+        """
+        access_key = iam.CfnAccessKey(
+            self,
+            "BackendServiceAccessKey",
+            user_name=self.backend_service_user.user_name,
+        )
+        return access_key
+
+    def _create_platform_credentials_secret(self) -> secretsmanager.CfnSecret:
+        """
+        Create a secret to store the backend service credentials.
+        These are used by the backend API for ECR operations.
+        """
+        secret = secretsmanager.CfnSecret(
+            self,
+            "PlatformCredentialsSecret",
+            name=f"{self.config.org_name}/platform-credentials",
+            description=f"Platform credentials for {self.config.org_name} backend services",
+            secret_string=cdk.Fn.sub(
+                '{"AWS_ACCESS_KEY_ID":"${AccessKeyId}","AWS_SECRET_ACCESS_KEY":"${SecretAccessKey}"}',
+                {
+                    "AccessKeyId": self.backend_service_access_key.ref,
+                    "SecretAccessKey": self.backend_service_access_key.attr_secret_access_key,
+                },
+            ),
+        )
+
+        # Add tags
+        cdk.Tags.of(secret).add("Purpose", "PlatformCredentials")
+        cdk.Tags.of(secret).add("Environment", "shared")
+        cdk.Tags.of(secret).add("Organization", self.config.org_name)
+
+        return secret
+
     @property
     def external_secrets_role_arn(self) -> str:
         """Get the external secrets role ARN"""
@@ -170,3 +278,13 @@ class PlatformIAMRoles(Construct):
     def ecr_base_role_arn(self) -> str:
         """Get the ECR base role ARN"""
         return self.ecr_base_role.attr_arn
+
+    @property
+    def backend_service_user_arn(self) -> str:
+        """Get the backend service user ARN"""
+        return self.backend_service_user.attr_arn
+
+    @property
+    def platform_credentials_secret_arn(self) -> str:
+        """Get the platform credentials secret ARN"""
+        return self.platform_credentials_secret.ref
