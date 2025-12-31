@@ -16,6 +16,7 @@ spec:
         app: {{ .Chart.Name }}-api
         component: api
     spec:
+      serviceAccountName: {{ .Chart.Name }}
       initContainers:
         - name: db-migrate
           image: "{{ .Values.image.registry }}/{{ .Values.image.name }}:{{ .Values.image.tag }}"
