@@ -56,4 +56,4 @@ kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.pas
 2. Add to ApplicationSets in `deploy/argocd-apps/applicationsets/`:
    - `services-staging.yaml`
    - `services-prod.yaml`
-3. Create `values-{region}.yaml` for region-specific values (ECR registry, certificates)
+3. Create `values-{region}.yaml` for region-specific values (certificates, etc.)

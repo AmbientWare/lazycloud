@@ -8,7 +8,7 @@
 CDK (AWS Resources)              Manual (K8s Bootstrap)
 ────────────────────             ─────────────────────
 lazycloud-shared
-  └─ IAM, ECR, Secrets
+  └─ IAM, Secrets
 
 lazycloud-prod-infra
   └─ VPC, EKS, Pod Identity
@@ -59,10 +59,10 @@ infrastructure/
 └── src/infrastructure/
     ├── config/environments.py        # Environment configs
     ├── stacks/
-    │   ├── shared/                   # IAM, ECR, Secrets
+    │   ├── shared/                   # IAM, Secrets
     │   └── prod/infra_stack.py       # VPC + EKS + Pod Identity + ConfigMap
     └── constructs/
-        ├── aws/                      # VPC, EKS, ECR
+        ├── aws/                      # VPC, EKS
         ├── iam/                      # IAM roles
         └── components/
             ├── infrastructure.py     # VPC + EKS

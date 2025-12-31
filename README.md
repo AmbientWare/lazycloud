@@ -149,7 +149,7 @@ uv run mk-down --delete
 **What Minikube provides:**
 - Local Kubernetes cluster for testing deployments
 - gVisor runtime for container isolation
-- LocalStack ECR integration (no AWS creds needed)
+- Depot integration for container builds
 - Monitoring stack (Prometheus + Grafana)
 - EFS-compatible storage class
 
@@ -182,7 +182,7 @@ cd apps/cli && uv run pytest
 CDK                              Manual Install
 ───                              ──────────────
 lazycloud-shared
-  └─ IAM, ECR, Secrets
+  └─ IAM, Secrets
 
 lazycloud-prod-infra             helm install argocd
   └─ VPC, EKS, Pod Identity      kubectl apply root-app.yaml
@@ -332,7 +332,7 @@ uv run python scripts/create_secret_key.py
 ### Deployment Flow
 
 ```
-Code → GitHub → CI/CD → ECR Images → Git (Helm values) → ArgoCD → Kubernetes
+Code → GitHub → CI/CD → Depot Registry → Git (Helm values) → ArgoCD → Kubernetes
                                                               ↓
                                             deploy/argocd-apps/root-app.yaml
                                                      ↓

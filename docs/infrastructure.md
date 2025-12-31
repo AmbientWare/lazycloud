@@ -21,7 +21,7 @@ uv sync
 uv run cdk deploy lazycloud-shared
 ```
 
-Creates: IAM roles, ECR repos, Secrets Manager secrets (empty)
+Creates: IAM roles, Secrets Manager secrets (empty)
 
 ### 2. Configure Cloudflare Tunnel
 
@@ -85,7 +85,20 @@ Customer flow:
 3. Customer adds CNAME: `customerdomain.com` → `lazycloud.dev`
 4. Cloudflare issues SSL cert automatically
 
-### 3. Deploy CDK Infra Stack
+### 3. Configure Depot Registry
+
+LazyCloud uses [Depot](https://depot.dev) for container builds and registry.
+
+Add your Depot organization token to AWS Secrets Manager (`lazycloud/shared-secrets`):
+```bash
+aws secretsmanager get-secret-value --secret-id lazycloud/shared-secrets --query SecretString --output text | \
+  jq '. + {"DEPOT_REGISTRY_TOKEN": "<your-depot-org-token>"}' | \
+  xargs -0 aws secretsmanager put-secret-value --secret-id lazycloud/shared-secrets --secret-string
+```
+
+The ExternalSecrets operator will sync this to a `depot-registry` imagePullSecret in all user namespaces.
+
+### 4. Deploy CDK Infra Stack
 
 ```bash
 uv run cdk deploy lazycloud-prod-us-east-1-infra
@@ -102,13 +115,13 @@ While it waits:
 
 Creates: VPC, EKS cluster, EFS, ACM wildcard cert, Pod Identity associations
 
-### 4. Configure kubectl
+### 5. Configure kubectl
 
 ```bash
 aws eks update-kubeconfig --region us-east-1 --name lazycloud-prod-us-east-1-eks
 ```
 
-### 5. Populate App Secrets
+### 6. Populate App Secrets
 
 Add to AWS Secrets Manager (`lazycloud/prod-secrets`):
 ```json
@@ -119,7 +132,7 @@ Add to AWS Secrets Manager (`lazycloud/prod-secrets`):
 }
 ```
 
-### 6. Install ArgoCD
+### 7. Install ArgoCD
 
 ```bash
 helm repo add argo https://argoproj.github.io/argo-helm
@@ -132,7 +145,7 @@ Get admin password:
 kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d
 ```
 
-### 7. Deploy Root Application
+### 8. Deploy Root Application
 
 ```bash
 kubectl apply -f deploy/argocd-apps/root-app.yaml
