@@ -60,7 +60,10 @@ flowchart TB
         end
 
         SM[Secrets Manager]
-        ECR[ECR]
+    end
+
+    subgraph Depot[Depot.dev]
+        Registry[Container Registry]
     end
 
     DNS --> Tunnel
@@ -68,8 +71,7 @@ flowchart TB
     NGINX --> LazyCloud
     NGINX --> Customer
     ESO --> SM
-    LazyCloud --> ECR
-    Customer --> ECR
+    Customer --> Registry
 ```
 
 ## GitOps Flow
