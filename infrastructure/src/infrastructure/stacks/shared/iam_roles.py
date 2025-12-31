@@ -14,7 +14,7 @@ class SharedIAMRoles(Construct):
     This construct aggregates IAM roles from different service categories:
     - EKS roles: CSI drivers (EBS, EFS)
     - Controller roles: Karpenter
-    - Platform roles: External Secrets, ECR
+    - Platform roles: External Secrets
     """
 
     def __init__(
@@ -71,33 +71,3 @@ class SharedIAMRoles(Construct):
     def external_secrets_role_arn(self) -> str:
         """Get the external secrets role ARN"""
         return self.platform_roles.external_secrets_role_arn
-
-    @property
-    def ecr_base_role(self):
-        """Get the ECR base role"""
-        return self.platform_roles.ecr_base_role
-
-    @property
-    def ecr_base_role_arn(self) -> str:
-        """Get the ECR base role ARN"""
-        return self.platform_roles.ecr_base_role_arn
-
-    @property
-    def backend_service_user(self):
-        """Get the backend service IAM user"""
-        return self.platform_roles.backend_service_user
-
-    @property
-    def backend_service_user_arn(self) -> str:
-        """Get the backend service user ARN"""
-        return self.platform_roles.backend_service_user_arn
-
-    @property
-    def platform_credentials_secret(self):
-        """Get the platform credentials secret"""
-        return self.platform_roles.platform_credentials_secret
-
-    @property
-    def platform_credentials_secret_arn(self) -> str:
-        """Get the platform credentials secret ARN"""
-        return self.platform_roles.platform_credentials_secret_arn

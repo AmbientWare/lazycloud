@@ -5,25 +5,12 @@ from backend.services.aws_metrics import AWSMetricsService
 from backend.services.cloudflare import CloudflareService
 from backend.services.cost_breakdown_service import CostBreakdownService
 from backend.services.depot_service import DepotService
-from backend.services.ecr_auth import ECRAuthService
 from backend.services.invitation_service import InvitationService
 from backend.services.polar import PolarService
 from backend.services.prometheus import PrometheusMetricsService
 from backend.services.subscription_service import SubscriptionService
 from backend.services.usage_service import UsageService
 from backend.services.user_onboarding import UserOnboardingService
-
-
-@lru_cache(maxsize=1)
-def get_ecr_auth_service() -> ECRAuthService:
-    return ECRAuthService(
-        account_id=app_config.AWS_ACCOUNT_ID,
-        access_key_id=app_config.AWS_ACCESS_KEY_ID,
-        secret_access_key=app_config.AWS_SECRET_ACCESS_KEY,
-        region=app_config.AWS_REGION,
-        base_role_arn=app_config.AWS_ECR_BASE_ROLE_ARN,
-        endpoint_url=app_config.AWS_ENDPOINT_URL,
-    )
 
 
 @lru_cache(maxsize=1)
@@ -104,7 +91,6 @@ def get_aws_metrics_service() -> AWSMetricsService:
 __all__ = [
     "AWSMetricsService",
     "DepotService",
-    "ECRAuthService",
     "CloudflareService",
     "CostBreakdownService",
     "PrometheusMetricsService",
@@ -115,7 +101,6 @@ __all__ = [
     "UsageService",
     "get_aws_metrics_service",
     "get_depot_service",
-    "get_ecr_auth_service",
     "get_cloudflare_service",
     "get_cost_breakdown_service",
     "get_metrics_service",

@@ -30,4 +30,4 @@ class DepotTokenResponse(BaseModel):
     project_id: str = Field(description="Depot project ID for this workspace")
     token: str = Field(description="Short-lived project token for depot build")
     expires_at: datetime = Field(description="Token expiration time")
-    registry_url: str = Field(description="ECR registry URL to push images to")
+    registry_url: str = Field(description="Depot registry URL for images")

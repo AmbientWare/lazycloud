@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 from backend.database import Database
 from backend.database.users import UserPydantic
-from backend.services import get_depot_service, get_ecr_auth_service
+from backend.services import get_depot_service
 from httpx import AsyncClient
 from models.depot import DepotBuildCredentials
 from models.workspaces import WorkspaceRole
@@ -48,15 +48,11 @@ class TestGetDepotToken:
                 project_id="test-project",
                 token="test-token",
                 expires_at=datetime.now(timezone.utc),
-                registry_url="test-registry",
+                registry_url="registry.depot.dev",
             )
         )
 
-        mock_ecr_service = AsyncMock()
-        mock_ecr_service.get_registry_url = lambda: "test-registry"
-
         app.dependency_overrides[get_depot_service] = lambda: mock_depot_service
-        app.dependency_overrides[get_ecr_auth_service] = lambda: mock_ecr_service
 
         response = await client.post(
             f"/v1/workspaces/{workspace.id}/builds/token?deployment_name=test-deploy"
@@ -66,4 +62,4 @@ class TestGetDepotToken:
         data = response.json()
         assert data["token"] == "test-token"
         assert data["project_id"] == "test-project"
-        assert data["registry_url"] == "test-registry"
+        assert data["registry_url"] == "registry.depot.dev"

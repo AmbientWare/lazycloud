@@ -6,12 +6,11 @@ from backend.api.dependencies import (
     WorkspaceAccess,
     get_workspace_with_admin_access,
 )
+from backend.config import app_config
 from backend.database import Database, get_db
 from backend.services import (
     DepotService,
-    ECRAuthService,
     get_depot_service,
-    get_ecr_auth_service,
 )
 
 builds_router = APIRouter(prefix="/{workspace_id}/builds")
@@ -21,7 +20,6 @@ builds_router = APIRouter(prefix="/{workspace_id}/builds")
 async def get_depot_token(
     workspace_access: WorkspaceAccess = Depends(get_workspace_with_admin_access),
     depot_service: DepotService = Depends(get_depot_service),
-    ecr_auth_service: ECRAuthService = Depends(get_ecr_auth_service),
     deployment_name: str = Query(..., description="Deployment name for the build"),
     db: Database = Depends(get_db),
 ) -> DepotTokenResponse:
@@ -29,6 +27,7 @@ async def get_depot_token(
 
     Returns a project token that the CLI can use to run `depot build`.
     The token is scoped to the deployment's Depot project.
+    Images are stored in Depot's registry (registry.depot.dev).
     """
     workspace = workspace_access.workspace
 
@@ -53,20 +52,17 @@ async def get_depot_token(
             f"Getting Depot build token for deployment {deployment_name} (ID: {deployment.id}) in workspace {workspace.id}"
         )
 
-        # Get ECR registry URL for the workspace
-        registry_url = ecr_auth_service.get_registry_url()
-
         # Get or create project and generate token (cached in Redis with TTL)
         credentials = await depot_service.get_build_token(
             deployment=deployment,
-            registry_url=registry_url,
+            registry_url=app_config.DEPOT_REGISTRY_URL,
         )
 
         return DepotTokenResponse(
             project_id=credentials.project_id,
             token=credentials.token,
             expires_at=credentials.expires_at,
-            registry_url=credentials.registry_url,
+            registry_url=app_config.DEPOT_REGISTRY_URL,
         )
 
     except ValueError as e:

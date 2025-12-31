@@ -1,8 +1,7 @@
 """Unit tests for CLI configuration"""
 
-import pytest
-
 import cli.config
+import pytest
 from cli.config import CLIConfig
 
 
@@ -189,4 +188,3 @@ class TestCLIConfig:
 
         assert config.api_base_url == "https://api.lazycloud.dev"
         assert config.api_version == "v1"
-        assert config.registry_type == "ecr"

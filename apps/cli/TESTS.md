@@ -234,7 +234,6 @@ apps/cli/tests/
 - [ ] Scale operations
 - [ ] Rolling updates
 - [ ] Build error handling
-- [ ] Registry authentication
 
 ## Testing Tools & Dependencies
 

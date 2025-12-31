@@ -40,7 +40,6 @@ def mock_config_file(mock_config_dir):
         lines = ["[api]"]
         lines.append(f'base_url = "{api_base_url or "https://api.lazycloud.dev"}"')
         lines.append('version = "v1"')
-        lines.append('registry_type = "ecr"')
         lines.append("")
         lines.append("[auth]")
         if access_token:

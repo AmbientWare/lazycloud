@@ -20,9 +20,9 @@ from models.helm import (
     WorkloadType,
 )
 
+from backend.config import app_config
 from backend.database.compose import ComposeDeploymentPydantic
 from backend.database.secrets import SecretPydantic
-from backend.services import get_ecr_auth_service
 from backend.services.compose.diff_checker import get_shared_volumes
 from backend.services.compose.validator import ComposeValidator
 from backend.services.k8s.generators.configuration import (
@@ -142,21 +142,20 @@ class HelmValuesGenerator:
         self, service: ComposeService, compose: ComposeFile
     ) -> tuple[ServiceValues, dict[str, str] | None]:
         """Generate Helm values for a single service."""
-        ecr_auth_service = get_ecr_auth_service()
-
         if not service.image:
             logger.error(f"Service '{service.name}' has no image! Full service: {service.model_dump()}")
             raise ValueError(f"Service {service.name} has no image")
 
         image_info = parse_image(service.image)
 
+        # For built images, use Depot registry URL
         if service.build is not None:
-            image_info.pullPolicy = ecr_auth_service.get_pull_policy()
-            image_info.repository = ecr_auth_service.get_repository_url(
-                workspace_id=self.deployment.workspace_id,
-                deployment_name=self.deployment.name,
-                image_name=image_info.repository,
-            )
+            image_info.pullPolicy = "Always"
+            # Depot registry format: registry.depot.dev/<project_id>/<image>
+            if self.deployment.depot_project_id:
+                image_info.repository = f"{app_config.DEPOT_REGISTRY_URL}/{self.deployment.depot_project_id}/{image_info.repository}"
+            else:
+                logger.warning(f"No depot_project_id for deployment {self.deployment.name}, using original image")
 
         service_values = ServiceValues(
             replicas=service.deploy.replicas,
@@ -184,6 +183,10 @@ class HelmValuesGenerator:
             service_values.annotations["lazycloud.dev/deployment-id"] = (
                 self.deployment.id
             )
+
+        # Add imagePullSecrets for services that use Depot registry (built images)
+        if service.build is not None and self.deployment.depot_project_id:
+            service_values.imagePullSecrets = [{"name": "depot-registry"}]
 
         # Add restart policy first to determine workload type
         restart_policy = self._map_restart_policy(service.deploy)
