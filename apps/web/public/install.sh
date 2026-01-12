@@ -54,22 +54,45 @@ download() {
     fi
 }
 
+verify_checksum() {
+    file="$1"
+    expected="$2"
+    if command_exists sha256sum; then
+        actual=$(sha256sum "$file" | awk '{print $1}')
+    elif command_exists shasum; then
+        actual=$(shasum -a 256 "$file" | awk '{print $1}')
+    else
+        debug "No checksum tool found, skipping verification"
+        return 0
+    fi
+    [ "$actual" = "$expected" ] || error "Checksum verification failed for $(basename "$file")"
+}
+
 install_lazycloud() {
     PLATFORM_ARCH=$(detect_platform)
     PLATFORM=$(echo "$PLATFORM_ARCH" | cut -d'-' -f1)
     ARCH=$(echo "$PLATFORM_ARCH" | cut -d'-' -f2)
 
     if [ "$LAZYCLOUD_VERSION" = "latest" ]; then
-        URL="https://github.com/AmbientWare/lazycloud-releases/releases/latest/download/lazycloud-${PLATFORM}-${ARCH}.tar.gz"
+        BASE_URL="https://github.com/AmbientWare/lazycloud-releases/releases/latest/download"
     else
-        URL="https://github.com/AmbientWare/lazycloud-releases/releases/download/${LAZYCLOUD_VERSION}/lazycloud-${PLATFORM}-${ARCH}.tar.gz"
+        BASE_URL="https://github.com/AmbientWare/lazycloud-releases/releases/download/${LAZYCLOUD_VERSION}"
     fi
+
+    FILENAME="lazycloud-${PLATFORM}-${ARCH}.tar.gz"
+    URL="${BASE_URL}/${FILENAME}"
+    CHECKSUM_URL="${BASE_URL}/${FILENAME}.sha256"
 
     TEMP_DIR=$(mktemp -d)
     trap "rm -rf $TEMP_DIR" EXIT
 
-    download "$URL" "$TEMP_DIR/lazycloud.tar.gz"
-    tar -xzf "$TEMP_DIR/lazycloud.tar.gz" -C "$TEMP_DIR"
+    download "$URL" "$TEMP_DIR/$FILENAME"
+    download "$CHECKSUM_URL" "$TEMP_DIR/${FILENAME}.sha256"
+
+    EXPECTED_CHECKSUM=$(cat "$TEMP_DIR/${FILENAME}.sha256" | awk '{print $1}')
+    verify_checksum "$TEMP_DIR/$FILENAME" "$EXPECTED_CHECKSUM"
+
+    tar -xzf "$TEMP_DIR/$FILENAME" -C "$TEMP_DIR"
     mkdir -p "$INSTALL_DIR"
     mv "$TEMP_DIR/lazycloud" "$INSTALL_DIR/lazycloud"
     chmod +x "$INSTALL_DIR/lazycloud"

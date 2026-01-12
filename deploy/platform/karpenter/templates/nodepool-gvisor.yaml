@@ -37,6 +37,15 @@ spec:
   disruption:
     consolidationPolicy: WhenEmptyOrUnderutilized
     consolidateAfter: 5m
+    budgets:
+      - nodes: "0"
+        reasons:
+          - Drifted
+      - nodes: "1"
+        reasons:
+          - Drifted
+        schedule: "0 6 * * *"
+        duration: 4h
   limits:
     cpu: "500"
     memory: 500Gi

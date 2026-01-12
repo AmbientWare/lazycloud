@@ -22,26 +22,43 @@ function Get-Architecture {
     }
 }
 
+function Test-Checksum {
+    param($FilePath, $ExpectedHash)
+    $actualHash = (Get-FileHash $FilePath -Algorithm SHA256).Hash.ToLower()
+    if ($actualHash -ne $ExpectedHash.ToLower()) {
+        Write-Err "Checksum verification failed for $(Split-Path $FilePath -Leaf)"
+    }
+}
+
 function Install-LazyCloud {
     $arch = Get-Architecture
 
     if ($LAZYCLOUD_VERSION -eq "latest") {
-        $url = "https://github.com/AmbientWare/lazycloud-releases/releases/latest/download/lazycloud-windows-$arch.zip"
+        $baseUrl = "https://github.com/AmbientWare/lazycloud-releases/releases/latest/download"
     } else {
-        $url = "https://github.com/AmbientWare/lazycloud-releases/releases/download/$LAZYCLOUD_VERSION/lazycloud-windows-$arch.zip"
+        $baseUrl = "https://github.com/AmbientWare/lazycloud-releases/releases/download/$LAZYCLOUD_VERSION"
     }
+
+    $filename = "lazycloud-windows-$arch.zip"
+    $url = "$baseUrl/$filename"
+    $checksumUrl = "$baseUrl/$filename.sha256"
 
     New-Item -ItemType Directory -Force -Path $INSTALL_DIR | Out-Null
 
     $tempDir = New-Item -ItemType Directory -Force -Path "$env:TEMP\lazycloud-install-cli"
-    $zipPath = "$tempDir\lazycloud.zip"
+    $zipPath = "$tempDir\$filename"
+    $checksumPath = "$tempDir\$filename.sha256"
 
     Write-Debug "Downloading $url"
     try {
         Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing
+        Invoke-WebRequest -Uri $checksumUrl -OutFile $checksumPath -UseBasicParsing
     } catch {
         Write-Err "Download failed: $_"
     }
+
+    $expectedChecksum = (Get-Content $checksumPath -Raw).Trim().Split()[0]
+    Test-Checksum -FilePath $zipPath -ExpectedHash $expectedChecksum
 
     Expand-Archive -Path $zipPath -DestinationPath $tempDir -Force
 
