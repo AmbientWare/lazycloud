@@ -5,4 +5,4 @@ karpenter:
     clusterName: lazycloud-prod-us-east-1-eks
     clusterEndpoint: https://C88AD0F29880698411134B05700C47EC.gr7.us-east-1.eks.amazonaws.com
     interruptionQueue: lazycloud-prod-us-east-1-karpenter
-gvisorAmiId: ami-02cbef054c5f26120
+gvisorAmiId: ami-0852132cc78df56a7
