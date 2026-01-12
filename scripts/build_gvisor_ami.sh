@@ -14,14 +14,15 @@ if [ -z "$PIPELINE_ARN" ]; then
 fi
 
 echo "Starting image build..."
-aws imagebuilder start-image-pipeline-execution --image-pipeline-arn "$PIPELINE_ARN"
+BUILD_OUTPUT=$(aws imagebuilder start-image-pipeline-execution --image-pipeline-arn "$PIPELINE_ARN")
+IMAGE_BUILD_ARN=$(echo "$BUILD_OUTPUT" | jq -r '.imageBuildVersionArn')
 
+echo "Build started: $IMAGE_BUILD_ARN"
 echo "Waiting for build to complete (this takes ~15-20 minutes)..."
 
 while true; do
-    STATUS=$(aws imagebuilder list-image-build-versions \
-        --image-version-arn "arn:aws:imagebuilder:us-east-1:$(aws sts get-caller-identity --query Account --output text):image/lazycloud-al2023-gvisor/1.0.0" \
-        --query "imageSummaryList[0].state.status" --output text 2>/dev/null || echo "PENDING")
+    STATUS=$(aws imagebuilder get-image --image-build-version-arn "$IMAGE_BUILD_ARN" \
+        --query "image.state.status" --output text 2>/dev/null || echo "PENDING")
 
     echo "Status: $STATUS"
 
@@ -32,6 +33,9 @@ while true; do
             ;;
         FAILED|CANCELLED)
             echo "Build failed with status: $STATUS"
+            REASON=$(aws imagebuilder get-image --image-build-version-arn "$IMAGE_BUILD_ARN" \
+                --query "image.state.reason" --output text 2>/dev/null || echo "Unknown")
+            echo "Reason: $REASON"
             exit 1
             ;;
         *)
@@ -40,8 +44,9 @@ while true; do
     esac
 done
 
-echo "Getting AMI ID..."
-AMI_ID=$(aws ec2 describe-images --owners self --filters "Name=tag:Runtime,Values=gvisor" --query "Images | sort_by(@, &CreationDate) | [-1].ImageId" --output text)
+echo "Getting AMI ID from build..."
+AMI_ID=$(aws imagebuilder get-image --image-build-version-arn "$IMAGE_BUILD_ARN" \
+    --query "image.outputResources.amis[0].image" --output text)
 
 if [ -z "$AMI_ID" ] || [ "$AMI_ID" = "None" ]; then
     echo "Error: Could not find AMI"

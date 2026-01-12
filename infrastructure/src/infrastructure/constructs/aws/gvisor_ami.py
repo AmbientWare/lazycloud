@@ -1,3 +1,4 @@
+import aws_cdk as cdk
 from aws_cdk import (
     aws_ec2 as ec2,
     aws_iam as iam,
@@ -70,13 +71,19 @@ class GvisorAmiConstruct(Construct):
             data=self._get_component_data(),
         )
 
-        # Image recipe based on AL2023 EKS-optimized AMI
+        # Get EKS-optimized AL2023 AMI from SSM
+        eks_ami_param = cdk.aws_ssm.StringParameter.value_for_string_parameter(
+            self,
+            "/aws/service/eks/optimized-ami/1.31/amazon-linux-2023/x86_64/standard/recommended/image_id",
+        )
+
+        # Image recipe based on EKS-optimized AL2023 AMI
         self.recipe = imagebuilder.CfnImageRecipe(
             self,
             "GvisorRecipe",
             name=f"{config.org_name}-al2023-gvisor",
-            version="1.0.0",
-            parent_image=f"arn:aws:imagebuilder:{config.aws_region}:aws:image/amazon-linux-2023-x86/x.x.x",
+            version="1.0.1",
+            parent_image=eks_ami_param,
             components=[
                 imagebuilder.CfnImageRecipe.ComponentConfigurationProperty(
                     component_arn=self.gvisor_component.attr_arn,
