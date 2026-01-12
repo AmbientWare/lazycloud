@@ -1,9 +1,11 @@
+"""Rollback compose flow - rolls back to a previous Helm revision."""
+
 import yaml
 from kubernetes.client.exceptions import ApiException
 from loguru import logger
 from models.deployments import DeploymentStates
 from models.k8s import WorkloadType
-from prefect import task
+from prefect import flow
 
 from backend.config import app_config
 from backend.database import get_db_context
@@ -17,8 +19,8 @@ from backend.services.k8s.helm_manager import HelmManager
 from backend.services.k8s.helm_values_generator import HelmValuesGenerator
 
 
-@task(log_prints=True)
-async def rollback_compose_task(deployment_id: str, revision: int) -> None:
+@flow(name="rollback-compose-flow", log_prints=True)
+async def rollback_compose_flow(deployment_id: str, revision: int) -> None:
     """Rollback a Docker Compose deployment to a previous Helm revision."""
     logger.info(
         f"Starting rollback of deployment {deployment_id} to revision {revision}"
@@ -233,7 +235,7 @@ async def rollback_compose_task(deployment_id: str, revision: int) -> None:
         # Perform Helm rollback (external)
         rollback_result = helm_manager.rollback(name, namespace, revision)
         if not rollback_result.success:
-            raise Exception(f"Helm rollback failed: {rollback_result.error}")
+            raise ValueError(f"Helm rollback failed: {rollback_result.error}")
 
         if not rollback_result.revision:
             raise ValueError("Helm rollback did not return a revision number")
@@ -291,7 +293,7 @@ async def rollback_compose_task(deployment_id: str, revision: int) -> None:
                         f"Deployment {deployment_id} not found during rollback update"
                     )
 
-                # Optimistic concurrency check - verify state hasn't changed unexpectedly
+                # Optimistic concurrency check
                 if deployment.state in (
                     DeploymentStates.DELETING,
                     DeploymentStates.DELETED,

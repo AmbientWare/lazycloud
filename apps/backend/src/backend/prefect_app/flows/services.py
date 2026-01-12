@@ -1,12 +1,14 @@
+"""Service management flows - restart services."""
+
 from loguru import logger
-from prefect import task
+from prefect import flow
 
 from backend.database import get_db_context
 from backend.services.k8s.workload_manager import WorkloadManager
 
 
-@task(log_prints=True)
-async def restart_service_task(deployment_id: str, service_name: str) -> None:
+@flow(name="restart-service-flow", log_prints=True)
+async def restart_service_flow(deployment_id: str, service_name: str) -> None:
     """Restart a specific service within a deployment."""
     logger.info(
         f"Starting restart of service {service_name} in deployment {deployment_id}"
@@ -17,12 +19,15 @@ async def restart_service_task(deployment_id: str, service_name: str) -> None:
         deployment = await db.compose_deployments.get_by_id(deployment_id)
 
     if not deployment:
-        raise Exception(f"Deployment {deployment_id} not found")
+        raise ValueError(f"Deployment {deployment_id} not found")
+
+    if not deployment.helm_values or not deployment.helm_values.services:
+        raise ValueError(f"Deployment {deployment_id} has no services configured")
 
     # Check if service exists
     service_names = [service.name for service in deployment.helm_values.services]
     if service_name not in service_names:
-        raise Exception(f"Service '{service_name}' not found in deployment")
+        raise ValueError(f"Service '{service_name}' not found in deployment")
 
     # Find the service by name
     service = next(s for s in deployment.helm_values.services if s.name == service_name)
@@ -35,13 +40,13 @@ async def restart_service_task(deployment_id: str, service_name: str) -> None:
     )
 
     if not result.success:
-        raise Exception(f"Failed to restart service: {result.message}")
+        raise ValueError(f"Failed to restart service: {result.message}")
 
     logger.info(f"Successfully restarted service {service_name}")
 
 
-@task(log_prints=True)
-async def restart_all_services_task(deployment_id: str) -> None:
+@flow(name="restart-all-services-flow", log_prints=True)
+async def restart_all_services_flow(deployment_id: str) -> None:
     """Restart all services within a deployment."""
     logger.info(f"Starting restart of all services in deployment {deployment_id}")
 
@@ -50,7 +55,10 @@ async def restart_all_services_task(deployment_id: str) -> None:
         deployment = await db.compose_deployments.get_by_id(deployment_id)
 
     if not deployment:
-        raise Exception(f"Deployment {deployment_id} not found")
+        raise ValueError(f"Deployment {deployment_id} not found")
+
+    if not deployment.helm_values or not deployment.helm_values.services:
+        raise ValueError(f"Deployment {deployment_id} has no services configured")
 
     # Use WorkloadOperations to restart all services
     workload_ops = WorkloadManager()
@@ -59,7 +67,7 @@ async def restart_all_services_task(deployment_id: str) -> None:
     )
 
     if result.failed > 0:
-        raise Exception(
+        raise ValueError(
             f"Failed to restart {result.failed} out of {result.total_services} services"
         )
 

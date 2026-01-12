@@ -14,10 +14,8 @@ from backend.api.utils import (
     create_sse_stream_with_subscription,
 )
 from backend.database.compose import ComposeDeploymentPydantic
-from backend.prefect_app.services import (
-    restart_all_services_task,
-    restart_service_task,
-)
+from backend.prefect_app.client import run_flow
+from backend.prefect_app.registry import Deployments
 from backend.services.k8s.status_watcher import StatusWatcher
 from backend.services.monitoring.monitor_config import ServiceMonitorConfig
 
@@ -91,12 +89,13 @@ async def restart_all_services(
 ) -> ServiceTaskStatusResponse:
     """Restart all services within a deployment."""
     try:
-        task_future = restart_all_services_task.delay(
-            deployment_id=deployment.id,
+        flow_run_id = await run_flow(
+            Deployments.RESTART_ALL_SERVICES,
+            {"deployment_id": deployment.id},
         )
 
         return ServiceTaskStatusResponse(
-            task_id=task_future.task_run_id,
+            task_id=flow_run_id,
             status=TaskStatus.PENDING,
             message="Restart all services task submitted",
             deployment_id=deployment.id,
@@ -119,13 +118,16 @@ async def restart_service(
 ) -> ServiceTaskStatusResponse:
     """Restart a specific service within a deployment."""
     try:
-        task_future = restart_service_task.delay(
-            deployment_id=deployment.id,
-            service_name=service_name,
+        flow_run_id = await run_flow(
+            Deployments.RESTART_SERVICE,
+            {
+                "deployment_id": deployment.id,
+                "service_name": service_name,
+            },
         )
 
         return ServiceTaskStatusResponse(
-            task_id=task_future.task_run_id,
+            task_id=flow_run_id,
             status=TaskStatus.PENDING,
             message=f"Restart service {service_name} task submitted",
             deployment_id=deployment.id,

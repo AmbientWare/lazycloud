@@ -2,7 +2,8 @@ from loguru import logger
 from prefect import flow
 
 from backend.database import get_db_context
-from backend.prefect_app.deployment.destroy import destroy_compose_task
+from backend.prefect_app.client import run_flow
+from backend.prefect_app.registry import Deployments
 
 
 @flow(log_prints=True)
@@ -51,17 +52,18 @@ async def cleanup_orphaned_deployments() -> dict:
                     skipped += 1
                     continue
 
-                # Trigger task and set task_run_id atomically
+                # Trigger flow and set task_run_id atomically
                 logger.info(
                     f"Triggering cleanup for orphaned deployment {deployment.id} "
                     f"(workspace {deployment.workspace_id}, state: {deployment.state})"
                 )
-                task_future = destroy_compose_task.delay(
-                    deployment_id=str(deployment.id)
+                flow_run_id = await run_flow(
+                    Deployments.DESTROY_COMPOSE,
+                    {"deployment_id": str(deployment.id)},
                 )
 
                 # Set task_run_id to prevent duplicate triggers
-                deployment_check.current_task_run_id = task_future.task_run_id
+                deployment_check.current_task_run_id = flow_run_id
                 async with get_db_context() as db:
                     await db.compose_deployments.update(deployment_check)
 
