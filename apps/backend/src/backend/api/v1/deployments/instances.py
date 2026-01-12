@@ -13,7 +13,8 @@ from backend.api.dependencies import (
 )
 from backend.api.utils import create_sse_stream_with_subscription
 from backend.database.compose import ComposeDeploymentPydantic
-from backend.prefect_app.instances import delete_instance_task
+from backend.prefect_app.client import run_flow
+from backend.prefect_app.registry import Deployments
 from backend.services.monitoring.monitor_config import LogMonitorConfig
 
 instances_router = APIRouter(prefix="/{deployment_id}/instances")
@@ -69,20 +70,23 @@ async def delete_instance(
                 detail=f"Pod '{pod_name}' does not belong to any service in this deployment",
             )
 
-        # Submit task to delete the instance
+        # Submit flow to delete the instance
         logger.info(
-            f"Submitting delete instance task for pod {pod_name} in deployment {deployment.id} (force={force})"
+            f"Submitting delete instance flow for pod {pod_name} in deployment {deployment.id} (force={force})"
         )
 
-        task_future = delete_instance_task.delay(
-            deployment_id=deployment.id,
-            service_name=service.name,
-            pod_name=pod_name,
-            force=force,
+        flow_run_id = await run_flow(
+            Deployments.DELETE_INSTANCE,
+            {
+                "deployment_id": deployment.id,
+                "service_name": service.name,
+                "pod_name": pod_name,
+                "force": force,
+            },
         )
 
         return InstanceTaskStatusResponse(
-            task_id=task_future.task_run_id,
+            task_id=flow_run_id,
             status=TaskStatus.PENDING,
             message=f"Instance {pod_name} deletion task submitted",
             deployment_id=deployment.id,

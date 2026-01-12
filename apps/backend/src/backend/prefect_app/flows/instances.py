@@ -1,12 +1,14 @@
+"""Instance management flows - delete pods/instances."""
+
 from loguru import logger
-from prefect import task
+from prefect import flow
 
 from backend.database import get_db_context
 from backend.services.k8s.pod_manager import KubernetesPodManager
 
 
-@task(log_prints=True)
-async def delete_instance_task(
+@flow(name="delete-instance-flow", log_prints=True)
+async def delete_instance_flow(
     deployment_id: str, service_name: str, pod_name: str, force: bool = False
 ) -> None:
     """Delete a specific instance (pod) in a deployment."""
@@ -18,16 +20,16 @@ async def delete_instance_task(
     async with get_db_context() as db:
         deployment = await db.compose_deployments.get_by_id(deployment_id)
         if not deployment:
-            raise Exception(f"Deployment {deployment_id} not found")
+            raise ValueError(f"Deployment {deployment_id} not found")
 
     # Validate service exists in deployment
     helm_values = deployment.helm_values
     if not helm_values or not helm_values.services:
-        raise Exception("Deployment does not have service configuration")
+        raise ValueError("Deployment does not have service configuration")
 
     service = next((s for s in helm_values.services if s.name == service_name), None)
     if not service:
-        raise Exception(f"Service '{service_name}' not found in deployment")
+        raise ValueError(f"Service '{service_name}' not found in deployment")
 
     namespace = deployment.namespace
     resource_name = service.resourceName
@@ -54,7 +56,7 @@ async def delete_instance_task(
 
         else:
             # Other verification errors (e.g., wrong ownership) are real errors
-            raise Exception(
+            raise ValueError(
                 verification_result.error or "Pod ownership verification failed"
             )
 
@@ -68,6 +70,6 @@ async def delete_instance_task(
     )
 
     if not delete_result.success:
-        raise Exception(delete_result.error or "Failed to delete pod")
+        raise ValueError(delete_result.error or "Failed to delete pod")
 
     logger.info(f"Successfully deleted instance {pod_name}")

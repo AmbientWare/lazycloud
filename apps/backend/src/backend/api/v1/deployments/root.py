@@ -32,11 +32,8 @@ from backend.database import Database, get_db
 from backend.database.compose import ComposeDeploymentPydantic
 from backend.database.user_workspaces import WorkspaceRole
 from backend.database.users import UserPydantic
-from backend.prefect_app.deployment import (
-    deploy_compose_task,
-    destroy_compose_task,
-    rollback_compose_task,
-)
+from backend.prefect_app.client import run_flow
+from backend.prefect_app.registry import Deployments
 from backend.services.compose.validation import validate_deployment_request
 from backend.services.k8s import create_ns_name, create_release_name
 from backend.services.k8s.helm_manager import HelmManager
@@ -389,23 +386,26 @@ async def deploy_deployment(
         deployment.helm_values = helm_values
         await db.compose_deployments.update(deployment)
 
-    # Trigger the deploy task
-    task_future = deploy_compose_task.delay(
-        deployment_id=deployment.id,
-        wait_for_secrets=request.secrets,
-        service_names=request.service_names,
+    # Trigger the deploy flow
+    flow_run_id = await run_flow(
+        Deployments.DEPLOY_COMPOSE,
+        {
+            "deployment_id": deployment.id,
+            "wait_for_secrets": request.secrets,
+            "service_names": request.service_names,
+        },
     )
 
-    # Update deployment with task_run_id after task is started
-    # The task's idempotency check handles the PENDING state correctly
+    # Update deployment with flow_run_id after flow is started
+    # The flow's idempotency check handles the PENDING state correctly
     deployment = await db.compose_deployments.get_by_id(deployment.id, with_lock=True)
     if deployment:
-        deployment.current_task_run_id = task_future.task_run_id
+        deployment.current_task_run_id = flow_run_id
         deployment.status_message = "Deployment task queued"
         await db.compose_deployments.update(deployment)
 
     return DeploymentTaskStatusResponse(
-        task_id=task_future.task_run_id,
+        task_id=flow_run_id,
         status=TaskStatus.PENDING,
         message="Deployment task queued",
         deployment_id=deployment.id,
@@ -422,21 +422,22 @@ async def delete_deployment(
 ) -> DeploymentTaskStatusResponse:
     """Delete a deployment."""
     try:
-        task_future = destroy_compose_task.delay(
-            deployment_id=deployment.id,
+        flow_run_id = await run_flow(
+            Deployments.DESTROY_COMPOSE,
+            {"deployment_id": deployment.id},
         )
 
         deployment = await db.compose_deployments.get_by_id(
             deployment.id, with_lock=True
         )
         if deployment:
-            deployment.current_task_run_id = task_future.task_run_id
+            deployment.current_task_run_id = flow_run_id
             deployment.state = DeploymentStates.DELETING
             deployment.status_message = "Deletion initiated"
             await db.compose_deployments.update(deployment)
 
         return DeploymentTaskStatusResponse(
-            task_id=task_future.task_run_id,
+            task_id=flow_run_id,
             status=TaskStatus.PENDING,
             message="Deletion task queued",
             deployment_id=deployment.id,
@@ -514,20 +515,23 @@ async def rollback_deployment(
             detail=f"Revision must be greater than 0 (got: {request.revision})",
         )
 
-    task_future = rollback_compose_task.delay(
-        deployment_id=deployment.id,
-        revision=request.revision,
+    flow_run_id = await run_flow(
+        Deployments.ROLLBACK_COMPOSE,
+        {
+            "deployment_id": deployment.id,
+            "revision": request.revision,
+        },
     )
 
     deployment = await db.compose_deployments.get_by_id(deployment.id, with_lock=True)
     if deployment:
-        deployment.current_task_run_id = task_future.task_run_id
+        deployment.current_task_run_id = flow_run_id
         deployment.state = DeploymentStates.DEPLOYING
         deployment.status_message = f"Rollback to revision {request.revision} queued"
         await db.compose_deployments.update(deployment)
 
     return DeploymentTaskStatusResponse(
-        task_id=task_future.task_run_id,
+        task_id=flow_run_id,
         status=TaskStatus.PENDING,
         message=f"Rollback to revision {request.revision} queued",
         deployment_id=deployment.id,

@@ -1,7 +1,9 @@
+"""Deploy compose flow - deploys Docker Compose to Kubernetes."""
+
 from loguru import logger
 from models.deployments import DeploymentStates
 from models.secrets import SecretState
-from prefect import task
+from prefect import flow
 
 from backend.database import get_db_context
 from backend.prefect_app.deployment.tasks import (
@@ -19,8 +21,8 @@ from backend.services.k8s import create_release_name
 from backend.services.k8s.helm_manager import HelmManager
 
 
-@task(log_prints=True)
-async def deploy_compose_task(
+@flow(name="deploy-compose-flow", log_prints=True)
+async def deploy_compose_flow(
     deployment_id: str,
     wait_for_secrets: bool = False,
     service_names: list[str] | None = None,
@@ -153,14 +155,13 @@ async def deploy_compose_task(
         )
 
         # Convert deployment errors to simple user-friendly messages
-        # All validation (compose, quotas, etc.) is done upfront, so these are deployment failures
         error_str = str(e).lower()
         if "timeout" in error_str:
             user_message = "Deployment timed out. Please try again."
         else:
             user_message = "Deployment failed. Please try again or contact support if the issue persists."
 
-        # Update state to failed (Helm's atomic mode handles cleanup)
+        # Update state to failed
         try:
             await update_deployment_state_task(
                 deployment_id,

@@ -1,22 +1,14 @@
 import sentry_sdk
 from loguru import logger
 from prefect import serve as flow_serve
-from prefect.task_worker import serve as task_worker_serve
 from sentry_sdk.integrations.loguru import LoguruIntegration
 
 from backend.config import app_config
 from backend.prefect_app.deployment import (
     cleanup_stale_pending_deployment,
-    deploy_compose_task,
-    destroy_compose_task,
     reconcile_rollback_states_deployment,
-    rollback_compose_task,
 )
-from backend.prefect_app.instances import delete_instance_task
-from backend.prefect_app.services import (
-    restart_all_services_task,
-    restart_service_task,
-)
+from backend.prefect_app.registry import Deployments
 from backend.prefect_app.subscription_monitor import (
     monitor_subscription_states_deployment,
 )
@@ -42,15 +34,21 @@ if app_config.SENTRY_DSN:
 
 
 def serve_background_tasks():
-    """Serve Prefect tasks."""
-    task_worker_serve(
-        deploy_compose_task,
-        destroy_compose_task,
-        rollback_compose_task,
-        delete_instance_task,
-        restart_service_task,
-        restart_all_services_task,
+    """Serve Prefect flow deployments to the background work pool.
+
+    These flows are triggered by the API via run_flow() and executed
+    by workers polling the work pool (HTTP-based, more reliable than
+    WebSocket-based task workers).
+    """
+    # Get all registered deployments and convert to Prefect deployment objects
+    deployments = [d.to_deployment() for d in Deployments.all()]
+
+    logger.info(
+        f"Starting background flow server with {len(deployments)} deployments: "
+        f"{[d.name for d in deployments]}"
     )
+
+    flow_serve(*deployments)
 
 
 def serve_crons():

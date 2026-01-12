@@ -1,9 +1,11 @@
+"""Destroy compose flow - removes Docker Compose deployment from Kubernetes."""
+
 from datetime import UTC, datetime
 
 import yaml
 from loguru import logger
 from models.deployments import DeploymentStates
-from prefect import task
+from prefect import flow
 
 from backend.database import get_db_context
 from backend.prefect_app.deployment.tasks import unregister_custom_domains_task
@@ -14,8 +16,8 @@ from backend.services.k8s import create_release_name
 from backend.services.k8s.helm_manager import HelmManager
 
 
-@task(log_prints=True)
-async def destroy_compose_task(deployment_id: str) -> None:
+@flow(name="destroy-compose-flow", log_prints=True)
+async def destroy_compose_flow(deployment_id: str) -> None:
     """Destroy a Docker Compose deployment from Kubernetes."""
     logger.info(f"Starting destruction of deployment {deployment_id}")
 
@@ -26,7 +28,7 @@ async def destroy_compose_task(deployment_id: str) -> None:
         )
 
     if not deployment:
-        raise Exception(f"Deployment {deployment_id} not found")
+        raise ValueError(f"Deployment {deployment_id} not found")
 
     # Update status to deleting
     await update_deployment_state(
@@ -54,7 +56,7 @@ async def destroy_compose_task(deployment_id: str) -> None:
     namespace = deployment.namespace
 
     if not name:
-        raise Exception("Deployment name is required")
+        raise ValueError("Deployment name is required")
 
     try:
         # Step 1: Destroy application
@@ -83,8 +85,6 @@ async def destroy_compose_task(deployment_id: str) -> None:
             logger.warning(f"Depot cleanup failed (continuing): {depot_error}")
 
         # Step 4: Update deployment state to DELETED and set deleted_at
-        # Re-fetch deployment to ensure we have latest state (may have been updated)
-
         async with get_db_context() as db:
             deployment = await db.compose_deployments.get_by_id(
                 deployment_id, include_deleted=True
