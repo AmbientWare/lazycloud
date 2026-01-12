@@ -55,7 +55,7 @@ async def rollback_compose_flow(deployment_id: str, revision: int) -> None:
         raise ValueError("Deployment name is required")
 
     # Step 2: Helm validation (external calls - NO DB transaction)
-    history = helm_manager.get_history(name, namespace)
+    history = await helm_manager.get_history(name, namespace)
     revision_numbers = [
         item.get("revision") for item in history if item.get("revision")
     ]
@@ -72,7 +72,7 @@ async def rollback_compose_flow(deployment_id: str, revision: int) -> None:
         )
 
     # Step 3: Check idempotency - if Helm is already at target revision
-    helm_current_revision = helm_manager._get_latest_revision(name, namespace)
+    helm_current_revision = await helm_manager._get_latest_revision(name, namespace)
     if helm_current_revision == revision:
         logger.info(
             f"Helm is already at target revision {revision}. Checking DB state for idempotency."
@@ -124,12 +124,12 @@ async def rollback_compose_flow(deployment_id: str, revision: int) -> None:
     # Step 5: Perform the actual rollback (external operations - NO DB transaction)
     try:
         # Get compose YAML from target revision
-        compose_yaml = helm_manager.get_compose_yaml_from_release(
+        compose_yaml = await helm_manager.get_compose_yaml_from_release(
             name, namespace, revision
         )
 
         if not compose_yaml:
-            history = helm_manager.get_history(name, namespace)
+            history = await helm_manager.get_history(name, namespace)
             available_revisions = [
                 item.get("revision")
                 for item in history
@@ -233,7 +233,7 @@ async def rollback_compose_flow(deployment_id: str, revision: int) -> None:
                     raise ValueError(f"Failed to delete Job {service.name}: {e}") from e
 
         # Perform Helm rollback (external)
-        rollback_result = helm_manager.rollback(name, namespace, revision)
+        rollback_result = await helm_manager.rollback(name, namespace, revision)
         if not rollback_result.success:
             raise ValueError(f"Helm rollback failed: {rollback_result.error}")
 
@@ -248,9 +248,9 @@ async def rollback_compose_flow(deployment_id: str, revision: int) -> None:
             )
 
         # Verify Helm state
-        actual_helm_revision = helm_manager._get_latest_revision(name, namespace)
+        actual_helm_revision = await helm_manager._get_latest_revision(name, namespace)
         if actual_helm_revision != new_revision:
-            history = helm_manager.get_history(name, namespace)
+            history = await helm_manager.get_history(name, namespace)
             history_revisions = [
                 item.get("revision") for item in history if item.get("revision")
             ]

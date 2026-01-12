@@ -114,7 +114,7 @@ async def validate_deployment_request(
         release_exists = False
         try:
             release_exists, _ = await asyncio.wait_for(
-                helm_manager.check_release_status_async(
+                helm_manager.check_release_status(
                     name,
                     deployment.namespace,
                 ),

@@ -45,7 +45,7 @@ async def reconcile_rollback_states(
                 skipped += 1
                 continue
 
-            helm_revision = helm_manager._get_latest_revision(name, namespace)
+            helm_revision = await helm_manager._get_latest_revision(name, namespace)
             db_revision = deployment.current_helm_revision
 
             if helm_revision is None:
@@ -56,7 +56,7 @@ async def reconcile_rollback_states(
                 skipped += 1
                 continue
 
-            history = helm_manager.get_history(name, namespace)
+            history = await helm_manager.get_history(name, namespace)
             history_revisions = [
                 item.get("revision") for item in history if item.get("revision")
             ]

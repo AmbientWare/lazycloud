@@ -465,7 +465,7 @@ async def get_deployment_history(
         raise HTTPException(status_code=400, detail="Deployment name is required")
 
     helm_manager = HelmManager()
-    history = helm_manager.get_history(name, namespace)
+    history = await helm_manager.get_history(name, namespace)
 
     revisions = [
         Revision(

@@ -3,7 +3,6 @@ import json
 import os
 import subprocess
 import tempfile
-import time
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -54,16 +53,21 @@ class DeploymentResult(BaseModel):
 
 
 class HelmManager:
-    """Manages Helm deployments with robust error handling and recovery."""
+    """Manages Helm deployments with robust error handling and recovery.
+
+    All methods are async to avoid blocking the event loop during I/O operations.
+    Helm commands run via asyncio.create_subprocess_exec() and K8s API calls
+    are wrapped with asyncio.to_thread() for non-blocking execution.
+    """
 
     def __init__(self):
         pass
 
-    def _namespace_exists(self, namespace: str) -> bool:
+    async def _namespace_exists(self, namespace: str) -> bool:
         """Check if a namespace exists."""
         try:
             core_v1 = get_core_v1_api()
-            core_v1.read_namespace(name=namespace)
+            await asyncio.to_thread(core_v1.read_namespace, name=namespace)
             return True
 
         except ApiException as e:
@@ -78,15 +82,17 @@ class HelmManager:
             logger.warning(f"Unexpected error checking namespace {namespace}: {e}")
             return False
 
-    def deploy(self, config: HelmDeploymentConfig) -> DeploymentResult:
+    async def deploy(self, config: HelmDeploymentConfig) -> DeploymentResult:
         """Deploy or update a Helm release with intelligent handling."""
         logger.info(f"Deploying {config.release_name} in namespace {config.namespace}")
 
         # Check if release exists
-        exists, _ = self.check_release_status(config.release_name, config.namespace)
+        exists, _ = await self.check_release_status(
+            config.release_name, config.namespace
+        )
         if exists and config.strategy == DeploymentStrategy.RECREATE:
             logger.info("Using RECREATE strategy, deleting existing release first")
-            delete_result = self.destroy(config.release_name, config.namespace)
+            delete_result = await self.destroy(config.release_name, config.namespace)
             if not delete_result.success:
                 return delete_result
             exists = False
@@ -97,14 +103,14 @@ class HelmManager:
         try:
             if not exists:
                 # Fresh install
-                result = self._helm_install(config, values_file)
+                result = await self._helm_install(config, values_file)
             else:
                 # Update existing release
-                result = self._helm_upgrade(config, values_file)
+                result = await self._helm_upgrade(config, values_file)
 
             if result.success and config.wait:
                 # Optionally wait for resources to be ready
-                ready_result = self._wait_for_resources(config)
+                ready_result = await self._wait_for_resources(config)
                 if not ready_result.success:
                     # NOTE: we don't fail the deployment, just warn
                     logger.warning(f"Resources not ready: {ready_result.message}")
@@ -116,7 +122,7 @@ class HelmManager:
             if values_file and values_file.exists():
                 values_file.unlink()
 
-    def destroy(
+    async def destroy(
         self, release_name: str, namespace: str, purge: bool = True
     ) -> DeploymentResult:
         """Destroy a Helm release."""
@@ -126,14 +132,14 @@ class HelmManager:
         if not purge:
             cmd.append("--keep-history")
 
-        result = self._run_helm_command(cmd)
+        result = await self._run_helm_command(cmd)
 
         if result.returncode == 0:
             logger.info(f"Helm uninstall completed with stdout: {result.stdout}")
 
             # Verify the release is actually gone
             check_cmd = ["helm", "status", release_name, "-n", namespace]
-            check_result = self._run_helm_command(check_cmd)
+            check_result = await self._run_helm_command(check_cmd)
 
             if check_result.returncode != 0 and "not found" in check_result.stderr:
                 return DeploymentResult(
@@ -160,9 +166,9 @@ class HelmManager:
             error=result.stderr,
         )
 
-    def get_status(self, release_name: str, namespace: str) -> DeploymentResult:
+    async def get_status(self, release_name: str, namespace: str) -> DeploymentResult:
         """Get detailed status of a Helm release."""
-        exists, is_deployed = self.check_release_status(release_name, namespace)
+        exists, is_deployed = await self.check_release_status(release_name, namespace)
 
         if not exists:
             return DeploymentResult(
@@ -171,7 +177,7 @@ class HelmManager:
 
         # Get release values
         cmd = ["helm", "get", "values", release_name, "-n", namespace, "-o", "json"]
-        result = self._run_helm_command(cmd)
+        result = await self._run_helm_command(cmd)
 
         if result.returncode != 0:
             return DeploymentResult(
@@ -181,7 +187,7 @@ class HelmManager:
             )
 
         # Get resource statuses
-        resources = self._get_resource_status(release_name, namespace)
+        resources = await self._get_resource_status(release_name, namespace)
 
         return DeploymentResult(
             success=True,
@@ -189,7 +195,7 @@ class HelmManager:
             resources=resources,
         )
 
-    def rollback(
+    async def rollback(
         self, release_name: str, namespace: str, revision: int | None = None
     ) -> DeploymentResult:
         """Rollback a Helm release to a previous revision."""
@@ -202,10 +208,10 @@ class HelmManager:
         cmd.extend(["--history-max", str(app_config.HELM_HISTORY_MAX_REVISIONS)])
         cmd.append("--cleanup-on-fail")
 
-        result = self._run_helm_command(cmd)
+        result = await self._run_helm_command(cmd)
 
         if result.returncode == 0:
-            new_revision = self._get_latest_revision(release_name, namespace)
+            new_revision = await self._get_latest_revision(release_name, namespace)
             return DeploymentResult(
                 success=True,
                 message=f"Successfully rolled back {release_name}",
@@ -218,10 +224,12 @@ class HelmManager:
             error=result.stderr,
         )
 
-    def get_history(self, release_name: str, namespace: str) -> list[dict[str, Any]]:
+    async def get_history(
+        self, release_name: str, namespace: str
+    ) -> list[dict[str, Any]]:
         """Get Helm release history."""
         cmd = ["helm", "history", release_name, "-n", namespace, "-o", "json"]
-        result = self._run_helm_command(cmd)
+        result = await self._run_helm_command(cmd)
 
         if result.returncode == 0 and result.stdout:
             try:
@@ -235,7 +243,7 @@ class HelmManager:
 
         return []
 
-    def get_compose_yaml_from_release(
+    async def get_compose_yaml_from_release(
         self, release_name: str, namespace: str, revision: int | None = None
     ) -> str | None:
         """Get compose_yaml from a Helm release revision."""
@@ -243,7 +251,7 @@ class HelmManager:
         if revision:
             cmd.extend(["--revision", str(revision)])
 
-        result = self._run_helm_command(cmd)
+        result = await self._run_helm_command(cmd)
 
         if result.returncode == 0 and result.stdout:
             try:
@@ -257,11 +265,10 @@ class HelmManager:
 
         return None
 
-    def _helm_install(
+    async def _helm_install(
         self, config: HelmDeploymentConfig, values_file: Path
     ) -> DeploymentResult:
         """Perform Helm install."""
-        # get the namespace
         cmd = [
             "helm",
             "upgrade",
@@ -277,7 +284,9 @@ class HelmManager:
         ]
 
         # Only use --create-namespace if namespace doesn't exist
-        if config.create_namespace and not self._namespace_exists(config.namespace):
+        if config.create_namespace and not await self._namespace_exists(
+            config.namespace
+        ):
             cmd.append("--create-namespace")
 
         if config.wait:
@@ -288,13 +297,13 @@ class HelmManager:
 
         cmd.extend(["--history-max", str(app_config.HELM_HISTORY_MAX_REVISIONS)])
 
-        result = self._run_helm_command(cmd)
+        result = await self._run_helm_command(cmd)
 
         if result.returncode == 0:
             return DeploymentResult(
                 success=True,
                 message=f"Successfully deployed {config.release_name}",
-                revision=self._get_latest_revision(
+                revision=await self._get_latest_revision(
                     config.release_name, config.namespace
                 ),
             )
@@ -309,20 +318,20 @@ class HelmManager:
             )
 
             # Clear Helm lock secrets
-            self._clear_helm_locks(config.release_name, config.namespace)
+            await self._clear_helm_locks(config.release_name, config.namespace)
 
             # Add force flag if not already present
             if "--force" not in cmd:
                 cmd.append("--force")
 
             # Retry with force after clearing locks
-            result = self._run_helm_command(cmd)
+            result = await self._run_helm_command(cmd)
 
             if result.returncode == 0:
                 return DeploymentResult(
                     success=True,
                     message=f"Successfully deployed {config.release_name} after clearing locks",
-                    revision=self._get_latest_revision(
+                    revision=await self._get_latest_revision(
                         config.release_name, config.namespace
                     ),
                 )
@@ -333,7 +342,7 @@ class HelmManager:
             error=result.stderr,
         )
 
-    def _helm_upgrade(
+    async def _helm_upgrade(
         self, config: HelmDeploymentConfig, values_file: Path
     ) -> DeploymentResult:
         """Perform Helm upgrade with intelligent handling."""
@@ -365,13 +374,13 @@ class HelmManager:
         cmd.extend(["--history-max", str(app_config.HELM_HISTORY_MAX_REVISIONS)])
 
         # First attempt
-        result = self._run_helm_command(cmd)
+        result = await self._run_helm_command(cmd)
 
         if result.returncode == 0:
             return DeploymentResult(
                 success=True,
                 message=f"Successfully upgraded {config.release_name}",
-                revision=self._get_latest_revision(
+                revision=await self._get_latest_revision(
                     config.release_name, config.namespace
                 ),
             )
@@ -384,20 +393,20 @@ class HelmManager:
             logger.warning("Detected stuck operation, clearing Helm locks and retrying")
 
             # Clear Helm lock secrets
-            self._clear_helm_locks(config.release_name, config.namespace)
+            await self._clear_helm_locks(config.release_name, config.namespace)
 
             # Add force flag if not already present
             if "--force" not in cmd:
                 cmd.append("--force")
 
             # Retry with force after clearing locks
-            result = self._run_helm_command(cmd)
+            result = await self._run_helm_command(cmd)
 
             if result.returncode == 0:
                 return DeploymentResult(
                     success=True,
                     message=f"Successfully force-upgraded {config.release_name} after clearing locks",
-                    revision=self._get_latest_revision(
+                    revision=await self._get_latest_revision(
                         config.release_name, config.namespace
                     ),
                 )
@@ -408,12 +417,12 @@ class HelmManager:
             error=result.stderr,
         )
 
-    def check_release_status(
+    async def check_release_status(
         self, release_name: str, namespace: str
     ) -> tuple[bool, bool]:
         """Check if a release exists and its deployment status."""
         cmd = ["helm", "status", release_name, "-n", namespace, "-o", "json"]
-        result = self._run_helm_command(cmd, suppress_not_found_warning=True)
+        result = await self._run_helm_command(cmd, suppress_not_found_warning=True)
 
         if result.returncode != 0:
             return False, False
@@ -426,63 +435,16 @@ class HelmManager:
         except (json.JSONDecodeError, KeyError):
             return True, False
 
-    async def _run_helm_command_async(
-        self, cmd: list[str], suppress_not_found_warning: bool = False
-    ) -> subprocess.CompletedProcess:
-        """Run a Helm command asynchronously with proper error handling."""
-        logger.debug(f"Running command (async): {' '.join(cmd)}")
-
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=os.environ,
-        )
-
-        stdout, stderr = await process.communicate()
-
-        result = subprocess.CompletedProcess(
-            args=cmd,
-            returncode=process.returncode,
-            stdout=stdout.decode("utf-8") if stdout else "",
-            stderr=stderr.decode("utf-8") if stderr else "",
-        )
-
-        if result.returncode != 0:
-            if suppress_not_found_warning and "not found" in result.stderr.lower():
-                logger.debug(f"Command returned not found (expected): {result.stderr}")
-            else:
-                logger.warning(f"Command failed: {result.stderr}")
-
-        return result
-
-    async def check_release_status_async(
-        self, release_name: str, namespace: str
-    ) -> tuple[bool, bool]:
-        """Check if a release exists and its deployment status (async)."""
-        cmd = ["helm", "status", release_name, "-n", namespace, "-o", "json"]
-        result = await self._run_helm_command_async(
-            cmd, suppress_not_found_warning=True
-        )
-
-        if result.returncode != 0:
-            return False, False
-
-        try:
-            status = json.loads(result.stdout)
-            info = status.get("info", {})
-            return True, info.get("status", "").lower() == "deployed"
-
-        except (json.JSONDecodeError, KeyError):
-            return True, False
-
-    def _clear_helm_locks(self, release_name: str, namespace: str) -> None:
+    async def _clear_helm_locks(self, release_name: str, namespace: str) -> None:
         """Clear Helm lock secrets for a release to unstick operations."""
         core_v1 = get_core_v1_api()
         lock_prefix = f"sh.helm.release.v1.{release_name}."
 
         try:
-            secrets = core_v1.list_namespaced_secret(namespace=namespace)
+            # Wrap sync K8s call in thread
+            secrets = await asyncio.to_thread(
+                core_v1.list_namespaced_secret, namespace=namespace
+            )
             deleted_count = 0
 
             for secret in secrets.items:
@@ -499,13 +461,16 @@ class HelmManager:
                         ]
                     ):
                         try:
-                            core_v1.delete_namespaced_secret(
-                                name=secret_name, namespace=namespace
+                            await asyncio.to_thread(
+                                core_v1.delete_namespaced_secret,
+                                name=secret_name,
+                                namespace=namespace,
                             )
                             logger.info(
                                 f"Deleted Helm lock secret: {secret_name} in namespace {namespace}"
                             )
                             deleted_count += 1
+
                         except ApiException as e:
                             if e.status != 404:  # Ignore if already deleted
                                 logger.warning(
@@ -517,22 +482,27 @@ class HelmManager:
                     f"Cleared {deleted_count} Helm lock secret(s) for release {release_name}"
                 )
                 # Small delay to ensure Kubernetes processes the deletion
-                time.sleep(1)
+                await asyncio.sleep(1)
+
             else:
                 logger.debug(f"No Helm lock secrets found for release {release_name}")
 
         except ApiException as e:
             logger.warning(f"Failed to list secrets when clearing Helm locks: {e}")
 
-    def _wait_for_resources(
+    async def _wait_for_resources(
         self, config: HelmDeploymentConfig, timeout: int = 300
     ) -> DeploymentResult:
         """Wait for resources to be ready (custom implementation)."""
         logger.info(f"Waiting for resources in {config.release_name} to be ready")
 
-        start_time = time.time()
-        while time.time() - start_time < timeout:
-            resources = self._get_resource_status(config.release_name, config.namespace)
+        start_time = asyncio.get_event_loop().time()
+        resources: dict[str, list[dict[str, Any]]] = {}
+
+        while asyncio.get_event_loop().time() - start_time < timeout:
+            resources = await self._get_resource_status(
+                config.release_name, config.namespace
+            )
 
             all_ready = True
             not_ready_resources = []
@@ -549,7 +519,7 @@ class HelmManager:
                 )
 
             logger.debug(f"Waiting for resources: {', '.join(not_ready_resources)}")
-            time.sleep(5)
+            await asyncio.sleep(5)
 
         return DeploymentResult(
             success=False,
@@ -557,12 +527,12 @@ class HelmManager:
             resources=resources,
         )
 
-    def _get_resource_status(
+    async def _get_resource_status(
         self, release_name: str, namespace: str
     ) -> dict[str, list[dict[str, Any]]]:
         """Get status of all resources in a release."""
 
-        resources = {}
+        resources: dict[str, list[dict[str, Any]]] = {}
         apps_v1 = get_apps_v1_api()
         core_v1 = get_core_v1_api()
         label_selector = f"app.kubernetes.io/instance={release_name}"
@@ -570,8 +540,10 @@ class HelmManager:
         try:
             # Get Deployments
             try:
-                deployments = apps_v1.list_namespaced_deployment(
-                    namespace=namespace, label_selector=label_selector
+                deployments = await asyncio.to_thread(
+                    apps_v1.list_namespaced_deployment,
+                    namespace=namespace,
+                    label_selector=label_selector,
                 )
                 items = []
                 for deployment in deployments.items:
@@ -592,13 +564,16 @@ class HelmManager:
                     )
                 if items:
                     resources["deployment"] = items
+
             except ApiException as e:
                 logger.debug(f"Error getting deployments: {e}")
 
             # Get Pods
             try:
-                pods = core_v1.list_namespaced_pod(
-                    namespace=namespace, label_selector=label_selector
+                pods = await asyncio.to_thread(
+                    core_v1.list_namespaced_pod,
+                    namespace=namespace,
+                    label_selector=label_selector,
                 )
                 items = []
                 for pod in pods.items:
@@ -615,16 +590,21 @@ class HelmManager:
                             "status": self._get_resource_status_summary("pod", status),
                         }
                     )
+
                 if items:
                     resources["pod"] = items
+
             except ApiException as e:
                 logger.debug(f"Error getting pods: {e}")
 
             # Get Services
             try:
-                services = core_v1.list_namespaced_service(
-                    namespace=namespace, label_selector=label_selector
+                services = await asyncio.to_thread(
+                    core_v1.list_namespaced_service,
+                    namespace=namespace,
+                    label_selector=label_selector,
                 )
+
                 items = []
                 for service in services.items:
                     status = (
@@ -642,8 +622,10 @@ class HelmManager:
                             ),
                         }
                     )
+
                 if items:
                     resources["service"] = items
+
             except ApiException as e:
                 logger.debug(f"Error getting services: {e}")
 
@@ -690,10 +672,12 @@ class HelmManager:
 
         return "Active"
 
-    def _get_latest_revision(self, release_name: str, namespace: str) -> int | None:
+    async def _get_latest_revision(
+        self, release_name: str, namespace: str
+    ) -> int | None:
         """Get the latest revision number for a release."""
         cmd = ["helm", "history", release_name, "-n", namespace, "-o", "json"]
-        result = self._run_helm_command(cmd)
+        result = await self._run_helm_command(cmd)
 
         if result.returncode == 0 and result.stdout:
             try:
@@ -721,17 +705,26 @@ class HelmManager:
 
         return values_file
 
-    def _run_helm_command(
+    async def _run_helm_command(
         self, cmd: list[str], suppress_not_found_warning: bool = False
     ) -> subprocess.CompletedProcess:
-        """Run a Helm command with proper error handling."""
+        """Run a Helm command asynchronously with proper error handling."""
         logger.debug(f"Running command: {' '.join(cmd)}")
 
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
             env=os.environ,
+        )
+
+        stdout, stderr = await process.communicate()
+
+        result = subprocess.CompletedProcess(
+            args=cmd,
+            returncode=process.returncode or 0,
+            stdout=stdout.decode("utf-8") if stdout else "",
+            stderr=stderr.decode("utf-8") if stderr else "",
         )
 
         if result.returncode != 0:

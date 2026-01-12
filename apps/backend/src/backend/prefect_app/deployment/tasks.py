@@ -304,7 +304,7 @@ async def deploy_namespace_resources_task(
 ) -> None:
     """Deploy namespace resources (NetworkPolicy, ResourceQuota, etc.)."""
     helm_manager = HelmManager()
-    result = helm_manager.deploy(namespace_config)
+    result = await helm_manager.deploy(namespace_config)
     if not result.success:
         raise Exception(f"Failed to deploy namespace: {result.error}")
 
@@ -387,7 +387,7 @@ async def deploy_application_task(
         cleanup_on_fail=True,
     )
 
-    app_result = helm_manager.deploy(helm_app_config)
+    app_result = await helm_manager.deploy(helm_app_config)
     if not app_result.success:
         raise Exception(f"Failed to deploy application: {app_result.error}")
 
