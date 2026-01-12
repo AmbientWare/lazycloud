@@ -15,19 +15,24 @@ from backend.database.utils import api_key_is_expired
 security = HTTPBearer(auto_error=False)
 
 # Cache the JWKS client to avoid repeated fetches
+# lifespan controls how long keys are cached before being refreshed (in seconds)
 _jwks_client: PyJWKClient | None = None
+_JWKS_CACHE_LIFESPAN = 3600  # Refresh keys every hour
 
 
-def get_jwks_client() -> PyJWKClient:
+def get_jwks_client(force_refresh: bool = False) -> PyJWKClient:
     """Get or create the JWKS client for WorkOS token validation.
 
     The JWKS URL must include the client ID:
     https://api.workos.com/sso/jwks/<clientId>
+
+    Args:
+        force_refresh: If True, recreate the client to force a fresh key fetch
     """
     global _jwks_client
-    if _jwks_client is None:
+    if _jwks_client is None or force_refresh:
         jwks_url = f"https://api.workos.com/sso/jwks/{app_config.WORKOS_CLIENT_ID}"
-        _jwks_client = PyJWKClient(jwks_url, cache_keys=True)
+        _jwks_client = PyJWKClient(jwks_url, cache_keys=True, lifespan=_JWKS_CACHE_LIFESPAN)
     return _jwks_client
 
 
@@ -88,67 +93,84 @@ async def _authenticate_api_key(api_key: str, db: Database) -> UserPydantic:
 
 async def _authenticate_workos_token(token: str, db: Database) -> UserPydantic:
     """Authenticate using WorkOS access token."""
-    try:
-        # Get the signing key from WorkOS JWKS
-        jwks_client = get_jwks_client()
-        signing_key = jwks_client.get_signing_key_from_jwt(token)
+    # Try validation, and if it fails due to key issues, retry with refreshed keys
+    for attempt in range(2):
+        try:
+            # Get the signing key from WorkOS JWKS
+            # On retry (attempt 1), force refresh to handle key rotation
+            jwks_client = get_jwks_client(force_refresh=(attempt > 0))
+            signing_key = jwks_client.get_signing_key_from_jwt(token)
 
-        # Decode and validate the token
-        # Note: WorkOS tokens may not include 'aud' claim by default,
-        # so we don't require audience verification
-        payload = jwt.decode(
-            token,
-            signing_key.key,
-            algorithms=["RS256"],
-            options={
-                "verify_exp": True,
-                "verify_aud": False,  # WorkOS may not include audience
-            },
-        )
+            # Decode and validate the token
+            # Note: WorkOS tokens may not include 'aud' claim by default,
+            # so we don't require audience verification
+            payload = jwt.decode(
+                token,
+                signing_key.key,
+                algorithms=["RS256"],
+                options={
+                    "verify_exp": True,
+                    "verify_aud": False,  # WorkOS may not include audience
+                },
+            )
 
-        # WorkOS access tokens have 'sub' claim with user ID
-        workos_user_id = payload.get("sub")
-        if not workos_user_id:
+            # WorkOS access tokens have 'sub' claim with user ID
+            workos_user_id = payload.get("sub")
+            if not workos_user_id:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid token: missing subject",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+
+            # Look up user by WorkOS ID
+            user = await db.users.get_by_workos_id(workos_id=workos_user_id)
+            if not user:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="User not found",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+
+            return user
+
+        except jwt.exceptions.PyJWKClientError:
+            # If this is the first attempt, retry with refreshed keys
+            if attempt == 0:
+                continue
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid token: missing subject",
+                detail="Authentication service unavailable",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        except jwt.InvalidTokenError as e:
+            # Key mismatch errors should trigger a retry with fresh keys
+            if attempt == 0 and "kid" in str(e).lower():
+                continue
+            # Sanitize error details in production to avoid leaking implementation info
+            if app_config.ENV == ENVIRONMENT.DEV:
+                detail = f"Invalid token: {str(e)}"
+            else:
+                detail = "Invalid token"
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=detail,
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        except jwt.ExpiredSignatureError:
+            # Expired tokens should not retry - the token itself is expired
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Token has expired",
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
-        # Look up user by WorkOS ID
-        user = await db.users.get_by_workos_id(workos_id=workos_user_id)
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="User not found",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-
-        return user
-
-    except jwt.exceptions.PyJWKClientError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication service unavailable",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token has expired",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    except jwt.InvalidTokenError as e:
-        # Sanitize error details in production to avoid leaking implementation info
-        if app_config.ENV == ENVIRONMENT.DEV:
-            detail = f"Invalid token: {str(e)}"
-        else:
-            detail = "Invalid token"
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=detail,
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    # Should not reach here, but handle gracefully
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Authentication failed",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 
 async def get_current_active_user(
