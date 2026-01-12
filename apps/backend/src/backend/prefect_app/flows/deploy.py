@@ -107,7 +107,7 @@ async def deploy_compose_flow(
             helm_manager = HelmManager()
             helm_revision = deploy_result.revision
             if helm_revision and helm_revision > 1:
-                rollback_result = helm_manager.rollback(
+                rollback_result = await helm_manager.rollback(
                     name, deployment.namespace, helm_revision - 1
                 )
                 if rollback_result.success:
@@ -123,7 +123,7 @@ async def deploy_compose_flow(
                 logger.info(
                     f"Fresh install detected (revision {helm_revision}), destroying release instead of rolling back"
                 )
-                destroy_result = helm_manager.destroy(name, deployment.namespace)
+                destroy_result = await helm_manager.destroy(name, deployment.namespace)
 
                 if destroy_result.success:
                     logger.info(

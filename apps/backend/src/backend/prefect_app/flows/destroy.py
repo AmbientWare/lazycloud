@@ -61,13 +61,13 @@ async def destroy_compose_flow(deployment_id: str) -> None:
     try:
         # Step 1: Destroy application
         logger.info(f"Destroying application {name} in namespace {namespace}")
-        app_result = helm_manager.destroy(name, namespace)
+        app_result = await helm_manager.destroy(name, namespace)
         if not app_result.success:
             logger.warning(f"Failed to destroy application: {app_result.error}")
 
         # Step 2: Destroy namespace resources (only if not default namespace)
         logger.info(f"Destroying namespace resources for {namespace}")
-        namespace_result = helm_manager.destroy(namespace, "default")
+        namespace_result = await helm_manager.destroy(namespace, "default")
         if not namespace_result.success:
             logger.warning(
                 f"Failed to destroy namespace resources: {namespace_result.error}"
