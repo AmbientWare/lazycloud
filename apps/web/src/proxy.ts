@@ -84,8 +84,45 @@ export default async function proxy(req: NextRequest) {
     return NextResponse.next();
   }
 
-  // Apply authkit headers and rate limit info to every response
-  const withHeaders = (response: NextResponse, rateLimitRemaining?: number) => {
+  // Build request headers for server actions (includes session, middleware marker, url)
+  // These headers allow withAuth() to read the session in server actions
+  const buildRequestHeaders = (): Headers => {
+    const requestHeaders = new Headers(req.headers);
+    for (const [key, value] of authkitHeaders) {
+      // Pass all headers except Set-Cookie to request headers
+      if (key.toLowerCase() !== 'set-cookie') {
+        requestHeaders.set(key, value);
+      }
+    }
+    return requestHeaders;
+  };
+
+  // Build response headers (Set-Cookie for session persistence, rate limit info)
+  const buildResponseHeaders = (rateLimitRemaining?: number): Headers => {
+    const responseHeaders = new Headers();
+    for (const [key, value] of authkitHeaders) {
+      if (key.toLowerCase() === 'set-cookie') {
+        responseHeaders.append(key, value);
+      }
+    }
+    if (rateLimitRemaining !== undefined) {
+      responseHeaders.set("X-RateLimit-Remaining", String(rateLimitRemaining));
+    }
+    return responseHeaders;
+  };
+
+  // Create NextResponse.next() that passes session to server actions via request headers
+  const nextWithAuth = (rateLimitRemaining?: number): NextResponse => {
+    return NextResponse.next({
+      request: {
+        headers: buildRequestHeaders(),
+      },
+      headers: buildResponseHeaders(rateLimitRemaining),
+    });
+  };
+
+  // Apply authkit headers to redirect/error responses (not NextResponse.next)
+  const withHeaders = (response: NextResponse, rateLimitRemaining?: number): NextResponse => {
     for (const [key, value] of authkitHeaders) {
       key.toLowerCase() === 'set-cookie'
         ? response.headers.append(key, value)
@@ -103,13 +140,13 @@ export default async function proxy(req: NextRequest) {
 
   // Allow callback route (always public)
   if (pathname === "/callback") {
-    return withHeaders(NextResponse.next(), remaining);
+    return nextWithAuth(remaining);
   }
 
   // Allow public routes for unauthenticated users only
   if (!session.user) {
     if (matchesRoute(pathname, PUBLIC_ROUTES)) {
-      return withHeaders(NextResponse.next(), remaining);
+      return nextWithAuth(remaining);
     }
     // Require authentication for non-public routes
     return withHeaders(
@@ -123,7 +160,7 @@ export default async function proxy(req: NextRequest) {
   // Allow authenticated access to checkout and subscribe pages
   const exemptRoutes = [...CHECKOUT_ROUTES, ...SUBSCRIBE_ROUTES];
   if (matchesRoute(pathname, exemptRoutes)) {
-    return withHeaders(NextResponse.next(), remaining);
+    return nextWithAuth(remaining);
   }
 
   // Check subscription status with Redis caching and stampede protection
@@ -169,7 +206,7 @@ export default async function proxy(req: NextRequest) {
     return withHeaders(NextResponse.redirect(new URL("/subscribe", req.url)), remaining);
   }
 
-  return withHeaders(NextResponse.next(), remaining);
+  return nextWithAuth(remaining);
 }
 
 export const config = {
