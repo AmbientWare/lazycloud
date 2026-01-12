@@ -66,8 +66,8 @@ class GvisorAmiConstruct(Construct):
             "GvisorComponent",
             name=f"{config.org_name}-gvisor-install",
             platform="Linux",
-            version="1.0.0",
-            description="Install gVisor (runsc) runtime for containerd",
+            version="1.0.6",
+            description="Install gVisor (runsc) runtime binaries for containerd",
             data=self._get_component_data(),
         )
 
@@ -82,7 +82,7 @@ class GvisorAmiConstruct(Construct):
             self,
             "GvisorRecipe",
             name=f"{config.org_name}-al2023-gvisor",
-            version="1.0.1",
+            version="1.0.7",
             parent_image=eks_ami_param,
             components=[
                 imagebuilder.CfnImageRecipe.ComponentConfigurationProperty(
@@ -160,9 +160,14 @@ class GvisorAmiConstruct(Construct):
         )
 
     def _get_component_data(self) -> str:
-        """Return the Image Builder component YAML for installing gVisor."""
+        """Return the Image Builder component YAML for installing gVisor.
+
+        Installs binaries and creates a drop-in config in /etc/containerd/config.d/
+        which is automatically imported by the EKS AL2023 containerd config.
+        The EC2NodeClass userData also configures the runtime via nodeadm as backup.
+        """
         return """name: InstallGvisor
-description: Install gVisor runtime for containerd
+description: Install gVisor runtime binaries for containerd
 schemaVersion: 1.0
 
 phases:
@@ -172,60 +177,39 @@ phases:
         action: ExecuteBash
         inputs:
           commands:
-            - |
-              set -ex
-              ARCH=$(uname -m)
-              URL="https://storage.googleapis.com/gvisor/releases/release/latest/${ARCH}"
+            - set -ex
+            - ARCH=$(uname -m)
+            - URL=https://storage.googleapis.com/gvisor/releases/release/latest/${ARCH}
+            - cd /tmp
+            - curl -fsSL -O ${URL}/runsc -O ${URL}/runsc.sha512 -O ${URL}/containerd-shim-runsc-v1 -O ${URL}/containerd-shim-runsc-v1.sha512
+            - sha512sum -c runsc.sha512
+            - sha512sum -c containerd-shim-runsc-v1.sha512
+            - chmod a+rx runsc containerd-shim-runsc-v1
+            - mv runsc containerd-shim-runsc-v1 /usr/bin/
+            - /usr/bin/runsc --version
 
-              cd /tmp
-              curl -fsSL -O "${URL}/runsc" \
-                         -O "${URL}/runsc.sha512" \
-                         -O "${URL}/containerd-shim-runsc-v1" \
-                         -O "${URL}/containerd-shim-runsc-v1.sha512"
-
-              sha512sum -c runsc.sha512
-              sha512sum -c containerd-shim-runsc-v1.sha512
-
-              chmod a+rx runsc containerd-shim-runsc-v1
-              mv runsc containerd-shim-runsc-v1 /usr/local/bin/
-
-              # Verify installation
-              /usr/local/bin/runsc --version
-
-      - name: ConfigureContainerd
+      - name: CreateContainerdDropin
         action: ExecuteBash
         inputs:
           commands:
-            - |
-              set -ex
-              mkdir -p /etc/containerd/config.d
-
-              cat > /etc/containerd/config.d/gvisor.toml << 'EOF'
-              [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc]
-                runtime_type = "io.containerd.runsc.v1"
-              EOF
-
-              echo "gVisor containerd configuration created"
+            - set -ex
+            - mkdir -p /etc/containerd/config.d
+            - echo '[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc]' > /etc/containerd/config.d/gvisor.toml
+            - echo '  runtime_type = "io.containerd.runsc.v1"' >> /etc/containerd/config.d/gvisor.toml
+            - cat /etc/containerd/config.d/gvisor.toml
 
   - name: validate
     steps:
-      - name: ValidateGvisor
+      - name: ValidateGvisorBinaries
         action: ExecuteBash
         inputs:
           commands:
-            - |
-              set -ex
-              # Verify binaries exist
-              test -x /usr/local/bin/runsc
-              test -x /usr/local/bin/containerd-shim-runsc-v1
-
-              # Verify config exists
-              test -f /etc/containerd/config.d/gvisor.toml
-
-              # Verify runsc works
-              /usr/local/bin/runsc --version
-
-              echo "gVisor validation successful"
+            - set -ex
+            - test -x /usr/bin/runsc
+            - test -x /usr/bin/containerd-shim-runsc-v1
+            - test -f /etc/containerd/config.d/gvisor.toml
+            - /usr/bin/runsc --version
+            - echo "gVisor installation validated successfully"
 """
 
     @property

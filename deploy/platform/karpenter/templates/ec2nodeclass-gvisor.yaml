@@ -6,7 +6,7 @@ spec:
   role: {{ .Values.nodeRoleName }}
   amiFamily: AL2023
   amiSelectorTerms:
-    # Pre-built AL2023 AMI with gVisor installed
+    # Pre-built AL2023 AMI with gVisor binaries installed
     - id: {{ required "gvisorAmiId is required - build with Image Builder first" .Values.gvisorAmiId }}
   subnetSelectorTerms:
     - tags:
@@ -19,3 +19,23 @@ spec:
         volumeSize: 150Gi
         volumeType: gp3
         deleteOnTermination: true
+  # Register runsc runtime with containerd via nodeadm
+  # Required because nodeadm regenerates containerd config on boot,
+  # overwriting any config baked into the AMI. The AMI provides the
+  # binaries, this userData tells containerd they exist.
+  userData: |
+    MIME-Version: 1.0
+    Content-Type: multipart/mixed; boundary="BOUNDARY"
+
+    --BOUNDARY
+    Content-Type: application/node.eks.aws
+
+    ---
+    apiVersion: node.eks.aws/v1alpha1
+    kind: NodeConfig
+    spec:
+      containerd:
+        config: |
+          [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc]
+            runtime_type = "io.containerd.runsc.v1"
+    --BOUNDARY--
