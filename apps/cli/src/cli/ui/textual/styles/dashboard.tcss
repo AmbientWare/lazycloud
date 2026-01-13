@@ -90,11 +90,15 @@ SecretsContainer:focus-within {
    ======================================== */
 
 DeploymentDetailsContainer.-loading,
-ServiceDetailsContainer.-loading {
+ServiceDetailsContainer.-loading,
+DeploymentsContainer.-loading,
+ServicesContainer.-loading {
     background: transparent;
 }
 
 DeploymentDetailsContainer LoadingIndicator,
-ServiceDetailsContainer LoadingIndicator {
+ServiceDetailsContainer LoadingIndicator,
+DeploymentsContainer LoadingIndicator,
+ServicesContainer LoadingIndicator {
     background: transparent;
 }

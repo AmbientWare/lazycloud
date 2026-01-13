@@ -33,7 +33,10 @@ from backend.services import (
     get_polar_service,
 )
 from backend.services.k8s import create_ns_name, create_release_name
-from backend.services.k8s.client import get_namespace_pvcs_with_details
+from backend.services.k8s.client import (
+    close_async_api_client,
+    get_namespace_pvcs_with_details,
+)
 from backend.services.polar import PolarService
 
 MAX_BILLING_ATTEMPTS = 5
@@ -376,11 +379,9 @@ async def spawn_usage_collection():
             "success": total_count - failed_count,
         }
     finally:
-        # Clean up service connections to prevent "unclosed client session" warnings
-        # during process exit. The depot service uses redis.asyncio which has aiohttp
-        # connections that must be explicitly closed.
-        depot_service = get_depot_service()
-        await depot_service.close()
+        # Clean up aiohttp connections from kubernetes-asyncio and depot service
+        await close_async_api_client()
+        await get_depot_service().close()
 
 
 @retry(
@@ -623,10 +624,10 @@ async def catch_up_missing_intervals():
 
         logger.info(f"Caught up {total_caught_up} missed intervals")
         return {"caught_up": total_caught_up}
+
     finally:
-        # Clean up service connections to prevent "unclosed client session" warnings
-        depot_service = get_depot_service()
-        await depot_service.close()
+        await close_async_api_client()
+        await get_depot_service().close()
 
 
 @flow(log_prints=True)
