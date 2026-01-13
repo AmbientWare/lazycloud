@@ -1116,6 +1116,8 @@ def _run_depot_build(
         "build",
         "--project",
         depot_token.project_id,
+        "--platform",
+        "linux/amd64",  # Build for amd64 architecture (EKS nodes)
         "--progress=plain",  # Force plain text output for pipes (not TTY)
         "--save",  # save to Depot's registry
         "--save-tag",  # custom tag for the saved image
