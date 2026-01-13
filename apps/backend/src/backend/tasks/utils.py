@@ -24,10 +24,7 @@ SAQ_STATUS_MAP: dict[Status, TaskStatus] = {
 
 
 def _transform_error_message(error: str | None) -> str:
-    """Transform technical errors to user-friendly messages.
-
-    Matches the error transformation logic from the previous Prefect implementation.
-    """
+    """Transform technical errors to user-friendly messages."""
     if not error:
         return "Job failed without specific error message."
 
@@ -52,9 +49,6 @@ def _transform_error_message(error: str | None) -> str:
 
 async def get_task_result(task_run_id: UUID | str) -> tuple[TaskStatus, Any]:
     """Get SAQ job result/status.
-
-    This function provides the same interface as the previous Prefect implementation,
-    allowing existing code to work without changes.
 
     Args:
         task_run_id: The job key (UUID) to look up

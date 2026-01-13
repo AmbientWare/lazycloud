@@ -30,12 +30,8 @@ spec:
                   name: {{ $.Values.secrets.name }}
                   key: {{ . }}
           {{- end }}
-            - name: PREFECT_LOCAL_STORAGE_PATH
-              value: "/shared-storage"
-            - name: PREFECT_RESULTS_PERSIST_BY_DEFAULT
-              value: "true"
           volumeMounts:
-            - name: prefect-storage
+            - name: shared-storage
               mountPath: /shared-storage
           livenessProbe:
             exec:
@@ -55,6 +51,6 @@ spec:
               cpu: {{ .Values.backgroundWorkers.resources.requests.cpu }}
               memory: {{ .Values.backgroundWorkers.resources.requests.memory }}
       volumes:
-        - name: prefect-storage
+        - name: shared-storage
           persistentVolumeClaim:
-            claimName: {{ .Chart.Name }}-prefect-storage
+            claimName: {{ .Chart.Name }}-shared-storage

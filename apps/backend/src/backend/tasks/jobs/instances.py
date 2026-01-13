@@ -78,7 +78,7 @@ async def delete_instance_job(
 
     # Delete the pod
     logger.info(f"Deleting pod {pod_name} in namespace {namespace} (force={force})")
-    delete_result = pod_manager.delete_pod(
+    delete_result = await pod_manager.delete_pod(
         pod_name=pod_name,
         namespace=namespace,
         grace_period=0 if force else 30,  # No grace period if forcing

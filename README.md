@@ -74,7 +74,7 @@ uv sync --all-packages
 - **FastAPI** - API server
 - **Next.js** - Web frontend
 - **Kubernetes & Helm** - Container orchestration
-- **Prefect** - Workflow orchestration
+- **SAQ** - Background task queue
 - **PostgreSQL** - Database
 - **Redis** - Cache and task queue
 - **Argo CD** - GitOps deployments
@@ -121,7 +121,6 @@ npm run dev
 
 - **API**: http://localhost:8000/docs
 - **Web**: http://localhost:3000
-- **Prefect**: http://localhost:4200
 - **LocalStack**: http://localhost:4566 (AWS emulation)
 
 ### Minikube Commands
@@ -326,8 +325,8 @@ uv run python scripts/create_secret_key.py
 - **API** - FastAPI backend, REST endpoints, compose parsing
 - **Web** - Next.js frontend, deployment dashboard
 - **CLI** - Typer CLI with Textual TUI
-- **Background Worker** - Prefect task workers (build/deploy jobs)
-- **Cron Worker** - Prefect flow workers (scheduled tasks)
+- **Background Worker** - SAQ task workers (build/deploy jobs)
+- **Cron Worker** - Scheduled task workers
 
 ### Deployment Flow
 

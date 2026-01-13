@@ -5,7 +5,7 @@ apiVersion: v2
 keywords:
   - lazycloud
   - api
-  - prefect
+  - saq
   - workers
 sources:
 home:

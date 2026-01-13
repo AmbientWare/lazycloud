@@ -41,14 +41,14 @@ COPY packages/ ./packages/
 WORKDIR /workspace/apps/backend
 RUN uv sync --no-dev
 
-# API target
+# API service target
 FROM builder AS api
 CMD ["uv", "run", "--no-sync", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
-# Background workers target (Prefect task workers)
+# Background workers target
 FROM builder AS background-workers
 CMD ["uv", "run", "--no-sync", "python", "-m", "backend.background_worker"]
 
-# Cron workers target (Prefect flow workers)
+# Cron workers target
 FROM builder AS crons
 CMD ["uv", "run", "--no-sync", "python", "-m", "backend.worker"]

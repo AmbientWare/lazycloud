@@ -9,8 +9,6 @@ Run with: pytest src/lazycloud_api/tests/e2e/test_cli_deployments.py -v -s
 
 Note: Tests use fixed deployment names and clean up before/after each test
 to avoid hitting deployment limits.
-
-Test order: Build test runs FIRST to avoid Prefect retry race conditions.
 """
 
 import tempfile
