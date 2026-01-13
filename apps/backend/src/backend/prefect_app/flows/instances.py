@@ -39,7 +39,7 @@ async def delete_instance_flow(
 
     # Verify pod ownership before deletion
     logger.info(f"Verifying pod {pod_name} belongs to service {service_name}")
-    verification_result = pod_manager.verify_pod_ownership(
+    verification_result = await pod_manager.verify_pod_ownership(
         pod_name=pod_name,
         namespace=namespace,
         service_name=service_name,
