@@ -1,48 +1,32 @@
 import asyncio
 import time
-from concurrent.futures import ThreadPoolExecutor
 
-from kubernetes.client.exceptions import ApiException
+from kubernetes_asyncio.client.exceptions import ApiException
 from loguru import logger
 from models.deployments import DeploymentStates
 
 from backend.config import app_config
 from backend.database import get_db_context
 from backend.services import get_subscription_service
-from backend.services.k8s.client import get_batch_v1_api
+from backend.services.k8s.client import get_async_batch_v1_api
 
 
 async def delete_job_with_timeout(
     job_name: str, namespace: str, timeout_seconds: int
 ) -> None:
     """Delete a Kubernetes Job and wait for it to be fully removed."""
-    batch_v1 = get_batch_v1_api()
-
-    def _delete_job() -> None:
-        batch_v1.delete_namespaced_job(
-            name=job_name,
-            namespace=namespace,
-            propagation_policy="Foreground",
-        )
-
-    def _check_job_exists() -> bool:
-        try:
-            batch_v1.read_namespaced_job(name=job_name, namespace=namespace)
-            return True
-
-        except ApiException as e:
-            if e.status == 404:
-                return False
-            raise
+    batch_v1 = await get_async_batch_v1_api()
 
     # Initiate deletion
     try:
-        loop = asyncio.get_event_loop()
-        with ThreadPoolExecutor() as executor:
-            await asyncio.wait_for(
-                loop.run_in_executor(executor, _delete_job),
-                timeout=timeout_seconds,
-            )
+        await asyncio.wait_for(
+            batch_v1.delete_namespaced_job(
+                name=job_name,
+                namespace=namespace,
+                propagation_policy="Foreground",
+            ),
+            timeout=timeout_seconds,
+        )
 
     except ApiException as e:
         if e.status == 404:
@@ -63,13 +47,15 @@ async def delete_job_with_timeout(
     poll_interval = 0.5
     while time.time() - start_time < timeout_seconds:
         try:
-            loop = asyncio.get_event_loop()
-            with ThreadPoolExecutor() as executor:
-                exists = await loop.run_in_executor(executor, _check_job_exists)
+            await batch_v1.read_namespaced_job(name=job_name, namespace=namespace)
+            # Job still exists, wait and retry
+            await asyncio.sleep(poll_interval)
 
-            if not exists:
+        except ApiException as e:
+            if e.status == 404:
                 logger.info(f"Job {job_name} successfully deleted and removed")
                 return
+            logger.warning(f"Error checking Job {job_name} deletion status: {e}")
             await asyncio.sleep(poll_interval)
 
         except Exception as e:

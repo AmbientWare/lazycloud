@@ -8,13 +8,17 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from kubernetes.client.exceptions import ApiException
+from kubernetes_asyncio.client.exceptions import ApiException
 from loguru import logger
 from models.helm import HelmNamespaceValues, HelmValues
 from pydantic import BaseModel
 
 from backend.config import app_config
-from backend.services.k8s.client import get_apps_v1_api, get_core_v1_api
+from backend.services.k8s.client import (
+    get_async_api_client,
+    get_async_apps_v1_api,
+    get_async_core_v1_api,
+)
 
 
 class DeploymentStrategy(StrEnum):
@@ -66,8 +70,8 @@ class HelmManager:
     async def _namespace_exists(self, namespace: str) -> bool:
         """Check if a namespace exists."""
         try:
-            core_v1 = get_core_v1_api()
-            await asyncio.to_thread(core_v1.read_namespace, name=namespace)
+            core_v1 = await get_async_core_v1_api()
+            await core_v1.read_namespace(name=namespace)
             return True
 
         except ApiException as e:
@@ -437,14 +441,11 @@ class HelmManager:
 
     async def _clear_helm_locks(self, release_name: str, namespace: str) -> None:
         """Clear Helm lock secrets for a release to unstick operations."""
-        core_v1 = get_core_v1_api()
+        core_v1 = await get_async_core_v1_api()
         lock_prefix = f"sh.helm.release.v1.{release_name}."
 
         try:
-            # Wrap sync K8s call in thread
-            secrets = await asyncio.to_thread(
-                core_v1.list_namespaced_secret, namespace=namespace
-            )
+            secrets = await core_v1.list_namespaced_secret(namespace=namespace)
             deleted_count = 0
 
             for secret in secrets.items:
@@ -461,8 +462,7 @@ class HelmManager:
                         ]
                     ):
                         try:
-                            await asyncio.to_thread(
-                                core_v1.delete_namespaced_secret,
+                            await core_v1.delete_namespaced_secret(
                                 name=secret_name,
                                 namespace=namespace,
                             )
@@ -533,22 +533,22 @@ class HelmManager:
         """Get status of all resources in a release."""
 
         resources: dict[str, list[dict[str, Any]]] = {}
-        apps_v1 = get_apps_v1_api()
-        core_v1 = get_core_v1_api()
+        apps_v1 = await get_async_apps_v1_api()
+        core_v1 = await get_async_core_v1_api()
+        api_client = await get_async_api_client()
         label_selector = f"app.kubernetes.io/instance={release_name}"
 
         try:
             # Get Deployments
             try:
-                deployments = await asyncio.to_thread(
-                    apps_v1.list_namespaced_deployment,
+                deployments = await apps_v1.list_namespaced_deployment(
                     namespace=namespace,
                     label_selector=label_selector,
                 )
                 items = []
                 for deployment in deployments.items:
                     status = (
-                        apps_v1.api_client.sanitize_for_serialization(deployment.status)
+                        api_client.sanitize_for_serialization(deployment.status)
                         if deployment.status
                         else {}
                     )
@@ -570,15 +570,14 @@ class HelmManager:
 
             # Get Pods
             try:
-                pods = await asyncio.to_thread(
-                    core_v1.list_namespaced_pod,
+                pods = await core_v1.list_namespaced_pod(
                     namespace=namespace,
                     label_selector=label_selector,
                 )
                 items = []
                 for pod in pods.items:
                     status = (
-                        core_v1.api_client.sanitize_for_serialization(pod.status)
+                        api_client.sanitize_for_serialization(pod.status)
                         if pod.status
                         else {}
                     )
@@ -599,8 +598,7 @@ class HelmManager:
 
             # Get Services
             try:
-                services = await asyncio.to_thread(
-                    core_v1.list_namespaced_service,
+                services = await core_v1.list_namespaced_service(
                     namespace=namespace,
                     label_selector=label_selector,
                 )
@@ -608,7 +606,7 @@ class HelmManager:
                 items = []
                 for service in services.items:
                     status = (
-                        core_v1.api_client.sanitize_for_serialization(service.status)
+                        api_client.sanitize_for_serialization(service.status)
                         if service.status
                         else {}
                     )

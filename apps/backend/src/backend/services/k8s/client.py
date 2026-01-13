@@ -1,17 +1,12 @@
 import asyncio
 import os
 import re
-from functools import lru_cache
 
-import urllib3
-from kubernetes import config
-from kubernetes.client import ApiClient, Configuration
-from kubernetes.client.api.apps_v1_api import AppsV1Api
-from kubernetes.client.api.batch_v1_api import BatchV1Api
-from kubernetes.client.api.core_v1_api import CoreV1Api
 from kubernetes_asyncio import config as async_config
 from kubernetes_asyncio.client import ApiClient as AsyncApiClient
 from kubernetes_asyncio.client import Configuration as AsyncConfiguration
+from kubernetes_asyncio.client.api.apps_v1_api import AppsV1Api as AsyncAppsV1Api
+from kubernetes_asyncio.client.api.batch_v1_api import BatchV1Api as AsyncBatchV1Api
 from kubernetes_asyncio.client.api.core_v1_api import CoreV1Api as AsyncCoreV1Api
 from loguru import logger
 from models.k8s import PVCInfo
@@ -58,70 +53,7 @@ def parse_k8s_size_to_gb(size_str: str) -> float:
         return value
 
 
-urllib3.disable_warnings()
-
-
-@lru_cache(maxsize=1)
-def _get_api_client() -> ApiClient:
-    """Get or create the Kubernetes API client."""
-    try:
-        # Try in-cluster config first (when running in Kubernetes)
-        try:
-            config.load_incluster_config()
-            logger.info("Loaded in-cluster Kubernetes configuration")
-            k8s_config = Configuration.get_default_copy()
-
-        except config.ConfigException:
-            # Fall back to kubeconfig file
-            kubeconfig_path = os.getenv("KUBECONFIG")
-            if kubeconfig_path:
-                config.load_kube_config(config_file=kubeconfig_path)
-                logger.info(f"Loaded Kubernetes configuration from {kubeconfig_path}")
-            else:
-                # Use default kubeconfig location (~/.kube/config)
-                config.load_kube_config()
-                logger.info("Loaded Kubernetes configuration from default location")
-            k8s_config = Configuration.get_default_copy()
-
-        # Configure connection pool for better scaling
-        k8s_config.connection_pool_maxsize = app_config.K8S_CONNECTION_POOL_SIZE
-
-        # The timeout is handled by asyncio.wait_for wrappers in the calling code
-        api_client = ApiClient(configuration=k8s_config)
-        # Set a default timeout on the REST client (connect + read)
-        # This is a fallback - our asyncio.wait_for calls provide the main timeout protection
-        if hasattr(api_client.rest_client, "pool_manager"):
-            # Configure urllib3 pool manager timeout
-            api_client.rest_client.pool_manager.connection_pool_kw.setdefault(
-                "timeout", 2.0
-            )
-
-        return api_client
-
-    except Exception as e:
-        logger.error(f"Failed to initialize Kubernetes client: {e}")
-        raise
-
-
-@lru_cache(maxsize=1)
-def get_core_v1_api() -> CoreV1Api:
-    """Get CoreV1Api client for pods, services, etc."""
-    return CoreV1Api(_get_api_client())
-
-
-@lru_cache(maxsize=1)
-def get_apps_v1_api() -> AppsV1Api:
-    """Get AppsV1Api client for deployments, etc."""
-    return AppsV1Api(_get_api_client())
-
-
-@lru_cache(maxsize=1)
-def get_batch_v1_api() -> BatchV1Api:
-    """Get BatchV1Api client for jobs, cronjobs, etc."""
-    return BatchV1Api(_get_api_client())
-
-
-# Async Kubernetes client for log streaming
+# Async Kubernetes client singleton
 _async_api_client: AsyncApiClient | None = None
 _async_client_lock = asyncio.Lock()
 
@@ -134,11 +66,16 @@ async def get_async_api_client() -> AsyncApiClient:
         return _async_api_client
 
     async with _async_client_lock:
+        # Double-check after acquiring lock
+        if _async_api_client is not None:
+            return _async_api_client
+
         try:
             # Try in-cluster config first (when running in Kubernetes)
             try:
-                await async_config.load_incluster_config()
-                logger.info("Loaded async in-cluster Kubernetes configuration")
+                # load_incluster_config is synchronous in kubernetes_asyncio
+                async_config.load_incluster_config()
+                logger.info("Loaded in-cluster Kubernetes configuration")
                 k8s_config = AsyncConfiguration.get_default_copy()
 
             except async_config.ConfigException:
@@ -147,14 +84,14 @@ async def get_async_api_client() -> AsyncApiClient:
                 if kubeconfig_path:
                     await async_config.load_kube_config(config_file=kubeconfig_path)
                     logger.info(
-                        f"Loaded async Kubernetes configuration from {kubeconfig_path}"
+                        f"Loaded Kubernetes configuration from {kubeconfig_path}"
                     )
 
                 else:
                     # Use default kubeconfig location (~/.kube/config)
                     await async_config.load_kube_config()
                     logger.info(
-                        "Loaded async Kubernetes configuration from default location"
+                        "Loaded Kubernetes configuration from default location"
                     )
 
                 k8s_config = AsyncConfiguration.get_default_copy()
@@ -166,14 +103,26 @@ async def get_async_api_client() -> AsyncApiClient:
             return _async_api_client
 
         except Exception as e:
-            logger.error(f"Failed to initialize async Kubernetes client: {e}")
+            logger.error(f"Failed to initialize Kubernetes client: {e}")
             raise
 
 
 async def get_async_core_v1_api() -> AsyncCoreV1Api:
-    """Get async CoreV1Api client for pods, logs, etc."""
+    """Get async CoreV1Api client for pods, services, secrets, PVCs, etc."""
     api_client = await get_async_api_client()
     return AsyncCoreV1Api(api_client)
+
+
+async def get_async_apps_v1_api() -> AsyncAppsV1Api:
+    """Get async AppsV1Api client for deployments, etc."""
+    api_client = await get_async_api_client()
+    return AsyncAppsV1Api(api_client)
+
+
+async def get_async_batch_v1_api() -> AsyncBatchV1Api:
+    """Get async BatchV1Api client for jobs, cronjobs, etc."""
+    api_client = await get_async_api_client()
+    return AsyncBatchV1Api(api_client)
 
 
 async def close_async_api_client():
@@ -182,7 +131,7 @@ async def close_async_api_client():
     if _async_api_client is not None:
         await _async_api_client.close()
         _async_api_client = None
-        logger.info("Closed async Kubernetes API client")
+        logger.info("Closed Kubernetes API client")
 
 
 async def get_namespace_pvcs(namespace: str) -> dict[str, str]:
@@ -204,11 +153,13 @@ async def get_namespace_pvcs(namespace: str) -> dict[str, str]:
         return {}
 
 
-def get_namespace_pvcs_with_details(namespace: str) -> list[PVCInfo]:
+async def get_namespace_pvcs_with_details(namespace: str) -> list[PVCInfo]:
     """Get PVC details including size and bound PV info."""
     try:
-        core_v1 = get_core_v1_api()
-        pvcs = core_v1.list_namespaced_persistent_volume_claim(namespace=namespace)
+        core_v1 = await get_async_core_v1_api()
+        pvcs = await core_v1.list_namespaced_persistent_volume_claim(
+            namespace=namespace
+        )
 
         pvc_infos = []
         for pvc in pvcs.items:
@@ -223,7 +174,7 @@ def get_namespace_pvcs_with_details(namespace: str) -> list[PVCInfo]:
             volume_handle = None
             if pvc.spec.volume_name:
                 try:
-                    pv = core_v1.read_persistent_volume(name=pvc.spec.volume_name)
+                    pv = await core_v1.read_persistent_volume(name=pvc.spec.volume_name)
                     if pv.spec.csi and pv.spec.csi.volume_handle:
                         volume_handle = pv.spec.csi.volume_handle
                 except Exception as e:

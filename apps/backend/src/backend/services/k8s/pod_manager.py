@@ -1,9 +1,9 @@
-from kubernetes.client.exceptions import ApiException
+from kubernetes_asyncio.client.exceptions import ApiException
 from loguru import logger
 from models.k8s import Pod
 from pydantic import BaseModel
 
-from backend.services.k8s.client import get_core_v1_api
+from backend.services.k8s.client import get_async_api_client, get_async_core_v1_api
 
 
 class PodOperationResult(BaseModel):
@@ -21,16 +21,19 @@ class KubernetesPodManager:
     def __init__(self):
         pass
 
-    def get_pod(self, pod_name: str, namespace: str) -> PodOperationResult:
+    async def get_pod(self, pod_name: str, namespace: str) -> PodOperationResult:
         """Get detailed information about a pod."""
         logger.info(f"Getting pod {pod_name} in namespace {namespace}")
 
         try:
-            core_v1 = get_core_v1_api()
-            v1_pod = core_v1.read_namespaced_pod(name=pod_name, namespace=namespace)
+            core_v1 = await get_async_core_v1_api()
+            v1_pod = await core_v1.read_namespaced_pod(
+                name=pod_name, namespace=namespace
+            )
 
             # Convert Kubernetes client object to dict, then to our Pod model
-            pod_dict = core_v1.api_client.sanitize_for_serialization(v1_pod)
+            api_client = await get_async_api_client()
+            pod_dict = api_client.sanitize_for_serialization(v1_pod)
             pod = Pod(**pod_dict)
 
             return PodOperationResult(
@@ -62,7 +65,7 @@ class KubernetesPodManager:
                 error=str(e),
             )
 
-    def delete_pod(
+    async def delete_pod(
         self,
         pod_name: str,
         namespace: str,
@@ -73,7 +76,7 @@ class KubernetesPodManager:
         logger.info(f"Deleting pod {pod_name} in namespace {namespace}")
 
         try:
-            core_v1 = get_core_v1_api()
+            core_v1 = await get_async_core_v1_api()
 
             # Build delete options
             delete_options = {}
@@ -83,7 +86,7 @@ class KubernetesPodManager:
                 delete_options["propagation_policy"] = "Background"
 
             # Delete the pod
-            core_v1.delete_namespaced_pod(
+            await core_v1.delete_namespaced_pod(
                 name=pod_name,
                 namespace=namespace,
                 **delete_options,
@@ -117,7 +120,7 @@ class KubernetesPodManager:
                 error=str(e),
             )
 
-    def verify_pod_ownership(
+    async def verify_pod_ownership(
         self,
         pod_name: str,
         namespace: str,
@@ -130,7 +133,7 @@ class KubernetesPodManager:
         )
 
         # Get pod information
-        pod_result = self.get_pod(pod_name, namespace)
+        pod_result = await self.get_pod(pod_name, namespace)
         if not pod_result.success:
             return pod_result
 
