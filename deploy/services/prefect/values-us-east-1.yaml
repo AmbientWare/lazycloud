@@ -1,5 +1,0 @@
-# Region-specific values for us-east-1
-
-prefect-server:
-  ingress:
-    annotations: {}

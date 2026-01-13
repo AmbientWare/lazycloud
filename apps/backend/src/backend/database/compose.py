@@ -146,7 +146,7 @@ class ComposeDeploymentPydantic(BaseDbPydanticModel):
 
     @field_serializer("current_task_run_id", when_used="always")
     def serialize_task_run_id(self, value: uuid.UUID | str | None) -> str | None:
-        """Ensure task_run_id is serialized as string for Prefect compatibility."""
+        """Ensure task_run_id is serialized as string."""
         if value is None:
             return None
         if isinstance(value, uuid.UUID):

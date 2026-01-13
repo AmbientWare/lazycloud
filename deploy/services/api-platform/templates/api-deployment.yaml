@@ -31,7 +31,7 @@ spec:
                   key: {{ . }}
           {{- end }}
           volumeMounts:
-            - name: prefect-storage
+            - name: shared-storage
               mountPath: /shared-storage
       containers:
         - name: api
@@ -65,10 +65,8 @@ spec:
                   name: {{ $.Values.secrets.name }}
                   key: {{ . }}
           {{- end }}
-            - name: PREFECT_LOCAL_STORAGE_PATH
-              value: "/shared-storage"
           volumeMounts:
-            - name: prefect-storage
+            - name: shared-storage
               mountPath: /shared-storage
           resources:
             limits:
@@ -78,6 +76,6 @@ spec:
               cpu: {{ .Values.resources.requests.cpu }}
               memory: {{ .Values.resources.requests.memory }}
       volumes:
-        - name: prefect-storage
+        - name: shared-storage
           persistentVolumeClaim:
-            claimName: {{ .Chart.Name }}-prefect-storage
+            claimName: {{ .Chart.Name }}-shared-storage

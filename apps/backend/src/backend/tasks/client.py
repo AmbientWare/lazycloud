@@ -1,8 +1,4 @@
-"""SAQ client for triggering background jobs from API endpoints.
-
-This module provides a clean interface for enqueuing jobs from the API,
-replacing the previous Prefect run_flow() function.
-"""
+"""SAQ client for triggering background jobs from API endpoints."""
 
 from typing import Any
 from uuid import uuid4
@@ -30,8 +26,6 @@ async def enqueue_job(
     retries: int = 1,
 ) -> str:
     """Enqueue a background job and return the job key.
-
-    This replaces run_flow() from the previous Prefect implementation.
 
     Args:
         job_name: Name of the job function to run

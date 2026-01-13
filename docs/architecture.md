@@ -13,7 +13,6 @@ flowchart LR
         subgraph LazyCloud[LazyCloud Apps]
             API[api]
             Web[web]
-            Prefect[prefect]
         end
 
         subgraph Customer[Customer Apps]
@@ -50,7 +49,6 @@ flowchart TB
             subgraph LazyCloud[LazyCloud Apps]
                 API[api]
                 Web[web]
-                Prefect[prefect]
             end
 
             subgraph Customer[Customer Apps]

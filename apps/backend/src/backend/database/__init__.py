@@ -63,7 +63,7 @@ async def get_db() -> AsyncGenerator[Database, None]:
 
 @asynccontextmanager
 async def get_db_context() -> AsyncGenerator[Database, None]:
-    """Context manager for Prefect tasks and scripts - use with async with."""
+    """Context manager for background tasks and scripts - use with async with."""
     existing = _current_db.get()
     if existing is not None:
         yield existing
