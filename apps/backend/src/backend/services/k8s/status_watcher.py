@@ -535,13 +535,15 @@ class StatusWatcher:
                     pod_reason = pod.status.reason
                     pod_message = pod.status.message
 
-                # Step 6: Override phase to ERROR if container errors detected
+                # Step 6: Set reason from container state
+                if container_reason:
+                    pod_reason = container_reason
+                if container_message:
+                    pod_message = container_message
+
+                # Override phase to ERROR if container errors detected
                 if has_container_error:
                     phase = KubernetesPhase.ERROR
-                    if container_reason:
-                        pod_reason = container_reason
-                    if container_message:
-                        pod_message = container_message
 
                 # Step 7: Check if pod is being terminated
                 if pod.metadata.deletion_timestamp:
