@@ -1673,7 +1673,6 @@ def _show_diff_and_confirm(
             view.show_no_changes()
 
         if diff_response.errors:
-            view.show_error("Cannot proceed due to errors")
             raise typer.Exit(1)
 
         # Show storage type change warnings (EBS ↔ EFS transitions cause data loss)

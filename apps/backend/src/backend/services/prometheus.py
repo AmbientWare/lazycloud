@@ -504,7 +504,17 @@ class PrometheusMetricsService:
             if pod_name == "unknown":
                 return
 
-            pod_labels = pod_labels_map.get(pod_name, {})
+            # Skip pods not in pod_labels_map - they're terminated pods with stale metrics
+            if pod_name not in pod_labels_map:
+                if pod_name not in warned_pods:
+                    warned_pods.add(pod_name)
+                    logger.debug(
+                        f"Skipping pod {pod_name} in namespace {namespace} - "
+                        "not found in kube_pod_labels (likely terminated)"
+                    )
+                return
+
+            pod_labels = pod_labels_map[pod_name]
             service_name = pod_labels.get("label_lazycloud_dev_service", "unknown")
             release_name = pod_labels.get("label_app_kubernetes_io_instance")
 
