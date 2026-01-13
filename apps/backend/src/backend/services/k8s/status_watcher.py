@@ -218,6 +218,7 @@ class StatusWatcher:
     async def _get_service_status(self, service: ServiceValues) -> ServiceStatus:
         """Get status for a specific service."""
         replicas = service.replicas or 1
+        updated_replicas: int | None = None
         k8s_healthcheck = None
         resources = None
         job_status = None
@@ -298,6 +299,8 @@ class StatusWatcher:
                         k8s_resource_raw
                     )
                     k8s_resource = Deployment(**resource_dict)
+                    if k8s_resource.status:
+                        updated_replicas = k8s_resource.status.updated_replicas
                 else:
                     raise ValueError(
                         f"Unsupported resource type: {service.workloadType}"
@@ -395,6 +398,7 @@ class StatusWatcher:
             status=status_enum,
             replicas=replicas,
             ready_replicas=ready_replicas,
+            updated_replicas=updated_replicas,
             pods=pods,
             resources=resources,
             current_usage=current_usage,

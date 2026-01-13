@@ -114,6 +114,7 @@ class ServiceStatus(BaseModel):
     status: KubernetesPhase
     replicas: int = 1
     ready_replicas: int = 0
+    updated_replicas: int | None = None
     pods: list[PodStatus] | None = None
     resources: Resources | None = None
     current_usage: CurrentUsage | None = None

@@ -128,13 +128,23 @@ class DeployProgressMonitor(BaseMonitor[DeployProgressStatus]):
         counts = self._count_containers(svc)
         status, message = self._get_status_and_message(svc, counts)
 
-        # Ready when running matches desired and no issues
+        # Check if rollout is in progress (updated_replicas < replicas)
+        rollout_in_progress = (
+            svc.updated_replicas is not None
+            and svc.updated_replicas < svc.replicas
+        )
+        if rollout_in_progress and status == "running":
+            status = "starting"
+            message = "Updating service"
+
+        # Ready when running matches desired, no issues, and rollout complete
         is_ready = (
             counts.running >= counts.desired
             and counts.desired > 0
             and counts.pending == 0
             and counts.creating == 0
             and counts.stopping == 0
+            and not rollout_in_progress
         )
 
         try:
