@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from backend.database import Database
 from backend.database.usage import DailyUsageStatus
-from backend.prefect_app.usage_collector import finalize_and_bill
+from backend.tasks.crons.usage import finalize_and_bill
 
 from tests.billing.conftest import create_daily_record
 from tests.fixtures.database import requires_db
@@ -22,7 +22,7 @@ pytestmark = [
 @pytest.fixture
 def mock_polar_service():
     """Mock Polar service."""
-    with patch("backend.prefect_app.usage_collector.get_polar_service") as mock_get:
+    with patch("backend.tasks.crons.usage.get_polar_service") as mock_get:
         mock_service = AsyncMock()
         mock_service.usage = AsyncMock()
         mock_service.usage.enabled = True
@@ -50,7 +50,7 @@ def mock_db_context(billing_db: Database, billing_db_session):
         return mock_context()
 
     with patch(
-        "backend.prefect_app.usage_collector.get_db_context",
+        "backend.tasks.crons.usage.get_db_context",
         side_effect=get_mock_db_context,
     ):
         yield billing_db
@@ -277,7 +277,7 @@ class TestBillingErrorHandling:
             usage_date=yesterday,
         )
 
-        with patch("backend.prefect_app.usage_collector.get_polar_service") as mock_get:
+        with patch("backend.tasks.crons.usage.get_polar_service") as mock_get:
             mock_service = AsyncMock()
             mock_service.usage = AsyncMock()
             mock_service.usage.enabled = False

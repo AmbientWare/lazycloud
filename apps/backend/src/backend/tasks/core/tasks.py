@@ -1,3 +1,9 @@
+"""Core task functions for deployment operations.
+
+These functions contain the actual business logic for deployment operations.
+They are called by SAQ jobs and can be composed together.
+"""
+
 import asyncio
 from datetime import UTC, datetime
 from uuid import UUID
@@ -14,19 +20,18 @@ from models.helm import HelmNamespaceValues, HelmValues, NamespaceConfig
 from models.k8s import WorkloadType
 from models.secrets import SecretState
 from models.statuses import TaskStatus
-from prefect import task
 
 from backend.config import app_config
 from backend.database import get_db_context
 from backend.database.compose import ComposeDeploymentPydantic
 from backend.database.secrets import SecretPydantic
-from backend.prefect_app.deployment.schemas import DeploymentPreparationResult
-from backend.prefect_app.deployment.utils import (
+from backend.tasks.core.schemas import DeploymentPreparationResult
+from backend.tasks.core.utils import (
     delete_job_with_timeout,
     update_deployment_state,
     wait_for_secrets,
 )
-from backend.prefect_app.utils import get_task_result
+from backend.tasks.utils import get_task_result
 from backend.services import get_cloudflare_service, get_subscription_service
 from backend.services.compose.parser import ComposeParser
 from backend.services.k8s import get_chart_paths
@@ -40,12 +45,13 @@ from backend.services.k8s.helm_values_generator import HelmValuesGenerator
 charts = get_chart_paths()
 
 
-@task(retries=0)
-async def check_deployment_idempotency_task(
+async def check_deployment_idempotency(
     deployment_id: str,
 ) -> DeploymentInfo | None:
-    """Check if deployment is already in progress or completed. Returns deployment if should proceed, None if should skip."""
+    """Check if deployment is already in progress or completed.
 
+    Returns deployment info if should proceed, None if should skip.
+    """
     # Step 1: Quick DB read to get current state
     async with get_db_context() as db:
         deployment = await db.compose_deployments.get_by_id(deployment_id)
@@ -63,7 +69,7 @@ async def check_deployment_idempotency_task(
         )
         return None
 
-    # Step 2: If in non-terminal state, check task status (external Prefect API call - NO DB)
+    # Step 2: If in non-terminal state, check task status
     should_reset_state = False
     reset_to_state = None
     reset_message = None
@@ -71,7 +77,7 @@ async def check_deployment_idempotency_task(
     if deployment.state in (DeploymentStates.DEPLOYING, DeploymentStates.DELETING):
         if deployment.current_task_run_id:
             try:
-                # External call to Prefect API - outside DB transaction
+                # Check if previous task is still running
                 task_status, _ = await get_task_result(
                     UUID(deployment.current_task_run_id)
                 )
@@ -163,8 +169,7 @@ async def check_deployment_idempotency_task(
         )
 
 
-@task(retries=0)
-async def prepare_deployment_task(
+async def prepare_deployment(
     deployment_id: str, wait_for_secrets_flag: bool = False
 ) -> DeploymentPreparationResult:
     """Prepare deployment data (validation already done upfront)."""
@@ -222,8 +227,7 @@ async def prepare_deployment_task(
     )
 
 
-@task(retries=1, retry_delay_seconds=5)
-async def prepare_namespace_config_task(
+async def prepare_namespace_config(
     deployment: ComposeDeploymentPydantic,
 ) -> HelmDeploymentConfig:
     """Prepare namespace configuration with quota."""
@@ -298,8 +302,7 @@ async def prepare_namespace_config_task(
     return namespace_config
 
 
-@task(retries=2, retry_delay_seconds=10)
-async def deploy_namespace_resources_task(
+async def deploy_namespace_resources(
     namespace_config: HelmDeploymentConfig,
 ) -> None:
     """Deploy namespace resources (NetworkPolicy, ResourceQuota, etc.)."""
@@ -309,8 +312,7 @@ async def deploy_namespace_resources_task(
         raise Exception(f"Failed to deploy namespace: {result.error}")
 
 
-@task(retries=2, retry_delay_seconds=5)
-async def delete_existing_jobs_task(
+async def delete_existing_jobs(
     namespace: str,
     helm_values: HelmValues,
     current_helm_values: HelmValues | None = None,
@@ -367,8 +369,7 @@ async def delete_existing_jobs_task(
     await asyncio.gather(*[delete_job(service) for service in all_jobs.values()])
 
 
-@task(retries=3, retry_delay_seconds=15)
-async def deploy_application_task(
+async def deploy_application(
     name: str,
     namespace: str,
     helm_values: HelmValues,
@@ -394,8 +395,7 @@ async def deploy_application_task(
     return DeploymentResult(revision=app_result.revision)
 
 
-@task(retries=2, retry_delay_seconds=5)
-async def register_custom_domains_task(
+async def register_custom_domains(
     domains: list[str],
 ) -> None:
     """Register custom domains with Cloudflare for SaaS SSL.
@@ -434,8 +434,7 @@ async def register_custom_domains_task(
                 # Customer will see SSL pending until they add CNAME
 
 
-@task(retries=2, retry_delay_seconds=5)
-async def unregister_custom_domains_task(
+async def unregister_custom_domains(
     domains: list[str],
 ) -> None:
     """Remove custom domains from Cloudflare for SaaS SSL.
@@ -459,18 +458,7 @@ async def unregister_custom_domains_task(
                 logger.warning(f"Failed to remove domain {domain} from Cloudflare: {e}")
 
 
-@task(retries=2, retry_delay_seconds=5)
-async def update_deployment_state_task(
-    deployment_id: str,
-    state: DeploymentStates,
-    message: str | None = None,
-) -> None:
-    """Update deployment state in database with retry logic."""
-    await update_deployment_state(deployment_id, state, message)
-
-
-@task(retries=2, retry_delay_seconds=5)
-async def sync_deployment_to_db_task(
+async def sync_deployment_to_db(
     deployment_id: str,
     helm_values: HelmValues,
     helm_revision: int | None,

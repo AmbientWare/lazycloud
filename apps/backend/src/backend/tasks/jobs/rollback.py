@@ -1,27 +1,37 @@
-"""Rollback compose flow - rolls back to a previous Helm revision."""
+"""Rollback compose SAQ job - rolls back to a previous Helm revision."""
+
+from typing import Any
 
 import yaml
 from kubernetes_asyncio.client.exceptions import ApiException
 from loguru import logger
 from models.deployments import DeploymentStates
 from models.k8s import WorkloadType
-from prefect import flow
 
 from backend.config import app_config
 from backend.database import get_db_context
-from backend.prefect_app.deployment.utils import (
-    delete_job_with_timeout,
-    update_deployment_state,
-)
+from backend.tasks.core import delete_job_with_timeout, update_deployment_state
 from backend.services.compose.parser import ComposeParser
 from backend.services.k8s import create_release_name
 from backend.services.k8s.helm_manager import HelmManager
 from backend.services.k8s.helm_values_generator import HelmValuesGenerator
 
 
-@flow(name="rollback-compose-flow", log_prints=True)
-async def rollback_compose_flow(deployment_id: str, revision: int) -> None:
-    """Rollback a Docker Compose deployment to a previous Helm revision."""
+async def rollback_compose_job(
+    ctx: dict[str, Any],
+    deployment_id: str,
+    revision: int,
+) -> dict[str, Any]:
+    """Rollback a Docker Compose deployment to a previous Helm revision.
+
+    Args:
+        ctx: SAQ job context
+        deployment_id: The deployment ID to rollback
+        revision: The target Helm revision to rollback to
+
+    Returns:
+        Result dict with status
+    """
     logger.info(
         f"Starting rollback of deployment {deployment_id} to revision {revision}"
     )
@@ -101,7 +111,7 @@ async def rollback_compose_flow(deployment_id: str, revision: int) -> None:
                 f"Deployment {deployment_id} is already at revision {revision} in both Helm and DB. "
                 "Skipping rollback."
             )
-        return
+        return {"status": "skipped", "reason": "already_at_revision"}
 
     # Step 4: Mark deployment as DEPLOYING (quick DB write)
     async with get_db_context() as db:
@@ -320,6 +330,7 @@ async def rollback_compose_flow(deployment_id: str, revision: int) -> None:
             logger.info(
                 f"Successfully rolled back deployment {deployment_id} to revision {revision}"
             )
+            return {"status": "success", "deployment_id": deployment_id, "new_revision": new_revision}
 
         except Exception as db_error:
             logger.error(

@@ -6,7 +6,7 @@ from responses.tasks import TaskStatusResponse
 from sse_starlette.sse import EventSourceResponse
 
 from backend.api.utils import create_sse_stream_with_subscription
-from backend.prefect_app import get_task_result
+from backend.tasks import get_task_result
 from backend.services.monitoring.monitor_config import TaskMonitorConfig
 
 tasks_router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -14,9 +14,8 @@ tasks_router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 @tasks_router.get("/{task_id}")
 async def get_task_status(task_id: UUID) -> TaskStatusResponse:
-    """Get the status of a Prefect task"""
+    """Get the status of a task"""
     try:
-        # Get task result from Prefect
         status, message = await get_task_result(task_id)
 
         return TaskStatusResponse(

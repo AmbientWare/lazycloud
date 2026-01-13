@@ -1,19 +1,35 @@
-"""Instance management flows - delete pods/instances."""
+"""Instance management SAQ job - delete pods/instances."""
+
+from typing import Any
 
 from loguru import logger
-from prefect import flow
 
 from backend.database import get_db_context
 from backend.services.k8s.pod_manager import KubernetesPodManager
 
 
-@flow(name="delete-instance-flow", log_prints=True)
-async def delete_instance_flow(
-    deployment_id: str, service_name: str, pod_name: str, force: bool = False
-) -> None:
-    """Delete a specific instance (pod) in a deployment."""
+async def delete_instance_job(
+    ctx: dict[str, Any],
+    deployment_id: str,
+    service_name: str,
+    pod_name: str,
+    force: bool = False,
+) -> dict[str, Any]:
+    """Delete a specific instance (pod) in a deployment.
+
+    Args:
+        ctx: SAQ job context
+        deployment_id: The deployment ID
+        service_name: The service name containing the instance
+        pod_name: The pod/instance name to delete
+        force: Whether to force delete (no grace period)
+
+    Returns:
+        Result dict with status
+    """
     logger.info(
-        f"Starting deletion of instance {pod_name} in deployment {deployment_id} for service {service_name} (force={force})"
+        f"Starting deletion of instance {pod_name} in deployment {deployment_id} "
+        f"for service {service_name} (force={force})"
     )
 
     # Get the deployment
@@ -52,7 +68,7 @@ async def delete_instance_flow(
             logger.info(
                 f"Pod {pod_name} does not exist - deletion goal already achieved"
             )
-            return
+            return {"status": "skipped", "reason": "pod_not_found"}
 
         else:
             # Other verification errors (e.g., wrong ownership) are real errors
@@ -73,3 +89,4 @@ async def delete_instance_flow(
         raise ValueError(delete_result.error or "Failed to delete pod")
 
     logger.info(f"Successfully deleted instance {pod_name}")
+    return {"status": "success", "pod_name": pod_name}

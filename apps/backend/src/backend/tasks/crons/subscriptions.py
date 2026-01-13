@@ -1,16 +1,23 @@
+"""Subscription monitoring cron job."""
+
+from typing import Any
+
 from loguru import logger
-from prefect import flow
 
 from backend.database import get_db_context
 from backend.database.users import SubscriptionState, UserStatus
 from backend.services import get_subscription_service
 
-# TODO: This is only temporary until we have a webhooks handler for subscription updates.
 
+async def monitor_subscription_states_job(ctx: dict[str, Any]) -> dict[str, Any]:
+    """Monitor users' subscription states, check actual usage vs limits, and update status.
 
-@flow(log_prints=True)
-async def monitor_subscription_states():
-    """Monitor users' subscription states, check actual usage vs limits, and update status."""
+    Args:
+        ctx: SAQ job context
+
+    Returns:
+        Result dict with checked count, overage count, and updated count
+    """
     logger.info("Starting subscription state monitoring")
 
     # Get all active users
@@ -64,10 +71,3 @@ async def monitor_subscription_states():
         "overage_count": overage_count,
         "updated": updated_count,
     }
-
-
-# Create deployment with cron schedule (runs every 4 hours)
-monitor_subscription_states_deployment = monitor_subscription_states.to_deployment(
-    name="monitor-subscription-states",
-    cron="0 */4 * * *",  # Every 4 hours at the top of the hour
-)

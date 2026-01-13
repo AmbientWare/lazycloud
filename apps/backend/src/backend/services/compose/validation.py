@@ -11,7 +11,7 @@ from models.k8s import WorkloadType
 from backend.config import app_config
 from backend.database import get_db_context
 from backend.database.compose import ComposeDeploymentPydantic
-from backend.prefect_app.deployment.utils import verify_quota_capacity
+from backend.tasks.core.utils import verify_quota_capacity
 from backend.services.compose.parser import ComposeParser
 from backend.services.k8s import create_release_name
 from backend.services.k8s.helm_manager import HelmManager

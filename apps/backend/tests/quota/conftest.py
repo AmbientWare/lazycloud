@@ -3,7 +3,7 @@
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock
 
-import backend.prefect_app.deployment.utils as deployment_utils_module
+import backend.tasks.core.utils as task_utils_module
 import backend.services.subscription_service as subscription_module
 import pytest
 from backend.database import Database
@@ -29,14 +29,14 @@ def mock_db_context(db_session, db: Database):
     subscription_module.get_db_context = mock_context
 
     # Patch deployment utils module
-    original_deployment = deployment_utils_module.get_db_context
-    deployment_utils_module.get_db_context = mock_context
+    original_deployment = task_utils_module.get_db_context
+    task_utils_module.get_db_context = mock_context
 
     yield
 
     # Restore originals
     subscription_module.get_db_context = original_subscription
-    deployment_utils_module.get_db_context = original_deployment
+    task_utils_module.get_db_context = original_deployment
 
 
 @pytest.fixture
@@ -55,11 +55,11 @@ def mock_subscription_service(request):
     mock_service = AsyncMock()
     mock_service.get_user_features = AsyncMock(return_value=features)
 
-    original = deployment_utils_module.get_subscription_service
+    original = task_utils_module.get_subscription_service
 
     def mock_get_subscription_service():
         return mock_service
 
-    deployment_utils_module.get_subscription_service = mock_get_subscription_service
+    task_utils_module.get_subscription_service = mock_get_subscription_service
     yield mock_service
-    deployment_utils_module.get_subscription_service = original
+    task_utils_module.get_subscription_service = original

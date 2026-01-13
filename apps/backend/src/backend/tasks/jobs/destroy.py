@@ -1,27 +1,36 @@
-"""Destroy compose flow - removes Docker Compose deployment from Kubernetes."""
+"""Destroy compose SAQ job - removes Docker Compose deployment from Kubernetes."""
 
 from datetime import UTC, datetime
+from typing import Any
 
 import yaml
 from loguru import logger
 from models.deployments import DeploymentStates
-from prefect import flow
 
 from backend.database import get_db_context
-from backend.prefect_app.deployment.tasks import unregister_custom_domains_task
-from backend.prefect_app.deployment.utils import update_deployment_state
+from backend.tasks.core import unregister_custom_domains, update_deployment_state
 from backend.services import get_depot_service
 from backend.services.compose.parser import ComposeParser
 from backend.services.k8s import create_release_name
 from backend.services.k8s.helm_manager import HelmManager
 
 
-@flow(name="destroy-compose-flow", log_prints=True)
-async def destroy_compose_flow(deployment_id: str) -> None:
-    """Destroy a Docker Compose deployment from Kubernetes."""
+async def destroy_compose_job(
+    ctx: dict[str, Any],
+    deployment_id: str,
+) -> dict[str, Any]:
+    """Destroy a Docker Compose deployment from Kubernetes.
+
+    Args:
+        ctx: SAQ job context
+        deployment_id: The deployment ID to destroy
+
+    Returns:
+        Result dict with status
+    """
     logger.info(f"Starting destruction of deployment {deployment_id}")
 
-    # get the deployment (include_deleted=True to access soft-deleted deployments)
+    # Get the deployment (include_deleted=True to access soft-deleted deployments)
     async with get_db_context() as db:
         deployment = await db.compose_deployments.get_by_id(
             deployment_id, include_deleted=True
@@ -45,7 +54,7 @@ async def destroy_compose_flow(deployment_id: str) -> None:
                 service.domain for service in compose_file.services if service.domain
             ]
             if custom_domains:
-                await unregister_custom_domains_task(custom_domains)
+                await unregister_custom_domains(custom_domains)
 
         except Exception as cf_error:
             logger.warning(f"Cloudflare domain cleanup failed (continuing): {cf_error}")
@@ -103,6 +112,7 @@ async def destroy_compose_flow(deployment_id: str) -> None:
                 await db.compose_deployments.update(deployment)
 
         logger.info(f"Successfully destroyed deployment {deployment_id}")
+        return {"status": "success", "deployment_id": deployment_id}
 
     except Exception as e:
         error_type = type(e).__name__
