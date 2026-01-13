@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from backend.database import Database
-from backend.prefect_app.usage_collector import collect_workspace_interval
+from backend.tasks.crons.usage import collect_workspace_interval
 from models.metrics import (
     NamespaceBreakdown,
     PodUsage,
@@ -54,7 +54,7 @@ def make_namespace_breakdown(
 @pytest.fixture
 def mock_prometheus_healthy():
     """Mock Prometheus as healthy."""
-    with patch("backend.prefect_app.usage_collector.get_metrics_service") as mock_get:
+    with patch("backend.tasks.crons.usage.get_metrics_service") as mock_get:
         mock_service = AsyncMock()
         mock_service.health_check = AsyncMock(return_value=True)
         mock_get.return_value = mock_service
@@ -64,7 +64,7 @@ def mock_prometheus_healthy():
 @pytest.fixture
 def mock_depot_service():
     """Mock Depot service (no build minutes)."""
-    with patch("backend.prefect_app.usage_collector.get_depot_service") as mock_get:
+    with patch("backend.tasks.crons.usage.get_depot_service") as mock_get:
         mock_service = AsyncMock()
         mock_service.is_configured = False
         mock_get.return_value = mock_service
@@ -74,7 +74,7 @@ def mock_depot_service():
 @pytest.fixture
 def mock_storage_collection():
     """Mock storage collection to return empty list."""
-    with patch("backend.prefect_app.usage_collector.collect_storage_usage") as mock:
+    with patch("backend.tasks.crons.usage.collect_storage_usage") as mock:
         mock.return_value = []
         yield mock
 
@@ -98,7 +98,7 @@ def mock_db_context(billing_db: Database, billing_db_session):
         return mock_context()
 
     with patch(
-        "backend.prefect_app.usage_collector.get_db_context",
+        "backend.tasks.crons.usage.get_db_context",
         side_effect=get_mock_db_context,
     ):
         yield billing_db
@@ -463,7 +463,7 @@ class TestErrorHandling:
         end_time = start_time + timedelta(minutes=15)
 
         with patch(
-            "backend.prefect_app.usage_collector.get_metrics_service"
+            "backend.tasks.crons.usage.get_metrics_service"
         ) as mock_get:
             mock_service = AsyncMock()
             mock_service.health_check = AsyncMock(return_value=False)

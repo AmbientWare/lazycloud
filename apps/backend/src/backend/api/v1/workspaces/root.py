@@ -34,8 +34,7 @@ from backend.database.user_workspaces import (
 from backend.database.users import UserPydantic
 from backend.database.utils import validate_workspace_name
 from backend.database.workspaces import WorkspacePydantic, WorkspaceStatus
-from backend.prefect_app.client import run_flow
-from backend.prefect_app.registry import Deployments
+from backend.tasks.client import run_destroy_compose
 from backend.services import (
     UsageService,
     get_usage_service,
@@ -228,19 +227,16 @@ async def delete_workspace(
             continue
 
         try:
-            flow_run_id = await run_flow(
-                Deployments.DESTROY_COMPOSE,
-                {"deployment_id": deployment.id},
-            )
+            job_key = await run_destroy_compose(deployment_id=deployment.id)
 
-            # Update state + task_run_id atomically after flow launch
+            # Update state + job_key atomically after job enqueue
             deployment = await db.compose_deployments.get_by_id(
                 deployment.id,
                 with_lock=True,
             )
             if deployment:
                 deployment.state = DeploymentStates.DELETING
-                deployment.current_task_run_id = flow_run_id
+                deployment.current_task_run_id = job_key
                 await db.compose_deployments.update(deployment)
 
         except Exception as e:

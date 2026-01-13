@@ -6,7 +6,7 @@ import pytest
 from backend.database import Database
 from backend.database.users import UserPydantic
 from backend.database.workspaces import WorkspacePydantic
-from backend.prefect_app.deployment.utils import verify_quota_capacity
+from backend.tasks.core.utils import verify_quota_capacity
 from models.deployments import DeploymentStates
 from models.helm import HelmValues, VolumeValues
 

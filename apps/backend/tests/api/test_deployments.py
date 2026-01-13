@@ -284,9 +284,9 @@ class TestDeployDeployment:
         client: AsyncClient,
         api_db: Database,
         api_user: UserPydantic,
-        mock_prefect_tasks,
+        mock_saq_tasks,
     ):
-        """Deploying a deployment triggers Prefect task."""
+        """Deploying a deployment triggers SAQ job."""
         workspace = await api_db.workspaces.create(make_workspace())
         await api_db.user_workspaces.create(
             make_user_workspace(api_user.id, workspace.id, WorkspaceRole.OWNER)
@@ -306,7 +306,7 @@ class TestDeployDeployment:
         data = response.json()
         assert "task_id" in data
         assert data["status"] == TaskStatus.PENDING.value
-        mock_prefect_tasks["deploy"].delay.assert_called_once()
+        mock_saq_tasks["deploy"].assert_called_once()
 
     async def test_deploy_deployment_requires_admin(
         self, client: AsyncClient, api_db: Database, api_user: UserPydantic
@@ -337,9 +337,9 @@ class TestDeleteDeployment:
         client: AsyncClient,
         api_db: Database,
         api_user: UserPydantic,
-        mock_prefect_tasks,
+        mock_saq_tasks,
     ):
-        """Deleting a deployment triggers destroy task."""
+        """Deleting a deployment triggers destroy job."""
         workspace = await api_db.workspaces.create(make_workspace())
         await api_db.user_workspaces.create(
             make_user_workspace(api_user.id, workspace.id, WorkspaceRole.OWNER)
@@ -355,7 +355,7 @@ class TestDeleteDeployment:
         data = response.json()
         assert "task_id" in data
         assert data["status"] == TaskStatus.PENDING.value
-        mock_prefect_tasks["destroy"].delay.assert_called_once()
+        mock_saq_tasks["destroy"].assert_called_once()
 
     async def test_delete_deployment_requires_admin(
         self, client: AsyncClient, api_db: Database, api_user: UserPydantic
@@ -383,9 +383,9 @@ class TestRollbackDeployment:
         client: AsyncClient,
         api_db: Database,
         api_user: UserPydantic,
-        mock_prefect_tasks,
+        mock_saq_tasks,
     ):
-        """Rolling back a deployment triggers rollback task."""
+        """Rolling back a deployment triggers rollback job."""
         workspace = await api_db.workspaces.create(make_workspace())
         await api_db.user_workspaces.create(
             make_user_workspace(api_user.id, workspace.id, WorkspaceRole.OWNER)
@@ -404,7 +404,7 @@ class TestRollbackDeployment:
         data = response.json()
         assert "task_id" in data
         assert data["status"] == TaskStatus.PENDING.value
-        mock_prefect_tasks["rollback"].delay.assert_called_once()
+        mock_saq_tasks["rollback"].assert_called_once()
 
 
 class TestGetDeploymentHistory:

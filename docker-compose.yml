@@ -5,8 +5,6 @@ networks:
 volumes:
   pg-data:
   redis-data:
-  prefect-data:
-  prefect-task-storage:
   localstack-data:
 
 x-backend-volumes: &backend-volumes
@@ -16,7 +14,6 @@ x-backend-volumes: &backend-volumes
   - ./uv.lock:/workspace/uv.lock
   - "${HOME}/.kube/config-docker:/root/.kube/config:ro"
   - "${HOME}/.minikube:/root/.minikube:ro"
-  - prefect-task-storage:/task-storage
 
 services:
   api:
@@ -54,8 +51,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
-      prefect-server:
-        condition: service_started
 
   crons:
     networks:
@@ -78,7 +73,7 @@ services:
         condition: service_healthy
       db-migration:
         condition: service_completed_successfully
-      prefect-server:
+      redis:
         condition: service_started
 
   background-workers:
@@ -98,8 +93,6 @@ services:
     working_dir: /workspace/apps/backend
     restart: unless-stopped
     depends_on:
-      prefect-server:
-        condition: service_started
       pgbouncer:
         condition: service_healthy
       db-migration:
@@ -108,19 +101,6 @@ services:
         condition: service_started
       localstack:
         condition: service_healthy
-
-  prefect-server:
-    image: prefecthq/prefect:3-latest
-    networks:
-      - lazycloud
-    command: ["prefect", "server", "start"]
-    volumes:
-      - prefect-data:/root/.prefect
-    env_file:
-      - path: ./apps/backend/.env
-        required: false
-    ports:
-      - 4200:4200
 
   db-migration:
     networks:

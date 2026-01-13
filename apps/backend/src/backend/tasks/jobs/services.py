@@ -1,15 +1,28 @@
-"""Service management flows - restart services."""
+"""Service management SAQ jobs - restart services."""
+
+from typing import Any
 
 from loguru import logger
-from prefect import flow
 
 from backend.database import get_db_context
 from backend.services.k8s.workload_manager import WorkloadManager
 
 
-@flow(name="restart-service-flow", log_prints=True)
-async def restart_service_flow(deployment_id: str, service_name: str) -> None:
-    """Restart a specific service within a deployment."""
+async def restart_service_job(
+    ctx: dict[str, Any],
+    deployment_id: str,
+    service_name: str,
+) -> dict[str, Any]:
+    """Restart a specific service within a deployment.
+
+    Args:
+        ctx: SAQ job context
+        deployment_id: The deployment ID
+        service_name: The service name to restart
+
+    Returns:
+        Result dict with status
+    """
     logger.info(
         f"Starting restart of service {service_name} in deployment {deployment_id}"
     )
@@ -32,7 +45,7 @@ async def restart_service_flow(deployment_id: str, service_name: str) -> None:
     # Find the service by name
     service = next(s for s in deployment.helm_values.services if s.name == service_name)
 
-    # Use WorkloadOperations to restart the service
+    # Use WorkloadManager to restart the service
     workload_ops = WorkloadManager()
     result = workload_ops.restart_service(
         service=service,
@@ -43,11 +56,22 @@ async def restart_service_flow(deployment_id: str, service_name: str) -> None:
         raise ValueError(f"Failed to restart service: {result.message}")
 
     logger.info(f"Successfully restarted service {service_name}")
+    return {"status": "success", "service_name": service_name}
 
 
-@flow(name="restart-all-services-flow", log_prints=True)
-async def restart_all_services_flow(deployment_id: str) -> None:
-    """Restart all services within a deployment."""
+async def restart_all_services_job(
+    ctx: dict[str, Any],
+    deployment_id: str,
+) -> dict[str, Any]:
+    """Restart all services within a deployment.
+
+    Args:
+        ctx: SAQ job context
+        deployment_id: The deployment ID
+
+    Returns:
+        Result dict with status
+    """
     logger.info(f"Starting restart of all services in deployment {deployment_id}")
 
     # Get deployment from database
@@ -60,7 +84,7 @@ async def restart_all_services_flow(deployment_id: str) -> None:
     if not deployment.helm_values or not deployment.helm_values.services:
         raise ValueError(f"Deployment {deployment_id} has no services configured")
 
-    # Use WorkloadOperations to restart all services
+    # Use WorkloadManager to restart all services
     workload_ops = WorkloadManager()
     result = workload_ops.restart_all_services(
         helm_values=deployment.helm_values, namespace=deployment.namespace
@@ -74,3 +98,8 @@ async def restart_all_services_flow(deployment_id: str) -> None:
     logger.info(
         f"Successfully restarted all {result.total_services} services in deployment"
     )
+    return {
+        "status": "success",
+        "total_services": result.total_services,
+        "restarted": result.restarted,
+    }

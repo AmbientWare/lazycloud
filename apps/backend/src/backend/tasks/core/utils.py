@@ -1,3 +1,5 @@
+"""Utility functions for deployment tasks."""
+
 import asyncio
 import time
 
@@ -110,7 +112,9 @@ async def verify_quota_capacity(
     existing_services: int = 0,
     existing_pvcs: int = 0,
 ) -> None:
-    """Verify subscription limits have capacity for required resources. Raises ValueError if insufficient.
+    """Verify subscription limits have capacity for required resources.
+
+    Raises ValueError if insufficient capacity.
 
     Checks against subscription features, not Kubernetes quotas. Kubernetes quotas are set higher
     as a safety net, but real enforcement happens here.

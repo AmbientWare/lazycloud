@@ -2,12 +2,12 @@ from uuid import UUID
 
 from models.statuses import TaskStatus
 
-from backend.prefect_app import get_task_result
+from backend.tasks import get_task_result
 from backend.services.monitoring.base import BaseMonitor
 
 
 class TaskMonitor(BaseMonitor[tuple[TaskStatus, str]]):
-    """Monitors Prefect task status."""
+    """Monitors SAQ task status."""
 
     def __init__(self, task_id: UUID, callback=None):
         super().__init__("Task Monitor", str(task_id), callback)

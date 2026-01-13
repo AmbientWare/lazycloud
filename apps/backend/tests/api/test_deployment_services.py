@@ -75,9 +75,9 @@ class TestRestartAllServices:
         client: AsyncClient,
         api_db: Database,
         api_user: UserPydantic,
-        mock_prefect_tasks,
+        mock_saq_tasks,
     ):
-        """Restarting all services triggers Prefect task."""
+        """Restarting all services triggers SAQ job."""
         workspace = await api_db.workspaces.create(make_workspace())
         await api_db.user_workspaces.create(
             make_user_workspace(api_user.id, workspace.id, WorkspaceRole.OWNER)
@@ -95,8 +95,8 @@ class TestRestartAllServices:
         data = response.json()
         assert "task_id" in data
         assert data["status"] == "pending"
-        mock_prefect_tasks["restart_all"].delay.assert_called_once()
-        call_kwargs = mock_prefect_tasks["restart_all"].delay.call_args.kwargs
+        mock_saq_tasks["restart_all"].assert_called_once()
+        call_kwargs = mock_saq_tasks["restart_all"].call_args.kwargs
         assert call_kwargs["deployment_id"] == str(deployment.id)
 
 
@@ -108,9 +108,9 @@ class TestRestartService:
         client: AsyncClient,
         api_db: Database,
         api_user: UserPydantic,
-        mock_prefect_tasks,
+        mock_saq_tasks,
     ):
-        """Restarting a service triggers Prefect task."""
+        """Restarting a service triggers SAQ job."""
         workspace = await api_db.workspaces.create(make_workspace())
         await api_db.user_workspaces.create(
             make_user_workspace(api_user.id, workspace.id, WorkspaceRole.OWNER)
@@ -128,7 +128,7 @@ class TestRestartService:
         data = response.json()
         assert "task_id" in data
         assert data["status"] == "pending"
-        mock_prefect_tasks["restart_service"].delay.assert_called_once()
-        call_kwargs = mock_prefect_tasks["restart_service"].delay.call_args.kwargs
+        mock_saq_tasks["restart_service"].assert_called_once()
+        call_kwargs = mock_saq_tasks["restart_service"].call_args.kwargs
         assert call_kwargs["deployment_id"] == str(deployment.id)
         assert call_kwargs["service_name"] == "web"

@@ -126,11 +126,9 @@ async def api_user(api_db: Database) -> UserPydantic:
     return await api_db.users.create(make_user())
 
 
-class MockTaskFuture:
-    """Mock Prefect task future with task_run_id."""
-
-    def __init__(self, task_run_id: str | None = None):
-        self.task_run_id = task_run_id or str(uuid.uuid4())
+def make_mock_job_key() -> str:
+    """Generate a mock SAQ job key."""
+    return str(uuid.uuid4())
 
 
 def make_mock_usage_service() -> AsyncMock:
@@ -219,43 +217,34 @@ async def api_admin_user(api_db: Database) -> UserPydantic:
 
 
 @pytest.fixture
-def mock_prefect_tasks():
-    """Mock Prefect tasks to return task futures."""
-    from unittest.mock import patch
-
-    mock_deploy = MagicMock()
-    mock_deploy.delay = MagicMock(return_value=MockTaskFuture())
-
-    mock_destroy = MagicMock()
-    mock_destroy.delay = MagicMock(return_value=MockTaskFuture())
-
-    mock_rollback = MagicMock()
-    mock_rollback.delay = MagicMock(return_value=MockTaskFuture())
-
-    mock_restart_service = MagicMock()
-    mock_restart_service.delay = MagicMock(return_value=MockTaskFuture())
-
-    mock_restart_all = MagicMock()
-    mock_restart_all.delay = MagicMock(return_value=MockTaskFuture())
-
-    mock_delete_instance = MagicMock()
-    mock_delete_instance.delay = MagicMock(return_value=MockTaskFuture())
+def mock_saq_tasks():
+    """Mock SAQ client functions to return job keys."""
+    mock_deploy = AsyncMock(return_value=make_mock_job_key())
+    mock_destroy = AsyncMock(return_value=make_mock_job_key())
+    mock_rollback = AsyncMock(return_value=make_mock_job_key())
+    mock_restart_service = AsyncMock(return_value=make_mock_job_key())
+    mock_restart_all = AsyncMock(return_value=make_mock_job_key())
+    mock_delete_instance = AsyncMock(return_value=make_mock_job_key())
 
     with (
-        patch("backend.api.v1.deployments.root.deploy_compose_task", mock_deploy),
-        patch("backend.api.v1.deployments.root.destroy_compose_task", mock_destroy),
-        patch("backend.api.v1.deployments.root.rollback_compose_task", mock_rollback),
+        patch("backend.api.v1.deployments.root.run_deploy_compose", mock_deploy),
+        patch("backend.api.v1.deployments.root.run_destroy_compose", mock_destroy),
+        patch("backend.api.v1.deployments.root.run_rollback_compose", mock_rollback),
         patch(
-            "backend.api.v1.deployments.services.restart_service_task",
+            "backend.api.v1.deployments.services.run_restart_service",
             mock_restart_service,
         ),
         patch(
-            "backend.api.v1.deployments.services.restart_all_services_task",
+            "backend.api.v1.deployments.services.run_restart_all_services",
             mock_restart_all,
         ),
         patch(
-            "backend.api.v1.deployments.instances.delete_instance_task",
+            "backend.api.v1.deployments.instances.run_delete_instance",
             mock_delete_instance,
+        ),
+        patch(
+            "backend.api.v1.workspaces.root.run_destroy_compose",
+            mock_destroy,
         ),
     ):
         yield {

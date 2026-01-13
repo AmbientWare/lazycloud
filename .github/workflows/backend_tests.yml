@@ -25,13 +25,20 @@ jobs:
           --health-retries 5
         ports:
           - 6432:6432
+      redis:
+        image: redis:latest
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
     env:
       DATABASE_URL: postgresql+asyncpg://lc_dev:password@localhost:6432/postgres
-      PREFECT_API_URL: http://localhost:4200/api
-      PREFECT_LOCAL_STORAGE_PATH: /tmp/prefect-task-storage
+      REDIS_URL: redis://localhost:6379
       # these are not used in the tests, but are required by the app
       ADMIN_API_KEY: test-admin-key
-      REDIS_URL: redis://localhost:6379
       AWS_ACCOUNT_ID: "000000000000"
       AWS_ACCESS_KEY_ID: test
       AWS_SECRET_ACCESS_KEY: test
@@ -61,34 +68,6 @@ jobs:
         working-directory: apps/backend
         run: uv run alembic upgrade head
 
-      - name: Start Prefect server
-        run: |
-          docker run -d \
-            --name prefect-server \
-            -p 4200:4200 \
-            -e PREFECT_SERVER_API_HOST=0.0.0.0 \
-            prefecthq/prefect:3-latest \
-            prefect server start --host 0.0.0.0
-          echo "Prefect server container started"
-
-      - name: Wait for Prefect server
-        run: |
-          timeout=60
-          elapsed=0
-          while [ $elapsed -lt $timeout ]; do
-            if curl -f http://localhost:4200/api/health > /dev/null 2>&1; then
-              echo "Prefect server is ready"
-              exit 0
-            fi
-            echo "Waiting for Prefect server... ($elapsed/$timeout seconds)"
-            sleep 2
-            elapsed=$((elapsed + 2))
-          done
-          echo "Prefect server failed to start"
-          docker logs prefect-server || true
-          exit 1
-
       - name: Run backend tests
         working-directory: apps/backend
         run: uv run pytest -v
-

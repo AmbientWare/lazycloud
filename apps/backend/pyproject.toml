@@ -14,7 +14,6 @@ dependencies = [
     "models",
     "polar-sdk>=0.28.0",
     "pyyaml>=6.0.3",
-    "redis>=7.1.0",
     "api_requests",
     "responses",
     "slowapi>=0.1.9",
@@ -23,12 +22,14 @@ dependencies = [
     "tenacity>=9.1.2",
     "uvicorn>=0.38.0",
     "kubernetes-asyncio>=33.3.0",
-    "prefect>=3.6.4",
     "petname>=2.6",
     "resend>=2.19.0",
     "alembic>=1.17.2",
     "sentry-sdk[fastapi]>=2.46.0",
     "pyjwt[crypto]>=2.10.1",
+    "saq[redis]>=0.26.1",
+    "redis>=6.4.0",
+    "asyncpg>=0.31.0",
 ]
 
 [tool.uv.sources]
@@ -62,6 +63,5 @@ markers = [
 ]
 env = [
     "DATABASE_URL=postgresql+asyncpg://lc_dev:password@localhost:6432/postgres",
-    "PREFECT_API_URL=http://localhost:4200/api",
-    "PREFECT_LOCAL_STORAGE_PATH=/tmp/prefect-task-storage",
+    "REDIS_URL=redis://localhost:6379",
 ]

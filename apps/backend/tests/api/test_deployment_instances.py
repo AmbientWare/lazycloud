@@ -25,9 +25,9 @@ class TestDeleteInstance:
         client: AsyncClient,
         api_db: Database,
         api_user: UserPydantic,
-        mock_prefect_tasks,
+        mock_saq_tasks,
     ):
-        """Deleting an instance triggers Prefect task."""
+        """Deleting an instance triggers SAQ job."""
         workspace = await api_db.workspaces.create(make_workspace())
         await api_db.user_workspaces.create(
             make_user_workspace(api_user.id, workspace.id, WorkspaceRole.OWNER)
@@ -58,7 +58,7 @@ class TestDeleteInstance:
         data = response.json()
         assert "task_id" in data
         assert data["status"] == "pending"
-        mock_prefect_tasks["delete_instance"].delay.assert_called_once()
-        call_kwargs = mock_prefect_tasks["delete_instance"].delay.call_args.kwargs
+        mock_saq_tasks["delete_instance"].assert_called_once()
+        call_kwargs = mock_saq_tasks["delete_instance"].call_args.kwargs
         assert call_kwargs["deployment_id"] == str(deployment.id)
         assert call_kwargs["pod_name"] == "web-123"

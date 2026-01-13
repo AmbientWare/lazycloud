@@ -1,6 +1,9 @@
+"""Usage collection and billing cron jobs."""
+
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import yaml
 from loguru import logger
@@ -11,7 +14,6 @@ from models.billing import (
 )
 from models.deployments import DeploymentStates
 from models.metrics import StorageUsage
-from prefect import flow, task
 from tenacity import (
     RetryError,
     retry,
@@ -155,7 +157,6 @@ async def _build_deployment_context(workspace_id: str) -> WorkspaceDeploymentCon
     )
 
 
-@task(retries=2, retry_delay_seconds=60)
 async def collect_workspace_interval(
     workspace_id: str,
     interval_start: datetime,
@@ -307,7 +308,6 @@ async def collect_workspace_interval(
     }
 
 
-@flow(log_prints=True)
 async def collect_interval_usage(workspace_id: str) -> dict:
     """Collect usage for previous interval for a single workspace."""
     now = datetime.now(timezone.utc)
@@ -331,9 +331,15 @@ async def collect_interval_usage(workspace_id: str) -> dict:
         }
 
 
-@flow(log_prints=True)
-async def spawn_usage_collection():
-    """Spawn usage collection for all active workspaces - parallel execution."""
+async def spawn_usage_collection_job(ctx: dict[str, Any]) -> dict[str, Any]:
+    """Spawn usage collection for all active workspaces - parallel execution.
+
+    Args:
+        ctx: SAQ job context
+
+    Returns:
+        Result dict with total, failed, and success counts
+    """
     async with get_db_context() as db:
         active_workspaces = await db.workspaces.get_active_workspaces()
 
@@ -343,7 +349,6 @@ async def spawn_usage_collection():
     )
 
     # Parallel collection with concurrency limit
-    # NOTE: may need to use distributed prefect tasks for higher concurrency
     semaphore = asyncio.Semaphore(20)
 
     async def collect_with_limit(workspace):
@@ -406,9 +411,15 @@ async def _send_to_polar_with_retry(
     return success
 
 
-@flow(log_prints=True)
-async def finalize_and_bill():
-    """Finalize yesterday's usage and send to Polar for billing."""
+async def finalize_and_bill_job(ctx: dict[str, Any]) -> dict[str, Any]:
+    """Finalize yesterday's usage and send to Polar for billing.
+
+    Args:
+        ctx: SAQ job context
+
+    Returns:
+        Result dict with billed, failed, and skipped counts
+    """
     logger.info("Starting daily billing process")
     start_time = datetime.now(timezone.utc)
 
@@ -572,9 +583,28 @@ async def finalize_and_bill():
     return {"billed": billed, "failed": failed, "skipped": skipped}
 
 
-@flow(log_prints=True)
-async def catch_up_missing_intervals():
-    """Catch up any missed intervals for active workspaces."""
+# Test-friendly wrapper (without ctx parameter)
+async def finalize_and_bill() -> dict[str, Any]:
+    """Finalize yesterday's usage and send to Polar for billing.
+
+    This is a wrapper for finalize_and_bill_job that can be called without
+    the SAQ context, useful for testing.
+
+    Returns:
+        Result dict with billed, failed, and skipped counts
+    """
+    return await finalize_and_bill_job({})
+
+
+async def catch_up_missing_intervals_job(ctx: dict[str, Any]) -> dict[str, Any]:
+    """Catch up any missed intervals for active workspaces.
+
+    Args:
+        ctx: SAQ job context
+
+    Returns:
+        Result dict with caught_up count
+    """
     now = datetime.now(timezone.utc)
     today = now.date()
 
@@ -630,9 +660,15 @@ async def catch_up_missing_intervals():
         await get_depot_service().close()
 
 
-@flow(log_prints=True)
-async def alert_stuck_records():
-    """Alert on records stuck in collecting status for 1+ days."""
+async def alert_stuck_records_job(ctx: dict[str, Any]) -> dict[str, Any]:
+    """Alert on records stuck in collecting status for 1+ days.
+
+    Args:
+        ctx: SAQ job context
+
+    Returns:
+        Result dict with stuck_count
+    """
     today = datetime.now(timezone.utc).date()
 
     async with get_db_context() as db:
@@ -654,26 +690,3 @@ async def alert_stuck_records():
         )
 
     return {"stuck_count": len(stuck_records)}
-
-
-# Prefect deployments
-
-spawn_usage_collection_deployment = spawn_usage_collection.to_deployment(
-    name="spawn-usage-collection",
-    cron=UsageCollectionConfig.get_cron_expression(),
-)
-
-finalize_and_bill_deployment = finalize_and_bill.to_deployment(
-    name="finalize-and-bill",
-    cron="15 0 * * *",  # 00:15 UTC daily
-)
-
-catch_up_missing_intervals_deployment = catch_up_missing_intervals.to_deployment(
-    name="catch-up-missing-intervals",
-    cron="0 */2 * * *",  # Every 2 hours
-)
-
-alert_stuck_records_deployment = alert_stuck_records.to_deployment(
-    name="alert-stuck-records",
-    cron="0 1 * * *",  # 01:00 UTC daily (after billing)
-)
