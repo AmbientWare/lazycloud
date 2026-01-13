@@ -8,8 +8,8 @@ from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.reactive import reactive
 from textual.widget import Widget
-from textual.widgets import LoadingIndicator, Static
-from textual.worker import Worker
+from textual.widgets import Static
+from textual.worker import Worker, WorkerCancelled
 
 from cli.api import api
 from cli.ui.colors import Colors
@@ -60,9 +60,8 @@ class ServiceDetailsContainer(Widget):
         if self.service_status and self._scroll and self._scroll.is_mounted:
             self._initial_render_done = True
             self._render_sections(self.service_status)
-
-        elif self._scroll and self._scroll.is_mounted:
-            self._scroll.mount(LoadingIndicator())
+        else:
+            self.loading = True
 
     def _show_error(self, message: str) -> None:
         """Show error message when status cannot be loaded."""
@@ -78,7 +77,10 @@ class ServiceDetailsContainer(Widget):
 
     async def on_unmount(self) -> None:
         """Clean up when unmounting."""
-        await self.cleanup()
+        try:
+            await self.cleanup()
+        except Exception:
+            pass  # Ignore cleanup errors during unmount
 
     async def watch_service_status(self, old_value, new_value) -> None:
         """React to service status changes."""
@@ -113,6 +115,7 @@ class ServiceDetailsContainer(Widget):
 
     def _render_sections(self, service: ServiceStatus) -> None:
         """Render all sections with the service data."""
+        self.loading = False
         if not self._scroll:
             return
         self._scroll.remove_children()
@@ -170,9 +173,13 @@ class ServiceDetailsContainer(Widget):
 
     async def cleanup(self) -> None:
         """Clean up SSE stream connections and tasks."""
-        if self._stream_task and not self._stream_task.is_finished:
-            self._stream_task.cancel()
-            self._stream_task.wait()
+        if self._stream_task:
+            if not self._stream_task.is_finished:
+                self._stream_task.cancel()
+            try:
+                await self._stream_task.wait()
+            except (WorkerCancelled, Exception):
+                pass  # Expected when cancelling the worker or if already finished
         self._stream_task = None
         self._initial_render_done = False
         self._stream_error = None
