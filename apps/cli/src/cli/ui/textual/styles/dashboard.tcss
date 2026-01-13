@@ -84,3 +84,17 @@ SecretsContainer:focus-within {
     height: auto;
     max-height: 50%;
 }
+
+/* ========================================
+   DASHBOARD LOADING INDICATORS
+   ======================================== */
+
+DeploymentDetailsContainer.-loading,
+ServiceDetailsContainer.-loading {
+    background: transparent;
+}
+
+DeploymentDetailsContainer LoadingIndicator,
+ServiceDetailsContainer LoadingIndicator {
+    background: transparent;
+}

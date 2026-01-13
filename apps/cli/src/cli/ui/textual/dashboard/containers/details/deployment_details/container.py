@@ -6,8 +6,8 @@ from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.reactive import reactive
 from textual.widget import Widget
-from textual.widgets import LoadingIndicator, Static
-from textual.worker import Worker
+from textual.widgets import Static
+from textual.worker import Worker, WorkerCancelled
 
 from cli.api.status import StatusAPI
 from cli.ui.textual.components import SectionContainer
@@ -62,8 +62,8 @@ class DeploymentDetailsContainer(Widget):
         if self.deployment_status and self._scroll and self._scroll.is_mounted:
             self._initial_render_done = True
             self._render_sections(self.deployment_status)
-        elif self._scroll and self._scroll.is_mounted:
-            self._scroll.mount(LoadingIndicator())
+        else:
+            self.loading = True
 
     def _show_error(self, message: str) -> None:
         """Show error message when status cannot be loaded."""
@@ -78,7 +78,10 @@ class DeploymentDetailsContainer(Widget):
 
     async def on_unmount(self) -> None:
         """Clean up when unmounting."""
-        await self.cleanup()
+        try:
+            await self.cleanup()
+        except Exception:
+            pass  # Ignore cleanup errors during unmount
 
     async def watch_deployment_status(self, old_value, new_value) -> None:
         """React to deployment status changes."""
@@ -112,6 +115,7 @@ class DeploymentDetailsContainer(Widget):
 
     def _render_sections(self, deployment: DeploymentStatus) -> None:
         """Render all sections with the deployment data."""
+        self.loading = False
         if not self._scroll:
             return
         self._scroll.remove_children()
@@ -195,9 +199,13 @@ class DeploymentDetailsContainer(Widget):
 
     async def cleanup(self) -> None:
         """Clean up SSE stream connections and tasks."""
-        if self._stream_task and not self._stream_task.is_finished:
-            self._stream_task.cancel()
-            self._stream_task.wait()
+        if self._stream_task:
+            if not self._stream_task.is_finished:
+                self._stream_task.cancel()
+            try:
+                await self._stream_task.wait()
+            except (WorkerCancelled, Exception):
+                pass  # Expected when cancelling the worker or if already finished
         self._stream_task = None
         self._initial_render_done = False
         self._stream_error = None

@@ -52,7 +52,10 @@ class LogViewerModal(ContentModal):
         self._start_stream()
 
     async def on_unmount(self) -> None:
-        await self.cleanup()
+        try:
+            await self.cleanup()
+        except Exception:
+            pass  # Ignore cleanup errors during unmount
 
     def _start_stream(self) -> None:
         if self._stream_task and not self._stream_task.is_finished:
@@ -61,12 +64,13 @@ class LogViewerModal(ContentModal):
         self._stream_task = self.run_worker(self._connect_logs_stream(), exclusive=True)
 
     async def cleanup(self) -> None:
-        if self._stream_task and not self._stream_task.is_finished:
-            self._stream_task.cancel()
+        if self._stream_task:
+            if not self._stream_task.is_finished:
+                self._stream_task.cancel()
             try:
                 await self._stream_task.wait()
-            except WorkerCancelled:
-                pass  # Expected when cancelling the worker
+            except (WorkerCancelled, Exception):
+                pass  # Expected when cancelling the worker or if already finished
         self._stream_task = None
 
     def action_scroll_down(self) -> None:
