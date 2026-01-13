@@ -359,6 +359,7 @@ async def deploy_deployment(
         namespace=deployment.namespace,
         compose_yaml=compose_yaml,
         state=deployment.state,
+        depot_project_id=deployment.depot_project_id,
     )
     temp_deployment.id = str(deployment.id)
 
