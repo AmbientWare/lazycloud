@@ -26,7 +26,8 @@ class KubernetesPhase(StrEnum):
     """Status enumeration."""
 
     RUNNING = "Running"
-    STARTING = "Starting"
+    STARTING = "Starting"  # Container running but not ready (readiness probe pending)
+    UPDATING = "Updating"  # Rolling update in progress
     PARTIALLY_RUNNING = "Partially Running"
     PENDING = "Pending"
     SUCCEEDED = "Succeeded"

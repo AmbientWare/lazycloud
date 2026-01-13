@@ -157,16 +157,8 @@ class StatusWatcher:
                 )
             )
 
-        # Determine overall status
-        all_ready = all(s.ready_replicas == s.replicas for s in services_list)
-        any_running = any(s.ready_replicas > 0 for s in services_list)
-
-        if all_ready:
-            overall_status = KubernetesPhase.RUNNING
-        elif any_running:
-            overall_status = KubernetesPhase.PARTIALLY_RUNNING
-        else:
-            overall_status = KubernetesPhase.STOPPED
+        # Determine overall status from service statuses
+        overall_status = self._determine_deployment_status(services_list)
 
         # Get volumes summaries
         volumes_summary = None
@@ -204,7 +196,7 @@ class StatusWatcher:
             deployment_name=self.deployment_name,
             namespace=self.namespace,
             status=overall_status,
-            ready=all_ready,
+            ready=overall_status == KubernetesPhase.RUNNING,
             last_checked=datetime.now(UTC),
             deployed_at=self.deployed_at,
             total_services=len(services_list),
@@ -620,6 +612,73 @@ class StatusWatcher:
         else:
             return f"{minutes}m"
 
+    def _determine_deployment_status(
+        self, services: list[ServiceStatus]
+    ) -> KubernetesPhase:
+        """Determine overall deployment status from service statuses."""
+        if not services:
+            return KubernetesPhase.PENDING
+
+        # Count services by status
+        error_count = sum(
+            1
+            for s in services
+            if s.status in [KubernetesPhase.ERROR, KubernetesPhase.FAILED]
+        )
+        updating_count = sum(
+            1
+            for s in services
+            if s.updated_replicas is not None and s.updated_replicas < s.replicas
+        )
+        starting_count = sum(
+            1 for s in services if s.status == KubernetesPhase.STARTING
+        )
+        running_count = sum(
+            1 for s in services if s.status == KubernetesPhase.RUNNING
+        )
+        terminating_count = sum(
+            1 for s in services if s.status == KubernetesPhase.TERMINATING
+        )
+        pending_count = sum(
+            1 for s in services if s.status == KubernetesPhase.PENDING
+        )
+
+        # Priority order for deployment status:
+
+        # 1. Any service in error = deployment error
+        if error_count > 0:
+            return KubernetesPhase.ERROR
+
+        # 2. All services terminating = deployment terminating
+        if terminating_count == len(services):
+            return KubernetesPhase.TERMINATING
+
+        # 3. Any service updating (rolling update) = deployment updating
+        if updating_count > 0:
+            return KubernetesPhase.UPDATING
+
+        # 4. All services running = deployment running
+        if running_count == len(services):
+            return KubernetesPhase.RUNNING
+
+        # 5. All services starting (none running yet) = deployment starting
+        if starting_count > 0 and running_count == 0 and pending_count == 0:
+            return KubernetesPhase.STARTING
+
+        # 6. Mix of states or some pending/terminating = partially running
+        if running_count > 0 or starting_count > 0:
+            return KubernetesPhase.PARTIALLY_RUNNING
+
+        # 7. All pending = pending
+        if pending_count == len(services):
+            return KubernetesPhase.PENDING
+
+        # 8. No services running at all = stopped
+        if running_count == 0 and starting_count == 0:
+            return KubernetesPhase.STOPPED
+
+        return KubernetesPhase.UNKNOWN
+
     def _determine_status_from_pods(
         self, pods: list[PodStatus] | None, replicas: int
     ) -> KubernetesPhase:
@@ -651,13 +710,16 @@ class StatusWatcher:
         if error_count > 0:
             return KubernetesPhase.ERROR
 
-        # Check for rolling update: more pods than replicas, or pending/terminating pods
-        # This MUST come before the "all running" check
-        if pending_count > 0 or terminating_count > 0:
-            return KubernetesPhase.PARTIALLY_RUNNING
-
         # More pods than expected = rolling update in progress
         if len(pods) > replicas:
+            return KubernetesPhase.UPDATING
+
+        # Check for rolling update: terminating pods while others run = updating
+        if terminating_count > 0 and (running_count > 0 or starting_count > 0):
+            return KubernetesPhase.UPDATING
+
+        # Pending pods with some running = partially running (scaling up)
+        if pending_count > 0:
             return KubernetesPhase.PARTIALLY_RUNNING
 
         # All pods running and count matches replicas
