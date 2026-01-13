@@ -151,9 +151,9 @@ class HelmValuesGenerator:
         # For built images, use Depot registry URL
         if service.build is not None:
             image_info.pullPolicy = "Always"
-            # Depot registry format: registry.depot.dev/<project_id>/<image>
+            # Depot registry format: registry.depot.dev/<project_id>:<tag>
             if self.deployment.depot_project_id:
-                image_info.repository = f"{app_config.DEPOT_REGISTRY_URL}/{self.deployment.depot_project_id}/{image_info.repository}"
+                image_info.repository = f"{app_config.DEPOT_REGISTRY_URL}/{self.deployment.depot_project_id}"
             else:
                 logger.warning(f"No depot_project_id for deployment {self.deployment.name}, using original image")
 
