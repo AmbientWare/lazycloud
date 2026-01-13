@@ -10,6 +10,7 @@ def get_status_class(status: KubernetesPhase) -> str:
     elif status in (
         KubernetesPhase.PENDING,
         KubernetesPhase.STARTING,
+        KubernetesPhase.UPDATING,
         KubernetesPhase.PARTIALLY_RUNNING,
         KubernetesPhase.TERMINATING,
     ):
@@ -27,6 +28,7 @@ def get_status_color(status: KubernetesPhase) -> str:
     elif status in (
         KubernetesPhase.PENDING,
         KubernetesPhase.STARTING,
+        KubernetesPhase.UPDATING,
         KubernetesPhase.PARTIALLY_RUNNING,
         KubernetesPhase.TERMINATING,
     ):
