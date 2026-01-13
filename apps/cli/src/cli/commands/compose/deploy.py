@@ -1104,10 +1104,11 @@ def _run_depot_build(
     dockerfile_path = context_path / build_info["dockerfile"]
     service_name = build_info["service_name"]
 
-    # Construct the full image URL using Depot registry
-    # Format: registry.depot.dev/<project_id>/<image>
-    image_tag = build_info["image_name"]
-    full_image_url = f"{depot_token.registry_url}/{depot_token.project_id}/{image_tag}"
+    # Construct the image tag for Depot registry
+    # Format: registry.depot.dev/<project_id>:<tag>
+    image_tag = build_info["image_name"]  # e.g., "api:api-08562c3-1768277453"
+    # Extract just the tag part (after the colon) for save-tag
+    tag_name = image_tag.split(":")[-1] if ":" in image_tag else image_tag
 
     # Build depot command with --save to store in Depot's registry
     depot_cmd = [
@@ -1116,9 +1117,9 @@ def _run_depot_build(
         "--project",
         depot_token.project_id,
         "--progress=plain",  # Force plain text output for pipes (not TTY)
-        "--save",  # make sure image saves to depot
-        "--tag",
-        full_image_url,
+        "--save",  # save to Depot's registry
+        "--save-tag",  # custom tag for the saved image
+        tag_name,
     ]
 
     depot_cmd.extend(
