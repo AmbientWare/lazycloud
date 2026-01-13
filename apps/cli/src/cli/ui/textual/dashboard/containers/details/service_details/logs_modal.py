@@ -63,7 +63,7 @@ class LogViewerModal(ContentModal):
     async def cleanup(self) -> None:
         if self._stream_task and not self._stream_task.is_finished:
             self._stream_task.cancel()
-            self._stream_task.wait()
+            await self._stream_task.wait()
         self._stream_task = None
 
     def action_scroll_down(self) -> None:
