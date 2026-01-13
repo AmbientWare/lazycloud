@@ -177,6 +177,8 @@ class ServiceStatusDisplay:
             DeployServicePhase.STARTING,
             DeployServicePhase.PENDING,
             DeployServicePhase.RESTARTING,
+            DeployServicePhase.UPDATING,
+            DeployServicePhase.STOPPING,
         ):
             return Colors.Ansi.warning
 

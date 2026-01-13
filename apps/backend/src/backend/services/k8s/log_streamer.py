@@ -3,6 +3,7 @@ from typing import AsyncGenerator
 
 from kubernetes_asyncio.client.exceptions import ApiException
 from loguru import logger
+from models.pod_states import PodFailureReasons
 
 from backend.services.k8s.client import get_async_core_v1_api
 
@@ -14,14 +15,6 @@ POD_LIST_TIMEOUT = 2.0
 INITIAL_LOG_READ_TIMEOUT = 10.0
 STREAM_CHUNK_SIZE = 4096
 MESSAGE_TRUNCATE_LENGTH = 100
-
-# Error types that indicate unrecoverable image issues
-UNRECOVERABLE_IMAGE_ERRORS = {
-    "ImagePullBackOff",
-    "ErrImagePull",
-    "ErrImageNeverPull",
-    "InvalidImageName",
-}
 
 
 class LogStreamer:
@@ -76,7 +69,7 @@ class LogStreamer:
                     reason = waiting.reason or ""
                     message = waiting.message or ""
 
-                    if reason in UNRECOVERABLE_IMAGE_ERRORS:
+                    if reason in PodFailureReasons.IMAGE_ERRORS:
                         error_msg = f"{reason}"
                         if message:
                             short_msg = (
@@ -158,7 +151,7 @@ class LogStreamer:
 
                 elif reason:
                     # Fail fast on unrecoverable image pull errors
-                    if any(err in reason for err in UNRECOVERABLE_IMAGE_ERRORS):
+                    if any(err in reason for err in PodFailureReasons.IMAGE_ERRORS):
                         yield f"ERROR: {reason}"
                         yield "Logs are not available because the container cannot start."
                         yield "Please check the pod status and resolve the issue before viewing logs."

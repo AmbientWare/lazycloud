@@ -70,9 +70,7 @@ class ContentContainer(Container):
 
     async def on_unmount(self) -> None:
         """Clean up when container unmounts."""
-        if self._service_view:
-            await self._service_view.cleanup()
-            self._service_view = None
+        self._service_view = None
 
     def _update_border_subtitle(self) -> None:
         navigation_subtitle = "1: Deployments • 2: Services • 3: Secrets • 4: Details"
@@ -150,25 +148,20 @@ class ContentContainer(Container):
         )
         self._update_border_subtitle()
 
-        if self._service_view:
-            await self._service_view.cleanup()
-            self._service_view = None
-
         scroll = self.query_one(VerticalScroll)
         scroll.remove_children()
+        self._service_view = None
 
-        try:
-            self._deployment_view = DeploymentDetailsContainer()
-            scroll.mount(self._deployment_view)
-            # Set properties after mounting to avoid reactive triggers before mount
-            self._deployment_view.deployment_id = self.deployment.id
-            self._deployment_view.deployment_status = self.deployment_status
-
-        except Exception as e:
-            error_widget = Static(
-                f"[red]Error loading deployment details: {str(e)}[/red]"
-            )
+        if not self.deployment_status:
+            error_widget = Static("[yellow]Loading deployment status...[/yellow]")
             scroll.mount(error_widget)
+            return
+
+        self._deployment_view = DeploymentDetailsContainer(
+            deployment_id=self.deployment.id,
+            deployment_status=self.deployment_status,
+        )
+        scroll.mount(self._deployment_view)
 
     async def refresh_service_content(self) -> None:
         if not self.service or not self.deployment:
@@ -180,18 +173,17 @@ class ContentContainer(Container):
         self._update_border_subtitle()
 
         if self._service_view:
-            await self._service_view.cleanup()
             self._service_view = None
 
         scroll = self.query_one(VerticalScroll)
         scroll.remove_children()
 
-        self._service_view = ServiceDetailsContainer()
+        self._service_view = ServiceDetailsContainer(
+            deployment_id=self.deployment.id,
+            service_name=self.service.name,
+            service_status=self.service,
+        )
         scroll.mount(self._service_view)
-        # Set properties after mounting to avoid reactive triggers before mount
-        self._service_view.deployment_id = self.deployment.id
-        self._service_view.service_name = self.service.name
-        self._service_view.service_status = self.service
 
     async def refresh_secret_content(self) -> None:
         """Refresh the secrets view - shows all secrets for the deployment."""
@@ -205,12 +197,9 @@ class ContentContainer(Container):
         self.border_title = self._get_border_title("📋 [4] Secrets")
         self._update_border_subtitle()
 
-        if self._service_view:
-            await self._service_view.cleanup()
-            self._service_view = None
-
         scroll = self.query_one(VerticalScroll)
         scroll.remove_children()
+        self._service_view = None
 
         try:
             secrets_response = await api.secrets.get_secrets(self.deployment.id)
@@ -240,15 +229,12 @@ class ContentContainer(Container):
             scroll.mount(error_section)
 
     async def clear_content(self) -> None:
-        if self._service_view:
-            await self._service_view.cleanup()
-            self._service_view = None
-
         self.border_title = self._get_border_title("📋 [4] Details")
         self._update_border_subtitle()
 
         scroll = self.query_one(VerticalScroll)
         scroll.remove_children()
+        self._service_view = None
 
         scroll.mount(EmptyStateWidget())
 

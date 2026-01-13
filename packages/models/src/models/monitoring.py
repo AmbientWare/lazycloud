@@ -22,13 +22,14 @@ class DeployOverallPhase(StrEnum):
 
 
 class ContainerCounts(BaseModel):
-    """Container counts for a service."""
+    """Container counts for a service (Docker-like semantics)."""
 
     desired: int = 0
     running: int = 0
     pending: int = 0
     stopping: int = 0
-    creating: int = 0
+    creating: int = 0  # Alias: starting (pulling image, initializing, health checks)
+    error: int = 0
 
 
 class DeployServiceStatus(BaseModel):
