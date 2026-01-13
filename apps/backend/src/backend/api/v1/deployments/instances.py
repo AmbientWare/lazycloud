@@ -111,6 +111,13 @@ async def stream_service_logs(
     deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_access),
 ):
     """Stream real-time service logs."""
+    # Check for helm_values
+    if not deployment.helm_values or not deployment.helm_values.services:
+        raise HTTPException(
+            status_code=400,
+            detail="Deployment does not have service configuration",
+        )
+
     # Find which service this pod belongs to
     service = _find_service_for_pod(pod_name, deployment.helm_values.services)
 
