@@ -203,6 +203,7 @@ class ServiceValues(BaseModel):
     securityContext: SecurityContext | None = None
     podSecurityContext: PodSecurityContext | None = None
     terminationGracePeriodSeconds: int | None = None
+    imagePullSecrets: list[dict[str, str]] | None = None
 
 
 class NamespaceConfig(BaseModel):
