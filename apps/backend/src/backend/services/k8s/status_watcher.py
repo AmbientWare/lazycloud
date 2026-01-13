@@ -16,6 +16,7 @@ from models.k8s import (
     PodList,
     WorkloadType,
 )
+from models.pod_states import ERROR_MESSAGES, PodFailureReasons
 from models.statuses import (
     JOB_CONDITION_COMPLETE,
     JOB_CONDITION_FAILED,
@@ -473,19 +474,21 @@ class StatusWatcher:
                         if waiting:
                             container_reason = waiting.get("reason")
                             container_message = waiting.get("message")
-                            if container_reason in [
-                                "ImagePullBackOff",
-                                "ErrImagePull",
-                                "ErrImageNeverPull",
-                                "InvalidImageName",
-                            ]:
+                            # Use unified error constants
+                            if container_reason in PodFailureReasons.IMAGE_ERRORS:
                                 has_container_error = True
-                            elif container_reason == "CrashLoopBackOff":
+                                container_message = ERROR_MESSAGES.get(
+                                    container_reason, container_message
+                                )
+                            elif container_reason in PodFailureReasons.RESTART_ERRORS:
                                 has_container_error = True
-                                container_message = (
-                                    "Container keeps crashing. Your application must "
-                                    "run continuously (e.g., a web server). "
-                                    "Check logs for details."
+                                container_message = ERROR_MESSAGES.get(
+                                    container_reason, "Service keeps crashing"
+                                )
+                            elif container_reason in PodFailureReasons.CONTAINER_ERRORS:
+                                has_container_error = True
+                                container_message = ERROR_MESSAGES.get(
+                                    container_reason, container_message
                                 )
                         else:
                             terminated = container_status.get("state", {}).get(
@@ -504,9 +507,9 @@ class StatusWatcher:
                                     # Container exited with code 0 but has restarts
                                     # This usually means it's not a long-running process
                                     container_reason = "ContainerExited"
-                                    container_message = (
-                                        "Container exited immediately. Your application "
-                                        "must run continuously (e.g., a web server). Or maked as a job."
+                                    container_message = ERROR_MESSAGES.get(
+                                        "ContainerExited",
+                                        "Service exited - use restart: no for one-time tasks",
                                     )
                                     has_container_error = True
 

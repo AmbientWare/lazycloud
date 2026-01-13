@@ -4,6 +4,7 @@ from typing import Any, Callable
 
 import httpx
 from httpx_sse import aconnect_sse
+from loguru import logger
 
 from cli.config import config
 
@@ -32,6 +33,7 @@ class SSEClient:
             max_retries: Maximum number of connection retry attempts
         """
         url = f"{config.api_base_url}/{config.api_version}{path}"
+        logger.debug(f"SSEClient.stream called for {url}")
 
         for attempt in range(max_retries):
             try:
@@ -60,6 +62,7 @@ class SSEClient:
         on_error: Callable[[Exception], None] | None = None,
     ) -> None:
         """Core SSE streaming implementation using httpx-sse."""
+        logger.debug(f"SSEClient._stream connecting to {url}")
         try:
             self._running = True
 
@@ -71,17 +74,20 @@ class SSEClient:
 
             # Create streaming connection
             self._client = httpx.AsyncClient(timeout=httpx.Timeout(None, connect=10.0))
+            logger.debug(f"SSEClient._stream created client, opening SSE connection")
 
             # Use httpx-sse to handle SSE protocol
             async with aconnect_sse(
                 self._client, "GET", url, headers=headers
             ) as event_source:
+                logger.debug(f"SSEClient._stream SSE connection established")
                 async for sse in event_source.aiter_sse():
                     if not self._running:
                         break
 
                     # Handle error events
                     if sse.event == "error":
+                        logger.debug(f"SSEClient received error event: {sse.data}")
                         try:
                             data = json.loads(sse.data)
                             if on_error:
@@ -93,6 +99,7 @@ class SSEClient:
                                 on_error(Exception("Invalid error data"))
                     else:
                         # Handle regular events
+                        logger.debug(f"SSEClient received event: {sse.event}")
                         try:
                             data = json.loads(sse.data)
                             on_event(sse.event or "message", data)
@@ -101,6 +108,7 @@ class SSEClient:
                                 on_error(Exception(f"Invalid JSON in SSE data: {e}"))
 
         except Exception as e:
+            logger.error(f"SSEClient._stream exception: {e}")
             if on_error:
                 on_error(e)
             raise

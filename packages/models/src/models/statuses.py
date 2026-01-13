@@ -42,7 +42,9 @@ class DeployServicePhase(StrEnum):
     PENDING = "pending"
     STARTING = "starting"
     RUNNING = "running"
+    UPDATING = "updating"
     RESTARTING = "restarting"
+    STOPPING = "stopping"
     ERROR = "error"
     EXITED = "exited"
 

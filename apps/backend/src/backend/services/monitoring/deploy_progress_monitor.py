@@ -10,34 +10,26 @@ from models.monitoring import (
     DeployProgressStatus,
     DeployServiceStatus,
 )
+from models.pod_states import (
+    ContainerState,
+    PodInfo,
+    PodStateClassifier,
+)
 from models.statuses import DeployServicePhase, KubernetesPhase, ServiceStatus
 
 from backend.services.k8s.status_watcher import StatusWatcher
 from backend.services.monitoring.base import BaseMonitor
 
-FAILURE_REASONS = {
-    "CrashLoopBackOff",
-    "ImagePullBackOff",
-    "ErrImagePull",
-    "ErrImageNeverPull",
-    "InvalidImageName",
-    "CreateContainerConfigError",
-    "RunContainerError",
-    "ContainerCannotRun",
-    "DeadlineExceeded",
-}
-
-# Reasons that indicate memory/resource issues
-RESOURCE_REASONS = {
-    "OOMKilled",
-    "Evicted",
-}
-
-# Reasons that indicate container exited (not a long-running service)
-EXIT_REASONS = {
-    "ContainerExited",
-    "Completed",
-    "Error",
+# Mapping from ContainerState to DeployServicePhase
+CONTAINER_STATE_TO_DEPLOY_PHASE: dict[ContainerState, DeployServicePhase] = {
+    ContainerState.PENDING: DeployServicePhase.PENDING,
+    ContainerState.STARTING: DeployServicePhase.STARTING,
+    ContainerState.RUNNING: DeployServicePhase.RUNNING,
+    ContainerState.UPDATING: DeployServicePhase.UPDATING,
+    ContainerState.RESTARTING: DeployServicePhase.RESTARTING,
+    ContainerState.STOPPING: DeployServicePhase.STOPPING,
+    ContainerState.EXITED: DeployServicePhase.EXITED,
+    ContainerState.ERROR: DeployServicePhase.ERROR,
 }
 
 
@@ -63,6 +55,7 @@ class DeployProgressMonitor(BaseMonitor[DeployProgressStatus]):
         self.namespace = namespace
         self.helm_values = helm_values
         self.start_time = time.time()
+        self._classifier = PodStateClassifier()
 
         self.status_watcher = StatusWatcher(
             deployment_id=deployment_id,
@@ -124,168 +117,48 @@ class DeployProgressMonitor(BaseMonitor[DeployProgressStatus]):
         )
 
     def _to_deploy_status(self, svc: ServiceStatus) -> DeployServiceStatus:
-        """Convert to deploy status with container counts."""
-        counts = self._count_containers(svc)
-        status, message = self._get_status_and_message(svc, counts)
+        """Convert to deploy status using PodStateClassifier."""
+        # Build PodInfo list from ServiceStatus.pods
+        pod_infos = [
+            PodInfo(
+                name=p.name,
+                phase=p.phase.value if isinstance(p.phase, KubernetesPhase) else p.phase,
+                reason=p.reason,
+                message=p.message,
+                ready_containers=p.ready_containers,
+                total_containers=p.total_containers,
+                restart_count=p.restart_count,
+                is_terminating=(p.phase == KubernetesPhase.TERMINATING),
+            )
+            for p in (svc.pods or [])
+        ]
 
-        # Check if rollout is in progress (updated_replicas < replicas)
-        rollout_in_progress = (
-            svc.updated_replicas is not None
-            and svc.updated_replicas < svc.replicas
+        # Use classifier for service-level classification
+        result = self._classifier.classify_service(
+            pods=pod_infos,
+            desired_replicas=svc.replicas,
+            updated_replicas=svc.updated_replicas,
         )
-        if rollout_in_progress and status == "running":
-            status = "starting"
-            message = "Updating service"
 
-        # Ready when running matches desired, no issues, and rollout complete
-        is_ready = (
-            counts.running >= counts.desired
-            and counts.desired > 0
-            and counts.pending == 0
-            and counts.creating == 0
-            and counts.stopping == 0
-            and not rollout_in_progress
+        # Map ContainerState to DeployServicePhase
+        phase = CONTAINER_STATE_TO_DEPLOY_PHASE.get(
+            result.state, DeployServicePhase.PENDING
         )
 
-        try:
-            phase = DeployServicePhase(status)
-        except ValueError:
-            phase = DeployServicePhase.PENDING
+        # Convert classifier counts to monitoring ContainerCounts
+        counts = ContainerCounts(
+            desired=result.container_counts.desired,
+            running=result.container_counts.running,
+            pending=result.container_counts.pending,
+            stopping=result.container_counts.stopping,
+            creating=result.container_counts.starting,  # Map 'starting' to 'creating' for API compat
+            error=result.container_counts.error,
+        )
 
         return DeployServiceStatus(
             name=svc.name,
             status=phase,
-            ready=is_ready,
+            ready=result.is_ready,
             containers=counts,
-            message=message,
+            message=result.message,
         )
-
-    def _count_containers(self, svc: ServiceStatus) -> ContainerCounts:
-        """Count instances by state using Docker-like semantics."""
-        running = 0
-        pending = 0
-        stopping = 0
-        creating = 0
-
-        if svc.pods:
-            for pod in svc.pods:
-                if pod.reason == "ContainerCreating":
-                    creating += 1
-                elif pod.reason == "PodInitializing":
-                    creating += 1
-                elif pod.phase == KubernetesPhase.TERMINATING:
-                    stopping += 1
-                elif pod.phase == KubernetesPhase.RUNNING:
-                    # Only count as running if service is actually ready
-                    # (all containers passing health checks)
-                    if (
-                        pod.ready_containers >= pod.total_containers
-                        and pod.total_containers > 0
-                    ):
-                        running += 1
-                    else:
-                        # Service started but not yet healthy
-                        creating += 1
-                elif pod.phase == KubernetesPhase.PENDING:
-                    pending += 1
-
-        return ContainerCounts(
-            desired=svc.replicas,
-            running=running,
-            pending=pending,
-            stopping=stopping,
-            creating=creating,
-        )
-
-    def _get_status_and_message(
-        self, svc: ServiceStatus, counts: ContainerCounts
-    ) -> tuple[str, str]:
-        """Get status and message based on service state."""
-        # Check for errors first
-        if svc.pods:
-            for pod in svc.pods:
-                # Restart loop
-                if pod.reason == "CrashLoopBackOff":
-                    return "restarting", "Service keeps crashing"
-
-                # Image issues
-                if pod.reason in ("ImagePullBackOff", "ErrImagePull"):
-                    return "error", "Failed to pull image"
-
-                # Memory/resource issues
-                if pod.reason in RESOURCE_REASONS:
-                    if pod.reason == "OOMKilled":
-                        return "error", "Out of memory - increase memory limit"
-                    if pod.reason == "Evicted":
-                        return "error", "Evicted due to resource pressure"
-                    return "error", pod.message or pod.reason
-
-                # Container exited (not a long-running service)
-                if pod.reason in EXIT_REASONS:
-                    return (
-                        "error",
-                        "Service exited - use restart: no for one-time tasks",
-                    )
-
-                # Other failures
-                if pod.reason in FAILURE_REASONS:
-                    return "error", pod.message or pod.reason
-
-        # Check if any instances are running but not ready (health checks)
-        has_unready_running = False
-        if svc.pods:
-            for pod in svc.pods:
-                if (
-                    pod.phase == KubernetesPhase.RUNNING
-                    and pod.ready_containers < pod.total_containers
-                ):
-                    has_unready_running = True
-                    break
-
-        # Status based on counts and readiness
-        if counts.creating > 0:
-            # Rolling update: some instances healthy, some starting
-            if counts.running > 0:
-                # Check specific state for more detail
-                if svc.pods:
-                    for pod in svc.pods:
-                        if pod.reason == "ContainerCreating":
-                            return "starting", "Updating (pulling image)"
-                        if pod.reason == "PodInitializing":
-                            return "starting", "Updating (initializing)"
-                if has_unready_running:
-                    return "starting", "Updating (health checks)"
-                return "starting", "Rolling update"
-
-            # Fresh deploy: no instances running yet
-            if svc.pods:
-                for pod in svc.pods:
-                    if pod.reason == "ContainerCreating":
-                        return "starting", "Pulling image"
-                    if pod.reason == "PodInitializing":
-                        return "starting", "Initializing"
-
-            # Running but waiting for health checks
-            if has_unready_running:
-                return "starting", "Running health checks"
-
-            return "starting", "Starting service"
-
-        if counts.stopping > 0:
-            return "starting", "Updating service"
-
-        if counts.pending > 0:
-            if counts.running > 0:
-                return "starting", "Scaling up"
-            return "pending", "Waiting to start"
-
-        if counts.running >= counts.desired and counts.desired > 0:
-            return "running", "Healthy"
-
-        if counts.running > 0:
-            return "starting", "Starting"
-
-        if counts.desired == 0:
-            return "exited", "Stopped"
-
-        return "pending", "Waiting"

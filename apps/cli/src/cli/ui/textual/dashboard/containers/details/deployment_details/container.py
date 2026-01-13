@@ -4,12 +4,11 @@ from loguru import logger
 from models.statuses import DeploymentStatus
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
-from textual.reactive import reactive
 from textual.widget import Widget
 from textual.widgets import Static
 from textual.worker import Worker, WorkerCancelled
 
-from cli.api.status import StatusAPI
+from cli.api import api
 from cli.ui.textual.components import SectionContainer
 from cli.ui.textual.dashboard.containers.details.deployment_details.networks_table import (
     NetworksTable,
@@ -27,17 +26,17 @@ from cli.ui.textual.theme import Icons
 class DeploymentDetailsContainer(Widget):
     """Handles deployment-specific UI rendering with real-time updates."""
 
-    # Reactive properties
-    deployment_status: reactive[DeploymentStatus | None] = reactive(None)
-    deployment_id: reactive[str | None] = reactive(None)
-
-    def __init__(self, **kwargs):
+    def __init__(
+        self,
+        deployment_id: str,
+        deployment_status: DeploymentStatus,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
-        self._status_api: StatusAPI | None = None
+        self.deployment_id = deployment_id
+        self.deployment_status = deployment_status
         self._stream_task: Worker | None = None
         self._scroll: VerticalScroll | None = None
-        self._initial_render_done = False
-        self._stream_error: str | None = None
 
         # Store widget references for updates
         self._overview_widget: Static | None = None
@@ -51,71 +50,33 @@ class DeploymentDetailsContainer(Widget):
         yield self._scroll
 
     def on_mount(self) -> None:
-        """Start SSE stream connection when mounted."""
-        self.call_after_refresh(self._show_loading)
-        if self.deployment_id:
-            self._start_stream()
-
-    def _show_loading(self) -> None:
-        """Show loading indicator after widget is fully mounted."""
-        # Skip loading if we already have initial status to render
-        if self.deployment_status and self._scroll and self._scroll.is_mounted:
-            self._initial_render_done = True
-            self._render_sections(self.deployment_status)
-        else:
-            self.loading = True
-
-    def _show_error(self, message: str) -> None:
-        """Show error message when status cannot be loaded."""
-        if not self._scroll or not self._scroll.is_mounted:
-            return
-        self._scroll.remove_children()
-        error_widget = Static(f"[yellow]{message}[/yellow]", markup=True)
-        error_section = SectionContainer(
-            f"{Icons.OVERVIEW} Status Unavailable", error_widget
-        )
-        self._scroll.mount(error_section)
+        """Render content and start streaming when mounted."""
+        self._render_sections(self.deployment_status)
+        self._start_stream()
 
     async def on_unmount(self) -> None:
         """Clean up when unmounting."""
-        try:
-            await self.cleanup()
-        except Exception:
-            pass  # Ignore cleanup errors during unmount
-
-    async def watch_deployment_status(self, old_value, new_value) -> None:
-        """React to deployment status changes."""
-        if not new_value or not self.is_mounted:
-            return
-
-        # Render on initial set or updates
-        if not self._initial_render_done:
-            self._initial_render_done = True
-            self._render_sections(new_value)
-        elif old_value is not None:
-            self._render_sections(new_value)
-
-    async def watch_deployment_id(self, old_value, new_value) -> None:
-        """React to deployment ID changes."""
-        if new_value and new_value != old_value:
-            # Cancel existing SSE stream if any
-            await self.cleanup()
-            # Start new SSE stream connection
-            self._start_stream()
+        await self._stop_stream()
 
     def _start_stream(self) -> None:
-        """Start SSE stream connection for real-time updates."""
-        if self.deployment_id:
-            if self._stream_task and not self._stream_task.is_finished:
-                self._stream_task.cancel()
+        """Start SSE stream for real-time updates."""
+        self._stream_task = self.run_worker(
+            self._connect_deployment_stream(),
+            exclusive=True,
+        )
 
-            self._stream_task = self.run_worker(
-                self._connect_deployment_stream(), exclusive=True
-            )
+    async def _stop_stream(self) -> None:
+        """Stop the SSE stream."""
+        if self._stream_task and not self._stream_task.is_finished:
+            self._stream_task.cancel()
+            try:
+                await self._stream_task.wait()
+            except (WorkerCancelled, Exception):
+                pass
+        self._stream_task = None
 
     def _render_sections(self, deployment: DeploymentStatus) -> None:
         """Render all sections with the deployment data."""
-        self.loading = False
         if not self._scroll:
             return
         self._scroll.remove_children()
@@ -156,7 +117,6 @@ class DeploymentDetailsContainer(Widget):
             self._networks_table.update_networks(deployment)
 
     def _build_overview_content(self, deployment: DeploymentStatus) -> list[str]:
-        # Use colored status
         color = get_status_color(deployment.status)
         status_text = f"[{color}]{deployment.status.upper()}[/{color}]"
 
@@ -179,14 +139,14 @@ class DeploymentDetailsContainer(Widget):
 
         return content
 
-    def update_deployment(self, deployment: DeploymentStatus) -> None:
-        """Update all sections with new deployment data."""
-        if self._overview_widget is None:
-            self._render_sections(deployment)
+    def _update_from_stream(self, deployment: DeploymentStatus) -> None:
+        """Update UI from stream data."""
+        if not self.is_mounted:
             return
 
-        overview_content = self._build_overview_content(deployment)
-        self._overview_widget.update("\n".join(overview_content).strip())
+        if self._overview_widget:
+            overview_content = self._build_overview_content(deployment)
+            self._overview_widget.update("\n".join(overview_content).strip())
 
         if self._services_table and deployment.services:
             self._services_table.update_services(deployment)
@@ -197,76 +157,31 @@ class DeploymentDetailsContainer(Widget):
         if self._networks_table and deployment.networks:
             self._networks_table.update_networks(deployment)
 
-    async def cleanup(self) -> None:
-        """Clean up SSE stream connections and tasks."""
-        if self._stream_task:
-            if not self._stream_task.is_finished:
-                self._stream_task.cancel()
-            try:
-                await self._stream_task.wait()
-            except (WorkerCancelled, Exception):
-                pass  # Expected when cancelling the worker or if already finished
-        self._stream_task = None
-        self._initial_render_done = False
-        self._stream_error = None
-
-        if self._status_api:
-            await self._status_api.disconnect()
-            self._status_api = None
-
     async def _connect_deployment_stream(self) -> None:
         """Connect to SSE stream for real-time deployment updates."""
-        if not self.deployment_id:
-            return
-
         max_reconnect_attempts = 5
-        reconnect_delay = 3  # seconds
+        reconnect_delay = 3
 
         for attempt in range(max_reconnect_attempts):
             try:
-                self._status_api = StatusAPI()
-
-                def on_update(status: DeploymentStatus | None) -> None:
-                    """Handle incoming deployment status updates."""
-                    if status:
-                        self._stream_error = None
-                        self.app.call_later(self.update_deployment, status)
-
-                def on_error(e: Exception) -> None:
-                    """Handle SSE stream errors."""
-                    self._stream_error = str(e)
-                    logger.warning(
-                        f"SSE stream error for deployment {self.deployment_id}: {e}"
-                    )
-
-                await self._status_api.stream_deployment_status(
+                await api.status.stream_deployment_status(
                     deployment_id=self.deployment_id,
-                    on_update=on_update,
-                    on_error=on_error,
+                    on_update=lambda data: self.app.call_later(
+                        self._update_from_stream, data
+                    ),
+                    on_error=lambda e: logger.warning(
+                        f"SSE stream error for deployment {self.deployment_id}: {e}"
+                    ),
                 )
-
                 break
 
             except Exception as e:
-                self._stream_error = str(e)
                 logger.error(
-                    f"SSE stream connection failed for deployment {self.deployment_id} "
+                    f"SSE connection failed for deployment {self.deployment_id} "
                     f"(attempt {attempt + 1}/{max_reconnect_attempts}): {e}"
                 )
 
-                # Only reconnect if still mounted and not on last attempt
                 if attempt < max_reconnect_attempts - 1 and self.is_mounted:
-                    logger.info(f"Reconnecting to SSE stream in {reconnect_delay}s...")
                     await asyncio.sleep(reconnect_delay)
-
                 else:
-                    logger.error(
-                        f"Failed to maintain SSE connection for deployment {self.deployment_id}"
-                    )
-                    # Show error if we don't have any status to display
-                    if not self._initial_render_done and self.is_mounted:
-                        self.app.call_later(
-                            self._show_error,
-                            f"Could not connect to status stream: {e}",
-                        )
                     break

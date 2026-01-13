@@ -1,12 +1,12 @@
 import asyncio
 
 from loguru import logger
+
 from models.helm import HealthCheckValues, HPAValues
 from models.k8s import WorkloadType
 from models.statuses import KubernetesPhase, PodStatus, ServiceStatus
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
-from textual.reactive import reactive
 from textual.widget import Widget
 from textual.widgets import Static
 from textual.worker import Worker, WorkerCancelled
@@ -28,20 +28,22 @@ from cli.utils.utils import format_cpu, format_image_name, format_memory
 class ServiceDetailsContainer(Widget):
     """Handles service-specific UI rendering and updates."""
 
-    # Reactive properties
-    service_status: reactive[ServiceStatus | None] = reactive(None)
-    deployment_id: reactive[str | None] = reactive(None)
-    service_name: reactive[str | None] = reactive(None)
-
-    def __init__(self, **kwargs):
+    def __init__(
+        self,
+        deployment_id: str,
+        service_name: str,
+        service_status: ServiceStatus,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
+        self.deployment_id = deployment_id
+        self.service_name = service_name
+        self.service_status = service_status
         self._overview_widget: Static | None = None
         self._resources_table: ResourcesTable | None = None
         self._pods_table: PodTable | None = None
         self._stream_task: Worker | None = None
         self._scroll: VerticalScroll | None = None
-        self._initial_render_done = False
-        self._stream_error: str | None = None
 
     def compose(self) -> ComposeResult:
         """Create the initial UI structure."""
@@ -49,73 +51,37 @@ class ServiceDetailsContainer(Widget):
         yield self._scroll
 
     def on_mount(self) -> None:
-        """Start SSE stream connection when mounted."""
-        self.call_after_refresh(self._show_loading)
-        if self.deployment_id and self.service_name:
-            self._start_stream()
-
-    def _show_loading(self) -> None:
-        """Show loading indicator after widget is fully mounted."""
-        # Skip loading if we already have initial status to render
-        if self.service_status and self._scroll and self._scroll.is_mounted:
-            self._initial_render_done = True
-            self._render_sections(self.service_status)
-        else:
-            self.loading = True
-
-    def _show_error(self, message: str) -> None:
-        """Show error message when status cannot be loaded."""
-        if not self._scroll or not self._scroll.is_mounted:
-            return
-
-        self._scroll.remove_children()
-        error_widget = Static(f"[yellow]{message}[/yellow]", markup=True)
-        error_section = SectionContainer(
-            f"{Icons.OVERVIEW} Status Unavailable", error_widget
-        )
-        self._scroll.mount(error_section)
+        """Render content and start streaming when mounted."""
+        logger.debug(f"ServiceDetailsContainer.on_mount for {self.service_name}")
+        self._render_sections(self.service_status)
+        self._start_stream()
 
     async def on_unmount(self) -> None:
         """Clean up when unmounting."""
-        try:
-            await self.cleanup()
-        except Exception:
-            pass  # Ignore cleanup errors during unmount
-
-    async def watch_service_status(self, old_value, new_value) -> None:
-        """React to service status changes."""
-        if not new_value or not self.is_mounted:
-            return
-
-        # Render on initial set or updates
-        if not self._initial_render_done:
-            self._initial_render_done = True
-            self._render_sections(new_value)
-        elif old_value is not None:
-            self._render_sections(new_value)
-
-    async def watch_service_name(self, old_value, new_value) -> None:
-        """React to service name changes."""
-        if new_value and new_value != old_value:
-            # Clean up old connection first
-            await self.cleanup()
-            self._start_stream()
+        logger.debug(f"ServiceDetailsContainer.on_unmount for {self.service_name}")
+        await self._stop_stream()
 
     def _start_stream(self) -> None:
-        """Start SSE stream connection for real-time updates."""
-        if self.deployment_id and self.service_name:
-            # Cancel existing stream if any
-            if self._stream_task and not self._stream_task.is_finished:
-                self._stream_task.cancel()
+        """Start SSE stream for real-time updates."""
+        logger.debug(f"ServiceDetailsContainer._start_stream for {self.service_name}")
+        self._stream_task = self.run_worker(
+            self._connect_service_stream(),
+            exclusive=True,
+        )
+        logger.debug(f"ServiceDetailsContainer._start_stream worker created: {self._stream_task}")
 
-            # Start new stream worker
-            self._stream_task = self.run_worker(
-                self._connect_service_stream(), exclusive=True
-            )
+    async def _stop_stream(self) -> None:
+        """Stop the SSE stream."""
+        if self._stream_task and not self._stream_task.is_finished:
+            self._stream_task.cancel()
+            try:
+                await self._stream_task.wait()
+            except (WorkerCancelled, Exception):
+                pass
+        self._stream_task = None
 
     def _render_sections(self, service: ServiceStatus) -> None:
         """Render all sections with the service data."""
-        self.loading = False
         if not self._scroll:
             return
         self._scroll.remove_children()
@@ -152,43 +118,27 @@ class ServiceDetailsContainer(Widget):
         if service.pods:
             self._pods_table.update_pods(service.pods)
 
-    def update_overview(self, service: ServiceStatus) -> None:
-        """Update the overview widget with new service data."""
-        if self._overview_widget is None:
-            self._render_sections(service)
+    def _update_from_stream(self, service: ServiceStatus) -> None:
+        """Update UI from stream data."""
+        if not self.is_mounted:
             return
 
-        overview_content = self._build_overview_content(service)
-        self._overview_widget.update("\n".join(overview_content).strip())
+        if self._overview_widget:
+            overview_content = self._build_overview_content(service)
+            self._overview_widget.update("\n".join(overview_content).strip())
 
-    def update_pods_table(self, pods: list[PodStatus]) -> None:
-        """Update the pods table with new data."""
-        if self._pods_table:
-            self._pods_table.update_pods(pods)
+        if self._pods_table and service.pods:
+            self._pods_table.update_pods(service.pods)
 
     def action_focus_instances(self) -> None:
         """Focus the instances table."""
         if self._pods_table:
             self._pods_table.focus()
 
-    async def cleanup(self) -> None:
-        """Clean up SSE stream connections and tasks."""
-        if self._stream_task:
-            if not self._stream_task.is_finished:
-                self._stream_task.cancel()
-            try:
-                await self._stream_task.wait()
-            except (WorkerCancelled, Exception):
-                pass  # Expected when cancelling the worker or if already finished
-        self._stream_task = None
-        self._initial_render_done = False
-        self._stream_error = None
-
     def _build_overview_content(self, service: ServiceStatus) -> list[str]:
         """Build service overview section content."""
         status_color = get_status_color(service.status)
 
-        # For Jobs, show completion status instead of replicas
         if service.workload_type == WorkloadType.JOB:
             if service.status == KubernetesPhase.STOPPED:
                 completion_text = "Completion:   [green]Completed[/green]"
@@ -226,7 +176,6 @@ class ServiceDetailsContainer(Widget):
                 f"Last Checked: {service.last_checked.strftime('%Y-%m-%d %H:%M:%S')}"
             )
 
-        # Add pod error information if available
         if service.pods:
             error_pods = [
                 pod
@@ -234,12 +183,11 @@ class ServiceDetailsContainer(Widget):
                 if pod.phase.value in ["Error", "Pending"] and pod.reason
             ]
             if error_pods:
-                content.append("")  # Spacing
+                content.append("")
                 content.append("[red]Pod Errors:[/red]")
                 for pod in error_pods:
                     error_msg = f"  • {pod.name}: {pod.reason}"
                     if pod.message:
-                        # Truncate long messages
                         msg = (
                             pod.message[:80] + "..."
                             if len(pod.message) > 80
@@ -254,7 +202,6 @@ class ServiceDetailsContainer(Widget):
         """Build service ports section content."""
         if not ports:
             return ["No ports exposed"]
-
         return [f"{Symbols.BULLET} {port}" for port in ports]
 
     def _build_health_content(self, healthcheck: HealthCheckValues) -> list[str]:
@@ -263,7 +210,6 @@ class ServiceDetailsContainer(Widget):
             return ["Disabled"]
 
         content = []
-
         if healthcheck.livenessProbe:
             probe = healthcheck.livenessProbe
             probe_type = (
@@ -311,14 +257,14 @@ class ServiceDetailsContainer(Widget):
         self._scroll.mount(section)
 
     def _create_pods_table(
-        self, deployment_id: str | None, service_name: str | None
+        self, deployment_id: str, service_name: str
     ) -> PodTable:
         """Create a data table for instances."""
         if not self._scroll:
             return None
         table = PodTable(
-            deployment_id=deployment_id or "",
-            service_name=service_name or "",
+            deployment_id=deployment_id,
+            service_name=service_name,
             show_header=True,
             zebra_stripes=True,
             cursor_type="row",
@@ -328,59 +274,32 @@ class ServiceDetailsContainer(Widget):
 
     async def _connect_service_stream(self) -> None:
         """Connect to SSE stream for real-time service updates."""
-        if not self.deployment_id or not self.service_name:
-            return
-
+        logger.debug(f"ServiceDetailsContainer._connect_service_stream ENTERED for {self.service_name}")
         max_reconnect_attempts = 5
-        reconnect_delay = 3  # seconds
+        reconnect_delay = 3
 
         for attempt in range(max_reconnect_attempts):
             try:
-
-                def on_update(data: ServiceStatus) -> None:
-                    """Handle incoming SSE events."""
-                    self._stream_error = None
-                    self.app.call_later(self.update_overview, data)
-
-                    if data.pods:
-                        self.app.call_later(self.update_pods_table, data.pods)
-
-                def on_error(error: Exception) -> None:
-                    """Handle SSE stream errors."""
-                    self._stream_error = str(error)
-                    logger.warning(
-                        f"SSE stream error for service {self.service_name}: {error}"
-                    )
-
+                logger.debug(f"ServiceDetailsContainer calling api.status.stream_service_status")
                 await api.status.stream_service_status(
                     deployment_id=self.deployment_id,
                     service_name=self.service_name,
-                    on_update=on_update,
-                    on_error=on_error,
+                    on_update=lambda data: self.app.call_later(
+                        self._update_from_stream, data
+                    ),
+                    on_error=lambda e: logger.warning(
+                        f"SSE stream error for {self.service_name}: {e}"
+                    ),
                 )
-
                 break
 
             except Exception as e:
-                self._stream_error = str(e)
                 logger.error(
-                    f"SSE stream connection failed for service {self.service_name} "
+                    f"SSE connection failed for {self.service_name} "
                     f"(attempt {attempt + 1}/{max_reconnect_attempts}): {e}"
                 )
 
-                # Only reconnect if still mounted and not on last attempt
                 if attempt < max_reconnect_attempts - 1 and self.is_mounted:
-                    logger.info(f"Reconnecting to SSE stream in {reconnect_delay}s...")
                     await asyncio.sleep(reconnect_delay)
-
                 else:
-                    logger.error(
-                        f"Failed to maintain SSE connection for service {self.service_name}"
-                    )
-                    # Show error if we don't have any status to display
-                    if not self._initial_render_done and self.is_mounted:
-                        self.app.call_later(
-                            self._show_error,
-                            f"Could not connect to status stream: {e}",
-                        )
                     break
