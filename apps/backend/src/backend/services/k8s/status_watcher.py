@@ -1,7 +1,7 @@
 import asyncio
 from datetime import UTC, datetime
 
-from kubernetes.client.exceptions import ApiException
+from kubernetes_asyncio.client.exceptions import ApiException
 from loguru import logger
 from models.billing import STORAGE_CLASS_EFS
 from models.compose import LazyCloudLabel
@@ -30,9 +30,10 @@ from models.statuses import (
 )
 
 from backend.services.k8s.client import (
-    get_apps_v1_api,
-    get_batch_v1_api,
-    get_core_v1_api,
+    get_async_api_client,
+    get_async_apps_v1_api,
+    get_async_batch_v1_api,
+    get_async_core_v1_api,
 )
 
 
@@ -226,19 +227,17 @@ class StatusWatcher:
 
         try:
             if is_job:
-                batch_v1 = get_batch_v1_api()
+                batch_v1 = await get_async_batch_v1_api()
+                api_client = await get_async_api_client()
 
-                def _get_job():
-                    k8s_job = batch_v1.read_namespaced_job(
+                k8s_job = await asyncio.wait_for(
+                    batch_v1.read_namespaced_job(
                         name=service.resourceName,
                         namespace=self.namespace,
-                        _request_timeout=2.0,
-                    )
-                    return batch_v1.api_client.sanitize_for_serialization(k8s_job)
-
-                k8s_job_dict = await asyncio.wait_for(
-                    asyncio.to_thread(_get_job), timeout=2.0
+                    ),
+                    timeout=2.0,
                 )
+                k8s_job_dict = api_client.sanitize_for_serialization(k8s_job)
                 replicas = 1
 
                 # Extract resources from job spec
@@ -284,27 +283,25 @@ class StatusWatcher:
                         job_status = KubernetesPhase.PENDING
 
             else:
-                apps_v1 = get_apps_v1_api()
+                apps_v1 = await get_async_apps_v1_api()
+                api_client = await get_async_api_client()
 
-                def _get_resource():
-                    if service.workloadType == WorkloadType.DEPLOYMENT:
-                        k8s_resource = apps_v1.read_namespaced_deployment(
+                if service.workloadType == WorkloadType.DEPLOYMENT:
+                    k8s_resource_raw = await asyncio.wait_for(
+                        apps_v1.read_namespaced_deployment(
                             name=service.resourceName,
                             namespace=self.namespace,
-                            _request_timeout=2.0,
-                        )
-                        resource_dict = apps_v1.api_client.sanitize_for_serialization(
-                            k8s_resource
-                        )
-                        return Deployment(**resource_dict)
-                    else:
-                        raise ValueError(
-                            f"Unsupported resource type: {service.workloadType}"
-                        )
-
-                k8s_resource = await asyncio.wait_for(
-                    asyncio.to_thread(_get_resource), timeout=2.0
-                )
+                        ),
+                        timeout=2.0,
+                    )
+                    resource_dict = api_client.sanitize_for_serialization(
+                        k8s_resource_raw
+                    )
+                    k8s_resource = Deployment(**resource_dict)
+                else:
+                    raise ValueError(
+                        f"Unsupported resource type: {service.workloadType}"
+                    )
                 replicas = k8s_resource.spec.replicas or 1
 
                 for container in k8s_resource.spec.template.spec.containers:
@@ -414,21 +411,19 @@ class StatusWatcher:
         """Get pod details for a specific service."""
 
         try:
-            core_v1 = get_core_v1_api()
+            core_v1 = await get_async_core_v1_api()
+            api_client = await get_async_api_client()
 
-            def _list_pods():
-                v1_pods = core_v1.list_namespaced_pod(
+            v1_pods = await asyncio.wait_for(
+                core_v1.list_namespaced_pod(
                     namespace=self.namespace,
                     label_selector=f"app.kubernetes.io/name={service_config.resourceName}",
-                    _request_timeout=2.0,
-                )
-                # Convert to our model
-                pods_dict = core_v1.api_client.sanitize_for_serialization(v1_pods)
-                return PodList(**pods_dict)
-
-            pod_list = await asyncio.wait_for(
-                asyncio.to_thread(_list_pods), timeout=2.0
+                ),
+                timeout=2.0,
             )
+            # Convert to our model
+            pods_dict = api_client.sanitize_for_serialization(v1_pods)
+            pod_list = PodList(**pods_dict)
 
             if pod_list is None:
                 logger.debug(

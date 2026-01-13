@@ -47,7 +47,7 @@ async def collect_storage_usage(
     namespace: str, interval_hours: float
 ) -> list[StorageUsage]:
     """Collect storage: K8s API for EBS size, CloudWatch for EFS actual usage."""
-    pvcs = get_namespace_pvcs_with_details(namespace)
+    pvcs = await get_namespace_pvcs_with_details(namespace)
     aws_metrics = get_aws_metrics_service()
 
     storage_list = []

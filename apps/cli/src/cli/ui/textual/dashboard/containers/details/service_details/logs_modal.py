@@ -1,7 +1,7 @@
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.widgets import RichLog
-from textual.worker import Worker
+from textual.worker import Worker, WorkerCancelled
 
 from cli.api import api
 from cli.ui.textual.components import ContentModal
@@ -63,7 +63,10 @@ class LogViewerModal(ContentModal):
     async def cleanup(self) -> None:
         if self._stream_task and not self._stream_task.is_finished:
             self._stream_task.cancel()
-            await self._stream_task.wait()
+            try:
+                await self._stream_task.wait()
+            except WorkerCancelled:
+                pass  # Expected when cancelling the worker
         self._stream_task = None
 
     def action_scroll_down(self) -> None:

@@ -1,7 +1,7 @@
 """Rollback compose flow - rolls back to a previous Helm revision."""
 
 import yaml
-from kubernetes.client.exceptions import ApiException
+from kubernetes_asyncio.client.exceptions import ApiException
 from loguru import logger
 from models.deployments import DeploymentStates
 from models.k8s import WorkloadType

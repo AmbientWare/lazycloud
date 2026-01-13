@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 import yaml
-from kubernetes.client.exceptions import ApiException
+from kubernetes_asyncio.client.exceptions import ApiException
 from loguru import logger
 from models.deployments import (
     DeploymentInfo,

@@ -1,12 +1,12 @@
 from datetime import datetime, timezone
 
-from kubernetes.client.exceptions import ApiException
+from kubernetes_asyncio.client.exceptions import ApiException
 from loguru import logger
 from models.helm import HelmValues, ServiceValues
 from models.k8s import WorkloadType
 from pydantic import BaseModel
 
-from backend.services.k8s.client import get_apps_v1_api
+from backend.services.k8s.client import get_async_apps_v1_api
 
 
 class RestartResult(BaseModel):
@@ -32,7 +32,7 @@ class RestartAllResult(BaseModel):
 class WorkloadManager:
     """Handles Kubernetes workload operations like restart, scale, etc."""
 
-    def restart_workload(
+    async def restart_workload(
         self, resource_type: str, resource_name: str, namespace: str
     ) -> RestartResult:
         """Restart a specific Kubernetes workload using rollout restart."""
@@ -41,7 +41,7 @@ class WorkloadManager:
         )
 
         try:
-            apps_v1 = get_apps_v1_api()
+            apps_v1 = await get_async_apps_v1_api()
 
             # Trigger restart by updating the restartedAt annotation
             # This is the same mechanism kubectl rollout restart uses
@@ -59,7 +59,7 @@ class WorkloadManager:
             }
 
             if resource_type.lower() == "deployment":
-                apps_v1.patch_namespaced_deployment(
+                await apps_v1.patch_namespaced_deployment(
                     name=resource_name,
                     namespace=namespace,
                     body=patch_body,
@@ -108,14 +108,16 @@ class WorkloadManager:
                 error=error_msg,
             )
 
-    def restart_service(self, service: ServiceValues, namespace: str) -> RestartResult:
+    async def restart_service(
+        self, service: ServiceValues, namespace: str
+    ) -> RestartResult:
         """Restart a service based on its configuration."""
 
-        return self.restart_workload(
+        return await self.restart_workload(
             service.workloadType.value.lower(), service.resourceName, namespace
         )
 
-    def restart_all_services(
+    async def restart_all_services(
         self, helm_values: HelmValues, namespace: str
     ) -> RestartAllResult:
         """Restart all services in a deployment."""
@@ -123,7 +125,7 @@ class WorkloadManager:
         failed_count = 0
 
         for service in helm_values.services:
-            result = self.restart_service(service, namespace)
+            result = await self.restart_service(service, namespace)
 
             restart_results.append(
                 RestartResult(
@@ -148,15 +150,15 @@ class WorkloadManager:
             results=restart_results,
         )
 
-    def get_rollout_status(
+    async def get_rollout_status(
         self, resource_type: str, resource_name: str, namespace: str
     ) -> tuple[bool, str]:
         """Check the rollout status of a workload."""
         try:
-            apps_v1 = get_apps_v1_api()
+            apps_v1 = await get_async_apps_v1_api()
 
             if resource_type.lower() == "deployment":
-                deployment = apps_v1.read_namespaced_deployment(
+                deployment = await apps_v1.read_namespaced_deployment(
                     name=resource_name, namespace=namespace
                 )
                 if deployment.status:
@@ -185,17 +187,17 @@ class WorkloadManager:
             logger.error(f"Failed to get rollout status: {e}")
             return False, f"Error checking status: {str(e)}"
 
-    def scale_workload(
+    async def scale_workload(
         self, resource_type: str, resource_name: str, namespace: str, replicas: int
     ) -> tuple[bool, str]:
         """Scale a workload to specified number of replicas."""
         try:
-            apps_v1 = get_apps_v1_api()
+            apps_v1 = await get_async_apps_v1_api()
 
             patch_body = {"spec": {"replicas": replicas}}
 
             if resource_type.lower() == "deployment":
-                apps_v1.patch_namespaced_deployment(
+                await apps_v1.patch_namespaced_deployment(
                     name=resource_name,
                     namespace=namespace,
                     body=patch_body,
