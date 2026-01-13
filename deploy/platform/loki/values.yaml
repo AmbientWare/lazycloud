@@ -2,6 +2,7 @@
 # No infrastructure values needed - static configuration only
 
 loki-stack:
+  # Grafana datasource config - don't set as default (prometheus is default)
   loki:
     persistence:
       enabled: false
@@ -12,6 +13,7 @@ loki-stack:
       requests:
         cpu: 100m
         memory: 128Mi
+    isDefault: false
 
   promtail:
     enabled: true
