@@ -1,6 +1,7 @@
 import asyncio
 import os
 import platform
+import re
 import shutil
 import subprocess
 import threading
@@ -37,6 +38,9 @@ from cli.ui.views.helpers.env_helpers import (
 )
 
 console = Console()
+
+# Regex to match depot build step lines (e.g., "#1 [depot] build:", "#10 DONE 2.4s")
+DEPOT_BUILD_STEP_PATTERN = re.compile(r"^#\d+")
 
 
 def _get_service_names_from_diff(diff_response: DiffResponse | None) -> list[str]:
@@ -1163,6 +1167,11 @@ def _run_depot_build(
                 }
             output_lines = build_state[service_name]["output_lines"]
 
+            def should_filter_line(line: str) -> bool:
+                """Only show depot build step lines (e.g., #1, #2, etc.)."""
+                stripped = line.lstrip()
+                return not DEPOT_BUILD_STEP_PATTERN.match(stripped)
+
             # Read output line by line until process completes
             while True:
                 # Check if process finished
@@ -1174,7 +1183,7 @@ def _run_depot_build(
                 line = process.stdout.readline()
                 if line:
                     line = line.rstrip()
-                    if line:
+                    if line and not should_filter_line(line):
                         with build_state_lock:
                             output_lines.append(line)
                 else:
@@ -1189,7 +1198,7 @@ def _run_depot_build(
             if remaining_stdout:
                 for line in remaining_stdout.splitlines():
                     line = line.rstrip()
-                    if line:
+                    if line and not should_filter_line(line):
                         with build_state_lock:
                             output_lines.append(line)
 
