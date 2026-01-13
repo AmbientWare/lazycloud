@@ -26,6 +26,7 @@ class KubernetesPhase(StrEnum):
     """Status enumeration."""
 
     RUNNING = "Running"
+    STARTING = "Starting"
     PARTIALLY_RUNNING = "Partially Running"
     PENDING = "Pending"
     SUCCEEDED = "Succeeded"

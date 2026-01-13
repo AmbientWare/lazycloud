@@ -47,7 +47,7 @@ async def restart_service_job(
 
     # Use WorkloadManager to restart the service
     workload_ops = WorkloadManager()
-    result = workload_ops.restart_service(
+    result = await workload_ops.restart_service(
         service=service,
         namespace=deployment.namespace,
     )
@@ -86,7 +86,7 @@ async def restart_all_services_job(
 
     # Use WorkloadManager to restart all services
     workload_ops = WorkloadManager()
-    result = workload_ops.restart_all_services(
+    result = await workload_ops.restart_all_services(
         helm_values=deployment.helm_values, namespace=deployment.namespace
     )
 

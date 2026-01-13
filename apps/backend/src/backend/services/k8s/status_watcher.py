@@ -552,7 +552,15 @@ class StatusWatcher:
                 if has_container_error:
                     phase = KubernetesPhase.ERROR
 
-                # Step 7: Check if pod is being terminated
+                # Step 7: Check if pod is running but not ready (starting up)
+                if (
+                    phase == KubernetesPhase.RUNNING
+                    and total_containers > 0
+                    and ready_containers < total_containers
+                ):
+                    phase = KubernetesPhase.STARTING
+
+                # Step 8: Check if pod is being terminated
                 if pod.metadata.deletion_timestamp:
                     phase = KubernetesPhase.TERMINATING
 
@@ -624,6 +632,7 @@ class StatusWatcher:
 
         # Count pods by phase
         running_count = sum(1 for p in pods if p.phase == KubernetesPhase.RUNNING)
+        starting_count = sum(1 for p in pods if p.phase == KubernetesPhase.STARTING)
         pending_count = sum(1 for p in pods if p.phase == KubernetesPhase.PENDING)
         terminating_count = sum(
             1 for p in pods if p.phase == KubernetesPhase.TERMINATING
@@ -654,6 +663,14 @@ class StatusWatcher:
         # All pods running and count matches replicas
         if running_count == replicas:
             return KubernetesPhase.RUNNING
+
+        # All pods starting (none running yet) = service is starting
+        if starting_count > 0 and running_count == 0:
+            return KubernetesPhase.STARTING
+
+        # Mix of running and starting = partially running
+        if running_count > 0 and starting_count > 0:
+            return KubernetesPhase.PARTIALLY_RUNNING
 
         # Some pods running but not all expected
         if running_count > 0:
