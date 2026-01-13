@@ -494,6 +494,7 @@ class PrometheusMetricsService:
                     pod_labels_map[pod_name] = series.get("metric", {})
 
         pods: dict[str, PodUsage] = {}
+        warned_pods: set[str] = set()
 
         def process_series(
             series: dict, metric_type: str, pods: dict[str, PodUsage]
@@ -507,10 +508,12 @@ class PrometheusMetricsService:
             service_name = pod_labels.get("label_lazycloud_dev_service", "unknown")
             release_name = pod_labels.get("label_app_kubernetes_io_instance")
 
-            if service_name == "unknown":
+            # Only warn once per pod to avoid duplicate warnings
+            if service_name == "unknown" and pod_name not in warned_pods:
+                warned_pods.add(pod_name)
                 logger.warning(
                     f"Pod {pod_name} in namespace {namespace} missing lazycloud.dev/service label. "
-                    "Labels may not be configured or pod may be from system namespace."
+                    "Ensure kube-state-metrics has metricLabelsAllowlist configured for this label."
                 )
 
             if pod_name not in pods:

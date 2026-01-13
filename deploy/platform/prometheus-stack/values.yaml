@@ -51,5 +51,10 @@ kube-prometheus-stack:
   kubeStateMetrics:
     enabled: true
 
+  kube-state-metrics:
+    # Expose custom LazyCloud labels for usage attribution
+    metricLabelsAllowlist:
+      - pods=[lazycloud.dev/service,lazycloud.dev/deployment-id,lazycloud.dev/workspace-id,app.kubernetes.io/instance]
+
   nodeExporter:
     enabled: true

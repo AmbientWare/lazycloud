@@ -347,33 +347,40 @@ async def spawn_usage_collection():
         async with semaphore:
             return await collect_interval_usage(str(workspace.id))
 
-    results = await asyncio.gather(
-        *[collect_with_limit(ws) for ws in active_workspaces],
-        return_exceptions=True,
-    )
-
-    # Count failures
-    failed_count = sum(
-        1
-        for r in results
-        if isinstance(r, Exception)
-        or (isinstance(r, dict) and not r.get("success", False))
-    )
-    total_count = len(results)
-
-    if total_count > 0 and failed_count / total_count > 0.3:
-        logger.critical(
-            f"HIGH FAILURE RATE in usage collection: {failed_count}/{total_count} "
-            f"({failed_count / total_count * 100:.1f}%) workspaces failed"
+    try:
+        results = await asyncio.gather(
+            *[collect_with_limit(ws) for ws in active_workspaces],
+            return_exceptions=True,
         )
-    elif failed_count > 0:
-        logger.error(f"Usage collection had {failed_count}/{total_count} failures")
 
-    return {
-        "total": total_count,
-        "failed": failed_count,
-        "success": total_count - failed_count,
-    }
+        # Count failures
+        failed_count = sum(
+            1
+            for r in results
+            if isinstance(r, Exception)
+            or (isinstance(r, dict) and not r.get("success", False))
+        )
+        total_count = len(results)
+
+        if total_count > 0 and failed_count / total_count > 0.3:
+            logger.critical(
+                f"HIGH FAILURE RATE in usage collection: {failed_count}/{total_count} "
+                f"({failed_count / total_count * 100:.1f}%) workspaces failed"
+            )
+        elif failed_count > 0:
+            logger.error(f"Usage collection had {failed_count}/{total_count} failures")
+
+        return {
+            "total": total_count,
+            "failed": failed_count,
+            "success": total_count - failed_count,
+        }
+    finally:
+        # Clean up service connections to prevent "unclosed client session" warnings
+        # during process exit. The depot service uses redis.asyncio which has aiohttp
+        # connections that must be explicitly closed.
+        depot_service = get_depot_service()
+        await depot_service.close()
 
 
 @retry(
@@ -577,43 +584,49 @@ async def catch_up_missing_intervals():
 
     total_caught_up = 0
 
-    for workspace in active_workspaces:
-        workspace_id = str(workspace.id)
+    try:
+        for workspace in active_workspaces:
+            workspace_id = str(workspace.id)
 
-        # Check intervals for today
-        for minute in UsageCollectionConfig.get_minute_marks():
-            for hour in range(now.hour + 1):
-                interval_start = datetime.combine(today, datetime.min.time()).replace(
-                    hour=hour, minute=minute, tzinfo=timezone.utc
-                )
+            # Check intervals for today
+            for minute in UsageCollectionConfig.get_minute_marks():
+                for hour in range(now.hour + 1):
+                    interval_start = datetime.combine(
+                        today, datetime.min.time()
+                    ).replace(hour=hour, minute=minute, tzinfo=timezone.utc)
 
-                # Skip future intervals
-                if interval_start >= now:
-                    continue
+                    # Skip future intervals
+                    if interval_start >= now:
+                        continue
 
-                interval_end = (
-                    interval_start + UsageCollectionConfig.COLLECTION_INTERVAL_TIMEDELTA
-                )
+                    interval_end = (
+                        interval_start
+                        + UsageCollectionConfig.COLLECTION_INTERVAL_TIMEDELTA
+                    )
 
-                async with get_db_context() as db:
-                    if not await db.usage.is_interval_collected(
-                        workspace_id, interval_start
-                    ):
-                        try:
-                            await collect_workspace_interval(
-                                workspace_id, interval_start, interval_end
-                            )
-                            total_caught_up += 1
-                            logger.debug(
-                                f"Caught up interval {interval_start} for {workspace_id}"
-                            )
-                        except Exception as e:
-                            logger.warning(
-                                f"Failed to catch up {interval_start} for {workspace_id}: {e}"
-                            )
+                    async with get_db_context() as db:
+                        if not await db.usage.is_interval_collected(
+                            workspace_id, interval_start
+                        ):
+                            try:
+                                await collect_workspace_interval(
+                                    workspace_id, interval_start, interval_end
+                                )
+                                total_caught_up += 1
+                                logger.debug(
+                                    f"Caught up interval {interval_start} for {workspace_id}"
+                                )
+                            except Exception as e:
+                                logger.warning(
+                                    f"Failed to catch up {interval_start} for {workspace_id}: {e}"
+                                )
 
-    logger.info(f"Caught up {total_caught_up} missed intervals")
-    return {"caught_up": total_caught_up}
+        logger.info(f"Caught up {total_caught_up} missed intervals")
+        return {"caught_up": total_caught_up}
+    finally:
+        # Clean up service connections to prevent "unclosed client session" warnings
+        depot_service = get_depot_service()
+        await depot_service.close()
 
 
 @flow(log_prints=True)
