@@ -6,8 +6,12 @@ import os
 from datetime import datetime
 from pathlib import Path
 
+import typer
 import yaml
 from pydantic import BaseModel, Field, field_validator
+from rich.console import Console
+
+from cli.ui.components.info_cards import ErrorCard
 
 
 class LazyCloudConfig(BaseModel):
@@ -66,6 +70,18 @@ class LazyCloudFile:
 
         with open(self.file_path, "r") as f:
             data = yaml.safe_load(f)
+
+        if not isinstance(data, dict):
+            console = Console()
+            console.print(
+                ErrorCard(
+                    title="Configuration Error",
+                    message=f"Invalid .lazycloud file at {self.file_path}",
+                    suggestion="Expected YAML with 'deployment_name' and 'compose_file' keys.\n"
+                    "Run 'lazycloud init' to create a valid configuration.",
+                )
+            )
+            raise typer.Exit(1)
 
         return LazyCloudConfig(**data)
 
