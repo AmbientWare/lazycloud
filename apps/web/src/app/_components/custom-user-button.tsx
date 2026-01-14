@@ -29,10 +29,10 @@ export function CustomUserButton({ showDetails = false }: CustomUserButtonProps)
   const [apiKeyDialogOpen, setApiKeyDialogOpen] = useState(false);
 
   useEffect(() => {
-    if (showDetails) {
+    if (showDetails && user) {
       getUserSubscriptionTier().then(setSubscriptionTier);
     }
-  }, [showDetails]);
+  }, [showDetails, user]);
 
   const handleSignOut = async () => {
     await signOut();
