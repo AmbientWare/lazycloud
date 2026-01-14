@@ -1,0 +1,263 @@
+<article class="bg-slate-800 border border-slate-700/50 rounded-2xl overflow-hidden" aria-label="Stock details for {{ stock.ticker }}">
+    <!-- Header Section -->
+    <div class="p-6 border-b border-slate-700/50">
+        <div class="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-4">
+            <div>
+                <div class="flex items-center gap-3 mb-1">
+                    <h2 class="text-2xl sm:text-3xl font-bold text-slate-50">{{ stock.ticker }}</h2>
+                    <span
+                        class="flex items-center gap-1 text-sm font-semibold px-3 py-1.5 rounded-lg
+                               {% if stock.change >= 0 %}bg-emerald-500/10 text-emerald-400{% else %}bg-red-500/10 text-red-400{% endif %}"
+                        role="status"
+                        aria-label="{% if stock.change >= 0 %}Price increased{% else %}Price decreased{% endif %} by {{ '%.2f'|format(stock.change|abs) }} percent"
+                    >
+                        {% if stock.change >= 0 %}
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 15l7-7 7 7" />
+                        </svg>
+                        +
+                        {% else %}
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7" />
+                        </svg>
+                        {% endif %}
+                        {{ "%.2f"|format(stock.change|abs) }}%
+                    </span>
+                </div>
+                <p class="text-slate-400 text-sm sm:text-base">{{ stock.name }}</p>
+            </div>
+            <div class="sm:text-right">
+                <p class="text-3xl sm:text-4xl font-bold tabular-nums text-slate-50">
+                    ${{ "%.2f"|format(stock.price) }}
+                </p>
+                <p class="text-slate-500 text-sm mt-1">Current Price</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Stats Grid -->
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-px bg-slate-700/30">
+        <div class="bg-slate-800 p-4 sm:p-5">
+            <p class="text-slate-400 text-xs sm:text-sm font-medium mb-1">Market Cap</p>
+            <p class="font-bold text-lg sm:text-xl tabular-nums text-slate-50">{{ stock.market_cap|format_number }}</p>
+        </div>
+        <div class="bg-slate-800 p-4 sm:p-5">
+            <p class="text-slate-400 text-xs sm:text-sm font-medium mb-1">P/E Ratio</p>
+            <p class="font-bold text-lg sm:text-xl tabular-nums text-slate-50">
+                {% if stock.pe_ratio %}{{ "%.2f"|format(stock.pe_ratio) }}{% else %}<span class="text-slate-500">N/A</span>{% endif %}
+            </p>
+        </div>
+        <div class="bg-slate-800 p-4 sm:p-5">
+            <p class="text-slate-400 text-xs sm:text-sm font-medium mb-1">52W High</p>
+            <p class="font-bold text-lg sm:text-xl tabular-nums text-emerald-400">
+                {% if stock.week_52_high %}${{ "%.2f"|format(stock.week_52_high) }}{% else %}<span class="text-slate-500">N/A</span>{% endif %}
+            </p>
+        </div>
+        <div class="bg-slate-800 p-4 sm:p-5">
+            <p class="text-slate-400 text-xs sm:text-sm font-medium mb-1">52W Low</p>
+            <p class="font-bold text-lg sm:text-xl tabular-nums text-red-400">
+                {% if stock.week_52_low %}${{ "%.2f"|format(stock.week_52_low) }}{% else %}<span class="text-slate-500">N/A</span>{% endif %}
+            </p>
+        </div>
+    </div>
+
+    <!-- Chart Section -->
+    <div class="p-4 sm:p-6">
+        <!-- Period Selector -->
+        <div class="flex items-center justify-between mb-4">
+            <h3 class="text-sm font-semibold text-slate-300">Price History</h3>
+            <div role="tablist" aria-label="Chart time period" class="flex bg-slate-900 rounded-lg p-1 gap-1">
+                <button
+                    role="tab"
+                    aria-selected="false"
+                    aria-controls="priceChart"
+                    class="period-btn px-3 py-1.5 text-xs font-medium rounded-md text-slate-400 hover:text-slate-200 hover:bg-slate-700 transition-colors"
+                    data-period="5d"
+                    hx-get="/stock/{{ stock.ticker }}?period=5d"
+                    hx-target="#result"
+                    hx-swap="innerHTML"
+                >
+                    5D
+                </button>
+                <button
+                    role="tab"
+                    aria-selected="true"
+                    aria-controls="priceChart"
+                    class="period-btn px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600 text-white"
+                    data-period="1mo"
+                >
+                    1M
+                </button>
+                <button
+                    role="tab"
+                    aria-selected="false"
+                    aria-controls="priceChart"
+                    class="period-btn px-3 py-1.5 text-xs font-medium rounded-md text-slate-400 hover:text-slate-200 hover:bg-slate-700 transition-colors"
+                    data-period="3mo"
+                    hx-get="/stock/{{ stock.ticker }}?period=3mo"
+                    hx-target="#result"
+                    hx-swap="innerHTML"
+                >
+                    3M
+                </button>
+                <button
+                    role="tab"
+                    aria-selected="false"
+                    aria-controls="priceChart"
+                    class="period-btn px-3 py-1.5 text-xs font-medium rounded-md text-slate-400 hover:text-slate-200 hover:bg-slate-700 transition-colors"
+                    data-period="6mo"
+                    hx-get="/stock/{{ stock.ticker }}?period=6mo"
+                    hx-target="#result"
+                    hx-swap="innerHTML"
+                >
+                    6M
+                </button>
+                <button
+                    role="tab"
+                    aria-selected="false"
+                    aria-controls="priceChart"
+                    class="period-btn px-3 py-1.5 text-xs font-medium rounded-md text-slate-400 hover:text-slate-200 hover:bg-slate-700 transition-colors"
+                    data-period="1y"
+                    hx-get="/stock/{{ stock.ticker }}?period=1y"
+                    hx-target="#result"
+                    hx-swap="innerHTML"
+                >
+                    1Y
+                </button>
+            </div>
+        </div>
+
+        <!-- Chart Container -->
+        <div
+            class="bg-slate-900 rounded-xl p-4"
+            role="img"
+            aria-label="Price chart for {{ stock.ticker }} showing price history. {% if stock.history %}Starting at ${{ stock.history[0].close }} on {{ stock.history[0].date }}, ending at ${{ stock.history[-1].close }} on {{ stock.history[-1].date }}.{% endif %}"
+        >
+            <div class="relative" style="height: 280px;">
+                <canvas id="priceChart"></canvas>
+            </div>
+        </div>
+
+        <!-- Chart Legend/Summary for Screen Readers -->
+        <div class="sr-only" aria-live="polite">
+            {% if stock.history %}
+            Price data from {{ stock.history[0].date }} to {{ stock.history[-1].date }}.
+            Starting price: ${{ stock.history[0].close }}.
+            Ending price: ${{ stock.history[-1].close }}.
+            {% endif %}
+        </div>
+    </div>
+</article>
+
+<script>
+    // Initialize chart
+    (function() {
+        const ctx = document.getElementById('priceChart').getContext('2d');
+        const history = {{ stock.history|tojson }};
+        const isPositive = {{ 'true' if stock.change >= 0 else 'false' }};
+
+        // Color configuration based on performance
+        const lineColor = isPositive ? '#10B981' : '#EF4444';
+        const gradientColorStart = isPositive ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)';
+        const gradientColorEnd = 'rgba(0, 0, 0, 0)';
+
+        // Create gradient
+        const gradient = ctx.createLinearGradient(0, 0, 0, 280);
+        gradient.addColorStop(0, gradientColorStart);
+        gradient.addColorStop(1, gradientColorEnd);
+
+        new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: history.map(h => h.date),
+                datasets: [{
+                    label: '{{ stock.ticker }} Price',
+                    data: history.map(h => h.close),
+                    borderColor: lineColor,
+                    backgroundColor: gradient,
+                    fill: true,
+                    tension: 0.4,
+                    pointRadius: 0,
+                    pointHoverRadius: 6,
+                    pointHoverBackgroundColor: lineColor,
+                    pointHoverBorderColor: '#FFFFFF',
+                    pointHoverBorderWidth: 2,
+                    borderWidth: 2,
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: {
+                    intersect: false,
+                    mode: 'index',
+                },
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        backgroundColor: '#1E293B',
+                        titleColor: '#F8FAFC',
+                        bodyColor: '#94A3B8',
+                        borderColor: '#334155',
+                        borderWidth: 1,
+                        padding: 12,
+                        displayColors: false,
+                        titleFont: {
+                            size: 12,
+                            weight: 'normal'
+                        },
+                        bodyFont: {
+                            size: 16,
+                            weight: 'bold'
+                        },
+                        callbacks: {
+                            title: function(context) {
+                                return context[0].label;
+                            },
+                            label: function(context) {
+                                return '$' + context.parsed.y.toFixed(2);
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        grid: {
+                            color: 'rgba(148, 163, 184, 0.08)',
+                            drawBorder: false,
+                        },
+                        ticks: {
+                            color: '#64748B',
+                            maxTicksLimit: 6,
+                            font: { size: 11 },
+                            padding: 8
+                        },
+                        border: { display: false }
+                    },
+                    y: {
+                        position: 'right',
+                        grid: {
+                            color: 'rgba(148, 163, 184, 0.08)',
+                            drawBorder: false,
+                        },
+                        ticks: {
+                            color: '#64748B',
+                            callback: function(value) {
+                                return '$' + value.toFixed(0);
+                            },
+                            font: { size: 11 },
+                            padding: 8
+                        },
+                        border: { display: false }
+                    }
+                }
+            }
+        });
+    })();
+</script>
+
+<style>
+    .tabular-nums {
+        font-variant-numeric: tabular-nums;
+    }
+</style>

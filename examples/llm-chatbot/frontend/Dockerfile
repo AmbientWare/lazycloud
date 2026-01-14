@@ -1,14 +1,14 @@
-FROM node:22-alpine AS builder
+FROM oven/bun:1 AS builder
 
 WORKDIR /app
 
-COPY package.json ./
-RUN npm install
+COPY package.json bun.lock* ./
+RUN bun install
 
 COPY . .
-RUN npm run build
+RUN bun run build
 
-FROM node:22-alpine AS runner
+FROM oven/bun:1 AS runner
 
 WORKDIR /app
 
@@ -19,4 +19,4 @@ COPY --from=builder /app/.next/static ./.next/static
 
 EXPOSE 3000
 
-CMD ["node", "server.js"]
+CMD ["bun", "server.js"]
