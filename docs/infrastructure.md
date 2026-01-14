@@ -6,10 +6,23 @@ See [architecture.md](architecture.md) for system diagrams.
 
 - AWS CLI configured
 - kubectl
+- kubectl argo rollouts plugin (optional, for rollout management)
 - helm
 - uv (Python package manager)
 - cloudflared CLI
 - Cloudflare account with Zero Trust access
+
+### Install kubectl argo rollouts plugin (optional)
+
+```bash
+# macOS
+brew install argoproj/tap/kubectl-argo-rollouts
+
+# Linux
+curl -LO https://github.com/argoproj/argo-rollouts/releases/latest/download/kubectl-argo-rollouts-linux-amd64
+chmod +x kubectl-argo-rollouts-linux-amd64
+sudo mv kubectl-argo-rollouts-linux-amd64 /usr/local/bin/kubectl-argo-rollouts
+```
 
 ## Setup
 
@@ -152,13 +165,15 @@ kubectl apply -f deploy/argocd-apps/root-app.yaml
 ```
 
 This triggers the full platform deployment via sync waves:
-1. storage-classes, reloader
+1. storage-classes, reloader, argo-rollouts
 2. external-secrets
 3. nginx-ingress
 4. cloudflare-tunnel, karpenter
 5. loki
 6. prometheus-stack
 7. services (prod/staging)
+
+**Note:** Argo Rollouts must deploy before services (Wave 1) because the services use `Rollout` CRDs for blue-green deployments. If you see errors about unknown `Rollout` kind, ensure the argo-rollouts app synced successfully first.
 
 ## Teardown
 
@@ -188,7 +203,10 @@ cloudflared tunnel delete lazycloud-prod
 | ArgoCD values | `infrastructure/argocd-values.yaml` |
 | Platform apps | `deploy/argocd-apps/applicationsets/platform.yaml` |
 | Service apps | `deploy/argocd-apps/applicationsets/services-*.yaml` |
+| Argo Rollouts | `deploy/platform/argo-rollouts/` |
 | Cloudflare tunnel | `deploy/platform/cloudflare-tunnel/` |
 | Cloudflare SaaS service | `apps/backend/src/backend/services/cloudflare.py` |
 | API platform config | `deploy/services/api-platform/values.yaml` |
+| Web rollout | `deploy/services/web/templates/deployment.yaml` |
+| API rollout | `deploy/services/api-platform/templates/api-deployment.yaml` |
 | Karpenter | `deploy/platform/karpenter/` |
