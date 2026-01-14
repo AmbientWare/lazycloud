@@ -1,0 +1,22 @@
+services:
+  # TanStack Start app
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - REPLICATE_API_TOKEN=${REPLICATE_API_TOKEN}
+      - DB_PATH=/app/data/images.db
+    volumes:
+      - app-data:/app/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  app-data:
+    labels:
+      lazycloud.volume.size: "20Gi"

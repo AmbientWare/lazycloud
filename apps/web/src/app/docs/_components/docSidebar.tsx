@@ -95,6 +95,14 @@ const data = {
           title: "LLM Chatbot",
           url: "/docs/examples/llm-chatbot",
         },
+        {
+          title: "Image Transformer",
+          url: "/docs/examples/image-transformer",
+        },
+        {
+          title: "Stock Dashboard",
+          url: "/docs/examples/stock-dashboard",
+        },
       ],
     },
   ],

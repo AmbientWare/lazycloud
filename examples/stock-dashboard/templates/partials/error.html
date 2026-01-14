@@ -1,0 +1,31 @@
+<div
+    class="bg-red-500/10 border border-red-500/20 rounded-xl p-6"
+    role="alert"
+    aria-live="assertive"
+>
+    <div class="flex items-start gap-4">
+        <div class="flex-shrink-0">
+            <div class="w-10 h-10 bg-red-500/20 rounded-full flex items-center justify-center">
+                <svg class="w-5 h-5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+            </div>
+        </div>
+        <div class="flex-1 min-w-0">
+            <h3 class="text-red-300 font-semibold text-lg mb-1">Unable to Load Stock Data</h3>
+            <p class="text-red-200/80 text-sm">{{ message }}</p>
+            <div class="mt-4 flex flex-wrap gap-3">
+                <button
+                    onclick="document.getElementById('ticker-input').focus()"
+                    class="inline-flex items-center gap-2 px-4 py-2 bg-red-500/20 hover:bg-red-500/30
+                           text-red-300 text-sm font-medium rounded-lg transition-colors"
+                >
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                    Try Another Search
+                </button>
+            </div>
+        </div>
+    </div>
+</div>

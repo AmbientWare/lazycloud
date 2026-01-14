@@ -1,0 +1,58 @@
+# Image Transformer
+
+Transform images into artistic styles using AI. A single-service app built with TanStack Start.
+
+```
+┌──────────────┐     ┌─────────────┐
+│  TanStack    │────▶│  Replicate  │
+│  Start       │     │  (Flux)     │
+└──────┬───────┘     └─────────────┘
+       │
+       ▼
+  ┌──────────┐
+  │  SQLite  │
+  └──────────┘
+```
+
+## Run it
+
+```bash
+git clone https://github.com/AmbientWare/lazycloud-releases.git
+cd lazycloud-releases/examples/image-transformer
+
+# Local
+export REPLICATE_API_TOKEN=r8_...
+bun install && bun run dev
+
+# Deploy
+lazycloud init
+lazycloud deploy
+```
+
+## What's configured
+
+A single service with one secret and persistent storage.
+
+### Environment variables
+
+```yaml
+environment:
+  - REPLICATE_API_TOKEN=${REPLICATE_API_TOKEN}
+```
+
+The Replicate token is detected during `lazycloud deploy` and stored encrypted.
+
+### Persistent storage
+
+```yaml
+volumes:
+  app-data:
+    labels:
+      lazycloud.volume.size: "20Gi"
+```
+
+SQLite database and generated images persist across deployments.
+
+---
+
+See [Labels](/docs/labels) for all configuration options.

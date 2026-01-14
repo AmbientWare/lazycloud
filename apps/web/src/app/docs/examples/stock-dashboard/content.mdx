@@ -1,0 +1,48 @@
+# Stock Dashboard
+
+Real-time stock analytics built with Python. No JavaScript framework—just FastAPI, HTMX, and Tailwind.
+
+```
+┌─────────────────┐     ┌─────────────┐
+│    FastAPI      │────▶│   Yahoo     │
+│  + HTMX + TW    │     │   Finance   │
+└─────────────────┘     └─────────────┘
+```
+
+## Run it
+
+```bash
+git clone https://github.com/AmbientWare/lazycloud-releases.git
+cd lazycloud-releases/examples/stock-dashboard
+
+# Local
+uv sync
+uv run uvicorn main:app --reload
+
+# Deploy
+lazycloud init
+lazycloud deploy
+```
+
+## What's configured
+
+A minimal single-service app with no secrets or volumes—the simplest deployment possible.
+
+```yaml
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+```
+
+No API keys needed. Stock data comes from Yahoo Finance (free, no auth).
+
+---
+
+See [Labels](/docs/labels) for all configuration options.
