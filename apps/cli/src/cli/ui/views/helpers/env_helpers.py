@@ -11,7 +11,7 @@ from rich.console import Console
 from rich.text import Text
 
 from cli.ui.colors import Colors
-from cli.ui.components import Card, SimpleConfirmationDialog
+from cli.ui.components import Card
 
 if TYPE_CHECKING:
     from responses.deployments import DiffResponse
@@ -27,10 +27,7 @@ class ImportMethod(StrEnum):
 
 # Constants
 MAX_VARS_TO_DISPLAY = 5
-MISSING_VARS_MESSAGE = "{count} variable(s) were not found in {source}"
-DEPLOY_ANYWAY_DETAILS = [
-    "You can add them later via the dashboard or by redeploying",
-]
+MISSING_VARS_MESSAGE = "{count} variable(s) not found in {source}"
 
 
 def find_env_file(project_dir: Path) -> Path | None:
@@ -92,28 +89,46 @@ def get_remaining_vars(
     }
 
 
-def handle_missing_vars_prompt(
+def show_missing_vars_error(
     console: Console,
     remaining_vars: dict[str, str],
     source_name: str,
-    skip_prompts: bool = False,
-) -> bool:
-    """Prompt user if they want to deploy with missing variables."""
-    if skip_prompts:
-        return True
+) -> None:
+    """Show error for missing environment variables."""
+    missing_keys = list(remaining_vars.keys())
 
-    dialog = SimpleConfirmationDialog(
-        action="deploy with missing environment variables",
-        details=[
-            MISSING_VARS_MESSAGE.format(count=len(remaining_vars), source=source_name),
-            f"Missing: {', '.join(list(remaining_vars.keys()))}",
-            *DEPLOY_ANYWAY_DETAILS,
-        ],
-        title="⚠️ Deploy Anyway?",
-        border_style=Colors.Ansi.warning,
+    # Build error message
+    console.print()
+    console.print(
+        Text(
+            f"Missing {len(missing_keys)} environment variable(s) from {source_name}",
+            style=Colors.Ansi.error,
+        )
     )
-    dialog.default = False
-    return dialog.show(console)
+    console.print()
+
+    # Show missing vars (truncated if too many)
+    if len(missing_keys) <= MAX_VARS_TO_DISPLAY:
+        for key in missing_keys:
+            console.print(Text(f"  • {key}", style=Colors.Ansi.text_muted))
+    else:
+        for key in missing_keys[:MAX_VARS_TO_DISPLAY]:
+            console.print(Text(f"  • {key}", style=Colors.Ansi.text_muted))
+        console.print(
+            Text(
+                f"  ... and {len(missing_keys) - MAX_VARS_TO_DISPLAY} more",
+                style=Colors.Ansi.text_muted,
+            )
+        )
+
+    console.print()
+    console.print(
+        Text(
+            "Add the missing variables to your env file and try again.",
+            style=Colors.Ansi.text_muted,
+        )
+    )
+    console.print()
 
 
 def create_env_vars_detected_card(var_count: int) -> Card:

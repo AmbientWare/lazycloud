@@ -2,6 +2,10 @@
 
 A full-stack AI chatbot showing how LazyCloud handles multi-service apps with persistent storage, resource limits, and secrets.
 
+<Tip>
+**What you'll learn:** Multi-service orchestration, persistent volumes for databases, Redis caching, and encrypted secret handling.
+</Tip>
+
 ```
 ┌──────────┐     ┌──────────┐     ┌──────────┐
 │ Next.js  │────▶│ FastAPI  │────▶│  OpenAI  │
@@ -43,9 +47,9 @@ environment:
   - REDIS_URL=redis://redis:6379
 ```
 
-Variables using `${VAR}` syntax are detected during `lazycloud deploy`. You'll be prompted to import values from a `.env` file, your shell environment, or enter them manually. Values are stored encrypted.
+Environment variables defined in your compose file are detected during `lazycloud deploy`. You'll be prompted to import values from a `.env` file, your shell environment, or enter them manually. Values are stored encrypted.
 
-Variables with defaults like `${VAR:-default}` use the default if not provided. Hardcoded values like `redis://redis:6379` work as-is—services can reference each other by name.
+Services can reference each other by name—`redis://redis:6379` resolves to the Redis container automatically.
 
 ### Resource limits
 
