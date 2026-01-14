@@ -127,14 +127,12 @@ class LazyCloudFile:
     @classmethod
     def find_and_load(cls, start_dir: Path) -> "LazyCloudFile | None":
         """
-        Find .lazycloud file in current or parent directories and load it.
+        Find .lazycloud file in current directory.
         Returns LazyCloudFile instance or None if not found.
         """
-        searcher = cls(start_dir)
-        found_dir = searcher.find_in_parents()
-
-        if found_dir:
-            return cls(found_dir)
+        lazycloud = cls(start_dir)
+        if lazycloud.exists():
+            return lazycloud
         return None
 
     def get_compose_file_path(self) -> Path:
