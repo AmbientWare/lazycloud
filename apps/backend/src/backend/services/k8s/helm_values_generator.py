@@ -143,7 +143,9 @@ class HelmValuesGenerator:
     ) -> tuple[ServiceValues, dict[str, str] | None]:
         """Generate Helm values for a single service."""
         if not service.image:
-            logger.error(f"Service '{service.name}' has no image! Full service: {service.model_dump()}")
+            logger.error(
+                f"Service '{service.name}' has no image! Full service: {service.model_dump()}"
+            )
             raise ValueError(f"Service {service.name} has no image")
 
         image_info = parse_image(service.image)
@@ -155,7 +157,9 @@ class HelmValuesGenerator:
             if self.deployment.depot_project_id:
                 image_info.repository = f"{app_config.DEPOT_REGISTRY_URL}/{self.deployment.depot_project_id}"
             else:
-                logger.warning(f"No depot_project_id for deployment {self.deployment.name}, using original image")
+                logger.warning(
+                    f"No depot_project_id for deployment {self.deployment.name}, using original image"
+                )
 
         service_values = ServiceValues(
             replicas=service.deploy.replicas,

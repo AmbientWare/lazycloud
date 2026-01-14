@@ -4,7 +4,7 @@ from loguru import logger
 
 from models.helm import HealthCheckValues, HPAValues
 from models.k8s import WorkloadType
-from models.statuses import KubernetesPhase, PodStatus, ServiceStatus
+from models.statuses import StatusPhase, ServiceStatus
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.widget import Widget
@@ -137,14 +137,15 @@ class ServiceDetailsContainer(Widget):
 
     def _build_overview_content(self, service: ServiceStatus) -> list[str]:
         """Build service overview section content."""
-        status_color = get_status_color(service.status)
+        deploy_phase = service.get_deploy_phase()
+        status_color = get_status_color(deploy_phase)
 
         if service.workload_type == WorkloadType.JOB:
-            if service.status == KubernetesPhase.STOPPED:
+            if deploy_phase == StatusPhase.EXITED:
                 completion_text = "Completion:   [green]Completed[/green]"
-            elif service.status == KubernetesPhase.ERROR:
+            elif deploy_phase == StatusPhase.ERROR:
                 completion_text = "Completion:   [red]Failed[/red]"
-            elif service.status == KubernetesPhase.RUNNING:
+            elif deploy_phase == StatusPhase.RUNNING:
                 completion_text = "Completion:   [yellow]Running[/yellow]"
             else:
                 completion_text = "Completion:   [dim]Pending[/dim]"
@@ -155,7 +156,7 @@ class ServiceDetailsContainer(Widget):
 
         content = [
             f"Name:         {service.name}",
-            f"Status:       [{status_color}]{service.status.upper()}[/{status_color}]",
+            f"Status:       [{status_color}]{deploy_phase.upper()}[/{status_color}]",
             f"Image:        {format_image_name(service.image)}",
             completion_text,
         ]

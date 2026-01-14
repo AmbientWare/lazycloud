@@ -157,11 +157,12 @@ class ContainerCounts(BaseModel):
     """Container counts for a service (Docker-like semantics)."""
 
     desired: int = 0
-    running: int = 0
-    starting: int = 0  # Creating, pulling, initializing, health checks
-    pending: int = 0
-    stopping: int = 0
-    error: int = 0
+    running: int = 0       # Fully healthy, serving traffic
+    creating: int = 0      # Pulling image, creating container
+    health_check: int = 0  # Container running, readiness probe pending
+    pending: int = 0       # Waiting to be scheduled
+    stopping: int = 0      # Terminating
+    error: int = 0         # Failed
 
 
 @dataclass(frozen=True)

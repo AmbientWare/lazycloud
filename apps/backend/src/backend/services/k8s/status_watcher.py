@@ -21,7 +21,8 @@ from models.statuses import (
     JOB_CONDITION_COMPLETE,
     JOB_CONDITION_FAILED,
     DeploymentStatus,
-    KubernetesPhase,
+    StatusPhase,
+    StatusPhase,
     NetworkStatusSummary,
     PodStatus,
     ServiceStatus,
@@ -56,13 +57,15 @@ class StatusWatcher:
         self.deployment_name = deployment_name
         self.deployed_at = deployed_at
 
-    async def get_service_statuses_for_deployment(self) -> list[ServiceStatus]:
+    async def get_service_statuses_for_deployment(
+        self, skip_metrics: bool = False
+    ) -> list[ServiceStatus]:
         """Get the status of all services in a deployment."""
         if not self.helm_values or not self.helm_values.services:
             return []
 
         tasks = [
-            self._get_service_status(service_config)
+            self._get_service_status(service_config, skip_metrics=skip_metrics)
             for service_config in self.helm_values.services
         ]
         # Overall timeout: max 3 seconds per service, but cap total at 10 seconds
@@ -95,7 +98,7 @@ class StatusWatcher:
                         name=service_config.name,
                         image=f"{service_config.image.repository}:{service_config.image.tag}",
                         workload_type=service_config.workloadType,
-                        status=KubernetesPhase.ERROR,
+                        status=StatusPhase.ERROR,
                         replicas=service_config.replicas or 1,
                         ready_replicas=0,
                         pods=[],
@@ -147,7 +150,7 @@ class StatusWatcher:
             services_summary.append(
                 ServiceStatusSummary(
                     name=service.name,
-                    status=service.status,
+                    status=service.get_deploy_phase(),
                     ready_replicas=service.ready_replicas,
                     total_replicas=service.replicas,
                     image=service.image,
@@ -196,7 +199,7 @@ class StatusWatcher:
             deployment_name=self.deployment_name,
             namespace=self.namespace,
             status=overall_status,
-            ready=overall_status == KubernetesPhase.RUNNING,
+            ready=overall_status == StatusPhase.RUNNING,
             last_checked=datetime.now(UTC),
             deployed_at=self.deployed_at,
             total_services=len(services_list),
@@ -208,7 +211,9 @@ class StatusWatcher:
             networks=networks_summary,
         )
 
-    async def _get_service_status(self, service: ServiceValues) -> ServiceStatus:
+    async def _get_service_status(
+        self, service: ServiceValues, skip_metrics: bool = False
+    ) -> ServiceStatus:
         """Get status for a specific service."""
         replicas = service.replicas or 1
         updated_replicas: int | None = None
@@ -260,21 +265,21 @@ class StatusWatcher:
                     is_true = condition_status in ["True", "true", True]
 
                     if condition_type == JOB_CONDITION_COMPLETE and is_true:
-                        job_status = KubernetesPhase.STOPPED
+                        job_status = StatusPhase.EXITED
                         break
                     elif condition_type == JOB_CONDITION_FAILED and is_true:
-                        job_status = KubernetesPhase.ERROR
+                        job_status = StatusPhase.ERROR
                         break
 
                 if job_status is None:
                     if succeeded > 0:
-                        job_status = KubernetesPhase.STOPPED
+                        job_status = StatusPhase.EXITED
                     elif failed > 0:
-                        job_status = KubernetesPhase.ERROR
+                        job_status = StatusPhase.ERROR
                     elif active > 0:
-                        job_status = KubernetesPhase.RUNNING
+                        job_status = StatusPhase.RUNNING
                     else:
-                        job_status = KubernetesPhase.PENDING
+                        job_status = StatusPhase.PENDING
 
             else:
                 apps_v1 = await get_async_apps_v1_api()
@@ -325,11 +330,11 @@ class StatusWatcher:
                             datetime.now(UTC) - self.deployed_at
                         ).total_seconds()
                         if age_seconds > 604800:  # TTL is 7 days (604800 seconds)
-                            job_status = KubernetesPhase.STOPPED
+                            job_status = StatusPhase.EXITED
                         else:
-                            job_status = KubernetesPhase.PENDING
+                            job_status = StatusPhase.PENDING
                     else:
-                        job_status = KubernetesPhase.PENDING
+                        job_status = StatusPhase.PENDING
                 else:
                     # Deployment/resource not found - log once at debug level
                     logger.debug(
@@ -345,24 +350,24 @@ class StatusWatcher:
             logger.error(f"Error getting status for {service.name}: {e}")
 
         # Get pods and calculate average resource usage
-        pods = await self._get_service_pods(service)
+        pods = await self._get_service_pods(service, skip_metrics=skip_metrics)
         if pods is None:
             pods = []
-        current_usage = self._calculate_average_usage(pods) if pods else None
+        current_usage = (
+            self._calculate_average_usage(pods) if pods and not skip_metrics else None
+        )
 
         # Determine status: use job status for Jobs, otherwise use pod status
         if is_job and job_status is not None:
             status_enum = job_status
-            ready_replicas = 1 if job_status == KubernetesPhase.STOPPED else 0
+            ready_replicas = 1 if job_status == StatusPhase.EXITED else 0
         elif resource_not_found and not pods:
             # Resource doesn't exist in K8s and no pods - likely deleted or never created
-            status_enum = KubernetesPhase.UNKNOWN
+            status_enum = StatusPhase.UNKNOWN
             ready_replicas = 0
         else:
             ready_replicas = (
-                len([p for p in pods if p.phase == KubernetesPhase.RUNNING])
-                if pods
-                else 0
+                len([p for p in pods if p.phase == StatusPhase.RUNNING]) if pods else 0
             )
             status_enum = self._determine_status_from_pods(pods, replicas)
 
@@ -404,7 +409,9 @@ class StatusWatcher:
             endpoint=endpoint,
         )
 
-    async def _get_service_pods(self, service_config: ServiceValues) -> list[PodStatus]:
+    async def _get_service_pods(
+        self, service_config: ServiceValues, skip_metrics: bool = False
+    ) -> list[PodStatus]:
         """Get pod details for a specific service."""
 
         try:
@@ -434,13 +441,15 @@ class StatusWatcher:
                 )
                 return []
 
-            # Start all metrics tasks in parallel
-            metrics_tasks = {
-                pod.metadata.name: asyncio.create_task(
-                    self._get_pod_metrics(pod.metadata.name)
-                )
-                for pod in pod_list.items
-            }
+            # Start all metrics tasks in parallel (skip if not needed)
+            metrics_tasks = {}
+            if not skip_metrics:
+                metrics_tasks = {
+                    pod.metadata.name: asyncio.create_task(
+                        self._get_pod_metrics(pod.metadata.name)
+                    )
+                    for pod in pod_list.items
+                }
 
             pods = []
             for pod in pod_list.items:
@@ -452,6 +461,7 @@ class StatusWatcher:
                 container_reason = None
                 container_message = None
                 has_container_error = False
+                is_creating = False  # Track if container is being created/image pulled
 
                 # Step 2: Process each container to calculate metrics and detect errors
                 for container_status in container_statuses:
@@ -482,6 +492,12 @@ class StatusWatcher:
                                 container_message = ERROR_MESSAGES.get(
                                     container_reason, container_message
                                 )
+                            elif container_reason in (
+                                "ContainerCreating",
+                                "PodInitializing",
+                            ):
+                                # Container is being created or init containers running
+                                is_creating = True
                         else:
                             terminated = container_status.get("state", {}).get(
                                 "terminated"
@@ -516,20 +532,20 @@ class StatusWatcher:
                     age_str = "Unknown"
 
                 # Step 5: Determine pod phase from status, defaulting to RUNNING
-                phase = KubernetesPhase.RUNNING
+                phase = StatusPhase.RUNNING
                 pod_reason = None
                 pod_message = None
 
                 if pod.status:
                     if pod.status.phase:
                         phase_map = {
-                            "Running": KubernetesPhase.RUNNING,
-                            "Pending": KubernetesPhase.PENDING,
-                            "Failed": KubernetesPhase.ERROR,
-                            "Succeeded": KubernetesPhase.STOPPED,
-                            "Unknown": KubernetesPhase.ERROR,
+                            "Running": StatusPhase.RUNNING,
+                            "Pending": StatusPhase.PENDING,
+                            "Failed": StatusPhase.ERROR,
+                            "Succeeded": StatusPhase.EXITED,
+                            "Unknown": StatusPhase.ERROR,
                         }
-                        phase = phase_map.get(pod.status.phase, KubernetesPhase.ERROR)
+                        phase = phase_map.get(pod.status.phase, StatusPhase.ERROR)
 
                     pod_reason = pod.status.reason
                     pod_message = pod.status.message
@@ -542,22 +558,25 @@ class StatusWatcher:
 
                 # Override phase to ERROR if container errors detected
                 if has_container_error:
-                    phase = KubernetesPhase.ERROR
+                    phase = StatusPhase.ERROR
 
-                # Step 7: Check if pod is running but not ready (starting up)
-                if (
-                    phase == KubernetesPhase.RUNNING
-                    and total_containers > 0
-                    and ready_containers < total_containers
-                ):
-                    phase = KubernetesPhase.STARTING
+                # Step 7: Check if pod is not ready - differentiate CREATING vs HEALTH_CHECK
+                if total_containers > 0 and ready_containers < total_containers:
+                    if is_creating:
+                        # Container is being created or image is being pulled
+                        phase = StatusPhase.CREATING
+                    elif phase == StatusPhase.RUNNING:
+                        # Container is running but readiness probe hasn't passed
+                        phase = StatusPhase.HEALTH_CHECK
 
                 # Step 8: Check if pod is being terminated
                 if pod.metadata.deletion_timestamp:
-                    phase = KubernetesPhase.TERMINATING
+                    phase = StatusPhase.STOPPING
 
                 # Step 8: Get metrics result (already started in parallel)
-                pod_metrics = await metrics_tasks[pod.metadata.name]
+                pod_metrics = None
+                if not skip_metrics and pod.metadata.name in metrics_tasks:
+                    pod_metrics = await metrics_tasks[pod.metadata.name]
 
                 pod_info = PodStatus(
                     name=pod.metadata.name,
@@ -614,132 +633,125 @@ class StatusWatcher:
 
     def _determine_deployment_status(
         self, services: list[ServiceStatus]
-    ) -> KubernetesPhase:
+    ) -> StatusPhase:
         """Determine overall deployment status from service statuses."""
         if not services:
-            return KubernetesPhase.PENDING
+            return StatusPhase.PENDING
 
-        # Count services by status
+        # Count services by their deploy phase (unified status)
+        phases = [s.get_deploy_phase() for s in services]
+
         error_count = sum(
-            1
-            for s in services
-            if s.status in [KubernetesPhase.ERROR, KubernetesPhase.FAILED]
+            1 for p in phases if p in (StatusPhase.ERROR, StatusPhase.RESTARTING)
         )
-        updating_count = sum(
-            1
-            for s in services
-            if s.updated_replicas is not None and s.updated_replicas < s.replicas
-        )
-        starting_count = sum(
-            1 for s in services if s.status == KubernetesPhase.STARTING
-        )
-        running_count = sum(
-            1 for s in services if s.status == KubernetesPhase.RUNNING
-        )
-        terminating_count = sum(
-            1 for s in services if s.status == KubernetesPhase.TERMINATING
-        )
-        pending_count = sum(
-            1 for s in services if s.status == KubernetesPhase.PENDING
-        )
+        updating_count = sum(1 for p in phases if p == StatusPhase.UPDATING)
+        creating_count = sum(1 for p in phases if p == StatusPhase.CREATING)
+        health_check_count = sum(1 for p in phases if p == StatusPhase.HEALTH_CHECK)
+        running_count = sum(1 for p in phases if p == StatusPhase.RUNNING)
+        stopping_count = sum(1 for p in phases if p == StatusPhase.STOPPING)
+        pending_count = sum(1 for p in phases if p == StatusPhase.PENDING)
+        exited_count = sum(1 for p in phases if p == StatusPhase.EXITED)
 
         # Priority order for deployment status:
 
         # 1. Any service in error = deployment error
         if error_count > 0:
-            return KubernetesPhase.ERROR
+            return StatusPhase.ERROR
 
-        # 2. All services terminating = deployment terminating
-        if terminating_count == len(services):
-            return KubernetesPhase.TERMINATING
+        # 2. All services stopping = deployment stopping
+        if stopping_count == len(services):
+            return StatusPhase.STOPPING
 
-        # 3. Any service updating (rolling update) = deployment updating
+        # 3. Any service updating = deployment updating
         if updating_count > 0:
-            return KubernetesPhase.UPDATING
+            return StatusPhase.UPDATING
 
         # 4. All services running = deployment running
         if running_count == len(services):
-            return KubernetesPhase.RUNNING
+            return StatusPhase.RUNNING
 
-        # 5. All services starting (none running yet) = deployment starting
-        if starting_count > 0 and running_count == 0 and pending_count == 0:
-            return KubernetesPhase.STARTING
+        # 5. All services exited (jobs completed) = exited
+        if exited_count == len(services):
+            return StatusPhase.EXITED
 
-        # 6. Mix of states or some pending/terminating = partially running
-        if running_count > 0 or starting_count > 0:
-            return KubernetesPhase.PARTIALLY_RUNNING
+        # 6. Health check pending (container running, waiting for readiness)
+        if health_check_count > 0:
+            return StatusPhase.HEALTH_CHECK
 
-        # 7. All pending = pending
+        # 7. Creating (pulling image, creating container)
+        if creating_count > 0:
+            return StatusPhase.CREATING
+
+        # 8. Mix of states with some running = health check (progress being made)
+        if running_count > 0:
+            return StatusPhase.HEALTH_CHECK
+
+        # 9. All pending = pending
         if pending_count == len(services):
-            return KubernetesPhase.PENDING
+            return StatusPhase.PENDING
 
-        # 8. No services running at all = stopped
-        if running_count == 0 and starting_count == 0:
-            return KubernetesPhase.STOPPED
-
-        return KubernetesPhase.UNKNOWN
+        return StatusPhase.PENDING
 
     def _determine_status_from_pods(
         self, pods: list[PodStatus] | None, replicas: int
-    ) -> KubernetesPhase:
+    ) -> StatusPhase:
         """Determine service status based on actual pod phases."""
         if replicas == 0:
-            return KubernetesPhase.STOPPED
+            return StatusPhase.EXITED
 
         if not pods:
-            return KubernetesPhase.PENDING
+            return StatusPhase.PENDING
 
         # Count pods by phase
-        running_count = sum(1 for p in pods if p.phase == KubernetesPhase.RUNNING)
-        starting_count = sum(1 for p in pods if p.phase == KubernetesPhase.STARTING)
-        pending_count = sum(1 for p in pods if p.phase == KubernetesPhase.PENDING)
-        terminating_count = sum(
-            1 for p in pods if p.phase == KubernetesPhase.TERMINATING
-        )
+        running_count = sum(1 for p in pods if p.phase == StatusPhase.RUNNING)
+        creating_count = sum(1 for p in pods if p.phase == StatusPhase.CREATING)
+        health_check_count = sum(1 for p in pods if p.phase == StatusPhase.HEALTH_CHECK)
+        pending_count = sum(1 for p in pods if p.phase == StatusPhase.PENDING)
+        stopping_count = sum(1 for p in pods if p.phase == StatusPhase.STOPPING)
         error_count = sum(
-            1
-            for p in pods
-            if p.phase in [KubernetesPhase.ERROR, KubernetesPhase.FAILED]
+            1 for p in pods if p.phase in [StatusPhase.ERROR, StatusPhase.RESTARTING]
         )
 
-        # If all pods are terminating, service is terminating
-        if terminating_count == len(pods):
-            return KubernetesPhase.TERMINATING
+        # If all pods are stopping, service is stopping
+        if stopping_count == len(pods):
+            return StatusPhase.STOPPING
 
-        # If any pods are in error/failed state, service is in error
+        # If any pods are in error state, service is in error
         if error_count > 0:
-            return KubernetesPhase.ERROR
+            return StatusPhase.ERROR
 
         # More pods than expected = rolling update in progress
         if len(pods) > replicas:
-            return KubernetesPhase.UPDATING
+            return StatusPhase.UPDATING
 
-        # Check for rolling update: terminating pods while others run = updating
-        if terminating_count > 0 and (running_count > 0 or starting_count > 0):
-            return KubernetesPhase.UPDATING
+        # Check for rolling update: stopping pods while others run = updating
+        if stopping_count > 0 and (
+            running_count > 0 or creating_count > 0 or health_check_count > 0
+        ):
+            return StatusPhase.UPDATING
 
-        # Pending pods with some running = partially running (scaling up)
-        if pending_count > 0:
-            return KubernetesPhase.PARTIALLY_RUNNING
-
-        # All pods running and count matches replicas
+        # All pods running and count matches replicas = fully healthy
         if running_count == replicas:
-            return KubernetesPhase.RUNNING
+            return StatusPhase.RUNNING
 
-        # All pods starting (none running yet) = service is starting
-        if starting_count > 0 and running_count == 0:
-            return KubernetesPhase.STARTING
+        # Health check pending (container running but readiness probe not passed)
+        if health_check_count > 0:
+            return StatusPhase.HEALTH_CHECK
 
-        # Mix of running and starting = partially running
-        if running_count > 0 and starting_count > 0:
-            return KubernetesPhase.PARTIALLY_RUNNING
+        # Creating (pulling image, creating container)
+        if creating_count > 0:
+            return StatusPhase.CREATING
+
+        # Pending pods (waiting to be scheduled)
+        if pending_count > 0:
+            return StatusPhase.PENDING
 
         # Some pods running but not all expected
         if running_count > 0:
-            return KubernetesPhase.PARTIALLY_RUNNING
+            return StatusPhase.HEALTH_CHECK
 
         # Shouldn't reach here, but default to pending
-        return KubernetesPhase.PENDING
+        return StatusPhase.PENDING
 
     def _calculate_average_usage(self, pods: list[PodStatus]) -> CurrentUsage | None:
         """Calculate average CPU and memory usage from pods."""

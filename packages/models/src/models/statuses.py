@@ -9,6 +9,7 @@ from models.helm import (
     HPAValues,
 )
 from models.k8s import Resources, WorkloadType
+from models.pod_states import ContainerCounts, PodFailureReasons
 
 JOB_CONDITION_COMPLETE = "Complete"
 JOB_CONDITION_FAILED = "Failed"
@@ -22,33 +23,22 @@ class TaskStatus(StrEnum):
     ERROR = "error"
 
 
-class KubernetesPhase(StrEnum):
-    """Status enumeration."""
+class StatusPhase(StrEnum):
+    """Unified status phases for pods, services, and deployments.
 
-    RUNNING = "Running"
-    STARTING = "Starting"  # Container running but not ready (readiness probe pending)
-    UPDATING = "Updating"  # Rolling update in progress
-    PARTIALLY_RUNNING = "Partially Running"
-    PENDING = "Pending"
-    SUCCEEDED = "Succeeded"
-    FAILED = "Failed"
-    STOPPED = "Stopped"
-    TERMINATING = "Terminating"
-    ERROR = "Error"
-    UNKNOWN = "Unknown"
+    Used everywhere - internal state and UI display.
+    """
 
-
-class DeployServicePhase(StrEnum):
-    """Status phases for deploy progress - compose-friendly."""
-
-    PENDING = "pending"
-    STARTING = "starting"
-    RUNNING = "running"
-    UPDATING = "updating"
-    RESTARTING = "restarting"
-    STOPPING = "stopping"
-    ERROR = "error"
-    EXITED = "exited"
+    PENDING = "pending"  # Waiting to be scheduled
+    CREATING = "creating"  # Pulling image, creating container
+    HEALTH_CHECK = "health_check"  # Container running, readiness probe pending
+    RUNNING = "running"  # Fully healthy, serving traffic
+    UPDATING = "updating"  # Rolling update in progress
+    STOPPING = "stopping"  # Terminating gracefully
+    RESTARTING = "restarting"  # CrashLoopBackOff
+    ERROR = "error"  # Failed (unrecoverable)
+    EXITED = "exited"  # Job completed or stopped (replicas=0)
+    UNKNOWN = "unknown"  # Can't determine state
 
 
 class StorageType(StrEnum):
@@ -96,7 +86,7 @@ class PodStatus(BaseModel):
     """Status information for a single pod/instance."""
 
     name: str
-    phase: KubernetesPhase
+    phase: StatusPhase
     ready_containers: int
     total_containers: int
     restart_count: int
@@ -115,7 +105,7 @@ class ServiceStatus(BaseModel):
     name: str
     image: str
     workload_type: WorkloadType
-    status: KubernetesPhase
+    status: StatusPhase
     replicas: int = 1
     ready_replicas: int = 0
     updated_replicas: int | None = None
@@ -130,12 +120,85 @@ class ServiceStatus(BaseModel):
     last_checked: datetime
     endpoint: str | None = None
 
+    def get_container_counts(self) -> ContainerCounts:
+        """Get Docker-like container counts from pods."""
+        running = creating = health_check = pending = stopping = error = 0
+
+        for pod in self.pods or []:
+            if pod.phase == StatusPhase.STOPPING:
+                stopping += 1
+            elif pod.phase == StatusPhase.RUNNING:
+                running += 1
+            elif pod.phase == StatusPhase.CREATING:
+                creating += 1
+            elif pod.phase == StatusPhase.HEALTH_CHECK:
+                health_check += 1
+            elif pod.phase == StatusPhase.PENDING:
+                pending += 1
+            elif pod.phase in (StatusPhase.ERROR, StatusPhase.RESTARTING):
+                error += 1
+
+        return ContainerCounts(
+            desired=self.replicas,
+            running=running,
+            creating=creating,
+            health_check=health_check,
+            pending=pending,
+            stopping=stopping,
+            error=error,
+        )
+
+    def get_error_info(self) -> tuple[str | None, str | None]:
+        """Get error message and reason from first errored pod."""
+        for pod in self.pods or []:
+            if pod.phase == StatusPhase.ERROR and pod.message:
+                return pod.message, pod.reason
+        return None, None
+
+    def get_deploy_phase(self) -> StatusPhase:
+        """Get Docker-like deploy phase for display."""
+        counts = self.get_container_counts()
+        _, error_reason = self.get_error_info()
+
+        # 1. Error takes precedence
+        if error_reason:
+            if error_reason in PodFailureReasons.RESTART_ERRORS:
+                return StatusPhase.RESTARTING
+            return StatusPhase.ERROR
+
+        # 2. Rolling update detected via updated_replicas
+        if self.updated_replicas is not None and self.updated_replicas < self.replicas:
+            return StatusPhase.UPDATING
+
+        # 3. Stopping (with some running = UPDATING)
+        if counts.stopping > 0:
+            if counts.running > 0 or counts.creating > 0 or counts.health_check > 0:
+                return StatusPhase.UPDATING
+            return StatusPhase.STOPPING
+
+        # 4. Health check pending (container running but readiness probe not passed)
+        if counts.health_check > 0:
+            return StatusPhase.HEALTH_CHECK
+
+        # 5. Creating (pulling image, creating container)
+        if counts.creating > 0:
+            return StatusPhase.CREATING
+
+        # 6. Pending pods
+        if counts.pending > 0:
+            return StatusPhase.PENDING
+
+        # 7. All running = RUNNING (only when no pods in transitional states)
+        if counts.running >= counts.desired and counts.desired > 0:
+            return StatusPhase.RUNNING
+
+        return StatusPhase.PENDING
 
 class ServiceStatusSummary(BaseModel):
     """Simplified service status for UI display."""
 
     name: str
-    status: KubernetesPhase
+    status: StatusPhase
     ready_replicas: int
     total_replicas: int
     image: str | None = None
@@ -150,7 +213,7 @@ class DeploymentStatus(BaseModel):
     deployment_id: str
     deployment_name: str
     namespace: str
-    status: KubernetesPhase
+    status: StatusPhase
     ready: bool
     last_checked: datetime
     deployed_at: datetime | None = None

@@ -462,9 +462,7 @@ class TestErrorHandling:
         )
         end_time = start_time + timedelta(minutes=15)
 
-        with patch(
-            "backend.tasks.crons.usage.get_metrics_service"
-        ) as mock_get:
+        with patch("backend.tasks.crons.usage.get_metrics_service") as mock_get:
             mock_service = AsyncMock()
             mock_service.health_check = AsyncMock(return_value=False)
             mock_get.return_value = mock_service

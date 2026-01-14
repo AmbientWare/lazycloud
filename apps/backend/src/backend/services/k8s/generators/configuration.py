@@ -97,9 +97,7 @@ def generate_healthcheck_values(
             probe.timeout_seconds = parse_duration(healthcheck["timeout"])
 
         if healthcheck.get("start_period"):
-            probe.initial_delay_seconds = parse_duration(
-                healthcheck["start_period"]
-            )
+            probe.initial_delay_seconds = parse_duration(healthcheck["start_period"])
         if healthcheck.get("retries"):
             probe.failure_threshold = healthcheck["retries"]
 
