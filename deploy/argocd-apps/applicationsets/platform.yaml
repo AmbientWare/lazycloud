@@ -27,6 +27,12 @@ spec:
                   createNamespace: "false"
                   serverSideApply: "false"
                   hasRegionValues: "false"
+                - app: argo-rollouts
+                  namespace: argo-rollouts
+                  syncWave: "1"
+                  createNamespace: "true"
+                  serverSideApply: "false"
+                  hasRegionValues: "false"
                 - app: external-secrets
                   namespace: external-secrets-system
                   syncWave: "2"

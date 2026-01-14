@@ -1,5 +1,5 @@
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
 metadata:
   name: {{ .Chart.Name }}
   labels:
@@ -7,6 +7,12 @@ metadata:
     component: frontend
 spec:
   replicas: {{ .Values.replicaCount }}
+  strategy:
+    blueGreen:
+      activeService: {{ .Chart.Name }}
+      previewService: {{ .Chart.Name }}-preview
+      autoPromotionEnabled: true
+      scaleDownDelaySeconds: 30
   selector:
     matchLabels:
       app: {{ .Chart.Name }}
