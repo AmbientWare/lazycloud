@@ -35,39 +35,52 @@ async def monitor_subscription_states_job(ctx: dict[str, Any]) -> dict[str, Any]
     subscription_service = get_subscription_service()
     overage_count = 0
     updated_count = 0
+    error_count = 0
 
     for user in users:
-        features = await subscription_service.get_user_features(user.workos_id)
-        state_before = user.subscription_state
+        try:
+            features = await subscription_service.get_user_features(user.workos_id)
+            state_before = user.subscription_state
 
-        user_after = await subscription_service._audit_and_update_subscription_state(
-            user.id, features
-        )
-
-        if not user_after:
-            continue
-
-        if user_after.subscription_state != state_before:
-            updated_count += 1
-            logger.info(
-                f"Updated user {user.email} (ID: {user.id}) subscription_state from "
-                f"{state_before.value} to {user_after.subscription_state.value}"
+            user_after = (
+                await subscription_service._audit_and_update_subscription_state(
+                    user.id, features
+                )
             )
 
-        if user_after.subscription_state == SubscriptionState.OVER_LIMITS:
-            overage_count += 1
-            logger.warning(
-                f"User {user.email} (ID: {user.id}, WorkOS ID: {user.workos_id}) "
-                f"has OVER_LIMITS subscription state"
+            if not user_after:
+                continue
+
+            if user_after.subscription_state != state_before:
+                updated_count += 1
+                logger.info(
+                    f"Updated user {user.email} (ID: {user.id}) subscription_state from "
+                    f"{state_before.value} to {user_after.subscription_state.value}"
+                )
+
+            if user_after.subscription_state == SubscriptionState.OVER_LIMITS:
+                overage_count += 1
+                logger.warning(
+                    f"User {user.email} (ID: {user.id}, WorkOS ID: {user.workos_id}) "
+                    f"has OVER_LIMITS subscription state"
+                )
+
+        except Exception:
+            error_count += 1
+            logger.exception(
+                f"Error checking subscription state for user {user.email} "
+                f"(ID: {user.id}, WorkOS ID: {user.workos_id})"
             )
 
     logger.info(
         f"Subscription monitoring complete. Checked {len(users)} users, "
-        f"found {overage_count} with overage, updated {updated_count} status(es)"
+        f"found {overage_count} with overage, updated {updated_count} status(es), "
+        f"{error_count} error(s)"
     )
 
     return {
         "checked": len(users),
         "overage_count": overage_count,
         "updated": updated_count,
+        "errors": error_count,
     }
