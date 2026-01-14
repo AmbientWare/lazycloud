@@ -1,8 +1,74 @@
 import type { DeploymentWithStatus } from "@/interfaces/deployments";
 import { StyledAccordionItem, StyledAccordionTrigger, StyledAccordionContent } from "@/components/shared/styled-accordion";
 import { Badge } from "@/components/ui/badge";
-import { Server, HardDrive, Network, ExternalLink } from "lucide-react";
+import { Server, HardDrive, Network, ExternalLink, AlertTriangle, Copy, Check } from "lucide-react";
 import { Spinner } from "@/components/shared/spinner";
+import { useState } from "react";
+
+function DomainSetupNotice({
+  customDomain,
+  cnameTarget,
+  domainStatus,
+}: {
+  customDomain: string;
+  cnameTarget: string;
+  domainStatus: string | null | undefined;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  const copyToClipboard = async () => {
+    await navigator.clipboard.writeText(cnameTarget);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const getStatusLabel = () => {
+    switch (domainStatus) {
+      case "pending_validation":
+        return "Pending DNS";
+      case "initializing":
+        return "Initializing";
+      default:
+        return "SSL Pending";
+    }
+  };
+
+  return (
+    <div className="mt-2 rounded-md border border-yellow-500/30 bg-yellow-500/5 p-2">
+      <div className="flex items-start gap-2">
+        <AlertTriangle className="h-3.5 w-3.5 text-yellow-500 shrink-0 mt-0.5" />
+        <div className="min-w-0 flex-1 space-y-1.5">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium text-yellow-500">{getStatusLabel()}</span>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Add a CNAME record to your DNS:
+          </p>
+          <div className="flex items-center gap-2 text-xs">
+            <code className="bg-muted px-1.5 py-0.5 rounded text-foreground truncate">
+              {customDomain}
+            </code>
+            <span className="text-muted-foreground shrink-0">→</span>
+            <code className="bg-muted px-1.5 py-0.5 rounded text-foreground">
+              {cnameTarget}
+            </code>
+            <button
+              onClick={copyToClipboard}
+              className="text-muted-foreground hover:text-foreground transition-colors shrink-0"
+              title="Copy CNAME target"
+            >
+              {copied ? (
+                <Check className="h-3 w-3 text-green-500" />
+              ) : (
+                <Copy className="h-3 w-3" />
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 
 export function DeploymentCard({ deployment }: { deployment: DeploymentWithStatus }) {
@@ -195,6 +261,13 @@ export function DeploymentCard({ deployment }: { deployment: DeploymentWithStatu
                           <ExternalLink className="h-3 w-3" />
                           <span className="truncate">{service.endpoint}</span>
                         </a>
+                      )}
+                      {service.custom_domain && service.domain_status !== "active" && service.cname_target && (
+                        <DomainSetupNotice
+                          customDomain={service.custom_domain}
+                          cnameTarget={service.cname_target}
+                          domainStatus={service.domain_status}
+                        />
                       )}
                     </div>
                   ))}

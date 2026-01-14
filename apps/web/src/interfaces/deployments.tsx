@@ -25,6 +25,10 @@ export const ServiceStatusSummarySchema = z.object({
   ports: z.array(z.string()).nullable(),
   restarts: z.number(),
   endpoint: z.string().nullable(),
+  // Custom domain fields
+  custom_domain: z.string().nullable().optional(),
+  domain_status: z.string().nullable().optional(),
+  cname_target: z.string().nullable().optional(),
 });
 
 export const VolumeStatusSummarySchema = z.object({
