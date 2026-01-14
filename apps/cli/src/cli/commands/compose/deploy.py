@@ -127,6 +127,8 @@ def deploy(
         # Load configuration
         _, lazycloud_config, compose_file_path = _load_configuration(view)
         deployment_name = lazycloud_config.deployment_name
+    except typer.Exit:
+        raise
     except Exception as e:
         view.show_error(f"Configuration error: {e}")
         raise typer.Exit(1)
@@ -432,7 +434,8 @@ def _load_configuration(view: DeployView):
 
     try:
         lazycloud_config = lazycloud_file.read()
-
+    except typer.Exit:
+        raise
     except Exception as e:
         view.show_error(f"Failed to read .lazycloud file: {e}")
         raise typer.Exit(1)
