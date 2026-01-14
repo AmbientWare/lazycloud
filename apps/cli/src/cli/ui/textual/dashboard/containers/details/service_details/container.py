@@ -20,6 +20,7 @@ from cli.ui.textual.dashboard.containers.details.service_details.resources_table
     ResourcesTable,
 )
 from cli.ui.textual.dashboard.containers.details.utils import get_status_color
+from cli.ui.textual.messages import ServiceStatusUpdated
 from cli.ui.textual.theme import Icons, Symbols
 from cli.utils.utils import format_cpu, format_image_name, format_memory
 
@@ -123,6 +124,14 @@ class ServiceDetailsContainer(Widget):
         """Update UI from stream data."""
         if not self.is_mounted:
             return
+
+        # Update cached state in parent containers
+        self.post_message(
+            ServiceStatusUpdated(
+                deployment_id=self.deployment_id,
+                service_status=service,
+            )
+        )
 
         if self._overview_widget:
             overview_content = self._build_overview_content(service)

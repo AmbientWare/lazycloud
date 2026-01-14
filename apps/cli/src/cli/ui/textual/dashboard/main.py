@@ -13,9 +13,11 @@ from cli.ui.textual.dashboard.containers.details.service_details import (
 )
 from cli.ui.textual.messages import (
     DeploymentSelected,
+    DeploymentStatusUpdated,
     DeploymentsLoaded,
     SecretSelected,
     ServiceSelected,
+    ServiceStatusUpdated,
 )
 from cli.ui.textual.theme import lazycloud_theme
 
@@ -153,6 +155,20 @@ class DashboardApp(App):
         """Handle secret selection - update content container display mode."""
         content = self.query_one(ContentContainer)
         content.display_mode = DisplayMode.SECRET
+
+    def on_deployment_status_updated(self, message: DeploymentStatusUpdated) -> None:
+        """Handle deployment status SSE update - update cached state."""
+        content = self.query_one(ContentContainer)
+        # Only update if this is for the currently selected deployment
+        if content.deployment and content.deployment.id == message.deployment_id:
+            content.deployment_status = message.status
+
+    def on_service_status_updated(self, message: ServiceStatusUpdated) -> None:
+        """Handle service status SSE update - update cached state."""
+        content = self.query_one(ContentContainer)
+        # Only update if this is for the currently selected service
+        if content.service and content.service.name == message.service_status.name:
+            content.service = message.service_status
 
 
 def run_dashboard():
