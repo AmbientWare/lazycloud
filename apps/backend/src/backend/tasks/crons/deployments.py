@@ -311,3 +311,91 @@ async def cleanup_orphaned_deployments_job(ctx: dict[str, Any]) -> dict[str, Any
         "triggered": triggered,
         "skipped": skipped,
     }
+
+
+async def cleanup_stranded_depot_projects_job(ctx: dict[str, Any]) -> dict[str, Any]:
+    """Retry Depot project deletion for DELETED deployments that still have a depot_project_id.
+
+    This handles cases where the Depot API call failed during deployment deletion.
+    The depot_project_id is only cleared on successful deletion, so any DELETED
+    deployment with a non-NULL depot_project_id needs cleanup.
+
+    Args:
+        ctx: SAQ job context
+
+    Returns:
+        Result dict with cleanup stats
+    """
+    from backend.services import get_depot_service
+
+    logger.info("Starting cleanup of stranded Depot projects")
+
+    async with get_db_context() as db:
+        pending_cleanup = await db.compose_deployments.find_pending_depot_cleanup()
+
+    if not pending_cleanup:
+        logger.info("No stranded Depot projects found")
+        return {
+            "found": 0,
+            "cleaned": 0,
+            "errors": 0,
+        }
+
+    logger.info(f"Found {len(pending_cleanup)} deployments with pending Depot cleanup")
+
+    depot_service = get_depot_service()
+    cleaned = 0
+    errors = 0
+
+    for deployment in pending_cleanup:
+        try:
+            project_id = deployment.depot_project_id
+            if not project_id:
+                continue
+
+            logger.info(
+                f"Retrying Depot cleanup for deployment {deployment.id} "
+                f"(project_id: {project_id})"
+            )
+
+            success = await depot_service.delete_project(project_id)
+
+            if success:
+                async with get_db_context() as db:
+                    deployment_locked = await db.compose_deployments.get_by_id(
+                        deployment.id, with_lock=True, include_deleted=True
+                    )
+                    if deployment_locked:
+                        deployment_locked.depot_project_id = None
+                        await db.compose_deployments.update(deployment_locked)
+
+                logger.info(
+                    f"Successfully cleaned up Depot project {project_id} "
+                    f"for deployment {deployment.id}"
+                )
+                cleaned += 1
+            else:
+                logger.warning(
+                    f"Failed to delete Depot project {project_id} "
+                    f"for deployment {deployment.id}"
+                )
+                errors += 1
+
+        except Exception as e:
+            logger.warning(
+                f"Error cleaning up Depot project for deployment {deployment.id}: {e}"
+            )
+            errors += 1
+
+    result = {
+        "found": len(pending_cleanup),
+        "cleaned": cleaned,
+        "errors": errors,
+    }
+
+    logger.info(
+        f"Depot cleanup complete: found {result['found']}, "
+        f"cleaned {result['cleaned']}, errors {result['errors']}"
+    )
+
+    return result
