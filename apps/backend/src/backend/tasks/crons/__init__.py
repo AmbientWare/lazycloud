@@ -19,6 +19,7 @@ from backend.tasks.crons.deployments import (
     reconcile_rollback_states_job,
     cleanup_orphaned_deployments_job,
     cleanup_stale_pending_job,
+    cleanup_stranded_depot_projects_job,
 )
 
 # All cron functions for worker registration
@@ -31,6 +32,7 @@ CRON_FUNCTIONS = [
     reconcile_rollback_states_job,
     cleanup_orphaned_deployments_job,
     cleanup_stale_pending_job,
+    cleanup_stranded_depot_projects_job,
 ]
 
 # CronJob definitions with schedules
@@ -83,6 +85,12 @@ CRON_JOBS = [
         timeout=300,
         retries=0,
     ),
+    CronJob(
+        function=cleanup_stranded_depot_projects_job,
+        cron="0 4 * * *",  # Daily 04:00 UTC
+        timeout=300,
+        retries=0,
+    ),
 ]
 
 __all__ = [
@@ -96,4 +104,5 @@ __all__ = [
     "reconcile_rollback_states_job",
     "cleanup_orphaned_deployments_job",
     "cleanup_stale_pending_job",
+    "cleanup_stranded_depot_projects_job",
 ]

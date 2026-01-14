@@ -402,6 +402,19 @@ class ComposeDeploymentService(
         db_models = list(result.scalars().all())
         return [self._to_pydantic(db_model) for db_model in db_models]
 
+    async def find_pending_depot_cleanup(
+        self,
+    ) -> list[ComposeDeploymentPydantic]:
+        """Find DELETED deployments with Depot projects that still need cleanup."""
+        query = (
+            select(ComposeDeploymentTable)
+            .where(ComposeDeploymentTable.state == DeploymentStates.DELETED.value)
+            .where(ComposeDeploymentTable.depot_project_id.isnot(None))
+        )
+        result = await self._session.execute(query)
+        db_models = list(result.scalars().all())
+        return [self._to_pydantic(db_model) for db_model in db_models]
+
     async def find_stale_pending(
         self, threshold: datetime
     ) -> list[ComposeDeploymentPydantic]:
