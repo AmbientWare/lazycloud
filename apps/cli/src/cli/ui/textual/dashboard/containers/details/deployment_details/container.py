@@ -20,6 +20,7 @@ from cli.ui.textual.dashboard.containers.details.deployment_details.volumes_tabl
     VolumesTable,
 )
 from cli.ui.textual.dashboard.containers.details.utils import get_status_color
+from cli.ui.textual.messages import DeploymentStatusUpdated
 from cli.ui.textual.theme import Icons
 
 
@@ -143,6 +144,14 @@ class DeploymentDetailsContainer(Widget):
         """Update UI from stream data."""
         if not self.is_mounted:
             return
+
+        # Update cached state in parent containers
+        self.post_message(
+            DeploymentStatusUpdated(
+                deployment_id=self.deployment_id,
+                status=deployment,
+            )
+        )
 
         if self._overview_widget:
             overview_content = self._build_overview_content(deployment)

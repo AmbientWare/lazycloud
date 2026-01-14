@@ -1,32 +1,33 @@
 # Examples
 
-Complete applications ready to deploy. Each example includes a Dockerfile, compose.yaml, and working application code.
+Reference implementations demonstrating LazyCloud features. Each example is a working application you can deploy immediately or use as a starting point.
 
-| Example | Stack | Features Demonstrated |
-|---------|-------|----------------------|
-| [FastAPI LLM](/docs/examples/fastapi-llm) | Python, FastAPI, OpenAI | Secret injection, uv builds |
-| [Go API](/docs/examples/go-api) | Go | Multi-stage builds, minimal images |
-| [Next.js](/docs/examples/nextjs) | TypeScript, React | Standalone output, SSR |
+| Example | Stack | Features |
+|---------|-------|----------|
+| [LLM Chatbot](/docs/examples/llm-chatbot) | Next.js, FastAPI, SQLite, Redis | Multi-service, volumes, secrets |
 
-## Quick Start
+## Quick start
 
 ```bash
 git clone https://github.com/AmbientWare/lazycloud-releases.git
-cd lazycloud-releases/examples/fastapi-llm
+cd lazycloud-releases/examples/llm-chatbot
 
+# Test locally
+export OPENAI_API_KEY=sk-...
+docker compose up --build
+
+# Deploy
 lazycloud init
 lazycloud deploy
 ```
 
 ## Structure
 
-Each example follows standard Docker Compose conventions:
-
 ```
-example-name/
-├── compose.yaml     # Services, ports, health checks
-├── Dockerfile       # Container build
-└── ...              # Application source
+llm-chatbot/
+├── compose.yaml      # Service definitions + LazyCloud labels
+├── frontend/         # Next.js (port 3000)
+└── api/              # FastAPI + OpenAI (port 8000)
 ```
 
-No LazyCloud-specific configuration required. If it runs with `docker compose up`, it deploys with `lazycloud deploy`.
+Standard Docker Compose—no LazyCloud-specific files required. Labels in `compose.yaml` configure deployment behavior.

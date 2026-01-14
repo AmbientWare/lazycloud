@@ -1,0 +1,81 @@
+# LLM Chatbot
+
+A full-stack AI chatbot showing how LazyCloud handles multi-service apps with persistent storage, resource limits, and secrets.
+
+```
+┌──────────┐     ┌──────────┐     ┌──────────┐
+│ Next.js  │────▶│ FastAPI  │────▶│  OpenAI  │
+│ Frontend │     │   API    │     │          │
+└──────────┘     └────┬─────┘     └──────────┘
+                      │
+              ┌───────┴───────┐
+              ▼               ▼
+         ┌────────┐     ┌─────────┐
+         │ SQLite │     │  Redis  │
+         └────────┘     └─────────┘
+```
+
+## Run it
+
+```bash
+git clone https://github.com/AmbientWare/lazycloud-releases.git
+cd lazycloud-releases/examples/llm-chatbot
+
+# Local
+export OPENAI_API_KEY=sk-...
+docker compose up --build
+
+# Deploy
+lazycloud init
+lazycloud deploy
+```
+
+## What's configured
+
+This example uses standard Docker Compose with a few LazyCloud labels.
+
+### Environment variables
+
+```yaml
+environment:
+  - OPENAI_API_KEY=${OPENAI_API_KEY}
+  - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+  - REDIS_URL=redis://redis:6379
+```
+
+Variables using `${VAR}` syntax are detected during `lazycloud deploy`. You'll be prompted to import values from a `.env` file, your shell environment, or enter them manually. Values are stored encrypted.
+
+Variables with defaults like `${VAR:-default}` use the default if not provided. Hardcoded values like `redis://redis:6379` work as-is—services can reference each other by name.
+
+### Resource limits
+
+```yaml
+deploy:
+  resources:
+    limits:
+      cpus: "1.0"
+      memory: 512M
+    reservations:
+      cpus: "0.25"
+      memory: 256M
+```
+
+Set CPU and memory per service. `limits` caps max usage, `reservations` guarantees minimum resources.
+
+### Persistent storage
+
+```yaml
+volumes:
+  api-data:
+    labels:
+      lazycloud.volume.size: "10Gi"
+  redis-data:
+    labels:
+      lazycloud.volume.size: "5Gi"
+```
+
+Data persists across deployments and restarts. Each service gets its own volume—SQLite database in `api-data`, Redis cache in `redis-data`.
+
+---
+
+See [Labels](/docs/labels) for all configuration options.

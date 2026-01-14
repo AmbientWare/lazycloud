@@ -5,10 +5,10 @@ following Textual best practices. Components post messages instead of directly
 calling methods on other components.
 """
 
-from textual.message import Message
-
 from models.statuses import DeploymentStatus, ServiceStatus
 from responses.deployments import DeploymentResponse
+from textual.message import Message
+
 from cli.ui.textual.dashboard.containers.details.container import DisplayMode
 
 
@@ -88,3 +88,31 @@ class DeploymentsLoaded(Message):
     def __init__(self, has_deployments: bool) -> None:
         super().__init__()
         self.has_deployments = has_deployments
+
+
+class DeploymentStatusUpdated(Message):
+    """Posted when deployment status is updated via SSE stream.
+
+    Attributes:
+        deployment_id: ID of the deployment
+        status: The updated deployment status
+    """
+
+    def __init__(self, deployment_id: str, status: DeploymentStatus) -> None:
+        super().__init__()
+        self.deployment_id = deployment_id
+        self.status = status
+
+
+class ServiceStatusUpdated(Message):
+    """Posted when service status is updated via SSE stream.
+
+    Attributes:
+        deployment_id: ID of the deployment containing the service
+        service_status: The updated service status
+    """
+
+    def __init__(self, deployment_id: str, service_status: ServiceStatus) -> None:
+        super().__init__()
+        self.deployment_id = deployment_id
+        self.service_status = service_status
