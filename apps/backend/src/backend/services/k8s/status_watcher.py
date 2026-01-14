@@ -31,6 +31,7 @@ from models.statuses import (
     VolumeStatusSummary,
 )
 
+from backend.config import app_config
 from backend.services.k8s.client import (
     get_async_api_client,
     get_async_apps_v1_api,
@@ -56,6 +57,49 @@ class StatusWatcher:
         self.helm_values = helm_values
         self.deployment_name = deployment_name
         self.deployed_at = deployed_at
+
+    def _is_custom_domain(self, hostname: str | None) -> bool:
+        """Check if hostname is a custom domain (not a platform domain)."""
+        if not hostname:
+            return False
+        return not hostname.endswith(f".{app_config.BASE_DOMAIN}")
+
+    async def _get_domain_status(
+        self, hostname: str
+    ) -> tuple[str | None, str | None]:
+        """Get domain status from Cloudflare for a custom domain.
+
+        Returns:
+            Tuple of (domain_status, cname_target).
+            domain_status is the SSL status from Cloudflare (e.g., "active", "pending_validation").
+            cname_target is the CNAME target to show if domain is not active.
+        """
+        # Skip if Cloudflare is not configured
+        if not app_config.CLOUDFLARE_API_KEY:
+            return None, None
+
+        try:
+            from backend.services import get_cloudflare_service
+
+            cloudflare = get_cloudflare_service()
+            result = await asyncio.wait_for(
+                cloudflare.get_domain_status(hostname),
+                timeout=3.0,
+            )
+            ssl_status = result.get("ssl", {}).get("status")
+
+            # Only show CNAME target if domain is not active
+            cname_target = (
+                app_config.BASE_DOMAIN if ssl_status != "active" else None
+            )
+            return ssl_status, cname_target
+
+        except asyncio.TimeoutError:
+            logger.debug(f"Timeout getting Cloudflare status for {hostname}")
+            return None, None
+        except Exception as e:
+            logger.debug(f"Error getting Cloudflare status for {hostname}: {e}")
+            return None, None
 
     async def get_service_statuses_for_deployment(
         self, skip_metrics: bool = False
@@ -157,6 +201,9 @@ class StatusWatcher:
                     ports=service.ports,
                     restarts=service.total_restarts,
                     endpoint=service.endpoint,
+                    custom_domain=service.custom_domain,
+                    domain_status=service.domain_status,
+                    cname_target=service.cname_target,
                 )
             )
 
@@ -386,8 +433,17 @@ class StatusWatcher:
 
         # Extract endpoint from ingress config if available
         endpoint = None
+        custom_domain = None
+        domain_status = None
+        cname_target = None
+
         if service.ingress and service.ingress.enabled:
             endpoint = service.ingress.hostname
+
+            # Check if this is a custom domain and fetch its status
+            if self._is_custom_domain(endpoint):
+                custom_domain = endpoint
+                domain_status, cname_target = await self._get_domain_status(endpoint)
 
         return ServiceStatus(
             name=service.name,
@@ -407,6 +463,9 @@ class StatusWatcher:
             total_restarts=sum(pod.restart_count for pod in pods) if pods else 0,
             last_checked=datetime.now(UTC),
             endpoint=endpoint,
+            custom_domain=custom_domain,
+            domain_status=domain_status,
+            cname_target=cname_target,
         )
 
     async def _get_service_pods(

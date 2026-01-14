@@ -181,6 +181,25 @@ class ServiceDetailsContainer(Widget):
                 f'Endpoint:     [link="{endpoint_url}"][cyan]{service.endpoint}[/cyan][/link]'
             )
 
+        # Show custom domain status if not active
+        if (
+            service.custom_domain
+            and service.domain_status != "active"
+            and service.cname_target
+        ):
+            status_label = {
+                "pending_validation": "Pending DNS",
+                "initializing": "Initializing",
+            }.get(service.domain_status or "", "SSL Pending")
+
+            content.append("")
+            content.append(
+                f"[yellow]{Icons.WARNING} Domain Setup Required ({status_label})[/yellow]"
+            )
+            content.append(
+                f"[dim]Add CNAME record:[/dim] {service.custom_domain} → {service.cname_target}"
+            )
+
         if service.current_usage:
             if service.current_usage.cpu:
                 formatted_cpu = format_cpu(service.current_usage.cpu)

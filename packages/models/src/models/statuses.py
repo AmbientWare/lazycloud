@@ -119,6 +119,10 @@ class ServiceStatus(BaseModel):
     total_restarts: int = 0
     last_checked: datetime
     endpoint: str | None = None
+    # Custom domain fields
+    custom_domain: str | None = None
+    domain_status: str | None = None
+    cname_target: str | None = None
 
     def get_container_counts(self) -> ContainerCounts:
         """Get Docker-like container counts from pods."""
@@ -194,6 +198,7 @@ class ServiceStatus(BaseModel):
 
         return StatusPhase.PENDING
 
+
 class ServiceStatusSummary(BaseModel):
     """Simplified service status for UI display."""
 
@@ -205,6 +210,11 @@ class ServiceStatusSummary(BaseModel):
     ports: list[str] | None = None
     restarts: int = 0
     endpoint: str | None = None
+
+    # Custom domain fields
+    custom_domain: str | None = None  # The custom domain if configured
+    domain_status: str | None = None  # "pending_validation" | "active" | None
+    cname_target: str | None = None  # Target for CNAME record when pending
 
 
 class DeploymentStatus(BaseModel):
