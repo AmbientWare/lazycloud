@@ -78,8 +78,9 @@ class ActiveDeploymentsContainer(Container):
             self._list_view.hide_loading()
             return
 
-        # Filter active deployments
+        # Filter active deployments and sort alphabetically
         active_deployments = [d for d in usage_data.deployments if d.status == "Active"]
+        active_deployments.sort(key=lambda d: (d.deployment_name or "").lower())
 
         # Convert to list items
         active_items = []
@@ -211,10 +212,13 @@ class InactiveDeploymentsContainer(Container):
             self._list_view.hide_loading()
             return
 
-        # Filter inactive deployments
+        # Filter inactive deployments and sort by name, then by date
         inactive_deployments = [
             d for d in usage_data.deployments if d.status == "Inactive"
         ]
+        inactive_deployments.sort(
+            key=lambda d: ((d.deployment_name or "").lower(), d.deleted_at or "")
+        )
 
         # Convert to list items
         inactive_items = []
