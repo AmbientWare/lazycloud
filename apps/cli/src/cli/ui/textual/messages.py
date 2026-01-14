@@ -5,11 +5,14 @@ following Textual best practices. Components post messages instead of directly
 calling methods on other components.
 """
 
+from typing import TYPE_CHECKING
+
 from models.statuses import DeploymentStatus, ServiceStatus
 from responses.deployments import DeploymentResponse
 from textual.message import Message
 
-from cli.ui.textual.dashboard.containers.details.container import DisplayMode
+if TYPE_CHECKING:
+    from cli.ui.textual.dashboard.containers.details.display_mode import DisplayMode
 
 
 class DeploymentSelected(Message):
@@ -73,7 +76,7 @@ class DisplayModeChanged(Message):
         mode: The new display mode
     """
 
-    def __init__(self, mode: DisplayMode) -> None:
+    def __init__(self, mode: "DisplayMode") -> None:
         super().__init__()
         self.mode = mode
 

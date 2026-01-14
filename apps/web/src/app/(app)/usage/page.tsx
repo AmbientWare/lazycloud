@@ -180,7 +180,6 @@ export default function UsagePage() {
                       deployments={workspace.deployments}
                       startDate={startDateISO}
                       endDate={endDateISO}
-                      workspaceStatus={workspace.workspace_status}
                     />
                   ))}
                 </div>

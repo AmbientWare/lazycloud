@@ -13,7 +13,6 @@ import {
 import { StyledCard } from "@/components/shared/styled-card";
 import { SectionIndicator } from "@/components/shared/section-header";
 import { Spinner } from "@/components/shared/spinner";
-import { StatusBadge } from "@/components/shared/status-badge";
 import { SectionHeader } from "./usage-cards";
 import { getDeploymentCostBreakdown } from "@/actions/usage";
 import type {
@@ -30,7 +29,6 @@ interface WorkspaceUsageCardProps {
   deployments: DeploymentUsageOverview[];
   startDate: string;
   endDate: string;
-  workspaceStatus: "Active" | "Inactive";
 }
 
 export function WorkspaceUsageCard({
@@ -40,7 +38,6 @@ export function WorkspaceUsageCard({
   deployments,
   startDate,
   endDate,
-  workspaceStatus,
 }: WorkspaceUsageCardProps) {
   const [breakdowns, setBreakdowns] = useState<
     Map<string, WorkspaceCostBreakdownResponse>
@@ -127,8 +124,11 @@ export function WorkspaceUsageCard({
     [breakdowns],
   );
 
+  // State for showing zero-cost inactive deployments
+  const [showZeroCostInactive, setShowZeroCostInactive] = useState(false);
+
   // Sort deployments into separate active and inactive arrays
-  const { activeDeployments, inactiveDeployments } = useMemo(() => {
+  const { activeDeployments, allInactiveDeployments } = useMemo(() => {
     const active = deployments
       .filter((d) => d.status === "Active")
       .sort((a, b) => (a.deployment_name || "").localeCompare(b.deployment_name || ""));
@@ -144,8 +144,21 @@ export function WorkspaceUsageCard({
         return dateA - dateB;
       });
 
-    return { activeDeployments: active, inactiveDeployments: inactive };
+    return { activeDeployments: active, allInactiveDeployments: inactive };
   }, [deployments]);
+
+  // Filter inactive deployments based on toggle
+  const inactiveDeployments = useMemo(() => {
+    if (showZeroCostInactive) {
+      return allInactiveDeployments;
+    }
+    return allInactiveDeployments.filter(
+      (d) => d.usage.costs && d.usage.costs.total_cost > 0
+    );
+  }, [allInactiveDeployments, showZeroCostInactive]);
+
+  // Count of hidden zero-cost deployments
+  const hiddenZeroCostCount = allInactiveDeployments.length - inactiveDeployments.length;
 
   // Helper to render a deployment accordion item
   const renderDeploymentAccordionItem = (deployment: DeploymentUsageOverview) => {
@@ -460,7 +473,6 @@ export function WorkspaceUsageCard({
               </span>
             </div>
           </div>
-          <StatusBadge status={workspaceStatus} />
         </div>
       </div>
 
@@ -496,15 +508,31 @@ export function WorkspaceUsageCard({
             )}
 
             {/* Inactive Deployments Section */}
-            {inactiveDeployments.length > 0 && (
+            {allInactiveDeployments.length > 0 && (
               <>
-                <div className="flex items-center gap-2 pt-4 pb-1">
-                  <span className="text-sm font-semibold text-amber-600 dark:text-amber-500">Inactive</span>
-                  <span className="text-muted-foreground bg-muted rounded px-1.5 py-0.5 text-xs">
-                    ({inactiveDeployments.length})
-                  </span>
+                <div className="flex items-center justify-between pt-4 pb-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-semibold text-amber-600 dark:text-amber-500">Inactive</span>
+                    <span className="text-muted-foreground bg-muted rounded px-1.5 py-0.5 text-xs">
+                      ({inactiveDeployments.length}{hiddenZeroCostCount > 0 && !showZeroCostInactive ? `/${allInactiveDeployments.length}` : ""})
+                    </span>
+                  </div>
+                  {hiddenZeroCostCount > 0 && (
+                    <button
+                      onClick={() => setShowZeroCostInactive(!showZeroCostInactive)}
+                      className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      {showZeroCostInactive ? "Hide" : "Show"} $0 ({hiddenZeroCostCount})
+                    </button>
+                  )}
                 </div>
-                {inactiveDeployments.map((deployment) => renderDeploymentAccordionItem(deployment))}
+                {inactiveDeployments.length > 0 ? (
+                  inactiveDeployments.map((deployment) => renderDeploymentAccordionItem(deployment))
+                ) : (
+                  <p className="text-muted-foreground text-sm py-2 italic">
+                    No inactive deployments with costs
+                  </p>
+                )}
               </>
             )}
           </Accordion>

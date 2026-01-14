@@ -153,15 +153,19 @@ class InactiveDeploymentsContainer(Container):
 
     selected_deployment_id: reactive[str | None] = reactive(None)
     usage_data: reactive[WorkspaceUsageSummary | None] = reactive(None)
+    show_zero_cost: reactive[bool] = reactive(False)
 
     BINDINGS = [
         ("up,k", "cursor_up", "Move up"),
         ("down,j", "cursor_down", "Move down"),
+        ("z", "toggle_zero_cost", "Toggle $0"),
     ]
 
     def __init__(self):
         super().__init__(id="inactive-deployments-container")
         self._list_view: ListView | None = None
+        self._all_inactive_items: list[ListItemData] = []
+        self._hidden_count: int = 0
         self.border_title = (
             f"[2] [bold {Colors.Hex.warning}]Inactive[/bold {Colors.Hex.warning}]"
         )
@@ -178,9 +182,17 @@ class InactiveDeploymentsContainer(Container):
     def on_mount(self) -> None:
         """Set up when mounted"""
         self.can_focus = True
-        self.border_subtitle = "↑↓/jk Navigate"
+        self._update_subtitle()
         if self._list_view:
             self._list_view.show_loading("Loading deployments...")
+
+    def _update_subtitle(self) -> None:
+        """Update subtitle with current toggle state"""
+        if self._hidden_count > 0:
+            toggle_hint = "z: Show $0" if not self.show_zero_cost else "z: Hide $0"
+            self.border_subtitle = f"↑↓/jk Navigate • {toggle_hint}"
+        else:
+            self.border_subtitle = "↑↓/jk Navigate"
 
     def on_focus(self) -> None:
         """Handle focus event"""
@@ -210,6 +222,9 @@ class InactiveDeploymentsContainer(Container):
             self._list_view._empty_message = "No inactive deployments found"
             self._list_view.show_empty_message()
             self._list_view.hide_loading()
+            self._all_inactive_items = []
+            self._hidden_count = 0
+            self._update_subtitle()
             return
 
         # Filter inactive deployments and sort by name, then by date
@@ -221,10 +236,10 @@ class InactiveDeploymentsContainer(Container):
         )
 
         # Convert to list items
-        inactive_items = []
+        all_items = []
         for deployment in inactive_deployments:
             try:
-                inactive_items.append(
+                all_items.append(
                     ListItemData(
                         id=deployment.deployment_id,
                         name=deployment.deployment_name or "Unknown",
@@ -236,16 +251,41 @@ class InactiveDeploymentsContainer(Container):
             except Exception:
                 continue
 
+        # Store all items and calculate hidden count
+        self._all_inactive_items = all_items
+        non_zero_items = [
+            item for item in all_items
+            if item.data and item.data.usage.costs and item.data.usage.costs.total_cost > 0
+        ]
+        self._hidden_count = len(all_items) - len(non_zero_items)
+        self._update_subtitle()
+
+        # Apply filter based on current toggle state
+        self._apply_filter()
+
+    def _apply_filter(self) -> None:
+        """Apply the zero-cost filter to the list"""
+        if not self._list_view:
+            return
+
+        if self.show_zero_cost:
+            items_to_show = self._all_inactive_items
+        else:
+            items_to_show = [
+                item for item in self._all_inactive_items
+                if item.data and item.data.usage.costs and item.data.usage.costs.total_cost > 0
+            ]
+
         # Update list
-        if inactive_items:
-            self._list_view.update_items(inactive_items)
+        if items_to_show:
+            self._list_view.update_items(items_to_show)
             # Try to find selected deployment
             if self.selected_deployment_id:
                 try:
                     current_index = next(
                         (
                             idx
-                            for idx, item in enumerate(inactive_items)
+                            for idx, item in enumerate(items_to_show)
                             if item.id == self.selected_deployment_id
                         ),
                         None,
@@ -259,9 +299,16 @@ class InactiveDeploymentsContainer(Container):
                 except StopIteration:
                     pass
         else:
-            self._list_view._empty_message = "No inactive deployments"
+            self._list_view._empty_message = "No inactive deployments with costs"
             self._list_view.show_empty_message()
         self._list_view.hide_loading()
+
+    def action_toggle_zero_cost(self) -> None:
+        """Toggle showing zero-cost deployments"""
+        if self._hidden_count > 0:
+            self.show_zero_cost = not self.show_zero_cost
+            self._update_subtitle()
+            self._apply_filter()
 
     def _handle_selection(self, item_data: ListItemData) -> None:
         """Handle deployment selection (Enter key pressed)"""

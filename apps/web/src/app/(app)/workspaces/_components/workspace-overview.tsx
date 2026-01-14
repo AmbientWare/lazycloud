@@ -28,13 +28,18 @@ const DEPLOYMENTS_HEADER = {
 export function WorkspaceOverview({ workspaceId }: WorkspaceOverviewProps) {
   const [deployments, setDeployments] = useState<DeploymentWithStatus[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [openAccordionValue, setOpenAccordionValue] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     if (!workspaceId) {
       setIsLoading(true);
       setDeployments([]);
+      setOpenAccordionValue(undefined);
       return;
     }
+
+    // Reset accordion state when workspace changes
+    setOpenAccordionValue(undefined);
 
     let cancelled = false;
 
@@ -131,7 +136,9 @@ export function WorkspaceOverview({ workspaceId }: WorkspaceOverviewProps) {
             type="single"
             collapsible
             className="w-full space-y-2"
+            value={openAccordionValue}
             onValueChange={(value) => {
+              setOpenAccordionValue(value);
               if (value) {
                 void loadDeploymentStatus(value);
               }
