@@ -1,10 +1,9 @@
 import asyncio
 
 from loguru import logger
-
 from models.helm import HealthCheckValues, HPAValues
 from models.k8s import WorkloadType
-from models.statuses import StatusPhase, ServiceStatus
+from models.statuses import ServiceStatus, StatusPhase
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.widget import Widget
@@ -68,7 +67,9 @@ class ServiceDetailsContainer(Widget):
             self._connect_service_stream(),
             exclusive=True,
         )
-        logger.debug(f"ServiceDetailsContainer._start_stream worker created: {self._stream_task}")
+        logger.debug(
+            f"ServiceDetailsContainer._start_stream worker created: {self._stream_task}"
+        )
 
     async def _stop_stream(self) -> None:
         """Stop the SSE stream."""
@@ -162,7 +163,14 @@ class ServiceDetailsContainer(Widget):
         ]
 
         if service.endpoint:
-            content.append(f"Endpoint:     [cyan]{service.endpoint}[/cyan]")
+            endpoint_url = (
+                service.endpoint
+                if service.endpoint.startswith(("http://", "https://"))
+                else f"https://{service.endpoint}"
+            )
+            content.append(
+                f'Endpoint:     [link="{endpoint_url}"][cyan]{service.endpoint}[/cyan][/link]'
+            )
 
         if service.current_usage:
             if service.current_usage.cpu:
@@ -257,9 +265,7 @@ class ServiceDetailsContainer(Widget):
         section = SectionContainer(title, widget)
         self._scroll.mount(section)
 
-    def _create_pods_table(
-        self, deployment_id: str, service_name: str
-    ) -> PodTable:
+    def _create_pods_table(self, deployment_id: str, service_name: str) -> PodTable:
         """Create a data table for instances."""
         if not self._scroll:
             return None
@@ -275,13 +281,17 @@ class ServiceDetailsContainer(Widget):
 
     async def _connect_service_stream(self) -> None:
         """Connect to SSE stream for real-time service updates."""
-        logger.debug(f"ServiceDetailsContainer._connect_service_stream ENTERED for {self.service_name}")
+        logger.debug(
+            f"ServiceDetailsContainer._connect_service_stream ENTERED for {self.service_name}"
+        )
         max_reconnect_attempts = 5
         reconnect_delay = 3
 
         for attempt in range(max_reconnect_attempts):
             try:
-                logger.debug(f"ServiceDetailsContainer calling api.status.stream_service_status")
+                logger.debug(
+                    "ServiceDetailsContainer calling api.status.stream_service_status"
+                )
                 await api.status.stream_service_status(
                     deployment_id=self.deployment_id,
                     service_name=self.service_name,
