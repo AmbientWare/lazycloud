@@ -1,5 +1,3 @@
-from enum import StrEnum
-
 from models.statuses import DeploymentStatus, ServiceStatus
 from responses.deployments import DeploymentResponse
 from textual.app import ComposeResult
@@ -13,6 +11,7 @@ from cli.ui.textual.components import Container, SectionContainer
 from cli.ui.textual.dashboard.containers.details.deployment_details import (
     DeploymentDetailsContainer,
 )
+from cli.ui.textual.dashboard.containers.details.display_mode import DisplayMode
 from cli.ui.textual.dashboard.containers.details.empty_state import EmptyStateWidget
 from cli.ui.textual.dashboard.containers.details.secret_details.container import (
     SecretsTable,
@@ -20,12 +19,6 @@ from cli.ui.textual.dashboard.containers.details.secret_details.container import
 from cli.ui.textual.dashboard.containers.details.service_details import (
     ServiceDetailsContainer,
 )
-
-
-class DisplayMode(StrEnum):
-    DEPLOYMENT = "deployment"
-    SERVICE = "service"
-    SECRET = "secret"
 
 
 class ContentContainer(Container):
