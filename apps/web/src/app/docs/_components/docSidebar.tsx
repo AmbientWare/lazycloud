@@ -32,6 +32,40 @@ const data = {
       items: [],
     },
     {
+      title: "Architecture",
+      url: "/docs/architecture",
+      items: [
+        {
+          title: "Networking",
+          url: "/docs/architecture/networking",
+        },
+        {
+          title: "Builds",
+          url: "/docs/architecture/builds",
+        },
+        {
+          title: "Scaling",
+          url: "/docs/architecture/scaling",
+        },
+        {
+          title: "Volumes",
+          url: "/docs/architecture/volumes",
+        },
+        {
+          title: "Secrets",
+          url: "/docs/architecture/secrets",
+        },
+        {
+          title: "Resources",
+          url: "/docs/architecture/resources",
+        },
+        {
+          title: "Security",
+          url: "/docs/architecture/security",
+        },
+      ],
+    },
+    {
       title: "Compose Labels",
       url: "/docs/labels",
       items: [

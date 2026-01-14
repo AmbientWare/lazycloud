@@ -33,10 +33,9 @@ from cli.ui.views.helpers.env_helpers import (
     filter_secrets_with_values,
     find_env_file,
     get_remaining_vars,
-    handle_missing_vars_prompt,
     load_from_env_file,
     load_from_shell_env,
-    mark_secrets_as_empty,
+    show_missing_vars_error,
 )
 
 
@@ -396,12 +395,10 @@ class DeployView:
             remaining_vars = get_remaining_vars(secrets_dict, loaded_keys)
 
             if remaining_vars:
-                if not handle_missing_vars_prompt(
-                    self.console, remaining_vars, "shell environment", skip_prompts
-                ):
-                    raise typer.Exit(0)
-
-                mark_secrets_as_empty(secrets_dict, set(remaining_vars.keys()))
+                show_missing_vars_error(
+                    self.console, remaining_vars, "shell environment"
+                )
+                raise typer.Exit(1)
 
         elif import_method == ImportMethod.FILE:
             # User chose to import from file
@@ -457,29 +454,18 @@ class DeployView:
             remaining_vars = get_remaining_vars(secrets_dict, loaded_keys)
 
             if remaining_vars:
-                if not handle_missing_vars_prompt(
-                    self.console, remaining_vars, "file", skip_prompts
-                ):
-                    raise typer.Exit(0)
-
-                mark_secrets_as_empty(secrets_dict, set(remaining_vars.keys()))
+                show_missing_vars_error(
+                    self.console, remaining_vars, file_path.name
+                )
+                raise typer.Exit(1)
 
         else:
-            # User chose 'none' or no valid import method
-            self.console.print()
-
-            # Show truncated list for large number of vars
-            var_list = ", ".join(list(secrets_dict.keys())[:5])
-            if len(secrets_dict) > 5:
-                var_list += f" and {len(secrets_dict) - 5} more..."
-
-            remaining_vars_display = {var_list: ""}
-            if not handle_missing_vars_prompt(
-                self.console, remaining_vars_display, "user input", skip_prompts
-            ):
-                raise typer.Exit(0)
-
-            mark_secrets_as_empty(secrets_dict, set(secrets_dict.keys()))
+            # User chose 'none' - error if there are env vars that need values
+            if secrets_dict:
+                show_missing_vars_error(
+                    self.console, {k: v.value for k, v in secrets_dict.items()}, "import source"
+                )
+                raise typer.Exit(1)
 
         # Filter out empty values - only keep secrets that have actual values
         env_vars.added = filter_secrets_with_values(secrets_dict)

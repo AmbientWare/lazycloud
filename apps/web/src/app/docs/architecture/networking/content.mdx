@@ -1,0 +1,96 @@
+# Networking
+
+Services communicate using their names as hostnames. You must define networks in your compose file for services to talk to each other.
+
+## Networks Are Required
+
+Services without a shared network cannot communicate. Define a network and assign services to it:
+
+```yaml
+services:
+  api:
+    build: .
+    environment:
+      - REDIS_URL=redis://cache:6379
+      - DATABASE_URL=postgres://db:5432/app
+    networks:
+      - backend
+
+  cache:
+    image: redis:alpine
+    networks:
+      - backend
+
+  db:
+    image: postgres:16
+    networks:
+      - backend
+
+networks:
+  backend:
+```
+
+The `api` service can connect to `cache:6379` and `db:5432` because they all share the `backend` network.
+
+<Warning>
+If you don't define networks, your services will be isolated and unable to reach each other.
+</Warning>
+
+## Network Isolation
+
+Use multiple networks to control which services can communicate:
+
+```yaml
+services:
+  frontend:
+    networks:
+      - public
+
+  api:
+    networks:
+      - public
+      - internal
+
+  db:
+    networks:
+      - internal
+
+networks:
+  public:
+  internal:
+```
+
+In this setup:
+- `frontend` can reach `api` (both on `public`)
+- `api` can reach `db` (both on `internal`)
+- `frontend` cannot reach `db` directly (different networks)
+
+## External Access
+
+Expose services to the internet with a custom domain:
+
+```yaml
+services:
+  web:
+    build: .
+    ports:
+      - "3000:3000"
+    labels:
+      lazycloud.domain: myapp.example.com
+```
+
+LazyCloud automatically provisions TLS certificates for your domain.
+
+<Note>
+You'll need to point your domain's DNS to LazyCloud. See the deployment output for the exact DNS target.
+</Note>
+
+## Cross-Deployment Communication
+
+Services in different deployments (different compose files) cannot communicate directly. Each deployment is isolated to its own network space.
+
+If you need services to communicate across deployments, expose them via domains and use HTTP/HTTPS.
+
+---
+
+See [Service Labels](/docs/labels/service) for domain configuration options.
