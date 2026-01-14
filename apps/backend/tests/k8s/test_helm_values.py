@@ -1,7 +1,6 @@
 """Tests for HelmValuesGenerator."""
 
 from typing import Any
-from unittest.mock import MagicMock, patch
 
 import pytest
 from backend.services.compose.parser import ComposeParser
@@ -62,10 +61,10 @@ class TestHelmValuesGeneratorBasic:
         """Test global values include deployment/workspace IDs."""
         values, _ = helm_generator.generate_values(simple_compose_file)
 
-            assert values.global_values is not None
-            assert values.global_values.deploymentId is not None
-            assert values.global_values.workspaceId is not None
-            assert values.global_values.managedBy == "lazycloud"
+        assert values.global_values is not None
+        assert values.global_values.deploymentId is not None
+        assert values.global_values.workspaceId is not None
+        assert values.global_values.managedBy == "lazycloud"
 
     def test_generate_values_complex_compose(
         self,
@@ -75,11 +74,11 @@ class TestHelmValuesGeneratorBasic:
         """Test generating Helm values from complex compose file."""
         values, _ = helm_generator.generate_values(complex_compose_file)
 
-            assert len(values.services) == 3
-            service_names = [s.name for s in values.services]
-            assert "api" in service_names
-            assert "postgres" in service_names
-            assert "redis" in service_names
+        assert len(values.services) == 3
+        service_names = [s.name for s in values.services]
+        assert "api" in service_names
+        assert "postgres" in service_names
+        assert "redis" in service_names
 
 
 class TestServiceValuesGeneration:
@@ -93,10 +92,10 @@ class TestServiceValuesGeneration:
         """Test service values include proper labels."""
         values, _ = helm_generator.generate_values(simple_compose_file)
 
-            service = values.services[0]
-            assert "lazycloud.dev/workspace-id" in service.labels
-            assert "lazycloud.dev/service" in service.labels
-            assert service.labels["lazycloud.dev/managed-by"] == "lazycloud"
+        service = values.services[0]
+        assert "lazycloud.dev/workspace-id" in service.labels
+        assert "lazycloud.dev/service" in service.labels
+        assert service.labels["lazycloud.dev/managed-by"] == "lazycloud"
 
     def test_service_values_include_ports(
         self,
@@ -106,10 +105,10 @@ class TestServiceValuesGeneration:
         """Test service values include port configuration."""
         values, _ = helm_generator.generate_values(simple_compose_file)
 
-            service = values.services[0]
-            assert service.ports is not None
-            assert len(service.ports) == 1
-            assert service.ports[0].port == 80
+        service = values.services[0]
+        assert service.ports is not None
+        assert len(service.ports) == 1
+        assert service.ports[0].port == 80
 
     def test_service_values_include_resources(
         self,
@@ -133,10 +132,10 @@ class TestServiceValuesGeneration:
 
         values, _ = helm_generator.generate_values(compose)
 
-            service = values.services[0]
-            assert service.resources is not None
-            assert service.resources.limits.cpu == "1"
-            assert service.resources.limits.memory == "1Gi"
+        service = values.services[0]
+        assert service.resources is not None
+        assert service.resources.limits.cpu == "1"
+        assert service.resources.limits.memory == "1Gi"
 
     def test_service_values_include_replicas(
         self,
@@ -155,7 +154,7 @@ class TestServiceValuesGeneration:
 
         values, _ = helm_generator.generate_values(compose)
 
-            assert values.services[0].replicas == 3
+        assert values.services[0].replicas == 3
 
 
 class TestWorkloadTypeGeneration:
@@ -172,7 +171,7 @@ class TestWorkloadTypeGeneration:
 
         values, _ = helm_generator.generate_values(compose)
 
-            assert values.services[0].workloadType == WorkloadType.DEPLOYMENT
+        assert values.services[0].workloadType == WorkloadType.DEPLOYMENT
 
     def test_job_workload_type_for_restart_no(
         self,
@@ -191,7 +190,7 @@ class TestWorkloadTypeGeneration:
 
         values, _ = helm_generator.generate_values(compose)
 
-            assert values.services[0].workloadType == WorkloadType.JOB
+        assert values.services[0].workloadType == WorkloadType.JOB
 
 
 class TestVolumeValuesGeneration:
@@ -219,9 +218,9 @@ class TestVolumeValuesGeneration:
 
         values, _ = helm_generator.generate_values(compose)
 
-            assert len(values.volumes) == 1
-            assert values.volumes[0].name == "data"
-            assert values.volumes[0].enabled is True
+        assert len(values.volumes) == 1
+        assert values.volumes[0].name == "data"
+        assert values.volumes[0].enabled is True
 
     def test_volume_ebs_storage_class_single_service(
         self,
@@ -243,9 +242,9 @@ class TestVolumeValuesGeneration:
 
         values, _ = helm_generator.generate_values(compose)
 
-            # Single-service volume should use EBS (ReadWriteOnce)
-            assert values.volumes[0].storageClass == STORAGE_CLASS_EBS
-            assert "ReadWriteOnce" in values.volumes[0].accessModes
+        # Single-service volume should use EBS (ReadWriteOnce)
+        assert values.volumes[0].storageClass == STORAGE_CLASS_EBS
+        assert "ReadWriteOnce" in values.volumes[0].accessModes
 
     def test_volume_efs_storage_class_shared_volume(
         self,
@@ -281,7 +280,7 @@ class TestVolumeValuesGeneration:
 
         values, _ = helm_generator.generate_values(compose)
 
-            assert values.volumes[0].storageClass == STORAGE_CLASS_EFS
+        assert values.volumes[0].storageClass == STORAGE_CLASS_EFS
 
     def test_volume_size_from_label(
         self,
@@ -305,7 +304,7 @@ class TestVolumeValuesGeneration:
 
         values, _ = helm_generator.generate_values(compose)
 
-            assert values.volumes[0].size == "50Gi"
+        assert values.volumes[0].size == "50Gi"
 
 
 class TestNetworkValuesGeneration:
@@ -329,9 +328,9 @@ class TestNetworkValuesGeneration:
 
         values, _ = helm_generator.generate_values(compose)
 
-            assert len(values.networks) == 1
-            assert values.networks[0].name == "backend"
-            assert values.networks[0].enabled is True
+        assert len(values.networks) == 1
+        assert values.networks[0].name == "backend"
+        assert values.networks[0].enabled is True
 
 
 class TestSecretsGeneration:
@@ -377,11 +376,11 @@ class TestScalingGeneration:
 
         values, _ = helm_generator.generate_values(compose)
 
-            service = values.services[0]
-            assert service.hpa is not None
-            assert service.hpa.enabled is True
-            assert service.hpa.minReplicas == 2
-            assert service.hpa.maxReplicas == 10
+        service = values.services[0]
+        assert service.hpa is not None
+        assert service.hpa.enabled is True
+        assert service.hpa.minReplicas == 2
+        assert service.hpa.maxReplicas == 10
 
 
 class TestIngressGeneration:
@@ -404,9 +403,9 @@ class TestIngressGeneration:
 
         values, _ = helm_generator.generate_values(compose)
 
-            service = values.services[0]
-            assert service.ingress is not None
-            assert service.ingress.enabled is True
+        service = values.services[0]
+        assert service.ingress is not None
+        assert service.ingress.enabled is True
 
 
 class TestGracePeriodGeneration:
@@ -429,7 +428,7 @@ class TestGracePeriodGeneration:
 
         values, _ = helm_generator.generate_values(compose)
 
-            assert values.services[0].terminationGracePeriodSeconds == 60
+        assert values.services[0].terminationGracePeriodSeconds == 60
 
 
 class TestValidationErrors:
@@ -510,8 +509,8 @@ class TestCommandGeneration:
 
         values, _ = helm_generator.generate_values(compose)
 
-            # Command list should be split
-            assert "nginx" in values.services[0].command
+        # Command list should be split
+        assert "nginx" in values.services[0].command
 
     def test_generate_command_from_string(
         self,
@@ -530,8 +529,8 @@ class TestCommandGeneration:
 
         values, _ = helm_generator.generate_values(compose)
 
-            assert "python" in values.services[0].command
-            assert "manage.py" in values.services[0].command
+        assert "python" in values.services[0].command
+        assert "manage.py" in values.services[0].command
 
 
 class TestEndToEndPipeline:

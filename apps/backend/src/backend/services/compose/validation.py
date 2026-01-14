@@ -180,9 +180,7 @@ async def validate_deployment_request(
             existing_services=existing_requirements.services
             if existing_requirements
             else 0,
-            existing_pvcs=existing_requirements.pvcs
-            if existing_requirements
-            else 0,
+            existing_pvcs=existing_requirements.pvcs if existing_requirements else 0,
         )
 
     except ValueError as e:

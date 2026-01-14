@@ -90,9 +90,7 @@ async def get_async_api_client() -> AsyncApiClient:
                 else:
                     # Use default kubeconfig location (~/.kube/config)
                     await async_config.load_kube_config()
-                    logger.info(
-                        "Loaded Kubernetes configuration from default location"
-                    )
+                    logger.info("Loaded Kubernetes configuration from default location")
 
                 k8s_config = AsyncConfiguration.get_default_copy()
 

@@ -1,40 +1,23 @@
-"""Deploy progress monitor - shows actual container states."""
+"""Deploy progress monitor - shows container states during deploys."""
 
 import time
 from typing import Callable
 
 from models.helm import HelmValues
+from models.k8s import WorkloadType
 from models.monitoring import (
-    ContainerCounts,
-    DeployOverallPhase,
     DeployProgressStatus,
     DeployServiceStatus,
 )
-from models.pod_states import (
-    ContainerState,
-    PodInfo,
-    PodStateClassifier,
-)
-from models.statuses import DeployServicePhase, KubernetesPhase, ServiceStatus
+from models.pod_states import ContainerCounts
+from models.statuses import ServiceStatus, StatusPhase
 
 from backend.services.k8s.status_watcher import StatusWatcher
 from backend.services.monitoring.base import BaseMonitor
 
-# Mapping from ContainerState to DeployServicePhase
-CONTAINER_STATE_TO_DEPLOY_PHASE: dict[ContainerState, DeployServicePhase] = {
-    ContainerState.PENDING: DeployServicePhase.PENDING,
-    ContainerState.STARTING: DeployServicePhase.STARTING,
-    ContainerState.RUNNING: DeployServicePhase.RUNNING,
-    ContainerState.UPDATING: DeployServicePhase.UPDATING,
-    ContainerState.RESTARTING: DeployServicePhase.RESTARTING,
-    ContainerState.STOPPING: DeployServicePhase.STOPPING,
-    ContainerState.EXITED: DeployServicePhase.EXITED,
-    ContainerState.ERROR: DeployServicePhase.ERROR,
-}
-
 
 class DeployProgressMonitor(BaseMonitor[DeployProgressStatus]):
-    """Monitors deployment - shows actual container states."""
+    """Monitors deployment progress with Docker-like container counts."""
 
     def __init__(
         self,
@@ -55,7 +38,6 @@ class DeployProgressMonitor(BaseMonitor[DeployProgressStatus]):
         self.namespace = namespace
         self.helm_values = helm_values
         self.start_time = time.time()
-        self._classifier = PodStateClassifier()
 
         self.status_watcher = StatusWatcher(
             deployment_id=deployment_id,
@@ -65,100 +47,106 @@ class DeployProgressMonitor(BaseMonitor[DeployProgressStatus]):
         )
 
     async def _task(self) -> DeployProgressStatus:
-        """Get current container states."""
+        """Get current container states from ServiceStatus."""
         elapsed = int(time.time() - self.start_time)
 
         if not self.helm_values or not self.helm_values.services:
-            # Auto-stop since there's nothing to monitor
             self._running = False
             return DeployProgressStatus(
                 services=[],
-                overall=DeployOverallPhase.COMPLETED,
                 elapsed_seconds=elapsed,
             )
 
-        service_statuses = (
-            await self.status_watcher.get_service_statuses_for_deployment()
+        statuses = await self.status_watcher.get_service_statuses_for_deployment(
+            skip_metrics=True
         )
 
         services: list[DeployServiceStatus] = []
-        all_ready = True
         failure_detected = False
         failure_message: str | None = None
 
-        for svc in service_statuses:
+        for svc in statuses:
             deploy_svc = self._to_deploy_status(svc)
             services.append(deploy_svc)
 
-            if not deploy_svc.ready:
-                all_ready = False
-
             if deploy_svc.status in (
-                DeployServicePhase.ERROR,
-                DeployServicePhase.RESTARTING,
+                StatusPhase.ERROR,
+                StatusPhase.RESTARTING,
             ):
                 failure_detected = True
                 failure_message = f"{svc.name}: {deploy_svc.message}"
 
-        if failure_detected:
-            overall = DeployOverallPhase.FAILED
-            self._running = False
-        elif all_ready:
-            overall = DeployOverallPhase.COMPLETED
-        else:
-            overall = DeployOverallPhase.DEPLOYING
-
         return DeployProgressStatus(
             services=services,
-            overall=overall,
             elapsed_seconds=elapsed,
             failure_detected=failure_detected,
             failure_message=failure_message,
         )
 
     def _to_deploy_status(self, svc: ServiceStatus) -> DeployServiceStatus:
-        """Convert to deploy status using PodStateClassifier."""
-        # Build PodInfo list from ServiceStatus.pods
-        pod_infos = [
-            PodInfo(
-                name=p.name,
-                phase=p.phase.value if isinstance(p.phase, KubernetesPhase) else p.phase,
-                reason=p.reason,
-                message=p.message,
-                ready_containers=p.ready_containers,
-                total_containers=p.total_containers,
-                restart_count=p.restart_count,
-                is_terminating=(p.phase == KubernetesPhase.TERMINATING),
-            )
-            for p in (svc.pods or [])
-        ]
+        """Convert ServiceStatus to DeployServiceStatus using shared methods."""
+        if svc.workload_type == WorkloadType.JOB:
+            return self._job_to_deploy_status(svc)
 
-        # Use classifier for service-level classification
-        result = self._classifier.classify_service(
-            pods=pod_infos,
-            desired_replicas=svc.replicas,
-            updated_replicas=svc.updated_replicas,
-        )
-
-        # Map ContainerState to DeployServicePhase
-        phase = CONTAINER_STATE_TO_DEPLOY_PHASE.get(
-            result.state, DeployServicePhase.PENDING
-        )
-
-        # Convert classifier counts to monitoring ContainerCounts
-        counts = ContainerCounts(
-            desired=result.container_counts.desired,
-            running=result.container_counts.running,
-            pending=result.container_counts.pending,
-            stopping=result.container_counts.stopping,
-            creating=result.container_counts.starting,  # Map 'starting' to 'creating' for API compat
-            error=result.container_counts.error,
-        )
+        counts = svc.get_container_counts()
+        phase = svc.get_deploy_phase()
+        error_msg, _ = svc.get_error_info()
+        message = self._phase_to_message(phase, error_msg)
 
         return DeployServiceStatus(
             name=svc.name,
             status=phase,
-            ready=result.is_ready,
             containers=counts,
-            message=result.message,
+            message=message,
         )
+
+    def _job_to_deploy_status(self, svc: ServiceStatus) -> DeployServiceStatus:
+        """Convert Job ServiceStatus to DeployServiceStatus."""
+        if svc.status == StatusPhase.EXITED:
+            phase = StatusPhase.EXITED
+            message = "Completed"
+            counts = ContainerCounts(desired=1, running=0, starting=0, stopping=0)
+        elif svc.status == StatusPhase.ERROR:
+            phase = StatusPhase.ERROR
+            error_msg, _ = svc.get_error_info()
+            message = error_msg or "Failed"
+            counts = ContainerCounts(
+                desired=1, running=0, starting=0, stopping=0, error=1
+            )
+        elif svc.status == StatusPhase.RUNNING:
+            phase = StatusPhase.RUNNING
+            message = "Running"
+            counts = ContainerCounts(desired=1, running=1, starting=0, stopping=0)
+        else:
+            phase = StatusPhase.PENDING
+            message = "Waiting to start"
+            counts = ContainerCounts(desired=1, running=0, starting=0, stopping=0)
+
+        return DeployServiceStatus(
+            name=svc.name,
+            status=phase,
+            containers=counts,
+            message=message,
+        )
+
+    def _phase_to_message(self, phase: StatusPhase, error_msg: str | None) -> str:
+        """Get user-friendly message for phase."""
+        if error_msg:
+            return error_msg
+        if phase == StatusPhase.RUNNING:
+            return "Healthy"
+        if phase == StatusPhase.CREATING:
+            return "Pulling image"
+        if phase == StatusPhase.HEALTH_CHECK:
+            return "Running health checks"
+        if phase == StatusPhase.UPDATING:
+            return "Updating"
+        if phase == StatusPhase.STOPPING:
+            return "Stopping"
+        if phase == StatusPhase.PENDING:
+            return "Waiting to start"
+        if phase == StatusPhase.EXITED:
+            return "Completed"
+        if phase == StatusPhase.RESTARTING:
+            return "Service keeps crashing"
+        return ""

@@ -1,6 +1,7 @@
 from enum import StrEnum
 
-from models.statuses import DeployServicePhase
+from models.pod_states import ContainerCounts
+from models.statuses import StatusPhase
 from pydantic import BaseModel, Field
 
 
@@ -21,23 +22,11 @@ class DeployOverallPhase(StrEnum):
     FAILED = "failed"
 
 
-class ContainerCounts(BaseModel):
-    """Container counts for a service (Docker-like semantics)."""
-
-    desired: int = 0
-    running: int = 0
-    pending: int = 0
-    stopping: int = 0
-    creating: int = 0  # Alias: starting (pulling image, initializing, health checks)
-    error: int = 0
-
-
 class DeployServiceStatus(BaseModel):
     """Status of a single service during deployment."""
 
     name: str
-    status: DeployServicePhase
-    ready: bool
+    status: StatusPhase
     containers: ContainerCounts
     message: str
     last_log: str | None = None
@@ -47,7 +36,6 @@ class DeployProgressStatus(BaseModel):
     """Overall deployment progress status."""
 
     services: list[DeployServiceStatus]
-    overall: DeployOverallPhase
     elapsed_seconds: int
     failure_detected: bool = False
     failure_message: str | None = None

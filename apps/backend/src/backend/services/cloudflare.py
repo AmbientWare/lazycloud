@@ -125,7 +125,10 @@ class CloudflareService:
         if origin_server:
             payload["custom_origin_server"] = origin_server
 
-        logger.info(f"Adding custom hostname: {domain}" + (f" -> {origin_server}" if origin_server else ""))
+        logger.info(
+            f"Adding custom hostname: {domain}"
+            + (f" -> {origin_server}" if origin_server else "")
+        )
         result = await self._make_request(
             method="POST",
             endpoint=f"/zones/{self._zone_id}/custom_hostnames",

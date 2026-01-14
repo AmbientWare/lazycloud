@@ -55,8 +55,7 @@ async def enqueue_job(
         return job_key
 
     logger.info(
-        f"Enqueued job {job_name} with key {job_key}, "
-        f"parameters: {list(kwargs.keys())}"
+        f"Enqueued job {job_name} with key {job_key}, parameters: {list(kwargs.keys())}"
     )
 
     return job_key

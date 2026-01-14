@@ -1825,17 +1825,12 @@ def _deploy(
         # Phase 2: Wait for task and stream service status
         service_display = ServiceStatusDisplay(deployment_name)
         stream_error: Exception | None = None
-        stream_complete = False
 
         async def monitor_deployment():
-            nonlocal final_status, stream_error, stream_complete
+            nonlocal final_status, stream_error
 
             def on_progress(data: dict):
-                nonlocal stream_complete
                 service_display.update(data)
-                # Check if deployment reached terminal state
-                if service_display.is_complete():
-                    stream_complete = True
 
             def on_stream_error(error: Exception):
                 nonlocal stream_error
@@ -1879,13 +1874,12 @@ def _deploy(
                 except asyncio.CancelledError:
                     pass
 
-                # If deployment succeeded but display doesn't show it yet, update it
-                if (
-                    final_status
-                    and final_status.status == TaskStatus.COMPLETED
-                    and service_display.overall != DeployOverallPhase.COMPLETED
-                ):
-                    service_display.overall = DeployOverallPhase.COMPLETED
+                # Set display state based on task completion
+                if final_status:
+                    if final_status.status == TaskStatus.COMPLETED:
+                        service_display.overall = DeployOverallPhase.COMPLETED
+                    elif final_status.status == TaskStatus.ERROR:
+                        service_display.overall = DeployOverallPhase.FAILED
 
             except Exception as e:
                 stream_error = e

@@ -32,7 +32,9 @@ def get_jwks_client(force_refresh: bool = False) -> PyJWKClient:
     global _jwks_client
     if _jwks_client is None or force_refresh:
         jwks_url = f"https://api.workos.com/sso/jwks/{app_config.WORKOS_CLIENT_ID}"
-        _jwks_client = PyJWKClient(jwks_url, cache_keys=True, lifespan=_JWKS_CACHE_LIFESPAN)
+        _jwks_client = PyJWKClient(
+            jwks_url, cache_keys=True, lifespan=_JWKS_CACHE_LIFESPAN
+        )
     return _jwks_client
 
 

@@ -84,14 +84,20 @@ async def deploy_compose_job(
         await update_deployment_state(
             deployment_id, DeploymentStates.DEPLOYING, "Deploying application"
         )
-        deploy_result = await deploy_application(name, deployment.namespace, helm_values)
+        deploy_result = await deploy_application(
+            name, deployment.namespace, helm_values
+        )
 
         # Step 7: Register custom domains with Cloudflare (non-blocking)
-        custom_domains = [
-            service.domain
-            for service in validation_result.compose_file.services
-            if service.domain
-        ] if validation_result.compose_file else []
+        custom_domains = (
+            [
+                service.domain
+                for service in validation_result.compose_file.services
+                if service.domain
+            ]
+            if validation_result.compose_file
+            else []
+        )
         if custom_domains:
             await register_custom_domains(custom_domains)
 

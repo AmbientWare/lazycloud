@@ -8,7 +8,7 @@ from backend.database import Database
 from backend.database.users import UserPydantic
 from httpx import AsyncClient
 from models.k8s import WorkloadType
-from models.statuses import KubernetesPhase, ServiceStatus
+from models.statuses import StatusPhase, ServiceStatus
 from models.workspaces import WorkspaceRole
 
 from tests.fixtures.database import (
@@ -41,7 +41,7 @@ class TestListServices:
             name="web",
             image="nginx:latest",
             workload_type=WorkloadType.DEPLOYMENT,
-            status=KubernetesPhase.RUNNING,
+            status=StatusPhase.RUNNING,
             replicas=1,
             ready_replicas=1,
             last_checked=datetime.now(timezone.utc),
@@ -64,7 +64,7 @@ class TestListServices:
         service = services[0]["service"]
         assert service["name"] == "web"
         assert service["image"] == "nginx:latest"
-        assert service["status"] == KubernetesPhase.RUNNING.value
+        assert service["status"] == StatusPhase.RUNNING.value
 
 
 class TestRestartAllServices:

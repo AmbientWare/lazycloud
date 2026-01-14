@@ -330,7 +330,11 @@ async def rollback_compose_job(
             logger.info(
                 f"Successfully rolled back deployment {deployment_id} to revision {revision}"
             )
-            return {"status": "success", "deployment_id": deployment_id, "new_revision": new_revision}
+            return {
+                "status": "success",
+                "deployment_id": deployment_id,
+                "new_revision": new_revision,
+            }
 
         except Exception as db_error:
             logger.error(
