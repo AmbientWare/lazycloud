@@ -19,6 +19,51 @@
   --color-success: #16A34A;
 }
 
+/* Dark Theme */
+.dark {
+  --color-bg-primary: #0F172A;
+  --color-bg-secondary: #1E293B;
+  --color-bg-tertiary: #334155;
+  --color-accent-primary: #3B82F6;
+  --color-accent-hover: #60A5FA;
+  --color-accent-light: #1E3A5F;
+  --color-text-primary: #F8FAFC;
+  --color-text-secondary: #CBD5E1;
+  --color-text-muted: #64748B;
+  --color-border: #334155;
+  --color-border-focus: #3B82F6;
+  --color-error: #F87171;
+  --color-error-bg: #450A0A;
+  --color-success: #4ADE80;
+}
+
+/* Support system preference */
+@media (prefers-color-scheme: dark) {
+  :root:not(.light) {
+    --color-bg-primary: #0F172A;
+    --color-bg-secondary: #1E293B;
+    --color-bg-tertiary: #334155;
+    --color-accent-primary: #3B82F6;
+    --color-accent-hover: #60A5FA;
+    --color-accent-light: #1E3A5F;
+    --color-text-primary: #F8FAFC;
+    --color-text-secondary: #CBD5E1;
+    --color-text-muted: #64748B;
+    --color-border: #334155;
+    --color-border-focus: #3B82F6;
+    --color-error: #F87171;
+    --color-error-bg: #450A0A;
+    --color-success: #4ADE80;
+  }
+}
+
+/* Touch device detection for copy button visibility */
+@media (hover: none) and (pointer: coarse) {
+  .touch-device\:opacity-100 {
+    opacity: 1 !important;
+  }
+}
+
 /* Base Styles */
 html {
   scroll-behavior: smooth;
@@ -224,7 +269,7 @@ body {
 }
 
 .message-bubble-user {
-  background: linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%);
+  background: linear-gradient(135deg, var(--color-accent-primary) 0%, var(--color-accent-hover) 100%);
   color: white;
   border-radius: 20px 20px 4px 20px;
 }
@@ -234,6 +279,17 @@ body {
   color: var(--color-text-primary);
   border-radius: 20px 20px 20px 4px;
   border: 1px solid var(--color-border);
+}
+
+/* Dark mode adjustments for copy button */
+.dark .copy-button {
+  background: rgba(30, 41, 59, 0.9);
+  color: var(--color-text-secondary);
+}
+
+.dark .copy-button:hover {
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
 }
 
 /* Input Focus Animation */
