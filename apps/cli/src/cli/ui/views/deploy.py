@@ -2,6 +2,7 @@ from datetime import datetime
 from pathlib import Path
 
 import typer
+from models.build_args import BuildArg, BuildArgsCollection, ServiceBuildArgs
 from models.secrets import SecretCollection
 from models.statuses import TaskStatus
 from responses.deployments import DiffResponse
@@ -371,10 +372,11 @@ class DeployView:
 
             choice = Prompt.ask(
                 Text("Import from", style=Colors.Ansi.text_muted),
-                choices=["file", "shell", "none"],
+                choices=["file", "shell", "manual"],
                 default="file",
             )
-            import_method = ImportMethod(choice)
+            # "manual" is not in ImportMethod enum, handle separately
+            import_method = ImportMethod(choice) if choice != "manual" else "manual"
 
         loaded_keys = set()
 
@@ -460,10 +462,20 @@ class DeployView:
                 raise typer.Exit(1)
 
         else:
-            # User chose 'none' - error if there are env vars that need values
-            if secrets_dict:
+            # Manual entry - prompt for each env var
+            self.console.print()
+            for key, secret in secrets_dict.items():
+                prompt_text = Text(key, style=Colors.Ansi.text_muted)
+                value = Prompt.ask(prompt_text, default="")
+                if value:
+                    secret.value = value
+                    loaded_keys.add(key)
+
+            # Check for remaining missing variables after manual entry
+            remaining_vars = get_remaining_vars(secrets_dict, loaded_keys)
+            if remaining_vars:
                 show_missing_vars_error(
-                    self.console, {k: v.value for k, v in secrets_dict.items()}, "import source"
+                    self.console, remaining_vars, "manual entry"
                 )
                 raise typer.Exit(1)
 
@@ -471,6 +483,194 @@ class DeployView:
         env_vars.added = filter_secrets_with_values(secrets_dict)
 
         return env_vars
+
+    def collect_build_args(
+        self,
+        build_args: BuildArgsCollection,
+        project_dir: Path | None = None,
+        build_arg_source: str | None = None,
+        skip_prompts: bool = False,
+    ) -> BuildArgsCollection:
+        """Collect build argument values from user.
+
+        Args:
+            build_args: Collection of build args that may need values
+            project_dir: Project directory for resolving relative file paths
+            build_arg_source: Source for build args: 'shell', path to .env file, or None for interactive
+            skip_prompts: If True, skip interactive prompts (use shell env only)
+
+        Returns:
+            Updated BuildArgsCollection with collected values
+        """
+        import os
+
+        if not build_args.services:
+            return build_args
+
+        # Count total args that need values
+        total_missing = sum(
+            1
+            for service in build_args.services
+            for arg in service.args
+            if arg.value is None
+        )
+
+        if total_missing == 0:
+            return build_args
+
+        # Show header
+        self.console.print()
+        card = Card(
+            content=Text(
+                f"Found {total_missing} build argument(s) that need values",
+                style=Colors.Ansi.text_muted,
+            ),
+            title="🔧 Build Arguments",
+            border_style=Colors.Ansi.info,
+        )
+        self.console.print(card)
+
+        # Determine import method
+        env_file_path: Path | None = None
+        if build_arg_source:
+            # Source provided via CLI flag
+            if build_arg_source.lower() == "shell":
+                import_method = ImportMethod.SHELL
+            else:
+                # Treat as file path
+                import_method = ImportMethod.FILE
+                env_file_path = Path(build_arg_source)
+                if not env_file_path.is_absolute():
+                    env_file_path = Path.cwd() / env_file_path
+        elif skip_prompts:
+            import_method = ImportMethod.SHELL
+        else:
+            self.console.print()
+            choice = Prompt.ask(
+                Text("Import from", style=Colors.Ansi.text_muted),
+                choices=["file", "shell", "manual"],
+                default="shell",
+            )
+            import_method = ImportMethod(choice) if choice != "manual" else "manual"
+
+        # Build a flat dict of all args that need values for easier loading
+        args_dict: dict[str, BuildArg] = {}
+        for service in build_args.services:
+            for arg in service.args:
+                if arg.value is None:
+                    args_dict[arg.key] = arg
+
+        loaded_keys: set[str] = set()
+
+        if import_method == ImportMethod.SHELL:
+            self.console.print()
+            # Load from shell environment
+            for key in args_dict:
+                env_value = os.environ.get(key)
+                if env_value:
+                    args_dict[key] = BuildArg(key=key, value=env_value)
+                    loaded_keys.add(key)
+
+            if loaded_keys:
+                self.show_info(
+                    f"Loaded {len(loaded_keys)} of {len(args_dict)} build args from shell environment",
+                    title="Import Successful",
+                )
+            else:
+                self.show_warning("No matching build args found in shell environment")
+
+        elif import_method == ImportMethod.FILE:
+            # Load from .env file
+            if env_file_path:
+                # File path provided via --build-arg flag
+                file_path = env_file_path
+            else:
+                # Prompt for file path
+                env_file = find_env_file(project_dir) if project_dir else None
+
+                if env_file:
+                    try:
+                        relative_path = env_file.relative_to(Path.cwd())
+                        default_path = str(relative_path)
+                    except ValueError:
+                        default_path = env_file.name
+                else:
+                    default_path = ".env"
+
+                self.console.print()
+                file_path_str = Prompt.ask(
+                    Text("Path to .env file", style=Colors.Ansi.text_muted),
+                    default=default_path,
+                )
+                self.console.print()
+
+                file_path = Path(file_path_str)
+                if not file_path.is_absolute():
+                    file_path = Path.cwd() / file_path
+
+            if file_path.exists():
+                # Parse the env file
+                with open(file_path) as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line or line.startswith("#"):
+                            continue
+                        if "=" in line:
+                            key, value = line.split("=", 1)
+                            key = key.strip()
+                            value = value.strip().strip('"').strip("'")
+                            if key in args_dict:
+                                args_dict[key] = BuildArg(key=key, value=value)
+                                loaded_keys.add(key)
+
+                if loaded_keys:
+                    self.show_info(
+                        f"Loaded {len(loaded_keys)} of {len(args_dict)} build args from {file_path.name}",
+                        title="Import Successful",
+                    )
+                else:
+                    self.show_warning(f"No matching build args found in {file_path.name}")
+            else:
+                self.show_error(f"File not found: {file_path}")
+
+        else:
+            # Manual entry - prompt for each arg
+            self.console.print()
+            for service in build_args.services:
+                for arg in service.args:
+                    if arg.value is None:
+                        prompt_text = Text(
+                            f"[{service.service_name}] {arg.key}",
+                            style=Colors.Ansi.text_muted,
+                        )
+                        value = Prompt.ask(prompt_text, default="")
+                        if value:
+                            args_dict[arg.key] = BuildArg(key=arg.key, value=value)
+                            loaded_keys.add(arg.key)
+
+        # Check for missing args
+        missing_keys = [k for k, v in args_dict.items() if v.value is None]
+        if missing_keys:
+            self.show_warning(
+                f"Missing values for build args: {', '.join(missing_keys)}"
+            )
+
+        # Rebuild the collection with updated values
+        updated_services: list[ServiceBuildArgs] = []
+        for service in build_args.services:
+            updated_args: list[BuildArg] = []
+            for arg in service.args:
+                if arg.value is not None:
+                    updated_args.append(arg)
+                elif arg.key in args_dict:
+                    updated_args.append(args_dict[arg.key])
+                else:
+                    updated_args.append(arg)
+            updated_services.append(
+                ServiceBuildArgs(service_name=service.service_name, args=updated_args)
+            )
+
+        return BuildArgsCollection(services=updated_services)
 
 
 class BuildProgress:

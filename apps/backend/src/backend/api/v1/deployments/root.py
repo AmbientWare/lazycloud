@@ -1,5 +1,6 @@
 import uuid
 
+import yaml
 from api_requests.deployments import (
     DeploymentCreateRequest,
     DeploymentRunRequest,
@@ -37,8 +38,10 @@ from backend.tasks.client import (
     run_destroy_compose,
     run_rollback_compose,
 )
+from backend.services.compose.parser import ComposeParser
 from backend.services.compose.validation import validate_deployment_request
 from backend.services.k8s import create_ns_name, create_release_name
+from backend.services.k8s.generators.networking import compute_service_endpoints
 from backend.services.k8s.helm_manager import HelmManager
 from backend.services.k8s.status_watcher import StatusWatcher
 
@@ -286,6 +289,17 @@ async def create_deployment(
     if not deployment:
         raise HTTPException(status_code=500, detail="Deployment not found")
 
+    # Compute service endpoints from the compose yaml
+    endpoints = None
+    compose_yaml_to_parse = request.compose_yaml or deployment.compose_yaml
+    if compose_yaml_to_parse:
+        try:
+            compose_data = yaml.safe_load(compose_yaml_to_parse)
+            compose_file = ComposeParser.parse_dict(compose_data)
+            endpoints = compute_service_endpoints(compose_file, deployment.id)
+        except Exception as e:
+            logger.warning(f"Failed to compute endpoints: {e}")
+
     return DeploymentResponse(
         id=deployment.id,
         workspace_id=deployment.workspace_id,
@@ -296,6 +310,7 @@ async def create_deployment(
         deployed_at=deployment.deployed_at,
         created_at=deployment.created_at,
         updated_at=deployment.updated_at,
+        endpoints=endpoints,
     )
 
 

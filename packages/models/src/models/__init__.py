@@ -2,6 +2,11 @@ from models.billing import (
     UsageCollectionConfig,
     UsageCollectionInterval,
 )
+from models.build_args import (
+    BuildArg,
+    BuildArgsCollection,
+    ServiceBuildArgs,
+)
 from models.deployments import (
     DeploymentInfo,
     DeploymentResult,
@@ -30,6 +35,9 @@ from models.monitoring import (
 )
 
 __all__ = [
+    "BuildArg",
+    "BuildArgsCollection",
+    "ServiceBuildArgs",
     "DeploymentInfo",
     "DeploymentResult",
     "DeploymentStates",

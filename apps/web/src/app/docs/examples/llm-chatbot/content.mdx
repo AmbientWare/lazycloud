@@ -51,6 +51,24 @@ Environment variables defined in your compose file are detected during `lazyclou
 
 Services can reference each other by name—`redis://redis:6379` resolves to the Redis container automatically.
 
+### Build arguments
+
+```yaml
+frontend:
+  build:
+    context: ./frontend
+    args:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+```
+
+Build arguments are for values needed at build time. The Next.js frontend uses `NEXT_PUBLIC_API_URL` to know where to send API requests—this gets embedded into the JavaScript bundle during build.
+
+During deployment, LazyCloud shows you the public URL for each service. Use the API's public URL (like `https://api-abc12.lazycloud.dev`) when prompted for `NEXT_PUBLIC_API_URL`.
+
+<Tip>
+For server-side code, you don't need build args—LazyCloud automatically injects `INTERNAL_API_URL` and `PUBLIC_API_URL` at runtime.
+</Tip>
+
 ### Resource limits
 
 ```yaml

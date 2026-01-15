@@ -7,13 +7,14 @@ import hashlib
 import random
 
 import petname
-from models.compose import ComposePort, ComposeService
+from models.compose import ComposeFile, ComposePort, ComposeService
 from models.helm import (
     IngressTLS,
     IngressValues,
     ParsedPort,
     PortConfig,
 )
+from responses.deployments import ServiceEndpoints
 
 from backend.config import app_config
 
@@ -202,3 +203,47 @@ def generate_petname(service_name: str) -> str:
 
     except (ImportError, AttributeError):
         return f"app-{service_name[:8]}"
+
+
+def compute_service_endpoints(
+    compose_file: ComposeFile, deployment_id: str | None
+) -> dict[str, ServiceEndpoints]:
+    """Compute internal and public endpoints for all services.
+
+    Args:
+        compose_file: Parsed compose file with services
+        deployment_id: Deployment ID (used for public URL generation)
+
+    Returns:
+        Dictionary mapping service names to their endpoints
+    """
+    endpoints: dict[str, ServiceEndpoints] = {}
+
+    for service in compose_file.services:
+        # Compute internal URL (Kubernetes DNS)
+        # Use the first port's target (container port) or default to 80
+        internal_port = 80
+        if service.ports:
+            first_port = service.ports[0]
+            internal_port = int(first_port.target)
+
+        internal_url = f"http://{service.name}:{internal_port}"
+
+        # Compute public URL (only if service has ports exposed)
+        public_url = None
+        if service.ports:
+            if service.domain:
+                # Custom domain
+                public_url = f"https://{service.domain}"
+            else:
+                # Auto-generated hostname
+                short_id = deployment_id[:5] if deployment_id else "xxxxx"
+                hostname = f"{service.name}-{short_id}.{app_config.BASE_DOMAIN}"
+                public_url = f"https://{hostname}"
+
+        endpoints[service.name] = ServiceEndpoints(
+            internal=internal_url,
+            public=public_url,
+        )
+
+    return endpoints

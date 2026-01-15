@@ -13,6 +13,7 @@ from pathlib import Path
 import typer
 import yaml
 from api_requests.deployments import DiffType
+from models.build_args import BuildArg, BuildArgsCollection, ServiceBuildArgs
 from models.diffs import ComposeDiff, EnvVarChanges, ResourceSection
 from models.monitoring import DeployOverallPhase
 from models.secrets import Secret, SecretCollection, SecretSource
@@ -118,6 +119,11 @@ def deploy(
         None,
         "--env",
         help="Source for environment variables: path to .env file or 'shell'",
+    ),
+    build_arg: str = typer.Option(
+        None,
+        "--build-arg",
+        help="Source for build arguments: path to .env file or 'shell'",
     ),
 ):
     """Deploy or update a Docker Compose application."""
@@ -378,12 +384,30 @@ def deploy(
             user_target_services=target_services if target_services else None,
         )
 
+        # Extract and collect build args for services that need building
+        build_args = None
+        if services_to_build:
+            # Extract user-defined build args from compose
+            build_args = _extract_build_args(
+                compose_data, env_files_content, services_to_build
+            )
+
+            # Collect any missing build arg values from user
+            if build_args.has_args_to_collect():
+                build_args = view.collect_build_args(
+                    build_args,
+                    project_dir=compose_file_path.parent,
+                    build_arg_source=build_arg,
+                    skip_prompts=yes or bool(build_arg),
+                )
+
         compose_yaml, build_duration = _handle_builds(
             compose_data,
             compose_file_path,
             deployment_name,
             yes,
             target_services=services_to_build if services_to_build else None,
+            build_args=build_args,
         )
 
         # Deploy (updates compose_yaml and triggers deployment in one call)
@@ -1082,6 +1106,129 @@ def _extract_env_variables_for_service(
     return env_vars
 
 
+def _extract_build_args(
+    compose_data: dict,
+    env_files_content: dict,
+    services_to_build: list[str] | None = None,
+) -> BuildArgsCollection:
+    """Extract build arguments from compose services.
+
+    Args:
+        compose_data: Parsed compose.yaml data
+        env_files_content: Contents of env files
+        services_to_build: Optional list of services to extract args for
+
+    Returns:
+        BuildArgsCollection with args for each service
+    """
+    service_build_args: list[ServiceBuildArgs] = []
+
+    for service_name, service_config in compose_data.get("services", {}).items():
+        # Skip if not in the list of services to build
+        if services_to_build and service_name not in services_to_build:
+            continue
+
+        build_config = service_config.get("build")
+        if not build_config:
+            continue
+
+        # Extract args from build config
+        args_config = {}
+        if isinstance(build_config, dict):
+            args_config = build_config.get("args", {})
+        elif isinstance(build_config, str):
+            # Simple string format (just context path), no args
+            continue
+
+        if not args_config:
+            continue
+
+        # Parse args - can be dict or list
+        args: list[BuildArg] = []
+        if isinstance(args_config, dict):
+            for key, value in args_config.items():
+                # Check if value needs to be resolved
+                resolved_value = _resolve_build_arg_value(
+                    value, env_files_content, compose_data
+                )
+                args.append(BuildArg(key=key, value=resolved_value))
+        elif isinstance(args_config, list):
+            for item in args_config:
+                if isinstance(item, str):
+                    if "=" in item:
+                        key, value = item.split("=", 1)
+                        resolved_value = _resolve_build_arg_value(
+                            value, env_files_content, compose_data
+                        )
+                        args.append(BuildArg(key=key, value=resolved_value))
+                    else:
+                        # Just a key, needs value from user
+                        args.append(BuildArg(key=item, value=None))
+
+        if args:
+            service_build_args.append(
+                ServiceBuildArgs(service_name=service_name, args=args)
+            )
+
+    return BuildArgsCollection(services=service_build_args)
+
+
+def _resolve_build_arg_value(
+    value: str | None,
+    env_files_content: dict,
+    compose_data: dict,
+) -> str | None:
+    """Resolve a build arg value, handling variable substitution.
+
+    Returns None if the value needs to be collected from user.
+    """
+    if value is None:
+        return None
+
+    if not isinstance(value, str):
+        return str(value)
+
+    # Check for variable substitution patterns
+    if value.startswith("${") and value.endswith("}"):
+        # Extract variable name (handle default values like ${VAR:-default})
+        var_content = value[2:-1]
+        var_name = var_content.split(":-")[0].split(":+")[0].split("-")[0]
+
+        # Try to resolve from environment
+        env_value = os.environ.get(var_name)
+        if env_value:
+            return env_value
+
+        # Try to resolve from env files
+        for _, content in env_files_content.items():
+            for line in content.splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    key, val = line.split("=", 1)
+                    if key.strip() == var_name:
+                        return val.strip().strip('"').strip("'")
+
+        # If has default value, use it
+        if ":-" in var_content:
+            return var_content.split(":-", 1)[1]
+
+        # Could not resolve, needs user input
+        return None
+
+    elif value.startswith("$"):
+        # Simple variable reference
+        var_name = value[1:]
+        env_value = os.environ.get(var_name)
+        if env_value:
+            return env_value
+        return None
+
+    # Literal value
+    return value
+
+
 def _is_depot_available() -> bool:
     """Check if Depot CLI is installed and available."""
     return shutil.which("depot") is not None
@@ -1104,6 +1251,7 @@ def _run_depot_build(
     compose_file_path: Path,
     build_state: dict,
     build_state_lock: threading.Lock,
+    service_build_args: dict[str, str] | None = None,
     max_retries: int = 3,
 ) -> tuple[bool, str]:
     """Run a single depot build with retry logic. Returns (success, error_message)."""
@@ -1130,6 +1278,12 @@ def _run_depot_build(
         "--save-tag",  # custom tag for the saved image
         tag_name,
     ]
+
+    # Add build args if provided
+    if service_build_args:
+        for key, value in service_build_args.items():
+            if value is not None:
+                depot_cmd.extend(["--build-arg", f"{key}={value}"])
 
     depot_cmd.extend(
         [
@@ -1302,6 +1456,7 @@ def _handle_builds_with_depot(
     deployment_name: str,
     services_to_build: list[dict],
     depot_token: DepotTokenResponse,
+    build_args: BuildArgsCollection | None = None,
 ) -> str:
     """Handle builds using Depot remote builder with parallel execution."""
     view = DeployView(console)
@@ -1431,6 +1586,9 @@ def _handle_builds_with_depot(
                 compose_file_path,
                 build_state,
                 build_state_lock,
+                build_args.get_args_for_service(build_info["service_name"])
+                if build_args
+                else None,
             ): (i, build_info)
             for i, build_info in builds_needed
         }
@@ -1540,6 +1698,7 @@ def _handle_builds(
     deployment_name: str,
     yes: bool = False,
     target_services: list[str] | None = None,
+    build_args: BuildArgsCollection | None = None,
 ) -> tuple[str, int | None]:
     """Handle building and pushing images if needed, optionally for only target services."""
     services_to_build = []
@@ -1608,6 +1767,7 @@ def _handle_builds(
         deployment_name=deployment_name,
         services_to_build=services_to_build,
         depot_token=depot_token,
+        build_args=build_args,
     )
 
 
