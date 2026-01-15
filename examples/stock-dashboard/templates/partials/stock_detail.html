@@ -153,8 +153,8 @@
 </article>
 
 <script>
-    // Initialize chart with proper cleanup
-    (function initChart() {
+    // Initialize chart after DOM is settled
+    function initStockChart() {
         const canvas = document.getElementById('priceChart');
         if (!canvas) return;
 
@@ -303,7 +303,21 @@
 
         // Force resize after creation to ensure proper dimensions
         window.stockChart.resize();
-    })();
+    }
+
+    // Use requestAnimationFrame to ensure DOM is ready, then initialize
+    // This handles both direct page load and HTMX content swaps
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', function() {
+            requestAnimationFrame(initStockChart);
+        });
+    } else {
+        // DOM is already ready (HTMX swap case), wait for next frame
+        requestAnimationFrame(function() {
+            // Double RAF ensures layout is complete
+            requestAnimationFrame(initStockChart);
+        });
+    }
 </script>
 
 <style>
