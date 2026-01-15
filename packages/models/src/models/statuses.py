@@ -216,6 +216,13 @@ class ServiceStatusSummary(BaseModel):
     domain_status: str | None = None  # "pending_validation" | "active" | None
     cname_target: str | None = None  # Target for CNAME record when pending
 
+    # Detailed fields for service details view
+    resources: Resources | None = None
+    current_usage: CurrentUsage | None = None
+    healthcheck: HealthCheckValues | None = None
+    hpa: HPAValues | None = None
+    pods: list["PodStatus"] | None = None
+
 
 class DeploymentStatus(BaseModel):
     """Status information for a deployment - optimized for UI display."""

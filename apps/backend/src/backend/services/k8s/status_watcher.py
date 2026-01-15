@@ -21,12 +21,11 @@ from models.statuses import (
     JOB_CONDITION_COMPLETE,
     JOB_CONDITION_FAILED,
     DeploymentStatus,
-    StatusPhase,
-    StatusPhase,
     NetworkStatusSummary,
     PodStatus,
     ServiceStatus,
     ServiceStatusSummary,
+    StatusPhase,
     StorageType,
     VolumeStatusSummary,
 )
@@ -64,9 +63,7 @@ class StatusWatcher:
             return False
         return not hostname.endswith(f".{app_config.BASE_DOMAIN}")
 
-    async def _get_domain_status(
-        self, hostname: str
-    ) -> tuple[str | None, str | None]:
+    async def _get_domain_status(self, hostname: str) -> tuple[str | None, str | None]:
         """Get domain status from Cloudflare for a custom domain.
 
         Returns:
@@ -89,9 +86,7 @@ class StatusWatcher:
             ssl_status = result.get("ssl", {}).get("status")
 
             # Only show CNAME target if domain is not active
-            cname_target = (
-                app_config.BASE_DOMAIN if ssl_status != "active" else None
-            )
+            cname_target = app_config.BASE_DOMAIN if ssl_status != "active" else None
             return ssl_status, cname_target
 
         except asyncio.TimeoutError:
@@ -204,6 +199,11 @@ class StatusWatcher:
                     custom_domain=service.custom_domain,
                     domain_status=service.domain_status,
                     cname_target=service.cname_target,
+                    resources=service.resources,
+                    current_usage=service.current_usage,
+                    healthcheck=service.healthcheck,
+                    hpa=service.hpa,
+                    pods=service.pods,
                 )
             )
 
