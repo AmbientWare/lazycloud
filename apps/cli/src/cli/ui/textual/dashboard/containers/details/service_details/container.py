@@ -2,7 +2,7 @@ import asyncio
 
 from loguru import logger
 from models.helm import HealthCheckValues, HPAValues
-from models.k8s import WorkloadType
+from models.k8s import ProbeConfig, WorkloadType
 from models.statuses import ServiceStatus, StatusPhase
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
@@ -178,7 +178,7 @@ class ServiceDetailsContainer(Widget):
                 else f"https://{service.endpoint}"
             )
             content.append(
-                f'Endpoint:     [link="{endpoint_url}"][cyan]{service.endpoint}[/cyan][/link]'
+                f'Endpoint:     [link="{endpoint_url}"][cyan]{endpoint_url}[/cyan][/link] [dim](c to copy)[/dim]'
             )
 
         # Show custom domain status if not active
@@ -241,6 +241,19 @@ class ServiceDetailsContainer(Widget):
             return ["No ports exposed"]
         return [f"{Symbols.BULLET} {port}" for port in ports]
 
+    def _get_probe_type(self, probe: ProbeConfig) -> str:
+        """Determine the probe type from configuration."""
+        if probe.http_get:
+            path = probe.http_get.path or "/"
+            port = probe.http_get.port
+            return f"HTTP ({path}:{port})"
+        elif probe.tcp_socket:
+            return f"TCP (port {probe.tcp_socket.port})"
+        elif hasattr(probe, "exec") and probe.exec:
+            return "Exec"
+        else:
+            return "Configured"
+
     def _build_health_content(self, healthcheck: HealthCheckValues) -> list[str]:
         """Build service health check section content."""
         if not healthcheck or not healthcheck.enabled:
@@ -248,18 +261,12 @@ class ServiceDetailsContainer(Widget):
 
         content = []
         if healthcheck.livenessProbe:
-            probe = healthcheck.livenessProbe
-            probe_type = (
-                "HTTP" if probe.http_get else "TCP" if probe.tcp_socket else "Exec"
-            )
-            content.append(f"Liveness:  {probe_type} check")
+            probe_type = self._get_probe_type(healthcheck.livenessProbe)
+            content.append(f"Liveness:  {probe_type}")
 
         if healthcheck.readinessProbe:
-            probe = healthcheck.readinessProbe
-            probe_type = (
-                "HTTP" if probe.http_get else "TCP" if probe.tcp_socket else "Exec"
-            )
-            content.append(f"Readiness: {probe_type} check")
+            probe_type = self._get_probe_type(healthcheck.readinessProbe)
+            content.append(f"Readiness: {probe_type}")
 
         return content if content else ["Not configured"]
 
@@ -333,7 +340,7 @@ class ServiceDetailsContainer(Widget):
                 break
 
             except Exception as e:
-                logger.error(
+                logger.warning(
                     f"SSE connection failed for {self.service_name} "
                     f"(attempt {attempt + 1}/{max_reconnect_attempts}): {e}"
                 )

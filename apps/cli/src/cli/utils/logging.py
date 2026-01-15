@@ -1,5 +1,4 @@
 import os
-import sys
 
 from dotenv import load_dotenv
 from loguru import logger
@@ -25,10 +24,10 @@ def configure_logging() -> None:
 
     enable_debug = os.environ.get("LAZYCLOUD_DEBUG", "").lower() in ("1", "true")
 
-    if enable_debug:
-        # Remove default stderr handler to avoid cluttering the terminal
-        logger.remove()
+    # Remove default stderr handler to avoid cluttering the terminal (especially TUI)
+    logger.remove()
 
+    if enable_debug:
         # Add file handler, clearing previous content
         logger.add(
             LOG_FILE,
@@ -39,10 +38,7 @@ def configure_logging() -> None:
         )
 
         logger.info("Debug logging enabled - writing to /tmp/lazycloud-cli.log")
-    else:
-        # Disable all logging by default (loguru logs to stderr otherwise)
-        logger.remove()
-        logger.add(sys.stderr, level="ERROR")
+    # else: No logging output - avoids corrupting TUI display with stderr output
 
 
 def watch_logs() -> None:

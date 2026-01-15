@@ -40,6 +40,7 @@ class DashboardApp(App):
         ("ctrl+c", "quit", "Quit"),
         ("escape", "quit", "Quit"),
         ("r", "restart_service", "Restart Service"),
+        ("c", "copy_endpoint", "Copy Endpoint"),
         ("1", "switch_to_deployments", "Deployments"),
         ("2", "switch_to_services", "Services"),
         ("3", "switch_to_secrets", "Secrets"),
@@ -125,6 +126,27 @@ class DashboardApp(App):
         focusable_widget = content_container.get_focusable_widget()
         if focusable_widget:
             self.set_focus(focusable_widget)
+
+    def action_copy_endpoint(self) -> None:
+        """Copy the service endpoint URL to clipboard when service details are displayed."""
+        content_container = self.query_one(ContentContainer)
+
+        # Only works when viewing service details
+        if content_container.display_mode != DisplayMode.SERVICE:
+            return
+
+        # Get endpoint from the service status
+        if content_container.service and content_container.service.endpoint:
+            endpoint = content_container.service.endpoint
+            endpoint_url = (
+                endpoint
+                if endpoint.startswith(("http://", "https://"))
+                else f"https://{endpoint}"
+            )
+            self.copy_to_clipboard(endpoint_url)
+            self.notify(f"Copied: {endpoint_url}", timeout=2)
+        else:
+            self.notify("No endpoint URL available", severity="warning", timeout=2)
 
     def on_deployments_loaded(self, message: DeploymentsLoaded) -> None:
         """Handle deployments loaded - update content container."""

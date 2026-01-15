@@ -19,7 +19,7 @@ class Icons(StrEnum):
     SAVE = "💾"
     NETWORKS = "🌐"
     RESTART = "🔄"
-    HEALTH = "❤️"
+    HEALTH = "❤️ "  # space for formatting
     WARNING = "⚠️"
     CHECKMARK = "✔️"
     TRASH = "🗑️ "  # space for formatting

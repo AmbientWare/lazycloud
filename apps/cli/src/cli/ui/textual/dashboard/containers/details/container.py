@@ -106,10 +106,13 @@ class ContentContainer(Container):
             # Keep loading state
             pass
 
-    async def watch_service(self, _old_value, new_value) -> None:
-        """Auto-refresh when service changes"""
+    async def watch_service(self, old_value, new_value) -> None:
+        """Auto-refresh when a different service is selected (not on status updates)"""
         if new_value and self.display_mode == DisplayMode.SERVICE:
-            await self.refresh_service_content()
+            # Only refresh if selecting a different service, not on status updates
+            old_name = old_value.name if old_value else None
+            if new_value.name != old_name:
+                await self.refresh_service_content()
 
     async def watch_secret_key(self, _old_value, new_value) -> None:
         """Auto-refresh when secret key changes"""

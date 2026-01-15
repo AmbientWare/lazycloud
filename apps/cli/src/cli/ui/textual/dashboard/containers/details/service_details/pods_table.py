@@ -32,10 +32,12 @@ class PodTable(DataTable):
         self.can_focus = True
         self.cursor_type = "row"
         self.show_cursor = True
-        self._pods = []
+        self._pods: list[PodStatus] = []
+        self._pod_keys: set[str] = set()  # Track current pod keys for delta updates
         self.border_title = f"{Icons.COMPUTER} [5] Instances"
 
-        self.add_columns(
+        self._column_keys: list = []
+        self._column_keys = self.add_columns(
             "Instance Name",
             "Status",
             "Ready",
@@ -123,55 +125,69 @@ class PodTable(DataTable):
         if event.row_key:
             self.selected_pod_name = event.row_key.value
 
-    def update_pods(self, pods: list[PodStatus]) -> None:
-        """Update the table with new pod data."""
-        self.clear()
-        self._pods = pods
-
-        for pod in pods:
-            status_color = get_status_color(pod.phase)
-            # Include error reason in status if available
-            if pod.reason and pod.phase.value in ["Error", "Pending"]:
-                status_text = (
-                    f"[{status_color}]{pod.phase.value}: {pod.reason}[/{status_color}]"
-                )
-            else:
-                status_text = f"[{status_color}]{pod.phase.value}[/{status_color}]"
-
-            ready = f"{pod.ready_containers}/{pod.total_containers}"
-
-            # Format CPU and memory using Docker Compose style
-            if pod.cpu_usage and pod.cpu_usage != "N/A":
-                cpu = f"{format_cpu(pod.cpu_usage)} cores"
-            else:
-                cpu = "N/A"
-
-            if pod.memory_usage and pod.memory_usage != "N/A":
-                memory = format_memory(pod.memory_usage)
-            else:
-                memory = "N/A"
-
-            restarts = str(pod.restart_count) if pod.restart_count > 0 else "0"
-            age = pod.age or "Unknown"
-
-            display_name = pod.name
-            if len(display_name) > 30:
-                display_name = display_name[:27] + "..."
-
-            self.add_row(
-                display_name,
-                status_text,
-                ready,
-                cpu,
-                memory,
-                restarts,
-                age,
-                key=pod.name,
+    def _build_row_data(
+        self, pod: PodStatus
+    ) -> tuple[str, str, str, str, str, str, str]:
+        """Build the display values for a pod row."""
+        status_color = get_status_color(pod.phase)
+        # Include error reason in status if available
+        if pod.reason and pod.phase.value in ["Error", "Pending"]:
+            status_text = (
+                f"[{status_color}]{pod.phase.value}: {pod.reason}[/{status_color}]"
             )
+        else:
+            status_text = f"[{status_color}]{pod.phase.value}[/{status_color}]"
 
-        # Restore cursor position if user has interacted
-        if self.user_has_interacted and self.cursor_coordinate:
+        ready = f"{pod.ready_containers}/{pod.total_containers}"
+
+        # Format CPU and memory using Docker Compose style
+        if pod.cpu_usage and pod.cpu_usage != "N/A":
+            cpu = f"{format_cpu(pod.cpu_usage)} cores"
+        else:
+            cpu = "N/A"
+
+        if pod.memory_usage and pod.memory_usage != "N/A":
+            memory = format_memory(pod.memory_usage)
+        else:
+            memory = "N/A"
+
+        restarts = str(pod.restart_count) if pod.restart_count > 0 else "0"
+        age = pod.age or "Unknown"
+
+        display_name = pod.name
+        if len(display_name) > 30:
+            display_name = display_name[:27] + "..."
+
+        return (display_name, status_text, ready, cpu, memory, restarts, age)
+
+    def update_pods(self, pods: list[PodStatus]) -> None:
+        """Update the table with new pod data using delta updates to prevent flicker."""
+        self._pods = pods
+        new_pod_keys = {pod.name for pod in pods}
+
+        # Remove pods that no longer exist
+        pods_to_remove = self._pod_keys - new_pod_keys
+        for pod_key in pods_to_remove:
             try:
-                self.move_cursor(self.cursor_coordinate)
+                self.remove_row(pod_key)
             except Exception:
                 pass
+
+        # Update existing pods and add new ones
+        for pod in pods:
+            new_values = self._build_row_data(pod)
+
+            if pod.name in self._pod_keys:
+                # Update existing row - only update cells that changed
+                for col_key, new_value in zip(self._column_keys, new_values):
+                    try:
+                        current_value = self.get_cell(pod.name, col_key)
+                        if current_value != new_value:
+                            self.update_cell(pod.name, col_key, new_value)
+                    except Exception:
+                        pass
+            else:
+                # Add new row
+                self.add_row(*new_values, key=pod.name)
+
+        self._pod_keys = new_pod_keys
