@@ -157,8 +157,12 @@ export function WorkspaceUsageCard({
     );
   }, [allInactiveDeployments, showZeroCostInactive]);
 
-  // Count of hidden zero-cost deployments
-  const hiddenZeroCostCount = allInactiveDeployments.length - inactiveDeployments.length;
+  // Count of zero-cost inactive deployments (for toggle button)
+  const zeroCostCount = useMemo(() => {
+    return allInactiveDeployments.filter(
+      (d) => !d.usage.costs || d.usage.costs.total_cost === 0
+    ).length;
+  }, [allInactiveDeployments]);
 
   // Helper to render a deployment accordion item
   const renderDeploymentAccordionItem = (deployment: DeploymentUsageOverview) => {
@@ -514,15 +518,15 @@ export function WorkspaceUsageCard({
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-semibold text-amber-600 dark:text-amber-500">Inactive</span>
                     <span className="text-muted-foreground bg-muted rounded px-1.5 py-0.5 text-xs">
-                      ({inactiveDeployments.length}{hiddenZeroCostCount > 0 && !showZeroCostInactive ? `/${allInactiveDeployments.length}` : ""})
+                      ({inactiveDeployments.length}{zeroCostCount > 0 && !showZeroCostInactive ? `/${allInactiveDeployments.length}` : ""})
                     </span>
                   </div>
-                  {hiddenZeroCostCount > 0 && (
+                  {zeroCostCount > 0 && (
                     <button
                       onClick={() => setShowZeroCostInactive(!showZeroCostInactive)}
                       className="text-xs text-muted-foreground hover:text-foreground transition-colors"
                     >
-                      {showZeroCostInactive ? "Hide" : "Show"} $0 ({hiddenZeroCostCount})
+                      {showZeroCostInactive ? "Hide" : "Show"} $0 ({zeroCostCount})
                     </button>
                   )}
                 </div>

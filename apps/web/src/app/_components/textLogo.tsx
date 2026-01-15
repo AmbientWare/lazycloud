@@ -14,6 +14,7 @@ export default function TextLogo() {
   const isLandingRoute = LANDING_ROUTES.some(
     (route) => pathname === route || pathname.startsWith(route + "/"),
   );
+  const isDocsRoute = pathname === "/docs" || pathname.startsWith("/docs/");
   const isSubscribeRoute = SUBSCRIBE_ROUTES.includes(pathname);
 
   return (
@@ -23,7 +24,7 @@ export default function TextLogo() {
     >
       <Link
         className="text-2xl font-bold hover:cursor-pointer"
-        href={isLandingRoute || isSubscribeRoute ? "/" : USER_HOME}
+        href={(isLandingRoute && !isDocsRoute) || isSubscribeRoute ? "/" : USER_HOME}
       >
         <motion.div
           className="flex items-center gap-2"

@@ -8,6 +8,7 @@ import { StyledCard, StyledCardContent } from "@/components/shared/styled-card";
 import { type PolarProduct } from "@/actions/products";
 import { cn } from "@/lib/utils";
 import { createCheckoutUrl } from "@/actions/checkout";
+import { getCustomerPortalUrl } from "@/actions/customer-portal";
 import { sendEnterpriseInquiry } from "@/actions/email";
 import { useTransition } from "react";
 import { toast } from "sonner";
@@ -56,6 +57,26 @@ export function ProductCard({ product, isEnterprise }: { product: PolarProduct; 
     }
 
     startTransition(async () => {
+      // For paid subscriptions, redirect to customer portal
+      if (!isFree) {
+        const toastId = toast.loading("Redirecting to customer portal...");
+        try {
+          const result = await getCustomerPortalUrl();
+
+          if (!result?.url) {
+            throw new Error("No portal URL returned");
+          }
+
+          toast.success("Redirecting...", { id: toastId });
+          window.location.replace(result.url);
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          toast.error(errorMessage || "Failed to access customer portal", { id: toastId });
+        }
+        return;
+      }
+
+      // For free tier, create checkout
       const toastId = toast.loading("Creating checkout session...");
       try {
         const result = await createCheckoutUrl(product.id);
