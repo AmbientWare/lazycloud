@@ -12,12 +12,12 @@ class ResourcesTable(DataTable):
         self.can_focus = False
         self.show_cursor = False
         self.zebra_stripes = True
-        self.add_columns("Resource", "Requests", "Limits")
+        self._column_keys: list = []
+        self._column_keys = self.add_columns("Resource", "Requests", "Limits")
+        self._initialized = False
 
     def update_resources(self, resources: Resources) -> None:
-        """Update the table with resource data."""
-        self.clear()
-
+        """Update the table with resource data using delta updates to prevent flicker."""
         limits = resources.limits
         requests = resources.requests
 
@@ -26,11 +26,27 @@ class ResourcesTable(DataTable):
             f"{format_cpu(requests.cpu)} cores" if requests and requests.cpu else "-"
         )
         cpu_limit = f"{format_cpu(limits.cpu)} cores" if limits and limits.cpu else "-"
-        self.add_row("CPU", cpu_request, cpu_limit, key="cpu")
+        cpu_values = ("CPU", cpu_request, cpu_limit)
 
         # Memory row - format with human-readable units
         mem_request = (
             format_memory(requests.memory) if requests and requests.memory else "-"
         )
         mem_limit = format_memory(limits.memory) if limits and limits.memory else "-"
-        self.add_row("Memory", mem_request, mem_limit, key="memory")
+        mem_values = ("Memory", mem_request, mem_limit)
+
+        if not self._initialized:
+            # First time - add rows
+            self.add_row(*cpu_values, key="cpu")
+            self.add_row(*mem_values, key="memory")
+            self._initialized = True
+        else:
+            # Update existing rows - only update cells that changed
+            for row_key, new_values in [("cpu", cpu_values), ("memory", mem_values)]:
+                for col_key, new_value in zip(self._column_keys, new_values):
+                    try:
+                        current_value = self.get_cell(row_key, col_key)
+                        if current_value != new_value:
+                            self.update_cell(row_key, col_key, new_value)
+                    except Exception:
+                        pass

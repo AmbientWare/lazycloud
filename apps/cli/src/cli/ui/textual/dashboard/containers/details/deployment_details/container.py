@@ -185,7 +185,7 @@ class DeploymentDetailsContainer(Widget):
                 break
 
             except Exception as e:
-                logger.error(
+                logger.warning(
                     f"SSE connection failed for deployment {self.deployment_id} "
                     f"(attempt {attempt + 1}/{max_reconnect_attempts}): {e}"
                 )

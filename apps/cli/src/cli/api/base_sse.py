@@ -6,6 +6,7 @@ import httpx
 from httpx_sse import aconnect_sse
 from loguru import logger
 
+from cli.api.token_refresh import attempt_token_refresh
 from cli.config import config
 
 
@@ -15,6 +16,7 @@ class SSEClient:
     def __init__(self):
         self._client: httpx.AsyncClient | None = None
         self._running = False
+        self._token_refreshed = False
 
     async def stream(
         self,
@@ -34,12 +36,25 @@ class SSEClient:
         """
         url = f"{config.api_base_url}/{config.api_version}{path}"
         logger.debug(f"SSEClient.stream called for {url}")
+        self._token_refreshed = False
 
         for attempt in range(max_retries):
             try:
                 await self._stream(url, on_event, on_error)
                 break  # Successful connection ended normally
             except Exception as e:
+                error_str = str(e)
+                is_auth_error = "401" in error_str or "application/json" in error_str
+
+                # On auth error, attempt token refresh before retrying
+                if is_auth_error and not self._token_refreshed:
+                    logger.debug("SSE got auth error, attempting token refresh")
+                    if attempt_token_refresh():
+                        logger.debug("Token refreshed successfully, retrying SSE")
+                        self._token_refreshed = True
+                        await asyncio.sleep(0.5)  # Brief pause before retry
+                        continue
+
                 if attempt + 1 >= max_retries:
                     if on_error:
                         on_error(Exception(f"Failed after {max_retries} retries: {e}"))
@@ -108,7 +123,7 @@ class SSEClient:
                                 on_error(Exception(f"Invalid JSON in SSE data: {e}"))
 
         except Exception as e:
-            logger.error(f"SSEClient._stream exception: {e}")
+            logger.debug(f"SSEClient._stream exception: {e}")
             if on_error:
                 on_error(e)
             raise
