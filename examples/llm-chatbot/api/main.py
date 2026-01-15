@@ -1,6 +1,7 @@
 import os
 import json
 import uuid
+import hashlib
 from datetime import datetime
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -10,7 +11,7 @@ import redis
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from openai import OpenAI
 
 
@@ -53,12 +54,18 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="LLM Chat API", lifespan=lifespan)
 
+# Get allowed origins from environment, default to common development origins
+ALLOWED_ORIGINS = os.getenv(
+    "CORS_ORIGINS",
+    "http://localhost:3000,http://127.0.0.1:3000,http://frontend:3000"
+).split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -68,11 +75,36 @@ class Message(BaseModel):
     role: str
     content: str
 
+    @field_validator("role")
+    @classmethod
+    def validate_role(cls, v: str) -> str:
+        if v not in ("user", "assistant", "system"):
+            raise ValueError("role must be 'user', 'assistant', or 'system'")
+        return v
+
+    @field_validator("content")
+    @classmethod
+    def validate_content(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("content cannot be empty")
+        if len(v) > 32000:  # Reasonable limit
+            raise ValueError("content exceeds maximum length of 32000 characters")
+        return v.strip()
+
 
 class ChatRequest(BaseModel):
     session_id: str | None = None
     messages: list[Message]
     stream: bool = False
+
+    @field_validator("messages")
+    @classmethod
+    def validate_messages(cls, v: list[Message]) -> list[Message]:
+        if not v:
+            raise ValueError("messages cannot be empty")
+        if len(v) > 100:  # Prevent excessive context
+            raise ValueError("too many messages (max 100)")
+        return v
 
 
 class ChatResponse(BaseModel):
@@ -93,7 +125,10 @@ async def chat(request: ChatRequest):
         messages = [{"role": m.role, "content": m.content} for m in request.messages]
         session_id = request.session_id or str(uuid.uuid4())
 
-        cache_key = f"chat:{session_id}:{hash(str(messages))}"
+        # Use stable hash for caching (hashlib instead of Python's hash)
+        messages_str = json.dumps(messages, sort_keys=True)
+        cache_hash = hashlib.sha256(messages_str.encode()).hexdigest()[:16]
+        cache_key = f"chat:{session_id}:{cache_hash}"
         cached = cache.get(cache_key)
         if cached and not request.stream:
             return ChatResponse(session_id=session_id, response=cached.decode())

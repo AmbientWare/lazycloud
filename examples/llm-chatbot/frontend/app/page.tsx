@@ -15,8 +15,53 @@ interface Toast {
   type: "success" | "error";
 }
 
+// Storage keys
+const SESSION_ID_KEY = "lazycloud_chat_session_id";
+const MESSAGES_KEY = "lazycloud_chat_messages";
+const THEME_KEY = "lazycloud_chat_theme";
+
 // Generate unique ID
 const generateId = () => Math.random().toString(36).substring(2, 9);
+
+// Get or create session ID
+const getSessionId = (): string => {
+  if (typeof window === "undefined") return generateId();
+  let sessionId = localStorage.getItem(SESSION_ID_KEY);
+  if (!sessionId) {
+    sessionId = generateId();
+    localStorage.setItem(SESSION_ID_KEY, sessionId);
+  }
+  return sessionId;
+};
+
+// Save messages to localStorage
+const saveMessages = (messages: Message[]) => {
+  if (typeof window === "undefined") return;
+  localStorage.setItem(
+    MESSAGES_KEY,
+    JSON.stringify(
+      messages.map((m) => ({
+        ...m,
+        timestamp: m.timestamp.toISOString(),
+      }))
+    )
+  );
+};
+
+// Load messages from localStorage
+const loadMessages = (): Message[] => {
+  if (typeof window === "undefined") return [];
+  try {
+    const stored = localStorage.getItem(MESSAGES_KEY);
+    if (!stored) return [];
+    return JSON.parse(stored).map((m: { id: string; role: "user" | "assistant"; content: string; timestamp: string }) => ({
+      ...m,
+      timestamp: new Date(m.timestamp),
+    }));
+  } catch {
+    return [];
+  }
+};
 
 // Format timestamp for display
 const formatTime = (date: Date) => {
@@ -49,7 +94,8 @@ function CopyButton({ text }: { text: string }) {
     <button
       onClick={handleCopy}
       className="copy-button absolute top-2 right-2 p-1.5 rounded-lg bg-white/80 hover:bg-white
-                 text-slate-500 hover:text-slate-700 transition-all shadow-sm"
+                 text-slate-500 hover:text-slate-700 transition-all shadow-sm
+                 sm:opacity-0 sm:group-hover:opacity-100 touch-device:opacity-100"
       aria-label={copied ? "Copied to clipboard" : "Copy message"}
     >
       {copied ? (
@@ -159,7 +205,7 @@ function MessageBubble({ message }: { message: Message }) {
     >
       <div className="flex flex-col gap-1 max-w-[85%]">
         <div
-          className={`message-bubble relative px-4 py-3 ${
+          className={`message-bubble relative px-4 py-3 group ${
             isUser ? "message-bubble-user" : "message-bubble-assistant"
           }`}
         >
@@ -184,13 +230,71 @@ export default function Chat() {
   const [isLoading, setIsLoading] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [charCount, setCharCount] = useState(0);
+  const [sessionId, setSessionId] = useState<string>("");
+  const [isDarkMode, setIsDarkMode] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const userScrolledRef = useRef(false);
 
   const MAX_CHARS = 4000;
 
-  const scrollToBottom = useCallback(() => {
+  // Load session, messages, and theme on mount
+  useEffect(() => {
+    setSessionId(getSessionId());
+    const savedMessages = loadMessages();
+    if (savedMessages.length > 0) {
+      setMessages(savedMessages);
+    }
+
+    // Load theme preference
+    const savedTheme = localStorage.getItem(THEME_KEY);
+    if (savedTheme) {
+      setIsDarkMode(savedTheme === "dark");
+    } else {
+      // Check system preference
+      setIsDarkMode(window.matchMedia("(prefers-color-scheme: dark)").matches);
+    }
+  }, []);
+
+  // Apply dark mode class to document
+  useEffect(() => {
+    if (isDarkMode) {
+      document.documentElement.classList.add("dark");
+      document.documentElement.classList.remove("light");
+    } else {
+      document.documentElement.classList.remove("dark");
+      document.documentElement.classList.add("light");
+    }
+  }, [isDarkMode]);
+
+  const toggleDarkMode = () => {
+    setIsDarkMode((prev) => {
+      const newMode = !prev;
+      localStorage.setItem(THEME_KEY, newMode ? "dark" : "light");
+      return newMode;
+    });
+  };
+
+  // Save messages when they change
+  useEffect(() => {
+    if (messages.length > 0) {
+      saveMessages(messages);
+    }
+  }, [messages]);
+
+  // Smart auto-scroll: only scroll if user is near bottom
+  const scrollToBottom = useCallback((force = false) => {
+    if (!messagesContainerRef.current || (!force && userScrolledRef.current)) return;
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, []);
+
+  // Detect if user scrolled up
+  const handleScroll = useCallback(() => {
+    if (!messagesContainerRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = messagesContainerRef.current;
+    const isNearBottom = scrollHeight - scrollTop - clientHeight < 100;
+    userScrolledRef.current = !isNearBottom;
   }, []);
 
   useEffect(() => {
@@ -241,16 +345,30 @@ export default function Chat() {
     setInput("");
     setCharCount(0);
     setIsLoading(true);
+    userScrolledRef.current = false; // Reset scroll lock when sending
+
+    // Timeout for streaming (5 minutes)
+    const STREAM_TIMEOUT = 5 * 60 * 1000;
+    let timeoutId: NodeJS.Timeout | null = null;
+    const controller = new AbortController();
 
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+      // Set up timeout
+      timeoutId = setTimeout(() => {
+        controller.abort();
+      }, STREAM_TIMEOUT);
+
       const response = await fetch(`${apiUrl}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          session_id: sessionId,
           messages: newMessages.map((m) => ({ role: m.role, content: m.content })),
           stream: true,
         }),
+        signal: controller.signal,
       });
 
       if (!response.ok) {
@@ -260,40 +378,74 @@ export default function Chat() {
       const reader = response.body?.getReader();
       if (!reader) throw new Error("No reader available");
 
-      const assistantMessage: Message = {
-        id: generateId(),
+      const assistantMessageId = generateId();
+      let accumulatedContent = "";
+
+      // Add initial empty assistant message
+      setMessages([...newMessages, {
+        id: assistantMessageId,
         role: "assistant",
         content: "",
         timestamp: new Date(),
-      };
-      setMessages([...newMessages, assistantMessage]);
+      }]);
 
       const decoder = new TextDecoder();
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
 
-        const chunk = decoder.decode(value);
-        assistantMessage.content += chunk;
-        assistantMessage.timestamp = new Date();
-        setMessages([...newMessages, { ...assistantMessage }]);
+      // Stream reading loop with error handling
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const chunk = decoder.decode(value);
+          accumulatedContent += chunk;
+
+          // Immutable state update - create new message object each time
+          setMessages([...newMessages, {
+            id: assistantMessageId,
+            role: "assistant",
+            content: accumulatedContent,
+            timestamp: new Date(),
+          }]);
+        }
+      } catch (streamError) {
+        // Handle stream interruption gracefully
+        if (accumulatedContent) {
+          // Keep partial response if we got some content
+          setMessages([...newMessages, {
+            id: assistantMessageId,
+            role: "assistant",
+            content: accumulatedContent + "\n\n[Response interrupted]",
+            timestamp: new Date(),
+          }]);
+        }
+        throw streamError;
       }
     } catch (error) {
       console.error("Error:", error);
-      addToast(
-        "Something went wrong. Please check your connection and try again.",
-        "error"
-      );
-      setMessages([
-        ...newMessages,
-        {
-          id: generateId(),
-          role: "assistant",
-          content: "Sorry, I encountered an error. Please try again.",
-          timestamp: new Date(),
-        },
-      ]);
+      const errorMessage = error instanceof Error && error.name === "AbortError"
+        ? "Request timed out. Please try again."
+        : "Something went wrong. Please check your connection and try again.";
+      addToast(errorMessage, "error");
+
+      // Only add error message if we don't already have a partial response
+      setMessages((currentMessages) => {
+        const lastMessage = currentMessages[currentMessages.length - 1];
+        if (lastMessage?.role === "assistant" && lastMessage.content) {
+          return currentMessages; // Keep partial response
+        }
+        return [
+          ...newMessages,
+          {
+            id: generateId(),
+            role: "assistant",
+            content: "Sorry, I encountered an error. Please try again.",
+            timestamp: new Date(),
+          },
+        ];
+      });
     } finally {
+      if (timeoutId) clearTimeout(timeoutId);
       setIsLoading(false);
       inputRef.current?.focus();
     }
@@ -301,12 +453,16 @@ export default function Chat() {
 
   const clearChat = () => {
     setMessages([]);
+    // Clear localStorage but keep session ID for potential history retrieval
+    if (typeof window !== "undefined") {
+      localStorage.removeItem(MESSAGES_KEY);
+    }
     addToast("Conversation cleared", "success");
     inputRef.current?.focus();
   };
 
   return (
-    <main id="main-content" className="min-h-screen flex flex-col bg-[#FAFAFA]">
+    <main id="main-content" className="min-h-screen flex flex-col bg-[var(--color-bg-primary)]">
       {/* Toast Container */}
       <div className="fixed top-4 right-4 z-50 flex flex-col gap-2 max-w-sm">
         {toasts.map((toast) => (
@@ -315,7 +471,7 @@ export default function Chat() {
       </div>
 
       {/* Header */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-40">
+      <header className="bg-[var(--color-bg-secondary)] border-b border-[var(--color-border)] sticky top-0 z-40">
         <div className="max-w-3xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl flex items-center justify-center shadow-sm">
@@ -324,18 +480,35 @@ export default function Chat() {
               </svg>
             </div>
             <div>
-              <h1 className="text-lg font-semibold text-slate-800">
-                LazyCloud <span className="text-blue-600">Chat</span>
+              <h1 className="text-lg font-semibold text-[var(--color-text-primary)]">
+                LazyCloud <span className="text-[var(--color-accent-primary)]">Chat</span>
               </h1>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
+            {/* Dark mode toggle */}
+            <button
+              onClick={toggleDarkMode}
+              className="p-2 rounded-lg text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]
+                       hover:bg-[var(--color-bg-tertiary)] transition-colors"
+              aria-label={isDarkMode ? "Switch to light mode" : "Switch to dark mode"}
+            >
+              {isDarkMode ? (
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+                </svg>
+              ) : (
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+                </svg>
+              )}
+            </button>
             {messages.length > 0 && (
               <button
                 onClick={clearChat}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-slate-600 hover:text-slate-800
-                         hover:bg-slate-100 rounded-lg transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]
+                         hover:bg-[var(--color-bg-tertiary)] rounded-lg transition-colors"
                 aria-label="Start new conversation"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -346,7 +519,7 @@ export default function Chat() {
             )}
             <a
               href="https://lazycloud.dev"
-              className="text-sm text-slate-500 hover:text-blue-600 transition-colors hidden sm:flex items-center gap-1"
+              className="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-accent-primary)] transition-colors hidden sm:flex items-center gap-1"
               target="_blank"
               rel="noopener noreferrer"
             >
@@ -361,6 +534,8 @@ export default function Chat() {
 
       {/* Messages Area */}
       <div
+        ref={messagesContainerRef}
+        onScroll={handleScroll}
         className="flex-1 overflow-y-auto"
         role="log"
         aria-live="polite"
@@ -389,7 +564,7 @@ export default function Chat() {
       </div>
 
       {/* Input Area */}
-      <div className="bg-white border-t border-slate-200 sticky bottom-0">
+      <div className="bg-[var(--color-bg-secondary)] border-t border-[var(--color-border)] sticky bottom-0">
         <form onSubmit={sendMessage} className="max-w-3xl mx-auto px-4 py-4">
           <div className="relative flex gap-3">
             <div className="flex-1 relative">
@@ -403,9 +578,9 @@ export default function Chat() {
                 onChange={handleInputChange}
                 onKeyDown={handleKeyDown}
                 placeholder="Type your message... (Enter to send, Shift+Enter for new line)"
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 pr-12
-                         text-slate-800 placeholder-slate-400 resize-none
-                         input-focus-ring focus:outline-none focus:bg-white
+                className="w-full bg-[var(--color-bg-tertiary)] border border-[var(--color-border)] rounded-xl px-4 py-3 pr-12
+                         text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] resize-none
+                         input-focus-ring focus:outline-none focus:bg-[var(--color-bg-secondary)]
                          min-h-[48px] max-h-[200px]"
                 rows={1}
                 disabled={isLoading}
@@ -423,7 +598,7 @@ export default function Chat() {
               <div
                 id="char-count"
                 className={`absolute bottom-2 right-3 text-xs ${
-                  charCount > MAX_CHARS * 0.9 ? "text-amber-500" : "text-slate-400"
+                  charCount > MAX_CHARS * 0.9 ? "text-amber-500" : "text-[var(--color-text-muted)]"
                 }`}
                 aria-live="off"
               >
@@ -451,10 +626,10 @@ export default function Chat() {
               <span className="hidden sm:inline">{isLoading ? "Sending..." : "Send"}</span>
             </button>
           </div>
-          <p id="input-hint" className="text-xs text-slate-400 mt-2 ml-1">
-            Press <kbd className="px-1.5 py-0.5 bg-slate-100 rounded text-slate-600 font-mono text-[10px]">Enter</kbd> to send,{" "}
-            <kbd className="px-1.5 py-0.5 bg-slate-100 rounded text-slate-600 font-mono text-[10px]">Shift+Enter</kbd> for new line,{" "}
-            <kbd className="px-1.5 py-0.5 bg-slate-100 rounded text-slate-600 font-mono text-[10px]">Esc</kbd> to clear
+          <p id="input-hint" className="text-xs text-[var(--color-text-muted)] mt-2 ml-1">
+            Press <kbd className="px-1.5 py-0.5 bg-[var(--color-bg-tertiary)] rounded text-[var(--color-text-secondary)] font-mono text-[10px]">Enter</kbd> to send,{" "}
+            <kbd className="px-1.5 py-0.5 bg-[var(--color-bg-tertiary)] rounded text-[var(--color-text-secondary)] font-mono text-[10px]">Shift+Enter</kbd> for new line,{" "}
+            <kbd className="px-1.5 py-0.5 bg-[var(--color-bg-tertiary)] rounded text-[var(--color-text-secondary)] font-mono text-[10px]">Esc</kbd> to clear
           </p>
         </form>
       </div>

@@ -75,6 +75,7 @@ function Home() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [lastFailedRequest, setLastFailedRequest] = useState<{ imageUrl: string; style: StyleKey; prompt: string } | null>(null);
   const resultRef = useRef<HTMLDivElement>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -84,6 +85,7 @@ function Home() {
     setLoading(true);
     setError(null);
     setResult(null);
+    setLastFailedRequest(null);
 
     try {
       const res = await transform({
@@ -91,6 +93,36 @@ function Home() {
       });
       setResult(res.resultUrl);
       // Scroll to result
+      setTimeout(() => {
+        resultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 100);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : "Transformation failed";
+      setError(errorMessage);
+      // Save request for retry
+      setLastFailedRequest({ imageUrl, style, prompt });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRetry = async () => {
+    if (!lastFailedRequest) return;
+
+    setLoading(true);
+    setError(null);
+    setResult(null);
+
+    try {
+      const res = await transform({
+        data: {
+          imageUrl: lastFailedRequest.imageUrl,
+          style: lastFailedRequest.style,
+          prompt: lastFailedRequest.prompt || undefined,
+        },
+      });
+      setResult(res.resultUrl);
+      setLastFailedRequest(null);
       setTimeout(() => {
         resultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
       }, 100);
@@ -130,7 +162,7 @@ function Home() {
         <h1 className="text-3xl sm:text-4xl font-bold mb-3">
           <span className="gradient-text">Image</span> Transformer
         </h1>
-        <p className="text-[#A0A0B0] max-w-lg mx-auto">
+        <p className="text-[var(--color-text-secondary)] max-w-lg mx-auto">
           Transform your images into stunning artistic styles using AI. Choose from Ghibli, Pixar, Watercolor, and more.
         </p>
       </header>
@@ -140,7 +172,7 @@ function Home() {
         {/* Input Panel */}
         <div className="panel">
           <h2 className="text-lg font-semibold mb-6 flex items-center gap-2">
-            <svg className="w-5 h-5 text-[#7C3AED]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-5 h-5 text-[var(--color-accent-violet)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
             </svg>
             Transform Settings
@@ -162,7 +194,7 @@ function Home() {
                 required
                 aria-describedby="image-url-hint"
               />
-              <p id="image-url-hint" className="text-xs text-[#6B6B7B] mt-2">
+              <p id="image-url-hint" className="text-xs text-[var(--color-text-muted)] mt-2">
                 Paste a direct link to any image (JPEG, PNG, WebP)
               </p>
             </div>
@@ -190,7 +222,7 @@ function Home() {
                       style === key ? "style-btn-active" : ""
                     }`}
                   >
-                    <span className={style === key ? "text-[#7C3AED]" : "text-[#6B6B7B]"}>
+                    <span className={style === key ? "text-[var(--color-accent-violet)]" : "text-[var(--color-text-muted)]"}>
                       {STYLE_ICONS[key]}
                     </span>
                     <span className="font-medium text-sm">{STYLES[key].name}</span>
@@ -202,7 +234,7 @@ function Home() {
             {/* Custom Prompt */}
             <div>
               <label htmlFor="custom-prompt" className="form-label">
-                Custom Instructions <span className="text-[#6B6B7B]">(optional)</span>
+                Custom Instructions <span className="text-[var(--color-text-muted)]">(optional)</span>
               </label>
               <input
                 id="custom-prompt"
@@ -241,7 +273,7 @@ function Home() {
         {/* Output Panel */}
         <div className="panel" ref={resultRef}>
           <h2 className="text-lg font-semibold mb-6 flex items-center gap-2">
-            <svg className="w-5 h-5 text-[#FF6B6B]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-5 h-5 text-[var(--color-accent-coral)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
             </svg>
             Preview
@@ -250,12 +282,24 @@ function Home() {
           {/* Error Display */}
           {error && (
             <div className="error-alert mb-6 animate-scale-in" role="alert" aria-live="assertive">
-              <svg className="w-5 h-5 text-[#F87171] flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-5 h-5 text-[var(--color-error)] flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
               </svg>
-              <div>
-                <p className="font-medium text-[#F87171]">Transformation Failed</p>
-                <p className="text-sm text-[#A0A0B0] mt-1">{error}</p>
+              <div className="flex-1">
+                <p className="font-medium text-[var(--color-error)]">Transformation Failed</p>
+                <p className="text-sm text-[var(--color-text-secondary)] mt-1">{error}</p>
+                {lastFailedRequest && (
+                  <button
+                    onClick={handleRetry}
+                    disabled={loading}
+                    className="mt-3 inline-flex items-center gap-2 text-sm font-medium text-[var(--color-accent-violet)] hover:text-[var(--color-accent-violet-hover)] transition-colors disabled:opacity-50"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                    Try Again
+                  </button>
+                )}
               </div>
             </div>
           )}
@@ -286,7 +330,7 @@ function Home() {
                 download
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center gap-2 text-sm text-[#7C3AED] hover:text-[#9333EA] transition-colors"
+                className="inline-flex items-center gap-2 text-sm text-[var(--color-accent-violet)] hover:text-[var(--color-accent-violet-hover)] transition-colors"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
@@ -298,22 +342,22 @@ function Home() {
             <div className="text-center py-12">
               <div className="inline-flex flex-col items-center gap-4">
                 <div className="w-16 h-16 relative">
-                  <div className="absolute inset-0 rounded-full border-4 border-[#252532]" />
-                  <div className="absolute inset-0 rounded-full border-4 border-transparent border-t-[#7C3AED] animate-spin" />
+                  <div className="absolute inset-0 rounded-full border-4 border-[var(--color-bg-tertiary)]" />
+                  <div className="absolute inset-0 rounded-full border-4 border-transparent border-t-[var(--color-accent-violet)] animate-spin" />
                 </div>
                 <div>
-                  <p className="font-medium text-[#F8F8FC]">Transforming your image...</p>
-                  <p className="text-sm text-[#6B6B7B] mt-1">This may take 10-30 seconds</p>
+                  <p className="font-medium text-[var(--color-text-primary)]">Transforming to {STYLES[style].name}...</p>
+                  <p className="text-sm text-[var(--color-text-muted)] mt-1">Estimated time: {STYLES[style].estimatedTime}</p>
                 </div>
               </div>
             </div>
           ) : (
-            <div className="text-center py-12 border-2 border-dashed border-[#252532] rounded-xl">
-              <svg className="w-16 h-16 text-[#6B6B7B] mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div className="text-center py-12 border-2 border-dashed border-[var(--color-bg-tertiary)] rounded-xl">
+              <svg className="w-16 h-16 text-[var(--color-text-muted)] mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
               </svg>
-              <p className="text-[#A0A0B0]">Your transformed image will appear here</p>
-              <p className="text-sm text-[#6B6B7B] mt-1">Enter an image URL and click Transform</p>
+              <p className="text-[var(--color-text-secondary)]">Your transformed image will appear here</p>
+              <p className="text-sm text-[var(--color-text-muted)] mt-1">Enter an image URL and click Transform</p>
             </div>
           )}
         </div>
@@ -324,21 +368,41 @@ function Home() {
         <section aria-labelledby="gallery-heading" className="mb-12">
           <div className="flex items-center justify-between mb-6">
             <h2 id="gallery-heading" className="text-xl font-semibold flex items-center gap-2">
-              <svg className="w-5 h-5 text-[#FFE66D]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-5 h-5 text-[var(--color-accent-gold)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
               </svg>
               Recent Transformations
             </h2>
-            <span className="text-sm text-[#6B6B7B]">{history.length} images</span>
+            <span className="text-sm text-[var(--color-text-muted)]">{history.length} images</span>
           </div>
 
           <div className="gallery-grid">
             {history.map((item: Transformation) => (
               <article
                 key={item.id}
-                className="gallery-item"
+                className="gallery-item group"
                 tabIndex={0}
-                aria-label={`${STYLES[item.style as StyleKey]?.name || item.style} transformation, status: ${item.status}`}
+                role="button"
+                aria-label={`${STYLES[item.style as StyleKey]?.name || item.style} transformation, status: ${item.status}. Click to load settings.`}
+                onClick={() => {
+                  if (item.original_url) {
+                    setImageUrl(item.original_url);
+                    setStyle(item.style as StyleKey);
+                    setPrompt(item.prompt || "");
+                    window.scrollTo({ top: 0, behavior: "smooth" });
+                  }
+                }}
+                onKeyDown={(e: React.KeyboardEvent) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    if (item.original_url) {
+                      setImageUrl(item.original_url);
+                      setStyle(item.style as StyleKey);
+                      setPrompt(item.prompt || "");
+                      window.scrollTo({ top: 0, behavior: "smooth" });
+                    }
+                  }
+                }}
               >
                 {item.transformed_url ? (
                   <img
@@ -347,7 +411,7 @@ function Home() {
                     loading="lazy"
                   />
                 ) : (
-                  <div className="w-full h-full flex flex-col items-center justify-center bg-[#1A1A24]">
+                  <div className="w-full h-full flex flex-col items-center justify-center bg-[var(--color-bg-secondary)]">
                     {item.status === "pending" ? (
                       <>
                         <div className="loading-spinner mb-2" />
@@ -359,9 +423,14 @@ function Home() {
                   </div>
                 )}
                 <div className="gallery-item-overlay">
-                  <span className="text-sm font-medium text-white">
-                    {STYLES[item.style as StyleKey]?.name || item.style}
-                  </span>
+                  <div className="flex items-center justify-between w-full">
+                    <span className="text-sm font-medium text-white">
+                      {STYLES[item.style as StyleKey]?.name || item.style}
+                    </span>
+                    <svg className="w-4 h-4 text-white/70 opacity-0 group-hover:opacity-100 transition-opacity" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                  </div>
                 </div>
               </article>
             ))}
@@ -370,13 +439,13 @@ function Home() {
       )}
 
       {/* Footer */}
-      <footer className="pt-8 border-t border-[#252532]">
-        <div className="flex flex-col sm:flex-row justify-between items-center gap-4 text-sm text-[#6B6B7B]">
+      <footer className="pt-8 border-t border-[var(--color-bg-tertiary)]">
+        <div className="flex flex-col sm:flex-row justify-between items-center gap-4 text-sm text-[var(--color-text-muted)]">
           <p>
             Powered by{" "}
             <a
               href="https://lazycloud.dev"
-              className="text-[#7C3AED] hover:text-[#9333EA] transition-colors"
+              className="text-[var(--color-accent-violet)] hover:text-[var(--color-accent-violet-hover)] transition-colors"
               target="_blank"
               rel="noopener noreferrer"
             >
