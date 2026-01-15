@@ -31,20 +31,21 @@ export function WorkspaceOverview({ workspaceId }: WorkspaceOverviewProps) {
   const [openAccordionValue, setOpenAccordionValue] = useState<string | undefined>(undefined);
 
   useEffect(() => {
+    // Always reset accordion state when this effect runs (workspace change or remount)
+    setOpenAccordionValue(undefined);
+
     if (!workspaceId) {
       setIsLoading(true);
       setDeployments([]);
-      setOpenAccordionValue(undefined);
       return;
     }
-
-    // Reset accordion state when workspace changes
-    setOpenAccordionValue(undefined);
 
     let cancelled = false;
 
     const loadData = async () => {
       setIsLoading(true);
+      // Clear deployments and accordion when starting to load fresh data
+      setDeployments([]);
       try {
         const workspaceResponse = await getWorkspaceWithDeployments(workspaceId);
 
