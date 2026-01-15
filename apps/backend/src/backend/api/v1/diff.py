@@ -22,6 +22,7 @@ from backend.services.compose.parser import ComposeParser
 from backend.services.compose.validation import validate_deployment_request
 from backend.services.k8s import create_ns_name
 from backend.services.k8s.client import get_namespace_pvcs
+from backend.services.k8s.generators.networking import compute_service_endpoints
 
 diff_router = APIRouter(prefix="/diff")
 
@@ -186,6 +187,11 @@ async def get_deployment_diff(
     if deployment and deployment.compose_yaml:
         existing_yaml = deployment.compose_yaml
 
+    # Compute service endpoints
+    # For existing deployments, use the real ID; for new, use None (will show placeholder)
+    deployment_id_for_endpoints = deployment.id if deployment else None
+    endpoints = compute_service_endpoints(compose_file, deployment_id_for_endpoints)
+
     return DiffResponse(
         deployment_id=deployment.id if deployment else "new",
         namespace=namespace,
@@ -197,4 +203,5 @@ async def get_deployment_diff(
         warnings=warnings,
         can_deploy=can_deploy,
         existing_compose_yaml=existing_yaml,
+        endpoints=endpoints,
     )

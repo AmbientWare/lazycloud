@@ -52,3 +52,57 @@ These images are pulled directly without going through Depot.
 <Tip>
 For fastest deploys, use multi-stage Dockerfiles and order your layers from least to most frequently changed.
 </Tip>
+
+## Build Arguments
+
+Build arguments let you pass values into your Dockerfile at build time. This is useful for variables that need to be embedded into your container image, like public API URLs for frontend apps.
+
+### Defining Build Args
+
+Define build arguments in your compose file under `build.args`:
+
+```yaml
+services:
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+        NODE_ENV: production
+```
+
+Then accept the argument in your Dockerfile:
+
+```dockerfile
+ARG NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+
+RUN npm run build
+```
+
+<Note>
+Build args are different from environment variables. Build args are available only during `docker build`, while environment variables are available at runtime. For Next.js apps, `NEXT_PUBLIC_*` variables must be build args because they're inlined into the JavaScript bundle.
+</Note>
+
+### Providing Values
+
+LazyCloud collects build argument values the same way as environment variables:
+
+- **From a file** — `lazycloud deploy --build-arg .env.prod`
+- **From your shell** — `lazycloud deploy --build-arg shell`
+- **Manually** — Enter values one by one when prompted
+
+Without the `--build-arg` flag, LazyCloud prompts you to choose a source interactively.
+
+### When to Use Build Args vs Environment Variables
+
+| Use Case | Solution |
+|----------|----------|
+| API keys, database URLs | Environment variables (runtime) |
+| Public URLs for frontend apps | Build arguments |
+| Feature flags baked into the image | Build arguments |
+| Configuration that can change without rebuild | Environment variables |
+
+<Tip>
+During deployment, LazyCloud shows you the public URLs for your services. Use these values for build args like `NEXT_PUBLIC_API_URL`.
+</Tip>

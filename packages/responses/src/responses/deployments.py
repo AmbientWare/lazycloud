@@ -6,6 +6,13 @@ from models.statuses import DeploymentStatus
 from pydantic import BaseModel
 
 
+class ServiceEndpoints(BaseModel):
+    """Endpoints for a service."""
+
+    internal: str  # Kubernetes internal DNS, e.g., http://api:8000
+    public: str | None = None  # External URL, e.g., https://api-xxxxx.lazycloud.dev
+
+
 class DeploymentResponse(BaseModel):
     """Response for a deployment."""
 
@@ -19,6 +26,7 @@ class DeploymentResponse(BaseModel):
     created_at: datetime | None = None
     updated_at: datetime | None = None
     deployed_at: datetime | None = None
+    endpoints: dict[str, ServiceEndpoints] | None = None  # Per-service endpoints
 
 
 class DeploymentListResponse(BaseModel):
@@ -44,6 +52,7 @@ class DiffResponse(BaseModel):
     warnings: list[str] | None = None
     can_deploy: bool = True
     existing_compose_yaml: str | None = None
+    endpoints: dict[str, ServiceEndpoints] | None = None  # Per-service endpoints
 
 
 class ValidationResult(BaseModel):

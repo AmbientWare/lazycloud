@@ -6,6 +6,10 @@ COPY package.json bun.lock* ./
 RUN bun install
 
 COPY . .
+
+ARG NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+
 RUN bun run build
 
 FROM oven/bun:1 AS runner
