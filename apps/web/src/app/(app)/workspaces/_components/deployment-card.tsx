@@ -79,11 +79,16 @@ export function DeploymentCard({ deployment }: { deployment: DeploymentWithStatu
   const networks = status?.networks ?? [];
   const hasStatusData = status !== undefined && status !== null;
 
-  const [selectedService, setSelectedService] = useState<ServiceStatusSummary | null>(null);
+  const [selectedServiceName, setSelectedServiceName] = useState<string | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
 
+  // Look up service from live data so it updates with SSE
+  const selectedService = selectedServiceName
+    ? services.find((s) => s.name === selectedServiceName) ?? null
+    : null;
+
   const openServiceDetails = (service: ServiceStatusSummary) => {
-    setSelectedService(service);
+    setSelectedServiceName(service.name);
     setSheetOpen(true);
   };
 
@@ -241,7 +246,7 @@ export function DeploymentCard({ deployment }: { deployment: DeploymentWithStatu
                         <div className="flex min-w-0 flex-1 items-center gap-2">
                           <Badge
                             variant="outline"
-                            className={`w-[70px] shrink-0 text-center text-xs ${getServiceStatusColor(service.status)}`}
+                            className={`shrink-0 text-xs ${getServiceStatusColor(service.status)}`}
                           >
                             {service.status}
                           </Badge>

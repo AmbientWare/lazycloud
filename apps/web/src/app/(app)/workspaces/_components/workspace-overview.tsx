@@ -25,6 +25,8 @@ const DEPLOYMENTS_HEADER = {
   titleSize: "xl" as const,
 };
 
+const STATUS_POLL_INTERVAL_MS = 2000;
+
 export function WorkspaceOverview({ workspaceId }: WorkspaceOverviewProps) {
   const [deployments, setDeployments] = useState<DeploymentWithStatus[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -67,43 +69,42 @@ export function WorkspaceOverview({ workspaceId }: WorkspaceOverviewProps) {
     };
   }, [workspaceId]);
 
-  const loadDeploymentStatus = async (deploymentId: string) => {
-    // Check if we already have status for this deployment
+  // Poll for status updates when a deployment is expanded
+  useEffect(() => {
+    if (!openAccordionValue) return;
+
+    const pollStatus = async () => {
+      try {
+        const statusResponse = await getDeploymentStatus(openAccordionValue);
+        setDeployments((prev) =>
+          prev.map((d) =>
+            d.id === openAccordionValue
+              ? { ...d, status: statusResponse.status, isLoading: false }
+              : d
+          )
+        );
+      } catch (error) {
+        console.error(`Failed to poll status for deployment ${openAccordionValue}:`, error);
+      }
+    };
+
+    // Initial fetch
+    void pollStatus();
+
+    // Set up polling interval
+    const intervalId = setInterval(pollStatus, STATUS_POLL_INTERVAL_MS);
+
+    return () => clearInterval(intervalId);
+  }, [openAccordionValue]);
+
+  const loadDeploymentStatus = (deploymentId: string) => {
+    // Mark as loading if we don't have status yet
     const deployment = deployments.find((d) => d.id === deploymentId);
-    if (deployment?.status || deployment?.isLoading) {
-      return; // Already loaded or loading
-    }
-
-    // Mark as loading
-    setDeployments((prev) =>
-      prev.map((d) =>
-        d.id === deploymentId ? { ...d, isLoading: true } : d,
-      ),
-    );
-
-    try {
-      const statusResponse = await getDeploymentStatus(deploymentId);
-
+    if (!deployment?.status && !deployment?.isLoading) {
       setDeployments((prev) =>
         prev.map((d) =>
-          d.id === deploymentId
-            ? {
-                ...d,
-                status: statusResponse.status,
-                isLoading: false,
-              }
-            : d,
-        ),
-      );
-    } catch (error) {
-      console.error(
-        `Failed to load status for deployment ${deploymentId}:`,
-        error,
-      );
-      setDeployments((prev) =>
-        prev.map((d) =>
-          d.id === deploymentId ? { ...d, isLoading: false } : d,
-        ),
+          d.id === deploymentId ? { ...d, isLoading: true } : d
+        )
       );
     }
   };
