@@ -412,26 +412,22 @@ class PrometheusMetricsService:
     async def get_namespace_breakdown(
         self, namespace: str, start_time: datetime, end_time: datetime
     ) -> NamespaceBreakdown:
-        """Get CPU and memory breakdowns"""
+        """Get CPU and memory breakdowns.
+
+        Totals are derived from sum of per-pod max(usage, requests) to ensure
+        consistency between workspace totals and deployment breakdowns.
+        """
         duration_seconds = (end_time - start_time).total_seconds()
 
-        (
-            cpu_usage,
-            memory_usage,
-            cpu_requests,
-            memory_requests,
-            by_pod,
-        ) = await asyncio.gather(
-            self.get_cpu_usage(namespace, start_time, end_time),
-            self.get_memory_usage(namespace, start_time, end_time),
-            self.get_cpu_requests(namespace, start_time, end_time),
-            self.get_memory_requests(namespace, start_time, end_time),
-            self._get_usage_by_pod(namespace, start_time, end_time, duration_seconds),
+        # Get per-pod breakdown with max(usage, requests) for each pod
+        by_pod = await self._get_usage_by_pod(
+            namespace, start_time, end_time, duration_seconds
         )
 
-        # Bill for max(reserved, actual)
-        cpu_total = max(cpu_usage, cpu_requests)
-        memory_total = max(memory_usage, memory_requests)
+        # Derive totals from per-pod values to ensure consistency
+        # Total = sum of max(usage, requests) for each pod
+        cpu_total = sum(pod.cpu_core_seconds for pod in by_pod)
+        memory_total = sum(pod.memory_gb_seconds for pod in by_pod)
 
         return NamespaceBreakdown(
             namespace=namespace,
@@ -454,8 +450,12 @@ class PrometheusMetricsService:
         end_time: datetime,
         duration_seconds: float,
     ) -> list[PodUsage]:
-        """Get resource usage for individual pods."""
-        cpu_query = f'''
+        """Get resource usage for individual pods.
+
+        Bills for max(actual_usage, requests) per pod to match workspace totals.
+        """
+        # Actual usage queries
+        cpu_usage_query = f'''
             sum by (pod) (
                 rate(
                     container_cpu_usage_seconds_total{{
@@ -467,7 +467,7 @@ class PrometheusMetricsService:
             )
         '''
 
-        memory_query = f'''
+        memory_usage_query = f'''
             sum by (pod) (
                 container_memory_working_set_bytes{{
                     namespace="{namespace}",
@@ -477,11 +477,36 @@ class PrometheusMetricsService:
             )
         '''
 
-        cpu_result = await self._query_range(
-            cpu_query, start_time, end_time, step="60s"
-        )
-        memory_result = await self._query_range(
-            memory_query, start_time, end_time, step="60s"
+        # Resource requests queries (reserved resources)
+        cpu_requests_query = f'''
+            sum by (pod) (
+                kube_pod_container_resource_requests{{
+                    namespace="{namespace}",
+                    resource="cpu",
+                    container!=""
+                }}
+                * on(pod, namespace) group_left()
+                (kube_pod_status_phase{{phase="Running"}} == 1)
+            )
+        '''
+
+        memory_requests_query = f'''
+            sum by (pod) (
+                kube_pod_container_resource_requests{{
+                    namespace="{namespace}",
+                    resource="memory",
+                    container!=""
+                }}
+                * on(pod, namespace) group_left()
+                (kube_pod_status_phase{{phase="Running"}} == 1)
+            )
+        '''
+
+        cpu_usage_result, memory_usage_result, cpu_requests_result, memory_requests_result = await asyncio.gather(
+            self._query_range(cpu_usage_query, start_time, end_time, step="60s"),
+            self._query_range(memory_usage_query, start_time, end_time, step="60s"),
+            self._query_range(cpu_requests_query, start_time, end_time, step="60s"),
+            self._query_range(memory_requests_query, start_time, end_time, step="60s"),
         )
 
         pod_labels_map: dict[str, dict[str, str]] = {}
@@ -494,15 +519,17 @@ class PrometheusMetricsService:
                     pod_labels_map[pod_name] = series.get("metric", {})
 
         pods: dict[str, PodUsage] = {}
+        # Track actual usage and requests separately, then take max
+        pod_cpu_usage: dict[str, float] = {}
+        pod_cpu_requests: dict[str, float] = {}
+        pod_memory_usage: dict[str, float] = {}
+        pod_memory_requests: dict[str, float] = {}
         warned_pods: set[str] = set()
 
-        def process_series(
-            series: dict, metric_type: str, pods: dict[str, PodUsage]
-        ) -> None:
-            metric = series.get("metric", {})
-            pod_name = metric.get("pod", "unknown")
+        def get_pod_info(pod_name: str) -> PodUsage | None:
+            """Get or create PodUsage for a pod, returning None if pod should be skipped."""
             if pod_name == "unknown":
-                return
+                return None
 
             # Skip pods not in pod_labels_map - they're terminated pods with stale metrics
             if pod_name not in pod_labels_map:
@@ -512,7 +539,10 @@ class PrometheusMetricsService:
                         f"Skipping pod {pod_name} in namespace {namespace} - "
                         "not found in kube_pod_labels (likely terminated)"
                     )
-                return
+                return None
+
+            if pod_name in pods:
+                return pods[pod_name]
 
             pod_labels = pod_labels_map[pod_name]
             service_name = pod_labels.get("label_lazycloud_dev_service", "unknown")
@@ -526,18 +556,17 @@ class PrometheusMetricsService:
                     "Ensure kube-state-metrics has metricLabelsAllowlist configured for this label."
                 )
 
-            if pod_name not in pods:
-                pods[pod_name] = PodUsage(
-                    pod=pod_name, service=service_name, release_name=release_name
-                )
-            elif pods[pod_name].release_name is None and release_name:
-                pods[pod_name].release_name = release_name
+            pods[pod_name] = PodUsage(
+                pod=pod_name, service=service_name, release_name=release_name
+            )
+            return pods[pod_name]
 
+        def calculate_avg_from_series(series: dict) -> float | None:
+            """Calculate average value from a time series."""
             values = series.get("values", [])
             if not values:
-                return
+                return None
 
-            # Calculate average across time series and convert to core-seconds or GB-seconds
             total = 0.0
             count = 0
             for _, value in values:
@@ -547,22 +576,41 @@ class PrometheusMetricsService:
                 except (ValueError, TypeError):
                     continue
 
-            if count > 0:
-                avg = total / count
-                if metric_type == "CPU":
-                    pods[pod_name].cpu_core_seconds = avg * duration_seconds
-                else:
-                    pods[pod_name].memory_gb_seconds = (
-                        avg / (1024**3)
-                    ) * duration_seconds
+            return total / count if count > 0 else None
 
-        if cpu_result and "result" in cpu_result:
-            for series in cpu_result["result"]:
-                process_series(series, "CPU", pods)
+        def process_series(
+            result: dict | None,
+            storage: dict[str, float],
+        ) -> None:
+            """Process query result and store average values per pod."""
+            if not result or "result" not in result:
+                return
+            for series in result["result"]:
+                pod_name = series.get("metric", {}).get("pod", "unknown")
+                if get_pod_info(pod_name) is None:
+                    continue
+                avg = calculate_avg_from_series(series)
+                if avg is not None:
+                    storage[pod_name] = avg
 
-        if memory_result and "result" in memory_result:
-            for series in memory_result["result"]:
-                process_series(series, "Memory", pods)
+        # Process all metrics
+        process_series(cpu_usage_result, pod_cpu_usage)
+        process_series(cpu_requests_result, pod_cpu_requests)
+        process_series(memory_usage_result, pod_memory_usage)
+        process_series(memory_requests_result, pod_memory_requests)
+
+        # Calculate final values using max(usage, requests) for each pod
+        for pod_name, pod_usage in pods.items():
+            cpu_usage = pod_cpu_usage.get(pod_name, 0.0)
+            cpu_requests = pod_cpu_requests.get(pod_name, 0.0)
+            memory_usage = pod_memory_usage.get(pod_name, 0.0)
+            memory_requests = pod_memory_requests.get(pod_name, 0.0)
+
+            # Bill for max(actual, requests) - same logic as workspace totals
+            pod_usage.cpu_core_seconds = max(cpu_usage, cpu_requests) * duration_seconds
+            pod_usage.memory_gb_seconds = (
+                max(memory_usage, memory_requests) / (1024**3)
+            ) * duration_seconds
 
         return list(pods.values())
 
