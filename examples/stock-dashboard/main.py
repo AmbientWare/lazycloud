@@ -88,7 +88,8 @@ async def home(request: Request):
 
 @app.post("/search", response_class=HTMLResponse)
 async def search(request: Request, ticker: str = Form(...)):
-    data = get_stock_data(ticker.strip().upper(), "1mo")
+    period = "1mo"  # Default period for search
+    data = get_stock_data(ticker.strip().upper(), period)
 
     if not data:
         return templates.TemplateResponse(
@@ -97,7 +98,7 @@ async def search(request: Request, ticker: str = Form(...)):
         )
 
     return templates.TemplateResponse(
-        "partials/stock_detail.html", {"request": request, "stock": data}
+        "partials/stock_detail.html", {"request": request, "stock": data, "current_period": period}
     )
 
 
@@ -112,7 +113,7 @@ async def stock_detail(request: Request, ticker: str, period: str = "1mo"):
         )
 
     return templates.TemplateResponse(
-        "partials/stock_detail.html", {"request": request, "stock": data}
+        "partials/stock_detail.html", {"request": request, "stock": data, "current_period": period}
     )
 
 
