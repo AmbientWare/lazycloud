@@ -69,58 +69,61 @@
             <div role="tablist" aria-label="Chart time period" class="flex bg-slate-900 rounded-lg p-1 gap-1">
                 <button
                     role="tab"
-                    aria-selected="false"
+                    aria-selected="{{ 'true' if current_period == '5d' else 'false' }}"
                     aria-controls="priceChart"
-                    class="period-btn px-3 py-1.5 text-xs font-medium rounded-md text-slate-400 hover:text-slate-200 hover:bg-slate-700 transition-colors"
+                    class="period-btn px-3 py-1.5 text-xs font-medium rounded-md transition-colors {% if current_period == '5d' %}bg-blue-600 text-white{% else %}text-slate-400 hover:text-slate-200 hover:bg-slate-700{% endif %}"
                     data-period="5d"
                     hx-get="/stock/{{ stock.ticker }}?period=5d"
                     hx-target="#result"
-                    hx-swap="innerHTML"
+                    hx-swap="innerHTML transition:true"
                 >
                     5D
                 </button>
                 <button
                     role="tab"
-                    aria-selected="true"
+                    aria-selected="{{ 'true' if current_period == '1mo' else 'false' }}"
                     aria-controls="priceChart"
-                    class="period-btn px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600 text-white"
+                    class="period-btn px-3 py-1.5 text-xs font-medium rounded-md transition-colors {% if current_period == '1mo' %}bg-blue-600 text-white{% else %}text-slate-400 hover:text-slate-200 hover:bg-slate-700{% endif %}"
                     data-period="1mo"
+                    hx-get="/stock/{{ stock.ticker }}?period=1mo"
+                    hx-target="#result"
+                    hx-swap="innerHTML transition:true"
                 >
                     1M
                 </button>
                 <button
                     role="tab"
-                    aria-selected="false"
+                    aria-selected="{{ 'true' if current_period == '3mo' else 'false' }}"
                     aria-controls="priceChart"
-                    class="period-btn px-3 py-1.5 text-xs font-medium rounded-md text-slate-400 hover:text-slate-200 hover:bg-slate-700 transition-colors"
+                    class="period-btn px-3 py-1.5 text-xs font-medium rounded-md transition-colors {% if current_period == '3mo' %}bg-blue-600 text-white{% else %}text-slate-400 hover:text-slate-200 hover:bg-slate-700{% endif %}"
                     data-period="3mo"
                     hx-get="/stock/{{ stock.ticker }}?period=3mo"
                     hx-target="#result"
-                    hx-swap="innerHTML"
+                    hx-swap="innerHTML transition:true"
                 >
                     3M
                 </button>
                 <button
                     role="tab"
-                    aria-selected="false"
+                    aria-selected="{{ 'true' if current_period == '6mo' else 'false' }}"
                     aria-controls="priceChart"
-                    class="period-btn px-3 py-1.5 text-xs font-medium rounded-md text-slate-400 hover:text-slate-200 hover:bg-slate-700 transition-colors"
+                    class="period-btn px-3 py-1.5 text-xs font-medium rounded-md transition-colors {% if current_period == '6mo' %}bg-blue-600 text-white{% else %}text-slate-400 hover:text-slate-200 hover:bg-slate-700{% endif %}"
                     data-period="6mo"
                     hx-get="/stock/{{ stock.ticker }}?period=6mo"
                     hx-target="#result"
-                    hx-swap="innerHTML"
+                    hx-swap="innerHTML transition:true"
                 >
                     6M
                 </button>
                 <button
                     role="tab"
-                    aria-selected="false"
+                    aria-selected="{{ 'true' if current_period == '1y' else 'false' }}"
                     aria-controls="priceChart"
-                    class="period-btn px-3 py-1.5 text-xs font-medium rounded-md text-slate-400 hover:text-slate-200 hover:bg-slate-700 transition-colors"
+                    class="period-btn px-3 py-1.5 text-xs font-medium rounded-md transition-colors {% if current_period == '1y' %}bg-blue-600 text-white{% else %}text-slate-400 hover:text-slate-200 hover:bg-slate-700{% endif %}"
                     data-period="1y"
                     hx-get="/stock/{{ stock.ticker }}?period=1y"
                     hx-target="#result"
-                    hx-swap="innerHTML"
+                    hx-swap="innerHTML transition:true"
                 >
                     1Y
                 </button>
@@ -151,24 +154,42 @@
 
 <script>
     // Initialize chart with proper cleanup
-    (function() {
+    (function initChart() {
         const canvas = document.getElementById('priceChart');
+        if (!canvas) return;
+
+        // Aggressively clean up any existing chart
+        // Check both global reference and Chart.js registry
+        if (window.stockChart) {
+            try {
+                window.stockChart.destroy();
+            } catch (e) {
+                // Chart may have been on a removed canvas
+            }
+            window.stockChart = null;
+        }
+
+        // Also check if there's a chart instance on this specific canvas
+        const existingChart = Chart.getChart(canvas);
+        if (existingChart) {
+            existingChart.destroy();
+        }
+
+        // Clear the canvas to ensure clean state
         const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
         const history = {{ stock.history|tojson }};
         const isPositive = {{ 'true' if stock.change >= 0 else 'false' }};
-
-        // Destroy existing chart instance to prevent memory leaks
-        if (window.stockChart instanceof Chart) {
-            window.stockChart.destroy();
-        }
 
         // Color configuration based on performance
         const lineColor = isPositive ? '#10B981' : '#EF4444';
         const gradientColorStart = isPositive ? 'rgba(16, 185, 129, 0.25)' : 'rgba(239, 68, 68, 0.25)';
         const gradientColorEnd = 'rgba(0, 0, 0, 0)';
 
-        // Create gradient
-        const gradient = ctx.createLinearGradient(0, 0, 0, 280);
+        // Create gradient using actual canvas height
+        const canvasHeight = canvas.parentElement?.clientHeight || 280;
+        const gradient = ctx.createLinearGradient(0, 0, 0, canvasHeight);
         gradient.addColorStop(0, gradientColorStart);
         gradient.addColorStop(1, gradientColorEnd);
 
@@ -177,7 +198,8 @@
         const minPrice = Math.min(...prices);
         const maxPrice = Math.max(...prices);
         const priceRange = maxPrice - minPrice;
-        const padding = priceRange * 0.1; // 10% padding
+        // Handle case where all prices are the same (flat line)
+        const padding = priceRange > 0 ? priceRange * 0.1 : minPrice * 0.05;
         const yMin = Math.max(0, minPrice - padding);
         const yMax = maxPrice + padding;
 
@@ -278,6 +300,9 @@
                 }
             }
         });
+
+        // Force resize after creation to ensure proper dimensions
+        window.stockChart.resize();
     })();
 </script>
 
