@@ -7,6 +7,7 @@ from loguru import logger
 from backend.database import get_db_context
 from backend.database.users import SubscriptionState, UserStatus
 from backend.services import get_subscription_service
+from backend.services.subscription_service import NoActiveSubscriptionError
 
 
 async def monitor_subscription_states_job(ctx: dict[str, Any]) -> dict[str, Any]:
@@ -65,6 +66,11 @@ async def monitor_subscription_states_job(ctx: dict[str, Any]) -> dict[str, Any]
                     f"has OVER_LIMITS subscription state"
                 )
 
+        except NoActiveSubscriptionError:
+            # Users without subscriptions (e.g., admin/test users) are skipped gracefully
+            logger.warning(
+                f"Skipping user {user.email} (ID: {user.id}) - no active subscription"
+            )
         except Exception:
             error_count += 1
             logger.exception(
