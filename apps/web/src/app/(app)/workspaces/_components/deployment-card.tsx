@@ -1,9 +1,10 @@
-import type { DeploymentWithStatus } from "@/interfaces/deployments";
+import type { DeploymentWithStatus, ServiceStatusSummary } from "@/interfaces/deployments";
 import { StyledAccordionItem, StyledAccordionTrigger, StyledAccordionContent } from "@/components/shared/styled-accordion";
 import { Badge } from "@/components/ui/badge";
-import { Server, HardDrive, Network, ExternalLink, AlertTriangle, Copy, Check } from "lucide-react";
+import { Server, HardDrive, Network, ExternalLink, AlertTriangle, Copy, Check, Info } from "lucide-react";
 import { Spinner } from "@/components/shared/spinner";
 import { useState } from "react";
+import { ServiceDetailsSheet } from "./service-details-sheet";
 
 function DomainSetupNotice({
   customDomain,
@@ -77,6 +78,14 @@ export function DeploymentCard({ deployment }: { deployment: DeploymentWithStatu
   const volumes = status?.volumes ?? [];
   const networks = status?.networks ?? [];
   const hasStatusData = status !== undefined && status !== null;
+
+  const [selectedService, setSelectedService] = useState<ServiceStatusSummary | null>(null);
+  const [sheetOpen, setSheetOpen] = useState(false);
+
+  const openServiceDetails = (service: ServiceStatusSummary) => {
+    setSelectedService(service);
+    setSheetOpen(true);
+  };
 
   const getStateBadgeColor = (state: string) => {
     switch (state.toLowerCase()) {
@@ -249,6 +258,13 @@ export function DeploymentCard({ deployment }: { deployment: DeploymentWithStatu
                               · {service.restarts} restarts
                             </span>
                           )}
+                          <button
+                            onClick={() => openServiceDetails(service)}
+                            className="text-muted-foreground hover:text-foreground transition-colors p-1 rounded hover:bg-muted"
+                            title="View details"
+                          >
+                            <Info className="h-3.5 w-3.5" />
+                          </button>
                         </div>
                       </div>
                       {service.endpoint && (
@@ -375,6 +391,12 @@ export function DeploymentCard({ deployment }: { deployment: DeploymentWithStatu
           </div>
         </div>
       </StyledAccordionContent>
+
+      <ServiceDetailsSheet
+        service={selectedService}
+        open={sheetOpen}
+        onOpenChange={setSheetOpen}
+      />
     </StyledAccordionItem>
   );
 }
