@@ -91,12 +91,14 @@ LazyCloud automatically injects environment variables for service discovery. Eve
 
 | Variable | Example | Description |
 |----------|---------|-------------|
-| `INTERNAL_<SERVICE>_URL` | `http://api:8000` | Internal URL for service-to-service communication |
-| `PUBLIC_<SERVICE>_URL` | `https://api-abc12.lazycloud.dev` | Public URL (only for services with exposed ports) |
+| `LC_<SERVICE>_URL` | `http://api:8000` | Internal URL for service-to-service communication |
+| `LC_<SERVICE>_PUBLIC_URL` | `https://api-abc12.lazycloud.dev` | Public URL (only for services with exposed ports) |
 
-Service names are uppercased and hyphens are replaced with underscores. For a service named `my-api`, you get `INTERNAL_MY_API_URL` and `PUBLIC_MY_API_URL`.
+Service names are uppercased and hyphens are replaced with underscores. For a service named `my-api`, you get `LC_MY_API_URL` and `LC_MY_API_PUBLIC_URL`.
 
-### Example
+### Using LC_* Variables in Compose
+
+You can reference these variables in your compose file with defaults for local development:
 
 ```yaml
 services:
@@ -104,26 +106,38 @@ services:
     build: ./frontend
     ports:
       - "3000:3000"
-    # No need to manually set API URLs - they're injected automatically
 
   api:
     build: ./api
     ports:
       - "8000:8000"
+    environment:
+      # Uses LC_REDIS_URL in cloud, falls back to default locally
+      - REDIS_URL=${LC_REDIS_URL:-redis://redis:6379}
+
+  redis:
+    image: redis:7-alpine
 ```
 
 At runtime, the `frontend` service automatically has access to:
-- `INTERNAL_API_URL` → `http://api:8000`
-- `PUBLIC_API_URL` → `https://api-abc12.lazycloud.dev`
-- `INTERNAL_FRONTEND_URL` → `http://frontend:3000`
-- `PUBLIC_FRONTEND_URL` → `https://frontend-abc12.lazycloud.dev`
+- `LC_API_URL` → `http://api:8000`
+- `LC_API_PUBLIC_URL` → `https://api-abc12.lazycloud.dev`
+- `LC_FRONTEND_URL` → `http://frontend:3000`
+- `LC_FRONTEND_PUBLIC_URL` → `https://frontend-abc12.lazycloud.dev`
+- `LC_REDIS_URL` → `http://redis:6379`
 
 <Tip>
-Use `INTERNAL_*_URL` for server-side API calls between your services. Use `PUBLIC_*_URL` when you need the external URL, such as for OAuth callbacks or webhooks.
+Use `LC_*_URL` for server-side API calls between your services. Use `LC_*_PUBLIC_URL` when you need the external URL, such as for OAuth callbacks or webhooks.
 </Tip>
 
 <Note>
-For client-side JavaScript (like Next.js `NEXT_PUBLIC_*` variables), you need to use build arguments instead since these URLs must be embedded at build time. See [Build Arguments](/docs/architecture/builds#build-arguments).
+For client-side JavaScript (like Next.js `NEXT_PUBLIC_*` variables), you can reference `LC_*_PUBLIC_URL` as a build argument. LazyCloud will auto-resolve it:
+
+```yaml
+build:
+  args:
+    NEXT_PUBLIC_API_URL: ${LC_API_PUBLIC_URL:-http://localhost:8000}
+```
 </Note>
 
 ## Cross-Deployment Communication

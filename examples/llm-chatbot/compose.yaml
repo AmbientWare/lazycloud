@@ -5,9 +5,8 @@ services:
       context: ./frontend
       args:
         # Build-time arg for Next.js client-side API calls
-        # LazyCloud will prompt for this or use --build-arg flag
-        # Use the PUBLIC_API_URL shown in the deployment diff
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+        # LazyCloud auto-resolves LC_API_PUBLIC_URL, uses default locally
+        NEXT_PUBLIC_API_URL: ${LC_API_PUBLIC_URL:-http://localhost:8000}
     ports:
       - "3000:3000"
     depends_on:
@@ -29,7 +28,8 @@ services:
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
-      - REDIS_URL=redis://redis:6379
+      # LazyCloud auto-resolves LC_REDIS_URL, uses default locally
+      - REDIS_URL=${LC_REDIS_URL:-redis://redis:6379}
     volumes:
       - api-data:/app/data
     depends_on:

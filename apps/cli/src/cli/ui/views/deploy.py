@@ -466,7 +466,7 @@ class DeployView:
             self.console.print()
             for key, secret in secrets_dict.items():
                 prompt_text = Text(key, style=Colors.Ansi.text_muted)
-                value = Prompt.ask(prompt_text, default="")
+                value = Prompt.ask(prompt_text)
                 if value:
                     secret.value = value
                     loaded_keys.add(key)
@@ -643,7 +643,7 @@ class DeployView:
                             f"[{service.service_name}] {arg.key}",
                             style=Colors.Ansi.text_muted,
                         )
-                        value = Prompt.ask(prompt_text, default="")
+                        value = Prompt.ask(prompt_text)
                         if value:
                             args_dict[arg.key] = BuildArg(key=arg.key, value=value)
                             loaded_keys.add(arg.key)

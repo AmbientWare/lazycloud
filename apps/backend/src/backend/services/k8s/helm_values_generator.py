@@ -111,14 +111,14 @@ class HelmValuesGenerator:
             if env_secret_data:
                 all_env_vars.update(env_secret_data)
 
-        # Inject service URLs as environment variables (INTERNAL_*_URL, PUBLIC_*_URL)
+        # Inject service URLs as environment variables (LC_*_URL, LC_*_PUBLIC_URL)
         endpoints = compute_service_endpoints(compose, self.deployment.id)
         for service_name, service_endpoints in endpoints.items():
             # Convert service name to uppercase for env var naming
             env_name = service_name.upper().replace("-", "_")
-            all_env_vars[f"INTERNAL_{env_name}_URL"] = service_endpoints.internal
+            all_env_vars[f"LC_{env_name}_URL"] = service_endpoints.internal
             if service_endpoints.public:
-                all_env_vars[f"PUBLIC_{env_name}_URL"] = service_endpoints.public
+                all_env_vars[f"LC_{env_name}_PUBLIC_URL"] = service_endpoints.public
 
         # Create a single deployment-wide secret for all env vars
         if all_env_vars and self.deployment.id:
