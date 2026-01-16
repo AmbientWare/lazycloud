@@ -519,7 +519,6 @@ class DeployView:
             return build_args
 
         # Show header
-        self.console.print()
         card = Card(
             content=Text(
                 f"Found {total_missing} build argument(s) that need values",
@@ -545,7 +544,6 @@ class DeployView:
         elif skip_prompts:
             import_method = ImportMethod.SHELL
         else:
-            self.console.print()
             choice = Prompt.ask(
                 Text("Import from", style=Colors.Ansi.text_muted),
                 choices=["file", "shell", "manual"],
