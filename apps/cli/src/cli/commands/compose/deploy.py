@@ -11,6 +11,7 @@ import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlparse, urlunparse
 
 import typer
 import yaml
@@ -1294,8 +1295,6 @@ def _transform_service_url(
         return value
 
     # Try to parse as URL first
-    from urllib.parse import urlparse, urlunparse
-
     try:
         parsed = urlparse(value)
         if parsed.scheme and parsed.netloc:
@@ -1344,8 +1343,6 @@ def _transform_netloc(
             endpoint = endpoints[service_name]
             if endpoint.public:
                 # Extract just the hostname from the public URL
-                from urllib.parse import urlparse
-
                 public_parsed = urlparse(endpoint.public)
                 public_host = public_parsed.netloc or endpoint.public.replace(
                     "https://", ""

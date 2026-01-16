@@ -58,13 +58,36 @@ frontend:
   build:
     context: ./frontend
     args:
-      # LazyCloud transforms api.public to the actual public URL
-      NEXT_PUBLIC_API_URL: https://api.public
+      NEXT_PUBLIC_API_URL: http://localhost:8000
 ```
 
 Build arguments are for values needed at build time. The Next.js frontend uses `NEXT_PUBLIC_API_URL` to know where to send API requests—this gets embedded into the JavaScript bundle during build.
 
-The `.public` suffix tells LazyCloud to resolve this to the actual public URL of the `api` service (e.g., `https://api-abc12.lazycloud.dev`).
+When prompted during `lazycloud deploy`, enter the production value using the `.public` suffix:
+
+```
+NEXT_PUBLIC_API_URL: https://api.public
+```
+
+LazyCloud transforms `.public` to the actual public URL (e.g., `https://api-abc12.lazycloud.dev`).
+
+### CORS configuration
+
+The API needs to allow requests from the frontend's public URL. The compose file has a local default:
+
+```yaml
+api:
+  environment:
+    - CORS_ORIGINS=http://localhost:3000,http://frontend:3000
+```
+
+When prompted during `lazycloud deploy`, enter the production value using the `.public` suffix:
+
+```
+CORS_ORIGINS: https://frontend.public
+```
+
+LazyCloud transforms `frontend.public` to the actual public URL (e.g., `https://frontend-abc12.lazycloud.dev`).
 
 <Tip>
 For server-side code, use the service name directly (e.g., `http://api:8000`). LazyCloud handles DNS resolution automatically.
