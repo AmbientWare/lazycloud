@@ -59,7 +59,7 @@ Build arguments let you pass values into your Dockerfile at build time. This is 
 
 ### Defining Build Args
 
-Define build arguments in your compose file under `build.args`. You can use `LC_*_PUBLIC_URL` variables for automatic resolution:
+Define build arguments in your compose file under `build.args`. Use localhost defaults for local development:
 
 ```yaml
 services:
@@ -67,9 +67,13 @@ services:
     build:
       context: ./frontend
       args:
-        # LazyCloud auto-resolves LC_API_PUBLIC_URL, falls back to default locally
-        NEXT_PUBLIC_API_URL: ${LC_API_PUBLIC_URL:-http://localhost:8000}
-        NODE_ENV: production
+        # Localhost default for local `docker compose build`
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+
+  api:
+    build: ./api
+    ports:
+      - "8000:8000"
 ```
 
 Then accept the argument in your Dockerfile:
@@ -81,26 +85,26 @@ ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 RUN npm run build
 ```
 
+When you run `docker compose build` locally, it uses the localhost default. When you run `lazycloud deploy`, you'll be prompted to enter the production value.
+
 <Note>
 Build args are different from environment variables. Build args are available only during `docker build`, while environment variables are available at runtime. For Next.js apps, `NEXT_PUBLIC_*` variables must be build args because they're inlined into the JavaScript bundle.
 </Note>
 
-### Auto-Resolved Build Args
+### The `.public` Suffix
 
-When you reference `LC_*_URL` or `LC_*_PUBLIC_URL` in build args, LazyCloud automatically resolves them without prompting:
+When prompted for a build arg value, you can use `<service-name>.public` and LazyCloud will resolve it to the service's public URL:
 
-```yaml
-build:
-  args:
-    # Auto-resolved to the actual public URL (e.g., https://api-abc12.lazycloud.dev)
-    NEXT_PUBLIC_API_URL: ${LC_API_PUBLIC_URL:-http://localhost:8000}
+```
+? Enter value for NEXT_PUBLIC_API_URL: https://api.public
+# Resolves to: https://api-abc12.lazycloud.dev
 ```
 
-The `:-default` syntax provides a fallback for local development with `docker compose up`.
+This also works in environment variables.
 
-### Providing Custom Values
+### Providing Build Arg Values
 
-For build args that are NOT `LC_*` variables, LazyCloud collects values the same way as environment variables:
+LazyCloud always prompts you to provide build arg values during deploy. You can provide them:
 
 - **From a file** — `lazycloud deploy --build-arg .env.prod`
 - **From your shell** — `lazycloud deploy --build-arg shell`
@@ -113,10 +117,10 @@ Without the `--build-arg` flag, LazyCloud prompts you to choose a source interac
 | Use Case | Solution |
 |----------|----------|
 | API keys, database URLs | Environment variables (runtime) |
-| Public URLs for frontend apps | Build arguments with `${LC_*_PUBLIC_URL:-default}` |
+| Public URLs for frontend apps | Build arguments (enter `https://<service>.public` when prompted) |
 | Feature flags baked into the image | Build arguments |
 | Configuration that can change without rebuild | Environment variables |
 
 <Tip>
-For server-side code, you don't need build args—LazyCloud automatically injects `LC_API_URL` and `LC_API_PUBLIC_URL` at runtime.
+For server-side code, use the service name directly in environment variables (e.g., `redis:6379`). LazyCloud handles DNS resolution automatically.
 </Tip>

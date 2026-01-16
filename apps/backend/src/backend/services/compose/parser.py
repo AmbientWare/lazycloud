@@ -190,6 +190,12 @@ class ComposeParser:
         if build and not image:
             image = f"{service_name}:latest"
 
+        # Parse expose (internal ports)
+        expose = ComposeParser._parse_expose(config.get("expose", []))
+
+        # Parse environment variables
+        environment = ComposeParser._parse_environment(config.get("environment"))
+
         return ComposeService(
             name=service_name,
             image=image,
@@ -199,6 +205,8 @@ class ComposeParser:
             working_dir=working_dir,
             stop_grace_period=stop_grace_period,
             ports=ports or None,
+            expose=expose or None,
+            environment=environment or None,
             volumes=service_volumes or None,
             networks=service_networks or None,
             deploy=deploy,
@@ -560,6 +568,49 @@ class ComposeParser:
                 labels=config.get("labels"),
                 external=config.get("external", False),
             )
+
+    @staticmethod
+    def _parse_expose(expose_config: list) -> list[int]:
+        """Parse expose configuration (internal ports)."""
+        ports = []
+        for port in expose_config:
+            if isinstance(port, int):
+                ports.append(port)
+            elif isinstance(port, str):
+                # Handle string port numbers and ranges
+                if "-" in port:
+                    # Port range - just use first port
+                    ports.append(int(port.split("-")[0]))
+                else:
+                    ports.append(int(port))
+        return ports
+
+    @staticmethod
+    def _parse_environment(
+        env_config: dict | list | None,
+    ) -> dict[str, str] | None:
+        """Parse environment variables from dict or list format."""
+        if not env_config:
+            return None
+
+        result: dict[str, str] = {}
+
+        if isinstance(env_config, dict):
+            # Dict format: { KEY: value }
+            for key, value in env_config.items():
+                if value is not None:
+                    result[key] = str(value)
+        elif isinstance(env_config, list):
+            # List format: [ "KEY=value", "KEY2=value2" ]
+            for item in env_config:
+                if isinstance(item, str) and "=" in item:
+                    key, value = item.split("=", 1)
+                    result[key] = value
+                elif isinstance(item, str):
+                    # Just key without value - skip or use empty string
+                    result[item] = ""
+
+        return result if result else None
 
     def validate_for_k8s(self, compose: ComposeFile) -> list[str]:
         """Validate compose file for Kubernetes translation and return warnings."""

@@ -58,16 +58,16 @@ frontend:
   build:
     context: ./frontend
     args:
-      # LazyCloud auto-resolves LC_API_PUBLIC_URL, uses default locally
-      NEXT_PUBLIC_API_URL: ${LC_API_PUBLIC_URL:-http://localhost:8000}
+      # LazyCloud transforms api.public to the actual public URL
+      NEXT_PUBLIC_API_URL: https://api.public
 ```
 
 Build arguments are for values needed at build time. The Next.js frontend uses `NEXT_PUBLIC_API_URL` to know where to send API requests—this gets embedded into the JavaScript bundle during build.
 
-By referencing `${LC_API_PUBLIC_URL:-default}`, LazyCloud automatically resolves the public URL for the API service without prompting. The `:-http://localhost:8000` part provides a fallback for local development with `docker compose up`.
+The `.public` suffix tells LazyCloud to resolve this to the actual public URL of the `api` service (e.g., `https://api-abc12.lazycloud.dev`).
 
 <Tip>
-For server-side code, you don't need build args—LazyCloud automatically injects `LC_API_URL` and `LC_API_PUBLIC_URL` at runtime.
+For server-side code, use the service name directly (e.g., `http://api:8000`). LazyCloud handles DNS resolution automatically.
 </Tip>
 
 ### Resource limits

@@ -85,20 +85,42 @@ LazyCloud automatically provisions TLS certificates for your domain.
 You'll need to point your domain's DNS to LazyCloud. See the deployment output for the exact DNS target.
 </Note>
 
-## Auto-Injected Service URLs
+## Service Discovery
 
-LazyCloud automatically injects environment variables for service discovery. Every service gets URL variables for all other services in the deployment:
+### Internal Communication
 
-| Variable | Example | Description |
-|----------|---------|-------------|
-| `LC_<SERVICE>_URL` | `http://api:8000` | Internal URL for service-to-service communication |
-| `LC_<SERVICE>_PUBLIC_URL` | `https://api-abc12.lazycloud.dev` | Public URL (only for services with exposed ports) |
+For service-to-service communication within your deployment, use the service name directly as the hostname. LazyCloud automatically resolves service names:
 
-Service names are uppercased and hyphens are replaced with underscores. For a service named `my-api`, you get `LC_MY_API_URL` and `LC_MY_API_PUBLIC_URL`.
+```yaml
+services:
+  api:
+    build: ./api
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=postgres://db:5432/app
 
-### Using LC_* Variables in Compose
+  redis:
+    image: redis:7-alpine
+    expose:
+      - "6379"
 
-You can reference these variables in your compose file with defaults for local development:
+  db:
+    image: postgres:16
+    expose:
+      - "5432"
+```
+
+The `api` service can connect to `redis:6379` and `db:5432` directly. No special configuration needed.
+
+<Tip>
+Use `expose` for internal-only services (like databases). Use `ports` for services that need external access.
+</Tip>
+
+### Public URLs with `.public` Suffix
+
+When you need a service's public URL (for OAuth callbacks, webhooks, or client-side code), use the `.public` suffix. LazyCloud transforms these at deploy time:
 
 ```yaml
 services:
@@ -106,38 +128,32 @@ services:
     build: ./frontend
     ports:
       - "3000:3000"
+    environment:
+      # Transforms to: https://api-abc12.lazycloud.dev
+      - API_PUBLIC_URL=https://api.public
 
   api:
     build: ./api
     ports:
       - "8000:8000"
     environment:
-      # Uses LC_REDIS_URL in cloud, falls back to default locally
-      - REDIS_URL=${LC_REDIS_URL:-redis://redis:6379}
-
-  redis:
-    image: redis:7-alpine
+      # Internal: use service name directly
+      - REDIS_URL=redis://redis:6379
+      # Public: use .public suffix
+      - CALLBACK_URL=https://api.public/auth/callback
 ```
 
-At runtime, the `frontend` service automatically has access to:
-- `LC_API_URL` → `http://api:8000`
-- `LC_API_PUBLIC_URL` → `https://api-abc12.lazycloud.dev`
-- `LC_FRONTEND_URL` → `http://frontend:3000`
-- `LC_FRONTEND_PUBLIC_URL` → `https://frontend-abc12.lazycloud.dev`
-- `LC_REDIS_URL` → `http://redis:6379`
-
-<Tip>
-Use `LC_*_URL` for server-side API calls between your services. Use `LC_*_PUBLIC_URL` when you need the external URL, such as for OAuth callbacks or webhooks.
-</Tip>
-
-<Note>
-For client-side JavaScript (like Next.js `NEXT_PUBLIC_*` variables), you can reference `LC_*_PUBLIC_URL` as a build argument. LazyCloud will auto-resolve it:
+The `.public` suffix works in both environment variables and build args:
 
 ```yaml
 build:
   args:
-    NEXT_PUBLIC_API_URL: ${LC_API_PUBLIC_URL:-http://localhost:8000}
+    # For client-side JavaScript (NEXT_PUBLIC_*, etc.)
+    NEXT_PUBLIC_API_URL: https://api.public
 ```
+
+<Note>
+The `.public` suffix only works for services with exposed `ports`. Internal-only services (using `expose`) don't get public URLs.
 </Note>
 
 ## Cross-Deployment Communication

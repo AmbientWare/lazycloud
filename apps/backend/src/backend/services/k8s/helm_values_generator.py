@@ -1,5 +1,4 @@
 from loguru import logger
-
 from models.billing import STORAGE_CLASS_EBS, STORAGE_CLASS_EFS
 from models.compose import (
     ComposeFile,
@@ -13,6 +12,7 @@ from models.helm import (
     GlobalValues,
     HelmValues,
     NetworkValues,
+    PortConfig,
     RestartPolicy,
     SecretValues,
     ServiceValues,
@@ -37,11 +37,11 @@ from backend.services.k8s.generators.monitoring import (
 )
 from backend.services.k8s.generators.networking import (
     ParsedPort,
-    compute_service_endpoints,
     generate_ingress_values,
     generate_petname,
     generate_ports_values,
     parse_port_string,
+    transform_environment_urls,
 )
 from backend.services.k8s.generators.workloads import (
     generate_pod_security_context_values,
@@ -99,6 +99,9 @@ class HelmValuesGenerator:
             secrets=[],
         )
 
+        # Collect service names for URL transformation
+        service_names = {s.name for s in compose.services}
+
         # Collect all environment variables from all services
         all_env_vars = {}
         for service in compose.services:
@@ -107,18 +110,20 @@ class HelmValuesGenerator:
             )
             values.services.append(service_values)
 
-            # Collect env vars for deployment-wide secret
+            # Collect env vars from secrets (user-provided secrets)
             if env_secret_data:
                 all_env_vars.update(env_secret_data)
 
-        # Inject service URLs as environment variables (LC_*_URL, LC_*_PUBLIC_URL)
-        endpoints = compute_service_endpoints(compose, self.deployment.id)
-        for service_name, service_endpoints in endpoints.items():
-            # Convert service name to uppercase for env var naming
-            env_name = service_name.upper().replace("-", "_")
-            all_env_vars[f"LC_{env_name}_URL"] = service_endpoints.internal
-            if service_endpoints.public:
-                all_env_vars[f"LC_{env_name}_PUBLIC_URL"] = service_endpoints.public
+            # Collect env vars from compose file's environment section
+            if service.environment:
+                all_env_vars.update(service.environment)
+
+        # Transform .public URLs in environment variables
+        # e.g., https://api.public -> https://api-xxxxx.lazycloud.dev
+        all_env_vars = (
+            transform_environment_urls(all_env_vars, service_names, self.deployment.id)
+            or {}
+        )
 
         # Create a single deployment-wide secret for all env vars
         if all_env_vars and self.deployment.id:
@@ -241,10 +246,26 @@ class HelmValuesGenerator:
         if service.working_dir:
             service_values.workingDir = service.working_dir
 
-        # Add ports
+        # Add ports (from both ports and expose)
+        # ports = external exposure (creates Service + Ingress)
+        # expose = internal only (creates Service, no Ingress)
+        all_port_configs = []
         if service.ports:
-            port_configs = generate_ports_values(service.ports)
-            service_values.ports = port_configs
+            all_port_configs.extend(generate_ports_values(service.ports))
+        if service.expose:
+            # Generate port configs for expose (internal-only ports)
+            for expose_port in service.expose:
+                port_num = int(expose_port)
+                all_port_configs.append(
+                    PortConfig(
+                        name=f"port-{port_num}",
+                        port=port_num,
+                        targetPort=port_num,
+                        protocol="TCP",
+                    )
+                )
+        if all_port_configs:
+            service_values.ports = all_port_configs
 
         # Add volumes
         if service.volumes:
