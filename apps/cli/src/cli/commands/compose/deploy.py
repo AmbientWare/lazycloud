@@ -288,6 +288,28 @@ def deploy(
     # Update diff response to reflect what was actually collected
     update_diff_with_collected_secrets(diff_response, secrets, env)
 
+    # Determine which services need to be built
+    services_to_build = _get_services_to_build_from_diff(
+        diff_response,
+        compose_data,
+        user_target_services=target_services if target_services else None,
+    )
+
+    # Extract and collect build args for services that need building
+    build_args = None
+    if services_to_build:
+        build_args = _extract_build_args(
+            compose_data, env_files_content, services_to_build
+        )
+
+        if build_args.has_args_to_collect():
+            build_args = view.collect_build_args(
+                build_args,
+                project_dir=compose_file_path.parent,
+                build_arg_source=build_arg,
+                skip_prompts=yes or bool(build_arg),
+            )
+
     # Detect cross-service impacts if deploying specific services
     if target_services and diff_response:
         affected_services = _detect_cross_service_impacts(
@@ -374,33 +396,12 @@ def deploy(
         view.show_error(f"Failed to create deployment: {e}")
         raise typer.Exit(1)
 
+    # Resolve any LC_* build args using the deployment's computed endpoints
+    if build_args and deployment.endpoints:
+        build_args = _resolve_lc_build_args(build_args, deployment.endpoints)
+
     # Wrap build/deploy in try/except for cleanup on failure
-    # If build or deploy fails, delete the PENDING deployment record to release quota
     try:
-        # Handle image building AFTER deployment record created
-        services_to_build = _get_services_to_build_from_diff(
-            diff_response,
-            compose_data,
-            user_target_services=target_services if target_services else None,
-        )
-
-        # Extract and collect build args for services that need building
-        build_args = None
-        if services_to_build:
-            # Extract user-defined build args from compose
-            build_args = _extract_build_args(
-                compose_data, env_files_content, services_to_build
-            )
-
-            # Collect any missing build arg values from user
-            if build_args.has_args_to_collect():
-                build_args = view.collect_build_args(
-                    build_args,
-                    project_dir=compose_file_path.parent,
-                    build_arg_source=build_arg,
-                    skip_prompts=yes or bool(build_arg),
-                )
-
         compose_yaml, build_duration = _handle_builds(
             compose_data,
             compose_file_path,
@@ -966,6 +967,34 @@ def _filter_diff_for_services(
     )
 
 
+def _is_lazycloud_managed_var(var_name: str) -> bool:
+    """Check if variable is a LazyCloud-managed service URL.
+
+    LazyCloud automatically injects LC_<SERVICE>_URL (internal) and
+    LC_<SERVICE>_PUBLIC_URL (public) for each service. These should not
+    be collected from the user.
+    """
+    if not var_name.startswith("LC_"):
+        return False
+    return var_name.endswith("_URL") or var_name.endswith("_PUBLIC_URL")
+
+
+def _extract_service_name_from_lc_var(var_name: str) -> str:
+    """Extract service name from LC_* variable.
+
+    Examples:
+        LC_REDIS_URL -> redis
+        LC_API_PUBLIC_URL -> api
+        LC_MY_SERVICE_URL -> my-service
+    """
+    name = var_name[3:]  # Remove LC_ prefix
+    if name.endswith("_PUBLIC_URL"):
+        name = name[:-11]
+    elif name.endswith("_URL"):
+        name = name[:-4]
+    return name.lower().replace("_", "-")
+
+
 def _extract_env_variables(
     compose_data: dict, env_files_content: dict
 ) -> dict[str, str | None]:
@@ -1005,7 +1034,17 @@ def _extract_env_variables(
                     str_value = str(value)
                     # Check if it's a placeholder like ${VAR} or $VAR
                     if str_value.startswith("${") and str_value.endswith("}"):
-                        all_env_vars[key] = None
+                        # Extract variable name and check for LC_* pattern
+                        var_content = str_value[2:-1]
+                        var_name = (
+                            var_content.split(":-")[0].split(":+")[0].split("-")[0]
+                        )
+                        if _is_lazycloud_managed_var(var_name):
+                            # LC_* vars are auto-injected at runtime
+                            # Don't add to env_vars - handled by LazyCloud
+                            pass
+                        else:
+                            all_env_vars[key] = None
                     elif str_value.startswith("$"):
                         all_env_vars[key] = None
                     elif str_value == "":
@@ -1018,7 +1057,17 @@ def _extract_env_variables(
                     key, value = env_var.split("=", 1)
                     # Check if it's a placeholder
                     if value.startswith("${") and value.endswith("}"):
-                        all_env_vars[key] = None
+                        # Extract variable name and check for LC_* pattern
+                        var_content = value[2:-1]
+                        var_name = (
+                            var_content.split(":-")[0].split(":+")[0].split("-")[0]
+                        )
+                        if _is_lazycloud_managed_var(var_name):
+                            # LC_* vars are auto-injected at runtime
+                            # Don't add to env_vars - handled by LazyCloud
+                            pass
+                        else:
+                            all_env_vars[key] = None
                     elif value.startswith("$"):
                         all_env_vars[key] = None
                     elif value == "":
@@ -1078,7 +1127,15 @@ def _extract_env_variables_for_service(
                 str_value = str(value)
                 # Check if it's a placeholder like ${VAR} or $VAR
                 if str_value.startswith("${") and str_value.endswith("}"):
-                    env_vars[key] = None
+                    # Extract variable name and check for LC_* pattern
+                    var_content = str_value[2:-1]
+                    var_name = var_content.split(":-")[0].split(":+")[0].split("-")[0]
+                    if _is_lazycloud_managed_var(var_name):
+                        # LC_* vars are auto-injected at runtime
+                        # Don't add to env_vars - handled by LazyCloud
+                        pass
+                    else:
+                        env_vars[key] = None
                 elif str_value.startswith("$"):
                     env_vars[key] = None
                 elif str_value == "":
@@ -1092,7 +1149,15 @@ def _extract_env_variables_for_service(
                 key, value = env_var.split("=", 1)
                 # Check if it's a placeholder
                 if value.startswith("${") and value.endswith("}"):
-                    env_vars[key] = None
+                    # Extract variable name and check for LC_* pattern
+                    var_content = value[2:-1]
+                    var_name = var_content.split(":-")[0].split(":+")[0].split("-")[0]
+                    if _is_lazycloud_managed_var(var_name):
+                        # LC_* vars are auto-injected at runtime
+                        # Don't add to env_vars - handled by LazyCloud
+                        pass
+                    else:
+                        env_vars[key] = None
                 elif value.startswith("$"):
                     env_vars[key] = None
                 elif value == "":
@@ -1181,6 +1246,9 @@ def _resolve_build_arg_value(
     """Resolve a build arg value, handling variable substitution.
 
     Returns None if the value needs to be collected from user.
+    Returns a __LC_RESOLVE__ marker for LazyCloud-managed vars.
+    Note: Default values (e.g., ${VAR:-default}) are ignored because defaults
+    are typically for local development, not production deployment.
     """
     if value is None:
         return None
@@ -1193,6 +1261,11 @@ def _resolve_build_arg_value(
         # Extract variable name (handle default values like ${VAR:-default})
         var_content = value[2:-1]
         var_name = var_content.split(":-")[0].split(":+")[0].split("-")[0]
+
+        # Check if it's a LazyCloud-managed variable
+        if _is_lazycloud_managed_var(var_name):
+            # Return marker - will be resolved after deployment is created
+            return f"__LC_RESOLVE__{var_name}"
 
         # Try to resolve from environment
         env_value = os.environ.get(var_name)
@@ -1210,16 +1283,16 @@ def _resolve_build_arg_value(
                     if key.strip() == var_name:
                         return val.strip().strip('"').strip("'")
 
-        # If has default value, use it
-        if ":-" in var_content:
-            return var_content.split(":-", 1)[1]
-
-        # Could not resolve, needs user input
+        # Don't use default values - they're typically for local development
+        # User should be prompted for production values
         return None
 
     elif value.startswith("$"):
         # Simple variable reference
         var_name = value[1:]
+        # Check if it's a LazyCloud-managed variable
+        if _is_lazycloud_managed_var(var_name):
+            return f"__LC_RESOLVE__{var_name}"
         env_value = os.environ.get(var_name)
         if env_value:
             return env_value
@@ -1227,6 +1300,36 @@ def _resolve_build_arg_value(
 
     # Literal value
     return value
+
+
+def _resolve_lc_build_args(
+    build_args: BuildArgsCollection,
+    endpoints: dict,
+) -> BuildArgsCollection:
+    """Resolve __LC_RESOLVE__ markers in build args using deployment endpoints.
+
+    Args:
+        build_args: BuildArgsCollection with potential LC markers
+        endpoints: Dict of service name -> ServiceEndpoints from deployment response
+
+    Returns:
+        BuildArgsCollection with markers resolved to actual URLs
+    """
+    for service_args in build_args.services:
+        for arg in service_args.args:
+            if arg.value and arg.value.startswith("__LC_RESOLVE__"):
+                lc_var = arg.value[14:]  # Remove __LC_RESOLVE__ prefix
+                service_name = _extract_service_name_from_lc_var(lc_var)
+                is_public = lc_var.endswith("_PUBLIC_URL")
+
+                if service_name in endpoints:
+                    endpoint = endpoints[service_name]
+                    if is_public and endpoint.public:
+                        arg.value = endpoint.public
+                    elif not is_public and endpoint.internal:
+                        arg.value = endpoint.internal
+
+    return build_args
 
 
 def _is_depot_available() -> bool:
