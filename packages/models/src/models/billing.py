@@ -64,7 +64,7 @@ METER_METADATA_FIELDS = {
     MeterNames.PUBLIC_ENDPOINTS: "public_endpoint_hours",
 }
 
-STORAGE_CLASS_EBS = "ebs-sc"
+STORAGE_CLASS_EBS = "ebs-gp3"
 STORAGE_CLASS_EFS = "efs-sc"
 
 STORAGE_CLASS_TO_METER: dict[str, str] = {
