@@ -1,12 +1,14 @@
 import asyncio
+import json
 import os
 import platform
 import re
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -18,7 +20,7 @@ from models.diffs import ComposeDiff, EnvVarChanges, ResourceSection
 from models.monitoring import DeployOverallPhase
 from models.secrets import Secret, SecretCollection, SecretSource
 from models.statuses import TaskStatus
-from responses.builds import DepotTokenResponse, is_retryable_build_error
+from responses.builds import DepotTokenResponse
 from responses.deployments import DiffResponse
 from rich.console import Console
 from rich.live import Live
@@ -1370,209 +1372,182 @@ def _get_depot_token(deployment_name: str) -> DepotTokenResponse | None:
         raise
 
 
-def _run_depot_build(
-    build_info: dict,
-    depot_token: DepotTokenResponse,
+def _run_depot_bake(
     compose_file_path: Path,
+    depot_token: DepotTokenResponse,
+    services_to_build: list[dict],
+    build_args: "BuildArgsCollection | None",
     build_state: dict,
     build_state_lock: threading.Lock,
-    service_build_args: dict[str, str] | None = None,
-    max_retries: int = 3,
-) -> tuple[bool, str]:
-    """Run a single depot build with retry logic. Returns (success, error_message)."""
-    context_path = compose_file_path.parent / build_info["context"]
-    dockerfile_path = context_path / build_info["dockerfile"]
-    service_name = build_info["service_name"]
+) -> tuple[bool, str, dict | None]:
+    """Run depot bake to build all services in a single command.
 
-    # Construct the image tag for Depot registry
-    # Format: registry.depot.dev/<project_id>:<tag>
-    image_tag = build_info["image_name"]  # e.g., "api:api-08562c3-1768277453"
-    # Extract just the tag part (after the colon) for save-tag
-    tag_name = image_tag.split(":")[-1] if ":" in image_tag else image_tag
+    Returns (success, error_message, metadata).
+    The metadata contains image info from depot's --metadata-file output.
+    """
+    # Create metadata file path in /tmp
+    metadata_file = Path(tempfile.gettempdir()) / f"depot-bake-{uuid.uuid4()}.json"
 
-    # Build depot command with --save to store in Depot's registry
+    # Build the depot bake command
     depot_cmd = [
         "depot",
-        "build",
+        "bake",
+        "-f",
+        str(compose_file_path),
         "--project",
         depot_token.project_id,
-        "--platform",
-        "linux/amd64",  # Build for amd64 architecture (EKS nodes)
-        "--progress=plain",  # Force plain text output for pipes (not TTY)
-        "--save",  # save to Depot's registry
-        "--save-tag",  # custom tag for the saved image
-        tag_name,
+        "--save",
+        "--metadata-file",
+        str(metadata_file),
+        "--progress=plain",
+        "--set",
+        "*.platform=linux/amd64",
     ]
 
-    # Add build args if provided
-    if service_build_args:
-        for key, value in service_build_args.items():
-            if value is not None:
-                depot_cmd.extend(["--build-arg", f"{key}={value}"])
+    # Note: depot bake --save auto-generates tags as {build_id}-{service_name}
+    # We read the actual image references from the metadata file after build
 
-    depot_cmd.extend(
-        [
-            "-f",
-            str(dockerfile_path),
-            str(context_path),
-        ]
-    )
+    # Add build args via --set (e.g., --set "frontend.args.KEY=value")
+    if build_args:
+        for service in build_args.services:
+            for arg in service.args:
+                if arg.value is not None:
+                    depot_cmd.extend(
+                        ["--set", f"{service.service_name}.args.{arg.key}={arg.value}"]
+                    )
+
+    # Add target names (services to build)
+    for build_info in services_to_build:
+        depot_cmd.append(build_info["service_name"])
 
     env = {
         **dict(os.environ),
         "DEPOT_TOKEN": depot_token.token,
     }
 
-    # Retry loop for transient errors
-    for attempt in range(1, max_retries + 1):
-        try:
-            # Stream output in real-time
-            # Combine stderr into stdout so we capture all output
-            process = subprocess.Popen(
-                depot_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,  # Redirect stderr to stdout
-                text=True,
-                env=env,
-                bufsize=1,  # Line buffered
-            )
+    try:
+        process = subprocess.Popen(
+            depot_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            env=env,
+            bufsize=1,
+            cwd=str(compose_file_path.parent),
+        )
 
-            # Initialize/reset shared state for this service
-            with build_state_lock:
-                build_state[service_name] = {
-                    "output_lines": [],
-                    "error_lines": [],
-                    "process": process,
-                    "status": f"building (attempt {attempt}/{max_retries})"
-                    if attempt > 1
-                    else "building",
-                }
-            output_lines = build_state[service_name]["output_lines"]
+        # Track which service is currently being built based on output
+        current_service = None
 
-            def should_filter_line(line: str) -> bool:
-                """Only show depot build step lines (e.g., #1, #2, etc.)."""
-                stripped = line.lstrip()
-                return not DEPOT_BUILD_STEP_PATTERN.match(stripped)
+        while True:
+            returncode = process.poll()
+            if returncode is not None:
+                break
 
-            # Read output line by line until process completes
-            while True:
-                # Check if process finished
-                returncode = process.poll()
-                if returncode is not None:
-                    break
+            line = process.stdout.readline()
+            if line:
+                line = line.rstrip()
+                if not line:
+                    continue
 
-                # Read line from stdout (non-blocking check)
-                line = process.stdout.readline()
-                if line:
-                    line = line.rstrip()
-                    if line and not should_filter_line(line):
+                # Depot bake output format: "#6 [app internal] load build definition..."
+                # Service name appears as [service_name ...] in the log line
+                # Infrastructure lines: "#1 [depot] starting and waiting for arm64 machine"
+                is_depot_infra = "[depot]" in line
+
+                if is_depot_infra:
+                    current_service = "_depot"
+                    if "machine ready" in line.lower():
                         with build_state_lock:
-                            output_lines.append(line)
+                            if "_depot" in build_state:
+                                build_state["_depot"]["status"] = "complete"
                 else:
-                    # No output available, wait a bit before checking again
-                    time.sleep(0.1)
+                    # Check each service and mark complete if DONE is in the line
+                    for build_info in services_to_build:
+                        service_name = build_info["service_name"]
+                        if f"[{service_name} " in line or f"[{service_name}]" in line:
+                            current_service = service_name
+                            # If this line also has DONE, mark service complete
+                            if " DONE " in line:
+                                with build_state_lock:
+                                    if service_name in build_state:
+                                        build_state[service_name]["status"] = "complete"
+                            break
 
-            # Wait for process to complete
-            process.wait()
+                # If we detect a build step line, add it to the appropriate service
+                if DEPOT_BUILD_STEP_PATTERN.match(line.lstrip()):
+                    with build_state_lock:
+                        if current_service and current_service in build_state:
+                            build_state[current_service]["output_lines"].append(line)
+                        elif "_depot" in build_state and is_depot_infra:
+                            # Route depot infrastructure lines
+                            build_state["_depot"]["output_lines"].append(line)
+                        else:
+                            # Add to first service if we can't determine which one
+                            for build_info in services_to_build:
+                                svc = build_info["service_name"]
+                                if svc in build_state:
+                                    build_state[svc]["output_lines"].append(line)
+                                    break
+            else:
+                time.sleep(0.1)
 
-            # Read any remaining stdout
-            remaining_stdout = process.stdout.read()
-            if remaining_stdout:
-                for line in remaining_stdout.splitlines():
-                    line = line.rstrip()
-                    if line and not should_filter_line(line):
-                        with build_state_lock:
-                            output_lines.append(line)
+        # Read any remaining output
+        remaining = process.stdout.read()
+        if remaining:
+            for line in remaining.splitlines():
+                line = line.rstrip()
+                if line and DEPOT_BUILD_STEP_PATTERN.match(line.lstrip()):
+                    with build_state_lock:
+                        for build_info in services_to_build:
+                            svc = build_info["service_name"]
+                            if svc in build_state:
+                                build_state[svc]["output_lines"].append(line)
+                                break
 
-            # Stderr is redirected to stdout, so we don't need to read it separately
-            # Any error messages will already be in output_lines
-
-            # Check if build succeeded
-            if process.returncode == 0:
-                with build_state_lock:
-                    build_state[service_name]["status"] = "complete"
-                break  # Success - exit retry loop
-
-            # Build failed - check if error is retryable
-            error_text = "\n".join(output_lines) if output_lines else ""
-
-            if is_retryable_build_error(error_text) and attempt < max_retries:
-                # Retryable error - try again
-                with build_state_lock:
-                    build_state[service_name]["status"] = (
-                        f"retrying ({attempt + 1}/{max_retries})..."
-                    )
-                    build_state[service_name]["output_lines"] = [
-                        f"[Network error, retrying attempt {attempt + 1}/{max_retries}...]"
-                    ]
-                time.sleep(2)  # Brief pause before retry
-                continue
-
-            # Non-retryable error or last attempt - mark as failed
+        if returncode != 0:
+            # Mark all services as failed
             with build_state_lock:
-                build_state[service_name]["status"] = "failed"
+                for build_info in services_to_build:
+                    svc = build_info["service_name"]
+                    if svc in build_state:
+                        build_state[svc]["status"] = "failed"
+            return False, f"depot bake failed with exit code {returncode}", None
 
-            # Check for common error patterns and provide user-friendly messages
-            error_text_lower = error_text.lower()
-            if is_retryable_build_error(error_text):
-                return (
-                    False,
-                    f"Network error after {attempt} attempt(s). Please try again.",
-                )
+        # Mark all services as complete (and depot infrastructure)
+        with build_state_lock:
+            if "_depot" in build_state:
+                build_state["_depot"]["status"] = "complete"
+            for build_info in services_to_build:
+                svc = build_info["service_name"]
+                if svc in build_state:
+                    build_state[svc]["status"] = "complete"
 
-            # Look for Dockerfile/build errors
-            if (
-                "dockerfile" in error_text_lower
-                or "failed to solve" in error_text_lower
-                or "error processing" in error_text_lower
-            ):
-                # Extract relevant error line if available
-                relevant_lines = [
-                    line
-                    for line in output_lines
-                    if any(
-                        keyword in line.lower()
-                        for keyword in ["error", "failed", "cannot"]
-                    )
-                ]
+        # Read metadata file
+        metadata = None
+        if metadata_file.exists():
+            try:
+                with open(metadata_file) as f:
+                    metadata = json.load(f)
+            except Exception:
+                pass
+            finally:
+                # Clean up metadata file
+                try:
+                    metadata_file.unlink()
+                except Exception:
+                    pass
 
-                if relevant_lines:
-                    last_error = relevant_lines[-1]
-                    # Clean up the error message
-                    if len(last_error) > 200:
-                        last_error = last_error[:197] + "..."
-                    return (
-                        False,
-                        f"Build configuration error: {last_error}",
-                    )
+        return True, "", metadata
 
-                return (
-                    False,
-                    "Build configuration error. Please check your Dockerfile and build context.",
-                )
-
-            # Generic build failure
-            return (
-                False,
-                "Build failed. Please check your Dockerfile and build context for errors.",
-            )
-
-        except Exception:
-            # Unexpected error during build
-            if attempt < max_retries:
-                with build_state_lock:
-                    build_state[service_name]["status"] = (
-                        f"retrying ({attempt + 1}/{max_retries})..."
-                    )
-                    build_state[service_name]["output_lines"] = [
-                        f"[Unexpected error, retrying attempt {attempt + 1}/{max_retries}...]"
-                    ]
-                time.sleep(2)
-                continue
-
-            return False, "Build failed due to an unexpected error. Please try again."
-
-    return True, ""
+    except Exception as e:
+        # Mark all services as failed
+        with build_state_lock:
+            for build_info in services_to_build:
+                svc = build_info["service_name"]
+                if svc in build_state:
+                    build_state[svc]["status"] = "failed"
+        return False, str(e), None
 
 
 def _handle_builds_with_depot(
@@ -1608,7 +1583,37 @@ def _handle_builds_with_depot(
             term_width = shutil.get_terminal_size().columns
             max_line_width = term_width - 10  # Account for borders, padding, indent
 
+            # Check if any service has output yet
+            any_service_has_output = any(
+                state.get("output_lines", [])
+                for name, state in build_state.items()
+                if name != "_depot"
+            )
+
+            # Only show setup section while waiting for service builds to start
+            if not any_service_has_output:
+                depot_state = build_state.get("_depot", {})
+                depot_lines = depot_state.get("output_lines", [])
+                if depot_lines:
+                    status_indicator = f"[{Colors.Ansi.accent}]●[/{Colors.Ansi.accent}]"
+                    name_color = Colors.Ansi.accent
+
+                    content_lines.append(
+                        f"{status_indicator} [bold {name_color}]setup[/bold {name_color}]"
+                    )
+                    # Show latest lines from depot setup
+                    for line in depot_lines[-LATEST_LINES:]:
+                        if len(line) > max_line_width:
+                            line = line[: max_line_width - 3] + "..."
+                        content_lines.append(f"    {line}")
+                    content_lines.append("")
+
+            # Render each service's build status
             for service_name, state in build_state.items():
+                # Skip the special _depot entry
+                if service_name == "_depot":
+                    continue
+
                 output_lines = state.get("output_lines", [])
                 error_lines = state.get("error_lines", [])
                 status = state.get("status", "building")
@@ -1663,12 +1668,15 @@ def _handle_builds_with_depot(
 
             content = "\n".join(content_lines).rstrip()
 
-            # Determine overall status for border
+            # Determine overall status for border (exclude _depot from status check)
+            service_states = [
+                state for name, state in build_state.items() if name != "_depot"
+            ]
             all_complete = all(
-                state.get("status") == "complete" for state in build_state.values()
+                state.get("status") == "complete" for state in service_states
             )
             any_failed = any(
-                state.get("status") == "failed" for state in build_state.values()
+                state.get("status") == "failed" for state in service_states
             )
 
             if any_failed:
@@ -1690,7 +1698,14 @@ def _handle_builds_with_depot(
 
     # Initialize build state for all services
     with build_state_lock:
-        for _, build_info in builds_needed:
+        # Special entry for depot infrastructure logs (machine provisioning)
+        build_state["_depot"] = {
+            "output_lines": [],
+            "error_lines": [],
+            "process": None,
+            "status": "building",
+        }
+        for build_info in services_to_build:
             service_name = build_info["service_name"]
             build_state[service_name] = {
                 "output_lines": [],
@@ -1699,117 +1714,64 @@ def _handle_builds_with_depot(
                 "status": "building",
             }
 
-    # Run builds in parallel with shared state
-    build_results = {}
+    # Run depot bake in a thread so we can update the Live display
+    bake_result: list = [None, None, None]  # [success, error_message, metadata]
 
-    with ThreadPoolExecutor(max_workers=min(4, len(builds_needed))) as executor:
-        futures = {
-            executor.submit(
-                _run_depot_build,
-                build_info,
-                depot_token,
-                compose_file_path,
-                build_state,
-                build_state_lock,
-                build_args.get_args_for_service(build_info["service_name"])
-                if build_args
-                else None,
-            ): (i, build_info)
-            for i, build_info in builds_needed
-        }
+    def run_bake():
+        result = _run_depot_bake(
+            compose_file_path,
+            depot_token,
+            services_to_build,
+            build_args,
+            build_state,
+            build_state_lock,
+        )
+        bake_result[0], bake_result[1], bake_result[2] = result
 
-        # Store errors to show after Live display closes
-        build_errors = {}
+    bake_thread = threading.Thread(target=run_bake)
+    bake_thread.start()
 
-        # Display all builds in a single Live view
-        with Live(render_build_status(), console=console, refresh_per_second=4) as live:
-            while futures:
-                # Update display
-                live.update(render_build_status())
+    # Display build status while bake runs
+    with Live(render_build_status(), console=console, refresh_per_second=4) as live:
+        while bake_thread.is_alive():
+            live.update(render_build_status())
+            time.sleep(0.25)
 
-                # Check for completed builds
-                done_futures = []
-                for future in futures:
-                    if future.done():
-                        done_futures.append(future)
-
-                for future in done_futures:
-                    idx, build_info = futures.pop(future)
-                    service_name = build_info["service_name"]
-                    try:
-                        success, error_message = future.result()
-                        build_results[idx] = success
-                        if not success:
-                            # Store error to show after Live closes
-                            build_errors[service_name] = error_message
-
-                            # Fail-fast: Cancel all remaining builds
-                            if futures:
-                                # Cancel all remaining futures
-                                for remaining_future in futures:
-                                    remaining_future.cancel()
-                                # Terminate all running processes
-                                with build_state_lock:
-                                    for name, state in build_state.items():
-                                        if name != service_name and "process" in state:
-                                            proc = state.get("process")
-                                            if proc and proc.poll() is None:
-                                                try:
-                                                    proc.terminate()
-                                                    state["status"] = "cancelled"
-                                                except Exception:
-                                                    pass
-
-                                # Clear remaining futures
-                                futures.clear()
-                                break
-
-                    except Exception as e:
-                        build_results[idx] = False
-                        # Provide user-friendly error message
-                        error_msg = str(e)
-                        if "not found" in error_msg.lower():
-                            build_errors[service_name] = (
-                                "Build configuration error: Required files not found."
-                            )
-                        else:
-                            build_errors[service_name] = (
-                                "Build failed due to an unexpected error."
-                            )
-
-                        # Fail-fast: Cancel all remaining builds
-                        if futures:
-                            for remaining_future in futures:
-                                remaining_future.cancel()
-                            with build_state_lock:
-                                for name, state in build_state.items():
-                                    if name != service_name and "process" in state:
-                                        proc = state.get("process")
-                                        if proc and proc.poll() is None:
-                                            try:
-                                                proc.terminate()
-                                                state["status"] = "cancelled"
-                                            except Exception:
-                                                pass
-                            futures.clear()
-                            break
-
-                if futures:
-                    time.sleep(0.25)  # Update every 250ms
-
-        # Final update
+        # Final update after bake completes
         live.update(render_build_status())
 
-        # Show errors after Live display is closed
-        if build_errors:
-            for service_name, error_message in build_errors.items():
-                view.show_error(
-                    f"Build failed for '{service_name}'", suggestion=error_message
-                )
+    bake_thread.join()
 
-    # Check if any builds failed
-    if not all(build_results.values()):
+    success, error_message, metadata = bake_result
+
+    # Show error if build failed
+    if not success:
+        view.show_error("Build failed", suggestion=error_message)
         raise typer.Exit(1)
+
+    # Update compose_data with registry image references from metadata
+    # Metadata contains actual image names like: {"svc1": {"image.name": "registry.depot.dev/proj:buildid-svc1"}}
+    for build_info in services_to_build:
+        service_name = build_info["service_name"]
+        if service_name in compose_data.get("services", {}):
+            service_config = compose_data["services"][service_name]
+            # Get image reference from metadata if available
+            if metadata and service_name in metadata:
+                image_ref = metadata[service_name].get("image.name")
+                if image_ref:
+                    service_config["image"] = image_ref
+                    continue
+            # Fallback: construct from project ID (shouldn't happen with valid metadata)
+            if "image" in service_config:
+                current_image = service_config["image"]
+                tag = (
+                    current_image.split(":")[-1]
+                    if ":" in current_image
+                    else current_image
+                )
+                service_config["image"] = (
+                    f"registry.depot.dev/{depot_token.project_id}:{tag}"
+                )
 
     # Calculate total build duration
     build_duration = int((datetime.now() - build_start_time).total_seconds())

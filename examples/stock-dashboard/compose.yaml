@@ -10,3 +10,15 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  # Second dashboard for testing
+  app2:
+    build: .
+    ports:
+      - "8001:8000"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
