@@ -106,7 +106,7 @@ defaultStorage:
   size: 1Gi
   accessModes:
     - ReadWriteOnce  # EBS default, EFS uses ReadWriteMany
-  storageClass: "ebs-sc"  # EBS-backed storage by default, use volume labels for EFS
+  storageClass: "ebs-gp3"  # EBS-backed storage by default, use volume labels for EFS
 
 # Service defaults
 defaultService:
