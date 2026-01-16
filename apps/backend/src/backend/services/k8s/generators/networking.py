@@ -5,6 +5,7 @@ Handles port parsing, ingress configuration, and network policies.
 
 import hashlib
 import random
+from urllib.parse import urlparse, urlunparse
 
 import petname
 from models.compose import ComposeFile, ComposePort, ComposeService
@@ -19,6 +20,12 @@ from responses.deployments import ServiceEndpoints
 from backend.config import app_config
 
 VALID_PROTOCOLS = ["tcp", "udp", "sctp"]
+
+# Pattern to match .public suffix in hostnames for public URL transformation
+# Example: api.public -> api-xxxxx.lazycloud.dev
+# Note: For internal services, just use the service name directly (e.g., redis:6379)
+# K8s DNS handles resolution automatically for services with expose/ports defined
+PUBLIC_SUFFIX = ".public"
 
 
 def parse_port_string(port_str: str) -> ParsedPort:
@@ -203,6 +210,119 @@ def generate_petname(service_name: str) -> str:
 
     except (ImportError, AttributeError):
         return f"app-{service_name[:8]}"
+
+
+def transform_service_url(
+    value: str,
+    service_names: set[str],
+    deployment_id: str | None,
+) -> str:
+    """Transform .public suffixes in URL values.
+
+    Transforms:
+    - https://api.public -> https://api-{short_id}.{base_domain}
+    - https://api.public:8080/v1 -> https://api-{short_id}.{base_domain}:8080/v1
+
+    Note: For internal service communication, use the service name directly
+    (e.g., redis:6379). K8s DNS handles resolution automatically.
+
+    Args:
+        value: The environment variable value to transform
+        service_names: Set of valid service names in the compose file
+        deployment_id: Deployment ID for generating public URLs
+
+    Returns:
+        Transformed value with .public replaced
+    """
+    if PUBLIC_SUFFIX not in value:
+        return value
+
+    # Try to parse as URL first
+    try:
+        parsed = urlparse(value)
+        if parsed.scheme and parsed.netloc:
+            # It's a full URL - transform the netloc (host:port)
+            new_netloc = _transform_netloc(parsed.netloc, service_names, deployment_id)
+            # Rebuild URL with transformed netloc
+            return urlunparse(
+                (
+                    parsed.scheme,
+                    new_netloc,
+                    parsed.path,
+                    parsed.params,
+                    parsed.query,
+                    parsed.fragment,
+                )
+            )
+    except Exception:
+        pass
+
+    # Not a standard URL format, try direct host:port transformation
+    # This handles cases like "api.public:8080" without a scheme
+    return _transform_netloc(value, service_names, deployment_id)
+
+
+def _transform_netloc(
+    netloc: str,
+    service_names: set[str],
+    deployment_id: str | None,
+) -> str:
+    """Transform a netloc (host or host:port) with .public suffix.
+
+    Args:
+        netloc: The host or host:port string
+        service_names: Set of valid service names
+        deployment_id: Deployment ID for public URLs
+
+    Returns:
+        Transformed netloc
+    """
+    # Split host and port
+    if ":" in netloc and not netloc.startswith("["):
+        # Has port (and not IPv6)
+        host, port = netloc.rsplit(":", 1)
+        port_suffix = f":{port}"
+    else:
+        host = netloc
+        port_suffix = ""
+
+    # Handle .public suffix
+    if host.endswith(PUBLIC_SUFFIX):
+        service_name = host[: -len(PUBLIC_SUFFIX)]
+        if service_name in service_names:
+            # Generate public hostname
+            short_id = deployment_id[:5] if deployment_id else "xxxxx"
+            public_host = f"{service_name}-{short_id}.{app_config.BASE_DOMAIN}"
+            return f"{public_host}{port_suffix}"
+        # Service not found, return unchanged
+        return netloc
+
+    return netloc
+
+
+def transform_environment_urls(
+    environment: dict[str, str] | None,
+    service_names: set[str],
+    deployment_id: str | None,
+) -> dict[str, str] | None:
+    """Transform all .public URLs in environment variables.
+
+    Args:
+        environment: Dictionary of environment variables
+        service_names: Set of valid service names in the compose file
+        deployment_id: Deployment ID for generating public URLs
+
+    Returns:
+        Transformed environment dictionary
+    """
+    if not environment:
+        return None
+
+    transformed = {}
+    for key, value in environment.items():
+        transformed[key] = transform_service_url(value, service_names, deployment_id)
+
+    return transformed
 
 
 def compute_service_endpoints(
