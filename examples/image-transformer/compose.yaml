@@ -1,0 +1,31 @@
+services:
+  # TanStack frontend with Replicate AI
+  app:
+    build:
+      context: .
+    ports:
+      - "3000:3000"
+    environment:
+      - REPLICATE_API_TOKEN=${REPLICATE_API_TOKEN}
+      - DATA_DIR=/app/data
+    volumes:
+      - app-data:/app/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+
+volumes:
+  app-data:
+    labels:
+      lazycloud.volume.size: "20Gi"

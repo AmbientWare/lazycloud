@@ -1,16 +1,16 @@
 # Image Transformer
 
-Transform images into artistic styles using AI. A single-service app built with TanStack Start.
+Transform images into artistic styles using AI. A single-service app with persistent storage for images and SQLite database tracking, built with TanStack Start.
 
 <Tip>
-**What you'll learn:** Connecting to external AI APIs, handling async image generation, and file storage with volumes.
+**What you'll learn:** Connecting to external AI APIs, persistent file storage with volumes, SQLite database for tracking history, and serving stored files via API routes.
 </Tip>
 
 ```
-┌──────────────┐     ┌─────────────┐
-│  TanStack    │────▶│  Replicate  │
-│  Start       │     │  (Flux)     │
-└──────┬───────┘     └─────────────┘
+┌──────────────┐     ┌───────────┐
+│   TanStack   │────▶│ Replicate │
+│   Frontend   │     │   (FLUX)  │
+└──────┬───────┘     └───────────┘
        │
        ▼
   ┌──────────┐
@@ -26,7 +26,7 @@ cd lazycloud-releases/examples/image-transformer
 
 # Local
 export REPLICATE_API_TOKEN=r8_...
-bun install && bun run dev
+docker compose up --build
 
 # Deploy
 lazycloud init
@@ -35,16 +35,17 @@ lazycloud deploy
 
 ## What's configured
 
-A single service with one secret and persistent storage.
+This example uses standard Docker Compose with LazyCloud labels for persistent storage.
 
 ### Environment variables
 
 ```yaml
 environment:
   - REPLICATE_API_TOKEN=${REPLICATE_API_TOKEN}
+  - DATA_DIR=/app/data
 ```
 
-The Replicate token is detected during `lazycloud deploy` and stored encrypted.
+Environment variables defined in your compose file are detected during `lazycloud deploy`. You'll be prompted to import values from a `.env` file, your shell environment, or enter them manually. Values are stored encrypted.
 
 ### Persistent storage
 
@@ -55,7 +56,39 @@ volumes:
       lazycloud.volume.size: "20Gi"
 ```
 
-SQLite database and generated images persist across deployments.
+The volume stores both the SQLite database (`transformations.db`) and all uploaded/transformed images. Data persists across deployments and restarts.
+
+The app uses the volume for:
+- **SQLite database** - Tracks transformation history (original filename, style, timestamps)
+- **Image files** - Stores both original uploads and AI-transformed results
+
+### Resource limits
+
+```yaml
+deploy:
+  resources:
+    limits:
+      cpus: "1.0"
+      memory: 512M
+    reservations:
+      cpus: "0.25"
+      memory: 256M
+```
+
+Set CPU and memory per service. `limits` caps max usage, `reservations` guarantees minimum resources.
+
+### Health checks
+
+```yaml
+healthcheck:
+  test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000"]
+  interval: 10s
+  timeout: 5s
+  retries: 3
+  start_period: 10s
+```
+
+LazyCloud uses health checks to determine when your service is ready to receive traffic and to restart unhealthy containers.
 
 ---
 

@@ -4,7 +4,7 @@ import { Upload, Image as ImageIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface DropzoneProps {
-  onImageSelect: (dataUrl: string) => void;
+  onImageSelect: (dataUrl: string, filename: string) => void;
   className?: string;
 }
 
@@ -15,7 +15,7 @@ export function Dropzone({ onImageSelect, className }: DropzoneProps) {
       if (file) {
         const reader = new FileReader();
         reader.onload = () => {
-          onImageSelect(reader.result as string);
+          onImageSelect(reader.result as string, file.name);
         };
         reader.readAsDataURL(file);
       }

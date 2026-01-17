@@ -1,30 +1,58 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { useState } from "react";
-import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
+import { transformImage, type StyleKey } from "@/lib/replicate";
 import {
-  Dropzone,
-  StyleSelector,
-  ComparisonSlider,
-  ImagePreview,
-} from "@/components/image-transformer";
-import { transformImage, STYLES, type StyleKey } from "@/lib/replicate";
-import {
-  Loader2,
-  Download,
-  RotateCcw,
-  Wand2,
-  ArrowLeft,
-} from "lucide-react";
+  createTransformation,
+  completeTransformation,
+  failTransformation,
+} from "@/lib/db";
+import { saveOriginalImage, saveTransformedImage, getImageAsDataUrl } from "@/lib/storage";
+import { UploadScreen, ConfigureScreen, ResultScreen } from "@/components/screens";
 
 const transform = createServerFn({ method: "POST" })
-  .inputValidator((data: { imageUrl: string; style: StyleKey; prompt?: string }) => data)
+  .inputValidator(
+    (data: { imageData: string; filename: string; style: StyleKey; prompt?: string }) => data
+  )
   .handler(async ({ data }) => {
-    const { imageUrl, style, prompt } = data;
-    const resultUrl = await transformImage(imageUrl, style, prompt);
-    return { resultUrl };
+    const { imageData, filename, style, prompt } = data;
+    const id = crypto.randomUUID();
+
+    // Save original image to storage
+    const originalPath = await saveOriginalImage(id, imageData);
+
+    // Create database record
+    createTransformation({
+      id,
+      original_filename: filename,
+      original_path: originalPath,
+      style,
+      custom_prompt: prompt,
+    });
+
+    try {
+      // Transform with Replicate
+      const resultUrl = await transformImage(imageData, style, prompt);
+
+      // Save transformed image to storage
+      const transformedPath = await saveTransformedImage(id, resultUrl);
+
+      // Update database record
+      completeTransformation(id, transformedPath);
+
+      // Return data URLs for immediate display
+      const originalDataUrl = getImageAsDataUrl(originalPath);
+      const transformedDataUrl = getImageAsDataUrl(transformedPath);
+
+      return {
+        id,
+        resultUrl: transformedDataUrl || resultUrl,
+        originalUrl: originalDataUrl || imageData,
+      };
+    } catch (error) {
+      failTransformation(id);
+      throw error;
+    }
   });
 
 export const Route = createFileRoute("/")({
@@ -33,11 +61,17 @@ export const Route = createFileRoute("/")({
 
 function Home() {
   const [imageData, setImageData] = useState<string | null>(null);
+  const [filename, setFilename] = useState<string>("image");
   const [style, setStyle] = useState<StyleKey>("ghibli");
   const [prompt, setPrompt] = useState("");
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<string | null>(null);
+  const [result, setResult] = useState<{ originalUrl: string; resultUrl: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const handleImageSelect = (dataUrl: string, name: string) => {
+    setImageData(dataUrl);
+    setFilename(name);
+  };
 
   const handleTransform = async () => {
     if (!imageData) return;
@@ -47,9 +81,9 @@ function Home() {
 
     try {
       const res = await transform({
-        data: { imageUrl: imageData, style, prompt: prompt || undefined },
+        data: { imageData, filename, style, prompt: prompt || undefined },
       });
-      setResult(res.resultUrl);
+      setResult({ originalUrl: res.originalUrl, resultUrl: res.resultUrl });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Transformation failed");
     } finally {
@@ -59,6 +93,7 @@ function Home() {
 
   const handleReset = () => {
     setImageData(null);
+    setFilename("image");
     setResult(null);
     setError(null);
     setPrompt("");
@@ -68,223 +103,36 @@ function Home() {
     setResult(null);
   };
 
-  // ==========================================
-  // STEP 1: Upload Screen
-  // ==========================================
+  // Upload screen
   if (!imageData) {
-    return (
-      <div className="min-h-screen bg-gradient-to-b from-background to-muted/30">
-        {/* Header */}
-        <header className="border-b bg-background/80 backdrop-blur-sm sticky top-0 z-10">
-          <div className="container max-w-5xl mx-auto px-4 h-16 flex items-center">
-            <div className="flex items-center gap-3">
-              <div className="h-9 w-9 rounded-lg bg-primary flex items-center justify-center">
-                <Wand2 className="h-5 w-5 text-primary-foreground" />
-              </div>
-              <span className="font-semibold text-lg">Image Transformer</span>
-            </div>
-          </div>
-        </header>
-
-        {/* Main content */}
-        <main className="container max-w-3xl mx-auto px-4 py-16">
-          <div className="text-center mb-12">
-            <h1 className="text-4xl font-bold tracking-tight mb-4">
-              Transform your images with AI
-            </h1>
-            <p className="text-lg text-muted-foreground max-w-xl mx-auto">
-              Upload any image and instantly convert it into beautiful artistic styles
-              using state-of-the-art AI models.
-            </p>
-          </div>
-
-          <Dropzone onImageSelect={setImageData} />
-
-          {/* Features */}
-          <div className="grid grid-cols-3 gap-6 mt-16">
-            {[
-              { title: "Multiple Styles", desc: "Ghibli, Pixar, Watercolor & more" },
-              { title: "High Quality", desc: "Powered by advanced AI models" },
-              { title: "Fast Results", desc: "Get results in seconds" },
-            ].map((feature) => (
-              <div key={feature.title} className="text-center">
-                <p className="font-medium mb-1">{feature.title}</p>
-                <p className="text-sm text-muted-foreground">{feature.desc}</p>
-              </div>
-            ))}
-          </div>
-        </main>
-      </div>
-    );
+    return <UploadScreen onImageSelect={handleImageSelect} />;
   }
 
-  // ==========================================
-  // STEP 3: Result Screen
-  // ==========================================
+  // Result screen
   if (result) {
     return (
-      <div className="min-h-screen bg-gradient-to-b from-background to-muted/30">
-        {/* Header */}
-        <header className="border-b bg-background/80 backdrop-blur-sm sticky top-0 z-10">
-          <div className="container max-w-5xl mx-auto px-4 h-16 flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="h-9 w-9 rounded-lg bg-primary flex items-center justify-center">
-                <Wand2 className="h-5 w-5 text-primary-foreground" />
-              </div>
-              <span className="font-semibold text-lg">Image Transformer</span>
-            </div>
-            <Button variant="ghost" onClick={handleReset}>
-              <RotateCcw className="h-4 w-4" />
-              Start Over
-            </Button>
-          </div>
-        </header>
-
-        {/* Main content */}
-        <main className="container max-w-4xl mx-auto px-4 py-8">
-          <div className="mb-6">
-            <h2 className="text-2xl font-bold mb-2">Transformation Complete</h2>
-            <p className="text-muted-foreground">
-              Drag the slider to compare the original and {STYLES[style].name} versions
-            </p>
-          </div>
-
-          {/* Comparison slider */}
-          <ComparisonSlider
-            originalImage={imageData}
-            transformedImage={result}
-            originalLabel="Original"
-            transformedLabel={STYLES[style].name}
-            className="shadow-2xl"
-          />
-
-          {/* Actions */}
-          <div className="flex flex-col sm:flex-row gap-3 mt-8">
-            <Button variant="outline" onClick={handleNewTransform} className="flex-1">
-              <ArrowLeft className="h-4 w-4" />
-              Try Another Style
-            </Button>
-            <Button asChild className="flex-1">
-              <a href={result} download target="_blank" rel="noopener noreferrer">
-                <Download className="h-4 w-4" />
-                Download Result
-              </a>
-            </Button>
-          </div>
-
-          {/* Quick style switcher */}
-          <div className="mt-8 p-6 rounded-xl border bg-card">
-            <p className="text-sm font-medium mb-4">Quick transform to another style</p>
-            <StyleSelector
-              value={style}
-              onChange={(newStyle) => {
-                setStyle(newStyle);
-                setResult(null);
-              }}
-              variant="compact"
-            />
-          </div>
-        </main>
-      </div>
+      <ResultScreen
+        result={result}
+        style={style}
+        onStyleChange={setStyle}
+        onTryAnotherStyle={handleNewTransform}
+        onReset={handleReset}
+      />
     );
   }
 
-  // ==========================================
-  // STEP 2: Configure Screen
-  // ==========================================
+  // Configure screen
   return (
-    <div className="min-h-screen bg-gradient-to-b from-background to-muted/30">
-      {/* Header */}
-      <header className="border-b bg-background/80 backdrop-blur-sm sticky top-0 z-10">
-        <div className="container max-w-5xl mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="h-9 w-9 rounded-lg bg-primary flex items-center justify-center">
-              <Wand2 className="h-5 w-5 text-primary-foreground" />
-            </div>
-            <span className="font-semibold text-lg">Image Transformer</span>
-          </div>
-          <Button variant="ghost" onClick={handleReset}>
-            <RotateCcw className="h-4 w-4" />
-            Start Over
-          </Button>
-        </div>
-      </header>
-
-      {/* Main content */}
-      <main className="container max-w-7xl mx-auto px-4 py-8">
-        <div className="flex flex-col lg:flex-row gap-8">
-          {/* Left: Image preview */}
-          <div className="flex-1 min-w-0">
-            <Label className="text-base mb-3 block">Your Image</Label>
-            <ImagePreview
-              src={imageData}
-              alt="Selected image"
-              onRemove={handleReset}
-            />
-          </div>
-
-          {/* Right: Options */}
-          <div className="w-full lg:w-[360px] shrink-0 space-y-6">
-            {/* Style selection */}
-            <div>
-              <Label className="text-base mb-3 block">Choose a Style</Label>
-              <StyleSelector value={style} onChange={setStyle} />
-            </div>
-
-            {/* Custom prompt */}
-            <div>
-              <Label htmlFor="prompt" className="text-base mb-3 block">
-                Custom Instructions
-                <span className="text-muted-foreground font-normal ml-2">(optional)</span>
-              </Label>
-              <Textarea
-                id="prompt"
-                value={prompt}
-                onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setPrompt(e.target.value)}
-                placeholder="Add specific details or adjustments..."
-                className="h-24 resize-none overflow-y-auto"
-              />
-              <p className="text-xs text-muted-foreground mt-2">
-                E.g., "make it more colorful" or "add a sunset background"
-              </p>
-            </div>
-
-            {/* Error message */}
-            {error && (
-              <div className="rounded-lg border border-destructive bg-destructive/10 px-4 py-3">
-                <p className="text-sm text-destructive font-medium">{error}</p>
-              </div>
-            )}
-
-            {/* Transform button */}
-            <Button
-              onClick={handleTransform}
-              disabled={loading}
-              size="lg"
-              className="w-full h-12 text-base"
-            >
-              {loading ? (
-                <>
-                  <Loader2 className="h-5 w-5 animate-spin" />
-                  Transforming...
-                </>
-              ) : (
-                <>
-                  <Wand2 className="h-5 w-5" />
-                  Transform Image
-                </>
-              )}
-            </Button>
-
-            {loading && (
-              <p className="text-sm text-muted-foreground text-center">
-                This usually takes 10-30 seconds...
-              </p>
-            )}
-          </div>
-        </div>
-      </main>
-    </div>
+    <ConfigureScreen
+      imageData={imageData}
+      style={style}
+      prompt={prompt}
+      loading={loading}
+      error={error}
+      onStyleChange={setStyle}
+      onPromptChange={setPrompt}
+      onTransform={handleTransform}
+      onReset={handleReset}
+    />
   );
 }
-
