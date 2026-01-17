@@ -12,7 +12,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, field_validator
-from openai import OpenAI
+from openai import AsyncOpenAI
 
 
 DATABASE_PATH = Path("/app/data/chatbot.db")
@@ -68,7 +68,7 @@ app.add_middleware(
     allow_headers=["Content-Type", "Authorization"],
 )
 
-openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+openai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 
 class Message(BaseModel):
@@ -137,12 +137,12 @@ async def chat(request: ChatRequest):
 
             async def generate():
                 full_response = ""
-                stream = openai_client.chat.completions.create(
+                stream = await openai_client.chat.completions.create(
                     model=OPENAI_MODEL,
                     messages=messages,
                     stream=True,
                 )
-                for chunk in stream:
+                async for chunk in stream:
                     if chunk.choices[0].delta.content:
                         content = chunk.choices[0].delta.content
                         full_response += content
@@ -153,7 +153,7 @@ async def chat(request: ChatRequest):
 
             return StreamingResponse(generate(), media_type="text/plain")
 
-        completion = openai_client.chat.completions.create(
+        completion = await openai_client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=messages,
         )
