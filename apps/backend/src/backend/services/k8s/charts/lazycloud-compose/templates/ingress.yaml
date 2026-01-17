@@ -22,6 +22,8 @@ metadata:
     {{- end }}
   annotations:
     {{- include "lazycloud-compose.annotations" $ | nindent 4 }}
+    # Default nginx body size limit for file uploads (can be overridden via ingress.annotations)
+    nginx.ingress.kubernetes.io/proxy-body-size: "128m"
     {{- if $service.annotations }}
     {{- toYaml $service.annotations | nindent 4 }}
     {{- end }}
