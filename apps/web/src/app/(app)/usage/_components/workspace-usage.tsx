@@ -187,7 +187,7 @@ export function WorkspaceUsageCard({
                 </span>
               )}
             </div>
-            <div className="flex items-center gap-3">
+            <div className="hidden sm:flex items-center gap-3">
               {deployment.status === "Active" && deployment.deployed_at && (
                 <span className="text-muted-foreground text-xs">
                   Deployed {formatShortDate(deployment.deployed_at)}
@@ -293,9 +293,9 @@ export function WorkspaceUsageCard({
                 </div>
               </div>
 
-              {/* Service Breakdown */}
+              {/* Service Breakdown - hidden on mobile */}
               {deploymentWithBreakdown.cost_breakdown && (
-                <div className="space-y-3">
+                <div className="hidden sm:block space-y-3">
                   <SectionHeader>Service Breakdown</SectionHeader>
                   {deploymentWithBreakdown.cost_breakdown.service_breakdown &&
                   deploymentWithBreakdown.cost_breakdown.service_breakdown.length > 0 ? (
@@ -340,10 +340,10 @@ export function WorkspaceUsageCard({
                 </div>
               )}
 
-              {/* Volume Breakdown */}
+              {/* Volume Breakdown - hidden on mobile */}
               {deploymentWithBreakdown.cost_breakdown?.volume_breakdown &&
                 deploymentWithBreakdown.cost_breakdown.volume_breakdown.length > 0 && (
-                  <div className="space-y-3">
+                  <div className="hidden sm:block space-y-3">
                     <SectionHeader>Volume Breakdown</SectionHeader>
                     <div className="bg-muted rounded-lg border overflow-hidden">
                       <div className="overflow-x-auto">
@@ -381,12 +381,12 @@ export function WorkspaceUsageCard({
                   </div>
                 )}
 
-              {/* Totals Comparison */}
+              {/* Totals Comparison - hidden on mobile */}
               {deploymentWithBreakdown.cost_breakdown?.service_breakdown &&
                 deploymentWithBreakdown.cost_breakdown.service_breakdown.length > 0 &&
                 deploymentWithBreakdown.cost_breakdown.volume_breakdown &&
                 deploymentWithBreakdown.cost_breakdown.volume_breakdown.length > 0 && (
-                  <div className="bg-card rounded-lg border p-3">
+                  <div className="hidden sm:block bg-card rounded-lg border p-3">
                     <div className="flex items-center justify-between text-sm">
                       <span className="text-muted-foreground">Breakdown Total ($):</span>
                       <span className="font-semibold">

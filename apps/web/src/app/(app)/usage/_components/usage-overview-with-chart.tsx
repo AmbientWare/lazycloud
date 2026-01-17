@@ -208,7 +208,7 @@ export function UsageOverviewWithChart({
                 {mounted ? (
                   <ChartContainer
                     config={chartConfig}
-                    className="h-[140px] w-full"
+                    className="h-[120px] sm:h-[140px] w-full"
                   >
                     <BarChart accessibilityLayer data={chartData}>
                       <CartesianGrid
@@ -248,7 +248,7 @@ export function UsageOverviewWithChart({
                     </BarChart>
                   </ChartContainer>
                 ) : (
-                  <div className="bg-muted flex h-[140px] w-full items-center justify-center rounded-lg">
+                  <div className="bg-muted flex h-[120px] sm:h-[140px] w-full items-center justify-center rounded-lg">
                     <p className="text-muted-foreground text-sm">Loading...</p>
                   </div>
                 )}
@@ -256,7 +256,7 @@ export function UsageOverviewWithChart({
             )}
 
             {/* Usage and Cost Metrics Cards */}
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-6">
+            <div className="grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-3 lg:grid-cols-6">
               {usage.costs && (
                 <UsageMetricCard
                   label="Total"

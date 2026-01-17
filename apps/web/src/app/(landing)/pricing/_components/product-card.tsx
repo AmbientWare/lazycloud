@@ -117,20 +117,20 @@ export function ProductCard({ product, isEnterprise }: { product: PolarProduct; 
           </Badge>
         </div>
       )}
-      <StyledCardContent className="flex h-full flex-col gap-6 p-8">
+      <StyledCardContent className="flex h-full flex-col gap-4 sm:gap-6 p-4 sm:p-6 md:p-8">
         <div className="space-y-4">
           <div className="space-y-2">
             <h3 className="text-2xl font-bold">{product.name}</h3>
             <div className="space-y-1">
               {isEnterprise ? (
-                <div className="text-4xl font-bold">Contact Us</div>
+                <div className="text-3xl sm:text-4xl font-bold">Contact Us</div>
               ) : monthlyPrice ? (
                 <div className="flex items-baseline gap-2">
-                  <span className="text-4xl font-bold">{monthlyPrice}</span>
+                  <span className="text-3xl sm:text-4xl font-bold">{monthlyPrice}</span>
                   <span className="text-muted-foreground text-sm">/month</span>
                 </div>
               ) : (
-                <div className="text-4xl font-bold">Free</div>
+                <div className="text-3xl sm:text-4xl font-bold">Free</div>
               )}
               {!isEnterprise && (
                 <div className="text-muted-foreground text-xs">

@@ -13,6 +13,7 @@ import {
 import {
   SidebarInset,
   SidebarProvider,
+  SidebarTrigger,
 } from "@/components/ui/sidebar";
 import { usePathname } from "next/navigation";
 import { UserProvider } from "@/contexts/UserContext";
@@ -95,8 +96,13 @@ export default function DocsLayout({
       <SidebarProvider>
         <DocsSidebar />
         <SidebarInset className="bg-transparent">
+          {/* Mobile header with sidebar trigger */}
+          <header className="flex md:hidden items-center gap-4 h-14 px-4 border-b sticky top-0 z-50 bg-background">
+            <SidebarTrigger />
+            <TextLogo />
+          </header>
           <div className="flex h-full w-full flex-col overflow-hidden p-4">
-            <div className="mx-auto w-full max-w-5xl">
+            <div className="mx-auto w-full max-w-5xl hidden md:block">
               <DocsHeader />
             </div>
             <div className="mx-auto mt-4 flex w-full max-w-5xl flex-1 flex-col overflow-y-auto rounded-xl border border-border/60 bg-card/90 shadow-sm backdrop-blur-md">

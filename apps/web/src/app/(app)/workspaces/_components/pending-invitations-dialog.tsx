@@ -179,10 +179,11 @@ export function PendingInvitationsDialog({
                               handleResend(invitation.email, invitation.role)
                             }
                             disabled={resendingEmail === invitation.email}
-                            className="h-8 shrink-0"
+                            className="h-11 w-11 shrink-0"
+                            aria-label="Resend invitation"
                           >
                             <Send
-                              className={`h-3 w-3 ${
+                              className={`h-4 w-4 ${
                                 resendingEmail === invitation.email
                                   ? "animate-spin"
                                   : ""

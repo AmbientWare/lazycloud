@@ -7,7 +7,7 @@ const Footer = () => {
   return (
     <footer className="bg-background w-full border-t py-12">
       <div className="container mx-auto px-4">
-        <div className="grid grid-cols-1 gap-8 md:grid-cols-2 md:gap-12 lg:grid-cols-4">
+        <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 sm:gap-8 lg:grid-cols-4 lg:gap-12">
           {/* Company Info */}
           <div className="space-y-3">
             <h3 className="text-lazycloud text-2xl font-bold tracking-tight">
@@ -68,10 +68,10 @@ const Footer = () => {
           <div className="space-y-3">
             <h4 className="text-foreground text-lg font-semibold">Follow Us</h4>
             <div className="flex space-x-2">
-              <Button variant="ghost" size="icon" aria-label="X">
+              <Button variant="ghost" size="icon" className="size-11" aria-label="X">
                 <X className="h-5 w-5" />
               </Button>
-              <Button variant="ghost" size="icon" aria-label="LinkedIn">
+              <Button variant="ghost" size="icon" className="size-11" aria-label="LinkedIn">
                 <Linkedin className="h-5 w-5" />
               </Button>
             </div>

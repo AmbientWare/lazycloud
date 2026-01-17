@@ -12,6 +12,7 @@ import {
   SidebarMenuItem,
   SidebarHeader,
   SidebarFooter,
+  useSidebar,
 } from "@/components/ui/sidebar";
 import TextLogo from "../_components/textLogo";
 import { CustomUserButton } from "./custom-user-button";
@@ -37,6 +38,8 @@ const items = [
 ];
 
 export function AppSidebar() {
+  const { setOpenMobile } = useSidebar();
+
   return (
     <Sidebar>
       <SidebarHeader className="flex h-16 items-center justify-center">
@@ -49,7 +52,7 @@ export function AppSidebar() {
               {items.map((item) => (
                 <SidebarMenuItem key={item.title}>
                   <SidebarMenuButton asChild>
-                    <Link href={item.url}>
+                    <Link href={item.url} onClick={() => setOpenMobile(false)}>
                       <item.icon />
                       <span>{item.title}</span>
                     </Link>

@@ -109,7 +109,7 @@ export function CodeBlock({ children, className }: CodeBlockProps) {
         variant="ghost"
         size="icon"
         className={cn(
-          "absolute right-2 h-8 w-8 opacity-0 transition-opacity group-hover:opacity-100",
+          "absolute right-2 h-11 w-11 opacity-0 transition-opacity group-hover:opacity-100",
           isSingleLine ? "top-1/2 -translate-y-1/2" : "top-2",
         )}
       />

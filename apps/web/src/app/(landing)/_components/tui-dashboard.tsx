@@ -47,8 +47,8 @@ export function TUIDashboard() {
   const [activeTab, setActiveTab] = useState("deployments");
   const isInView = useInView(sectionRef, {
     margin: "0%",
-    amount: 0.3,
-    once: false,
+    amount: 0.2,
+    once: true,
   });
 
   return (
@@ -82,10 +82,10 @@ export function TUIDashboard() {
                 value={activeTab}
                 onValueChange={setActiveTab}
                 orientation="vertical"
-                className="flex min-h-[500px] flex-col md:flex-row"
+                className="flex min-h-[400px] sm:min-h-[500px] flex-col sm:flex-row"
               >
                 {/* Left sidebar - tab triggers */}
-                <TabsList className="bg-transparent h-auto w-full flex-shrink-0 flex-col items-stretch justify-start gap-2 rounded-none border-b border-border/30 p-4 md:w-[280px] md:border-r md:border-b-0">
+                <TabsList className="bg-transparent h-auto w-full flex-shrink-0 flex-col items-stretch justify-start gap-2 rounded-none border-b border-border/30 p-4 sm:w-[240px] md:w-[280px] sm:border-r sm:border-b-0">
                   {dashboardFeatures.map((feature) => {
                     const Icon = feature.icon;
                     return (

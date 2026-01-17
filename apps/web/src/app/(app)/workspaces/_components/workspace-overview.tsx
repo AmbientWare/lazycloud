@@ -124,7 +124,7 @@ export function WorkspaceOverview({ workspaceId }: WorkspaceOverviewProps) {
       </StyledCardHeader>
       <StyledCardContent>
         {deployments.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-12 text-center">
+          <div className="flex flex-col items-center justify-center py-8 sm:py-12 text-center">
             <div className="bg-lazycloud/10 mb-4 flex h-12 w-12 items-center justify-center rounded-lg">
               <Rocket className="text-lazycloud h-6 w-6" />
             </div>

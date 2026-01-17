@@ -3,18 +3,16 @@
  */
 
 export const containerVariants = {
-  hidden: { opacity: 0, y: 30 },
+  hidden: { opacity: 0 },
   show: {
     opacity: 1,
-    y: 0,
     transition: {
-      duration: 0.2,
+      duration: 0.3,
       ease: [0.2, 0, 0.1, 1] as const,
     },
   },
   exit: {
     opacity: 0,
-    y: -30,
     transition: {
       duration: 0.15,
       ease: [0.2, 0, 0.1, 1] as const,

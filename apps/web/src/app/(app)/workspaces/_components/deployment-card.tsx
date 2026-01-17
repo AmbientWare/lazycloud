@@ -55,13 +55,14 @@ function DomainSetupNotice({
             </code>
             <button
               onClick={copyToClipboard}
-              className="text-muted-foreground hover:text-foreground transition-colors shrink-0"
+              className="text-muted-foreground hover:text-foreground transition-colors shrink-0 p-2 min-h-[44px] min-w-[44px] flex items-center justify-center"
               title="Copy CNAME target"
+              aria-label="Copy CNAME target"
             >
               {copied ? (
-                <Check className="h-3 w-3 text-green-500" />
+                <Check className="h-4 w-4 text-green-500" />
               ) : (
-                <Copy className="h-3 w-3" />
+                <Copy className="h-4 w-4" />
               )}
             </button>
           </div>
@@ -139,7 +140,7 @@ export function DeploymentCard({ deployment }: { deployment: DeploymentWithStatu
                 {deployment.state}
               </Badge>
             </div>
-            <div className="text-muted-foreground flex items-center gap-4 text-sm">
+            <div className="text-muted-foreground hidden sm:flex items-center gap-4 text-sm">
               <div className="flex items-center gap-1.5">
                 <Server className="h-4 w-4" />
                 <span>{service_count}</span>
@@ -184,7 +185,7 @@ export function DeploymentCard({ deployment }: { deployment: DeploymentWithStatu
               {deployment.state}
             </Badge>
           </div>
-          <div className="text-muted-foreground flex items-center gap-4 text-sm">
+          <div className="text-muted-foreground hidden sm:flex items-center gap-4 text-sm">
             <div className="flex items-center gap-1.5">
               <Server className="h-4 w-4" />
               {status ? (
@@ -208,7 +209,7 @@ export function DeploymentCard({ deployment }: { deployment: DeploymentWithStatu
       </StyledAccordionTrigger>
       <StyledAccordionContent>
         <div className="space-y-6 pt-2">
-          <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3">
             {/* Services Section */}
             <div className="space-y-3">
               <div className="flex items-center gap-2 pb-1">
@@ -242,7 +243,7 @@ export function DeploymentCard({ deployment }: { deployment: DeploymentWithStatu
                         key={service.name}
                         className="bg-muted/50 rounded-md border border-border/50 p-3 shadow-sm transition-colors"
                       >
-                      <div className="flex items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
                         <div className="flex min-w-0 flex-1 items-center gap-2">
                           <Badge
                             variant="outline"
@@ -265,10 +266,11 @@ export function DeploymentCard({ deployment }: { deployment: DeploymentWithStatu
                           )}
                           <button
                             onClick={() => openServiceDetails(service)}
-                            className="text-muted-foreground hover:text-foreground transition-colors p-1 rounded hover:bg-muted"
+                            className="text-muted-foreground hover:text-foreground transition-colors p-2 min-h-[44px] min-w-[44px] flex items-center justify-center rounded hover:bg-muted"
                             title="View details"
+                            aria-label="View service details"
                           >
-                            <Info className="h-3.5 w-3.5" />
+                            <Info className="h-4 w-4" />
                           </button>
                         </div>
                       </div>

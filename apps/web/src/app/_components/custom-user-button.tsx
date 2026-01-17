@@ -84,7 +84,10 @@ export function CustomUserButton({ showDetails = false }: CustomUserButtonProps)
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button className="flex cursor-pointer items-center gap-3 rounded-lg p-1 transition-colors hover:bg-accent/50 focus:outline-none focus-visible:outline-none">
+        <button
+          className="flex cursor-pointer items-center gap-3 rounded-lg p-1.5 min-h-[44px] transition-colors hover:bg-accent/50 focus:outline-none focus-visible:outline-none"
+          aria-label="User menu"
+        >
           {avatar}
           {showDetails && (
             <div className="flex flex-col items-start text-left">

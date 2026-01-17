@@ -183,7 +183,8 @@ export function TransferOwnershipDialog({
                     size="sm"
                     onClick={handleCancelPendingTransfer}
                     disabled={isCancelling}
-                    className="h-8 w-8 shrink-0 p-0 text-red-500 hover:bg-red-500/10"
+                    className="h-11 w-11 shrink-0 p-0 text-red-500 hover:bg-red-500/10"
+                    aria-label="Cancel transfer"
                   >
                     {isCancelling ? (
                       <Loader2 className="h-4 w-4 animate-spin text-red-500" />

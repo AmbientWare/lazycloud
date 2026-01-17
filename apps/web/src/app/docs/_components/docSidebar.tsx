@@ -16,6 +16,7 @@ import {
   SidebarMenuSub,
   SidebarMenuSubItem,
   SidebarRail,
+  useSidebar,
 } from "@/components/ui/sidebar";
 import { CustomUserButton } from "@/app/_components/custom-user-button";
 import { CurrentYear } from "@/components/shared/CurrentYear";
@@ -147,6 +148,7 @@ const data = {
 
 export function DocsSidebar() {
   const pathname = usePathname();
+  const { setOpenMobile } = useSidebar();
 
   const isActive = (url: string) => pathname === url;
   const isParentActive = (item: (typeof data.navMain)[0]) => {
@@ -200,6 +202,7 @@ export function DocsSidebar() {
                             >
                               <Link
                                 href={subItem.url}
+                                onClick={() => setOpenMobile(false)}
                                 className={cn(
                                   isActive(subItem.url) &&
                                     "text-lazycloud font-medium"
@@ -219,6 +222,7 @@ export function DocsSidebar() {
                   <SidebarMenuButton asChild isActive={isActive(item.url)}>
                     <Link
                       href={item.url}
+                      onClick={() => setOpenMobile(false)}
                       className={cn(
                         "font-medium",
                         isParentActive(item) && "text-lazycloud"

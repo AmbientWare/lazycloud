@@ -131,8 +131,8 @@ export default function QuickStart() {
   const sectionRef = useRef<HTMLDivElement>(null);
   const isInView = useInView(sectionRef, {
     margin: "0%",
-    amount: 0.3,
-    once: false,
+    amount: 0.2,
+    once: true,
   });
   const [highlightKey, setHighlightKey] = useState<
     ComposeHighlightKey | ComposeHighlightKey[] | null
@@ -175,7 +175,8 @@ export default function QuickStart() {
 
         <div className="space-y-10">
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 lg:items-stretch xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)] xl:gap-8">
-            <div className="h-full lg:order-2">
+            {/* Compose file example - hidden on mobile */}
+            <div className="hidden h-full lg:block lg:order-2">
               <ComposeFile highlightKey={highlightKey} />
             </div>
 
