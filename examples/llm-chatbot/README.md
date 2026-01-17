@@ -1,6 +1,6 @@
 # LLM Chatbot
 
-A full-stack AI chatbot demonstrating LazyCloud's key features: multi-service deployment, persistent volumes, and secret management.
+A full-stack AI chatbot with streaming responses, demonstrating LazyCloud's key features: multi-service deployment, persistent volumes, and secret management.
 
 ## Architecture
 
