@@ -1,5 +1,5 @@
 from loguru import logger
-from models.billing import STORAGE_CLASS_EBS, STORAGE_CLASS_EFS
+from models.storage import STORAGE_CLASS_EBS, STORAGE_CLASS_EFS
 from models.compose import (
     ComposeFile,
     ComposeNetwork,

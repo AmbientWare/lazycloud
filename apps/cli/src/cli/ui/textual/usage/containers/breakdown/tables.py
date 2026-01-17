@@ -1,4 +1,4 @@
-from models.billing import STORAGE_CLASS_EBS
+from models.storage import STORAGE_CLASS_EBS
 from responses.usage import ServiceCostBreakdown, VolumeCostBreakdown
 from textual.widgets import DataTable
 

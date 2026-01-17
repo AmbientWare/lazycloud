@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta
 from enum import IntEnum, StrEnum
 
+from models.storage import STORAGE_CLASS_EBS, STORAGE_CLASS_EFS
+
 
 class UsageCollectionInterval(IntEnum):
     MINUTE = 1
@@ -64,15 +66,7 @@ METER_METADATA_FIELDS = {
     MeterNames.PUBLIC_ENDPOINTS: "public_endpoint_hours",
 }
 
-STORAGE_CLASS_EBS = "ebs-gp3"
-STORAGE_CLASS_EFS = "efs-sc"
-
-STORAGE_CLASS_TO_METER: dict[str, str] = {
+STORAGE_CLASS_TO_METER: dict[str, MeterNames] = {
     STORAGE_CLASS_EBS: MeterNames.STANDARD_STORAGE,
     STORAGE_CLASS_EFS: MeterNames.SHARED_STORAGE,
-}
-
-STORAGE_CLASS_TO_TYPE: dict[str, str] = {
-    STORAGE_CLASS_EBS: "Standard",
-    STORAGE_CLASS_EFS: "Shared",
 }

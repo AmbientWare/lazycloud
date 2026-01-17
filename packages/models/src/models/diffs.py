@@ -1,6 +1,6 @@
 from typing import Any
 
-from models.billing import STORAGE_CLASS_TO_TYPE
+from models.storage import STORAGE_CLASS_TO_TYPE
 from pydantic import BaseModel
 
 

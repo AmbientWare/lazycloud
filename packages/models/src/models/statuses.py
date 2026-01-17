@@ -10,6 +10,7 @@ from models.helm import (
 )
 from models.k8s import Resources, WorkloadType
 from models.pod_states import ContainerCounts, PodFailureReasons
+from models.storage import StorageType
 
 JOB_CONDITION_COMPLETE = "Complete"
 JOB_CONDITION_FAILED = "Failed"
@@ -39,13 +40,6 @@ class StatusPhase(StrEnum):
     ERROR = "error"  # Failed (unrecoverable)
     EXITED = "exited"  # Job completed or stopped (replicas=0)
     UNKNOWN = "unknown"  # Can't determine state
-
-
-class StorageType(StrEnum):
-    """Storage class types."""
-
-    STANDARD = "Standard"
-    SHARED = "Shared"
 
 
 class VolumeStatus(BaseModel):

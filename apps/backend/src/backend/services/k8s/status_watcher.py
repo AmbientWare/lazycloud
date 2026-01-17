@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 
 from kubernetes_asyncio.client.exceptions import ApiException
 from loguru import logger
-from models.billing import STORAGE_CLASS_EFS
+from models.storage import STORAGE_CLASS_EFS
 from models.compose import LazyCloudLabel
 from models.helm import (
     CurrentUsage,
@@ -26,9 +26,9 @@ from models.statuses import (
     ServiceStatus,
     ServiceStatusSummary,
     StatusPhase,
-    StorageType,
     VolumeStatusSummary,
 )
+from models.storage import StorageType
 
 from backend.config import app_config
 from backend.services.k8s.client import (
