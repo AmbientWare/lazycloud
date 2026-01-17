@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from models.billing import STORAGE_CLASS_EBS, STORAGE_CLASS_EFS
+from models.storage import STORAGE_CLASS_EBS, STORAGE_CLASS_EFS
 from pydantic import BaseModel
 
 

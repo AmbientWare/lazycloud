@@ -5,7 +5,7 @@ from typing import Any
 
 from models.compose import LazyCloudLabel
 from models.diffs import ComposeDiff, EnvVarChanges, FieldChange, ResourceSection
-from models.statuses import StorageType
+from models.storage import StorageType
 from rich.table import Table
 from rich.text import Text
 

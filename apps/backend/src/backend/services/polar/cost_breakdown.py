@@ -1,7 +1,7 @@
 """Service for calculating cost breakdowns from usage data."""
 
 from loguru import logger
-from models.billing import STORAGE_CLASS_EBS, STORAGE_CLASS_EFS
+from models.storage import STORAGE_CLASS_EBS, STORAGE_CLASS_EFS
 from pydantic import BaseModel
 from responses.usage import (
     MeterCostBreakdown,

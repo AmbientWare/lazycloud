@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 from backend.services.compose.parser import ComposeParser
 from backend.services.k8s.helm_values_generator import HelmValuesGenerator
-from models.billing import STORAGE_CLASS_EBS, STORAGE_CLASS_EFS
+from models.storage import STORAGE_CLASS_EBS, STORAGE_CLASS_EFS
 from models.compose import (
     ComposeFile,
     ComposeNetwork,

@@ -2,7 +2,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from models.billing import STORAGE_CLASS_EBS, STORAGE_CLASS_EFS
+from models.storage import STORAGE_CLASS_EBS, STORAGE_CLASS_EFS
 from models.k8s import (
     PodSecurityContext,
     ProbeConfig,

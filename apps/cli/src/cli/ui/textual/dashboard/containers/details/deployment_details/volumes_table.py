@@ -1,4 +1,5 @@
-from models.statuses import DeploymentStatus, StorageType, VolumeStatus
+from models.statuses import DeploymentStatus, VolumeStatus
+from models.storage import StorageType
 from textual.widgets import DataTable
 
 from cli.ui.colors import Colors
