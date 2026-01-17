@@ -40,7 +40,7 @@ export function ExpandConfirmButton({
 
   return (
     <div
-      className={`flex gap-1 overflow-hidden transition-all duration-300 ease-in-out ${showConfirm ? "max-w-48 opacity-100" : "max-w-8 opacity-100"}`}
+      className={`flex gap-1 overflow-hidden transition-all duration-300 ease-in-out ${showConfirm ? "max-w-48 opacity-100" : "max-w-11 opacity-100"}`}
     >
       {showConfirm ? (
         <ConfirmButtons
@@ -55,7 +55,8 @@ export function ExpandConfirmButton({
           variant="outline"
           size="icon"
           onClick={() => setShowConfirm(true)}
-          className={`h-8 w-8 shrink-0 cursor-pointer ${buttonClassName}`}
+          className={`h-11 w-11 shrink-0 cursor-pointer ${buttonClassName}`}
+          aria-label="Confirm action"
         >
           <Icon className="h-4 w-4" />
         </Button>

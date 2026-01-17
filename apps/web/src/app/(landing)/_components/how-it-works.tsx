@@ -52,8 +52,8 @@ export default function HowItWorks() {
   const sectionRef = useRef<HTMLDivElement>(null);
   const isInView = useInView(sectionRef, {
     margin: "0%",
-    amount: 0.3,
-    once: false,
+    amount: 0.2,
+    once: true,
   });
 
   return (
@@ -66,7 +66,7 @@ export default function HowItWorks() {
       >
         <motion.div
           variants={itemVariants}
-          className="mb-12 ml-auto max-w-3xl text-right"
+          className="mb-12 ml-auto max-w-3xl text-left sm:text-right"
         >
           <Badge variant="secondary" className="bg-lazycloud mb-4 text-xs">
             How It Works
@@ -84,8 +84,8 @@ export default function HowItWorks() {
           variants={itemVariants}
           className="grid grid-cols-1 gap-6 lg:grid-cols-2 lg:items-stretch"
         >
-          {/* Left side - TUI Dashboard */}
-          <div className="h-full lg:order-1">
+          {/* Left side - TUI Dashboard (hidden on mobile) */}
+          <div className="hidden h-full lg:block lg:order-1">
             <AnimatedTerminal isActive={isInView} />
           </div>
 
@@ -96,7 +96,7 @@ export default function HowItWorks() {
               return (
                 <div key={step.title}>
                   <StyledCard variant="interactive" className="relative">
-                    <StyledCardHeader>
+                    <StyledCardHeader className="pr-16">
                       <div className="flex items-center gap-3">
                         <div className="border-primary/50 bg-primary/10 text-primary flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-sm font-semibold">
                           {idx + 1}

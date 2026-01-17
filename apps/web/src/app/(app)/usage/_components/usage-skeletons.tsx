@@ -13,7 +13,7 @@ export function OverviewSkeleton() {
         <Skeleton className="mt-2 h-4 w-48" />
       </StyledCardHeader>
       <StyledCardContent>
-        <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-4">
+        <div className="mb-6 grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-3 lg:grid-cols-4">
           {Array.from({ length: 4 }).map((_, i) => (
             <div key={i} className="bg-muted rounded-lg p-3">
               <Skeleton className="mb-2 h-3 w-20" />

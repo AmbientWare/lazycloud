@@ -138,7 +138,7 @@ export function MemberCard({
               }
               disabled={isUpdating}
             >
-              <SelectTrigger className="h-8 w-[120px] text-xs cursor-pointer">
+              <SelectTrigger className="h-11 w-full sm:w-[120px] text-xs cursor-pointer">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>

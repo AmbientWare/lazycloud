@@ -269,7 +269,7 @@ export function InviteMembersDialog({
                 value={role}
                 onValueChange={(value) => setRole(value as WorkspaceRole)}
                 disabled={isInviting}
-                className="flex gap-6"
+                className="flex flex-col gap-3 sm:flex-row sm:gap-6"
               >
                 <div className="flex items-center space-x-2">
                   <RadioGroupItem value={WorkspaceRoles.MEMBER} id="role-member" className="cursor-pointer" />

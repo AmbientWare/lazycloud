@@ -191,7 +191,7 @@ export function WorkspaceSelector({
             variant="outline"
             role="combobox"
             aria-expanded={open}
-            className="w-[280px] cursor-pointer justify-between"
+            className="w-full sm:w-[280px] cursor-pointer justify-between"
           >
             <span className="min-w-0 flex-1 truncate text-left">
               {initialWorkspaces.length === 0
@@ -235,7 +235,8 @@ export function WorkspaceSelector({
                             <Button
                               variant="ghost"
                               size="icon"
-                              className="hover:bg-primary/10 ml-2 h-6 w-6 shrink-0 cursor-pointer"
+                              className="hover:bg-primary/10 ml-2 h-11 w-11 shrink-0 cursor-pointer"
+                              aria-label="Workspace options"
                             >
                               <MoreHorizontal className="h-4 w-4" />
                             </Button>
@@ -288,7 +289,8 @@ export function WorkspaceSelector({
                               <Button
                                 variant="ghost"
                                 size="icon"
-                                className="hover:bg-primary/10 ml-2 h-6 w-6 shrink-0 cursor-pointer"
+                                className="hover:bg-primary/10 ml-2 h-11 w-11 shrink-0 cursor-pointer"
+                                aria-label="Workspace options"
                               >
                                 <MoreHorizontal className="h-4 w-4" />
                               </Button>

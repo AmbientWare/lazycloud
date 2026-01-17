@@ -26,7 +26,7 @@ export function CopyButton({
   timeout = 750,
   variant = "outline",
   size = "icon",
-  className = "h-8 w-8 shrink-0 cursor-pointer",
+  className = "h-11 w-11 shrink-0 cursor-pointer",
 }: CopyButtonProps) {
   const [copied, setCopied] = useState(false);
   const timeoutRef = useRef<NodeJS.Timeout | undefined>(undefined);
@@ -63,6 +63,7 @@ export function CopyButton({
         size={size}
         onClick={handleCopy}
         className={className}
+        aria-label={copied ? "Copied" : tooltipText}
       >
         {copied ? (
           <Check className="h-4 w-4 text-green-500" />

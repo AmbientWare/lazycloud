@@ -125,7 +125,7 @@ export function ApiKeyDialog({ open, onOpenChange }: ApiKeyDialogProps) {
                   <CopyButton
                     text={apiKey.value}
                     tooltipText="Copy"
-                    className="h-8 w-8 shrink-0 cursor-pointer"
+                    className="h-11 w-11 shrink-0 cursor-pointer"
                   />
                   <StyledTooltip content="Regenerate">
                     <div>

@@ -17,8 +17,8 @@ export default function Features() {
   const sectionRef = useRef<HTMLDivElement>(null);
   const isInView = useInView(sectionRef, {
     margin: "0%",
-    amount: 0.3,
-    once: false,
+    amount: 0.2,
+    once: true,
   });
 
   return (

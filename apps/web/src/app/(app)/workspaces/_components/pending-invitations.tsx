@@ -119,7 +119,8 @@ export function PendingInvitations() {
             variant="ghost"
             size="sm"
             onClick={handleDismiss}
-            className="h-8 w-8 p-0"
+            className="h-11 w-11 p-0"
+            aria-label="Dismiss invitations"
           >
             <X className="h-4 w-4" />
           </Button>

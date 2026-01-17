@@ -112,7 +112,7 @@ export default function ComposeFile({ highlightKey }: ComposeFileProps) {
       </div>
       <div className="bg-card flex flex-1 overflow-hidden">
         {/* Line numbers */}
-        <div className="bg-muted/30 border-border/70 text-muted-foreground/40 flex min-w-[2.5rem] flex-col overflow-y-hidden border-r py-3 pr-3 text-right font-mono text-xs leading-[1.6] select-none">
+        <div className="bg-muted/30 border-border/70 text-muted-foreground/40 flex min-w-[2rem] sm:min-w-[2.5rem] flex-col overflow-y-hidden border-r py-3 pr-2 sm:pr-3 text-right font-mono text-[10px] sm:text-xs leading-[1.6] select-none">
           {Array.from({ length: 35 }, (_, i) => (
             <div key={i + 1} className="h-[1.6em]">
               {i + 1}
@@ -122,7 +122,7 @@ export default function ComposeFile({ highlightKey }: ComposeFileProps) {
         {/* Code content */}
         <div
           ref={containerRef}
-          className="bg-card flex-1 overflow-y-auto scroll-smooth px-3 py-3 font-mono text-xs leading-[1.6]"
+          className="bg-card flex-1 overflow-x-auto overflow-y-auto scroll-smooth px-2 sm:px-3 py-3 font-mono text-[10px] sm:text-xs leading-[1.6]"
         >
           <div>
             <div {...baseSectionProps()}>services:</div>

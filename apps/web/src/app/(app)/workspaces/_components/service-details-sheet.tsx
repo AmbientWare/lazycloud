@@ -150,7 +150,7 @@ export function ServiceDetailsSheet({
 
   return (
     <Drawer open={open} onOpenChange={onOpenChange}>
-      <DrawerContent className="max-h-[85vh]">
+      <DrawerContent className="max-h-[96dvh] sm:max-h-[90vh]">
         <div className="mx-auto w-full max-w-3xl">
           <DrawerHeader className="pb-2">
             <div className="flex items-center gap-3">
@@ -169,9 +169,9 @@ export function ServiceDetailsSheet({
 
           <Separator />
 
-          <div className="overflow-y-auto p-4 pb-8">
+          <div className="overflow-y-auto p-4 pb-12 sm:pb-8">
             {/* Overview row */}
-            <div className="flex flex-wrap items-center gap-x-6 gap-y-2 mb-4">
+            <div className="flex flex-wrap items-center gap-x-4 sm:gap-x-6 gap-y-2 mb-4">
               <div className="text-sm">
                 <span className="text-muted-foreground">Replicas: </span>
                 <span className="font-medium">
@@ -206,8 +206,9 @@ export function ServiceDetailsSheet({
                 </a>
                 <button
                   onClick={copyEndpoint}
-                  className="ml-auto text-muted-foreground hover:text-foreground transition-colors shrink-0 p-1 rounded hover:bg-muted"
+                  className="ml-auto text-muted-foreground hover:text-foreground transition-colors shrink-0 p-2 rounded hover:bg-muted"
                   title="Copy endpoint"
+                  aria-label="Copy endpoint"
                 >
                   {copied ? (
                     <Check className="h-4 w-4 text-green-500" />
@@ -224,23 +225,42 @@ export function ServiceDetailsSheet({
               {hasResources && (
                 <SectionCard icon={Cpu} title="Resources" iconColor="bg-blue-500/10 text-blue-500">
                   <div className="space-y-1">
-                    <div className="grid grid-cols-4 gap-2 text-xs text-muted-foreground pb-1 border-b border-border/30">
+                    <div className="hidden sm:grid grid-cols-4 gap-2 text-xs text-muted-foreground pb-1 border-b border-border/30">
                       <span></span>
                       <span>Request</span>
                       <span>Limit</span>
                       <span>Usage</span>
                     </div>
-                    <div className="grid grid-cols-4 gap-2 text-xs py-1">
+                    <div className="hidden sm:grid grid-cols-4 gap-2 text-xs py-1">
                       <span className="text-muted-foreground">CPU</span>
                       <span>{service.resources?.requests?.cpu || "-"}</span>
                       <span>{service.resources?.limits?.cpu || "-"}</span>
                       <span>{service.current_usage?.cpu || "-"}</span>
                     </div>
-                    <div className="grid grid-cols-4 gap-2 text-xs py-1">
+                    <div className="hidden sm:grid grid-cols-4 gap-2 text-xs py-1">
                       <span className="text-muted-foreground">Memory</span>
                       <span>{service.resources?.requests?.memory || "-"}</span>
                       <span>{service.resources?.limits?.memory || "-"}</span>
                       <span>{service.current_usage?.memory || "-"}</span>
+                    </div>
+                    {/* Mobile-friendly stacked layout */}
+                    <div className="sm:hidden space-y-3">
+                      <div>
+                        <span className="text-xs text-muted-foreground">CPU</span>
+                        <div className="grid grid-cols-3 gap-2 text-xs mt-1">
+                          <div><span className="text-muted-foreground">Req:</span> {service.resources?.requests?.cpu || "-"}</div>
+                          <div><span className="text-muted-foreground">Lim:</span> {service.resources?.limits?.cpu || "-"}</div>
+                          <div><span className="text-muted-foreground">Use:</span> {service.current_usage?.cpu || "-"}</div>
+                        </div>
+                      </div>
+                      <div>
+                        <span className="text-xs text-muted-foreground">Memory</span>
+                        <div className="grid grid-cols-3 gap-2 text-xs mt-1">
+                          <div><span className="text-muted-foreground">Req:</span> {service.resources?.requests?.memory || "-"}</div>
+                          <div><span className="text-muted-foreground">Lim:</span> {service.resources?.limits?.memory || "-"}</div>
+                          <div><span className="text-muted-foreground">Use:</span> {service.current_usage?.memory || "-"}</div>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </SectionCard>
