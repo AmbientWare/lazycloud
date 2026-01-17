@@ -29,16 +29,16 @@ class SecretsContainer(Container):
         """Create the secrets count display"""
         yield Static("", id="secrets-count")
 
-    def on_mount(self) -> None:
+    async def on_mount(self) -> None:
         """Style the container when mounted."""
         self.can_focus = True
         if self.deployment_id:
-            self._update_count(self.deployment_id)
+            await self._update_count(self.deployment_id)
 
-    def watch_deployment_id(self, old_id: str | None, new_id: str | None) -> None:
+    async def watch_deployment_id(self, old_id: str | None, new_id: str | None) -> None:
         """Update secret count when deployment changes."""
         if new_id:
-            self._update_count(new_id)
+            await self._update_count(new_id)
         else:
             self.secret_count = 0
 
@@ -66,7 +66,7 @@ class SecretsContainer(Container):
         if isinstance(message, (SecretUpdated, SecretDeleted)):
             # Refresh the count when secrets are updated/deleted
             if self.deployment_id:
-                self._update_count(self.deployment_id)
+                await self._update_count(self.deployment_id)
             message.stop()
 
     def on_click(self) -> None:
