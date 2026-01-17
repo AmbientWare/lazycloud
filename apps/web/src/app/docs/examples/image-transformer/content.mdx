@@ -3,7 +3,7 @@
 Transform images into artistic styles using AI. A single-service app with persistent storage for images and SQLite database tracking, built with TanStack Start.
 
 <Tip>
-**What you'll learn:** Connecting to external AI APIs, persistent file storage with volumes, SQLite database for tracking history, and serving stored files via API routes.
+**What you'll learn:** Connecting to external AI APIs, persistent file storage with volumes, SQLite database for tracking history, and serving stored files via server functions.
 </Tip>
 
 ```
@@ -18,24 +18,69 @@ Transform images into artistic styles using AI. A single-service app with persis
   └──────────┘
 ```
 
-## Run it
+## Prerequisites
+
+You'll need a **Replicate API token** to use the FLUX image generation model.
+
+1. Create an account at [replicate.com](https://replicate.com)
+2. Go to [Account → API Tokens](https://replicate.com/account/api-tokens)
+3. Create a new token and copy it (starts with `r8_`)
+
+## Quick Start (Local)
 
 ```bash
 git clone https://github.com/AmbientWare/lazycloud-releases.git
 cd lazycloud-releases/examples/image-transformer
 
-# Local
-export REPLICATE_API_TOKEN=r8_...
-docker compose up --build
+# Set your API token
+export REPLICATE_API_TOKEN=r8_your_token_here
 
-# Deploy
+# Run locally
+docker compose up --build
+```
+
+Open [http://localhost:3000](http://localhost:3000) to use the app.
+
+## Deploy to LazyCloud
+
+### Step 1: Initialize
+
+```bash
 lazycloud init
+```
+
+This detects your `compose.yaml` and prepares for deployment.
+
+### Step 2: Deploy
+
+```bash
 lazycloud deploy
 ```
 
-## What's configured
+You'll be prompted for environment variables. When asked "Import from", you have three options:
 
-This example uses standard Docker Compose with LazyCloud labels for persistent storage.
+| Option | When to use |
+|--------|-------------|
+| `file` | Import from a `.env` file (default) |
+| `shell` | Import from your current shell environment |
+| `manual` | Enter each value directly in the terminal |
+
+Select `manual` to enter values directly, then provide:
+
+| Variable | What to enter |
+|----------|---------------|
+| `REPLICATE_API_TOKEN` | Your Replicate API token (e.g., `r8_abc123...`) |
+| `DATA_DIR` | Keep the default `/app/data` |
+
+### Step 3: Access your app
+
+Once deployed, run `lazycloud dashboard` to view your deployment. Navigate to your service to find its public URL. Your images and transformation history persist across deployments.
+
+---
+
+## Configuration Reference
+
+Details about the `compose.yaml` configuration for customization.
 
 ### Environment variables
 
@@ -45,7 +90,7 @@ environment:
   - DATA_DIR=/app/data
 ```
 
-Environment variables defined in your compose file are detected during `lazycloud deploy`. You'll be prompted to import values from a `.env` file, your shell environment, or enter them manually. Values are stored encrypted.
+Variables are detected during `lazycloud deploy` and stored encrypted.
 
 ### Persistent storage
 
@@ -56,11 +101,11 @@ volumes:
       lazycloud.volume.size: "20Gi"
 ```
 
-The volume stores both the SQLite database (`transformations.db`) and all uploaded/transformed images. Data persists across deployments and restarts.
+The volume stores:
+- **SQLite database** (`transformations.db`) - Tracks transformation history
+- **Image files** - Both original uploads and AI-transformed results
 
-The app uses the volume for:
-- **SQLite database** - Tracks transformation history (original filename, style, timestamps)
-- **Image files** - Stores both original uploads and AI-transformed results
+Data persists across deployments and restarts.
 
 ### Resource limits
 
@@ -75,7 +120,7 @@ deploy:
       memory: 256M
 ```
 
-Set CPU and memory per service. `limits` caps max usage, `reservations` guarantees minimum resources.
+`limits` caps maximum usage. `reservations` guarantees minimum resources.
 
 ### Health checks
 
@@ -88,7 +133,7 @@ healthcheck:
   start_period: 10s
 ```
 
-LazyCloud uses health checks to determine when your service is ready to receive traffic and to restart unhealthy containers.
+LazyCloud uses health checks to determine when your service is ready and to restart unhealthy containers.
 
 ---
 
