@@ -19,24 +19,85 @@ A full-stack AI chatbot with streaming responses, showing how LazyCloud handles 
          └────────┘     └─────────┘
 ```
 
-## Run it
+## Prerequisites
+
+You'll need an **OpenAI API key** to use GPT models.
+
+1. Create an account at [platform.openai.com](https://platform.openai.com)
+2. Go to [API Keys](https://platform.openai.com/api-keys)
+3. Create a new key and copy it (starts with `sk-`)
+
+## Quick Start (Local)
 
 ```bash
 git clone https://github.com/AmbientWare/lazycloud-releases.git
 cd lazycloud-releases/examples/llm-chatbot
 
-# Local
-export OPENAI_API_KEY=sk-...
-docker compose up --build
+# Set your API key
+export OPENAI_API_KEY=sk-your_key_here
 
-# Deploy
+# Run locally
+docker compose up --build
+```
+
+Open [http://localhost:3000](http://localhost:3000) to use the chatbot.
+
+## Deploy to LazyCloud
+
+### Step 1: Initialize
+
+```bash
 lazycloud init
+```
+
+This detects your `compose.yaml` and prepares for deployment.
+
+### Step 2: Deploy
+
+```bash
 lazycloud deploy
 ```
 
-## What's configured
+You'll be prompted for environment variables and build arguments. When asked "Import from", you have three options:
 
-This example uses standard Docker Compose with a few LazyCloud labels.
+| Option | When to use |
+|--------|-------------|
+| `file` | Import from a `.env` file (default) |
+| `shell` | Import from your current shell environment |
+| `manual` | Enter each value directly in the terminal |
+
+Select `manual` to enter values directly.
+
+#### Environment Variables
+
+| Variable | What to enter |
+|----------|---------------|
+| `OPENAI_API_KEY` | Your OpenAI API key (e.g., `sk-abc123...`) |
+| `OPENAI_MODEL` | Model name or keep default `gpt-4o-mini` |
+| `REDIS_URL` | Keep the default `redis://redis:6379` |
+| `CORS_ORIGINS` | Enter `https://frontend.public` |
+
+#### Build Arguments
+
+| Argument | What to enter |
+|----------|---------------|
+| `NEXT_PUBLIC_API_URL` | Enter `https://api.public` |
+
+<Tip>
+**About `.public` URLs:** LazyCloud transforms `.public` suffixes into actual deployed URLs. Use this pattern when services need to reference each other's public endpoints. For example, `https://frontend.public` becomes the frontend's real URL.
+</Tip>
+
+### Step 3: Access your app
+
+Once deployed, run `lazycloud dashboard` to view your deployment. Navigate to each service to find its public URL.
+
+Your chat history persists in SQLite, and Redis provides caching across sessions.
+
+---
+
+## Configuration Reference
+
+Details about the `compose.yaml` configuration for customization.
 
 ### Environment variables
 
@@ -47,9 +108,7 @@ environment:
   - REDIS_URL=redis://redis:6379
 ```
 
-Environment variables defined in your compose file are detected during `lazycloud deploy`. You'll be prompted to import values from a `.env` file, your shell environment, or enter them manually. Values are stored encrypted.
-
-Services can reference each other by name—`redis://redis:6379` resolves to the Redis container automatically.
+Variables are detected during `lazycloud deploy` and stored encrypted. Services can reference each other by name—`redis://redis:6379` resolves automatically.
 
 ### Build arguments
 
@@ -61,19 +120,9 @@ frontend:
       NEXT_PUBLIC_API_URL: http://localhost:8000
 ```
 
-Build arguments are for values needed at build time. The Next.js frontend uses `NEXT_PUBLIC_API_URL` to know where to send API requests—this gets embedded into the JavaScript bundle during build.
-
-When prompted during `lazycloud deploy`, enter the production value using the `.public` suffix:
-
-```
-NEXT_PUBLIC_API_URL: https://api.public
-```
-
-LazyCloud transforms `.public` to the actual public URL (e.g., `https://api-abc12.lazycloud.dev`).
+Build arguments are for values needed at build time. The Next.js frontend uses `NEXT_PUBLIC_API_URL` to know where to send API requests.
 
 ### CORS configuration
-
-The API needs to allow requests from the frontend's public URL. The compose file has a local default:
 
 ```yaml
 api:
@@ -81,17 +130,25 @@ api:
     - CORS_ORIGINS=http://localhost:3000,http://frontend:3000
 ```
 
-When prompted during `lazycloud deploy`, enter the production value using the `.public` suffix:
-
-```
-CORS_ORIGINS: https://frontend.public
-```
-
-LazyCloud transforms `frontend.public` to the actual public URL (e.g., `https://frontend-abc12.lazycloud.dev`).
+The API needs to allow requests from the frontend's public URL. Use `https://frontend.public` for production.
 
 <Tip>
-For server-side code, use the service name directly (e.g., `http://api:8000`). LazyCloud handles DNS resolution automatically.
+For server-to-server communication, use the service name directly (e.g., `http://api:8000`). LazyCloud handles DNS resolution automatically.
 </Tip>
+
+### Persistent storage
+
+```yaml
+volumes:
+  api-data:
+    labels:
+      lazycloud.volume.size: "10Gi"
+  redis-data:
+    labels:
+      lazycloud.volume.size: "5Gi"
+```
+
+Each service gets its own volume. Data persists across deployments and restarts.
 
 ### Resource limits
 
@@ -106,21 +163,7 @@ deploy:
       memory: 256M
 ```
 
-Set CPU and memory per service. `limits` caps max usage, `reservations` guarantees minimum resources.
-
-### Persistent storage
-
-```yaml
-volumes:
-  api-data:
-    labels:
-      lazycloud.volume.size: "10Gi"
-  redis-data:
-    labels:
-      lazycloud.volume.size: "5Gi"
-```
-
-Data persists across deployments and restarts. Each service gets its own volume—SQLite database in `api-data`, Redis cache in `redis-data`.
+`limits` caps maximum usage. `reservations` guarantees minimum resources.
 
 ---
 

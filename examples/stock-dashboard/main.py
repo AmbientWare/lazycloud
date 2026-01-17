@@ -1,10 +1,8 @@
-import os
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import yfinance as yf
-from fastapi import FastAPI, Request, Form
+from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse
-from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 app = FastAPI(title="Stock Dashboard")
@@ -98,7 +96,8 @@ async def search(request: Request, ticker: str = Form(...)):
         )
 
     return templates.TemplateResponse(
-        "partials/stock_detail.html", {"request": request, "stock": data, "current_period": period}
+        "partials/stock_detail.html",
+        {"request": request, "stock": data, "current_period": period},
     )
 
 
@@ -113,7 +112,8 @@ async def stock_detail(request: Request, ticker: str, period: str = "1mo"):
         )
 
     return templates.TemplateResponse(
-        "partials/stock_detail.html", {"request": request, "stock": data, "current_period": period}
+        "partials/stock_detail.html",
+        {"request": request, "stock": data, "current_period": period},
     )
 
 
