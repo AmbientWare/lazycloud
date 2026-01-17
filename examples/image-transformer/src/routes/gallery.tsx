@@ -5,7 +5,7 @@ import { getRecentTransformations, deleteTransformation } from "@/lib/db";
 import { deleteImages, getImageAsDataUrl } from "@/lib/storage";
 import { STYLES } from "@/lib/replicate";
 import { PageLayout } from "@/components/screens";
-import { Wand2, Trash2, ArrowLeft, ImageIcon } from "lucide-react";
+import { Wand2, Trash2, ArrowLeft, ImageIcon, X, Download } from "lucide-react";
 import { useState } from "react";
 
 type GalleryItem = {
@@ -46,6 +46,7 @@ function Gallery() {
   const { transformations: initialTransformations } = Route.useLoaderData();
   const [transformations, setTransformations] = useState<GalleryItem[]>(initialTransformations);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [selectedItem, setSelectedItem] = useState<GalleryItem | null>(null);
 
   const handleDelete = async (id: string) => {
     setDeleting(id);
@@ -86,9 +87,14 @@ function Gallery() {
               item={item}
               onDelete={handleDelete}
               isDeleting={deleting === item.id}
+              onClick={() => setSelectedItem(item)}
             />
           ))}
         </div>
+      )}
+
+      {selectedItem && (
+        <Lightbox item={selectedItem} onClose={() => setSelectedItem(null)} />
       )}
     </PageLayout>
   );
@@ -118,11 +124,15 @@ interface GalleryCardProps {
   item: GalleryItem;
   onDelete: (id: string) => void;
   isDeleting: boolean;
+  onClick: () => void;
 }
 
-function GalleryCard({ item, onDelete, isDeleting }: GalleryCardProps) {
+function GalleryCard({ item, onDelete, isDeleting, onClick }: GalleryCardProps) {
   return (
-    <div className="group relative rounded-xl border bg-card overflow-hidden">
+    <div
+      className="group relative rounded-xl border bg-card overflow-hidden cursor-pointer hover:ring-2 hover:ring-primary transition-all"
+      onClick={onClick}
+    >
       <div className="aspect-video relative">
         <div className="absolute inset-0 grid grid-cols-2">
           {item.originalDataUrl && (
@@ -157,11 +167,101 @@ function GalleryCard({ item, onDelete, isDeleting }: GalleryCardProps) {
             variant="ghost"
             size="icon"
             className="text-white/70 hover:text-white hover:bg-white/20"
-            onClick={() => onDelete(item.id)}
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete(item.id);
+            }}
             disabled={isDeleting}
           >
             <Trash2 className="h-4 w-4" />
           </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface LightboxProps {
+  item: GalleryItem;
+  onClose: () => void;
+}
+
+function Lightbox({ item, onClose }: LightboxProps) {
+  const downloadImage = (dataUrl: string | null, filename: string) => {
+    if (!dataUrl) return;
+    const link = document.createElement("a");
+    link.href = dataUrl;
+    link.download = filename;
+    link.click();
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <div
+        className="relative bg-card rounded-xl max-w-5xl w-full max-h-[90vh] overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between p-4 border-b">
+          <div>
+            <h2 className="font-semibold">
+              {STYLES[item.style as keyof typeof STYLES]?.name || item.style}
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              {new Date(item.created_at).toLocaleDateString()}
+            </p>
+          </div>
+          <Button variant="ghost" size="icon" onClick={onClose}>
+            <X className="h-5 w-5" />
+          </Button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4">
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-medium">Original</span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => downloadImage(item.originalDataUrl, `original-${item.id}.png`)}
+                disabled={!item.originalDataUrl}
+              >
+                <Download className="h-4 w-4 mr-1" />
+                Download
+              </Button>
+            </div>
+            {item.originalDataUrl && (
+              <img
+                src={item.originalDataUrl}
+                alt="Original"
+                className="w-full rounded-lg border"
+              />
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-medium">Transformed</span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => downloadImage(item.transformedDataUrl, `transformed-${item.id}.png`)}
+                disabled={!item.transformedDataUrl}
+              >
+                <Download className="h-4 w-4 mr-1" />
+                Download
+              </Button>
+            </div>
+            {item.transformedDataUrl && (
+              <img
+                src={item.transformedDataUrl}
+                alt="Transformed"
+                className="w-full rounded-lg border"
+              />
+            )}
+          </div>
         </div>
       </div>
     </div>

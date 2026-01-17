@@ -42,15 +42,13 @@ export async function transformImage(
   const output = await replicate.run("black-forest-labs/flux-kontext-dev", {
     input: {
       prompt,
-      image: imageUrl,
-      guidance_scale: 7.5,
+      input_image: imageUrl,
+      guidance: 2.5,
       num_inference_steps: 28,
     },
   });
 
-  if (Array.isArray(output) && output.length > 0) {
-    return output[0] as string;
-  }
-
-  throw new Error("No output from model");
+  // Output is a FileOutput object
+  const fileOutput = output as { url: () => string };
+  return fileOutput.url();
 }

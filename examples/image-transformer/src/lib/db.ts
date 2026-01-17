@@ -1,4 +1,4 @@
-import Database from "better-sqlite3";
+import { Database } from "bun:sqlite";
 import { mkdirSync, existsSync } from "fs";
 import path from "path";
 
@@ -10,7 +10,7 @@ if (!existsSync(DATA_DIR)) {
   mkdirSync(DATA_DIR, { recursive: true });
 }
 
-const db = new Database(DB_PATH);
+const db = new Database(DB_PATH, { create: true });
 
 // Initialize schema
 db.exec(`
