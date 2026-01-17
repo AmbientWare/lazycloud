@@ -3,7 +3,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
@@ -226,20 +225,22 @@ function MessageItem({ message }: { message: Message }) {
   const isUser = message.role === "user";
 
   return (
-    <div className={`group py-5 ${isUser ? "" : "bg-muted/40"}`}>
-      <div className="max-w-3xl mx-auto px-4 flex gap-4">
-        <Avatar className="size-8">
-          <AvatarFallback className={isUser ? "bg-primary text-primary-foreground" : "bg-secondary"}>
-            {isUser ? "Y" : "A"}
-          </AvatarFallback>
-        </Avatar>
-        <div className="flex-1 min-w-0 pt-0.5">
-          <div className="flex items-center gap-2 mb-1.5">
-            <span className="text-sm font-semibold">{isUser ? "You" : "Assistant"}</span>
-            {!isUser && message.content && <CopyButton text={message.content} />}
-          </div>
-          <div className="text-[15px] leading-7 whitespace-pre-wrap break-words text-foreground/90">
-            {message.content || <TypingIndicator />}
+    <div className="group py-3">
+      <div className="max-w-3xl mx-auto px-4">
+        <div className={`flex gap-4 p-4 rounded-2xl ${isUser ? "" : "bg-muted/50"}`}>
+          <Avatar className="size-8 shrink-0">
+            <AvatarFallback className={isUser ? "bg-primary text-primary-foreground" : "bg-secondary"}>
+              {isUser ? "Y" : "A"}
+            </AvatarFallback>
+          </Avatar>
+          <div className="flex-1 min-w-0 pt-0.5">
+            <div className="flex items-center gap-2 mb-1.5">
+              <span className="text-sm font-semibold">{isUser ? "You" : "Assistant"}</span>
+              {!isUser && message.content && <CopyButton text={message.content} />}
+            </div>
+            <div className="text-[15px] leading-7 whitespace-pre-wrap break-words text-foreground/90">
+              {message.content || <TypingIndicator />}
+            </div>
           </div>
         </div>
       </div>
@@ -355,6 +356,15 @@ export default function Chat() {
       localStorage.setItem(CURRENT_CHAT_KEY, currentChatId);
     }
   }, [chats, currentChatId]);
+
+  // Auto-resize textarea based on content
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (textarea) {
+      textarea.style.height = "auto";
+      textarea.style.height = `${Math.min(textarea.scrollHeight, 150)}px`;
+    }
+  }, [input]);
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -550,21 +560,21 @@ export default function Chat() {
         onDeleteChat={deleteChat}
         onNewChat={createNewChat}
       />
-      <SidebarInset>
-        <ScrollArea className="flex-1 h-[calc(100vh-5rem)]">
+      <SidebarInset className="flex flex-col h-screen">
+        <div className="flex-1 overflow-y-auto">
           {messages.length === 0 ? (
             <EmptyState onSuggestionClick={(text) => sendMessage(text)} />
           ) : (
-            <div className="pb-4">
+            <div className="pt-4 pb-4">
               {messages.map((message) => (
                 <MessageItem key={message.id} message={message} />
               ))}
               <div ref={messagesEndRef} />
             </div>
           )}
-        </ScrollArea>
+        </div>
 
-        <div className="border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+        <div className="shrink-0 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
           <div className="max-w-3xl mx-auto p-4">
             <Card className="p-2 py-2">
               <CardContent className="flex items-end gap-2 p-0">
@@ -575,7 +585,7 @@ export default function Chat() {
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={handleKeyDown}
                   placeholder="Send a message..."
-                  className="min-h-[40px] max-h-[200px] resize-none border-0 shadow-none focus-visible:ring-0"
+                  className="min-h-[40px] max-h-[150px] resize-none border-0 shadow-none focus-visible:ring-0 overflow-y-auto"
                   rows={1}
                   disabled={isLoading}
                 />
