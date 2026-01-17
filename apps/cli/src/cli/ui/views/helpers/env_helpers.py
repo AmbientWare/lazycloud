@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 from models.diffs import EnvVarChanges
 from models.secrets import Secret, SecretCollection
-from rich.console import Console
+from rich.console import Console, Group
 from rich.text import Text
 
 from cli.ui.colors import Colors
@@ -131,8 +131,86 @@ def show_missing_vars_error(
     console.print()
 
 
-def create_env_vars_detected_card(var_count: int) -> Card:
-    """Create card displaying detected environment variables."""
+def create_env_vars_detected_card(
+    var_count: int,
+    env_var_changes: EnvVarChanges | None = None,
+) -> Card:
+    """Create card displaying detected environment variables with diff info."""
+    sections = []
+
+    # If we have diff info, show the breakdown
+    if env_var_changes:
+        has_existing = env_var_changes.existing or []
+        has_added = env_var_changes.added or []
+        has_removed = env_var_changes.removed or []
+        has_user_managed = env_var_changes.user_managed or []
+
+        # Show existing variables
+        if has_existing:
+            existing_text = Text()
+            existing_text.append("Existing", style=f"bold {Colors.Ansi.text_muted}")
+            existing_text.append(
+                f" ({len(has_existing)}): ", style=Colors.Ansi.text_muted
+            )
+            existing_text.append(
+                ", ".join(sorted(has_existing)), style=Colors.Ansi.text_muted
+            )
+            sections.append(existing_text)
+
+        # Show user-managed variables
+        if has_user_managed:
+            user_text = Text()
+            user_text.append("User-Managed", style=f"bold {Colors.Ansi.info}")
+            user_text.append(f" ({len(has_user_managed)}): ", style=Colors.Ansi.info)
+            user_text.append(
+                ", ".join(sorted(has_user_managed)), style=Colors.Ansi.info
+            )
+            sections.append(user_text)
+
+        # Show added variables (these are what we're collecting)
+        if has_added:
+            added_text = Text()
+            added_text.append("+ Adding", style=f"bold {Colors.Ansi.success}")
+            added_text.append(f" ({len(has_added)}): ", style=Colors.Ansi.success)
+            added_text.append(", ".join(sorted(has_added)), style=Colors.Ansi.success)
+            sections.append(added_text)
+
+        # Show removed variables
+        if has_removed:
+            removed_text = Text()
+            removed_text.append("- Removing", style=f"bold {Colors.Ansi.error}")
+            removed_text.append(f" ({len(has_removed)}): ", style=Colors.Ansi.error)
+            removed_text.append(", ".join(sorted(has_removed)), style=Colors.Ansi.error)
+            sections.append(removed_text)
+
+        # Add spacing and note about collection
+        if has_added:
+            sections.append(Text(""))
+            sections.append(
+                Text(
+                    "Values needed for new variables (encrypted & stored securely)",
+                    style=Colors.Ansi.text_muted,
+                )
+            )
+
+        # Build title
+        total_existing = len(has_existing) + len(has_user_managed)
+        change_count = len(has_added) + len(has_removed)
+
+        if total_existing > 0 and change_count > 0:
+            title = f"🔐 Environment Variables ({total_existing} existing, {change_count} changes)"
+        elif change_count > 0:
+            title = f"🔐 Environment Variables ({change_count} to add)"
+        else:
+            title = f"🔐 Environment Variables ({total_existing} existing)"
+
+        return Card(
+            content=Group(*sections),
+            title=title,
+            border_style=Colors.Ansi.primary,
+        )
+
+    # Fallback to simple display if no diff info
     return Card(
         content=Text("\n").join(
             [

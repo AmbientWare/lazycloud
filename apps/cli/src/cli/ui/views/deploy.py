@@ -3,10 +3,11 @@ from pathlib import Path
 
 import typer
 from models.build_args import BuildArg, BuildArgsCollection, ServiceBuildArgs
+from models.diffs import EnvVarChanges
 from models.secrets import SecretCollection
 from models.statuses import TaskStatus
 from responses.deployments import DiffResponse
-from rich.console import Console
+from rich.console import Console, Group
 from rich.prompt import Prompt
 from rich.rule import Rule
 from rich.table import Table
@@ -94,8 +95,6 @@ class DeployView:
         """Show validation results."""
         if errors:
             # Create content for multiple errors
-            from rich.console import Group
-
             error_parts = []
             for error in errors:
                 error_parts.append(Text(f"• {error}", style=Colors.Ansi.error))
@@ -109,8 +108,6 @@ class DeployView:
 
         if warnings:
             # Create content for multiple warnings
-            from rich.console import Group
-
             warning_parts = []
             for warning in warnings:
                 warning_parts.append(Text(f"• {warning}", style=Colors.Ansi.warning))
@@ -336,7 +333,7 @@ class DeployView:
         env_vars: SecretCollection,
         project_dir: Path | None = None,
         env_source: str | None = None,
-        skip_prompts: bool = False,
+        env_var_changes: EnvVarChanges | None = None,
     ) -> SecretCollection:
         """Collect secret values for environment variables from user."""
         if not env_vars.added:
@@ -366,8 +363,8 @@ class DeployView:
                 if not env_file_path.is_absolute():
                     env_file_path = Path.cwd() / env_file_path
         else:
-            # Ask user to choose source
-            card = create_env_vars_detected_card(len(secrets_dict))
+            # Ask user to choose source - show diff info if available
+            card = create_env_vars_detected_card(len(secrets_dict), env_var_changes)
             self.console.print(card)
 
             choice = Prompt.ask(
@@ -456,9 +453,7 @@ class DeployView:
             remaining_vars = get_remaining_vars(secrets_dict, loaded_keys)
 
             if remaining_vars:
-                show_missing_vars_error(
-                    self.console, remaining_vars, file_path.name
-                )
+                show_missing_vars_error(self.console, remaining_vars, file_path.name)
                 raise typer.Exit(1)
 
         else:
@@ -474,9 +469,7 @@ class DeployView:
             # Check for remaining missing variables after manual entry
             remaining_vars = get_remaining_vars(secrets_dict, loaded_keys)
             if remaining_vars:
-                show_missing_vars_error(
-                    self.console, remaining_vars, "manual entry"
-                )
+                show_missing_vars_error(self.console, remaining_vars, "manual entry")
                 raise typer.Exit(1)
 
         # Filter out empty values - only keep secrets that have actual values
@@ -518,13 +511,24 @@ class DeployView:
         if total_missing == 0:
             return build_args
 
-        # Show header
+        # Show header with args grouped by service
+        content_parts = []
+        for service in build_args.services:
+            args_needing_values = [arg.key for arg in service.args if arg.value is None]
+            if args_needing_values:
+                service_text = Text()
+                service_text.append(
+                    service.service_name, style=f"bold {Colors.Ansi.primary}"
+                )
+                service_text.append(": ", style=Colors.Ansi.text_muted)
+                service_text.append(
+                    ", ".join(sorted(args_needing_values)), style=Colors.Ansi.text_muted
+                )
+                content_parts.append(service_text)
+
         card = Card(
-            content=Text(
-                f"Found {total_missing} build argument(s) that need values",
-                style=Colors.Ansi.text_muted,
-            ),
-            title="🔧 Build Arguments",
+            content=Group(*content_parts),
+            title=f"🔧 Build Arguments ({total_missing} needed)",
             border_style=Colors.Ansi.info,
         )
         self.console.print(card)
@@ -627,7 +631,9 @@ class DeployView:
                         title="Import Successful",
                     )
                 else:
-                    self.show_warning(f"No matching build args found in {file_path.name}")
+                    self.show_warning(
+                        f"No matching build args found in {file_path.name}"
+                    )
             else:
                 self.show_error(f"File not found: {file_path}")
 
