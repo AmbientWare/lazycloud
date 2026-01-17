@@ -85,6 +85,23 @@ LazyCloud automatically provisions TLS certificates for your domain.
 You'll need to point your domain's DNS to LazyCloud. See the deployment output for the exact DNS target.
 </Note>
 
+## Request Size Limits
+
+LazyCloud allows request bodies up to **128 MB**. This covers most use cases including:
+
+- Image uploads
+- File attachments
+- Document uploads
+- Form submissions with media
+
+<Tip>
+For very large file uploads (videos, datasets), consider using presigned URLs to upload directly to object storage instead of proxying through your application.
+</Tip>
+
+<Note>
+If your application requires a higher limit, contact support.
+</Note>
+
 ## Service Discovery
 
 ### Internal Communication
