@@ -1,8 +1,7 @@
-import os
-import json
-import uuid
 import hashlib
-from datetime import datetime
+import json
+import os
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -11,9 +10,8 @@ import redis
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, field_validator
 from openai import AsyncOpenAI
-
+from pydantic import BaseModel, field_validator
 
 DATABASE_PATH = Path("/app/data/chatbot.db")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
@@ -56,8 +54,7 @@ app = FastAPI(title="LLM Chat API", lifespan=lifespan)
 
 # Get allowed origins from environment, default to common development origins
 ALLOWED_ORIGINS = os.getenv(
-    "CORS_ORIGINS",
-    "http://localhost:3000,http://127.0.0.1:3000,http://frontend:3000"
+    "CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000,http://frontend:3000"
 ).split(",")
 
 app.add_middleware(
@@ -148,7 +145,9 @@ async def chat(request: ChatRequest):
                         full_response += content
                         yield content
 
-                all_messages = messages + [{"role": "assistant", "content": full_response}]
+                all_messages = messages + [
+                    {"role": "assistant", "content": full_response}
+                ]
                 await save_conversation(session_id, all_messages)
 
             return StreamingResponse(generate(), media_type="text/plain")
