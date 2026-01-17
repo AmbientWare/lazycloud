@@ -1,5 +1,4 @@
 from loguru import logger
-from models.storage import STORAGE_CLASS_EBS, STORAGE_CLASS_EFS
 from models.compose import (
     ComposeFile,
     ComposeNetwork,
@@ -19,6 +18,7 @@ from models.helm import (
     VolumeValues,
     WorkloadType,
 )
+from models.storage import STORAGE_CLASS_EBS, STORAGE_CLASS_EFS
 
 from backend.config import app_config
 from backend.database.compose import ComposeDeploymentPydantic
@@ -103,6 +103,7 @@ class HelmValuesGenerator:
         service_names = {s.name for s in compose.services}
 
         # Collect all environment variables from all services
+        # All env vars are stored in the database - compose.yaml just declares which vars exist
         all_env_vars = {}
         for service in compose.services:
             service_values, env_secret_data = self._generate_service_values(
@@ -110,13 +111,9 @@ class HelmValuesGenerator:
             )
             values.services.append(service_values)
 
-            # Collect env vars from secrets (user-provided secrets)
+            # Use previously collected env vars from the database
             if env_secret_data:
                 all_env_vars.update(env_secret_data)
-
-            # Collect env vars from compose file's environment section
-            if service.environment:
-                all_env_vars.update(service.environment)
 
         # Transform .public URLs in environment variables
         # e.g., https://api.public -> https://api-xxxxx.lazycloud.dev
