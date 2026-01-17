@@ -1580,6 +1580,10 @@ def _handle_builds_with_depot(
             term_width = shutil.get_terminal_size().columns
             max_line_width = term_width - 10  # Account for borders, padding, indent
 
+            # Count actual services (excluding _depot)
+            service_names = [name for name in build_state.keys() if name != "_depot"]
+            is_single_service = len(service_names) == 1
+
             # Check if any service has output yet
             any_service_has_output = any(
                 state.get("output_lines", [])
@@ -1587,8 +1591,8 @@ def _handle_builds_with_depot(
                 if name != "_depot"
             )
 
-            # Only show setup section while waiting for service builds to start
-            if not any_service_has_output:
+            # Only show setup section for multi-service builds while waiting
+            if not is_single_service and not any_service_has_output:
                 depot_state = build_state.get("_depot", {})
                 depot_lines = depot_state.get("output_lines", [])
                 if depot_lines:
@@ -1613,6 +1617,13 @@ def _handle_builds_with_depot(
 
                 output_lines = state.get("output_lines", [])
                 error_lines = state.get("error_lines", [])
+
+                # For single service builds, combine depot lines with service lines
+                if is_single_service:
+                    depot_state = build_state.get("_depot", {})
+                    depot_lines = depot_state.get("output_lines", [])
+                    # Combine: depot lines first, then service lines
+                    output_lines = depot_lines + output_lines
                 status = state.get("status", "building")
 
                 # Determine status indicator and color
