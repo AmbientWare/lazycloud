@@ -277,7 +277,7 @@ def deploy(
             secrets,
             project_dir=compose_file_path.parent,
             env_source=env,
-            skip_prompts=yes or bool(env),
+            env_var_changes=diff_response.env_var_changes if diff_response else None,
         )
 
         # Show collection summary
