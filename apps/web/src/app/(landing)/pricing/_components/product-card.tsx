@@ -19,16 +19,27 @@ function formatPrice(priceAmount: number): string {
   return `$${(priceAmount / 100).toFixed(0)}`;
 }
 
-export function ProductCard({ product, isEnterprise }: { product: PolarProduct; isEnterprise?: boolean }) {
+export function ProductCard({ product, isEnterprise, summary = false }: { product: PolarProduct; isEnterprise?: boolean; summary?: boolean }) {
   const fixedPrice = product.prices.find((p) => p.amountType === "fixed");
   const isFree = !fixedPrice || fixedPrice.priceAmount === 0;
   const isHobby = product.name.toLowerCase() === "hobby";
-  const isMostPopular = isHobby;
+  const isMostPopular = isHobby && !summary;
   const monthlyPrice = fixedPrice ? formatPrice(fixedPrice.priceAmount) : null;
   const [isPending, startTransition] = useTransition();
   const { user } = useAuth();
   const userId = user?.id;
   const router = useRouter();
+
+  // Extract key features for summary mode (first 3 bullet points)
+  const getSummaryFeatures = (description: string | null | undefined): string[] => {
+    if (!description) return [];
+    const lines = description.split('\n').filter(line => line.trim());
+    const bulletPoints = lines
+      .filter(line => line.trim().startsWith('-') || line.trim().startsWith('*'))
+      .map(line => line.replace(/^[-*]\s*/, '').trim())
+      .slice(0, 3);
+    return bulletPoints;
+  };
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -94,25 +105,81 @@ export function ProductCard({ product, isEnterprise }: { product: PolarProduct; 
     });
   };
 
+  // Summary mode - simplified card for landing page preview
+  if (summary) {
+    const features = getSummaryFeatures(product.description);
+    const isPopular = isHobby;
+
+    return (
+      <StyledCard
+        variant="interactive"
+        className={cn(
+          "relative h-full transition-all",
+          isPopular && "border-lazycloud/40"
+        )}
+      >
+        {isPopular && (
+          <div className="absolute -top-3 left-1/2 -translate-x-1/2">
+            <Badge className="bg-lazycloud text-white text-xs font-medium border-0">
+              Most Popular
+            </Badge>
+          </div>
+        )}
+        <StyledCardContent className="flex h-full flex-col p-6">
+          {/* Header */}
+          <div className="mb-4">
+            <h3 className="text-lg font-bold">{product.name}</h3>
+          </div>
+
+          {/* Price */}
+          <div className="mb-5">
+            {monthlyPrice ? (
+              <div className="flex items-baseline gap-1">
+                <span className="text-3xl font-bold">{monthlyPrice}</span>
+                <span className="text-muted-foreground text-sm">/mo</span>
+              </div>
+            ) : (
+              <div className="text-3xl font-bold">Free</div>
+            )}
+            <div className="text-muted-foreground text-xs mt-1">
+              + usage-based pricing
+            </div>
+          </div>
+
+          {/* Features list */}
+          {features.length > 0 && (
+            <ul className="space-y-2.5 text-sm">
+              {features.map((feature, idx) => (
+                <li key={idx} className="flex items-start gap-2">
+                  <Check className="h-4 w-4 text-lazycloud mt-0.5 shrink-0" />
+                  <span className="text-muted-foreground">{feature}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </StyledCardContent>
+      </StyledCard>
+    );
+  }
+
   return (
     <StyledCard
       variant="interactive"
       className={cn(
         "relative h-full transition-all",
-        isMostPopular && "overflow-visible border-primary/50 shadow-lg ring-2 ring-primary/20",
-        isEnterprise && "overflow-visible border-primary/50 shadow-lg ring-2 ring-primary/20",
+        (isMostPopular || isEnterprise) && "overflow-visible border-lazycloud/40 shadow-md",
       )}
     >
       {isMostPopular && (
         <div className="absolute -top-3 left-1/2 -translate-x-1/2">
-          <Badge variant="secondary" className="bg-lazycloud text-white text-xs font-semibold border-lazycloud/30">
+          <Badge className="border-0 bg-lazycloud text-xs font-semibold text-white">
             Most Popular
           </Badge>
         </div>
       )}
       {isEnterprise && (
         <div className="absolute -top-3 left-1/2 -translate-x-1/2">
-          <Badge variant="secondary" className="bg-lazycloud text-white text-xs font-semibold border-lazycloud/30">
+          <Badge className="border-0 bg-lazycloud text-xs font-semibold text-white">
             Custom Pricing
           </Badge>
         </div>

@@ -200,7 +200,7 @@ function MemberList({
 
   return (
     <SectionDivider spacing="lg">
-      <StyledCard className="border-l-lazycloud/40 border-l-2 shadow-md" elevation={2}>
+      <StyledCard className="border-l-lazycloud/40 border-l-2 shadow-md">
         <StyledCardHeader>
           <div className="flex items-center justify-between">
             <SectionHeader

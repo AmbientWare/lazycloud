@@ -1,142 +1,137 @@
 "use client";
 
-import { useRef, useState } from "react";
-import { motion, useInView } from "framer-motion";
-import Image from "next/image";
-import { containerVariants, itemVariants } from "@/lib/animations";
-import { StyledCard, StyledCardContent } from "@/components/shared/styled-card";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { Activity, Boxes, FileText } from "lucide-react";
+import { motion } from "framer-motion";
+import { Activity, Boxes, FileText, BarChart3, RefreshCw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import BorderIcon from "@/components/shared/border-icon";
 import { IconLock } from "@tabler/icons-react";
+import {
+  DeploymentStatusCard,
+  ServiceMetricsCard,
+  SecretsCard,
+  LogsCard,
+  UsageBillingCard,
+  ContainerManagementCard,
+} from "./tui-mocks";
 
 const dashboardFeatures = [
   {
     id: "deployments",
-    title: "Deployment Dashboard",
-    description: "Track deployment status and history",
+    title: "Deployment Status",
+    description: "Track deployments, service health, and replica counts.",
     icon: Activity,
-    image: "/tui-dashboard/deployments.png",
+    card: DeploymentStatusCard,
   },
   {
     id: "services",
-    title: "Service Level Analytics",
-    description: "View service health and metrics",
+    title: "Service Metrics",
+    description: "Monitor CPU, memory, and instance health in real-time.",
     icon: Boxes,
-    image: "/tui-dashboard/services.png",
+    card: ServiceMetricsCard,
   },
   {
     id: "secrets",
-    title: "Manage Secrets",
-    description: "Create, update, and delete secrets",
+    title: "Secrets and Build Args",
+    description: "Securely manage environment variables and build args from your terminal.",
     icon: IconLock,
-    image: "/tui-dashboard/secrets.png",
+    card: SecretsCard,
   },
   {
     id: "logs",
-    title: "Stream Logs Real-Time",
-    description: "Live log streaming and filtering",
+    title: "Live Logs",
+    description: "Stream logs in real-time, per container.",
     icon: FileText,
-    image: "/tui-dashboard/logs.png",
+    card: LogsCard,
+  },
+  {
+    id: "management",
+    title: "Container Management",
+    description: "Restart, rollback, scale, and manage your containers.",
+    icon: RefreshCw,
+    card: ContainerManagementCard,
+  },
+  {
+    id: "usage",
+    title: "Usage & Billing",
+    description: "Track resource usage and costs in real-time.",
+    icon: BarChart3,
+    card: UsageBillingCard,
   },
 ];
 
 export function TUIDashboard() {
-  const sectionRef = useRef<HTMLDivElement>(null);
-  const [activeTab, setActiveTab] = useState("deployments");
-  const isInView = useInView(sectionRef, {
-    margin: "0%",
-    amount: 0.2,
-    once: true,
-  });
-
   return (
-    <section ref={sectionRef} className="w-full px-6 py-20">
-      <motion.div
-        className="mx-auto max-w-7xl"
-        variants={containerVariants}
-        initial="hidden"
-        animate={isInView ? "show" : "hidden"}
-      >
+    <section className="relative w-full py-20 md:py-24">
+      {/* Soft gradient background */}
+      <div className="absolute inset-0 bg-gradient-to-b from-transparent via-muted/30 to-transparent" />
+
+      <div className="container relative mx-auto max-w-6xl px-6 md:px-8">
+        {/* Section header */}
         <motion.div
-          variants={itemVariants}
-          className="mb-12 ml-auto w-full max-w-3xl text-right"
+          initial={{ opacity: 0, y: 20 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.6 }}
+          viewport={{ once: true }}
+          className="mb-12 flex flex-col items-center text-center"
         >
-          <Badge variant="secondary" className="bg-lazycloud mb-4 text-xs">
+          <Badge
+            variant="outline"
+            className="mb-4 border-lazycloud/30 bg-lazycloud/10 text-lazycloud"
+          >
             Terminal Dashboard
           </Badge>
-          <h2 className="text-3xl font-bold tracking-tight md:text-5xl">
-            Full Control from Your Terminal
+          <h2 className="mb-4 text-4xl font-bold tracking-tight md:text-5xl lg:text-6xl">
+            Never Leave Your{" "}
+            <span className="bg-gradient-to-r from-lazycloud to-lazycloud-light bg-clip-text text-transparent">
+              Terminal
+            </span>
           </h2>
-          <p className="text-muted-foreground mt-4 ml-auto text-lg md:max-w-2xl">
-            No need to switch to a GUI or go online. Everything you need in a
-            powerful TUI dashboard.
+          <p className="max-w-xl text-lg text-muted-foreground">
+            Deploy, debug, and scale without context switching. A TUI built for
+            developers who live in the command line.
           </p>
         </motion.div>
 
-        <motion.div variants={itemVariants}>
-          <StyledCard variant="interactive" elevation={2} className="overflow-hidden">
-            <StyledCardContent className="p-0">
-              <Tabs
-                value={activeTab}
-                onValueChange={setActiveTab}
-                orientation="vertical"
-                className="flex min-h-[400px] sm:min-h-[500px] flex-col sm:flex-row"
+        {/* Cards Grid */}
+        <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
+          {dashboardFeatures.map((feature, idx) => {
+            const Icon = feature.icon;
+            const Card = feature.card;
+            return (
+              <motion.div
+                key={feature.id}
+                initial={{ opacity: 0, y: 20 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.6, delay: idx * 0.1 }}
+                viewport={{ once: true, margin: "-100px" }}
               >
-                {/* Left sidebar - tab triggers */}
-                <TabsList className="bg-transparent h-auto w-full flex-shrink-0 flex-col items-stretch justify-start gap-2 rounded-none border-b border-border/30 p-4 sm:w-[240px] md:w-[280px] sm:border-r sm:border-b-0">
-                  {dashboardFeatures.map((feature) => {
-                    const Icon = feature.icon;
-                    return (
-                      <TabsTrigger
-                        key={feature.id}
-                        value={feature.id}
-                        onMouseEnter={() => setActiveTab(feature.id)}
-                        className="h-auto w-full justify-start p-3 whitespace-normal transition-all duration-300 rounded-lg border shadow-md backdrop-blur-sm hover:-translate-y-0.5 hover:shadow-lg bg-muted/60 border-border/50 hover:border-lazycloud/20 data-[state=active]:bg-card data-[state=active]:border-lazycloud/50 data-[state=active]:shadow-lg data-[state=active]:text-foreground"
-                      >
-                        <div className="flex w-full items-start gap-2.5 text-left">
-                          <BorderIcon
-                            icon={<Icon size={16} className="text-primary" />}
-                          />
-                          <div className="min-w-0 flex-1">
-                            <h3 className="mb-1 text-sm font-semibold break-words">
-                              {feature.title}
-                            </h3>
-                            <p className="text-muted-foreground text-xs break-words">
-                              {feature.description}
-                            </p>
-                          </div>
+                <div className="flex h-full flex-col overflow-hidden rounded-xl border border-border/60 bg-card shadow-xl">
+                  {/* Card header */}
+                  <div className="flex items-center border-b border-border/40 bg-muted/40 px-4 py-4">
+                    <div className="flex flex-col gap-2">
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-border/60 bg-lazycloud/10">
+                          <Icon size={20} className="text-lazycloud" />
                         </div>
-                      </TabsTrigger>
-                    );
-                  })}
-                </TabsList>
-
-                {/* Right side - tab content */}
-                {dashboardFeatures.map((feature) => (
-                  <TabsContent
-                    key={feature.id}
-                    value={feature.id}
-                    className="bg-transparent m-0 flex-1 p-8"
-                  >
-                    <div className="flex w-full items-center justify-center rounded-lg border overflow-hidden aspect-[840/438]">
-                      <Image
-                        src={feature.image}
-                        alt={feature.title}
-                        width={1200}
-                        height={675}
-                        className="w-full h-full object-contain rounded-lg"
-                        priority={feature.id === "deployments"}
-                      />
+                        <h3 className="text-base font-semibold text-foreground">
+                          {feature.title}
+                        </h3>
+                      </div>
+                      <p className="text-sm text-muted-foreground">
+                        {feature.description}
+                      </p>
                     </div>
-                  </TabsContent>
-                ))}
-              </Tabs>
-            </StyledCardContent>
-          </StyledCard>
-        </motion.div>
-      </motion.div>
+                  </div>
+
+                  {/* Card content */}
+                  <div className="flex-1 bg-card/50 p-4">
+                    <Card />
+                  </div>
+                </div>
+              </motion.div>
+            );
+          })}
+        </div>
+      </div>
     </section>
   );
 }

@@ -15,13 +15,13 @@ function NodesBackground({
   fadeOnScroll = true,
 }: NodesBackgroundProps) {
   return (
-    <div className="relative h-full w-full">
+    <div className="relative min-h-screen w-full">
       <div className="absolute inset-0 -z-10">
         <svg className="h-full w-full">
           <BaseNodesOverlay fadeOnScroll={fadeOnScroll} />
         </svg>
       </div>
-      <div className="flex h-full w-full items-center justify-center">
+      <div className="flex min-h-screen w-full items-center justify-center">
         {children}
       </div>
     </div>
@@ -187,7 +187,7 @@ function GraphNodes({ seed }: GraphNodesProps) {
             y1={`${sourceNode.y}%`}
             x2={`${targetNode.x}%`}
             y2={`${targetNode.y}%`}
-            className="stroke-primary/30"
+            className="stroke-primary/50"
             strokeWidth="1"
             initial={{ pathLength: 0, opacity: 0 }}
             animate={{ pathLength: 1, opacity: 1 }}
@@ -204,7 +204,7 @@ function GraphNodes({ seed }: GraphNodesProps) {
           cy={`${node.y}%`}
           r={node.size}
           className={
-            node.isLazyCloud ? "fill-lazycloud/80" : "fill-secondary/80"
+            node.isLazyCloud ? "fill-lazycloud" : "fill-secondary"
           }
           initial={{ scale: 0, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}

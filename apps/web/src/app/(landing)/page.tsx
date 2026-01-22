@@ -1,8 +1,7 @@
 import Hero from "./_components/hero";
 import HowItWorks from "./_components/how-it-works";
-import QuickStart from "./_components/quick-start";
 import { TUIDashboard } from "./_components/tui-dashboard";
-import Features from "./_components/features";
+import FinalCTA from "./_components/final-cta";
 
 export default function Home() {
   return (
@@ -13,23 +12,14 @@ export default function Home() {
           <Hero />
         </section>
 
-        {/* 2. How It Works */}
-        <section className="w-full">
-          <HowItWorks />
-        </section>
+        {/* 2. How It Works - Docker Compose Deployment */}
+        <HowItWorks />
 
-        {/* 3. Quick Start (Compose → Deploy) */}
-        <section className="w-full">
-          <QuickStart />
-        </section>
-
-        {/* 4. TUI Dashboard */}
+        {/* 3. TUI Dashboard */}
         <TUIDashboard />
 
-        {/* 5. Features & Use Cases */}
-        <section className="w-full">
-          <Features />
-        </section>
+        {/* 4. Final CTA */}
+        <FinalCTA />
       </main>
     </div>
   );
