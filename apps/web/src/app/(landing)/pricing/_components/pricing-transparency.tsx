@@ -137,7 +137,7 @@ export function PricingTransparency() {
                   <Info size={16} className="flex-shrink-0 mt-0.5" />
                   <div className="space-y-1">
                     <p>
-                      <strong>How billing works:</strong> We meter your usage every 15 minutes.
+                      <strong>How billing works:</strong>
                       Your total cost is calculated by multiplying your usage by the rates above,
                       plus any fixed monthly plan fee.
                     </p>

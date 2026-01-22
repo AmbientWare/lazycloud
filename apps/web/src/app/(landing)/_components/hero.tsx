@@ -74,14 +74,8 @@ export default function Hero() {
               <>
                 <StyledButton variant="primary" size="lg" asChild>
                   <Link href="/request-access">
-                    Start Free
+                    Deploy Now
                     <ArrowRight className="ml-2 h-4 w-4 transition-transform group-hover:translate-x-1" />
-                  </Link>
-                </StyledButton>
-                <StyledButton variant="outline" size="lg" asChild>
-                  <Link href="#how-it-works">
-                    <Play className="mr-2 h-4 w-4" />
-                    See How It Works
                   </Link>
                 </StyledButton>
               </>
