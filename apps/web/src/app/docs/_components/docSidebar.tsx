@@ -183,13 +183,20 @@ export function DocsSidebar() {
                   <SidebarMenuItem>
                     <CollapsibleTrigger asChild>
                       <SidebarMenuButton
+                        asChild
+                        isActive={isActive(item.url)}
                         className={cn(
                           "font-medium",
                           isParentActive(item) && "text-lazycloud"
                         )}
                       >
-                        {item.title}
-                        <ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
+                        <Link
+                          href={item.url}
+                          onClick={() => setOpenMobile(false)}
+                        >
+                          {item.title}
+                          <ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
+                        </Link>
                       </SidebarMenuButton>
                     </CollapsibleTrigger>
                     <CollapsibleContent>
