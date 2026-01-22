@@ -18,6 +18,16 @@ services:
 
 If not specified, LazyCloud auto-generates a unique domain for services with exposed ports.
 
+### DNS Setup
+
+Add a CNAME record pointing your domain to LazyCloud:
+
+| Type | Name | Target |
+|------|------|--------|
+| CNAME | `api.example.com` | `lazycloud.dev` |
+
+SSL certificates are provisioned automatically once the CNAME is configured.
+
 ---
 
 ## lazycloud.ignore

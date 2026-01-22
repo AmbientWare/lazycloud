@@ -36,6 +36,11 @@ const data = {
       items: [],
     },
     {
+      title: "CI/CD",
+      url: "/docs/cicd",
+      items: [],
+    },
+    {
       title: "Architecture",
       url: "/docs/architecture",
       items: [

@@ -257,20 +257,22 @@ helm template lazycloud-api-platform ./deploy/services/api-platform \
 ## CLI Usage
 
 ```bash
-# Install CLI
-uv run --with lazycloud-cli lazycloud --help
+# Install CLI (download from releases)
+curl -LsSf https://lazycloud.dev/install.sh | sh
 
 # Authenticate
-uv run lazycloud auth add <key-name>
+lazycloud login
 
-# Deploy compose to K8s
+# First deploy (run locally)
 cd /path/to/compose/project
-uv run lazycloud init
-uv run lazycloud deploy
+lazycloud init
+lazycloud deploy
 
-# Dashboard
-uv run lazycloud dashboard
+# Open dashboard
+lazycloud dashboard
 ```
+
+For CI/CD automation, see [docs/cicd.md](docs/cicd.md).
 
 ## Development
 
@@ -317,6 +319,16 @@ uv run python scripts/create_secret_key.py
 # Setup Docker network
 ./scripts/setup_network.sh
 ```
+
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [docs/architecture.md](docs/architecture.md) | System architecture diagrams |
+| [docs/infrastructure.md](docs/infrastructure.md) | AWS/Kubernetes infrastructure setup |
+| [docs/cicd.md](docs/cicd.md) | CI/CD integration guide |
+| [deploy/README.md](deploy/README.md) | GitOps deployment structure |
+| [infrastructure/README.md](infrastructure/README.md) | CDK infrastructure details |
 
 ## Architecture
 

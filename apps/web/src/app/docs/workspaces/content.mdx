@@ -25,3 +25,19 @@ lazycloud workspaces destroy my-team
 - **Billing** - Each workspace tracks usage independently
 
 All commands operate on your active workspace. Check which is active with `lazycloud workspaces list`.
+
+## Environments with CI/CD
+
+Use separate workspaces for staging and production in your CI/CD pipeline:
+
+```yaml
+# Deploy to staging
+env:
+  LAZYCLOUD_WORKSPACE_ID: ${{ secrets.WORKSPACE_ID_STAGING }}
+
+# Deploy to production
+env:
+  LAZYCLOUD_WORKSPACE_ID: ${{ secrets.WORKSPACE_ID_PROD }}
+```
+
+See the [CI/CD guide](/docs/cicd) for complete setup.
