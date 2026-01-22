@@ -16,6 +16,15 @@ spec:
         app: {{ .Chart.Name }}-background-workers
         component: worker
     spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: {{ .Chart.Name }}-background-workers
+                topologyKey: kubernetes.io/hostname
       serviceAccountName: {{ .Chart.Name }}
       containers:
         - name: background-worker

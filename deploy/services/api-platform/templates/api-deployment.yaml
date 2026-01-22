@@ -22,6 +22,15 @@ spec:
         app: {{ .Chart.Name }}-api
         component: api
     spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: {{ .Chart.Name }}-api
+                topologyKey: kubernetes.io/hostname
       serviceAccountName: {{ .Chart.Name }}
       initContainers:
         - name: db-migrate
