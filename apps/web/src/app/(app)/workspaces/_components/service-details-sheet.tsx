@@ -6,7 +6,6 @@ import {
   DrawerContent,
   DrawerHeader,
   DrawerTitle,
-  DrawerDescription,
 } from "@/components/ui/drawer";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
@@ -162,9 +161,6 @@ export function ServiceDetailsSheet({
               </Badge>
               <DrawerTitle>{service.name}</DrawerTitle>
             </div>
-            <DrawerDescription className="font-mono text-xs truncate">
-              {service.image || "No image specified"}
-            </DrawerDescription>
           </DrawerHeader>
 
           <Separator />
