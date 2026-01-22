@@ -35,11 +35,8 @@ class PolarUsageModule:
                 name=event_name,
                 external_customer_id=external_customer_id,
                 metadata=metadata,
+                external_id=idempotency_key,  # Used for deduplication
             )
-
-            # Add idempotency key if provided
-            if idempotency_key:
-                event.idempotency_key = idempotency_key
 
             response = await self.client.events.ingest_async(
                 request=EventsIngest(events=[event])
