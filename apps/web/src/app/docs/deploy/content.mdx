@@ -3,49 +3,33 @@
 Deploys your Docker Compose app to the cloud.
 
 ```bash
-lazycloud deploy
-```
-
-## Options
-
-| Option | Description |
-|--------|-------------|
-| `-s, --service` | Deploy specific services only |
-| `-y, --yes` | Skip confirmation |
-| `--env` | Env var source: file path, `shell`, or `none` |
-
-## Examples
-
-```bash
-# Deploy everything
-lazycloud deploy
-
-# Skip confirmation
-lazycloud deploy -y
-
-# Deploy specific services
-lazycloud deploy -s api -s worker
-
-# Use env vars from shell
-lazycloud deploy --env shell
-
-# Use specific .env file
-lazycloud deploy --env .env.production
+lazycloud deploy --env shell --build-arg shell -y
 ```
 
 ## What Happens
 
 1. Shows a diff of changes
-2. Prompts for new environment variables
+2. Collects environment variables and build args from shell
 3. Builds images remotely (if compose has `build:` configs)
 4. Deploys with real-time progress
 
-## Environment Variables
+## Environment Variables & Build Args
 
-New env vars are prompted interactively. Use `--env` to provide them automatically:
+Both are read from your shell. Environment variables are stored as encrypted secrets.
 
-- `--env shell` - reads from your shell
-- `--env .env.prod` - reads from a file
-- `--env none` - skips collection
+```bash
+export DATABASE_URL=postgres://...
+export API_KEY=secret123
+export VITE_API_URL=https://api.example.com
+lazycloud deploy --env shell --build-arg shell -y
+```
 
-Variables are stored as encrypted secrets.
+## Deploy Specific Services
+
+```bash
+lazycloud deploy --env shell --build-arg shell -y -s api -s worker
+```
+
+## CI/CD
+
+For automated deployments, see the [CI/CD guide](/docs/cicd).

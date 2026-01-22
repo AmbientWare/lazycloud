@@ -55,6 +55,18 @@ lazycloud deployments list
 - `lazycloud dashboard` - Launch the interactive dashboard
 - `lazycloud --version` - Show CLI version
 
+## CI/CD
+
+Automate deployments with environment variables:
+
+```bash
+export LAZYCLOUD_API_KEY=<your-api-key>
+export LAZYCLOUD_WORKSPACE_ID=<your-workspace-id>
+lazycloud deploy --env shell --build-arg shell -y
+```
+
+See full CI/CD guide at [lazycloud.dev/docs/cicd](https://lazycloud.dev/docs/cicd).
+
 ## Documentation
 
 Visit [lazycloud.dev](https://lazycloud.dev) for full documentation.

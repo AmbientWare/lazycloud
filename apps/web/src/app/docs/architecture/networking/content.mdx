@@ -79,11 +79,15 @@ services:
       lazycloud.domain: myapp.example.com
 ```
 
-LazyCloud automatically provisions TLS certificates for your domain.
+### DNS Setup
 
-<Note>
-You'll need to point your domain's DNS to LazyCloud. See the deployment output for the exact DNS target.
-</Note>
+Add a CNAME record pointing your custom domain to LazyCloud:
+
+| Type | Name | Target |
+|------|------|--------|
+| CNAME | `myapp.example.com` | `lazycloud.dev` |
+
+SSL certificates are provisioned automatically once the CNAME is configured.
 
 ## Request Size Limits
 
