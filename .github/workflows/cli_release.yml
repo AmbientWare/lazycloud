@@ -3,14 +3,73 @@ name: Update Releases Repo
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: 'Version to release (e.g., 0.2.0). Leave empty to only sync examples/README.'
-        required: false
-        type: string
+      bump_type:
+        description: 'Version bump type'
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+          - sync-only
+        default: patch
 
 jobs:
+  calculate-version:
+    name: Calculate Version
+    if: ${{ inputs.bump_type != 'sync-only' }}
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Calculate new version
+        id: bump
+        run: |
+          # Read current version from pyproject.toml
+          CURRENT=$(grep -oP '^version = "\K[^"]+' apps/cli/pyproject.toml)
+          echo "Current version: $CURRENT"
+
+          # Parse version components
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+
+          # Increment based on bump type
+          case "${{ inputs.bump_type }}" in
+            major)
+              MAJOR=$((MAJOR + 1))
+              MINOR=0
+              PATCH=0
+              ;;
+            minor)
+              MINOR=$((MINOR + 1))
+              PATCH=0
+              ;;
+            patch)
+              PATCH=$((PATCH + 1))
+              ;;
+          esac
+
+          NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+          echo "New version: $NEW_VERSION"
+          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Update pyproject.toml
+        run: |
+          sed -i 's/^version = ".*"/version = "${{ steps.bump.outputs.version }}"/' apps/cli/pyproject.toml
+
+      - name: Commit version bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add apps/cli/pyproject.toml
+          git commit -m "Bump CLI version to ${{ steps.bump.outputs.version }}"
+          git push
+
   build:
-    if: ${{ inputs.version != '' }}
+    needs: calculate-version
+    if: ${{ inputs.bump_type != 'sync-only' }}
     name: Build ${{ matrix.os }}-${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -40,6 +99,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ref: main  # Get the latest commit with version bump
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -90,8 +151,8 @@ jobs:
 
   sync:
     name: Sync Examples and README
-    if: ${{ always() && (inputs.version == '' || needs.build.result == 'success') }}
-    needs: build
+    if: ${{ always() && (inputs.bump_type == 'sync-only' || needs.build.result == 'success') }}
+    needs: [calculate-version, build]
     runs-on: ubuntu-latest
 
     steps:
@@ -119,8 +180,8 @@ jobs:
 
   release:
     name: Create GitHub Release
-    if: ${{ inputs.version != '' }}
-    needs: [build, sync]
+    if: ${{ inputs.bump_type != 'sync-only' }}
+    needs: [calculate-version, build, sync]
     runs-on: ubuntu-latest
 
     steps:
@@ -135,15 +196,16 @@ jobs:
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+          VERSION: ${{ needs.calculate-version.outputs.version }}
         run: |
           mkdir -p release-assets
           find artifacts -type f -name "lazycloud-*" -exec cp {} release-assets/ \;
 
           # Delete existing release if retrying (only works for unpublished/draft releases)
-          gh release delete "v${{ inputs.version }}" --repo AmbientWare/lazycloud-releases --yes --cleanup-tag 2>/dev/null || true
+          gh release delete "v${VERSION}" --repo AmbientWare/lazycloud-releases --yes --cleanup-tag 2>/dev/null || true
 
-          gh release create "v${{ inputs.version }}" \
+          gh release create "v${VERSION}" \
             --repo AmbientWare/lazycloud-releases \
-            --title "Release v${{ inputs.version }}" \
+            --title "Release v${VERSION}" \
             --notes-file apps/cli/release/release_readme.md \
             release-assets/*
