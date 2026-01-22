@@ -5,70 +5,91 @@ import { StyledButton } from "@/components/shared/styled-button";
 import { useAuth } from "@workos-inc/authkit-nextjs/components";
 import Link from "next/link";
 import NodesBackground from "@/components/backgrounds/NodesBackground";
-import { ChevronRight } from "lucide-react";
+import { ArrowRight, Play, Sparkles } from "lucide-react";
 import { USER_HOME } from "@/lib/constants";
+import { Badge } from "@/components/ui/badge";
 
 export default function Hero() {
   const { user } = useAuth();
   const isSignedIn = !!user;
 
   return (
-    <div className="relative flex h-screen w-full items-center justify-center">
+    <div className="relative w-full overflow-hidden">
       <NodesBackground fadeOnScroll={false}>
-        <div className="container mx-auto flex max-w-7xl flex-col items-center justify-center px-4 py-12 lg:py-20">
-          <motion.h1
-            className="mb-3 text-center text-4xl font-bold md:text-5xl lg:text-6xl"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6 }}
-          >
-            <span className="block">The Developer's Cloud</span>
-          </motion.h1>
-          <motion.p
-            className="text-muted-foreground mb-8 max-w-3xl text-center text-lg md:text-xl"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, delay: 0.1 }}
-          >
-            <b>Run the same docker-compose.yaml you use locally.</b>
-            <br />
-            <b>Production-ready infrastructure in minutes.</b>
-          </motion.p>
-
+        <div className="container relative mx-auto flex max-w-5xl flex-col items-center px-6 py-12 md:px-8 md:py-20">
+          {/* Announcement badge */}
           <motion.div
-            className="flex flex-col items-center justify-center gap-4 sm:flex-row"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5 }}
+          >
+            <Badge
+              variant="outline"
+              className="mb-6 border-lazycloud/30 bg-lazycloud/10 text-lazycloud backdrop-blur-sm"
+            >
+              <Sparkles className="mr-2 h-3 w-3" />
+              GPU support for ML workloads coming soon!
+            </Badge>
+          </motion.div>
+
+          {/* Main headline with gradient */}
+          <motion.h1
+            className="mb-6 text-center text-5xl font-bold tracking-tighter md:text-6xl lg:text-7xl xl:text-8xl"
+            style={{ textWrap: "balance" } as React.CSSProperties}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, delay: 0.15 }}
+          >
+            <span className="bg-gradient-to-r from-foreground via-foreground to-lazycloud bg-clip-text text-transparent">
+              Deploy Like{" "}
+            </span>
+            <span className="bg-gradient-to-r from-lazycloud to-lazycloud-light bg-clip-text text-transparent">
+              You Develop
+            </span>
+          </motion.h1>
+
+          {/* Subheading */}
+          <motion.p
+            className="mb-12 max-w-2xl text-center text-lg text-muted-foreground md:text-xl"
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6, delay: 0.2 }}
           >
+            Your{" "}
+            <span className="font-semibold text-lazycloud">
+              docker-compose.yaml
+            </span>{" "}
+            goes straight to production. No rewrites, no infrastructure
+            complexity.
+          </motion.p>
+
+          {/* Dual CTA buttons */}
+          <motion.div
+            className="flex flex-col gap-4 sm:flex-row"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.6, delay: 0.4 }}
+          >
             {!isSignedIn ? (
-              <StyledButton
-                variant="primary"
-                size="lg"
-                className="text-lg"
-                asChild
-              >
-                <Link href="/request-access">
-                  Request Access
-                  <ChevronRight
-                    size={20}
-                    className="transition-transform group-hover:translate-x-1"
-                  />
-                </Link>
-              </StyledButton>
+              <>
+                <StyledButton variant="primary" size="lg" asChild>
+                  <Link href="/request-access">
+                    Start Free
+                    <ArrowRight className="ml-2 h-4 w-4 transition-transform group-hover:translate-x-1" />
+                  </Link>
+                </StyledButton>
+                <StyledButton variant="outline" size="lg" asChild>
+                  <Link href="#how-it-works">
+                    <Play className="mr-2 h-4 w-4" />
+                    See How It Works
+                  </Link>
+                </StyledButton>
+              </>
             ) : (
-              <StyledButton
-                variant="primary"
-                size="lg"
-                className="text-lg"
-                asChild
-              >
+              <StyledButton variant="primary" size="lg" asChild>
                 <Link href={USER_HOME}>
-                  Monitore Workspaces
-                  <ChevronRight
-                    size={20}
-                    className="transition-transform group-hover:translate-x-1"
-                  />
+                  Monitor Workspaces
+                  <ArrowRight className="ml-2 h-4 w-4 transition-transform group-hover:translate-x-1" />
                 </Link>
               </StyledButton>
             )}

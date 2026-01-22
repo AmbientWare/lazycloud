@@ -118,7 +118,7 @@ export function WorkspaceOverview({ workspaceId }: WorkspaceOverviewProps) {
   }
 
   return (
-    <StyledCard className="border-l-lazycloud/40 border-l-2 shadow-md" elevation={2}>
+    <StyledCard className="border-l-lazycloud/40 border-l-2 shadow-md">
       <StyledCardHeader>
         <SectionHeader {...DEPLOYMENTS_HEADER} />
       </StyledCardHeader>

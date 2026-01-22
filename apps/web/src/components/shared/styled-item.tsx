@@ -16,8 +16,14 @@ interface StyledItemProps
 /**
  * StyledItem - A pre-styled Item component with consistent design across the app
  *
- * @variant default - Standard item with subtle styling (size="sm", rounded-lg)
- * @variant feature - Feature card styling with enhanced shadows and backdrop blur
+ * Design tokens used:
+ * - Border: border-border/60 (standard), hover:border-lazycloud/30 (accent)
+ * - Background: bg-muted/60 with backdrop-blur-sm
+ * - Radius: rounded-lg
+ * - Shadow: shadow-sm (base), hover:shadow-md (feature)
+ *
+ * @variant default - Standard item with subtle styling
+ * @variant feature - Feature card styling with hover effect
  */
 export const StyledItem = forwardRef<HTMLDivElement, StyledItemProps>(
   ({ className, variant: styledVariant = "default", size, ...props }, ref) => {
@@ -29,11 +35,11 @@ export const StyledItem = forwardRef<HTMLDivElement, StyledItemProps>(
         variant="outline"
         size={itemSize}
         className={cn(
-          styledVariant === "default" &&
-            "border-border/70 bg-muted/60 backdrop-blur-sm rounded-lg shadow-sm shadow-black/30 dark:shadow-white/10",
+          // Base styles for all variants (matches TUI dashboard tab triggers)
+          "rounded-lg border border-border/60 bg-muted/60 shadow-sm backdrop-blur-sm",
+          // Variant-specific styles
           styledVariant === "feature" && [
-            "border-border/70 bg-muted/60 backdrop-blur-sm rounded-lg shadow-sm shadow-black/35 dark:shadow-white/12",
-            "transition-all duration-300 hover:-translate-y-0.5 hover:shadow-md hover:shadow-black/45 dark:hover:shadow-white/18 hover:border-lazycloud/30",
+            "cursor-pointer transition-all duration-300 hover:-translate-y-0.5 hover:border-lazycloud/30 hover:shadow-md",
           ],
           className,
         )}

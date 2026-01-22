@@ -18,17 +18,17 @@ export function GridBackground({ children }: GridBackgroundProps) {
               <stop
                 offset="0%"
                 stopColor="currentColor"
-                stopOpacity="0.08"
+                stopOpacity="0.15"
               />
               <stop
                 offset="50%"
                 stopColor="currentColor"
-                stopOpacity="0.04"
+                stopOpacity="0.08"
               />
               <stop
                 offset="100%"
                 stopColor="currentColor"
-                stopOpacity="0.02"
+                stopOpacity="0.04"
               />
             </linearGradient>
             <radialGradient
@@ -40,7 +40,7 @@ export function GridBackground({ children }: GridBackgroundProps) {
               <stop
                 offset="0%"
                 stopColor="currentColor"
-                stopOpacity="0.06"
+                stopOpacity="0.12"
               />
               <stop
                 offset="100%"
@@ -72,7 +72,7 @@ export function GridBackground({ children }: GridBackgroundProps) {
               fill="none"
               stroke="currentColor"
               strokeWidth="0.75"
-              strokeOpacity="0.25"
+              strokeOpacity="0.4"
               className="text-muted-foreground"
             />
           </pattern>

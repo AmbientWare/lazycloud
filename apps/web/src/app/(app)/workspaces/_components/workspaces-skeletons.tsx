@@ -14,7 +14,7 @@ const DEPLOYMENTS_HEADER = {
 
 export function DeploymentsSkeleton() {
   return (
-    <StyledCard elevation={2}>
+    <StyledCard>
       <StyledCardHeader>
         <SectionHeader {...DEPLOYMENTS_HEADER} />
       </StyledCardHeader>
@@ -30,7 +30,7 @@ export function DeploymentsSkeleton() {
 
 export function MembersSkeleton() {
   return (
-    <StyledCard elevation={2}>
+    <StyledCard>
       <StyledCardHeader>
         <SectionHeader
           title="Members"
