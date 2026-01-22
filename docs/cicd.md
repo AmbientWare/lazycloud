@@ -21,14 +21,13 @@ This creates the `.lazycloud` config and stores initial secrets. After that, aut
 1. Go to https://lazycloud.dev
 2. Click your user icon in the sidebar → **API Key**
 3. Copy your API key
-4. Get your workspace ID: `lazycloud workspaces list`
 
 ### 2. Add Secrets to CI/CD
 
 | Secret | Description |
 |--------|-------------|
 | `LAZYCLOUD_API_KEY` | Your API key |
-| `LAZYCLOUD_WORKSPACE_ID` | Target workspace ID |
+| `LAZYCLOUD_WORKSPACE` | Target workspace name |
 
 Plus any app-specific secrets (DATABASE_URL, etc.)
 
@@ -60,7 +59,7 @@ jobs:
       - run: lazycloud deploy --env shell --build-arg shell -y
         env:
           LAZYCLOUD_API_KEY: ${{ secrets.LAZYCLOUD_API_KEY }}
-          LAZYCLOUD_WORKSPACE_ID: ${{ secrets.LAZYCLOUD_WORKSPACE_ID }}
+          LAZYCLOUD_WORKSPACE: ${{ secrets.LAZYCLOUD_WORKSPACE }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
 ```
 
@@ -85,7 +84,7 @@ jobs:
       - run: lazycloud deploy --env shell --build-arg shell -y
         env:
           LAZYCLOUD_API_KEY: ${{ secrets.LAZYCLOUD_API_KEY }}
-          LAZYCLOUD_WORKSPACE_ID: ${{ secrets.WORKSPACE_ID_STAGING }}
+          LAZYCLOUD_WORKSPACE: ${{ secrets.WORKSPACE_STAGING }}
           DATABASE_URL: ${{ secrets.DATABASE_URL_STAGING }}
 
   production:
@@ -98,7 +97,7 @@ jobs:
       - run: lazycloud deploy --env shell --build-arg shell -y
         env:
           LAZYCLOUD_API_KEY: ${{ secrets.LAZYCLOUD_API_KEY }}
-          LAZYCLOUD_WORKSPACE_ID: ${{ secrets.WORKSPACE_ID_PROD }}
+          LAZYCLOUD_WORKSPACE: ${{ secrets.WORKSPACE_PROD }}
           DATABASE_URL: ${{ secrets.DATABASE_URL_PROD }}
 ```
 
@@ -114,7 +113,7 @@ deploy:
     - lazycloud deploy --env shell --build-arg shell -y
   variables:
     LAZYCLOUD_API_KEY: $LAZYCLOUD_API_KEY
-    LAZYCLOUD_WORKSPACE_ID: $LAZYCLOUD_WORKSPACE_ID
+    LAZYCLOUD_WORKSPACE: $LAZYCLOUD_WORKSPACE
   only:
     - main
 ```
@@ -125,11 +124,10 @@ Use **separate workspaces** for each environment. Workspaces are fully isolated 
 
 ### Setup
 
-1. Create workspaces in dashboard: `my-app-staging`, `my-app-production`
-2. Get IDs: `lazycloud workspaces list`
-3. Store in CI/CD secrets:
-   - `WORKSPACE_ID_STAGING`
-   - `WORKSPACE_ID_PROD`
+1. Create workspaces: `lazycloud workspaces create my-app-staging`
+2. Store workspace names in CI/CD secrets:
+   - `WORKSPACE_STAGING` = `my-app-staging`
+   - `WORKSPACE_PROD` = `my-app-production`
 
 ### Local Switching
 
@@ -150,7 +148,7 @@ lazycloud deploy
 
 | Error | Solution |
 |-------|----------|
-| "No active workspace ID found" | Set `LAZYCLOUD_WORKSPACE_ID` |
+| "No active workspace found" | Set `LAZYCLOUD_WORKSPACE` |
 | "Authentication failed" | Check `LAZYCLOUD_API_KEY` |
 | "Missing environment variables" | Add missing vars to CI/CD secrets |
 | "Deployment not found" | Run first deploy locally |
