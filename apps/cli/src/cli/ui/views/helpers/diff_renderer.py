@@ -16,13 +16,11 @@ from cli.ui.views.helpers.formatters import (
     format_deploy_config,
     format_env_var_list,
     format_healthcheck,
-    format_image_change,
     format_ports_list,
     format_scaling_config,
     format_value_summary,
     format_volume_list,
 )
-from cli.utils.utils import format_image_name
 
 
 @dataclass
@@ -194,10 +192,6 @@ def format_service_details(details: dict[str, Any]) -> str:
     """Format service details for display."""
     parts = []
 
-    # Image (most important)
-    if details.get("image"):
-        parts.append(f"Image: {format_image_name(details['image'])}")
-
     # Ports
     if details.get("ports"):
         parts.append(f"Ports: {format_ports_list(details['ports'])}")
@@ -240,7 +234,6 @@ def format_service_modifications(changes: dict[str, Any]) -> str:
 
     # Priority fields to show first
     priority_fields = [
-        "image",
         "entrypoint",
         "command",
         "working_dir",
@@ -268,9 +261,7 @@ def format_field_change(field: str, change: Any) -> str | None:
     # Check if it's a FieldChange object
     if isinstance(change, FieldChange):
         # Special formatting for specific fields
-        if field == "image":
-            return f"Image: {format_image_change(change.from_value, change.to_value)}"
-        elif field == "ports":
+        if field == "ports":
             return f"Ports: {format_ports_list(change.from_value)} → {format_ports_list(change.to_value)}"
         elif field == "command":
             return f"Command: {format_command(change.from_value)} → {format_command(change.to_value)}"
