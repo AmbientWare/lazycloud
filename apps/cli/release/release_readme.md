@@ -61,7 +61,7 @@ Automate deployments with environment variables:
 
 ```bash
 export LAZYCLOUD_API_KEY=<your-api-key>
-export LAZYCLOUD_WORKSPACE_ID=<your-workspace-id>
+export LAZYCLOUD_WORKSPACE=<your-workspace-name>
 lazycloud deploy --env shell --build-arg shell -y
 ```
 

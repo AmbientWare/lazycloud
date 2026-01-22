@@ -146,15 +146,26 @@ class CLIConfig(BaseSettings):
 
     @property
     def active_workspace_id(self) -> str:
-        """Get the currently active workspace ID."""
+        """Get the currently active workspace ID.
+
+        Checks in order:
+        1. Stored workspace ID from config file (from login/activate)
+        2. LAZYCLOUD_WORKSPACE env var (name - resolved to ID via API)
+        """
         if self._active_workspace_id is not None:
             return self._active_workspace_id
 
-        if env_id := os.getenv("LAZYCLOUD_WORKSPACE_ID"):
-            return env_id
+        if workspace_name := os.getenv("LAZYCLOUD_WORKSPACE"):
+            # Lazy import to avoid circular dependency
+            from cli.api import api
+
+            workspace = api.workspaces.get_workspace_by_name(workspace_name)
+            if workspace:
+                return workspace["id"]
+            raise ValueError(f"Workspace '{workspace_name}' not found")
 
         raise ValueError(
-            "No active workspace ID found. Set LAZYCLOUD_WORKSPACE_ID or run 'lazycloud login'"
+            "No active workspace found. Set LAZYCLOUD_WORKSPACE or run 'lazycloud login'"
         )
 
     @property
