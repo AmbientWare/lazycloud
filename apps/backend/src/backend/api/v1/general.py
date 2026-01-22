@@ -1,5 +1,3 @@
-from importlib.metadata import version
-
 import httpx
 import redis.asyncio as aioredis
 from fastapi import APIRouter
@@ -93,11 +91,7 @@ async def readiness() -> ReadinessResponse:
 @cli_version_router.get("")
 async def cli_version() -> CLIVersionResponse:
     """Get the minimum supported CLI version."""
-    try:
-        pkg_version = version("lazycloud")
-    except Exception:
-        pkg_version = "0.0.1"
-    return CLIVersionResponse(version=pkg_version)
+    return CLIVersionResponse(version=app_config.CLI_VERSION)
 
 
 class AuthConfigResponse(BaseModel):

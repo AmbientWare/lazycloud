@@ -59,11 +59,15 @@ jobs:
         run: |
           sed -i 's/^version = ".*"/version = "${{ steps.bump.outputs.version }}"/' apps/cli/pyproject.toml
 
+      - name: Update backend CLI_VERSION config
+        run: |
+          sed -i 's/CLI_VERSION: str = ".*"/CLI_VERSION: str = "${{ steps.bump.outputs.version }}"/' apps/backend/src/backend/config.py
+
       - name: Commit version bump
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add apps/cli/pyproject.toml
+          git add apps/cli/pyproject.toml apps/backend/src/backend/config.py
           git commit -m "Bump CLI version to ${{ steps.bump.outputs.version }}"
           git push
 
