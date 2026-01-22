@@ -1,0 +1,30 @@
+{{/*
+Create PodDisruptionBudgets for services with replicas > 1
+Ensures at least 1 pod remains available during voluntary disruptions
+*/}}
+{{- range $service := .Values.services }}
+{{- if and $service.enabled (ne ($service.workloadType | default "Deployment") "Job") }}
+{{- if gt (int ($service.replicas | default 1)) 1 }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $service.name }}
+  namespace: {{ include "lazycloud-compose.serviceNamespace" (dict "serviceName" $service.name "Values" $.Values "root" $) }}
+  labels:
+    {{- include "lazycloud-compose.labels" $ | nindent 4 }}
+    app.kubernetes.io/name: {{ $service.name }}
+    app.kubernetes.io/component: application
+    lazycloud.dev/service: {{ $service.name }}
+    {{- if $.Values.global.labels }}
+    {{- toYaml $.Values.global.labels | nindent 4 }}
+    {{- end }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $service.name }}
+      app.kubernetes.io/instance: {{ $.Release.Name }}
+{{- end }}
+{{- end }}
+{{- end }}

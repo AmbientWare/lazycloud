@@ -178,9 +178,21 @@ spec:
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with $service.affinity | default $.Values.affinity }}
+      {{- if or $service.affinity $.Values.affinity }}
       affinity:
-        {{- toYaml . | nindent 8 }}
+        {{- toYaml ($service.affinity | default $.Values.affinity) | nindent 8 }}
+      {{- else if gt (int ($service.replicas | default 1)) 1 }}
+      {{- /* Auto-add soft anti-affinity when replicas > 1 for high availability */}}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: {{ $service.name }}
+                    app.kubernetes.io/instance: {{ $.Release.Name }}
+                topologyKey: kubernetes.io/hostname
       {{- end }}
       {{- with $service.tolerations | default $.Values.tolerations }}
       tolerations:

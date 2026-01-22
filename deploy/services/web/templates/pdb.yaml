@@ -1,0 +1,14 @@
+{{- if gt (int .Values.replicaCount) 1 }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .Chart.Name }}
+  labels:
+    app: {{ .Chart.Name }}
+    component: frontend
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: {{ .Chart.Name }}
+{{- end }}
