@@ -505,22 +505,31 @@ async def finalize_and_bill_job(ctx: dict[str, Any]) -> dict[str, Any]:
 
         try:
             if not polar_service.usage.enabled:
-                logger.debug(
-                    f"Polar disabled, marking {record.id} as billed without sending"
+                logger.error(
+                    f"BILLING SKIPPED - Polar disabled: workspace {record.workspace_id} "
+                    f"for {yesterday}. Set POLAR_ACCESS_TOKEN to enable billing."
                 )
-                billing_id = f"disabled-{idempotency_key}"
-            else:
-                # Increment attempt counter before trying
                 async with get_db_context() as db:
-                    await db.usage.increment_billing_attempt(record.id)
+                    await db.billing_audit.log_billing_skipped(
+                        workspace_id=record.workspace_id,
+                        record_id=record.id,
+                        reason="Polar service disabled (POLAR_ACCESS_TOKEN not configured)",
+                        usage_date=usage_date_str,
+                    )
+                skipped += 1
+                continue
 
-                await _send_to_polar_with_retry(
-                    polar_service=polar_service,
-                    record=record,
-                    external_customer_id=workspace_owner.workos_id,
-                    idempotency_key=idempotency_key,
-                )
-                billing_id = idempotency_key
+            # Increment attempt counter before trying
+            async with get_db_context() as db:
+                await db.usage.increment_billing_attempt(record.id)
+
+            await _send_to_polar_with_retry(
+                polar_service=polar_service,
+                record=record,
+                external_customer_id=workspace_owner.workos_id,
+                idempotency_key=idempotency_key,
+            )
+            billing_id = idempotency_key
 
             # Mark as billed and log success
             async with get_db_context() as db:
