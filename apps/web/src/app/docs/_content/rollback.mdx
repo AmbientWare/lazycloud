@@ -1,0 +1,42 @@
+---
+title: Rollback
+description: Rollback your LazyCloud deployments to previous versions instantly. Recover from failed deployments with one command.
+---
+
+# lazycloud rollback
+
+Reverts a deployment to a previous version.
+
+```bash
+lazycloud rollback
+```
+
+## Options
+
+| Option | Description |
+|--------|-------------|
+| `-y, --yes` | Skip confirmation |
+| `-r, --revision` | Specific revision number |
+
+## Examples
+
+```bash
+# Interactive (shows available revisions)
+lazycloud rollback
+
+# Rollback to specific revision
+lazycloud rollback --revision 3
+
+# Skip confirmation
+lazycloud rollback -y
+```
+
+## How It Works
+
+LazyCloud keeps a history of your deployments. Rollback restores a previous configuration and creates a new revision, so you can always roll forward again if needed.
+
+## Limitations
+
+- Database migrations aren't reversed
+- Secrets use current values (not versioned)
+- Requires at least 2 revisions to exist

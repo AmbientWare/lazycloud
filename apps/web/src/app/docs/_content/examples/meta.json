@@ -1,0 +1,9 @@
+{
+  "title": "Examples",
+  "pages": [
+    "index",
+    "llm-chatbot",
+    "image-transformer",
+    "stock-dashboard"
+  ]
+}

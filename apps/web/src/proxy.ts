@@ -64,7 +64,6 @@ export default async function proxy(req: NextRequest) {
 
   try {
     const result = await authkit(req, {
-      debug: process.env.NODE_ENV === "development",
       redirectUri: process.env.WORKOS_REDIRECT_URI,
     });
     session = result.session;
@@ -143,12 +142,13 @@ export default async function proxy(req: NextRequest) {
     return nextWithAuth(remaining);
   }
 
-  // Allow public routes for unauthenticated users only
+  // Allow public routes (no subscription check needed)
+  if (matchesRoute(pathname, PUBLIC_ROUTES)) {
+    return nextWithAuth(remaining);
+  }
+
+  // Require authentication for non-public routes
   if (!session.user) {
-    if (matchesRoute(pathname, PUBLIC_ROUTES)) {
-      return nextWithAuth(remaining);
-    }
-    // Require authentication for non-public routes
     return withHeaders(
       authorizationUrl
         ? NextResponse.redirect(authorizationUrl)
@@ -157,7 +157,7 @@ export default async function proxy(req: NextRequest) {
     );
   }
 
-  // Allow authenticated access to checkout and subscribe pages
+  // Allow authenticated access to checkout and subscribe pages (no subscription check)
   const exemptRoutes = [...CHECKOUT_ROUTES, ...SUBSCRIBE_ROUTES];
   if (matchesRoute(pathname, exemptRoutes)) {
     return nextWithAuth(remaining);
@@ -211,7 +211,7 @@ export default async function proxy(req: NextRequest) {
 
 export const config = {
   matcher: [
-    // Skip Next.js internals and all static files, unless found in search params
+    // Skip Next.js internals and static files
     "/((?!_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)",
     // Always run for API routes
     "/api(.*)",

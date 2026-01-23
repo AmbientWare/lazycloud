@@ -1,0 +1,145 @@
+---
+title: Image Transformer
+description: Transform images into artistic styles using AI with persistent storage for images and SQLite database tracking.
+---
+
+# Image Transformer
+
+Transform images into artistic styles using AI. A single-service app with persistent storage for images and SQLite database tracking, built with TanStack Start.
+
+<Tip>
+**What you'll learn:** Connecting to external AI APIs, persistent file storage with volumes, SQLite database for tracking history, and serving stored files via server functions.
+</Tip>
+
+```
+┌──────────────┐     ┌───────────┐
+│   TanStack   │────▶│ Replicate │
+│   Frontend   │     │   (FLUX)  │
+└──────┬───────┘     └───────────┘
+       │
+       ▼
+  ┌──────────┐
+  │  SQLite  │
+  └──────────┘
+```
+
+## Prerequisites
+
+You'll need a **Replicate API token** to use the FLUX image generation model.
+
+1. Create an account at [replicate.com](https://replicate.com)
+2. Go to [Account → API Tokens](https://replicate.com/account/api-tokens)
+3. Create a new token and copy it (starts with `r8_`)
+
+## Quick Start (Local)
+
+```bash
+git clone https://github.com/AmbientWare/lazycloud-releases.git
+cd lazycloud-releases/examples/image-transformer
+
+# Set your API token
+export REPLICATE_API_TOKEN=r8_your_token_here
+
+# Run locally
+docker compose up --build
+```
+
+Open [http://localhost:3000](http://localhost:3000) to use the app.
+
+## Deploy to LazyCloud
+
+### Step 1: Initialize
+
+```bash
+lazycloud init
+```
+
+This detects your `compose.yaml` and prepares for deployment.
+
+### Step 2: Deploy
+
+```bash
+lazycloud deploy
+```
+
+You'll be prompted for environment variables. When asked "Import from", you have three options:
+
+| Option | When to use |
+|--------|-------------|
+| `file` | Import from a `.env` file (default) |
+| `shell` | Import from your current shell environment |
+| `manual` | Enter each value directly in the terminal |
+
+Select `manual` to enter values directly, then provide:
+
+| Variable | What to enter |
+|----------|---------------|
+| `REPLICATE_API_TOKEN` | Your Replicate API token (e.g., `r8_abc123...`) |
+| `DATA_DIR` | Keep the default `/app/data` |
+
+### Step 3: Access your app
+
+Once deployed, run `lazycloud dashboard` to view your deployment. Navigate to your service to find its public URL. Your images and transformation history persist across deployments.
+
+---
+
+## Configuration Reference
+
+Details about the `compose.yaml` configuration for customization.
+
+### Environment variables
+
+```yaml
+environment:
+  - REPLICATE_API_TOKEN=${REPLICATE_API_TOKEN}
+  - DATA_DIR=/app/data
+```
+
+Variables are detected during `lazycloud deploy` and stored encrypted.
+
+### Persistent storage
+
+```yaml
+volumes:
+  app-data:
+    labels:
+      lazycloud.volume.size: "20Gi"
+```
+
+The volume stores:
+- **SQLite database** (`transformations.db`) - Tracks transformation history
+- **Image files** - Both original uploads and AI-transformed results
+
+Data persists across deployments and restarts.
+
+### Resource limits
+
+```yaml
+deploy:
+  resources:
+    limits:
+      cpus: "1.0"
+      memory: 512M
+    reservations:
+      cpus: "0.25"
+      memory: 256M
+```
+
+`limits` caps maximum usage. `reservations` guarantees minimum resources.
+
+### Health checks
+
+```yaml
+healthcheck:
+  test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000"]
+  interval: 10s
+  timeout: 5s
+  retries: 3
+  start_period: 10s
+```
+
+LazyCloud uses health checks to determine when your service is ready and to restart unhealthy containers.
+
+---
+
+See [Labels](/docs/labels) for all configuration options.
