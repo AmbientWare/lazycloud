@@ -26,7 +26,6 @@ Perfect for getting started. Pay only for what you use.
 - {FREE_FEATURES.deployment_limit} Deployments
 - Up to {int(FREE_FEATURES.max_cpu_per_service)} CPU, {FREE_FEATURES.max_memory_per_service}GB RAM per service
 - Platform-generated domain names
-- Community support (GitHub/Discord)
 """
 
 free_product = ProductDefinition(

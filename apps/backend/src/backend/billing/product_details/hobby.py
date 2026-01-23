@@ -27,7 +27,6 @@ Perfect for individual developers and side projects.
 - Up to {int(DEVELOPER_FEATURES.max_cpu_per_service)} CPU, {DEVELOPER_FEATURES.max_memory_per_service}GB RAM per service
 - Auto-scaling (up to {DEVELOPER_FEATURES.max_replicas_per_service}x)
 - Platform-generated domain names
-- Email support
 """
 
 developer_product = ProductDefinition(

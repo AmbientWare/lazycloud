@@ -10,6 +10,11 @@ export const PUBLIC_ROUTES: string[] = [
   "/install.sh",
   "/install.ps1",
   "/auth-panel",
+  // SEO routes
+  "/sitemap.xml",
+  "/robots.txt",
+  "/manifest.webmanifest",
+  "/opengraph-image",
 ];
 
 export const CHECKOUT_ROUTES: string[] = ["/checkout/success"];
