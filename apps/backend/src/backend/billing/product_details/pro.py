@@ -28,7 +28,6 @@ Ideal for teams and production workloads.
 - Custom domain names
 - Auto-scaling (up to {PRO_FEATURES.max_replicas_per_service}x)
 - Team collaboration (up to {PRO_FEATURES.max_team_members} members)
-- Priority support
 """
 
 pro_product = ProductDefinition(

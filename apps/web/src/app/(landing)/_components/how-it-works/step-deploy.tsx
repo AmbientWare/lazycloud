@@ -28,8 +28,8 @@ export function StepDeploy({ id, stackIndex = 0 }: StepDeployProps) {
             <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-sm text-lazycloud">
               lazycloud deploy
             </code>{" "}
-            and watch your app go live. We handle building, pushing, and
-            deploying.
+            and watch your app go live. We handle build, push, and
+            deploy.
           </>
         }
         features={<FeatureList items={FEATURES} />}

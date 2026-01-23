@@ -1,4 +1,20 @@
+import { type Metadata } from "next";
 import { ExampleCard } from "@/components/shared/example-card";
+
+export const metadata: Metadata = {
+  title: "Examples",
+  description:
+    "Ready-to-deploy Docker Compose examples: LLM chatbots, image transformers, stock dashboards, and more. Clone and deploy in minutes.",
+  openGraph: {
+    title: "Examples | LazyCloud Docs",
+    description:
+      "Ready-to-deploy Docker Compose examples. Clone and deploy in minutes.",
+    url: "https://lazycloud.dev/docs/examples",
+  },
+  alternates: {
+    canonical: "https://lazycloud.dev/docs/examples",
+  },
+};
 
 const examples = [
   {

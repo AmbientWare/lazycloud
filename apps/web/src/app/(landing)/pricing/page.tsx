@@ -1,8 +1,24 @@
+import { type Metadata } from "next";
 import { Suspense } from "react";
 import { ProductsCards } from "./_components/products-cards";
 import { ProductsCardsSkeleton } from "./_components/products-skeleton";
 import { EnterpriseSection } from "./_components/enterprise-section";
 import { PricingTransparency } from "./_components/pricing-transparency";
+
+export const metadata: Metadata = {
+  title: "Pricing",
+  description:
+    "Simple, transparent pricing for LazyCloud. Start free and scale as you grow. Deploy Docker Compose applications to the cloud with predictable costs.",
+  openGraph: {
+    title: "Pricing | LazyCloud",
+    description:
+      "Simple, transparent pricing for LazyCloud. Start free and scale as you grow.",
+    url: "https://lazycloud.dev/pricing",
+  },
+  alternates: {
+    canonical: "https://lazycloud.dev/pricing",
+  },
+};
 
 export default function PricingPage() {
   return (

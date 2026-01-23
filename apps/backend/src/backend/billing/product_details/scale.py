@@ -28,7 +28,6 @@ For growing teams and high-scale workloads.
 - Custom domain names
 - Auto-scaling (up to {SCALE_FEATURES.max_replicas_per_service}x)
 - Unlimited team members
-- Dedicated support
 """
 
 scale_product = ProductDefinition(
