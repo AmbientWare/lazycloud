@@ -1,13 +1,10 @@
 """API test fixtures with AsyncClient and dependency overrides."""
 
 import uuid
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
-from backend.api.dependencies import (
-    check_workspace_limit,
-    get_user_product_features,
-)
+from backend.api.dependencies import get_user_product_features
 from backend.api.security import (
     get_current_active_user,
     get_current_user,
@@ -24,11 +21,7 @@ from backend.api.v1 import (
     users_router,
     workspaces_router,
 )
-from backend.billing.product_details.features import (
-    BaseFeatures,
-    DeploymentFeature,
-    WorkspaceFeature,
-)
+from backend.billing.product_details.features import BaseFeatures
 from backend.config import app_config
 from backend.database import Database, _create_database, get_db
 from backend.database.session import session_manager
@@ -50,14 +43,13 @@ pytestmark = [pytest.mark.asyncio, requires_db]
 def make_test_features() -> BaseFeatures:
     """Create mock subscription features for testing."""
     return BaseFeatures(
-        workspace=WorkspaceFeature(limit=10, deployment_limit=5),
-        deployment=DeploymentFeature(
-            service_limit=10,
-            volume_limit=5,
-            network_limit=3,
-            max_replicas_per_service=10,
-        ),
-        domain_limit=3,
+        deployment_limit=10,
+        max_team_members=10,
+        max_cpu_per_service=8.0,
+        max_memory_per_service=16,
+        max_replicas_per_service=10,
+        custom_domains_enabled=True,
+        support_level="email",
     )
 
 
@@ -187,7 +179,6 @@ def make_mock_subscription_service() -> AsyncMock:
     """Create mock SubscriptionService."""
     mock = AsyncMock()
     mock.get_user_features = AsyncMock(return_value=make_test_features())
-    mock.check_workspace_limit = AsyncMock(return_value=None)
     mock.check_deployment_limit = AsyncMock(return_value=None)
     mock.validate_workspace_for_owner = AsyncMock(return_value=None)
     return mock
@@ -268,7 +259,6 @@ async def client(api_db: Database, api_user: UserPydantic) -> AsyncClient:
     app.dependency_overrides[get_current_active_user] = lambda: api_user
     app.dependency_overrides[require_admin] = lambda: api_user
     app.dependency_overrides[get_user_product_features] = make_test_features
-    app.dependency_overrides[check_workspace_limit] = lambda: None
     app.dependency_overrides[get_usage_service] = make_mock_usage_service
     app.dependency_overrides[get_subscription_service] = make_mock_subscription_service
     app.dependency_overrides[get_invitation_service] = make_mock_invitation_service
@@ -301,7 +291,6 @@ async def admin_client(api_db: Database, api_admin_user: UserPydantic) -> AsyncC
     app.dependency_overrides[get_current_active_user] = lambda: api_admin_user
     app.dependency_overrides[require_admin] = lambda: api_admin_user
     app.dependency_overrides[get_user_product_features] = make_test_features
-    app.dependency_overrides[check_workspace_limit] = lambda: None
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:

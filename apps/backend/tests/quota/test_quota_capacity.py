@@ -4,16 +4,15 @@ from unittest.mock import AsyncMock
 
 import pytest
 from backend.database import Database
-from backend.database.users import UserPydantic
-from backend.database.workspaces import WorkspacePydantic
 from backend.tasks.core.utils import verify_quota_capacity
-from models.deployments import DeploymentStates
-from models.helm import HelmValues, VolumeValues
+from models.workspaces import WorkspaceRole
 
 from tests.fixtures.database import (
     make_deployment,
     make_features,
-    make_service,
+    make_user,
+    make_user_workspace,
+    make_workspace,
     requires_db,
 )
 
@@ -21,159 +20,107 @@ pytestmark = [pytest.mark.asyncio, requires_db]
 
 
 class TestVerifyQuotaCapacity:
-    """Tests for verify_quota_capacity function."""
+    """Tests for verify_quota_capacity function.
+
+    Note: Only deployment limit is checked. Services, volumes, and networks
+    are unlimited (usage billing handles cost).
+    """
 
     async def test_deployment_limit_exceeded_raises_error(
         self,
-        db_user_with_workspace: tuple[UserPydantic, WorkspacePydantic],
         db: Database,
         mock_subscription_service,
     ):
-        """Raises ValueError when deployment limit exceeded."""
-        _, workspace = db_user_with_workspace
-        features = make_features(deployment_limit=2)
+        """Raises ValueError when total deployment limit exceeded across all workspaces."""
+        # Create user with 2 workspaces
+        user = await db.users.create(make_user())
+        workspace1 = await db.workspaces.create(make_workspace())
+        await db.user_workspaces.create(
+            make_user_workspace(user.id, workspace1.id, WorkspaceRole.OWNER)
+        )
+        workspace2 = await db.workspaces.create(make_workspace())
+        await db.user_workspaces.create(
+            make_user_workspace(user.id, workspace2.id, WorkspaceRole.OWNER)
+        )
+
+        # Set deployment limit to 3
+        features = make_features(deployment_limit=3)
         mock_subscription_service.get_user_features = AsyncMock(return_value=features)
 
-        for i in range(2):
-            await db.compose_deployments.create(
-                make_deployment(workspace.id, name=f"deploy-{i}")
-            )
+        # Create 2 deployments in workspace1 and 1 in workspace2 (total = 3)
+        await db.compose_deployments.create(
+            make_deployment(workspace1.id, name="deploy-1")
+        )
+        await db.compose_deployments.create(
+            make_deployment(workspace1.id, name="deploy-2")
+        )
+        await db.compose_deployments.create(
+            make_deployment(workspace2.id, name="deploy-3")
+        )
 
+        # Should fail because total is 3, which equals the limit
         with pytest.raises(ValueError, match="Deployment limit exceeded"):
-            await verify_quota_capacity(
-                workspace_id=workspace.id,
-                required_deployments=1,
-                required_services=1,
-                required_pvcs=0,
-            )
+            await verify_quota_capacity(workspace1.id)
 
-    async def test_service_limit_exceeded_raises_error(
+    async def test_within_limit_succeeds(
         self,
-        db_user_with_workspace: tuple[UserPydantic, WorkspacePydantic],
         db: Database,
         mock_subscription_service,
     ):
-        """Raises ValueError when service limit exceeded."""
-        _, workspace = db_user_with_workspace
-        features = make_features(deployment_limit=5, service_limit=2)
+        """Succeeds when within deployment limit."""
+        user = await db.users.create(make_user())
+        workspace = await db.workspaces.create(make_workspace())
+        await db.user_workspaces.create(
+            make_user_workspace(user.id, workspace.id, WorkspaceRole.OWNER)
+        )
+
+        features = make_features(deployment_limit=5)
         mock_subscription_service.get_user_features = AsyncMock(return_value=features)
 
-        deployment = await db.compose_deployments.create(
-            make_deployment(workspace.id, name="existing")
+        await db.compose_deployments.create(
+            make_deployment(workspace.id, name="deploy-1")
         )
-        deployment.helm_values = HelmValues(
-            services=[make_service(f"svc-{i}") for i in range(8)],
-            volumes=[],
-            networks=[],
-            secrets=[],
-        )
-        await db.compose_deployments.update(deployment)
 
-        with pytest.raises(ValueError, match="Service limit exceeded"):
-            await verify_quota_capacity(
-                workspace_id=workspace.id,
-                required_deployments=1,
-                required_services=5,
-                required_pvcs=0,
-            )
+        # Should succeed - only 1 deployment, limit is 5
+        await verify_quota_capacity(workspace.id)
 
-    async def test_pvc_limit_exceeded_raises_error(
+    async def test_update_skips_limit_check(
         self,
-        db_user_with_workspace: tuple[UserPydantic, WorkspacePydantic],
         db: Database,
         mock_subscription_service,
     ):
-        """Raises ValueError when PVC/volume limit exceeded."""
-        _, workspace = db_user_with_workspace
-        features = make_features(deployment_limit=5, volume_limit=2)
-        mock_subscription_service.get_user_features = AsyncMock(return_value=features)
-
-        deployment = await db.compose_deployments.create(
-            make_deployment(workspace.id, name="existing")
-        )
-        deployment.helm_values = HelmValues(
-            services=[],
-            volumes=[VolumeValues(name=f"vol-{i}", size="1Gi") for i in range(9)],
-            networks=[],
-            secrets=[],
-        )
-        await db.compose_deployments.update(deployment)
-
-        with pytest.raises(ValueError, match="Volume limit exceeded"):
-            await verify_quota_capacity(
-                workspace_id=workspace.id,
-                required_deployments=1,
-                required_services=1,
-                required_pvcs=3,
-            )
-
-    async def test_existing_resources_subtracted_for_updates(
-        self,
-        db_user_with_workspace: tuple[UserPydantic, WorkspacePydantic],
-        db: Database,
-        mock_subscription_service,
-    ):
-        """Existing resources are subtracted when updating deployment."""
-        _, workspace = db_user_with_workspace
-        features = make_features(deployment_limit=2, service_limit=5, volume_limit=3)
-        mock_subscription_service.get_user_features = AsyncMock(return_value=features)
-
-        for i in range(2):
-            deployment = await db.compose_deployments.create(
-                make_deployment(workspace.id, name=f"deploy-{i}")
-            )
-            deployment.helm_values = HelmValues(
-                services=[make_service(f"svc-{i}-{j}") for j in range(3)],
-                volumes=[VolumeValues(name=f"vol-{i}", size="1Gi")],
-                networks=[],
-                secrets=[],
-            )
-            await db.compose_deployments.update(deployment)
-
-        with pytest.raises(ValueError, match="limit exceeded"):
-            await verify_quota_capacity(
-                workspace_id=workspace.id,
-                required_deployments=1,
-                required_services=3,
-                required_pvcs=1,
-            )
-
-        # With existing_ params (simulating update), should succeed
-        await verify_quota_capacity(
-            workspace_id=workspace.id,
-            required_deployments=1,
-            required_services=3,
-            required_pvcs=1,
-            existing_deployments=1,
-            existing_services=3,
-            existing_pvcs=1,
+        """Updates skip the limit check since they don't create new deployments."""
+        user = await db.users.create(make_user())
+        workspace = await db.workspaces.create(make_workspace())
+        await db.user_workspaces.create(
+            make_user_workspace(user.id, workspace.id, WorkspaceRole.OWNER)
         )
 
-    async def test_deleted_deployments_not_counted(
-        self,
-        db_user_with_workspace: tuple[UserPydantic, WorkspacePydantic],
-        db: Database,
-        mock_subscription_service,
-    ):
-        """Deleted deployments are not counted toward limits."""
-        _, workspace = db_user_with_workspace
         features = make_features(deployment_limit=2)
         mock_subscription_service.get_user_features = AsyncMock(return_value=features)
 
         await db.compose_deployments.create(
-            make_deployment(
-                workspace.id, name="deploy-active", state=DeploymentStates.DEPLOYED
-            )
+            make_deployment(workspace.id, name="deploy-1")
         )
         await db.compose_deployments.create(
-            make_deployment(
-                workspace.id, name="deploy-deleted", state=DeploymentStates.DELETED
-            )
+            make_deployment(workspace.id, name="deploy-2")
         )
 
-        await verify_quota_capacity(
-            workspace_id=workspace.id,
-            required_deployments=1,
-            required_services=1,
-            required_pvcs=0,
-        )
+        # Without is_update, should fail (2 deployments = limit)
+        with pytest.raises(ValueError, match="Deployment limit exceeded"):
+            await verify_quota_capacity(workspace.id)
+
+        # With is_update=True, should succeed (updating existing, not creating new)
+        await verify_quota_capacity(workspace.id, is_update=True)
+
+    async def test_no_owner_skips_check(
+        self,
+        db: Database,
+        mock_subscription_service,
+    ):
+        """Workspace without owner skips quota check (returns without error)."""
+        # Create workspace without owner
+        workspace = await db.workspaces.create(make_workspace())
+
+        # Should not raise - just logs warning and returns
+        await verify_quota_capacity(workspace.id)

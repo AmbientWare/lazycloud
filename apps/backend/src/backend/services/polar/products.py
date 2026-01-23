@@ -159,6 +159,24 @@ class PolarProductsModule:
             logger.error(f"Failed to update Polar product {product_id}: {e}")
             return None
 
+    async def archive_product(self, product_id: str) -> Product | None:
+        """Archive a product in Polar (soft delete)."""
+        if not self.enabled:
+            logger.info(f"Polar disabled, skipping product archive for {product_id}")
+            return None
+
+        try:
+            product_update = ProductUpdate(is_archived=True)
+            result = await self.client.products.update_async(
+                id=product_id, product_update=product_update
+            )
+            logger.info(f"Archived Polar product: {product_id}")
+            return result
+
+        except Exception as e:
+            logger.error(f"Failed to archive Polar product {product_id}: {e}")
+            return None
+
     async def get_product_by_name(
         self, name: str, organization_id: str
     ) -> Product | None:

@@ -6,52 +6,38 @@ from backend.billing.product_details.base_models import (
     ProductMetadata,
     SubscriptionRecurringInterval,
 )
-from backend.billing.product_details.features import (
-    BaseFeatures,
-    DeploymentFeature,
-    WorkspaceFeature,
+from backend.billing.product_details.features import BaseFeatures
+
+FREE_PRODUCT_NAME = "Free"
+
+FREE_FEATURES = BaseFeatures(
+    deployment_limit=2,
+    max_team_members=1,
+    max_cpu_per_service=1.0,
+    max_memory_per_service=2,
+    max_replicas_per_service=1,  # No auto-scaling
+    custom_domains_enabled=False,
+    support_level="community",
 )
 
-BASE_PRODUCT_NAME = "Basic"
-
-BASE_FEATURES = BaseFeatures(
-    workspace=WorkspaceFeature(
-        limit=1, deployment_limit=1
-    ),  # only Personal workspace, no isolation
-    deployment=DeploymentFeature(
-        service_limit=3,
-        volume_limit=3,
-        network_limit=1,
-        max_replicas_per_service=1,  # No auto-scaling
-        max_cpu_per_service=1.0,  # 1 CPU core per service
-        max_memory_per_service=2,  # 2GB RAM per service
-    ),
-    domain_limit=0,  # Platform-generated domain only
-    max_team_members=1,  # Only yourself
-    support_level="community",  # Community support (GitHub/Discord)
-)
-
-DESCRITPION_MARKDOWN = f"""
+DESCRIPTION_MARKDOWN = f"""
 Perfect for getting started. Pay only for what you use.
 
-- 1 Personal workspace
-- {BASE_FEATURES.workspace.deployment_limit} Deployment per workspace
-- {BASE_FEATURES.deployment.service_limit} Services per deployment (max 1 CPU, 2GB RAM each)
-- {BASE_FEATURES.deployment.volume_limit} Volumes per deployment
-- {BASE_FEATURES.deployment.network_limit} Network per deployment
+- {FREE_FEATURES.deployment_limit} Deployments
+- Up to {int(FREE_FEATURES.max_cpu_per_service)} CPU, {FREE_FEATURES.max_memory_per_service}GB RAM per service
 - Platform-generated domain names
-- Community support
+- Community support (GitHub/Discord)
 """
 
-base_product = ProductDefinition(
-    name=BASE_PRODUCT_NAME,
-    description=DESCRITPION_MARKDOWN,
+free_product = ProductDefinition(
+    name=FREE_PRODUCT_NAME,
+    description=DESCRIPTION_MARKDOWN,
     recurring_interval=SubscriptionRecurringInterval.MONTH,
     has_free_base=True,
     monthly_fee=None,
     meter_prices=METER_PRICES,
     metadata=ProductMetadata(
-        tier=BASE_PRODUCT_NAME.lower(),
-        features=json.dumps(BASE_FEATURES.model_dump()),
+        tier=FREE_PRODUCT_NAME.lower(),
+        features=json.dumps(FREE_FEATURES.model_dump()),
     ),
 )

@@ -6,25 +6,19 @@ import { WorkspaceOverview } from "./_components/workspace-overview";
 import { MemberListWrapper } from "./_components/member-list";
 import { PendingInvitations } from "./_components/pending-invitations";
 import { getWorkspaces } from "@/actions/workspaces";
-import { getUserFeatures } from "@/actions/users";
 import { Building2 } from "lucide-react";
 import { Spinner } from "@/components/shared/spinner";
 import type { Workspace } from "@/interfaces/workspaces";
-import type { UserFeaturesResponse } from "@/interfaces/users";
 
 export default function WorkspacesPage() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
-  const [userFeatures, setUserFeatures] = useState<UserFeaturesResponse | null>(null);
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(null);
   const [isContentLoading, setIsContentLoading] = useState(false);
 
   useEffect(() => {
     const loadInitialData = async () => {
       try {
-        const [workspacesData, featuresData] = await Promise.all([
-          getWorkspaces(),
-          getUserFeatures(),
-        ]);
+        const workspacesData = await getWorkspaces();
         // Everyone has a Personal workspace - find and set it immediately
         const personalWorkspace = workspacesData.find((w) => w.is_personal);
         if (personalWorkspace) {
@@ -34,7 +28,6 @@ export default function WorkspacesPage() {
           setSelectedWorkspaceId(workspacesData[0].id);
         }
         setWorkspaces(workspacesData);
-        setUserFeatures(featuresData);
       } catch (error) {
         console.error("Failed to load workspaces data:", error);
       }
@@ -84,7 +77,6 @@ export default function WorkspacesPage() {
             <WorkspaceSelector
               initialWorkspaces={workspaces}
               currentWorkspaceId={selectedWorkspaceId ?? undefined}
-              userFeatures={userFeatures}
               onWorkspaceChange={handleWorkspaceChange}
               onWorkspacesUpdate={setWorkspaces}
             />

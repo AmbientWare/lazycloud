@@ -7,7 +7,7 @@ import { PricingTransparency } from "./_components/pricing-transparency";
 export default function PricingPage() {
   return (
     <div className="flex min-h-screen w-full items-start justify-center px-4 py-12">
-      <div className="container mx-auto max-w-7xl">
+      <div className="container mx-auto max-w-6xl">
         <div className="mb-8 flex flex-col items-center space-y-4 text-center">
           <h1 className="text-3xl font-bold tracking-tight sm:text-4xl md:text-5xl lg:text-6xl">
             Choose Your Plan

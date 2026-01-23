@@ -136,16 +136,35 @@ async def setup_products(organization_id: str) -> dict:
             logger.error(f"Error processing product '{name}': {e}")
             failed += 1
 
+    # Archive products that exist in Polar but are not in our definitions
+    archived = 0
+    defined_names = {p.name for p in PRODUCT_DEFINITIONS}
+    all_products = await polar.products.list_products(
+        organization_id=organization_id, is_archived=False
+    )
+
+    for product in all_products:
+        if product.name not in defined_names:
+            logger.info(f"Archiving undefined product '{product.name}'...")
+            result = await polar.products.archive_product(product.id)
+            if result:
+                logger.info(f"Archived product '{product.name}' (ID: {product.id})")
+                archived += 1
+            else:
+                logger.error(f"Failed to archive product '{product.name}'")
+                failed += 1
+
     # Summary
     logger.info(
         f"Product setup complete: {created} created, {updated} updated, "
-        f"{skipped} skipped, {failed} failed"
+        f"{skipped} skipped, {archived} archived, {failed} failed"
     )
 
     return {
         "created": created,
         "updated": updated,
         "skipped": skipped,
+        "archived": archived,
         "failed": failed,
         "total": len(PRODUCT_DEFINITIONS),
     }

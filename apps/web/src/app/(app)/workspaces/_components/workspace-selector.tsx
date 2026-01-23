@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, type MouseEvent } from "react";
+import { useState, type MouseEvent } from "react";
 import {
   Check,
   ChevronsUpDown,
@@ -33,22 +33,18 @@ import {
 } from "@/components/ui/dropdown-menu";
 import type { Workspace } from "@/interfaces/workspaces";
 import { WorkspaceRoles } from "@/interfaces/workspaces";
-import type { UserFeaturesResponse } from "@/interfaces/users";
 import {
   getWorkspaces,
   createWorkspace,
   deleteWorkspace,
   leaveWorkspace,
 } from "@/actions/workspaces";
-import { getUserFeatures } from "@/actions/users";
 import { DeleteDialog } from "@/components/shared/workspace_dropdown/delete-workspace-dialog";
 import { CreateDialog } from "@/components/shared/workspace_dropdown/create-workspace-dialog";
-import { StyledTooltip } from "@/components/shared/styled-tooltip";
 
 interface WorkspaceSelectorProps {
   initialWorkspaces: Workspace[];
   currentWorkspaceId?: string;
-  userFeatures: UserFeaturesResponse | null;
   onWorkspaceChange: (workspaceId: string) => void;
   onWorkspacesUpdate?: (workspaces: Workspace[]) => void;
 }
@@ -56,7 +52,6 @@ interface WorkspaceSelectorProps {
 export function WorkspaceSelector({
   initialWorkspaces,
   currentWorkspaceId,
-  userFeatures,
   onWorkspaceChange,
   onWorkspacesUpdate,
 }: WorkspaceSelectorProps) {
@@ -70,15 +65,6 @@ export function WorkspaceSelector({
   const [workspaceToLeave, setWorkspaceToLeave] = useState<Workspace | null>(
     null,
   );
-  // Sync features locally for optimistic updates during create/delete
-  const [localFeatures, setLocalFeatures] = useState<
-    UserFeaturesResponse | null
-  >(userFeatures);
-
-  // Sync features when props change
-  useEffect(() => {
-    setLocalFeatures(userFeatures);
-  }, [userFeatures]);
 
   // Find current workspace - use props directly, no complex fallback logic
   const currentWorkspace = currentWorkspaceId
@@ -112,12 +98,6 @@ export function WorkspaceSelector({
     const newWorkspace = await createWorkspace(name);
     const updatedWorkspaces = await getWorkspaces();
     onWorkspacesUpdate?.(updatedWorkspaces);
-    try {
-      const features = await getUserFeatures();
-      setLocalFeatures(features);
-    } catch (error) {
-      console.error("Failed to refresh user features:", error);
-    }
     if (newWorkspace) {
       onWorkspaceChange(newWorkspace.id);
     }
@@ -141,12 +121,6 @@ export function WorkspaceSelector({
     await deleteWorkspace(workspaceToDelete.id);
     const updatedWorkspaces = await getWorkspaces();
     onWorkspacesUpdate?.(updatedWorkspaces);
-    try {
-      const features = await getUserFeatures();
-      setLocalFeatures(features);
-    } catch (error) {
-      console.error("Failed to refresh user features:", error);
-    }
 
     if (currentWorkspace?.id === workspaceToDelete.id) {
       const updatedNonPersonal = updatedWorkspaces.filter(
@@ -315,41 +289,13 @@ export function WorkspaceSelector({
               )}
               <CommandSeparator />
               <CommandGroup>
-                {localFeatures &&
-                  localFeatures.workspace.current_count >=
-                  localFeatures.workspace.limit ? (
-                  <StyledTooltip
-                    content={
-                      <div>
-                        <p className="font-medium">Subscription upgrade required</p>
-                        <p className="text-muted-foreground mt-1 text-sm">
-                          You've reached your workspace limit ({localFeatures.workspace.current_count}/
-                          {localFeatures.workspace.limit}). Upgrade your plan to create more workspaces.
-                        </p>
-                      </div>
-                    }
-                  >
-                    <span className="block w-full">
-                      <CommandItem
-                        onSelect={() => {
-                          // Intentionally disabled - workspace limit reached
-                        }}
-                        className="cursor-not-allowed opacity-50"
-                      >
-                        <Plus className="mr-2 h-4 w-4" />
-                        <span>Create workspace</span>
-                      </CommandItem>
-                    </span>
-                  </StyledTooltip>
-                ) : (
-                  <CommandItem
-                    onSelect={handleCreateWorkspace}
-                    className="cursor-pointer"
-                  >
-                    <Plus className="mr-2 h-4 w-4" />
-                    <span>Create workspace</span>
-                  </CommandItem>
-                )}
+                <CommandItem
+                  onSelect={handleCreateWorkspace}
+                  className="cursor-pointer"
+                >
+                  <Plus className="mr-2 h-4 w-4" />
+                  <span>Create workspace</span>
+                </CommandItem>
               </CommandGroup>
             </CommandList>
           </Command>

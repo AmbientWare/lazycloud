@@ -25,13 +25,6 @@ from backend.config import app_config
 from backend.database import get_db_context
 from backend.database.compose import ComposeDeploymentPydantic
 from backend.database.secrets import SecretPydantic
-from backend.tasks.core.schemas import DeploymentPreparationResult
-from backend.tasks.core.utils import (
-    delete_job_with_timeout,
-    update_deployment_state,
-    wait_for_secrets,
-)
-from backend.tasks.utils import get_task_result
 from backend.services import get_cloudflare_service, get_subscription_service
 from backend.services.compose.parser import ComposeParser
 from backend.services.k8s import get_chart_paths
@@ -41,6 +34,13 @@ from backend.services.k8s.helm_manager import (
     HelmManager,
 )
 from backend.services.k8s.helm_values_generator import HelmValuesGenerator
+from backend.tasks.core.schemas import DeploymentPreparationResult
+from backend.tasks.core.utils import (
+    delete_job_with_timeout,
+    update_deployment_state,
+    wait_for_secrets,
+)
+from backend.tasks.utils import get_task_result
 
 charts = get_chart_paths()
 
@@ -242,26 +242,21 @@ async def prepare_namespace_config(
     subscription_service = get_subscription_service()
     features = await subscription_service.get_user_features(owner_user.workos_id)
 
-    max_replicas = features.deployment.max_replicas_per_service
-    # Set quotas much higher than limits as a safety net
-    # Real enforcement happens in application layer (verify_quota_capacity)
+    max_replicas = features.max_replicas_per_service
+    # Set quotas as generous safety nets
+    # Real enforcement happens in application layer (subscription checks)
+    # Services, volumes, networks are unlimited - only deployment count is limited
+    # Use generous multipliers to avoid hitting K8s quotas before subscription limits
+    base_services_per_deployment = 20  # Generous default for unlimited services
+    base_volumes_per_deployment = 20  # Generous default for unlimited volumes
+
     pods_limit = (
-        features.workspace.deployment_limit
-        * features.deployment.service_limit
-        * max_replicas
-        * 2
+        features.deployment_limit * base_services_per_deployment * max_replicas * 2
     )
-    services_limit = (
-        features.workspace.deployment_limit * features.deployment.service_limit * 2
-    )
-    pvcs_limit = (
-        features.workspace.deployment_limit * features.deployment.volume_limit * 2
-    )
+    services_limit = features.deployment_limit * base_services_per_deployment * 2
+    pvcs_limit = features.deployment_limit * base_volumes_per_deployment * 2
     # Kubernetes count/deployments.apps counts Deployment resources (services), not compose deployments
-    # So we need to account for all services across all compose deployments
-    deployments_limit = (
-        features.workspace.deployment_limit * features.deployment.service_limit * 2
-    )
+    deployments_limit = features.deployment_limit * base_services_per_deployment * 2
     ingresses_limit = services_limit
 
     quota_objects = {
