@@ -197,6 +197,30 @@ jobs:
         with:
           path: artifacts
 
+      - name: Delete all previous releases and tags
+        env:
+          GH_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+        run: |
+          echo "Cleaning up all previous releases..."
+
+          # Get all releases and delete them (--limit 1000 to ensure we get all)
+          RELEASES=$(gh release list --repo AmbientWare/lazycloud-releases --limit 1000 --json tagName -q '.[].tagName' 2>/dev/null || true)
+          for TAG in $RELEASES; do
+            echo "Deleting release $TAG..."
+            gh release delete "$TAG" --repo AmbientWare/lazycloud-releases --yes --cleanup-tag 2>/dev/null || true
+          done
+
+          # Delete any remaining orphan tags
+          echo "Cleaning up any remaining tags..."
+          TAGS=$(gh api repos/AmbientWare/lazycloud-releases/git/refs/tags --paginate --jq '.[].ref' 2>/dev/null || true)
+          for REF in $TAGS; do
+            TAG_NAME=${REF#refs/tags/}
+            echo "Deleting tag $TAG_NAME..."
+            gh api -X DELETE "repos/AmbientWare/lazycloud-releases/git/refs/tags/$TAG_NAME" 2>/dev/null || true
+          done
+
+          echo "Cleanup complete."
+
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.ADMIN_TOKEN }}
@@ -204,9 +228,6 @@ jobs:
         run: |
           mkdir -p release-assets
           find artifacts -type f -name "lazycloud-*" -exec cp {} release-assets/ \;
-
-          # Delete existing release if retrying (only works for unpublished/draft releases)
-          gh release delete "v${VERSION}" --repo AmbientWare/lazycloud-releases --yes --cleanup-tag 2>/dev/null || true
 
           gh release create "v${VERSION}" \
             --repo AmbientWare/lazycloud-releases \
