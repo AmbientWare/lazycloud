@@ -1,6 +1,7 @@
 export const PUBLIC_ROUTES: string[] = [
   "/",
   "/api/health",
+  "/api/search",
   "/pricing",
   "/docs",
   "/support",

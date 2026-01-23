@@ -1,0 +1,22 @@
+{
+  "title": "Documentation",
+  "pages": [
+    "index",
+    "cicd",
+    "---Architecture---",
+    "architecture",
+    "---Labels---",
+    "labels",
+    "---CLI Commands---",
+    "init",
+    "deploy",
+    "destroy",
+    "rollback",
+    "dashboard",
+    "workspaces",
+    "deployments",
+    "usage",
+    "---Examples---",
+    "examples"
+  ]
+}
