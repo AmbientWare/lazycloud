@@ -19,7 +19,6 @@ from responses.workspaces import (
 
 from backend.api.dependencies import (
     WorkspaceAccess,
-    check_workspace_limit,
     get_workspace_with_any_access,
     get_workspace_with_owner_access,
 )
@@ -34,11 +33,11 @@ from backend.database.user_workspaces import (
 from backend.database.users import UserPydantic
 from backend.database.utils import validate_workspace_name
 from backend.database.workspaces import WorkspacePydantic, WorkspaceStatus
-from backend.tasks.client import run_destroy_compose
 from backend.services import (
     UsageService,
     get_usage_service,
 )
+from backend.tasks.client import run_destroy_compose
 
 workspaces_router = APIRouter(prefix="/workspaces", tags=["workspaces"])
 
@@ -163,7 +162,6 @@ async def get_workspace_with_deployments(
 async def create_workspace(
     request: CreateWorkspaceRequest,
     current_user: UserPydantic = Depends(get_current_active_user),
-    _: None = Depends(check_workspace_limit),
     db: Database = Depends(get_db),
 ) -> WorkspaceResponse:
     """Create a new workspace"""

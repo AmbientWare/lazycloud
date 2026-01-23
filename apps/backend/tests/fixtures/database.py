@@ -5,11 +5,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from backend.billing.product_details.features import (
-    BaseFeatures,
-    DeploymentFeature,
-    WorkspaceFeature,
-)
+from backend.billing.product_details.features import BaseFeatures
 from backend.database import Database, _create_database
 from backend.database.api_keys import ApiKeyPydantic
 from backend.database.compose import ComposeDeploymentPydantic
@@ -237,26 +233,23 @@ def make_daily_usage_record(
 
 
 def make_features(
-    workspace_limit: int = 10,
-    deployment_limit: int = 5,
-    service_limit: int = 10,
-    volume_limit: int = 5,
-    network_limit: int = 3,
+    deployment_limit: int = 10,
+    max_team_members: int | None = 10,
+    max_cpu_per_service: float = 8.0,
+    max_memory_per_service: int = 16,
     max_replicas: int = 10,
-    domain_limit: int = 3,
+    custom_domains_enabled: bool = True,
+    support_level: str = "email",
 ) -> BaseFeatures:
     """Create test subscription features with specified limits."""
     return BaseFeatures(
-        workspace=WorkspaceFeature(
-            limit=workspace_limit, deployment_limit=deployment_limit
-        ),
-        deployment=DeploymentFeature(
-            service_limit=service_limit,
-            volume_limit=volume_limit,
-            network_limit=network_limit,
-            max_replicas_per_service=max_replicas,
-        ),
-        domain_limit=domain_limit,
+        deployment_limit=deployment_limit,
+        max_team_members=max_team_members,
+        max_cpu_per_service=max_cpu_per_service,
+        max_memory_per_service=max_memory_per_service,
+        max_replicas_per_service=max_replicas,
+        custom_domains_enabled=custom_domains_enabled,
+        support_level=support_level,
     )
 
 

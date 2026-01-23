@@ -5,11 +5,10 @@ from loguru import logger
 from models.compose import ComposeFile
 from models.workspaces import InvitationType
 
-from backend.billing.product_details.base import BASE_FEATURES
+from backend.billing.product_details.base import FREE_FEATURES
 from backend.billing.product_details.features import BaseFeatures
 from backend.database import get_db_context
 from backend.database.users import SubscriptionState, UserPydantic
-from backend.database.workspaces import WorkspaceStatus
 from backend.services.compose.parser import ComposeParser
 from backend.services.k8s.generators.converters import (
     parse_cpu_to_cores,
@@ -69,8 +68,8 @@ class SubscriptionService:
     async def get_user_features(self, external_customer_id: str) -> BaseFeatures:
         """Get product features for a user based on their subscription"""
         if not self.polar_service.enabled:
-            logger.debug("Polar disabled, returning Basic features")
-            return BASE_FEATURES
+            logger.info("Polar is disabled, returning Free features")
+            return FREE_FEATURES
 
         try:
             subscriptions_response = (
@@ -142,54 +141,37 @@ class SubscriptionService:
     async def _audit_and_update_subscription_state(
         self, user_id: str, features: BaseFeatures
     ) -> UserPydantic | None:
-        """Audit user's resource usage and update subscription_state accordingly"""
+        """Audit user's resource usage and update subscription_state accordingly.
+
+        Checks total deployments across all workspaces against the deployment limit.
+        """
         async with get_db_context() as db:
             user = await db.users.get_by_id(user_id)
 
         if user is None:
             return None
 
+        # Get total deployment count across all user's workspaces
         async with get_db_context() as db:
-            workspace_count = await db.workspaces.get_active_workspace_count(user_id)
+            total_deployments = (
+                await db.compose_deployments.get_total_deployment_count_for_user(
+                    user_id
+                )
+            )
 
-        if workspace_count > features.workspace.limit:
+        # Check if user exceeds total deployment limit
+        if total_deployments > features.deployment_limit:
             if user.subscription_state != SubscriptionState.OVER_LIMITS:
                 user = await self._update_user_subscription_state(
                     user, SubscriptionState.OVER_LIMITS
                 )
                 logger.warning(
-                    f"User {user.email} (ID: {user_id}) exceeded workspace limit: "
-                    f"{workspace_count}/{features.workspace.limit}. Setting OVER_LIMITS status."
+                    f"User {user.email} (ID: {user_id}) exceeded deployment limit: "
+                    f"{total_deployments}/{features.deployment_limit}. Setting OVER_LIMITS status."
                 )
             return user
 
-        if workspace_count > 0:
-            async with get_db_context() as db:
-                workspaces_with_membership = (
-                    await db.workspaces.get_user_workspaces_with_membership(
-                        user_id, status=WorkspaceStatus.ACTIVE
-                    )
-                )
-                workspace_ids = [ws.id for ws, _ in workspaces_with_membership]
-                deployment_counts = (
-                    await db.compose_deployments.get_deployment_counts_by_workspace(
-                        workspace_ids
-                    )
-                )
-
-            for workspace, _membership in workspaces_with_membership:
-                deployment_count = deployment_counts.get(workspace.id, 0)
-                if deployment_count > features.workspace.deployment_limit:
-                    if user.subscription_state != SubscriptionState.OVER_LIMITS:
-                        user = await self._update_user_subscription_state(
-                            user, SubscriptionState.OVER_LIMITS
-                        )
-                        logger.warning(
-                            f"User {user.email} (ID: {user_id}) exceeded deployment limit in workspace "
-                            f"{workspace.id}. Setting OVER_LIMITS status."
-                        )
-                    return user
-
+        # User is within limits
         if user.subscription_state == SubscriptionState.OVER_LIMITS:
             user = await self._update_user_subscription_state(
                 user, SubscriptionState.WITHIN_LIMITS
@@ -201,29 +183,24 @@ class SubscriptionService:
 
         return user
 
-    async def check_workspace_limit(self, user_id: str, features: BaseFeatures) -> None:
-        """Check if user can create a new workspace based on their subscription tier."""
-        async with get_db_context() as db:
-            workspace_count = await db.workspaces.get_active_workspace_count(user_id)
-
-        if workspace_count >= features.workspace.limit:
-            raise SubscriptionLimitError(
-                f"Workspace limit reached. Your plan allows {features.workspace.limit} workspace(s). "
-                "Please upgrade your plan to create more workspaces.",
-            )
-
     async def check_deployment_limit(
-        self, workspace_id: str, features: BaseFeatures, user_id: str | None = None
+        self, user_id: str, features: BaseFeatures
     ) -> None:
-        """Check if user can create a new deployment in the workspace based on their subscription tier."""
+        """Check if user can create a new deployment based on their subscription tier.
+
+        Checks total deployments across ALL workspaces against the deployment limit.
+        """
         async with get_db_context() as db:
-            deployment_count = await db.compose_deployments.get_deployment_count(
-                workspace_id
+            total_deployments = (
+                await db.compose_deployments.get_total_deployment_count_for_user(
+                    user_id
+                )
             )
 
-        if deployment_count >= features.workspace.deployment_limit:
+        if total_deployments >= features.deployment_limit:
             raise SubscriptionLimitError(
-                f"Deployment limit reached for this workspace. Your plan allows {features.workspace.deployment_limit} deployment(s) per workspace. "
+                f"Deployment limit reached. Your plan allows {features.deployment_limit} deployment(s). "
+                f"You currently have {total_deployments}. "
                 "Please upgrade your plan to create more deployments.",
             )
 
@@ -288,63 +265,38 @@ class SubscriptionService:
         for service in compose_file.services:
             # Apply CPU default if not specified
             if service.deploy.resources.limits.cpus is None:
-                if features.deployment.max_cpu_per_service is not None:
-                    service.deploy.resources.limits.cpus = str(
-                        features.deployment.max_cpu_per_service
-                    )
+                service.deploy.resources.limits.cpus = str(features.max_cpu_per_service)
 
             # Apply memory default if not specified
             if service.deploy.resources.limits.memory is None:
-                if features.deployment.max_memory_per_service is not None:
-                    service.deploy.resources.limits.memory = (
-                        f"{features.deployment.max_memory_per_service}G"
-                    )
+                service.deploy.resources.limits.memory = (
+                    f"{features.max_memory_per_service}G"
+                )
 
     async def check_deployment_features(
         self,
         compose_file: ComposeFile,
         features: BaseFeatures,
     ) -> None:
-        """Check if deployment features (services, volumes, networks, domains) are within subscription limits."""
+        """Check if deployment features are within subscription limits.
+
+        Checks:
+        - Replicas per service (auto-scaling limit)
+        - CPU per service
+        - Memory per service
+        - Custom domains enabled
+
+        Note: Services, volumes, and networks per deployment are NOT limited.
+        Usage-based billing handles the cost of these resources.
+        """
 
         # Get custom domains from parsed services
         custom_domains = [
             service.domain for service in compose_file.services if service.domain
         ]
 
-        # Count services
-        service_count = len(compose_file.services)
-        if service_count > features.deployment.service_limit:
-            raise SubscriptionLimitError(
-                f"Service limit exceeded. Your plan allows {features.deployment.service_limit} service(s) per deployment, "
-                f"but this deployment has {service_count}. Please upgrade your plan or reduce the number of services.",
-            )
-
-        # Count volumes - compose_file.volumes already contains only volumes used by non-ignored services)
-        # and is already deduplicated, so we just count that
-        volume_count = len(compose_file.volumes)
-        if volume_count > features.deployment.volume_limit:
-            raise SubscriptionLimitError(
-                f"Volume limit exceeded. Your plan allows {features.deployment.volume_limit} volume(s) per deployment, "
-                f"but this deployment has {volume_count}. Please upgrade your plan or reduce the number of volumes.",
-            )
-
-        # Count networks (unique network names)
-        network_names = set()
-        for service in compose_file.services:
-            if service.networks:
-                for network in service.networks:
-                    network_names.add(network.name)
-
-        network_count = len(network_names) + len(compose_file.networks)
-        if network_count > features.deployment.network_limit:
-            raise SubscriptionLimitError(
-                f"Network limit exceeded. Your plan allows {features.deployment.network_limit} network(s) per deployment, "
-                f"but this deployment has {network_count}. Please upgrade your plan or reduce the number of networks.",
-            )
-
-        # Check replicas per service
-        max_replicas = features.deployment.max_replicas_per_service
+        # Check replicas per service (auto-scaling limit)
+        max_replicas = features.max_replicas_per_service
         for service in compose_file.services:
             replicas = None
 
@@ -369,44 +321,42 @@ class SubscriptionService:
                 and service.scaling.max > max_replicas
             ):
                 raise SubscriptionLimitError(
-                    f"HPA max replica limit exceeded for service '{service.name}'. Your plan allows {max_replicas} replica(s) per service, "
+                    f"Auto-scaling limit exceeded for service '{service.name}'. Your plan allows up to {max_replicas}x scaling, "
                     f"but HPA max is set to {service.scaling.max}. Please upgrade your plan or reduce the max replicas.",
                 )
 
         # Check CPU limits
-        if features.deployment.max_cpu_per_service is not None:
-            for service in compose_file.services:
-                cpu_str = service.deploy.resources.limits.cpus
-                if cpu_str is not None:
-                    # Parse CPU value (handles formats like "0.5", "2", "500m")
-                    cpu_cores = parse_cpu_to_cores(cpu_str)
+        for service in compose_file.services:
+            cpu_str = service.deploy.resources.limits.cpus
+            if cpu_str is not None:
+                # Parse CPU value (handles formats like "0.5", "2", "500m")
+                cpu_cores = parse_cpu_to_cores(cpu_str)
 
-                    if cpu_cores > features.deployment.max_cpu_per_service:
-                        raise SubscriptionLimitError(
-                            f"CPU limit exceeded for service '{service.name}'. "
-                            f"Your plan allows {features.deployment.max_cpu_per_service} CPU cores per service, "
-                            f"but this service requests {cpu_cores} cores. "
-                            "Please upgrade your plan or reduce CPU allocation."
-                        )
+                if cpu_cores > features.max_cpu_per_service:
+                    raise SubscriptionLimitError(
+                        f"CPU limit exceeded for service '{service.name}'. "
+                        f"Your plan allows {features.max_cpu_per_service} CPU cores per service, "
+                        f"but this service requests {cpu_cores} cores. "
+                        "Please upgrade your plan or reduce CPU allocation."
+                    )
 
         # Check Memory limits
-        if features.deployment.max_memory_per_service is not None:
-            for service in compose_file.services:
-                memory_str = service.deploy.resources.limits.memory
-                if memory_str is not None:
-                    # Parse memory value to GB (handles formats like "512Mi", "2Gi", "1G", "1024M")
-                    memory_gb = parse_memory_to_gb(memory_str)
+        for service in compose_file.services:
+            memory_str = service.deploy.resources.limits.memory
+            if memory_str is not None:
+                # Parse memory value to GB (handles formats like "512Mi", "2Gi", "1G", "1024M")
+                memory_gb = parse_memory_to_gb(memory_str)
 
-                    if memory_gb > features.deployment.max_memory_per_service:
-                        raise SubscriptionLimitError(
-                            f"Memory limit exceeded for service '{service.name}'. "
-                            f"Your plan allows {features.deployment.max_memory_per_service}GB per service, "
-                            f"but this service requests {memory_gb:.2f}GB. "
-                            "Please upgrade your plan or reduce memory allocation."
-                        )
+                if memory_gb > features.max_memory_per_service:
+                    raise SubscriptionLimitError(
+                        f"Memory limit exceeded for service '{service.name}'. "
+                        f"Your plan allows {features.max_memory_per_service}GB per service, "
+                        f"but this service requests {memory_gb:.2f}GB. "
+                        "Please upgrade your plan or reduce memory allocation."
+                    )
 
         # Check custom domains
-        if features.domain_limit == 0 and len(custom_domains) > 0:
+        if not features.custom_domains_enabled and len(custom_domains) > 0:
             raise SubscriptionLimitError(
                 "Custom domains are not available on your plan. Please upgrade to a plan that supports custom domains.",
             )
@@ -414,29 +364,32 @@ class SubscriptionService:
     async def validate_workspace_for_owner(
         self, workspace_id: str, new_owner_features: BaseFeatures, new_owner_id: str
     ) -> None:
-        """Validate that a workspace can be transferred to a new owner based on their plan features."""
-        # Check workspace limit: new owner must have room for one more workspace
+        """Validate that a workspace can be transferred to a new owner based on their plan features.
+
+        Checks:
+        - New owner's total deployment count + workspace's deployments <= limit
+        - Each deployment's features (CPU, memory, replicas, domains) are within new owner's limits
+        """
+        # Get new owner's current total deployment count
         async with get_db_context() as db:
-            workspace_count = await db.workspaces.get_active_workspace_count(
-                new_owner_id
+            current_deployments = (
+                await db.compose_deployments.get_total_deployment_count_for_user(
+                    new_owner_id
+                )
             )
 
-        if workspace_count >= new_owner_features.workspace.limit:
-            raise SubscriptionLimitError(
-                f"Workspace limit reached. Your plan allows {new_owner_features.workspace.limit} workspace(s), "
-                f"and you currently own {workspace_count}. Please upgrade your plan to accept this workspace transfer.",
-            )
-
-        # Check deployment limit: workspace's deployment count must not exceed new owner's limit
+        # Get deployment count in the workspace being transferred
         async with get_db_context() as db:
-            deployment_count = await db.compose_deployments.get_deployment_count(
-                workspace_id
+            transfer_deployment_count = (
+                await db.compose_deployments.get_deployment_count(workspace_id)
             )
 
-        if deployment_count > new_owner_features.workspace.deployment_limit:
+        # Check if accepting this workspace would exceed deployment limit
+        total_after_transfer = current_deployments + transfer_deployment_count
+        if total_after_transfer > new_owner_features.deployment_limit:
             raise SubscriptionLimitError(
-                f"Deployment limit exceeded. This workspace has {deployment_count} deployment(s), "
-                f"but your plan allows {new_owner_features.workspace.deployment_limit} deployment(s) per workspace. "
+                f"Deployment limit would be exceeded. Your plan allows {new_owner_features.deployment_limit} deployment(s), "
+                f"you currently have {current_deployments}, and this workspace has {transfer_deployment_count}. "
                 "Please upgrade your plan to accept this workspace transfer.",
             )
 

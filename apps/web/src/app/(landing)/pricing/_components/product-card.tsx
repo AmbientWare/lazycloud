@@ -22,8 +22,8 @@ function formatPrice(priceAmount: number): string {
 export function ProductCard({ product, isEnterprise, summary = false }: { product: PolarProduct; isEnterprise?: boolean; summary?: boolean }) {
   const fixedPrice = product.prices.find((p) => p.amountType === "fixed");
   const isFree = !fixedPrice || fixedPrice.priceAmount === 0;
-  const isHobby = product.name.toLowerCase() === "hobby";
-  const isMostPopular = isHobby && !summary;
+  const isPro = product.name.toLowerCase() === "pro";
+  const isMostPopular = isPro && !summary;
   const monthlyPrice = fixedPrice ? formatPrice(fixedPrice.priceAmount) : null;
   const [isPending, startTransition] = useTransition();
   const { user } = useAuth();
@@ -108,7 +108,7 @@ export function ProductCard({ product, isEnterprise, summary = false }: { produc
   // Summary mode - simplified card for landing page preview
   if (summary) {
     const features = getSummaryFeatures(product.description);
-    const isPopular = isHobby;
+    const isPopular = isPro;
 
     return (
       <StyledCard
@@ -184,20 +184,20 @@ export function ProductCard({ product, isEnterprise, summary = false }: { produc
           </Badge>
         </div>
       )}
-      <StyledCardContent className="flex h-full flex-col gap-4 sm:gap-6 p-4 sm:p-6 md:p-8">
+      <StyledCardContent className="flex h-full flex-col gap-4 p-4 sm:p-5 lg:p-6">
         <div className="space-y-4">
           <div className="space-y-2">
-            <h3 className="text-2xl font-bold">{product.name}</h3>
+            <h3 className="text-xl font-bold lg:text-2xl">{product.name}</h3>
             <div className="space-y-1">
               {isEnterprise ? (
-                <div className="text-3xl sm:text-4xl font-bold">Contact Us</div>
+                <div className="text-2xl sm:text-3xl lg:text-4xl font-bold">Contact Us</div>
               ) : monthlyPrice ? (
-                <div className="flex items-baseline gap-2">
-                  <span className="text-3xl sm:text-4xl font-bold">{monthlyPrice}</span>
+                <div className="flex items-baseline gap-1.5">
+                  <span className="text-2xl sm:text-3xl lg:text-4xl font-bold">{monthlyPrice}</span>
                   <span className="text-muted-foreground text-sm">/month</span>
                 </div>
               ) : (
-                <div className="text-3xl sm:text-4xl font-bold">Free</div>
+                <div className="text-2xl sm:text-3xl lg:text-4xl font-bold">Free</div>
               )}
               {!isEnterprise && (
                 <div className="text-muted-foreground text-xs">

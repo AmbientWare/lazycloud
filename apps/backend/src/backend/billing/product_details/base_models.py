@@ -15,7 +15,7 @@ class MeterPrice:
 
 METER_PRICE_MAP = {
     MeterNames.CPU_USAGE: 4.0,  # $0.04 per CPU core hour
-    MeterNames.MEMORY_USAGE: 0.6,  # $0.006 per memory GB hour
+    MeterNames.MEMORY_USAGE: 0.8,  # $0.008 per memory GB hour
     MeterNames.STANDARD_STORAGE: 0.015,  # $0.00015 per standard storage GB hour (~$0.11/GB-month)
     MeterNames.SHARED_STORAGE: 0.06,  # $0.0006 per shared (EFS) storage GB hour (~$0.43/GB-month)
     MeterNames.BUILD_MINUTES: 4.0,  # $0.04 per build minute (matches Depot overage)

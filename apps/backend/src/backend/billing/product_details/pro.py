@@ -6,51 +6,37 @@ from backend.billing.product_details.base_models import (
     ProductMetadata,
     SubscriptionRecurringInterval,
 )
-from backend.billing.product_details.features import (
-    BaseFeatures,
-    DeploymentFeature,
-    WorkspaceFeature,
-)
+from backend.billing.product_details.features import BaseFeatures
 
 PRO_PRODUCT_NAME = "Pro"
 
 PRO_FEATURES = BaseFeatures(
-    workspace=WorkspaceFeature(
-        limit=4, deployment_limit=5
-    ),  # 3 apps with environment isolation - key premium feature
-    deployment=DeploymentFeature(
-        service_limit=12,
-        volume_limit=12,
-        network_limit=4,
-        max_replicas_per_service=10,
-        max_cpu_per_service=16.0,  # 16 CPU cores per service
-        max_memory_per_service=32,  # 32GB RAM per service
-    ),
-    domain_limit=999,  # Custom domains enabled (unlimited in practice)
-    max_team_members=None,  # Unlimited team members
-    support_level="priority",  # Priority support (12h response)
+    deployment_limit=10,
+    max_team_members=10,
+    max_cpu_per_service=8.0,
+    max_memory_per_service=16,
+    max_replicas_per_service=5,  # Auto-scaling up to 5x
+    custom_domains_enabled=True,
+    support_level="priority",
 )
 
-DESCRITPION_MARKDOWN = f"""
-Ideal for teams and production workloads. Multiple apps with environment isolation.
+DESCRIPTION_MARKDOWN = f"""
+Ideal for teams and production workloads.
 
-- 1 Personal + {PRO_FEATURES.workspace.limit - 1} additional workspaces
-- {PRO_FEATURES.workspace.deployment_limit} Deployments per workspace
-- {PRO_FEATURES.deployment.service_limit} Services per deployment (max 16 CPU, 32GB RAM each)
-- {PRO_FEATURES.deployment.volume_limit} Volumes per deployment
-- {PRO_FEATURES.deployment.network_limit} Networks per deployment
+- {PRO_FEATURES.deployment_limit} Deployments
+- Up to {int(PRO_FEATURES.max_cpu_per_service)} CPU, {PRO_FEATURES.max_memory_per_service}GB RAM per service
 - Custom domain names
-- Auto-scaling enabled (up to {PRO_FEATURES.deployment.max_replicas_per_service} replicas)
-- Unlimited team members
+- Auto-scaling (up to {PRO_FEATURES.max_replicas_per_service}x)
+- Team collaboration (up to {PRO_FEATURES.max_team_members} members)
 - Priority support
 """
 
 pro_product = ProductDefinition(
     name=PRO_PRODUCT_NAME,
-    description=DESCRITPION_MARKDOWN,
+    description=DESCRIPTION_MARKDOWN,
     recurring_interval=SubscriptionRecurringInterval.MONTH,
     has_free_base=False,
-    monthly_fee=7500,  # $75/month
+    monthly_fee=4900,  # $49/month
     meter_prices=METER_PRICES,
     metadata=ProductMetadata(
         tier=PRO_PRODUCT_NAME.lower(),
