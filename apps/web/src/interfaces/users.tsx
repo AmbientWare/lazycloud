@@ -1,18 +1,10 @@
-export interface WorkspaceFeatureResponse {
-  limit: number;
-  deployment_limit: number;
-  current_count: number;
-}
-
-export interface DeploymentFeatureResponse {
-  service_limit: number;
-  volume_limit: number;
-  network_limit: number;
-}
-
 export interface UserFeaturesResponse {
-  workspace: WorkspaceFeatureResponse;
-  deployment: DeploymentFeatureResponse;
-  domain_limit: number;
+  deployment_limit: number;
+  deployment_count: number;
+  max_team_members: number | null;
+  max_cpu_per_service: number;
+  max_memory_per_service: number;
+  max_replicas_per_service: number;
+  custom_domains_enabled: boolean;
+  support_level: string;
 }
-

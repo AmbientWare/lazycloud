@@ -143,7 +143,7 @@ async def get_deployment_diff(
             temp_deployment.id = None
 
         # Run full validation (includes compose validation via HelmValuesGenerator)
-        _, _, warnings = await validate_deployment_request(temp_deployment, deployment)
+        _, warnings = await validate_deployment_request(temp_deployment, deployment)
 
     except ValueError as e:
         # User-friendly validation errors

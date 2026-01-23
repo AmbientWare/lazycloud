@@ -105,22 +105,18 @@ async def update_deployment_state(
 
 async def verify_quota_capacity(
     workspace_id: str,
-    required_deployments: int,
-    required_services: int,
-    required_pvcs: int,
-    existing_deployments: int = 0,
-    existing_services: int = 0,
-    existing_pvcs: int = 0,
+    is_update: bool = False,
 ) -> None:
-    """Verify subscription limits have capacity for required resources.
+    """Verify subscription limits have capacity for a new deployment.
 
     Raises ValueError if insufficient capacity.
 
-    Checks against subscription features, not Kubernetes quotas. Kubernetes quotas are set higher
-    as a safety net, but real enforcement happens here.
+    Checks total deployment limit across ALL workspaces owned by the user.
+    Services, volumes, and networks per deployment are NOT limited (usage billing handles cost).
 
-    When updating an existing deployment, pass existing_* parameters to account for resources
-    being replaced rather than added.
+    Args:
+        workspace_id: The workspace to check quota for
+        is_update: If True, this is an update to an existing deployment (doesn't count against limit)
     """
     async with get_db_context() as db:
         owner_user = await db.workspaces.get_owner_user(workspace_id)
@@ -132,72 +128,25 @@ async def verify_quota_capacity(
     subscription_service = get_subscription_service()
     features = await subscription_service.get_user_features(owner_user.workos_id)
 
-    # Get current usage from database
+    # Get total deployment count across ALL user's workspaces
     async with get_db_context() as db:
-        deployments = await db.compose_deployments.find(
-            {"workspace_id": workspace_id, "deleted_at": None}
-        )
-
-    current_deployments_count = len(
-        [d for d in deployments if d.state != DeploymentStates.DELETED]
-    )
-
-    # Calculate current services and volumes usage
-    current_services_count = 0
-    current_pvcs_count = 0
-    for deployment in deployments:
-        if deployment.state == DeploymentStates.DELETED:
-            continue
-        if deployment.helm_values and deployment.helm_values.services:
-            current_services_count += len(
-                [s for s in deployment.helm_values.services if s.enabled]
+        total_deployments = (
+            await db.compose_deployments.get_total_deployment_count_for_user(
+                owner_user.id
             )
-        if deployment.helm_values and deployment.helm_values.volumes:
-            current_pvcs_count += len(deployment.helm_values.volumes)
-
-    # Subtract existing resources being replaced
-    effective_deployments_used = current_deployments_count - existing_deployments
-    effective_services_used = current_services_count - existing_services
-    effective_pvcs_used = current_pvcs_count - existing_pvcs
-
-    # Calculate limits from subscription features
-    deployments_limit = features.workspace.deployment_limit
-    services_limit = (
-        features.workspace.deployment_limit * features.deployment.service_limit
-    )
-    pvcs_limit = features.workspace.deployment_limit * features.deployment.volume_limit
-
-    # Each compose deployment counts as 1 deployment, regardless of services
-    required_deployments_count = 1
-
-    errors = []
-
-    if effective_deployments_used + required_deployments_count > deployments_limit:
-        available = max(0, deployments_limit - effective_deployments_used)
-        errors.append(
-            f"Deployment limit exceeded. Your plan allows {deployments_limit} deployment(s) per workspace, "
-            f"but this would require {effective_deployments_used + required_deployments_count}. "
-            f"{available} deployment slot(s) available."
         )
 
-    if effective_services_used + required_services > services_limit:
-        available = max(0, services_limit - effective_services_used)
-        errors.append(
-            f"Service limit exceeded. Your plan allows {services_limit} service(s) per workspace, "
-            f"but this deployment would require {required_services} service(s). "
-            f"{available} service slot(s) available."
-        )
+    # If updating existing deployment, it doesn't count as a new one
+    if is_update:
+        return
 
-    if effective_pvcs_used + required_pvcs > pvcs_limit:
-        available = max(0, pvcs_limit - effective_pvcs_used)
-        errors.append(
-            f"Volume limit exceeded. Your plan allows {pvcs_limit} volume(s) per workspace, "
-            f"but this deployment would require {required_pvcs} volume(s). "
-            f"{available} volume slot(s) available."
+    # Check deployment limit for new deployments
+    if total_deployments >= features.deployment_limit:
+        error_msg = (
+            f"Deployment limit exceeded. Your plan allows {features.deployment_limit} deployment(s), "
+            f"you currently have {total_deployments}. "
+            "Please upgrade your plan to create more deployments."
         )
-
-    if errors:
-        error_msg = f"{' '.join(errors)} Please reduce the number of resources or upgrade your plan."
         raise ValueError(error_msg)
 
 

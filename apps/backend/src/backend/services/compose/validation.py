@@ -1,35 +1,29 @@
 """Validation functions for deployments that run before queuing tasks."""
 
-import asyncio
-
 import yaml
 from loguru import logger
-from models.deployments import ResourceRequirements
 from models.helm import HelmValues
-from models.k8s import WorkloadType
 
 from backend.config import app_config
 from backend.database import get_db_context
 from backend.database.compose import ComposeDeploymentPydantic
-from backend.tasks.core.utils import verify_quota_capacity
 from backend.services.compose.parser import ComposeParser
-from backend.services.k8s import create_release_name
-from backend.services.k8s.helm_manager import HelmManager
 from backend.services.k8s.helm_values_generator import HelmValuesGenerator
+from backend.tasks.core.utils import verify_quota_capacity
 
 
 async def validate_deployment_request(
     deployment: ComposeDeploymentPydantic,
     existing_deployment: ComposeDeploymentPydantic | None = None,
     service_names: list[str] | None = None,
-) -> tuple[HelmValues, ResourceRequirements, list[str]]:
+) -> tuple[HelmValues, list[str]]:
     """Validate deployment request before queuing task.
 
-    Validates compose YAML, generates Helm values, calculates resources, and checks quotas.
+    Validates compose YAML, generates Helm values, and checks quotas.
     Raises ValueError with user-friendly message if validation fails.
 
     Returns:
-        Tuple of (helm_values, resource_requirements, warnings)
+        Tuple of (helm_values, warnings)
     """
     compose_yaml = deployment.pending_compose_yaml or deployment.compose_yaml
 
@@ -87,104 +81,13 @@ async def validate_deployment_request(
             f"Failed to generate deployment configuration: {str(e)}"
         ) from e
 
-    # Calculate resource requirements
-    required_deployments = len(
-        [
-            s
-            for s in helm_values.services
-            if s.enabled and s.workloadType == WorkloadType.DEPLOYMENT
-        ]
-    )
-    required_services = len([s for s in helm_values.services if s.enabled])
-    required_pvcs = len(helm_values.volumes) if helm_values.volumes else 0
-
-    requirements = ResourceRequirements(
-        deployments=required_deployments,
-        services=required_services,
-        pvcs=required_pvcs,
-    )
-
-    # Check if updating existing deployment
-    existing_requirements = None
-    if existing_deployment:
-        helm_manager = HelmManager()
-        name = create_release_name(deployment.workspace_id, deployment.name)
-
-        # Use async Helm subprocess call with timeout
-        release_exists = False
-        try:
-            release_exists, _ = await asyncio.wait_for(
-                helm_manager.check_release_status(
-                    name,
-                    deployment.namespace,
-                ),
-                timeout=5.0,
-            )
-        except asyncio.TimeoutError:
-            logger.warning(
-                f"Helm status check timed out for release {name} in namespace {deployment.namespace}"
-            )
-            warnings.append(
-                "Could not verify existing deployment status: Helm check timeout"
-            )
-        except Exception as e:
-            logger.warning(
-                f"Helm status check failed for release {name} in namespace {deployment.namespace}: {e}"
-            )
-            warnings.append(f"Could not verify existing deployment status: {str(e)}")
-
-        if release_exists:
-            if existing_deployment.helm_values:
-                existing_deployments = len(
-                    [
-                        s
-                        for s in existing_deployment.helm_values.services
-                        if s.enabled and s.workloadType == WorkloadType.DEPLOYMENT
-                    ]
-                )
-                existing_services = len(
-                    [s for s in existing_deployment.helm_values.services if s.enabled]
-                )
-                existing_pvcs = (
-                    len(existing_deployment.helm_values.volumes)
-                    if existing_deployment.helm_values.volumes
-                    else 0
-                )
-                existing_requirements = ResourceRequirements(
-                    deployments=existing_deployments,
-                    services=existing_services,
-                    pvcs=existing_pvcs,
-                )
-            else:
-                # Release exists but no helm_values - account for 1 deployment being replaced
-                existing_requirements = ResourceRequirements(
-                    deployments=1, services=0, pvcs=0
-                )
-        else:
-            # DB record exists but no helm release yet (first deploy after create_deployment)
-            # Still need to account for the deployment slot being used by this record
-            existing_requirements = ResourceRequirements(
-                deployments=1, services=0, pvcs=0
-            )
-
-    # Verify quota capacity
+    # Verify quota capacity (only for new deployments, not updates)
     try:
         await verify_quota_capacity(
             deployment.workspace_id,
-            required_deployments=requirements.deployments,
-            required_services=requirements.services,
-            required_pvcs=requirements.pvcs,
-            existing_deployments=existing_requirements.deployments
-            if existing_requirements
-            else 0,
-            existing_services=existing_requirements.services
-            if existing_requirements
-            else 0,
-            existing_pvcs=existing_requirements.pvcs if existing_requirements else 0,
+            is_update=existing_deployment is not None,
         )
-
     except ValueError as e:
-        # verify_quota_capacity already provides user-friendly messages
         raise ValueError(str(e)) from e
 
-    return helm_values, requirements, warnings
+    return helm_values, warnings

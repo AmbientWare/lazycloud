@@ -31,7 +31,7 @@ from backend.database.base import (
     DatabaseService,
     UUIDStr,
 )
-from backend.database.user_workspaces import UserWorkspaceTable
+from backend.database.user_workspaces import UserWorkspaceTable, WorkspaceRole
 from backend.database.utils import (
     decrypt_dict,
     decrypt_string,
@@ -367,6 +367,26 @@ class ComposeDeploymentService(
         )
         result = await self._session.execute(query)
         return {str(row.workspace_id): row.deployment_count for row in result.all()}
+
+    async def get_total_deployment_count_for_user(self, user_id: str) -> int:
+        """Count total active deployments across all workspaces owned by a user.
+
+        Deployment limits are enforced against the workspace OWNER's subscription,
+        so this counts only deployments in workspaces where the user is the owner.
+        Team members creating deployments count against the owner's limit.
+        """
+        query = (
+            select(func.count(ComposeDeploymentTable.id))
+            .join(
+                UserWorkspaceTable,
+                ComposeDeploymentTable.workspace_id == UserWorkspaceTable.workspace_id,
+            )
+            .where(UserWorkspaceTable.user_id == user_id)
+            .where(UserWorkspaceTable.role == WorkspaceRole.OWNER)
+            .where(ComposeDeploymentTable.deleted_at.is_(None))
+        )
+        result = await self._session.execute(query)
+        return result.scalar() or 0
 
     async def find_stuck_deploying(
         self, minutes_old: int = 10

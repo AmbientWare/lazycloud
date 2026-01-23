@@ -196,37 +196,35 @@ async def get_user_product_features(
         raise HTTPException(status_code=503, detail=str(e))
 
 
-async def check_workspace_limit(
-    current_user: UserPydantic = Depends(get_current_active_user),
-    features: BaseFeatures = Depends(get_user_product_features),
-) -> None:
-    """Check if user can create a new workspace based on their subscription tier."""
-    subscription_service = get_subscription_service()
-    try:
-        await subscription_service.check_workspace_limit(current_user.id, features)
-
-    except SubscriptionLimitError as e:
-        raise HTTPException(status_code=e.status_code, detail=str(e))
-
-
 async def check_deployment_limit(
     workspace_id: str,
     current_user: UserPydantic = Depends(get_current_active_user),
-    features: BaseFeatures = Depends(get_user_product_features),
     db: Database = Depends(get_db),
 ) -> None:
-    """Check if user can create a new deployment in the workspace based on their subscription tier."""
+    """Check if workspace owner can create a new deployment based on their subscription tier.
+
+    Deployment limits are enforced against the WORKSPACE OWNER's subscription,
+    not the current user creating the deployment. This allows team members to
+    create deployments up to the owner's limit.
+    """
     membership = await db.user_workspaces.get_by_user_and_workspace(
         current_user.id, workspace_id
     )
     if not membership:
         raise HTTPException(404, "Workspace not found")
 
+    # Get workspace owner to check against their limits
+    owner_user = await db.workspaces.get_owner_user(workspace_id)
+    if not owner_user:
+        raise HTTPException(500, "Workspace has no owner")
+
     subscription_service = get_subscription_service()
     try:
-        await subscription_service.check_deployment_limit(
-            workspace_id, features, user_id=current_user.id
+        # Get owner's features and check against their deployment limit
+        owner_features = await subscription_service.get_user_features(
+            owner_user.workos_id
         )
+        await subscription_service.check_deployment_limit(owner_user.id, owner_features)
 
     except SubscriptionLimitError as e:
         raise HTTPException(status_code=e.status_code, detail=str(e))

@@ -7,6 +7,7 @@ from httpx import AsyncClient
 from models.workspaces import WorkspaceRole
 
 from tests.fixtures.database import (
+    make_deployment,
     make_user_workspace,
     make_workspace,
     requires_db,
@@ -38,7 +39,11 @@ class TestCurrentUser:
 
 
 class TestUserFeatures:
-    """Tests for GET /v1/users/features."""
+    """Tests for GET /v1/users/features.
+
+    Note: The features response has been simplified to a flat structure.
+    Workspaces are unlimited, services/volumes/networks are unlimited.
+    """
 
     async def test_returns_feature_limits(self, client: AsyncClient):
         """Features endpoint returns subscription limits."""
@@ -46,45 +51,53 @@ class TestUserFeatures:
 
         assert response.status_code == 200
         data = response.json()
-        assert "workspace" in data
-        assert "deployment" in data
-        assert "domain_limit" in data
+        assert "deployment_limit" in data
+        assert "deployment_count" in data
+        assert "max_team_members" in data
+        assert "max_cpu_per_service" in data
+        assert "max_memory_per_service" in data
+        assert "max_replicas_per_service" in data
+        assert "custom_domains_enabled" in data
+        assert "support_level" in data
 
-    async def test_workspace_features_structure(self, client: AsyncClient):
-        """Workspace features have correct structure."""
+    async def test_features_response_structure(self, client: AsyncClient):
+        """Features have correct types."""
         response = await client.get("/v1/users/features")
 
         assert response.status_code == 200
-        ws = response.json()["workspace"]
-        assert "limit" in ws
-        assert "deployment_limit" in ws
-        assert "current_count" in ws
+        data = response.json()
 
-    async def test_deployment_features_structure(self, client: AsyncClient):
-        """Deployment features have correct structure."""
-        response = await client.get("/v1/users/features")
+        assert isinstance(data["deployment_limit"], int)
+        assert isinstance(data["deployment_count"], int)
+        assert data["max_team_members"] is None or isinstance(
+            data["max_team_members"], int
+        )
+        assert isinstance(data["max_cpu_per_service"], (int, float))
+        assert isinstance(data["max_memory_per_service"], int)
+        assert isinstance(data["max_replicas_per_service"], int)
+        assert isinstance(data["custom_domains_enabled"], bool)
+        assert isinstance(data["support_level"], str)
 
-        assert response.status_code == 200
-        dep = response.json()["deployment"]
-        assert "service_limit" in dep
-        assert "volume_limit" in dep
-        assert "network_limit" in dep
-
-    async def test_workspace_count_reflects_user_workspaces(
+    async def test_deployment_count_reflects_total_deployments(
         self, client: AsyncClient, api_db: Database, api_user: UserPydantic
     ):
-        """Workspace count matches actual user workspace count."""
-        # Create 2 workspaces
+        """Deployment count matches total deployments across all workspaces."""
+        # Create 2 workspaces with deployments
         ws1 = await api_db.workspaces.create(make_workspace(name="WS1"))
         ws2 = await api_db.workspaces.create(make_workspace(name="WS2"))
         await api_db.user_workspaces.create(
             make_user_workspace(api_user.id, ws1.id, WorkspaceRole.OWNER)
         )
         await api_db.user_workspaces.create(
-            make_user_workspace(api_user.id, ws2.id, WorkspaceRole.MEMBER)
+            make_user_workspace(api_user.id, ws2.id, WorkspaceRole.OWNER)
         )
+
+        # Create 2 deployments in ws1 and 1 in ws2
+        await api_db.compose_deployments.create(make_deployment(ws1.id, name="d1"))
+        await api_db.compose_deployments.create(make_deployment(ws1.id, name="d2"))
+        await api_db.compose_deployments.create(make_deployment(ws2.id, name="d3"))
 
         response = await client.get("/v1/users/features")
 
         assert response.status_code == 200
-        assert response.json()["workspace"]["current_count"] == 2
+        assert response.json()["deployment_count"] == 3

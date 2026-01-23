@@ -502,7 +502,12 @@ class PrometheusMetricsService:
             )
         '''
 
-        cpu_usage_result, memory_usage_result, cpu_requests_result, memory_requests_result = await asyncio.gather(
+        (
+            cpu_usage_result,
+            memory_usage_result,
+            cpu_requests_result,
+            memory_requests_result,
+        ) = await asyncio.gather(
             self._query_range(cpu_usage_query, start_time, end_time, step="60s"),
             self._query_range(memory_usage_query, start_time, end_time, step="60s"),
             self._query_range(cpu_requests_query, start_time, end_time, step="60s"),

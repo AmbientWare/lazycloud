@@ -1,13 +1,15 @@
-from .base import base_product
+from .base import free_product
 from .base_models import ProductDefinition
-from .hobby import hobby_product
+from .hobby import developer_product
 from .pro import pro_product
+from .scale import scale_product
 
-# Product definitions
+# Product definitions (ordered by tier)
 PRODUCT_DEFINITIONS: tuple[ProductDefinition, ...] = (
-    base_product,
-    hobby_product,
+    free_product,
+    developer_product,
     pro_product,
+    scale_product,
 )
 
 __all__ = ["PRODUCT_DEFINITIONS"]

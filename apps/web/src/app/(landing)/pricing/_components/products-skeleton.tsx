@@ -3,10 +3,10 @@ import { StyledCard, StyledCardContent } from "@/components/shared/styled-card";
 
 export function ProductsCardsSkeleton() {
   return (
-    <div className="mx-auto grid max-w-6xl grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
-      {Array.from({ length: 3 }).map((_, i) => (
+    <div className="mx-auto grid max-w-6xl grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 lg:gap-6">
+      {Array.from({ length: 4 }).map((_, i) => (
         <StyledCard key={i} variant="interactive" className="h-full">
-          <StyledCardContent className="flex h-full flex-col gap-6 p-8">
+          <StyledCardContent className="flex h-full flex-col gap-4 p-4 sm:p-5 lg:p-6">
             <div className="space-y-4">
               <Skeleton className="h-8 w-32" />
               <div className="space-y-2">

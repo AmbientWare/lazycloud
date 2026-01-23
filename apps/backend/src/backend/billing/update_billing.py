@@ -64,6 +64,7 @@ async def update_billing() -> dict:
         print(f"Created:        {products_result['created']}")
         print(f"Updated:        {products_result['updated']}")
         print(f"Already exist:  {products_result['skipped']}")
+        print(f"Archived:       {products_result.get('archived', 0)}")
         print(f"Failed:         {products_result['failed']}")
         print("=" * 60 + "\n")
 

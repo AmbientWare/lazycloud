@@ -2,10 +2,8 @@ from api_requests.users import OnboardingRequest
 from fastapi import APIRouter, Depends, HTTPException
 from responses.users import (
     CurrentUserResponse,
-    DeploymentFeatureResponse,
     OnboardingResponse,
     UserFeaturesResponse,
-    WorkspaceFeatureResponse,
 )
 
 from backend.api.dependencies import get_user_product_features
@@ -34,20 +32,22 @@ async def get_user_features(
     db: Database = Depends(get_db),
 ) -> UserFeaturesResponse:
     """Get the current user's subscription features and current usage counts."""
-    workspace_count = await db.workspaces.get_active_workspace_count(current_user.id)
+    # Get total deployment count across all workspaces
+    total_deployments = (
+        await db.compose_deployments.get_total_deployment_count_for_user(
+            current_user.id
+        )
+    )
 
     return UserFeaturesResponse(
-        workspace=WorkspaceFeatureResponse(
-            limit=features.workspace.limit,
-            deployment_limit=features.workspace.deployment_limit,
-            current_count=workspace_count,
-        ),
-        deployment=DeploymentFeatureResponse(
-            service_limit=features.deployment.service_limit,
-            volume_limit=features.deployment.volume_limit,
-            network_limit=features.deployment.network_limit,
-        ),
-        domain_limit=features.domain_limit,
+        deployment_limit=features.deployment_limit,
+        deployment_count=total_deployments,
+        max_team_members=features.max_team_members,
+        max_cpu_per_service=features.max_cpu_per_service,
+        max_memory_per_service=features.max_memory_per_service,
+        max_replicas_per_service=features.max_replicas_per_service,
+        custom_domains_enabled=features.custom_domains_enabled,
+        support_level=features.support_level,
     )
 
 

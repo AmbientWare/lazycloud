@@ -24,26 +24,24 @@ from backend.api.dependencies import (
     check_deployment_limit,
     get_deployment_with_access,
     get_deployment_with_admin_access,
-    get_user_product_features,
     require_workspace_member,
 )
 from backend.api.security import get_current_active_user
-from backend.billing.product_details.features import BaseFeatures
 from backend.database import Database, get_db
 from backend.database.compose import ComposeDeploymentPydantic
 from backend.database.user_workspaces import WorkspaceRole
 from backend.database.users import UserPydantic
-from backend.tasks.client import (
-    run_deploy_compose,
-    run_destroy_compose,
-    run_rollback_compose,
-)
 from backend.services.compose.parser import ComposeParser
 from backend.services.compose.validation import validate_deployment_request
 from backend.services.k8s import create_ns_name, create_release_name
 from backend.services.k8s.generators.networking import compute_service_endpoints
 from backend.services.k8s.helm_manager import HelmManager
 from backend.services.k8s.status_watcher import StatusWatcher
+from backend.tasks.client import (
+    run_deploy_compose,
+    run_destroy_compose,
+    run_rollback_compose,
+)
 
 deployments_router = APIRouter(prefix="/deployments", tags=["deployments"])
 
@@ -129,7 +127,6 @@ async def get_deployment_status(
 async def create_deployment(
     request: DeploymentCreateRequest,
     current_user: UserPydantic = Depends(get_current_active_user),
-    features: BaseFeatures = Depends(get_user_product_features),
     db: Database = Depends(get_db),
 ) -> DeploymentResponse:
     """Create or update a deployment record (does not trigger deployment)."""
@@ -161,7 +158,6 @@ async def create_deployment(
         await check_deployment_limit(
             workspace_id=request.workspace_id,
             current_user=current_user,
-            features=features,
             db=db,
         )
 
@@ -180,9 +176,7 @@ async def create_deployment(
         temp_deployment.id = str(uuid.uuid4())
 
     try:
-        _, _, _ = await validate_deployment_request(
-            temp_deployment, existing_deployment
-        )
+        _, _ = await validate_deployment_request(temp_deployment, existing_deployment)
 
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -383,7 +377,7 @@ async def deploy_deployment(
 
     # Full validation (compose parsing, helm generation, quotas)
     try:
-        helm_values, _, _ = await validate_deployment_request(
+        helm_values, _ = await validate_deployment_request(
             temp_deployment,
             deployment,
             service_names=request.service_names,

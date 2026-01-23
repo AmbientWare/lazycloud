@@ -25,14 +25,6 @@ class DeploymentInfo(BaseModel):
     current_helm_values: HelmValues | None = None
 
 
-class ResourceRequirements(BaseModel):
-    """Resource requirements for a deployment."""
-
-    deployments: int
-    services: int
-    pvcs: int
-
-
 class DeploymentResult(BaseModel):
     """Result from application deployment task."""
 

@@ -11,7 +11,6 @@ from models.deployments import (
     DeploymentInfo,
     DeploymentResult,
     DeploymentStates,
-    ResourceRequirements,
 )
 from models.depot import (
     DepotBuildCredentials,
@@ -50,7 +49,6 @@ __all__ = [
     "PodMetrics",
     "PodUsage",
     "PVCInfo",
-    "ResourceRequirements",
     "StorageUsage",
     "StreamEventType",
     "SubscriptionManagerStats",

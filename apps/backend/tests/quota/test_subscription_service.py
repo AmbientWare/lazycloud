@@ -24,97 +24,73 @@ from tests.fixtures.database import (
 pytestmark = [pytest.mark.asyncio, requires_db]
 
 
-class TestCheckWorkspaceLimit:
-    """Tests for check_workspace_limit."""
-
-    async def test_user_at_limit_cannot_create_workspace(
-        self, subscription_service: SubscriptionService, db: Database
-    ):
-        """User at workspace limit cannot create new workspace."""
-        user = await db.users.create(make_user())
-        features = make_features(workspace_limit=2)
-
-        for _ in range(2):
-            workspace = await db.workspaces.create(make_workspace())
-            await db.user_workspaces.create(
-                make_user_workspace(user.id, workspace.id, WorkspaceRole.OWNER)
-            )
-
-        with pytest.raises(SubscriptionLimitError, match="Workspace limit reached"):
-            await subscription_service.check_workspace_limit(user.id, features)
-
-
 class TestCheckDeploymentLimit:
-    """Tests for check_deployment_limit."""
+    """Tests for check_deployment_limit.
 
-    async def test_workspace_at_limit_cannot_create_deployment(
+    Note: Deployment limit is now checked across ALL workspaces (total),
+    not per-workspace.
+    """
+
+    async def test_user_at_total_deployment_limit_cannot_create_deployment(
         self,
         subscription_service: SubscriptionService,
-        db_user_with_workspace: tuple[UserPydantic, WorkspacePydantic],
         db: Database,
     ):
-        """Workspace at deployment limit cannot create new deployment."""
-        user, workspace = db_user_with_workspace
-        features = make_features(deployment_limit=2)
+        """User at total deployment limit cannot create new deployment."""
+        user = await db.users.create(make_user())
+        features = make_features(deployment_limit=3)
 
-        for i in range(2):
-            await db.compose_deployments.create(
-                make_deployment(workspace.id, name=f"deploy-{i}")
-            )
+        # Create 2 workspaces with deployments totaling the limit
+        workspace1 = await db.workspaces.create(make_workspace())
+        await db.user_workspaces.create(
+            make_user_workspace(user.id, workspace1.id, WorkspaceRole.OWNER)
+        )
+        await db.compose_deployments.create(
+            make_deployment(workspace1.id, name="deploy-1")
+        )
+        await db.compose_deployments.create(
+            make_deployment(workspace1.id, name="deploy-2")
+        )
 
+        workspace2 = await db.workspaces.create(make_workspace())
+        await db.user_workspaces.create(
+            make_user_workspace(user.id, workspace2.id, WorkspaceRole.OWNER)
+        )
+        await db.compose_deployments.create(
+            make_deployment(workspace2.id, name="deploy-3")
+        )
+
+        # Should fail because total is 3, which equals the limit
         with pytest.raises(SubscriptionLimitError, match="Deployment limit reached"):
-            await subscription_service.check_deployment_limit(
-                workspace.id, features, user.id
-            )
+            await subscription_service.check_deployment_limit(user.id, features)
+
+    async def test_user_under_limit_can_create_deployment(
+        self,
+        subscription_service: SubscriptionService,
+        db: Database,
+    ):
+        """User under deployment limit can create new deployment."""
+        user = await db.users.create(make_user())
+        features = make_features(deployment_limit=5)
+
+        workspace = await db.workspaces.create(make_workspace())
+        await db.user_workspaces.create(
+            make_user_workspace(user.id, workspace.id, WorkspaceRole.OWNER)
+        )
+        await db.compose_deployments.create(
+            make_deployment(workspace.id, name="deploy-1")
+        )
+
+        # Should pass - only 1 deployment, limit is 5
+        await subscription_service.check_deployment_limit(user.id, features)
 
 
 class TestCheckDeploymentFeatures:
-    """Tests for check_deployment_features."""
+    """Tests for check_deployment_features.
 
-    async def test_deployment_with_too_many_services_fails(
-        self, subscription_service: SubscriptionService
-    ):
-        """Deployment with too many services fails validation."""
-        services = {f"service-{i}": {"image": "nginx"} for i in range(11)}
-        compose_data = {"version": "3.8", "services": services}
-        compose_file = ComposeParser.parse_dict(compose_data)
-        features = make_features(service_limit=10)
-
-        with pytest.raises(SubscriptionLimitError, match="Service limit exceeded"):
-            await subscription_service.check_deployment_features(compose_file, features)
-
-    async def test_deployment_with_too_many_volumes_fails(
-        self, subscription_service: SubscriptionService
-    ):
-        """Deployment with too many volumes fails validation."""
-        volumes = {f"vol-{i}": {} for i in range(6)}
-        volume_mounts = [f"vol-{i}:/data{i}" for i in range(6)]
-        compose_data = {
-            "version": "3.8",
-            "services": {"web": {"image": "nginx", "volumes": volume_mounts}},
-            "volumes": volumes,
-        }
-        compose_file = ComposeParser.parse_dict(compose_data)
-        features = make_features(volume_limit=5)
-
-        with pytest.raises(SubscriptionLimitError, match="Volume limit exceeded"):
-            await subscription_service.check_deployment_features(compose_file, features)
-
-    async def test_deployment_with_too_many_networks_fails(
-        self, subscription_service: SubscriptionService
-    ):
-        """Deployment with too many networks fails validation."""
-        network_names = [f"net-{i}" for i in range(4)]
-        compose_data = {
-            "version": "3.8",
-            "services": {"web": {"image": "nginx", "networks": network_names}},
-            "networks": network_names,
-        }
-        compose_file = ComposeParser.parse_dict(compose_data)
-        features = make_features(network_limit=3)
-
-        with pytest.raises(SubscriptionLimitError, match="Network limit exceeded"):
-            await subscription_service.check_deployment_features(compose_file, features)
+    Note: Services, volumes, and networks per deployment are NO LONGER limited.
+    Only replicas, CPU, memory, and custom domains are checked.
+    """
 
     async def test_service_with_too_many_replicas_fails(
         self, subscription_service: SubscriptionService
@@ -154,10 +130,48 @@ class TestCheckDeploymentFeatures:
         compose_file = ComposeParser.parse_dict(compose_data)
         features = make_features(max_replicas=10)
 
-        with pytest.raises(SubscriptionLimitError, match="HPA max replica limit"):
+        with pytest.raises(SubscriptionLimitError, match="Auto-scaling limit"):
             await subscription_service.check_deployment_features(compose_file, features)
 
-    async def test_deployment_with_custom_domains_on_no_domain_plan_fails(
+    async def test_service_with_too_much_cpu_fails(
+        self, subscription_service: SubscriptionService
+    ):
+        """Service requesting too much CPU fails validation."""
+        compose_data = {
+            "version": "3.8",
+            "services": {
+                "web": {
+                    "image": "nginx",
+                    "deploy": {"resources": {"limits": {"cpus": "16"}}},
+                }
+            },
+        }
+        compose_file = ComposeParser.parse_dict(compose_data)
+        features = make_features(max_cpu_per_service=8.0)
+
+        with pytest.raises(SubscriptionLimitError, match="CPU limit exceeded"):
+            await subscription_service.check_deployment_features(compose_file, features)
+
+    async def test_service_with_too_much_memory_fails(
+        self, subscription_service: SubscriptionService
+    ):
+        """Service requesting too much memory fails validation."""
+        compose_data = {
+            "version": "3.8",
+            "services": {
+                "web": {
+                    "image": "nginx",
+                    "deploy": {"resources": {"limits": {"memory": "32G"}}},
+                }
+            },
+        }
+        compose_file = ComposeParser.parse_dict(compose_data)
+        features = make_features(max_memory_per_service=16)
+
+        with pytest.raises(SubscriptionLimitError, match="Memory limit exceeded"):
+            await subscription_service.check_deployment_features(compose_file, features)
+
+    async def test_deployment_with_custom_domains_when_disabled_fails(
         self, subscription_service: SubscriptionService
     ):
         """Deployment with custom domains on plan without domain support fails."""
@@ -171,82 +185,144 @@ class TestCheckDeploymentFeatures:
             },
         }
         compose_file = ComposeParser.parse_dict(compose_data)
-        features = make_features(domain_limit=0)
+        features = make_features(custom_domains_enabled=False)
 
         with pytest.raises(SubscriptionLimitError, match="Custom domains are not"):
             await subscription_service.check_deployment_features(compose_file, features)
+
+    async def test_deployment_with_custom_domains_when_enabled_passes(
+        self, subscription_service: SubscriptionService
+    ):
+        """Deployment with custom domains passes when enabled."""
+        compose_data = {
+            "version": "3.8",
+            "services": {
+                "web": {
+                    "image": "nginx",
+                    "labels": {"lazycloud.domain": "example.com"},
+                }
+            },
+        }
+        compose_file = ComposeParser.parse_dict(compose_data)
+        features = make_features(custom_domains_enabled=True)
+
+        # Should not raise
+        await subscription_service.check_deployment_features(compose_file, features)
+
+    async def test_deployment_with_many_services_passes(
+        self, subscription_service: SubscriptionService
+    ):
+        """Deployment with many services passes (no service limit)."""
+        services = {f"service-{i}": {"image": "nginx"} for i in range(20)}
+        compose_data = {"version": "3.8", "services": services}
+        compose_file = ComposeParser.parse_dict(compose_data)
+        features = make_features()
+
+        # Should not raise - services are not limited
+        await subscription_service.check_deployment_features(compose_file, features)
 
 
 class TestValidateWorkspaceForOwner:
     """Tests for validate_workspace_for_owner."""
 
-    async def test_transfer_fails_when_new_owner_at_workspace_limit(
+    async def test_transfer_fails_when_would_exceed_deployment_limit(
         self,
         subscription_service: SubscriptionService,
-        db_user_with_workspace: tuple[UserPydantic, WorkspacePydantic],
         db: Database,
     ):
-        """Workspace transfer fails when new owner is at workspace limit."""
-        _, workspace = db_user_with_workspace
-        new_owner = await db.users.create(make_user())
-
-        for _ in range(2):
-            other_workspace = await db.workspaces.create(make_workspace())
-            await db.user_workspaces.create(
-                make_user_workspace(
-                    new_owner.id, other_workspace.id, WorkspaceRole.OWNER
-                )
-            )
-
-        new_owner_features = make_features(workspace_limit=2)
-
-        with pytest.raises(SubscriptionLimitError, match="Workspace limit reached"):
-            await subscription_service.validate_workspace_for_owner(
-                workspace.id, new_owner_features, new_owner.id
-            )
-
-    async def test_transfer_fails_when_workspace_exceeds_deployment_limit(
-        self,
-        subscription_service: SubscriptionService,
-        db_user_with_workspace: tuple[UserPydantic, WorkspacePydantic],
-        db: Database,
-    ):
-        """Workspace transfer fails when workspace has more deployments than new owner's limit."""
-        _, workspace = db_user_with_workspace
-        new_owner = await db.users.create(make_user())
-
+        """Workspace transfer fails when it would exceed new owner's total deployment limit."""
+        # Create original owner with workspace and deployments
+        original_owner = await db.users.create(make_user())
+        workspace = await db.workspaces.create(make_workspace())
+        await db.user_workspaces.create(
+            make_user_workspace(original_owner.id, workspace.id, WorkspaceRole.OWNER)
+        )
         for i in range(3):
             await db.compose_deployments.create(
                 make_deployment(workspace.id, name=f"deploy-{i}")
             )
 
-        new_owner_features = make_features(deployment_limit=2)
+        # Create new owner who already has some deployments
+        new_owner = await db.users.create(make_user())
+        new_owner_workspace = await db.workspaces.create(make_workspace())
+        await db.user_workspaces.create(
+            make_user_workspace(
+                new_owner.id, new_owner_workspace.id, WorkspaceRole.OWNER
+            )
+        )
+        await db.compose_deployments.create(
+            make_deployment(new_owner_workspace.id, name="existing-deploy")
+        )
 
-        with pytest.raises(SubscriptionLimitError, match="Deployment limit exceeded"):
+        # New owner has limit of 3, already has 1, workspace has 3 -> would be 4
+        new_owner_features = make_features(deployment_limit=3)
+
+        with pytest.raises(
+            SubscriptionLimitError, match="Deployment limit would be exceeded"
+        ):
             await subscription_service.validate_workspace_for_owner(
                 workspace.id, new_owner_features, new_owner.id
             )
 
-    async def test_transfer_fails_when_deployment_exceeds_feature_limits(
+    async def test_transfer_fails_when_deployment_exceeds_cpu_limits(
         self,
         subscription_service: SubscriptionService,
-        db_user_with_workspace: tuple[UserPydantic, WorkspacePydantic],
         db: Database,
     ):
-        """Workspace transfer fails when deployment exceeds new owner's feature limits."""
-        _, workspace = db_user_with_workspace
-        new_owner = await db.users.create(make_user())
+        """Workspace transfer fails when deployment exceeds new owner's CPU limits."""
+        original_owner = await db.users.create(make_user())
+        workspace = await db.workspaces.create(make_workspace())
+        await db.user_workspaces.create(
+            make_user_workspace(original_owner.id, workspace.id, WorkspaceRole.OWNER)
+        )
 
-        services = {f"service-{i}": {"image": "nginx"} for i in range(11)}
+        # Create deployment with high CPU
         deployment = await db.compose_deployments.create(
             make_deployment(workspace.id, name="test-deploy")
         )
-        deployment.compose_yaml = yaml.dump({"version": "3.8", "services": services})
+        deployment.compose_yaml = yaml.dump(
+            {
+                "version": "3.8",
+                "services": {
+                    "web": {
+                        "image": "nginx",
+                        "deploy": {"resources": {"limits": {"cpus": "16"}}},
+                    }
+                },
+            }
+        )
         await db.compose_deployments.update(deployment)
 
-        new_owner_features = make_features(service_limit=10)
+        new_owner = await db.users.create(make_user())
+        new_owner_features = make_features(
+            deployment_limit=10,
+            max_cpu_per_service=8.0,
+        )
 
         with pytest.raises(SubscriptionLimitError, match="exceed your plan limits"):
             await subscription_service.validate_workspace_for_owner(
                 workspace.id, new_owner_features, new_owner.id
             )
+
+    async def test_transfer_succeeds_when_within_limits(
+        self,
+        subscription_service: SubscriptionService,
+        db: Database,
+    ):
+        """Workspace transfer succeeds when within new owner's limits."""
+        original_owner = await db.users.create(make_user())
+        workspace = await db.workspaces.create(make_workspace())
+        await db.user_workspaces.create(
+            make_user_workspace(original_owner.id, workspace.id, WorkspaceRole.OWNER)
+        )
+        await db.compose_deployments.create(
+            make_deployment(workspace.id, name="deploy-1")
+        )
+
+        new_owner = await db.users.create(make_user())
+        new_owner_features = make_features(deployment_limit=10)
+
+        # Should not raise
+        await subscription_service.validate_workspace_for_owner(
+            workspace.id, new_owner_features, new_owner.id
+        )
