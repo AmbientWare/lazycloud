@@ -45,3 +45,15 @@ class BaseFeatures(BaseModel):
     )
 
     model_config = ConfigDict(extra="ignore")
+
+
+# Admin users get unlimited features (not a purchasable tier)
+ADMIN_FEATURES = BaseFeatures(
+    deployment_limit=999999,
+    max_team_members=None,  # unlimited
+    max_cpu_per_service=64.0,
+    max_memory_per_service=256,
+    max_replicas_per_service=100,
+    custom_domains_enabled=True,
+    support_level="dedicated",
+)
