@@ -2,11 +2,11 @@ from fastapi import Depends, HTTPException
 from models.compose import ComposeFile
 
 from backend.api.security import get_current_active_user
-from backend.billing.product_details.features import BaseFeatures
+from backend.billing.product_details.features import ADMIN_FEATURES, BaseFeatures
 from backend.database import Database, get_db
 from backend.database.compose import ComposeDeploymentPydantic
 from backend.database.user_workspaces import WorkspaceRole
-from backend.database.users import UserPydantic
+from backend.database.users import UserPydantic, UserRole
 from backend.models.workspace_access import WorkspaceAccess
 from backend.services import get_subscription_service
 from backend.services.subscription_service import SubscriptionLimitError
@@ -180,9 +180,15 @@ async def get_deployment_with_admin_access_for_usage(
 
 async def get_user_product_features(
     current_user: UserPydantic = Depends(get_current_active_user),
-    db: Database = Depends(get_db),
 ) -> BaseFeatures:
-    """Get product features for the current user based on their subscription."""
+    """Get product features for the current user based on their subscription.
+
+    Admin users (role == ADMIN) get unlimited features regardless of subscription.
+    """
+    # Admin users get unlimited features
+    if current_user.role == UserRole.ADMIN:
+        return ADMIN_FEATURES
+
     subscription_service = get_subscription_service()
     try:
         return await subscription_service.get_user_features(
@@ -206,6 +212,8 @@ async def check_deployment_limit(
     Deployment limits are enforced against the WORKSPACE OWNER's subscription,
     not the current user creating the deployment. This allows team members to
     create deployments up to the owner's limit.
+
+    Admin users (role == ADMIN) have no deployment limits.
     """
     membership = await db.user_workspaces.get_by_user_and_workspace(
         current_user.id, workspace_id
@@ -217,6 +225,10 @@ async def check_deployment_limit(
     owner_user = await db.workspaces.get_owner_user(workspace_id)
     if not owner_user:
         raise HTTPException(500, "Workspace has no owner")
+
+    # Admin workspace owners have no deployment limits
+    if owner_user.role == UserRole.ADMIN:
+        return
 
     subscription_service = get_subscription_service()
     try:
