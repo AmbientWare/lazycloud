@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/collapsible";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
+import { DocsSearch } from "@/components/docs/search-dialog";
 
 const data = {
   navMain: [
@@ -172,6 +173,9 @@ export function DocsSidebar() {
             <span className="font-semibold">Documentation</span>
             <span className="text-muted-foreground text-xs">LazyCloud</span>
           </div>
+        </div>
+        <div className="px-2 pt-2">
+          <DocsSearch />
         </div>
       </SidebarHeader>
       <SidebarContent>

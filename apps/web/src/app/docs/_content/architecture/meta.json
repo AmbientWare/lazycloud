@@ -1,0 +1,13 @@
+{
+  "title": "Architecture",
+  "pages": [
+    "index",
+    "networking",
+    "builds",
+    "scaling",
+    "volumes",
+    "secrets",
+    "resources",
+    "security"
+  ]
+}

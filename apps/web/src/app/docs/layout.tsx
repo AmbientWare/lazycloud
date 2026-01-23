@@ -18,6 +18,8 @@ import {
 import { usePathname } from "next/navigation";
 import { UserProvider } from "@/contexts/UserContext";
 import TextLogo from "../_components/textLogo";
+import { RootProvider } from "fumadocs-ui/provider/next";
+import SearchDialog from "@/components/docs/search-dialog";
 
 const titleMap: Record<string, string> = {
   docs: "Documentation",
@@ -78,7 +80,7 @@ function DocsHeader() {
             </BreadcrumbList>
           </Breadcrumb>
         </div>
-        <div className="ml-4 flex shrink-0 items-center gap-6">
+        <div className="ml-4 flex shrink-0 items-center">
           <TextLogo />
         </div>
       </div>
@@ -92,8 +94,9 @@ export default function DocsLayout({
   children: React.ReactNode;
 }) {
   return (
-    <UserProvider>
-      <SidebarProvider>
+    <RootProvider search={{ SearchDialog }}>
+      <UserProvider>
+        <SidebarProvider>
         <DocsSidebar />
         <SidebarInset className="bg-transparent">
           {/* Mobile header with sidebar trigger */}
@@ -110,7 +113,8 @@ export default function DocsLayout({
             </div>
           </div>
         </SidebarInset>
-      </SidebarProvider>
-    </UserProvider>
+        </SidebarProvider>
+      </UserProvider>
+    </RootProvider>
   );
 }

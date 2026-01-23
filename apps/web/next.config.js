@@ -3,12 +3,11 @@
  * for Docker builds.
  */
 import "./src/env.js";
-import createMDX from "@next/mdx";
+import { createMDX } from "fumadocs-mdx/next";
 
 /** @type {import("next").NextConfig} */
 const config = {
   cacheComponents: true,
-  pageExtensions: ["js", "jsx", "md", "mdx", "ts", "tsx"],
   output: "standalone",
   images: {
     remotePatterns: [
@@ -20,11 +19,6 @@ const config = {
   },
 };
 
-const withMDX = createMDX({
-  options: {
-    remarkPlugins: ["remark-gfm"],
-  },
-});
+const withMDX = createMDX();
 
-// Merge MDX config with Next.js config
 export default withMDX(config);
