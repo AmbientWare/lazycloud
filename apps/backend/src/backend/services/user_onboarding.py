@@ -10,12 +10,7 @@ from backend.database.user_workspaces import (
     UserWorkspaceStatus,
     WorkspaceRole,
 )
-from backend.database.users import (
-    SubscriptionState,
-    UserPydantic,
-    UserRole,
-    UserStatus,
-)
+from backend.database.users import UserPydantic
 from backend.database.utils import generate_api_key, generate_api_key_expires_at
 from backend.database.workspaces import WorkspacePydantic
 from backend.services import PolarService
@@ -60,9 +55,6 @@ class UserOnboardingService:
                     name=name,
                     email=email,
                     workos_id=workos_id,
-                    role=UserRole.ADMIN,
-                    status=UserStatus.ACTIVE,
-                    subscription_state=SubscriptionState.WITHIN_LIMITS,
                 )
                 user = await db.users.create(user)
 

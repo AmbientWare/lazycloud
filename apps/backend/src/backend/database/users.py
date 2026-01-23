@@ -76,9 +76,9 @@ class UserPydantic(BaseDbPydanticModel):
     name: str
     email: str
     workos_id: str
-    role: UserRole
-    status: UserStatus
-    subscription_state: SubscriptionState
+    role: UserRole = UserRole.USER
+    status: UserStatus = UserStatus.ACTIVE
+    subscription_state: SubscriptionState = SubscriptionState.WITHIN_LIMITS
 
 
 class UserService(DatabaseService[UserTable, UserPydantic]):
