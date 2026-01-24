@@ -1,0 +1,45 @@
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: gvisor-placeholder
+value: -10
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: "Low priority class for gvisor placeholder pods - evicted for real workloads"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gvisor-placeholder
+  namespace: kube-system
+  labels:
+    app: gvisor-placeholder
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gvisor-placeholder
+  template:
+    metadata:
+      labels:
+        app: gvisor-placeholder
+    spec:
+      priorityClassName: gvisor-placeholder
+      runtimeClassName: gvisor
+      nodeSelector:
+        runtime: gvisor
+      tolerations:
+        - key: runtime
+          value: gvisor
+          effect: NoSchedule
+      terminationGracePeriodSeconds: 0
+      containers:
+        - name: pause
+          image: registry.k8s.io/pause:3.9
+          resources:
+            requests:
+              cpu: 1m
+              memory: 4Mi
+            limits:
+              cpu: 1m
+              memory: 4Mi
