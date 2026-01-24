@@ -3,6 +3,7 @@ from cli.api.base import APIError
 from cli.api.builds import BuildsAPI
 from cli.api.deployments import DeploymentsAPI
 from cli.api.diff import DiffAPI
+from cli.api.feedback import FeedbackAPI
 from cli.api.instances import InstancesAPI
 from cli.api.logs import LogsAPI
 from cli.api.secrets import SecretsAPI
@@ -31,6 +32,7 @@ class API:
         self.workspaces = WorkspacesAPI()
         self.usage = UsageAPI()
         self.builds = BuildsAPI()
+        self.feedback = FeedbackAPI()
 
 
 api = API()

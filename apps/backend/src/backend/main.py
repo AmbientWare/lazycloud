@@ -23,6 +23,7 @@ from backend.api.v1 import (
     cli_version_router,
     deployments_router,
     diff_router,
+    feedback_router,
     health_router,
     invitations_router,
     tasks_router,
@@ -126,6 +127,7 @@ versionsed_routes.include_router(workspaces_router)
 versionsed_routes.include_router(invitations_router)
 versionsed_routes.include_router(diff_router)
 versionsed_routes.include_router(billing_router)
+versionsed_routes.include_router(feedback_router)
 app.include_router(versionsed_routes)
 
 # include non versioned routes that are not part of the main api

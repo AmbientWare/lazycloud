@@ -17,6 +17,11 @@ from models.depot import (
     DepotProject,
     DepotProjectToken,
 )
+from models.feedback import (
+    FeedbackRequest,
+    FeedbackResponse,
+    FeedbackType,
+)
 from models.k8s import PVCInfo
 from models.metrics import (
     NamespaceBreakdown,
@@ -36,6 +41,9 @@ from models.monitoring import (
 __all__ = [
     "BuildArg",
     "BuildArgsCollection",
+    "FeedbackRequest",
+    "FeedbackResponse",
+    "FeedbackType",
     "ServiceBuildArgs",
     "DeploymentInfo",
     "DeploymentResult",

@@ -9,7 +9,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { LogOut, CreditCard, Key } from "lucide-react";
+import { LogOut, CreditCard, Key, MessageSquare } from "lucide-react";
 import { Spinner } from "@/components/shared/spinner";
 import { useState, useEffect } from "react";
 import { getCustomerPortalUrl } from "@/actions/customer-portal";
@@ -17,6 +17,7 @@ import { getUserSubscriptionTier } from "@/actions/users";
 import { toast } from "sonner";
 import Image from "next/image";
 import { ApiKeyDialog } from "./api-key-dialog";
+import { FeedbackDialog } from "./feedback-dialog";
 
 interface CustomUserButtonProps {
   showDetails?: boolean;
@@ -27,6 +28,7 @@ export function CustomUserButton({ showDetails = false }: CustomUserButtonProps)
   const [isLoadingPortal, setIsLoadingPortal] = useState(false);
   const [subscriptionTier, setSubscriptionTier] = useState<string | undefined>();
   const [apiKeyDialogOpen, setApiKeyDialogOpen] = useState(false);
+  const [feedbackDialogOpen, setFeedbackDialogOpen] = useState(false);
 
   useEffect(() => {
     if (showDetails && user) {
@@ -119,6 +121,10 @@ export function CustomUserButton({ showDetails = false }: CustomUserButtonProps)
           )}
           Customer Portal
         </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => setFeedbackDialogOpen(true)} className="cursor-pointer">
+          <MessageSquare className="mr-2 size-4" />
+          Feedback
+        </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={handleSignOut} variant="destructive" className="cursor-pointer">
           <LogOut className="mr-2 size-4" />
@@ -126,6 +132,7 @@ export function CustomUserButton({ showDetails = false }: CustomUserButtonProps)
         </DropdownMenuItem>
       </DropdownMenuContent>
       <ApiKeyDialog open={apiKeyDialogOpen} onOpenChange={setApiKeyDialogOpen} />
+      <FeedbackDialog open={feedbackDialogOpen} onOpenChange={setFeedbackDialogOpen} />
     </DropdownMenu>
   );
 }
