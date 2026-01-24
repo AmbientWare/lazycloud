@@ -1990,64 +1990,91 @@ def _deploy(
     """Trigger deployment and wait for Helm to complete (async - no pod wait)."""
     view = DeployView(console)
 
+    # Create a deployment creation progress card
+    creation_progress = view.show_deployment_creation_progress(deployment_name)
+    task_response = None
+    final_status = None
+
     try:
-        # Store secrets first (BEFORE triggering deploy task!)
-        if secrets:
-            console.print(f"[dim]Storing environment variables...[/dim]")
-            try:
-                # Handle new secrets
-                if secrets.added:
-                    try:
-                        api.secrets.store_secrets(deployment_id, secrets.added)
-                    except APIError as e:
-                        if e.status_code == 409:
-                            raise Exception(
-                                f"Secrets already exist (unexpected): {e}\n"
-                                "The diff indicated these are new keys, but they already exist."
+        # Use Live display for real-time progress updates
+        with Live(creation_progress, console=console, refresh_per_second=4):
+            # Store secrets first (BEFORE triggering deploy task!)
+            if secrets:
+                creation_progress.update_status(
+                    "creating", "Storing environment variables..."
+                )
+                try:
+                    # Handle new secrets
+                    if secrets.added:
+                        try:
+                            api.secrets.store_secrets(deployment_id, secrets.added)
+                        except APIError as e:
+                            creation_progress.update_status(
+                                "failed", "Failed to create secrets"
                             )
-                        else:
-                            raise Exception(f"Failed to create secrets: {e}")
+                            if e.status_code == 409:
+                                raise Exception(
+                                    f"Secrets already exist (unexpected): {e}\n"
+                                    "The diff indicated these are new keys, but they already exist."
+                                )
+                            else:
+                                raise Exception(f"Failed to create secrets: {e}")
 
-                # Handle removed secrets
-                if secrets.removed:
-                    try:
-                        api.secrets.delete_secrets(deployment_id, secrets.removed)
-                    except Exception as delete_error:
-                        raise Exception(f"Failed to delete secrets: {delete_error}")
+                    # Handle removed secrets
+                    if secrets.removed:
+                        try:
+                            api.secrets.delete_secrets(deployment_id, secrets.removed)
+                        except Exception as delete_error:
+                            creation_progress.update_status(
+                                "failed", "Failed to delete secrets"
+                            )
+                            raise Exception(f"Failed to delete secrets: {delete_error}")
 
-            except Exception as e:
-                if "Failed to" not in str(e):
-                    raise Exception(f"Failed to manage secrets: {e}")
+                except Exception as e:
+                    if "Failed to" not in str(e):
+                        creation_progress.update_status(
+                            "failed", "Failed to manage secrets"
+                        )
+                        raise Exception(f"Failed to manage secrets: {e}")
+                    else:
+                        raise
+
+            # Trigger deployment
+            creation_progress.update_status("creating", "Triggering deployment...")
+            try:
+                task_response = api.deployments.deploy_deployment(
+                    deployment_id=deployment_id,
+                    compose_yaml=compose_yaml,
+                    secrets=bool(secrets),
+                    service_names=service_names,
+                )
+
+                if not task_response or not task_response.task_id:
+                    creation_progress.update_status(
+                        "failed", "Failed to create deployment task"
+                    )
+                    raise Exception("Server did not return a task ID")
+
+            except APIError as e:
+                creation_progress.update_status("failed", "API request failed")
+                if e.status_code == 401:
+                    raise Exception(
+                        "Authentication failed. Please run 'lazycloud login'"
+                    )
+                elif e.status_code and 500 <= e.status_code < 600:
+                    raise Exception(f"Server error: {e}")
                 else:
-                    raise
+                    raise Exception(f"API error: {e}")
+            except Exception as e:
+                if "API error" not in str(e) and "Server error" not in str(e):
+                    creation_progress.update_status("failed", "Request failed")
+                    raise Exception(f"Failed to trigger deployment: {e}")
+                raise
 
-        # Trigger deployment
-        console.print(f"[dim]Triggering deployment...[/dim]")
-        try:
-            task_response = api.deployments.deploy_deployment(
-                deployment_id=deployment_id,
-                compose_yaml=compose_yaml,
-                secrets=bool(secrets),
-                service_names=service_names,
+            # Wait for Helm deployment to complete
+            creation_progress.update_status(
+                "creating", "Waiting for deployment to complete..."
             )
-
-            if not task_response or not task_response.task_id:
-                raise Exception("Server did not return a task ID")
-
-        except APIError as e:
-            if e.status_code == 401:
-                raise Exception("Authentication failed. Please run 'lazycloud login'")
-            elif e.status_code and 500 <= e.status_code < 600:
-                raise Exception(f"Server error: {e}")
-            else:
-                raise Exception(f"API error: {e}")
-        except Exception as e:
-            if "API error" not in str(e) and "Server error" not in str(e):
-                raise Exception(f"Failed to trigger deployment: {e}")
-            raise
-
-        # Wait for Helm deployment to complete (fast - no pod wait)
-        console.print(f"[dim]Waiting for deployment to complete...[/dim]")
 
         async def wait_for_task():
             return await api.deployments.wait_for_deployment(task_response.task_id)
