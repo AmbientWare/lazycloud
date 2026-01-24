@@ -24,7 +24,7 @@ async def submit_feedback(
             user_name=current_user.name,
             feedback_type=request.feedback_type,
             message=request.message,
-            source="cli",
+            source=request.source,
         )
         return FeedbackResponse(success=True, message="Feedback submitted successfully")
 

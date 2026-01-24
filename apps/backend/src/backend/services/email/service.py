@@ -1,4 +1,5 @@
 import base64
+import html
 from datetime import datetime
 from pathlib import Path
 
@@ -173,16 +174,21 @@ class EmailService:
 
             subject = f"[{source.upper()}] {type_label} from {user_email}"
 
+            # Escape user-provided content to prevent HTML injection
+            safe_user_name = html.escape(user_name or "Unknown")
+            safe_user_email = html.escape(user_email)
+            safe_message = html.escape(message)
+
             html_content = f"""
             <html>
             <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #1a1a1a; max-width: 600px; margin: 0 auto; padding: 20px;">
                 <h2 style="color: #2563eb; border-bottom: 2px solid #2563eb; padding-bottom: 10px;">
                     [{source.upper()}] {type_label}
                 </h2>
-                <p><strong>From:</strong> {user_name or "Unknown"} ({user_email})</p>
+                <p><strong>From:</strong> {safe_user_name} ({safe_user_email})</p>
                 <p><strong>Type:</strong> {type_label}</p>
                 <div style="background-color: #f5f5f5; border-left: 4px solid #66CBFF; padding: 16px; margin-top: 16px;">
-                    <pre style="white-space: pre-wrap; margin: 0; font-family: inherit;">{message}</pre>
+                    <pre style="white-space: pre-wrap; margin: 0; font-family: inherit;">{safe_message}</pre>
                 </div>
                 <p style="color: #666; font-size: 12px; margin-top: 24px;">
                     Reply directly to this email to respond to the user.

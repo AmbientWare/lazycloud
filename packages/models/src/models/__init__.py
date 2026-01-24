@@ -20,6 +20,7 @@ from models.depot import (
 from models.feedback import (
     FeedbackRequest,
     FeedbackResponse,
+    FeedbackSource,
     FeedbackType,
 )
 from models.k8s import PVCInfo
@@ -43,6 +44,7 @@ __all__ = [
     "BuildArgsCollection",
     "FeedbackRequest",
     "FeedbackResponse",
+    "FeedbackSource",
     "FeedbackType",
     "ServiceBuildArgs",
     "DeploymentInfo",
