@@ -1,6 +1,5 @@
 import platform
 import subprocess
-import sys
 
 import typer
 from rich.console import Console
@@ -54,7 +53,7 @@ def update():
         )
         console.print(success_card)
 
-    except FileNotFoundError as e:
+    except FileNotFoundError:
         if is_windows:
             error_card = ErrorCard(
                 message="PowerShell is required but was not found.",
