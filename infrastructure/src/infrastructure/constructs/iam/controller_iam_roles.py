@@ -113,6 +113,15 @@ class ControllerIAMRoles(Construct):
                     ],
                     "Resource": f"arn:aws:sqs:*:{cdk.Aws.ACCOUNT_ID}:*",
                 },
+                {
+                    "Sid": "CreateSpotServiceLinkedRole",
+                    "Effect": "Allow",
+                    "Action": "iam:CreateServiceLinkedRole",
+                    "Resource": "*",
+                    "Condition": {
+                        "StringEquals": {"iam:AWSServiceName": "spot.amazonaws.com"}
+                    },
+                },
             ],
         }
 

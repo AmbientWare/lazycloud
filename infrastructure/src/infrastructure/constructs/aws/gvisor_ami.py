@@ -82,7 +82,7 @@ class GvisorAmiConstruct(Construct):
             self,
             "GvisorRecipe",
             name=f"{config.org_name}-al2023-gvisor",
-            version="1.0.7",
+            version="1.0.8",
             parent_image=eks_ami_param,
             components=[
                 imagebuilder.CfnImageRecipe.ComponentConfigurationProperty(

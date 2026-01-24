@@ -36,7 +36,7 @@ spec:
       expireAfter: 720h
   disruption:
     consolidationPolicy: WhenEmptyOrUnderutilized
-    consolidateAfter: 5m
+    consolidateAfter: 10m
     budgets:
       - nodes: "0"
         reasons:
