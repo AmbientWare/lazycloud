@@ -377,10 +377,9 @@ async def deploy_application(
         namespace=namespace,
         chart_path=str(charts.compose),
         values=helm_values,
-        timeout="5m",
+        timeout="2m",  # Just for helm install itself, not pod readiness
         strategy=DeploymentStrategy.ROLLING_UPDATE,
-        atomic=True,
-        cleanup_on_fail=True,
+        # No atomic/wait - deployment returns immediately, user monitors via dashboard
     )
 
     app_result = await helm_manager.deploy(helm_app_config)

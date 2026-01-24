@@ -18,7 +18,6 @@ import yaml
 from api_requests.deployments import DiffType
 from models.build_args import BuildArg, BuildArgsCollection, ServiceBuildArgs
 from models.diffs import ComposeDiff, EnvVarChanges, ResourceSection
-from models.monitoring import DeployOverallPhase
 from models.secrets import Secret, SecretCollection, SecretSource
 from models.statuses import TaskStatus
 from responses.builds import DepotTokenResponse
@@ -32,7 +31,6 @@ from cli.config import config
 from cli.lazycloud_file import LazyCloudFile
 from cli.ui.colors import Colors
 from cli.ui.components.card import Card
-from cli.ui.components.deploy_progress import ServiceStatusDisplay
 from cli.ui.components.info_cards import ErrorCard
 from cli.ui.views import DeployView
 from cli.ui.views.helpers.env_helpers import (
@@ -1989,206 +1987,87 @@ def _deploy(
     service_names: list[str] | None = None,
     build_duration: int | None = None,
 ):
-    """Trigger deployment and wait for completion with real-time status."""
+    """Trigger deployment and wait for Helm to complete (async - no pod wait)."""
     view = DeployView(console)
 
-    # Create a deployment creation progress card
-    creation_progress = view.show_deployment_creation_progress(deployment_name)
-    task_response = None
-    final_status = None
-
     try:
-        # Phase 1: Store secrets and trigger deployment
-        with Live(creation_progress, console=console, refresh_per_second=4):
-            # Store secrets first (BEFORE triggering deploy task!)
-            if secrets:
-                try:
-                    creation_progress.update_status(
-                        "creating", "Storing environment variables..."
-                    )
-
-                    # Handle new secrets (from diff's "added" list - these should all be new)
-                    if secrets.added:
-                        try:
-                            # Create new secrets - these keys are brand new per the diff
-                            api.secrets.store_secrets(deployment_id, secrets.added)
-                        except APIError as e:
-                            creation_progress.update_status(
-                                "failed", "Failed to create secrets"
-                            )
-                            if e.status_code == 409:
-                                raise Exception(
-                                    f"Secrets already exist (unexpected): {e}\n"
-                                    "The diff indicated these are new keys, but they already exist."
-                                )
-                            else:
-                                raise Exception(f"Failed to create secrets: {e}")
-
-                    # Handle removed secrets
-                    if secrets.removed:
-                        try:
-                            api.secrets.delete_secrets(deployment_id, secrets.removed)
-                        except Exception as delete_error:
-                            creation_progress.update_status(
-                                "failed", "Failed to delete secrets"
-                            )
-                            raise Exception(f"Failed to delete secrets: {delete_error}")
-
-                except Exception as e:
-                    if "Failed to" not in str(
-                        e
-                    ):  # Don't double-wrap our own exceptions
-                        creation_progress.update_status(
-                            "failed", "Failed to manage secrets"
-                        )
-                        raise Exception(f"Failed to manage secrets: {e}")
-                    else:
-                        raise
-
-            # Trigger deployment (with updated compose_yaml if provided)
-            creation_progress.update_status("creating", "Triggering deployment...")
-
+        # Store secrets first (BEFORE triggering deploy task!)
+        if secrets:
+            console.print(f"[dim]Storing environment variables...[/dim]")
             try:
-                task_response = api.deployments.deploy_deployment(
-                    deployment_id=deployment_id,
-                    compose_yaml=compose_yaml,
-                    secrets=bool(secrets),
-                    service_names=service_names,
-                )
+                # Handle new secrets
+                if secrets.added:
+                    try:
+                        api.secrets.store_secrets(deployment_id, secrets.added)
+                    except APIError as e:
+                        if e.status_code == 409:
+                            raise Exception(
+                                f"Secrets already exist (unexpected): {e}\n"
+                                "The diff indicated these are new keys, but they already exist."
+                            )
+                        else:
+                            raise Exception(f"Failed to create secrets: {e}")
 
-                if not task_response or not task_response.task_id:
-                    creation_progress.update_status(
-                        "failed", "Failed to create deployment task"
-                    )
-                    raise Exception("Server did not return a task ID")
+                # Handle removed secrets
+                if secrets.removed:
+                    try:
+                        api.secrets.delete_secrets(deployment_id, secrets.removed)
+                    except Exception as delete_error:
+                        raise Exception(f"Failed to delete secrets: {delete_error}")
 
-            except APIError as e:
-                creation_progress.update_status("failed", "API request failed")
-                if e.status_code == 401:
-                    raise Exception(
-                        "Authentication failed. Please run 'lazycloud login'"
-                    )
-                elif e.status_code and 500 <= e.status_code < 600:
-                    raise Exception(f"Server error: {e}")
+            except Exception as e:
+                if "Failed to" not in str(e):
+                    raise Exception(f"Failed to manage secrets: {e}")
                 else:
-                    raise Exception(f"API error: {e}")
-            except Exception as e:
-                creation_progress.update_status("failed", "Request failed")
+                    raise
+
+        # Trigger deployment
+        console.print(f"[dim]Triggering deployment...[/dim]")
+        try:
+            task_response = api.deployments.deploy_deployment(
+                deployment_id=deployment_id,
+                compose_yaml=compose_yaml,
+                secrets=bool(secrets),
+                service_names=service_names,
+            )
+
+            if not task_response or not task_response.task_id:
+                raise Exception("Server did not return a task ID")
+
+        except APIError as e:
+            if e.status_code == 401:
+                raise Exception("Authentication failed. Please run 'lazycloud login'")
+            elif e.status_code and 500 <= e.status_code < 600:
+                raise Exception(f"Server error: {e}")
+            else:
+                raise Exception(f"API error: {e}")
+        except Exception as e:
+            if "API error" not in str(e) and "Server error" not in str(e):
                 raise Exception(f"Failed to trigger deployment: {e}")
+            raise
 
-            creation_progress.update_status(
-                "creating", "Deployment started, monitoring services..."
-            )
+        # Wait for Helm deployment to complete (fast - no pod wait)
+        console.print(f"[dim]Waiting for deployment to complete...[/dim]")
 
-        # Phase 2: Wait for task and stream service status
-        service_display = ServiceStatusDisplay(deployment_name)
-        stream_error: Exception | None = None
+        async def wait_for_task():
+            return await api.deployments.wait_for_deployment(task_response.task_id)
 
-        async def monitor_deployment():
-            nonlocal final_status, stream_error
-
-            def on_progress(data: dict):
-                service_display.update(data)
-
-            def on_stream_error(error: Exception):
-                nonlocal stream_error
-                stream_error = error
-
-            # Start both the task wait and service status stream
-            task_wait = asyncio.create_task(
-                api.deployments.wait_for_deployment(task_response.task_id)
-            )
-
-            try:
-                # Stream service status until complete or task finishes
-                progress_stream = asyncio.create_task(
-                    api.deployments.stream_deploy_progress(
-                        deployment_id=deployment_id,
-                        on_progress=on_progress,
-                        on_error=on_stream_error,
-                    )
-                )
-
-                # Wait for task completion (this is the authoritative signal)
-                final_status = await task_wait
-
-                # Give the progress stream a moment to receive final status update
-                # before cancelling (the server may have one more update pending)
-                if final_status and final_status.status == TaskStatus.COMPLETED:
-                    try:
-                        await asyncio.wait_for(
-                            asyncio.shield(progress_stream), timeout=1.0
-                        )
-                    except asyncio.TimeoutError:
-                        pass
-                    except asyncio.CancelledError:
-                        pass
-
-                # Cancel progress stream
-                progress_stream.cancel()
-                try:
-                    await progress_stream
-
-                except asyncio.CancelledError:
-                    pass
-
-                # Set display state based on task completion
-                if final_status:
-                    if final_status.status == TaskStatus.COMPLETED:
-                        service_display.overall = DeployOverallPhase.COMPLETED
-                    elif final_status.status == TaskStatus.ERROR:
-                        service_display.overall = DeployOverallPhase.FAILED
-
-            except Exception as e:
-                stream_error = e
-                # Still try to get task result
-                if not task_wait.done():
-                    task_wait.cancel()
-
-                    try:
-                        await task_wait
-                    except asyncio.CancelledError:
-                        pass
-
-        # Run with Live display showing service status
-        with Live(service_display, console=console, refresh_per_second=4) as live:
-            # Run the async monitoring
-            try:
-                asyncio.run(monitor_deployment())
-            except Exception as e:
-                if stream_error is None:
-                    stream_error = e
-
-            # Keep refreshing until we have final status
-            if final_status is None and stream_error:
-                service_display.overall = DeployOverallPhase.FAILED
-                service_display.failure_message = str(stream_error)
-                live.update(service_display)
-
-        # Handle results
-        if stream_error and final_status is None:
-            raise Exception(f"Error monitoring deployment: {stream_error}")
+        final_status = asyncio.run(wait_for_task())
 
         if final_status is None:
-            raise Exception("Deployment monitoring ended without status")
+            raise Exception("Deployment ended without status")
 
-        # Update UI based on actual status
+        # Update .lazycloud file timestamp on success
         if final_status.status == TaskStatus.COMPLETED:
-            # Update last_deployed timestamp in .lazycloud file
             try:
                 lazycloud_file = LazyCloudFile.find_and_load(Path.cwd())
                 if lazycloud_file:
                     lazycloud_file.update(last_deployed=datetime.now(UTC))
-
             except Exception:
-                # Don't fail deployment if we can't update the timestamp
-                pass
+                pass  # Don't fail deployment if we can't update the timestamp
 
         elif final_status.status == TaskStatus.ERROR:
             error_msg = final_status.message or "Task failed"
-            # Add failure message from service display if available
-            if service_display.failure_message:
-                error_msg = f"{error_msg}\n{service_display.failure_message}"
             raise Exception(f"Deployment failed: {error_msg}")
 
         else:
@@ -2196,13 +2075,13 @@ def _deploy(
                 f"Deployment ended with unexpected status: {final_status.status}"
             )
 
-        # Show final success message
+        # Show success message
         view.show_summary(
             deployment_name=deployment_name,
             status=final_status.status,
-            duration=service_display.elapsed_seconds,
+            duration=0,  # We don't track duration anymore
             build_duration=build_duration,
-            message="View deployment in the dashboard with 'lazycloud dashboard'",
+            message="Deployment submitted. Monitor pod status with 'lazycloud dashboard'",
         )
 
     except typer.Exit:

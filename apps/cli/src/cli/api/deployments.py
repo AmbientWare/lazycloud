@@ -1,5 +1,5 @@
 from datetime import UTC
-from typing import Any, Callable
+from typing import Any
 
 from api_requests.deployments import (
     DeploymentCreateRequest,
@@ -15,7 +15,6 @@ from responses.deployments import (
 from responses.tasks import DeploymentTaskStatusResponse, TaskStatusResponse
 
 from cli.api.base import BaseAPI
-from cli.api.base_sse import SSEClient
 from cli.api.tasks import TasksAPI
 from cli.config import config
 
@@ -172,21 +171,3 @@ class DeploymentsAPI(BaseAPI):
             message=final_status.message,
         )
 
-    async def stream_deploy_progress(
-        self,
-        deployment_id: str,
-        on_progress: Callable[[dict], None],
-        on_error: Callable[[Exception], None] | None = None,
-    ) -> None:
-        """Stream deployment progress with per-service status updates."""
-        sse_client = SSEClient()
-
-        def handle_event(event_type: str, data: dict) -> None:
-            on_progress(data)
-
-        await sse_client.stream(
-            path=f"/deployments/{deployment_id}/status/deploy/stream",
-            on_event=handle_event,
-            on_error=on_error,
-            max_retries=3,
-        )

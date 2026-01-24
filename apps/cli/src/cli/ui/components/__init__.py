@@ -12,7 +12,6 @@ from cli.ui.components.confirmation import (
     SimpleConfirmationDialog,
     confirm_action,
 )
-from cli.ui.components.deploy_progress import ServiceStatusDisplay
 from cli.ui.components.info_cards import (
     BuildInfoCard,
     DeploymentActionCard,
@@ -54,7 +53,6 @@ __all__ = [
     "ProgressCard",
     "SpinnerProgress",
     "DeploymentProgress",
-    "ServiceStatusDisplay",
     "InfoCard",
     "BuildInfoCard",
     "SuccessCard",
