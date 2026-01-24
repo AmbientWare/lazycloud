@@ -13,14 +13,16 @@ from cli.commands.deployments import deployments_app
 from cli.commands.feedback import feedback
 from cli.commands.login import login
 from cli.commands.logout import logout
+from cli.commands.update import update
 from cli.commands.usage import usage_command
 from cli.commands.workspaces import workspace_app
 from cli.config import config
 from cli.ui.colors import Colors
 from cli.ui.components.info_cards import ErrorCard
+from cli.utils import validate_cli_version
 
 # Commands that don't require authentication
-PUBLIC_COMMANDS = {"login", "logout", "version", "init", None}
+PUBLIC_COMMANDS = {"login", "logout", "version", "init", "update", None}
 
 try:
     __version__ = importlib.metadata.version("lazycloud")
@@ -69,6 +71,10 @@ def main(
 ):
     """LazyCloud CLI"""
     console = Console()
+
+    # Check CLI version (skip for update and version commands)
+    if ctx.invoked_subcommand not in {"update", "version", None}:
+        validate_cli_version()
 
     # Check authentication for protected commands
     if ctx.invoked_subcommand not in PUBLIC_COMMANDS:
@@ -131,3 +137,8 @@ main_cli.command("version", help="Show the CLI version")(version_command)
 
 # Add feedback command
 main_cli.command("feedback", help="Submit feedback to the LazyCloud team")(feedback)
+
+# Add update command
+main_cli.command("update", help="Update the LazyCloud CLI to the latest version")(
+    update
+)
