@@ -134,22 +134,24 @@ def _show_upgrade_prompt(installed: str, required: str):
     """Show upgrade instructions to the user."""
     console = Console()
 
-    # Determine OS for appropriate command
+    # Determine OS for appropriate manual command
     is_windows = platform.system() == "Windows"
 
     if is_windows:
-        upgrade_cmd = "irm https://lazycloud.dev/install.ps1 | iex"
+        manual_cmd = "irm https://lazycloud.dev/install.ps1 | iex"
     else:
-        upgrade_cmd = "curl -LsSf https://lazycloud.dev/install.sh | sh"
+        manual_cmd = "curl -LsSf https://lazycloud.dev/install.sh | sh"
 
     console.print()
     console.print(
         Panel(
-            f"[yellow]Update available![/yellow]\n\n"
+            f"[yellow]Update required![/yellow]\n\n"
             f"Installed: [red]{installed}[/red]\n"
             f"Required:  [green]{required}[/green]\n\n"
             f"[dim]Run to upgrade:[/dim]\n"
-            f"[cyan]{upgrade_cmd}[/cyan]",
+            f"[cyan]lazycloud update[/cyan]\n\n"
+            f"[dim]Or manually:[/dim]\n"
+            f"[dim]{manual_cmd}[/dim]",
             title="[bold]LazyCloud Update[/bold]",
             border_style="yellow",
         )
