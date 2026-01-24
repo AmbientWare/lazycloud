@@ -10,6 +10,7 @@ from cli.commands.compose.init import init_deployment
 from cli.commands.compose.rollback import rollback
 from cli.commands.dashboard import dashboard
 from cli.commands.deployments import deployments_app
+from cli.commands.feedback import feedback
 from cli.commands.login import login
 from cli.commands.logout import logout
 from cli.commands.usage import usage_command
@@ -127,3 +128,6 @@ main_cli.command("dashboard", help="Launch the LazyCloud dashboard")(dashboard)
 
 # Add version command
 main_cli.command("version", help="Show the CLI version")(version_command)
+
+# Add feedback command
+main_cli.command("feedback", help="Submit feedback to the LazyCloud team")(feedback)

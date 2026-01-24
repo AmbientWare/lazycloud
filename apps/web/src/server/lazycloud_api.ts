@@ -463,6 +463,25 @@ class LazyCloudAPIClass {
   async regenerateApiKey(accessToken: string, apiKeyId: string): Promise<ApiKey> {
     return await this.put<ApiKey>(`/api-keys/${apiKeyId}`, {}, { accessToken });
   }
+
+  // Feedback Methods
+
+  async submitFeedback(
+    accessToken: string,
+    feedbackType: string,
+    message: string,
+    source: string = "web",
+  ): Promise<{ success: boolean; message: string }> {
+    return await this.post<{ success: boolean; message: string }>(
+      `/feedback`,
+      {
+        feedback_type: feedbackType,
+        message: message,
+        source: source,
+      },
+      { accessToken },
+    );
+  }
 }
 
 const lazycloudApi = new LazyCloudAPIClass();
