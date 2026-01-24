@@ -112,13 +112,6 @@ class HelmManager:
                 # Update existing release
                 result = await self._helm_upgrade(config, values_file)
 
-            if result.success and config.wait:
-                # Optionally wait for resources to be ready
-                ready_result = await self._wait_for_resources(config)
-                if not ready_result.success:
-                    # NOTE: we don't fail the deployment, just warn
-                    logger.warning(f"Resources not ready: {ready_result.message}")
-
             return result
 
         finally:
@@ -293,12 +286,6 @@ class HelmManager:
         ):
             cmd.append("--create-namespace")
 
-        if config.wait:
-            cmd.append("--wait")
-
-        if config.atomic:
-            cmd.extend(["--atomic", "--cleanup-on-fail"])
-
         cmd.extend(["--history-max", str(app_config.HELM_HISTORY_MAX_REVISIONS)])
 
         result = await self._run_helm_command(cmd)
@@ -363,17 +350,11 @@ class HelmManager:
             config.timeout,
         ]
 
-        if config.wait:
-            cmd.append("--wait")
-
         if config.force or config.strategy == DeploymentStrategy.FORCE_UPDATE:
             cmd.append("--force")
 
         if config.recreate_pods:
             cmd.append("--recreate-pods")
-
-        if config.atomic:
-            cmd.extend(["--atomic", "--cleanup-on-fail"])
 
         cmd.extend(["--history-max", str(app_config.HELM_HISTORY_MAX_REVISIONS)])
 
@@ -489,43 +470,6 @@ class HelmManager:
 
         except ApiException as e:
             logger.warning(f"Failed to list secrets when clearing Helm locks: {e}")
-
-    async def _wait_for_resources(
-        self, config: HelmDeploymentConfig, timeout: int = 300
-    ) -> DeploymentResult:
-        """Wait for resources to be ready (custom implementation)."""
-        logger.info(f"Waiting for resources in {config.release_name} to be ready")
-
-        start_time = asyncio.get_event_loop().time()
-        resources: dict[str, list[dict[str, Any]]] = {}
-
-        while asyncio.get_event_loop().time() - start_time < timeout:
-            resources = await self._get_resource_status(
-                config.release_name, config.namespace
-            )
-
-            all_ready = True
-            not_ready_resources = []
-
-            for resource_type, items in resources.items():
-                for item in items:
-                    if not item.get("ready", False):
-                        all_ready = False
-                        not_ready_resources.append(f"{resource_type}/{item['name']}")
-
-            if all_ready:
-                return DeploymentResult(
-                    success=True, message="All resources are ready", resources=resources
-                )
-
-            logger.debug(f"Waiting for resources: {', '.join(not_ready_resources)}")
-            await asyncio.sleep(5)
-
-        return DeploymentResult(
-            success=False,
-            message=f"Timeout waiting for resources after {timeout}s",
-            resources=resources,
-        )
 
     async def _get_resource_status(
         self, release_name: str, namespace: str
