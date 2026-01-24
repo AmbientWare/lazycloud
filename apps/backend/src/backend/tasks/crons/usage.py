@@ -11,6 +11,7 @@ from models.billing import (
     STORAGE_CLASS_EBS,
     STORAGE_CLASS_EFS,
     UsageCollectionConfig,
+    UsageUnits,
 )
 from models.deployments import DeploymentStates
 from models.metrics import StorageUsage
@@ -199,7 +200,9 @@ async def collect_workspace_interval(
             namespace, interval_start, interval_end
         )
 
-        interval_hours = (interval_end - interval_start).total_seconds() / 3600
+        interval_hours = UsageUnits.seconds_to_hours(
+            (interval_end - interval_start).total_seconds()
+        )
         storage_list = await collect_storage_usage(namespace, interval_hours)
 
         # Collect build minutes from Depot

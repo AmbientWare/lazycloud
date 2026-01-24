@@ -1,10 +1,8 @@
 """Billing and pricing API endpoints."""
 
 from fastapi import APIRouter
+from models.billing import METER_PRICES_CENTS, MeterNames
 from pydantic import BaseModel
-
-from backend.billing.product_details.base_models import METER_PRICE_MAP
-from models.billing import MeterNames
 
 billing_router = APIRouter(prefix="/billing", tags=["billing"])
 
@@ -27,10 +25,10 @@ class MeterPricingResponse(BaseModel):
 async def get_meter_pricing() -> MeterPricingResponse:
     """Get current meter pricing rates."""
     return MeterPricingResponse(
-        cpu_usage=METER_PRICE_MAP[MeterNames.CPU_USAGE],
-        memory_usage=METER_PRICE_MAP[MeterNames.MEMORY_USAGE],
-        standard_storage=METER_PRICE_MAP[MeterNames.STANDARD_STORAGE],
-        shared_storage=METER_PRICE_MAP[MeterNames.SHARED_STORAGE],
-        build_minutes=METER_PRICE_MAP[MeterNames.BUILD_MINUTES],
-        public_endpoints=METER_PRICE_MAP[MeterNames.PUBLIC_ENDPOINTS],
+        cpu_usage=METER_PRICES_CENTS[MeterNames.CPU_USAGE],
+        memory_usage=METER_PRICES_CENTS[MeterNames.MEMORY_USAGE],
+        standard_storage=METER_PRICES_CENTS[MeterNames.STANDARD_STORAGE],
+        shared_storage=METER_PRICES_CENTS[MeterNames.SHARED_STORAGE],
+        build_minutes=METER_PRICES_CENTS[MeterNames.BUILD_MINUTES],
+        public_endpoints=METER_PRICES_CENTS[MeterNames.PUBLIC_ENDPOINTS],
     )
