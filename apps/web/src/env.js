@@ -25,6 +25,8 @@ export const env = createEnv({
     NODE_ENV: z
       .enum(["development", "test", "production"])
       .default("development"),
+    // Dev auth bypass - use a user's API key to skip WorkOS auth
+    DEV_API_KEY: z.string().optional(),
   },
 
   /**
@@ -55,6 +57,7 @@ export const env = createEnv({
     WORKOS_REDIRECT_URI: process.env.WORKOS_REDIRECT_URI,
     UPSTASH_REDIS_REST_URL: process.env.UPSTASH_REDIS_REST_URL,
     UPSTASH_REDIS_REST_TOKEN: process.env.UPSTASH_REDIS_REST_TOKEN,
+    DEV_API_KEY: process.env.DEV_API_KEY,
   },
   /**
    * Run `build` or `dev` with `SKIP_ENV_VALIDATION` to skip env validation. This is especially

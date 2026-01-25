@@ -1,10 +1,10 @@
 "use server";
 
-import { withAuth } from "@workos-inc/authkit-nextjs";
 import { invalidateSubscriptionCache } from "@/lib/subscription-cache";
+import { getUser } from "./utils";
 
 export async function invalidateSubscriptionCacheAction() {
-  const { user } = await withAuth({ ensureSignedIn: true });
+  const user = await getUser();
 
   await invalidateSubscriptionCache(user.id);
 

@@ -222,8 +222,8 @@ class LazyCloudAPIClass {
     );
   }
 
-  async getCurrentUser(accessToken: string): Promise<{ id: string }> {
-    return await this.get<{ id: string }>(`/users/current`, { accessToken });
+  async getCurrentUser(accessToken: string): Promise<{ id: string; workos_id: string }> {
+    return await this.get<{ id: string; workos_id: string }>(`/users/current`, { accessToken });
   }
 
   async getUserFeatures(accessToken: string): Promise<UserFeaturesResponse> {

@@ -7,6 +7,7 @@ class OnboardingResponse(BaseModel):
 
 class CurrentUserResponse(BaseModel):
     id: str
+    workos_id: str
 
 
 class UserFeaturesResponse(BaseModel):

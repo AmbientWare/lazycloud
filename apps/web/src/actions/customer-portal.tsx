@@ -1,11 +1,11 @@
 "use server";
 
 import polarService from "@/server/polar";
-import { withAuth } from "@workos-inc/authkit-nextjs";
 import { env } from "@/env";
+import { getUser } from "./utils";
 
 export async function getCustomerPortalUrl() {
-  const { user } = await withAuth({ ensureSignedIn: true });
+  const user = await getUser();
   const userId = user.id;
 
   try {

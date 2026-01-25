@@ -3,7 +3,7 @@
 import type { UserFeaturesResponse } from "@/interfaces/users";
 import lazycloudApi from "@/server/lazycloud_api";
 import polarService from "@/server/polar";
-import { getAuthToken, getUserId } from "./utils";
+import { getAuthToken } from "./utils";
 
 export async function getCurrentUserInternalId(): Promise<string> {
   const accessToken = await getAuthToken();
