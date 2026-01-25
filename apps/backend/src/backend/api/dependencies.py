@@ -8,8 +8,11 @@ from backend.database.compose import ComposeDeploymentPydantic
 from backend.database.user_workspaces import WorkspaceRole
 from backend.database.users import UserPydantic, UserRole
 from backend.models.workspace_access import WorkspaceAccess
-from backend.services import get_subscription_service
-from backend.services.subscription_service import SubscriptionLimitError
+from backend.services import get_polar_service, get_subscription_service
+from backend.services.subscription_service import (
+    NoActiveSubscriptionError,
+    SubscriptionLimitError,
+)
 
 
 async def require_workspace_member(
@@ -178,6 +181,20 @@ async def get_deployment_with_admin_access_for_usage(
     )
 
 
+async def get_deployment_with_active_subscription(
+    deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_admin_access),
+    current_user: UserPydantic = Depends(get_current_active_user),
+    db: Database = Depends(get_db),
+) -> ComposeDeploymentPydantic:
+    """Get deployment with admin access and verify workspace owner has active subscription."""
+    await get_owner_with_active_subscription(
+        workspace_id=deployment.workspace_id,
+        current_user=current_user,
+        db=db,
+    )
+    return deployment
+
+
 async def get_user_product_features(
     current_user: UserPydantic = Depends(get_current_active_user),
 ) -> BaseFeatures:
@@ -202,18 +219,19 @@ async def get_user_product_features(
         raise HTTPException(status_code=503, detail=str(e))
 
 
-async def check_deployment_limit(
+async def get_owner_with_active_subscription(
     workspace_id: str,
     current_user: UserPydantic = Depends(get_current_active_user),
     db: Database = Depends(get_db),
-) -> None:
-    """Check if workspace owner can create a new deployment based on their subscription tier.
+) -> UserPydantic:
+    """Get workspace owner after verifying access and active subscription.
 
-    Deployment limits are enforced against the WORKSPACE OWNER's subscription,
-    not the current user creating the deployment. This allows team members to
-    create deployments up to the owner's limit.
+    Verifies:
+    1. Current user has access to the workspace
+    2. Workspace owner has an active subscription (or is admin, or billing disabled)
 
-    Admin users (role == ADMIN) have no deployment limits.
+    Returns the workspace owner for use in subsequent billing checks.
+    Raises HTTP 402 if no active subscription.
     """
     membership = await db.user_workspaces.get_by_user_and_workspace(
         current_user.id, workspace_id
@@ -221,18 +239,51 @@ async def check_deployment_limit(
     if not membership:
         raise HTTPException(404, "Workspace not found")
 
-    # Get workspace owner to check against their limits
     owner_user = await db.workspaces.get_owner_user(workspace_id)
     if not owner_user:
         raise HTTPException(500, "Workspace has no owner")
 
-    # Admin workspace owners have no deployment limits
+    # Admin workspace owners bypass subscription requirement
+    if owner_user.role == UserRole.ADMIN:
+        return owner_user
+
+    # Check if Polar is enabled
+    polar_service = get_polar_service()
+    if not polar_service.enabled:
+        return owner_user  # Allow through if billing is disabled
+
+    subscription_service = get_subscription_service()
+    try:
+        await subscription_service.get_user_features(owner_user.workos_id)
+
+    except NoActiveSubscriptionError:
+        raise HTTPException(
+            status_code=402,
+            detail="Payment method required. Please add a payment method to continue.",
+        )
+
+    except (ValueError, RuntimeError):
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to verify subscription status. Please try again.",
+        )
+
+    return owner_user
+
+
+async def check_deployment_limit_for_owner(
+    owner_user: UserPydantic,
+) -> None:
+    """Check if workspace owner can create a new deployment based on their subscription tier.
+
+    Use get_owner_with_active_subscription() first to get the owner, then pass here.
+    Admin users (role == ADMIN) have no deployment limits.
+    """
     if owner_user.role == UserRole.ADMIN:
         return
 
     subscription_service = get_subscription_service()
     try:
-        # Get owner's features and check against their deployment limit
         owner_features = await subscription_service.get_user_features(
             owner_user.workos_id
         )
@@ -240,6 +291,12 @@ async def check_deployment_limit(
 
     except SubscriptionLimitError as e:
         raise HTTPException(status_code=e.status_code, detail=str(e))
+
+    except (ValueError, RuntimeError):
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to verify subscription status. Please try again.",
+        )
 
 
 async def check_deployment_features(

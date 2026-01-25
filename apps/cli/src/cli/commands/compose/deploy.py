@@ -31,7 +31,7 @@ from cli.config import config
 from cli.lazycloud_file import LazyCloudFile
 from cli.ui.colors import Colors
 from cli.ui.components.card import Card
-from cli.ui.components.info_cards import ErrorCard
+from cli.ui.components.info_cards import ErrorCard, SubscriptionRequiredCard
 from cli.ui.views import DeployView
 from cli.ui.views.helpers.env_helpers import (
     ImportMethod,
@@ -388,6 +388,8 @@ def deploy(
                 "Authentication failed",
                 suggestion="Run 'lazycloud login' to authenticate",
             )
+        elif e.status_code == 402:
+            console.print(SubscriptionRequiredCard())
         else:
             view.show_error(f"Failed to create deployment: {e}")
 

@@ -7,6 +7,7 @@ from rich.console import Console
 
 from cli.api import APIError, api
 from cli.lazycloud_file import LazyCloudFile
+from cli.ui.components.info_cards import SubscriptionRequiredCard
 from cli.ui.views import RollbackView
 
 console = Console()
@@ -98,6 +99,8 @@ def rollback(
         except APIError as e:
             if e.status_code == 401:
                 view.show_error("Authentication failed. Please run 'lazycloud login'")
+            elif e.status_code == 402:
+                console.print(SubscriptionRequiredCard())
             elif e.status_code and 500 <= e.status_code < 600:
                 view.show_error(f"Server error: {e}")
             else:

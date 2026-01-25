@@ -4,7 +4,8 @@ import typer
 from models.statuses import TaskStatus
 from rich.console import Console
 
-from cli.api import api
+from cli.api import APIError, api
+from cli.ui.components.info_cards import SubscriptionRequiredCard
 from cli.ui.views import DestroyView
 from cli.utils import get_current_deployment_name
 
@@ -70,6 +71,12 @@ def destroy(
     except typer.Exit:
         # Re-raise Exit exceptions
         raise
+    except APIError as e:
+        if e.status_code == 402:
+            console.print(SubscriptionRequiredCard())
+        else:
+            view.show_error(f"API error: {str(e)}")
+        raise typer.Exit(1)
     except Exception as e:
         view.show_error(f"Unexpected error: {str(e)}")
         raise typer.Exit(1)
