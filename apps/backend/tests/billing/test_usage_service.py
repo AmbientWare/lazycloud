@@ -12,6 +12,7 @@ from backend.services.depot_service import DepotService
 from backend.services.polar import PolarService
 from backend.services.usage_service import UsageService
 from models.billing import SECONDS_PER_HOUR
+from models.storage import STORAGE_CLASS_EBS
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tests.billing.conftest import create_breakdown_events, create_daily_record
@@ -288,7 +289,7 @@ class TestDeploymentBreakdown:
         for vol in volumes:
             assert vol.gb_hours == 25.0
             assert vol.volume_name.startswith("pvc-")
-            assert vol.storage_class == "ebs-sc"
+            assert vol.storage_class == STORAGE_CLASS_EBS
 
 
 class TestDailyByTimezone:

@@ -2,6 +2,7 @@ import uuid
 from datetime import date, datetime, timezone
 from enum import StrEnum
 
+from models.storage import STORAGE_CLASS_EBS, STORAGE_CLASS_EFS
 from sqlalchemy import (
     UUID,
     Date,
@@ -503,9 +504,9 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecordPydant
         standard_gb_hours = 0.0
         shared_gb_hours = 0.0
         for row in storage_result.all():
-            if row[0] == "ebs-sc":
+            if row[0] == STORAGE_CLASS_EBS:
                 standard_gb_hours = row[1] or 0.0
-            elif row[0] == "efs-sc":
+            elif row[0] == STORAGE_CLASS_EFS:
                 shared_gb_hours = row[1] or 0.0
 
         endpoint_hours = network_result.scalar() or 0.0

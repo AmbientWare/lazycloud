@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from backend.database import Database
 from backend.database.usage import BreakdownType, DailyUsageStatus
+from models.storage import STORAGE_CLASS_EBS
 
 from tests.fixtures.database import (
     make_user,
@@ -288,7 +289,7 @@ class TestBreakdownEvents:
             interval_end=interval_end,
             breakdown_type=BreakdownType.STORAGE,
             resource_name="data-vol",
-            storage_class="ebs-sc",
+            storage_class=STORAGE_CLASS_EBS,
             gb_hours=10.0,
         )
 
@@ -300,7 +301,7 @@ class TestBreakdownEvents:
 
         assert len(breakdown) == 1
         assert breakdown[0][0] == "data-vol"
-        assert breakdown[0][1] == "ebs-sc"
+        assert breakdown[0][1] == STORAGE_CLASS_EBS
         assert breakdown[0][2] == 10.0
 
 

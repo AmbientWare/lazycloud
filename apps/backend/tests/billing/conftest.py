@@ -6,6 +6,7 @@ import pytest
 from backend.database import Database, _create_database
 from backend.database.session import session_manager
 from backend.database.usage import BreakdownType, DailyUsageRecordPydantic
+from models.storage import STORAGE_CLASS_EBS
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tests.fixtures.database import (
@@ -154,6 +155,6 @@ async def create_breakdown_events(
             breakdown_type=BreakdownType.STORAGE,
             resource_name=f"pvc-{i}",
             deployment_id=deployment_id,
-            storage_class="ebs-sc",
+            storage_class=STORAGE_CLASS_EBS,
             gb_hours=gb_hours_per_pvc,
         )
