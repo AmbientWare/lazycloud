@@ -6,7 +6,7 @@ const ephemeralCache = new Map();
 export const ratelimit = redis
   ? new Ratelimit({
       redis,
-      limiter: Ratelimit.slidingWindow(100, "1 m"),
+      limiter: Ratelimit.slidingWindow(300, "1 m"),
       ephemeralCache,
       analytics: false,
     })
