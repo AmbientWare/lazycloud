@@ -1,7 +1,7 @@
 """Storage size fetching with caching."""
 
 from backend.database import get_db_context
-from backend.services.cache import get_cache_service
+from backend.services import get_cache_service
 
 # Cache key prefix and TTL (15 minutes = billing collection interval)
 STORAGE_SIZE_CACHE_PREFIX = "storage_sizes:"

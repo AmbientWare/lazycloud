@@ -37,17 +37,17 @@ export default function Header() {
       ];
 
   const ctaButton = !isSignedIn ? (
-    <Link href="/request-access">
+    <Link href="/login">
       <StyledButton variant="primary">
         <Zap size={18} className="group-hover:animate-pulse" />
-        Request Access
+        Login
       </StyledButton>
     </Link>
   ) : (
     <Link href={USER_HOME}>
       <StyledButton variant="primary">
         <Zap size={18} className="group-hover:animate-pulse" />
-        Monitore Workspaces
+        Monitor Workspaces
         <ChevronRight
           size={20}
           className="transition-transform group-hover:translate-x-1"
