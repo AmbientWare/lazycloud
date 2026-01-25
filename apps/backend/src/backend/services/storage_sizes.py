@@ -30,8 +30,8 @@ async def get_storage_sizes_cached(
         storage_sizes = await db.usage.get_latest_storage_sizes(deployment_id)
 
     # Cache the result (convert tuples to lists for JSON serialization)
-    if storage_sizes:
-        cacheable = {k: list(v) for k, v in storage_sizes.items()}
-        await cache.set(cache_key, cacheable, STORAGE_SIZE_TTL_SECONDS)
+    # Always cache, even if empty, to avoid repeated DB queries
+    cacheable = {k: list(v) for k, v in storage_sizes.items()}
+    await cache.set(cache_key, cacheable, STORAGE_SIZE_TTL_SECONDS)
 
     return storage_sizes
