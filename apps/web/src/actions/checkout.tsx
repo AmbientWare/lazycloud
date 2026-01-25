@@ -2,10 +2,10 @@
 
 import { env } from "@/env";
 import polarService from "@/server/polar";
-import { withAuth } from "@workos-inc/authkit-nextjs";
+import { getUser } from "./utils";
 
 export async function createCheckoutUrl(productId: string) {
-  const { user } = await withAuth({ ensureSignedIn: true });
+  const user = await getUser();
   const userId = user.id;
 
   try {

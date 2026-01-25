@@ -11,6 +11,7 @@ import {
   setSubscriptionStatus,
 } from "./lib/subscription-cache";
 import polarService from "./server/polar";
+import { getUser } from "./actions/utils";
 
 // In-memory lock to prevent cache stampede (per-instance)
 const subscriptionLocks = new Map<string, Promise<boolean>>();
@@ -62,20 +63,28 @@ export default async function proxy(req: NextRequest) {
   let authkitHeaders: Headers = new Headers();
   let authorizationUrl: string | undefined;
 
-  try {
-    const result = await authkit(req, {
-      redirectUri: process.env.WORKOS_REDIRECT_URI,
-    });
-    session = result.session;
-    authkitHeaders = result.headers;
-    authorizationUrl = result.authorizationUrl;
-  } catch (error) {
-    console.error("AuthKit middleware error:", error);
-    // If cookie decryption fails, clear the cookie and redirect to home
-    const response = NextResponse.redirect(new URL("/", req.url));
-    response.cookies.delete("wos-session");
-    return response;
+  // Dev auth bypass - skip WorkOS and fetch real user from API
+  const devApiKey = process.env.DEV_API_KEY;
+  if (devApiKey && process.env.NODE_ENV === "development") {
+    const user = await getUser();
+    session = { user: { id: user.id } };
+  } else {
+    try {
+      const result = await authkit(req, {
+        redirectUri: process.env.WORKOS_REDIRECT_URI,
+      });
+      session = result.session;
+      authkitHeaders = result.headers;
+      authorizationUrl = result.authorizationUrl;
+    } catch (error) {
+      console.error("AuthKit middleware error:", error);
+      // If cookie decryption fails, clear the cookie and redirect to home
+      const response = NextResponse.redirect(new URL("/", req.url));
+      response.cookies.delete("wos-session");
+      return response;
+    }
   }
+  
   const { pathname } = req.nextUrl;
 
   // Skip rate limiting for health endpoints (called frequently by k8s probes)
