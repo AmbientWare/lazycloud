@@ -192,11 +192,12 @@ class TestResourcesGeneration:
 
         assert result.limits.cpu == "1"
         assert result.limits.memory == "1Gi"
-        assert result.requests.cpu == "0.5"
+        # Requests are enforced to minimum thresholds in millicores format
+        assert result.requests.cpu == "500m"  # 0.5 cores = 500m
         assert result.requests.memory == "512Mi"
 
     def test_generate_resources_with_default_reservations(self):
-        """Test resources generation uses default reservations."""
+        """Test resources auto-generates requests from limits when no reservations specified."""
         resources_config = ResourcesConfig(
             limits=ResourceConfig(cpus="2", memory="2Gi"),
         )
@@ -206,10 +207,10 @@ class TestResourcesGeneration:
         # Limits should be set correctly
         assert result.limits.cpu == "2"
         assert result.limits.memory == "2Gi"
-        # Requests should use default reservations (0.5 CPU, 512M)
+        # Requests are auto-generated at 50% CPU, 80% memory from limits
         assert result.requests is not None
-        assert result.requests.cpu == "0.5"
-        assert result.requests.memory == "512Mi"
+        assert result.requests.cpu == "1000m"  # 50% of 2 cores = 1 core = 1000m
+        assert result.requests.memory == "1638Mi"  # 80% of 2Gi ≈ 1638Mi
 
     def test_generate_resources_returns_none_when_empty(self):
         """Test returns None when no resources specified."""
@@ -217,8 +218,8 @@ class TestResourcesGeneration:
 
         result = generate_resources_values(resources_config)
 
-        # Should have default resources
-        assert result is not None
+        # No limits or reservations = no resources generated
+        assert result is None
 
 
 class TestSecurityContextGeneration:

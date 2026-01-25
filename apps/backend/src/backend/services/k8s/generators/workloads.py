@@ -64,7 +64,11 @@ def generate_resources_values(
             resources.limits = limits
 
     # Handle requests (from "reservations" in Docker Compose)
-    if resources_config.reservations:
+    # Check if reservations has actual values (not just an empty ResourceConfig)
+    has_reservations = resources_config.reservations and (
+        resources_config.reservations.cpus or resources_config.reservations.memory
+    )
+    if has_reservations:
         requests = ResourceRequirements()
 
         if resources_config.reservations.cpus:
@@ -75,7 +79,7 @@ def generate_resources_values(
         if requests.cpu or requests.memory:
             resources.requests = requests
 
-    # Auto-generate requests if only limits are specified
+    # Auto-generate requests if only limits are specified (no explicit reservations)
     elif resources.limits:
         requests = ResourceRequirements()
 

@@ -108,19 +108,25 @@ class TestCLIConfig:
         with pytest.raises(ValueError, match="No active workspace"):
             _ = config.active_workspace_id
 
-    def test_active_workspace_from_env_var(self, mock_config_dir, monkeypatch):
-        """Test active workspace from environment variable"""
-        monkeypatch.setenv("LAZYCLOUD_WORKSPACE_ID", "ws_env")
+    def test_active_workspace_from_env_var(self, mock_config_dir, monkeypatch, mocker):
+        """Test active workspace from environment variable (resolves name to ID)"""
+        monkeypatch.setenv("LAZYCLOUD_WORKSPACE", "my-workspace")
+
+        # Mock the API call that resolves workspace name to ID
+        # The api is lazily imported inside the property from cli.api
+        mock_api = mocker.patch("cli.api.api")
+        mock_api.workspaces.get_workspace_by_name.return_value = {"id": "ws_env"}
 
         config = CLIConfig()
         assert config.active_workspace_id == "ws_env"
+        mock_api.workspaces.get_workspace_by_name.assert_called_once_with("my-workspace")
 
     def test_active_workspace_file_priority_over_env(
         self, mock_config_file, monkeypatch
     ):
         """Test that stored workspace takes priority over env var"""
         mock_config_file(workspace_id="ws_file")
-        monkeypatch.setenv("LAZYCLOUD_WORKSPACE_ID", "ws_env")
+        monkeypatch.setenv("LAZYCLOUD_WORKSPACE", "my-workspace")
 
         config = CLIConfig()
         assert config.active_workspace_id == "ws_file"
