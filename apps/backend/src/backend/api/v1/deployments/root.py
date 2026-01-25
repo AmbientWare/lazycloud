@@ -8,6 +8,7 @@ from api_requests.deployments import (
 )
 from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
+from models.billing import UsageUnits
 from models.deployments import DeploymentStates
 from models.statuses import TaskStatus
 from responses.deployments import (
@@ -37,6 +38,7 @@ from backend.services.k8s import create_ns_name, create_release_name
 from backend.services.k8s.generators.networking import compute_service_endpoints
 from backend.services.k8s.helm_manager import HelmManager
 from backend.services.k8s.status_watcher import StatusWatcher
+from backend.services.storage_sizes import get_storage_sizes_cached
 from backend.tasks.client import (
     run_deploy_compose,
     run_destroy_compose,
@@ -119,6 +121,14 @@ async def get_deployment_status(
     )
 
     deployment_status = await watcher.get_deployment_status()
+
+    # Enrich volume summaries with storage sizes from billing data (cached)
+    if deployment_status.volumes:
+        storage_sizes = await get_storage_sizes_cached(deployment.id)
+        for volume in deployment_status.volumes:
+            if volume.name in storage_sizes:
+                _, size_gb = storage_sizes[volume.name]
+                volume.size = UsageUnits.format_size_gb(size_gb)
 
     return DeploymentStatusResponse(status=deployment_status)
 
