@@ -1,8 +1,13 @@
 """Billing and pricing API endpoints."""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, HTTPException
 from models.billing import METER_PRICES_CENTS, MeterNames
 from pydantic import BaseModel
+from responses.billing import BillingCycleResponse
+
+from backend.api.security import get_current_active_user
+from backend.database.users import UserPydantic
+from backend.services import get_polar_service
 
 billing_router = APIRouter(prefix="/billing", tags=["billing"])
 
@@ -32,3 +37,18 @@ async def get_meter_pricing() -> MeterPricingResponse:
         build_minutes=METER_PRICES_CENTS[MeterNames.BUILD_MINUTES],
         public_endpoints=METER_PRICES_CENTS[MeterNames.PUBLIC_ENDPOINTS],
     )
+
+
+@billing_router.get("/cycle", response_model=BillingCycleResponse)
+async def get_billing_cycle(
+    current_user: UserPydantic = Depends(get_current_active_user),
+) -> BillingCycleResponse:
+    """Get the current billing cycle dates for the authenticated user."""
+    polar_service = get_polar_service()
+
+    try:
+        return await polar_service.subscriptions.get_billing_cycle(
+            external_customer_id=current_user.workos_id
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
