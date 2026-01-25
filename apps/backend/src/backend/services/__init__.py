@@ -2,6 +2,7 @@ from functools import lru_cache
 
 from backend.config import app_config
 from backend.services.aws_metrics import AWSMetricsService
+from backend.services.cache import CacheService
 from backend.services.cloudflare import CloudflareService
 from backend.services.cost_breakdown_service import CostBreakdownService
 from backend.services.depot_service import DepotService
@@ -88,8 +89,15 @@ def get_aws_metrics_service() -> AWSMetricsService:
     )
 
 
+@lru_cache(maxsize=1)
+def get_cache_service() -> CacheService:
+    """Get the singleton cache service instance."""
+    return CacheService(redis_url=app_config.REDIS_URL)
+
+
 __all__ = [
     "AWSMetricsService",
+    "CacheService",
     "DepotService",
     "CloudflareService",
     "CostBreakdownService",
@@ -100,6 +108,7 @@ __all__ = [
     "UserOnboardingService",
     "UsageService",
     "get_aws_metrics_service",
+    "get_cache_service",
     "get_depot_service",
     "get_cloudflare_service",
     "get_cost_breakdown_service",

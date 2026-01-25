@@ -116,6 +116,15 @@ class UsageUnits:
         price_dollars = UsageUnits.get_price_dollars(meter)
         return usage * price_dollars
 
+    @staticmethod
+    def format_size_gb(size_gb: float) -> str:
+        """Format size in GB to a human-readable string."""
+        if size_gb >= 1.0:
+            return f"{size_gb:.1f} GB"
+        else:
+            size_mb = size_gb * 1024
+            return f"{size_mb:.0f} MB"
+
 
 METER_METADATA_FIELDS = {
     MeterNames.CPU_USAGE: "cpu_core_hours",

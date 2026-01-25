@@ -330,8 +330,15 @@ export function DeploymentCard({ deployment }: { deployment: DeploymentWithStatu
                         <span className="min-w-0 flex-1 truncate text-sm font-medium">
                           {volume.name}
                         </span>
-                        <div className="text-muted-foreground shrink-0 text-xs capitalize">
-                          {volume.storage_type.toLowerCase()}
+                        <div className="flex shrink-0 items-center gap-2">
+                          {volume.size && (
+                            <span className="text-muted-foreground text-xs">
+                              {volume.size}
+                            </span>
+                          )}
+                          <span className="text-muted-foreground text-xs capitalize">
+                            {volume.storage_type.toLowerCase()}
+                          </span>
                         </div>
                       </div>
                     </div>

@@ -118,6 +118,7 @@ export const VolumeStatusSummarySchema = z.object({
   name: z.string(),
   status: z.string(),
   storage_type: z.string(),
+  size: z.string().nullable().optional(),
 });
 
 export const DeploymentStatusSchema = z.object({

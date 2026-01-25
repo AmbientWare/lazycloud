@@ -2,6 +2,7 @@ import uuid
 from datetime import date, datetime, timezone
 from enum import StrEnum
 
+from models.billing import UsageCollectionConfig
 from models.storage import STORAGE_CLASS_EBS, STORAGE_CLASS_EFS
 from sqlalchemy import (
     UUID,
@@ -520,3 +521,57 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecordPydant
             endpoint_hours,
             build_minutes,
         )
+
+    async def get_latest_storage_sizes(
+        self,
+        deployment_id: str,
+    ) -> dict[str, tuple[str, float]]:
+        """Get latest storage sizes for a deployment from breakdown events.
+
+        Returns a dict mapping volume name to (storage_class, size_gb).
+        Size is calculated from gb_hours / interval_hours where interval is 15 minutes.
+        For EBS: this is the provisioned size.
+        For EFS: this is the actual used size from CloudWatch.
+        """
+        # Get the most recent interval for this deployment
+        latest_interval_query = (
+            select(func.max(UsageBreakdownEventTable.interval_start))
+            .where(UsageBreakdownEventTable.deployment_id == deployment_id)
+            .where(
+                UsageBreakdownEventTable.breakdown_type == BreakdownType.STORAGE.value
+            )
+        )
+        latest_interval = (await self._session.execute(latest_interval_query)).scalar()
+
+        if not latest_interval:
+            return {}
+
+        # Get all storage events from that interval
+        query = (
+            select(
+                UsageBreakdownEventTable.resource_name,
+                UsageBreakdownEventTable.storage_class,
+                UsageBreakdownEventTable.gb_hours,
+            )
+            .where(UsageBreakdownEventTable.deployment_id == deployment_id)
+            .where(
+                UsageBreakdownEventTable.breakdown_type == BreakdownType.STORAGE.value
+            )
+            .where(UsageBreakdownEventTable.interval_start == latest_interval)
+        )
+
+        result = await self._session.execute(query)
+
+        # Convert gb_hours back to size_gb
+        # gb_hours = size_gb * interval_hours, so size_gb = gb_hours / interval_hours
+        interval_hours = UsageCollectionConfig.COLLECTION_INTERVAL.value / 60.0
+
+        storage_sizes: dict[str, tuple[str, float]] = {}
+        for row in result.all():
+            volume_name = row[0]
+            storage_class = row[1] or STORAGE_CLASS_EBS
+            gb_hours = row[2] or 0.0
+            size_gb = gb_hours / interval_hours if interval_hours > 0 else 0.0
+            storage_sizes[volume_name] = (storage_class, size_gb)
+
+        return storage_sizes
