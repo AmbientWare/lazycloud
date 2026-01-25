@@ -73,7 +73,7 @@ export default function Hero() {
             {!isSignedIn ? (
               <>
                 <StyledButton variant="primary" size="lg" asChild>
-                  <Link href="/request-access">
+                  <Link href="/login">
                     Deploy Now
                     <ArrowRight className="ml-2 h-4 w-4 transition-transform group-hover:translate-x-1" />
                   </Link>

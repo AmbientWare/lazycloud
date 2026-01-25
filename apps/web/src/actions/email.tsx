@@ -44,24 +44,6 @@ async function checkEmailRateLimit(email: string): Promise<{ allowed: boolean; m
   return { allowed: true };
 }
 
-export async function requestAccessEmail(email: string) {
-  const result = emailSchema.safeParse(email);
-  if (!result.success) {
-    throw new Error(result.error.issues[0]?.message ?? "Invalid email address");
-  }
-
-  const rateLimit = await checkEmailRateLimit(email);
-  if (!rateLimit.allowed) {
-    throw new Error(rateLimit.message ?? "Rate limit exceeded");
-  }
-
-  const title = "The following user has requested access to LazyCloud";
-  const body = `Email: ${email}`;
-  const subject = "ACCESS REQUESTED";
-
-  return resendService.emailSupport(subject, title, body);
-}
-
 export async function sendSupportEmail(email: string, description: string) {
   const result = supportEmailSchema.safeParse({ email, description });
   if (!result.success) {
