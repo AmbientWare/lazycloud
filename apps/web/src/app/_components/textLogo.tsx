@@ -4,18 +4,12 @@ import { motion } from "framer-motion";
 import Link from "next/link";
 import Image from "next/image";
 import { useState } from "react";
-import { LANDING_ROUTES, SUBSCRIBE_ROUTES, USER_HOME } from "@/lib/constants";
-import { usePathname } from "next/navigation";
+import { USER_HOME } from "@/lib/constants";
+import { useUserContext } from "@/contexts/UserContext";
 
 export default function TextLogo() {
   const [imageLoaded, setImageLoaded] = useState(false);
-  const pathname = usePathname();
-
-  const isLandingRoute = LANDING_ROUTES.some(
-    (route) => pathname === route || pathname.startsWith(route + "/"),
-  );
-  const isDocsRoute = pathname === "/docs" || pathname.startsWith("/docs/");
-  const isSubscribeRoute = SUBSCRIBE_ROUTES.includes(pathname);
+  const { isSignedIn } = useUserContext();
 
   return (
     <motion.div
@@ -24,7 +18,7 @@ export default function TextLogo() {
     >
       <Link
         className="text-2xl font-bold hover:cursor-pointer"
-        href={(isLandingRoute && !isDocsRoute) || isSubscribeRoute ? "/" : USER_HOME}
+        href={isSignedIn ? USER_HOME : "/"}
       >
         <motion.div
           className="flex items-center gap-2"

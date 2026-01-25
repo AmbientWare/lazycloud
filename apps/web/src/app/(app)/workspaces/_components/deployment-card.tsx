@@ -123,6 +123,14 @@ export function DeploymentCard({ deployment }: { deployment: DeploymentWithStatu
     }
   };
 
+  const getServiceStatusDisplay = (service: ServiceStatusSummary) => {
+    const hasHealthCheck = service.healthcheck?.livenessProbe || service.healthcheck?.readinessProbe;
+    if (service.status.toLowerCase() === "running" && !hasHealthCheck) {
+      return "Running (no health check)";
+    }
+    return service.status;
+  };
+
   if (isLoading) {
     return (
       <StyledAccordionItem value={deployment.id}>
@@ -249,7 +257,7 @@ export function DeploymentCard({ deployment }: { deployment: DeploymentWithStatu
                             variant="outline"
                             className={`shrink-0 text-xs ${getServiceStatusColor(service.status)}`}
                           >
-                            {service.status}
+                            {getServiceStatusDisplay(service)}
                           </Badge>
                           <span className="truncate text-sm font-medium">
                             {service.name}

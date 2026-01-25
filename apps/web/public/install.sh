@@ -120,20 +120,24 @@ install_depot() {
     chmod +x "$INSTALL_DIR/depot"
 }
 
+detect_shell_rc() {
+    SHELL_NAME=$(basename "$SHELL")
+    case "$SHELL_NAME" in
+        bash)
+            [ -f "$HOME/.bashrc" ] && echo "$HOME/.bashrc" || echo "$HOME/.bash_profile"
+            ;;
+        zsh) echo "$HOME/.zshrc" ;;
+        fish) echo "$HOME/.config/fish/config.fish" ;;
+        *) echo "$HOME/.profile" ;;
+    esac
+}
+
 setup_path() {
     case ":$PATH:" in
         *":$INSTALL_DIR:"*) return ;;
     esac
 
-    SHELL_NAME=$(basename "$SHELL")
-    case "$SHELL_NAME" in
-        bash)
-            [ -f "$HOME/.bashrc" ] && SHELL_RC="$HOME/.bashrc" || SHELL_RC="$HOME/.bash_profile"
-            ;;
-        zsh) SHELL_RC="$HOME/.zshrc" ;;
-        fish) SHELL_RC="$HOME/.config/fish/config.fish" ;;
-        *) SHELL_RC="$HOME/.profile" ;;
-    esac
+    SHELL_RC=$(detect_shell_rc)
 
     if [ -f "$SHELL_RC" ] && ! grep -q "$INSTALL_DIR" "$SHELL_RC" 2>/dev/null; then
         echo "" >> "$SHELL_RC"
@@ -154,12 +158,11 @@ main() {
     install_depot
     setup_path
 
+    SHELL_RC=$(detect_shell_rc)
+
     success "Installation complete!"
     echo ""
-    echo "To get started:"
-    echo "  1. Restart your shell or run: source ~/.bashrc"
-    echo "  2. Run: lazycloud login"
-    echo "  3. Run: lazycloud init"
+    echo "Restart your shell or run: source $SHELL_RC"
     echo ""
 }
 

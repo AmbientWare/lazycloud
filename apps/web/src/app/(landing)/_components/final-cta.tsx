@@ -58,12 +58,6 @@ export default function FinalCTA() {
                     <ArrowRight className="ml-2 h-4 w-4 transition-transform group-hover:translate-x-1" />
                   </Link>
                 </StyledButton>
-                <StyledButton variant="outline" size="lg" asChild>
-                  <Link href="/support">
-                    <Calendar className="mr-2 h-4 w-4" />
-                    Schedule Demo
-                  </Link>
-                </StyledButton>
               </>
             ) : (
               <StyledButton variant="primary" size="lg" asChild>
