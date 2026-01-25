@@ -13,8 +13,8 @@ feedback_router = APIRouter(prefix="/feedback", tags=["feedback"])
 @feedback_router.post("")
 @limiter.limit("5/minute")
 async def submit_feedback(
-    request_obj: Request,
-    request: FeedbackRequest,
+    request: Request,
+    feedback: FeedbackRequest,
     current_user: UserPydantic = Depends(get_current_active_user),
 ) -> FeedbackResponse:
     """Submit user feedback (bug report, feature request, or other)."""
@@ -22,9 +22,9 @@ async def submit_feedback(
         email_service.send_feedback(
             user_email=current_user.email,
             user_name=current_user.name,
-            feedback_type=request.feedback_type,
-            message=request.message,
-            source=request.source,
+            feedback_type=feedback.feedback_type,
+            message=feedback.message,
+            source=feedback.source,
         )
         return FeedbackResponse(success=True, message="Feedback submitted successfully")
 
