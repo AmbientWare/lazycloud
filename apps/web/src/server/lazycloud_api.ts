@@ -13,6 +13,7 @@ import type {
   WorkspaceCostBreakdownResponse,
   MeterPricingResponse,
 } from "@/interfaces/usage";
+import type { BillingCycleResponse } from "@/interfaces/billing";
 import type { UserFeaturesResponse } from "@/interfaces/users";
 
 class LazyCloudAPIClass {
@@ -404,6 +405,10 @@ class LazyCloudAPIClass {
 
   async getMeterPricing(): Promise<MeterPricingResponse> {
     return await this.get<MeterPricingResponse>("/billing/meter-pricing");
+  }
+
+  async getBillingCycle(accessToken: string): Promise<BillingCycleResponse> {
+    return await this.get<BillingCycleResponse>("/billing/cycle", { accessToken });
   }
 
   async acceptInvitation(

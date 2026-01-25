@@ -8,6 +8,7 @@ from .customers import PolarCustomersModule
 from .meters import PolarMetersModule
 from .pricing import PolarPricingModule
 from .products import PolarProductsModule
+from .subscriptions import PolarSubscriptionsModule
 from .usage import PolarUsageModule
 
 
@@ -51,4 +52,7 @@ class PolarService:
             client=self.client, enabled=self.enabled, products_module=self.products
         )
         self.cost_breakdown = PolarCostBreakdownModule(pricing_module=self.pricing)
+        self.subscriptions = PolarSubscriptionsModule(
+            client=self.client, enabled=self.enabled
+        )
         self.usage = PolarUsageModule(client=self.client, enabled=self.enabled)

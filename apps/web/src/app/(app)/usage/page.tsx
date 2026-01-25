@@ -9,6 +9,7 @@ import {
   getAggregatedUsage,
   getAggregatedDailyUsage,
 } from "@/actions/usage";
+import { getBillingCycle } from "@/actions/billing";
 import { UsageOverviewWithChart } from "./_components/usage-overview-with-chart";
 import { WorkspaceUsageCard } from "./_components/workspace-usage";
 import { SectionDivider } from "@/components/shared/section-divider";
@@ -51,6 +52,8 @@ export default function UsagePage() {
   const [startDateISO, setStartDateISO] = useState<string>(defaultDates.start);
   const [endDateISO, setEndDateISO] = useState<string>(defaultDates.end);
   const [presetId, setPresetId] = useState<string>("this-month");
+  const [billingCycle, setBillingCycle] = useState<{ start: Date; end: Date } | null>(null);
+  const [billingCycleLoaded, setBillingCycleLoaded] = useState(false);
   const [timezone] = useState<string>(() => {
     try {
       return Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -62,8 +65,31 @@ export default function UsagePage() {
   const [aggregatedDailyUsage, setAggregatedDailyUsage] = useState<AggregatedDailyUsageResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Fetch data when dates or timezone change
+  // Fetch billing cycle on mount and set as default dates
   useEffect(() => {
+    const fetchBillingCycle = async () => {
+      try {
+        const cycle = await getBillingCycle();
+        const start = new Date(cycle.current_period_start);
+        const end = new Date(cycle.current_period_end);
+        setBillingCycle({ start, end });
+        // Set billing cycle as default dates
+        setStartDateISO(dateToUrlString(start, false));
+        setEndDateISO(dateToUrlString(end, true));
+        setPresetId("billing-cycle");
+      } catch {
+        // If billing cycle fetch fails, keep calendar month defaults
+      } finally {
+        setBillingCycleLoaded(true);
+      }
+    };
+    void fetchBillingCycle();
+  }, []);
+
+  // Fetch usage data when dates or timezone change (only after billing cycle loaded)
+  useEffect(() => {
+    if (!billingCycleLoaded) return;
+
     const fetchData = async () => {
       setIsLoading(true);
       try {
@@ -81,7 +107,7 @@ export default function UsagePage() {
     };
 
     void fetchData();
-  }, [startDateISO, endDateISO, timezone]);
+  }, [startDateISO, endDateISO, timezone, billingCycleLoaded]);
 
   const handleDateChange = (start: string, end: string, newPresetId?: string) => {
     setStartDateISO(start);
@@ -131,6 +157,7 @@ export default function UsagePage() {
             startDate={startDateISO}
             endDate={endDateISO}
             presetId={presetId}
+            billingCycle={billingCycle}
             onDateChange={handleDateChange}
           />
         </div>

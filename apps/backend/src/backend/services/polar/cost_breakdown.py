@@ -1,6 +1,7 @@
 """Service for calculating cost breakdowns from usage data."""
 
 from loguru import logger
+from models.billing import UsageUnits
 from models.storage import STORAGE_CLASS_EBS, STORAGE_CLASS_EFS
 from pydantic import BaseModel
 from responses.usage import (
@@ -139,8 +140,8 @@ class PolarCostBreakdownModule:
         breakdowns = []
         for service in service_usage:
             # Convert seconds to hours
-            cpu_core_hours = service.cpu_core_seconds / 3600.0
-            memory_gb_hours = service.memory_gb_seconds / 3600.0
+            cpu_core_hours = UsageUnits.seconds_to_hours(service.cpu_core_seconds)
+            memory_gb_hours = UsageUnits.seconds_to_hours(service.memory_gb_seconds)
 
             cpu_cost = cpu_core_hours * prices.cpu_price_per_unit
             memory_cost = memory_gb_hours * prices.memory_price_per_unit

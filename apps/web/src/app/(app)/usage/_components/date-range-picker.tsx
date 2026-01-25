@@ -21,6 +21,7 @@ interface DateRangePickerProps {
   startDate: string;
   endDate: string;
   presetId?: string;
+  billingCycle?: { start: Date; end: Date } | null;
   onDateChange: (start: string, end: string, presetId?: string) => void;
 }
 
@@ -105,9 +106,25 @@ export function DateRangePicker({
   startDate,
   endDate,
   presetId,
+  billingCycle,
   onDateChange,
 }: DateRangePickerProps) {
   const [open, setOpen] = useState(false);
+
+  // Build presets list with billing cycle at the top if available
+  const allPresets = billingCycle
+    ? [
+        {
+          id: "billing-cycle",
+          label: `${format(billingCycle.start, "MMM d")} - ${format(billingCycle.end, "MMM d")}`,
+          getValue: () => ({
+            from: billingCycle.start,
+            to: billingCycle.end,
+          }),
+        } as Preset,
+        ...presets,
+      ]
+    : presets;
 
   // Parse UTC ISO string to Date for display
   const parseDate = (dateString?: string): Date => {
@@ -132,13 +149,13 @@ export function DateRangePicker({
   const findMatchingPreset = (): Preset | undefined => {
     // If presetId is provided, use it directly
     if (presetId) {
-      return presets.find((p) => p.id === presetId);
+      return allPresets.find((p) => p.id === presetId);
     }
 
     // Otherwise, try to match by date
     const currentFromNorm = normalizeDate(currentFrom);
     const currentToNorm = normalizeDate(currentTo);
-    const dynamicEndIds = new Set(["this-month", "last-7-days", "last-30-days", "last-90-days"]);
+    const dynamicEndIds = new Set(["this-month", "last-7-days", "last-30-days", "last-90-days", "billing-cycle"]);
 
     const checkPreset = (preset: Preset): boolean => {
       const range = preset.getValue();
@@ -151,14 +168,20 @@ export function DateRangePicker({
       return presetFromNorm === currentFromNorm && presetToNorm === currentToNorm;
     };
 
-    const thisMonth = presets.find((p) => p.id === "this-month");
+    // Check billing cycle first if available
+    const billingCyclePreset = allPresets.find((p) => p.id === "billing-cycle");
+    if (billingCyclePreset && checkPreset(billingCyclePreset)) {
+      return billingCyclePreset;
+    }
+
+    const thisMonth = allPresets.find((p) => p.id === "this-month");
     if (thisMonth && checkPreset(thisMonth)) {
       return thisMonth;
     }
 
-    for (let i = presets.length - 1; i >= 0; i--) {
-      const preset = presets[i];
-      if (preset && preset.id !== "this-month" && checkPreset(preset)) {
+    for (let i = allPresets.length - 1; i >= 0; i--) {
+      const preset = allPresets[i];
+      if (preset && preset.id !== "this-month" && preset.id !== "billing-cycle" && checkPreset(preset)) {
         return preset;
       }
     }
@@ -200,7 +223,7 @@ export function DateRangePicker({
         <Command>
           <CommandList>
             <CommandGroup>
-              {presets.map((preset) => {
+              {allPresets.map((preset) => {
                 const isSelected = selectedPreset?.id === preset.id;
 
                 return (
