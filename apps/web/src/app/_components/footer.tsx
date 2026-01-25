@@ -47,7 +47,7 @@ const Footer = () => {
                 </li>
                 <li>
                   <Link
-                    href="/request-access"
+                    href="/login"
                     className="text-sm text-muted-foreground transition-colors duration-200 hover:text-foreground"
                   >
                     Get Started

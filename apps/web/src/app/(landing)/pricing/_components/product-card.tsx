@@ -45,7 +45,7 @@ export function ProductCard({ product, isEnterprise, summary = false }: { produc
     e.preventDefault();
 
     if (!user) {
-      router.push("/request-access");
+      router.push("/login");
       return;
     }
 
