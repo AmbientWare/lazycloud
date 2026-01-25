@@ -1,4 +1,4 @@
-from models.statuses import DeploymentStatus, VolumeStatus
+from models.statuses import DeploymentStatus, VolumeStatusSummary
 from models.storage import StorageType
 from textual.widgets import DataTable
 
@@ -17,9 +17,9 @@ class VolumesTable(DataTable):
         self.show_cursor = False
         self.zebra_stripes = True
         self._column_keys: list = []
-        self._column_keys = self.add_columns("Name", "Status", "Type")
+        self._column_keys = self.add_columns("Name", "Status", "Type", "Size")
 
-    def _build_row_data(self, volume: VolumeStatus) -> tuple[str, str, str]:
+    def _build_row_data(self, volume: VolumeStatusSummary) -> tuple[str, str, str, str]:
         """Build the display values for a volume row."""
         color = get_status_color_from_string(volume.status)
         status_text = f"[{color}]{volume.status.upper()}[/{color}]"
@@ -30,7 +30,9 @@ class VolumesTable(DataTable):
             else str(volume.storage_type)
         )
 
-        return (volume.name, status_text, storage_text)
+        size_text = volume.size or "-"
+
+        return (volume.name, status_text, storage_text, size_text)
 
     def update_volumes(self, deployment: DeploymentStatus) -> None:
         """Update the table with volume data using delta updates to prevent flicker."""

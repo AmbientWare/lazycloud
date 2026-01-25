@@ -58,6 +58,7 @@ class VolumeStatusSummary(BaseModel):
     name: str
     status: str
     storage_type: StorageType = StorageType.STANDARD
+    size: str | None = None
 
 
 class NetworkStatus(BaseModel):
