@@ -31,3 +31,14 @@ export async function getUserSubscriptionTier(): Promise<string | undefined> {
   }
 }
 
+export async function hasActiveSubscription(): Promise<boolean> {
+  const accessToken = await getAuthToken();
+  try {
+    const customerState = await polarService.getCustomerStateExternal(accessToken);
+    return (customerState?.activeSubscriptions?.length ?? 0) > 0;
+  } catch {
+    // On error, fail open to avoid blocking users
+    return true;
+  }
+}
+

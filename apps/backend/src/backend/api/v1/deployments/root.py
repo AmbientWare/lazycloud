@@ -22,9 +22,10 @@ from responses.tasks import DeploymentTaskStatusResponse
 from sqlalchemy.exc import IntegrityError
 
 from backend.api.dependencies import (
-    check_deployment_limit,
+    check_deployment_limit_for_owner,
     get_deployment_with_access,
-    get_deployment_with_admin_access,
+    get_deployment_with_active_subscription,
+    get_owner_with_active_subscription,
     require_workspace_member,
 )
 from backend.api.security import get_current_active_user
@@ -163,13 +164,16 @@ async def create_deployment(
         )
         is_update = existing_deployment is not None
 
+    # Get workspace owner and verify active subscription
+    owner_user = await get_owner_with_active_subscription(
+        workspace_id=request.workspace_id,
+        current_user=current_user,
+        db=db,
+    )
+
     # Only check deployment limit for new deployments (not updates)
     if not is_update:
-        await check_deployment_limit(
-            workspace_id=request.workspace_id,
-            current_user=current_user,
-            db=db,
-        )
+        await check_deployment_limit_for_owner(owner_user)
 
     # Create a temporary deployment object for basic validation
     temp_deployment = ComposeDeploymentPydantic(
@@ -323,8 +327,9 @@ async def create_deployment(
 )
 async def deploy_deployment(
     request: DeploymentRunRequest,
-    deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_admin_access),
-    _: UserPydantic = Depends(get_current_active_user),
+    deployment: ComposeDeploymentPydantic = Depends(
+        get_deployment_with_active_subscription
+    ),
     db: Database = Depends(get_db),
 ) -> DeploymentTaskStatusResponse:
     """Trigger deployment of a deployment record."""
@@ -436,8 +441,9 @@ async def deploy_deployment(
     "/{deployment_id}", response_model=DeploymentTaskStatusResponse
 )
 async def delete_deployment(
-    deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_admin_access),
-    _: UserPydantic = Depends(get_current_active_user),
+    deployment: ComposeDeploymentPydantic = Depends(
+        get_deployment_with_active_subscription
+    ),
     db: Database = Depends(get_db),
 ) -> DeploymentTaskStatusResponse:
     """Delete a deployment."""
@@ -503,8 +509,9 @@ async def get_deployment_history(
 )
 async def rollback_deployment(
     request: RollbackRequest,
-    deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_admin_access),
-    _: UserPydantic = Depends(get_current_active_user),
+    deployment: ComposeDeploymentPydantic = Depends(
+        get_deployment_with_active_subscription
+    ),
     db: Database = Depends(get_db),
 ) -> DeploymentTaskStatusResponse:
     """Rollback a deployment to a previous Helm revision."""
