@@ -69,6 +69,14 @@ function formatProbeType(probe: ProbeConfig | null | undefined): string {
   return "Configured";
 }
 
+function getStatusDisplay(service: ServiceStatusSummary): string {
+  const hasHealthCheck = service.healthcheck?.livenessProbe || service.healthcheck?.readinessProbe;
+  if (service.status.toLowerCase() === "running" && !hasHealthCheck) {
+    return "Running (no health check)";
+  }
+  return service.status;
+}
+
 function SectionCard({
   icon: Icon,
   title,
@@ -155,9 +163,9 @@ export function ServiceDetailsSheet({
             <div className="flex items-center gap-3">
               <Badge
                 variant="outline"
-                className={`text-xs capitalize ${getStatusColor(service.status)}`}
+                className={`text-xs ${getStatusColor(service.status)}`}
               >
-                {service.status}
+                {getStatusDisplay(service)}
               </Badge>
               <DrawerTitle>{service.name}</DrawerTitle>
             </div>

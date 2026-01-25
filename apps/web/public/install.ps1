@@ -122,10 +122,7 @@ function Main {
 
     Write-Success "Installation complete!"
     Write-Host ""
-    Write-Host "To get started:"
-    Write-Host "  1. Restart your terminal"
-    Write-Host "  2. Run: lazycloud login"
-    Write-Host "  3. Run: lazycloud init"
+    Write-Host "Restart your terminal to use lazycloud."
     Write-Host ""
 }
 

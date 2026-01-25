@@ -150,6 +150,16 @@ class ServiceDetailsContainer(Widget):
         deploy_phase = service.get_deploy_phase()
         status_color = get_status_color(deploy_phase)
 
+        # Check if service has health checks configured
+        has_health_check = service.healthcheck and (
+            service.healthcheck.livenessProbe or service.healthcheck.readinessProbe
+        )
+
+        # Build status display text
+        status_text = deploy_phase.upper()
+        if deploy_phase == StatusPhase.RUNNING and not has_health_check:
+            status_text = "RUNNING (no health check)"
+
         if service.workload_type == WorkloadType.JOB:
             if deploy_phase == StatusPhase.EXITED:
                 completion_text = "Completion:   [green]Completed[/green]"
@@ -166,7 +176,7 @@ class ServiceDetailsContainer(Widget):
 
         content = [
             f"Name:         {service.name}",
-            f"Status:       [{status_color}]{deploy_phase.upper()}[/{status_color}]",
+            f"Status:       [{status_color}]{status_text}[/{status_color}]",
             f"Image:        {format_image_name(service.image)}",
             completion_text,
         ]

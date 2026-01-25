@@ -25,7 +25,7 @@ const DEPLOYMENTS_HEADER = {
   titleSize: "xl" as const,
 };
 
-const STATUS_POLL_INTERVAL_MS = 2000;
+const STATUS_POLL_INTERVAL_MS = 5000;
 
 export function WorkspaceOverview({ workspaceId }: WorkspaceOverviewProps) {
   const [deployments, setDeployments] = useState<DeploymentWithStatus[]>([]);
