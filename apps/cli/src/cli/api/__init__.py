@@ -1,5 +1,6 @@
 from cli.api.auth import AuthAPI
 from cli.api.base import APIError
+from cli.api.billing import BillingAPI
 from cli.api.builds import BuildsAPI
 from cli.api.deployments import DeploymentsAPI
 from cli.api.diff import DiffAPI
@@ -19,6 +20,7 @@ from cli.api.workspaces import WorkspacesAPI
 class API:
     def __init__(self):
         self.auth = AuthAPI()
+        self.billing = BillingAPI()
         self.users = UsersAPI()
         self.tasks = TasksAPI()
         self.deployments = DeploymentsAPI()

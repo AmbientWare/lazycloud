@@ -2,7 +2,7 @@ import asyncio
 
 from cachetools import TTLCache
 from loguru import logger
-from models.billing import MeterNames
+from models.billing import MeterNames, UsageUnits
 from polar_sdk import Polar
 from pydantic import BaseModel
 
@@ -134,7 +134,7 @@ class PolarPricingModule:
                     continue
 
                 # Convert from cents to dollars
-                price_per_unit = float(unit_amount) / 100.0
+                price_per_unit = UsageUnits.cents_to_dollars(float(unit_amount))
                 meter_prices_dict[meter.name] = price_per_unit
 
         # Verify all required meters are present

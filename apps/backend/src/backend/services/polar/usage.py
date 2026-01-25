@@ -1,9 +1,9 @@
 from loguru import logger
 from models.billing import (
     METER_METADATA_FIELDS,
-    SECONDS_PER_HOUR,
     USAGE_EVENT_NAME,
     MeterNames,
+    UsageUnits,
 )
 from polar_sdk import Polar
 from polar_sdk.models import EventCreateExternalCustomer, EventsIngest
@@ -70,8 +70,8 @@ class PolarUsageModule:
             )
             return False
 
-        cpu_core_hours = record.cpu_core_seconds / SECONDS_PER_HOUR
-        memory_gb_hours = record.memory_gb_seconds / SECONDS_PER_HOUR
+        cpu_core_hours = UsageUnits.seconds_to_hours(record.cpu_core_seconds)
+        memory_gb_hours = UsageUnits.seconds_to_hours(record.memory_gb_seconds)
 
         usage_metadata = {
             "workspace_id": str(record.workspace_id),

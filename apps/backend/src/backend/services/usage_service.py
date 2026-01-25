@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from loguru import logger
-from models.billing import SECONDS_PER_HOUR
+from models.billing import UsageUnits
 from responses.usage import (
     AggregatedDailyUsageResponse,
     AggregatedUsageResponse,
@@ -66,8 +66,8 @@ class UsageService:
         total_endpoint_hours = sum(r.public_endpoint_hours for r in daily_records)
 
         return UsageMetrics(
-            cpu_core_hours=total_cpu_seconds / SECONDS_PER_HOUR,
-            memory_gb_hours=total_memory_seconds / SECONDS_PER_HOUR,
+            cpu_core_hours=UsageUnits.seconds_to_hours(total_cpu_seconds),
+            memory_gb_hours=UsageUnits.seconds_to_hours(total_memory_seconds),
             standard_gb_hours=total_standard_hours,
             shared_gb_hours=total_shared_hours,
             build_minutes=total_build_minutes,
@@ -111,8 +111,8 @@ class UsageService:
             )
 
         metrics = UsageMetrics(
-            cpu_core_hours=cpu / SECONDS_PER_HOUR,
-            memory_gb_hours=memory / SECONDS_PER_HOUR,
+            cpu_core_hours=UsageUnits.seconds_to_hours(cpu),
+            memory_gb_hours=UsageUnits.seconds_to_hours(memory),
             standard_gb_hours=standard,
             shared_gb_hours=shared,
             build_minutes=build,
@@ -359,8 +359,8 @@ class UsageService:
     ) -> tuple[list[WorkspaceUsageSummary], UsageMetrics]:
         """Build workspace summaries and calculate totals."""
         workspace_summaries: list[WorkspaceUsageSummary] = []
-        total_cpu_seconds = 0.0
-        total_memory_seconds = 0.0
+        total_cpu_hours = 0.0
+        total_memory_hours = 0.0
         total_standard_hours = 0.0
         total_shared_hours = 0.0
         total_build_minutes = 0.0
@@ -418,16 +418,16 @@ class UsageService:
                 )
             )
 
-            total_cpu_seconds += usage.cpu_core_hours * SECONDS_PER_HOUR
-            total_memory_seconds += usage.memory_gb_hours * SECONDS_PER_HOUR
+            total_cpu_hours += usage.cpu_core_hours
+            total_memory_hours += usage.memory_gb_hours
             total_standard_hours += usage.standard_gb_hours
             total_shared_hours += usage.shared_gb_hours
             total_build_minutes += usage.build_minutes
             total_endpoint_hours += usage.public_endpoint_hours
 
         total_usage = UsageMetrics(
-            cpu_core_hours=total_cpu_seconds / SECONDS_PER_HOUR,
-            memory_gb_hours=total_memory_seconds / SECONDS_PER_HOUR,
+            cpu_core_hours=total_cpu_hours,
+            memory_gb_hours=total_memory_hours,
             standard_gb_hours=total_standard_hours,
             shared_gb_hours=total_shared_hours,
             build_minutes=total_build_minutes,
@@ -464,11 +464,11 @@ class UsageService:
                     public_endpoint_hours=0.0,
                 )
 
-            daily_data[day_key].cpu_core_hours += (
-                record.cpu_core_seconds / SECONDS_PER_HOUR
+            daily_data[day_key].cpu_core_hours += UsageUnits.seconds_to_hours(
+                record.cpu_core_seconds
             )
-            daily_data[day_key].memory_gb_hours += (
-                record.memory_gb_seconds / SECONDS_PER_HOUR
+            daily_data[day_key].memory_gb_hours += UsageUnits.seconds_to_hours(
+                record.memory_gb_seconds
             )
             daily_data[day_key].standard_gb_hours += record.standard_gb_hours
             daily_data[day_key].shared_gb_hours += record.shared_gb_hours

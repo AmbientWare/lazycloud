@@ -54,8 +54,68 @@ class MeterNames(StrEnum):
 
 
 SECONDS_PER_HOUR = 3600
+CENTS_PER_DOLLAR = 100
 
 USAGE_EVENT_NAME = "lazycloud-usage"
+
+# Meter prices in cents per unit
+# - CPU: cents per core-hour
+# - Memory: cents per GB-hour
+# - Storage: cents per GB-hour
+# - Build: cents per minute
+# - Endpoints: cents per endpoint-hour
+METER_PRICES_CENTS: dict[MeterNames, float] = {
+    MeterNames.CPU_USAGE: 4.0,  # $0.04 per core-hour
+    MeterNames.MEMORY_USAGE: 0.8,  # $0.008 per GB-hour
+    MeterNames.STANDARD_STORAGE: 0.015,  # $0.00015 per GB-hour (~$0.11/GB-month)
+    MeterNames.SHARED_STORAGE: 0.06,  # $0.0006 per GB-hour (~$0.43/GB-month)
+    MeterNames.BUILD_MINUTES: 4.0,  # $0.04 per minute
+    MeterNames.PUBLIC_ENDPOINTS: 0.07,  # $0.0007 per endpoint-hour (~$0.50/month)
+}
+
+
+class UsageUnits:
+    """Centralized utility for usage unit conversions and cost calculations.
+
+    All prices are stored in cents. All usage is converted to hours (except build minutes).
+    This class provides a single source of truth for conversions used by both
+    Polar billing and CLI display.
+    """
+
+    @staticmethod
+    def seconds_to_hours(seconds: float) -> float:
+        """Convert seconds to hours."""
+        return seconds / SECONDS_PER_HOUR
+
+    @staticmethod
+    def cents_to_dollars(cents: float) -> float:
+        """Convert cents to dollars."""
+        return cents / CENTS_PER_DOLLAR
+
+    @staticmethod
+    def get_price_cents(meter: MeterNames) -> float:
+        """Get the price in cents for a meter."""
+        return METER_PRICES_CENTS[meter]
+
+    @staticmethod
+    def get_price_dollars(meter: MeterNames) -> float:
+        """Get the price in dollars for a meter."""
+        return UsageUnits.cents_to_dollars(METER_PRICES_CENTS[meter])
+
+    @staticmethod
+    def calculate_cost_dollars(usage: float, meter: MeterNames) -> float:
+        """Calculate cost in dollars for given usage.
+
+        Args:
+            usage: Usage amount in the meter's native unit (hours for most, minutes for build)
+            meter: The meter type
+
+        Returns:
+            Cost in dollars
+        """
+        price_dollars = UsageUnits.get_price_dollars(meter)
+        return usage * price_dollars
+
 
 METER_METADATA_FIELDS = {
     MeterNames.CPU_USAGE: "cpu_core_hours",

@@ -8,6 +8,7 @@ from textual.app import ComposeResult
 from textual.reactive import reactive
 from textual.widgets import DataTable
 
+from cli.api.billing import BillingAPI
 from cli.api.usage import UsageAPI
 from cli.config import config
 from cli.ui.colors import Colors
@@ -24,6 +25,7 @@ class UsageOverviewSection(Container):
 
     def __init__(self):
         super().__init__(id="usage-overview-section")
+        self._billing_api = BillingAPI()
         self._usage_api = UsageAPI()
         self._section_container: SectionContainer | None = None
         self._metrics_table: DataTable | None = None
@@ -50,15 +52,26 @@ class UsageOverviewSection(Container):
             yield self._metrics_table
 
     def on_mount(self) -> None:
-        """Fetch usage data when mounted"""
-        now_local = datetime.now()
-        start_local = now_local.replace(
-            day=1, hour=0, minute=0, second=0, microsecond=0
-        )
-        start_date = start_local.astimezone(timezone.utc).replace(microsecond=0)
-        end_date = datetime.now(timezone.utc).replace(microsecond=0)
+        """Fetch billing cycle then usage data when mounted"""
+        self.run_worker(self._fetch_with_billing_cycle(), exclusive=True)
 
-        self.run_worker(self._fetch_usage_async(start_date, end_date), exclusive=True)
+    async def _fetch_with_billing_cycle(self) -> None:
+        """Fetch billing cycle dates, then fetch usage with those dates."""
+        try:
+            # Try to get billing cycle from subscription
+            cycle = await self._billing_api.get_billing_cycle()
+            start_date = cycle.current_period_start
+            end_date = cycle.current_period_end
+        except Exception:
+            # Fallback to calendar month if billing cycle fetch fails
+            now_local = datetime.now()
+            start_local = now_local.replace(
+                day=1, hour=0, minute=0, second=0, microsecond=0
+            )
+            start_date = start_local.astimezone(timezone.utc).replace(microsecond=0)
+            end_date = datetime.now(timezone.utc).replace(microsecond=0)
+
+        await self._fetch_usage_async(start_date, end_date)
 
     async def _fetch_usage_async(
         self,
