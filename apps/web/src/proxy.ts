@@ -1,20 +1,8 @@
 import { authkit } from '@workos-inc/authkit-nextjs';
 import { type NextRequest, NextResponse } from "next/server";
-import {
-  PUBLIC_ROUTES,
-  CHECKOUT_ROUTES,
-  SUBSCRIBE_ROUTES,
-} from "./lib/constants";
+import { PUBLIC_ROUTES } from "./lib/constants";
 import { ratelimit } from "./lib/rate-limit";
-import {
-  getSubscriptionStatus,
-  setSubscriptionStatus,
-} from "./lib/subscription-cache";
-import polarService from "./server/polar";
 import { getUser } from "./actions/utils";
-
-// In-memory lock to prevent cache stampede (per-instance)
-const subscriptionLocks = new Map<string, Promise<boolean>>();
 
 function matchesRoute(pathname: string, routes: string[]): boolean {
   return routes.some((route) => {
@@ -166,55 +154,9 @@ export default async function proxy(req: NextRequest) {
     );
   }
 
-  // Allow authenticated access to checkout and subscribe pages (no subscription check)
-  const exemptRoutes = [...CHECKOUT_ROUTES, ...SUBSCRIBE_ROUTES];
-  if (matchesRoute(pathname, exemptRoutes)) {
-    return nextWithAuth(remaining);
-  }
-
-  // Check subscription status with Redis caching and stampede protection
-  const userId = session.user.id;
-
-  let hasActiveSubscription = false;
-
-  try {
-    // Try to get from cache first
-    const cachedStatus = await getSubscriptionStatus(userId);
-
-    if (cachedStatus !== null) {
-      hasActiveSubscription = cachedStatus;
-    } else {
-      // Cache miss - check if there's already a request in flight (stampede protection)
-      const existingRequest = subscriptionLocks.get(userId);
-      if (existingRequest) {
-        hasActiveSubscription = await existingRequest;
-      } else {
-        // Create a new request and store the promise
-        const fetchPromise = (async () => {
-          const customerState = await polarService.getCustomerStateExternal(userId);
-          const isActive = (customerState?.activeSubscriptions?.length ?? 0) > 0;
-          await setSubscriptionStatus(userId, isActive);
-          return isActive;
-        })();
-
-        subscriptionLocks.set(userId, fetchPromise);
-
-        try {
-          hasActiveSubscription = await fetchPromise;
-        } finally {
-          subscriptionLocks.delete(userId);
-        }
-      }
-    }
-  } catch {
-    // On error, allow access (fail open) - subscription will be checked elsewhere
-    hasActiveSubscription = true;
-  }
-
-  if (!hasActiveSubscription) {
-    return withHeaders(NextResponse.redirect(new URL("/subscribe", req.url)), remaining);
-  }
-
+  // Allow all authenticated users - subscription status is checked by:
+  // - Backend API (returns 402 for operations requiring subscription)
+  // - Frontend banner (shows prompt to add payment method)
   return nextWithAuth(remaining);
 }
 

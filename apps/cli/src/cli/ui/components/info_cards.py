@@ -231,3 +231,58 @@ class ActionProgressCard(InfoCard):
         else:
             message = f"{action}..."
         super().__init__(message=message, title=title)
+
+
+class SubscriptionRequiredCard(Card):
+    """Card shown when user needs to add a payment method."""
+
+    def __init__(self):
+        """Initialize subscription required card"""
+        table = Table(show_header=False, box=None, padding=(0, 1))
+        table.add_column(style=Colors.Ansi.text)
+
+        # Warning message
+        warning_text = Text()
+        warning_text.append("⚠️  ", style=Colors.Ansi.warning)
+        warning_text.append(
+            "Payment method required", style=f"bold {Colors.Ansi.warning}"
+        )
+        table.add_row(warning_text)
+
+        # Empty row for spacing
+        table.add_row("")
+
+        # Description
+        desc_text = Text()
+        desc_text.append(
+            "Add a payment method to start deploying.", style=Colors.Ansi.text
+        )
+        table.add_row(desc_text)
+
+        # Empty row for spacing
+        table.add_row("")
+
+        # Link
+        link_text = Text()
+        link_text.append("→ ", style=f"bold {Colors.Ansi.accent}")
+        link_text.append(
+            "https://lazycloud.dev/subscribe", style=f"underline {Colors.Ansi.accent}"
+        )
+        table.add_row(link_text)
+
+        # Empty row for spacing
+        table.add_row("")
+
+        # Support link
+        support_text = Text()
+        support_text.append("Questions? ", style=Colors.Ansi.text_muted)
+        support_text.append(
+            "https://lazycloud.dev/support", style=f"underline {Colors.Ansi.text_muted}"
+        )
+        table.add_row(support_text)
+
+        super().__init__(
+            content=table,
+            title="Subscription",
+            border_style=Colors.Ansi.warning,
+        )
