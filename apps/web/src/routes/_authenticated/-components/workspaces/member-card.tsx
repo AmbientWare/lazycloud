@@ -183,7 +183,6 @@ export function MemberCard({
                   onConfirm={handleRemove}
                   icon={Trash2}
                   color="red"
-                  buttonClassName="text-red-500 hover:bg-red-500/10 cursor-pointer"
                 />
               </div>
             </StyledTooltip>

@@ -16,7 +16,7 @@ interface CopyButtonProps {
     | 'link'
     | 'destructive'
     | 'secondary'
-  size?: 'default' | 'sm' | 'lg' | 'icon'
+  size?: 'default' | 'sm' | 'lg' | 'icon' | 'icon-sm' | 'icon-lg'
   className?: string
 }
 
@@ -26,7 +26,7 @@ export function CopyButton({
   timeout = 750,
   variant = 'outline',
   size = 'icon',
-  className = 'size-11 shrink-0 cursor-pointer',
+  className,
 }: CopyButtonProps) {
   const [copied, setCopied] = useState(false)
   const timeoutRef = useRef<NodeJS.Timeout | undefined>(undefined)
@@ -62,7 +62,7 @@ export function CopyButton({
         variant={variant}
         size={size}
         onClick={handleCopy}
-        className={className}
+        className={className ?? ''}
         aria-label={copied ? 'Copied' : tooltipText}
       >
         {copied ? (
