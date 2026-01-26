@@ -1996,6 +1996,7 @@ def _deploy(
     creation_progress = view.show_deployment_creation_progress(deployment_name)
     task_response = None
     final_status = None
+    deploy_start_time = datetime.now()
 
     try:
         # Use Live display for real-time progress updates
@@ -2107,11 +2108,14 @@ def _deploy(
             except Exception:
                 pass  # Don't fail deployment if we can't update the timestamp
 
+        # Calculate deploy duration
+        deploy_duration = int((datetime.now() - deploy_start_time).total_seconds())
+
         # Show success message
         view.show_summary(
             deployment_name=deployment_name,
             status=final_status.status,
-            duration=0,  # We don't track duration anymore
+            duration=deploy_duration,
             build_duration=build_duration,
             message="Deployment submitted. Monitor pod status with 'lazycloud dashboard'",
         )
