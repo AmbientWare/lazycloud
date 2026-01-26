@@ -100,8 +100,9 @@ class ComposeDiffChecker:
         changes = {}
 
         # Compare simple fields
+        # Note: "image" is intentionally excluded - we don't want to show
+        # image changes to customers as they use our managed registry
         simple_fields = [
-            "image",
             "entrypoint",
             "command",
             "working_dir",
