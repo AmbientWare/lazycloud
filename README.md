@@ -8,7 +8,7 @@ LazyCloud converts Docker Compose files into Kubernetes Helm charts, making Kube
 lazycloud/
 ├── apps/
 │   ├── backend/          # FastAPI API server
-│   ├── web/              # Next.js web frontend
+│   ├── web/              # TanStack Start web frontend
 │   └── cli/              # CLI tool
 ├── packages/             # Shared Python packages
 │   ├── models/           # Shared data models
@@ -72,7 +72,8 @@ uv sync --all-packages
 ## Key Technologies
 
 - **FastAPI** - API server
-- **Next.js** - Web frontend
+- **TanStack Start** - Web frontend
+- **Bun** - JavaScript runtime & package manager
 - **Kubernetes & Helm** - Container orchestration
 - **SAQ** - Background task queue
 - **PostgreSQL** - Database
@@ -87,7 +88,7 @@ uv sync --all-packages
 - **Python 3.13+**
 - **uv** - Python package manager ([install](https://docs.astral.sh/uv/))
 - **Docker & Docker Compose**
-- **Node.js 22+**
+- **Bun** - JavaScript runtime & package manager ([install](https://bun.sh/))
 - **Minikube** - For local K8s testing ([install](https://minikube.sigs.k8s.io/docs/start/))
 - **kubectl** - Kubernetes CLI ([install](https://kubernetes.io/docs/tasks/tools/))
 - **Helm** - K8s package manager ([install](https://helm.sh/docs/intro/install/))
@@ -113,8 +114,8 @@ docker compose up -d
 
 # 5. Start web dev server (optional)
 cd apps/web
-npm install
-npm run dev
+bun install
+bun dev
 ```
 
 ### Access Services
@@ -161,7 +162,7 @@ uv run uvicorn backend.main:app --reload
 
 # Frontend dev server (auto-refresh)
 cd apps/web
-npm run dev
+bun dev
 
 # Run background workers
 docker compose up background-workers
@@ -335,7 +336,7 @@ uv run python scripts/create_secret_key.py
 ### Components
 
 - **API** - FastAPI backend, REST endpoints, compose parsing
-- **Web** - Next.js frontend, deployment dashboard
+- **Web** - TanStack Start frontend, deployment dashboard
 - **CLI** - Typer CLI with Textual TUI
 - **Background Worker** - SAQ task workers (build/deploy jobs)
 - **Cron Worker** - Scheduled task workers

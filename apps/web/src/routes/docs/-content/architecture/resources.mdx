@@ -1,0 +1,59 @@
+---
+title: Resources
+description: Control how much CPU and memory your Docker Compose services can use in LazyCloud.
+---
+
+# Resources
+
+Control how much CPU and memory your services can use.
+
+## Setting Limits
+
+Define resource limits in your compose file:
+
+```yaml
+services:
+  api:
+    build: .
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1024M
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+```
+
+## Limits vs Reservations
+
+- **Limits** — Maximum resources a service can use. If exceeded, the service may be throttled (CPU) or restarted (memory).
+- **Reservations** — Minimum resources guaranteed to the service. LazyCloud ensures these are always available.
+
+## CPU
+
+CPU is measured in cores:
+
+- `"0.5"` — Half a CPU core
+- `"1.0"` — One full core
+- `"2.0"` — Two cores
+
+## Memory
+
+Memory uses standard units:
+
+- `256M` — 256 megabytes
+- `1G` — 1 gigabyte
+- `2048M` — 2 gigabytes
+
+## Defaults
+
+If you don't specify resources, LazyCloud applies sensible defaults:
+
+- CPU: 0.25 cores reserved, 2 cores limit
+- Memory: 256MB reserved, 2GB limit
+
+<Tip>
+  Start with conservative limits and increase based on actual usage. Check the
+  dashboard to see how much your services actually use.
+</Tip>

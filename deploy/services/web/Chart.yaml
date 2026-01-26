@@ -1,11 +1,11 @@
 name: lazycloud-web
-description: Helm chart for LazyCloud Web (Next.js Frontend)
+description: Helm chart for LazyCloud Web
 version: 0.1.0
 apiVersion: v2
 keywords:
   - lazycloud
   - web
-  - nextjs
+  - tanstack
   - frontend
 sources:
 home:
