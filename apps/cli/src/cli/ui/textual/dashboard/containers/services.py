@@ -22,7 +22,6 @@ class ServicesContainer(Container):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._list_view = None
-        self._selection_timer = None
         self.border_title = f"{Icons.WRENCH} [2] Services"
 
     def compose(self) -> ComposeResult:
@@ -144,10 +143,10 @@ class ServicesContainer(Container):
                 self.log.error(f"Failed to get service status: {e}")
 
     def _handle_highlight(self, item_data: ListItemData) -> None:
-        """Handle service highlight with api requestdebouncing."""
+        """Handle service highlight with api request debouncing."""
         self._selection_timer = self.handle_debounce(
             self._selection_timer,
-            lambda: self._update_selected_service(item_data),
+            lambda: self.call_later(self._update_selected_service, item_data),
         )
 
     async def _update_selected_service(self, item_data: ListItemData) -> None:
