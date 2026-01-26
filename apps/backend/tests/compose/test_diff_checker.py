@@ -83,19 +83,22 @@ class TestServiceDiffDetection:
         removed_names = [s.get("name") for s in diff.services.removed]
         assert "api" in removed_names
 
-    def test_detect_modified_service_image(
+    def test_image_changes_not_detected(
         self,
         current_compose_file: ComposeFile,
         new_compose_file: ComposeFile,
     ):
-        """Test detection of modified service image."""
+        """Test that image changes are intentionally not detected.
+
+        Image changes are excluded from diff detection because we use a managed
+        registry and don't want to show internal image tag changes to customers.
+        """
         checker = ComposeDiffChecker()
         diff = checker.compare_compose_files(current_compose_file, new_compose_file)
 
-        # 'web' image changed from nginx:1.20 to nginx:1.21
-        assert "web" in diff.services.modified
-        web_changes = diff.services.modified["web"]
-        assert "image" in web_changes
+        # 'web' image changed from nginx:1.20 to nginx:1.21, but should NOT be detected
+        # The service should not appear in modified since only image changed
+        assert "web" not in diff.services.modified
 
     def test_detect_modified_service_ports(self):
         """Test detection of modified service ports."""
@@ -741,9 +744,15 @@ class TestDiffHasChanges:
 
     def test_has_changes_with_modified_services(self):
         """Test has_changes returns True when services modified."""
-        current = ComposeFile(services=[ComposeService(name="web", image="nginx:1.20")])
+        current = ComposeFile(
+            services=[ComposeService(name="web", image="nginx:latest", command="nginx")]
+        )
 
-        new = ComposeFile(services=[ComposeService(name="web", image="nginx:1.21")])
+        new = ComposeFile(
+            services=[
+                ComposeService(name="web", image="nginx:latest", command="nginx -g daemon off;")
+            ]
+        )
 
         checker = ComposeDiffChecker()
         diff = checker.compare_compose_files(current, new)
