@@ -6,10 +6,13 @@ import { Toaster } from '@/components/ui/sonner'
 import { SubscriptionBanner } from '@/components/shared/subscription-banner'
 
 export const Route = createFileRoute('/_authenticated')({
-  beforeLoad: async ({ context }) => {
+  beforeLoad: async ({ context, location }) => {
     // User is set in __root.tsx beforeLoad via getAuth()
     if (!context.user) {
-      throw redirect({ to: '/login' })
+      throw redirect({
+        to: '/login',
+        search: { redirect: location.pathname },
+      })
     }
   },
   component: AuthenticatedLayout,

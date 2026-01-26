@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link, useLocation } from '@tanstack/react-router'
 import { StyledButton } from '@/components/shared/styled-button'
 import Navigation from './navigation'
-import { ChevronRight, Menu, Zap } from 'lucide-react'
+import { ArrowUpRight, ChevronRight, Menu, Zap } from 'lucide-react'
 import HeaderBar from '@/components/shared/header-bar'
 import { LANDING_ROUTES, USER_HOME } from '@/lib/constants'
 import { Button } from '@/components/ui/button'
@@ -13,6 +13,36 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
+
+function AuthButtons() {
+  return (
+    <div className="flex items-center rounded-full border border-border/50 bg-background/50 backdrop-blur-sm">
+      {/* Log In link */}
+      <Link
+        to="/login"
+        className="px-4 py-2 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+      >
+        Log In
+      </Link>
+
+      {/* Divider */}
+      <div className="h-4 w-px bg-border/50" />
+
+      {/* Sign Up link with arrow - has its own hover group */}
+      <Link
+        to="/signup"
+        className="group/signup relative flex items-center gap-1.5 overflow-hidden rounded-r-full py-2 pl-3 pr-2 text-sm font-medium text-lazycloud transition-colors duration-300 hover:text-black"
+      >
+        {/* Expanding background on hover - only on signup */}
+        <div className="absolute inset-0 origin-right scale-x-0 bg-lazycloud transition-transform duration-300 ease-out group-hover/signup:scale-x-100" />
+        <span className="relative z-10">Sign Up</span>
+        <span className="relative z-10 flex size-5 items-center justify-center rounded-full bg-lazycloud transition-colors duration-300 group-hover/signup:bg-black">
+          <ArrowUpRight className="size-3 text-black transition-colors duration-300 group-hover/signup:text-lazycloud" />
+        </span>
+      </Link>
+    </div>
+  )
+}
 
 export default function Header() {
   const user = useRouteUser()
@@ -35,13 +65,8 @@ export default function Header() {
         { label: 'Docs', href: '/docs' },
       ]
 
-  const ctaButton = !isSignedIn ? (
-    <Link to="/login">
-      <StyledButton variant="primary">
-        <Zap size={18} className="group-hover:animate-pulse" />
-        Login
-      </StyledButton>
-    </Link>
+  const ctaButtons = !isSignedIn ? (
+    <AuthButtons />
   ) : (
     <Link to={USER_HOME}>
       <StyledButton variant="primary">
@@ -61,7 +86,7 @@ export default function Header() {
         {/* Desktop navigation */}
         <div className="hidden items-center gap-8 md:flex">
           <Navigation isLoggedIn={signedInAndNotLandingRoute} />
-          <div className="flex items-center gap-4">{ctaButton}</div>
+          <div className="flex items-center gap-4">{ctaButtons}</div>
         </div>
 
         {/* Mobile hamburger button */}
@@ -92,7 +117,7 @@ export default function Header() {
                   {item.label}
                 </Link>
               ))}
-              <div className="mt-4 px-4">{ctaButton}</div>
+              <div className="mt-4 px-4">{ctaButtons}</div>
             </nav>
           </SheetContent>
         </Sheet>
