@@ -69,14 +69,12 @@ export default function Hero() {
             transition={{ duration: 0.6, delay: 0.4 }}
           >
             {!isSignedIn ? (
-              <>
-                <StyledButton variant="primary" size="lg" asChild>
-                  <Link to="/login">
-                    Deploy Now
-                    <ArrowRight className="ml-2 size-4 transition-transform group-hover:translate-x-1" />
-                  </Link>
-                </StyledButton>
-              </>
+              <StyledButton variant="primary" size="lg" asChild>
+                <Link to="/signup">
+                  Deploy Now
+                  <ArrowRight className="ml-2 size-4 transition-transform group-hover:translate-x-1" />
+                </Link>
+              </StyledButton>
             ) : (
               <StyledButton variant="primary" size="lg" asChild>
                 <Link to={USER_HOME}>

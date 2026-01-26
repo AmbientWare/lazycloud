@@ -57,7 +57,7 @@ export function ProductCard({
     e.preventDefault()
 
     if (!user) {
-      navigate({ to: '/login' })
+      navigate({ to: '/signup' })
       return
     }
 

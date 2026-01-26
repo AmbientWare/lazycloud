@@ -57,11 +57,12 @@ export const onboardUser = createServerFn({ method: 'POST' })
   .inputValidator(
     z.object({
       userId: z.string(),
+      name: z.string(),
       email: z.string().email(),
     }),
   )
-  .handler(async ({ context, data }): Promise<{ success: boolean }> => {
-    // Ensure the user exists in the API backend
-    await lazycloudApi.onboardUser(context.accessToken, data.userId, data.email)
+  .handler(async ({ data }): Promise<{ success: boolean }> => {
+    // Ensure the user exists in the API backend (uses admin API key)
+    await lazycloudApi.onboardUser(data.userId, data.name, data.email)
     return { success: true }
   })

@@ -49,14 +49,12 @@ export default function FinalCTA() {
           {/* CTAs */}
           <div className="flex flex-col justify-center gap-4 sm:flex-row">
             {!isSignedIn ? (
-              <>
-                <StyledButton variant="primary" size="lg" asChild>
-                  <Link to="/login">
-                    Start Free
-                    <ArrowRight className="ml-2 size-4 transition-transform group-hover:translate-x-1" />
-                  </Link>
-                </StyledButton>
-              </>
+              <StyledButton variant="primary" size="lg" asChild>
+                <Link to="/signup">
+                  Start Free
+                  <ArrowRight className="ml-2 size-4 transition-transform group-hover:translate-x-1" />
+                </Link>
+              </StyledButton>
             ) : (
               <StyledButton variant="primary" size="lg" asChild>
                 <Link to={USER_HOME}>

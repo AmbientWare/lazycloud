@@ -1,6 +1,6 @@
 import { createFileRoute, useSearch } from '@tanstack/react-router'
 import { useAuth } from '@workos/authkit-tanstack-react-start/client'
-import { getSignInUrl } from '@workos/authkit-tanstack-react-start'
+import { getSignUpUrl } from '@workos/authkit-tanstack-react-start'
 import { useEffect } from 'react'
 import { USER_HOME } from '@/lib/constants'
 import { z } from 'zod'
@@ -9,20 +9,20 @@ const searchSchema = z.object({
   redirect: z.string().optional(),
 })
 
-export const Route = createFileRoute('/login')({
+export const Route = createFileRoute('/signup')({
   ssr: false,
   validateSearch: searchSchema,
-  component: LoginPage,
+  component: SignUpPage,
 })
 
-function LoginPage() {
+function SignUpPage() {
   const { loading, user } = useAuth()
-  const { redirect } = useSearch({ from: '/login' })
+  const { redirect } = useSearch({ from: '/signup' })
 
   useEffect(() => {
     if (!loading && !user) {
       const returnPath = redirect || USER_HOME
-      getSignInUrl({ data: returnPath }).then((url) => {
+      getSignUpUrl({ data: returnPath }).then((url) => {
         window.location.href = url
       })
     }
@@ -32,7 +32,7 @@ function LoginPage() {
     <div className="flex h-screen w-full items-center justify-center bg-background">
       <div className="flex flex-col items-center gap-4">
         <div className="size-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-        <p className="text-muted-foreground">Redirecting to login...</p>
+        <p className="text-muted-foreground">Redirecting to sign up...</p>
       </div>
     </div>
   )

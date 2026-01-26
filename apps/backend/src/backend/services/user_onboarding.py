@@ -25,10 +25,11 @@ class UserOnboardingService:
     async def onboard_user(self, workos_id: str, name: str, email: str) -> UserPydantic:
         """Onboard a new user with proper transaction handling."""
 
-        # Check if user already exists
+        # Check if user already exists - return existing user for idempotency
         existing_user = await self._get_user_by_workos_id(workos_id)
         if existing_user:
-            raise ValueError(f"User with workos_id {workos_id} already exists")
+            logger.info(f"User {workos_id} already exists, returning existing user")
+            return existing_user
 
         # Create user with all related entities in a transaction
         user = await self._create_user_with_entities(workos_id, name, email)

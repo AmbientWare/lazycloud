@@ -11,8 +11,8 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as SupportRouteImport } from './routes/support'
 import { Route as SubscribeRouteImport } from './routes/subscribe'
+import { Route as SignupRouteImport } from './routes/signup'
 import { Route as LoginRouteImport } from './routes/login'
-import { Route as CallbackRouteImport } from './routes/callback'
 import { Route as ApiRouteImport } from './routes/api'
 import { Route as LandingRouteImport } from './routes/_landing'
 import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
@@ -26,6 +26,7 @@ import { Route as ApiHealthRouteImport } from './routes/api/health'
 import { Route as LandingPricingRouteImport } from './routes/_landing/pricing'
 import { Route as AuthenticatedWorkspacesRouteImport } from './routes/_authenticated/workspaces'
 import { Route as AuthenticatedUsageRouteImport } from './routes/_authenticated/usage'
+import { Route as ApiAuthCallbackRouteImport } from './routes/api/auth/callback'
 import { Route as LandingLegalTermsRouteImport } from './routes/_landing/legal/terms'
 import { Route as LandingLegalPrivacyRouteImport } from './routes/_landing/legal/privacy'
 import { Route as LandingLegalAcceptableUseRouteImport } from './routes/_landing/legal/acceptable-use'
@@ -40,14 +41,14 @@ const SubscribeRoute = SubscribeRouteImport.update({
   path: '/subscribe',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SignupRoute = SignupRouteImport.update({
+  id: '/signup',
+  path: '/signup',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
   path: '/login',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const CallbackRoute = CallbackRouteImport.update({
-  id: '/callback',
-  path: '/callback',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiRoute = ApiRouteImport.update({
@@ -113,6 +114,11 @@ const AuthenticatedUsageRoute = AuthenticatedUsageRouteImport.update({
   path: '/usage',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
+const ApiAuthCallbackRoute = ApiAuthCallbackRouteImport.update({
+  id: '/auth/callback',
+  path: '/auth/callback',
+  getParentRoute: () => ApiRoute,
+} as any)
 const LandingLegalTermsRoute = LandingLegalTermsRouteImport.update({
   id: '/legal/terms',
   path: '/legal/terms',
@@ -134,8 +140,8 @@ export interface FileRoutesByFullPath {
   '/docs': typeof DocsRouteRouteWithChildren
   '/': typeof LandingIndexRoute
   '/api': typeof ApiRouteWithChildren
-  '/callback': typeof CallbackRoute
   '/login': typeof LoginRoute
+  '/signup': typeof SignupRoute
   '/subscribe': typeof SubscribeRoute
   '/support': typeof SupportRoute
   '/usage': typeof AuthenticatedUsageRoute
@@ -149,12 +155,13 @@ export interface FileRoutesByFullPath {
   '/legal/acceptable-use': typeof LandingLegalAcceptableUseRoute
   '/legal/privacy': typeof LandingLegalPrivacyRoute
   '/legal/terms': typeof LandingLegalTermsRoute
+  '/api/auth/callback': typeof ApiAuthCallbackRoute
 }
 export interface FileRoutesByTo {
   '/': typeof LandingIndexRoute
   '/api': typeof ApiRouteWithChildren
-  '/callback': typeof CallbackRoute
   '/login': typeof LoginRoute
+  '/signup': typeof SignupRoute
   '/subscribe': typeof SubscribeRoute
   '/support': typeof SupportRoute
   '/usage': typeof AuthenticatedUsageRoute
@@ -168,6 +175,7 @@ export interface FileRoutesByTo {
   '/legal/acceptable-use': typeof LandingLegalAcceptableUseRoute
   '/legal/privacy': typeof LandingLegalPrivacyRoute
   '/legal/terms': typeof LandingLegalTermsRoute
+  '/api/auth/callback': typeof ApiAuthCallbackRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -175,8 +183,8 @@ export interface FileRoutesById {
   '/_authenticated': typeof AuthenticatedRouteWithChildren
   '/_landing': typeof LandingRouteWithChildren
   '/api': typeof ApiRouteWithChildren
-  '/callback': typeof CallbackRoute
   '/login': typeof LoginRoute
+  '/signup': typeof SignupRoute
   '/subscribe': typeof SubscribeRoute
   '/support': typeof SupportRoute
   '/_authenticated/usage': typeof AuthenticatedUsageRoute
@@ -191,6 +199,7 @@ export interface FileRoutesById {
   '/_landing/legal/acceptable-use': typeof LandingLegalAcceptableUseRoute
   '/_landing/legal/privacy': typeof LandingLegalPrivacyRoute
   '/_landing/legal/terms': typeof LandingLegalTermsRoute
+  '/api/auth/callback': typeof ApiAuthCallbackRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -198,8 +207,8 @@ export interface FileRouteTypes {
     | '/docs'
     | '/'
     | '/api'
-    | '/callback'
     | '/login'
+    | '/signup'
     | '/subscribe'
     | '/support'
     | '/usage'
@@ -213,12 +222,13 @@ export interface FileRouteTypes {
     | '/legal/acceptable-use'
     | '/legal/privacy'
     | '/legal/terms'
+    | '/api/auth/callback'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/api'
-    | '/callback'
     | '/login'
+    | '/signup'
     | '/subscribe'
     | '/support'
     | '/usage'
@@ -232,14 +242,15 @@ export interface FileRouteTypes {
     | '/legal/acceptable-use'
     | '/legal/privacy'
     | '/legal/terms'
+    | '/api/auth/callback'
   id:
     | '__root__'
     | '/docs'
     | '/_authenticated'
     | '/_landing'
     | '/api'
-    | '/callback'
     | '/login'
+    | '/signup'
     | '/subscribe'
     | '/support'
     | '/_authenticated/usage'
@@ -254,6 +265,7 @@ export interface FileRouteTypes {
     | '/_landing/legal/acceptable-use'
     | '/_landing/legal/privacy'
     | '/_landing/legal/terms'
+    | '/api/auth/callback'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -261,8 +273,8 @@ export interface RootRouteChildren {
   AuthenticatedRoute: typeof AuthenticatedRouteWithChildren
   LandingRoute: typeof LandingRouteWithChildren
   ApiRoute: typeof ApiRouteWithChildren
-  CallbackRoute: typeof CallbackRoute
   LoginRoute: typeof LoginRoute
+  SignupRoute: typeof SignupRoute
   SubscribeRoute: typeof SubscribeRoute
   SupportRoute: typeof SupportRoute
   CheckoutSuccessRoute: typeof CheckoutSuccessRoute
@@ -284,18 +296,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SubscribeRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/signup': {
+      id: '/signup'
+      path: '/signup'
+      fullPath: '/signup'
+      preLoaderRoute: typeof SignupRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/login': {
       id: '/login'
       path: '/login'
       fullPath: '/login'
       preLoaderRoute: typeof LoginRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/callback': {
-      id: '/callback'
-      path: '/callback'
-      fullPath: '/callback'
-      preLoaderRoute: typeof CallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api': {
@@ -389,6 +401,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedUsageRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/api/auth/callback': {
+      id: '/api/auth/callback'
+      path: '/auth/callback'
+      fullPath: '/api/auth/callback'
+      preLoaderRoute: typeof ApiAuthCallbackRouteImport
+      parentRoute: typeof ApiRoute
+    }
     '/_landing/legal/terms': {
       id: '/_landing/legal/terms'
       path: '/legal/terms'
@@ -463,11 +482,13 @@ const LandingRouteWithChildren =
 interface ApiRouteChildren {
   ApiHealthRoute: typeof ApiHealthRoute
   ApiSearchRoute: typeof ApiSearchRoute
+  ApiAuthCallbackRoute: typeof ApiAuthCallbackRoute
 }
 
 const ApiRouteChildren: ApiRouteChildren = {
   ApiHealthRoute: ApiHealthRoute,
   ApiSearchRoute: ApiSearchRoute,
+  ApiAuthCallbackRoute: ApiAuthCallbackRoute,
 }
 
 const ApiRouteWithChildren = ApiRoute._addFileChildren(ApiRouteChildren)
@@ -477,8 +498,8 @@ const rootRouteChildren: RootRouteChildren = {
   AuthenticatedRoute: AuthenticatedRouteWithChildren,
   LandingRoute: LandingRouteWithChildren,
   ApiRoute: ApiRouteWithChildren,
-  CallbackRoute: CallbackRoute,
   LoginRoute: LoginRoute,
+  SignupRoute: SignupRoute,
   SubscribeRoute: SubscribeRoute,
   SupportRoute: SupportRoute,
   CheckoutSuccessRoute: CheckoutSuccessRoute,
