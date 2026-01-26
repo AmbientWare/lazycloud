@@ -1,14 +1,14 @@
-import { forwardRef } from "react";
+import { forwardRef } from 'react'
 import {
   AccordionItem,
   AccordionTrigger,
   AccordionContent,
-} from "@/components/ui/accordion";
-import { cn } from "@/lib/utils";
+} from '@/components/ui/accordion'
+import { cn } from '@/lib/utils'
 
 type StyledAccordionItemProps = React.ComponentPropsWithoutRef<
   typeof AccordionItem
->;
+>
 
 export const StyledAccordionItem = forwardRef<
   React.ComponentRef<typeof AccordionItem>,
@@ -17,16 +17,16 @@ export const StyledAccordionItem = forwardRef<
   return (
     <AccordionItem
       ref={ref}
-      className={cn("border-none", className)}
+      className={cn('border-none', className)}
       {...props}
     />
-  );
-});
-StyledAccordionItem.displayName = "StyledAccordionItem";
+  )
+})
+StyledAccordionItem.displayName = 'StyledAccordionItem'
 
 type StyledAccordionTriggerProps = React.ComponentPropsWithoutRef<
   typeof AccordionTrigger
->;
+>
 
 export const StyledAccordionTrigger = forwardRef<
   React.ComponentRef<typeof AccordionTrigger>,
@@ -36,23 +36,24 @@ export const StyledAccordionTrigger = forwardRef<
     <AccordionTrigger
       ref={ref}
       className={cn(
-        "group border-border/50 bg-muted/30 hover:bg-muted/50 hover:border-lazycloud/30 data-[state=open]:bg-muted/50 data-[state=open]:border-lazycloud/40 cursor-pointer rounded-lg border px-4 py-3 transition-all hover:border-l-2 hover:no-underline data-[state=open]:border-l-2 data-[state=open]:shadow-sm",
+        'group border-border/50 bg-muted/30 hover:bg-muted/50 hover:border-lazycloud/30 data-[state=open]:bg-muted/50 data-[state=open]:border-lazycloud/40 cursor-pointer rounded-lg border px-4 py-3 transition-all hover:border-l-2 hover:no-underline data-[state=open]:border-l-2 data-[state=open]:shadow-sm',
         className,
       )}
       {...props}
     >
       {children}
     </AccordionTrigger>
-  );
-});
-StyledAccordionTrigger.displayName = "StyledAccordionTrigger";
+  )
+})
+StyledAccordionTrigger.displayName = 'StyledAccordionTrigger'
 
-interface StyledAccordionContentProps
-  extends React.ComponentPropsWithoutRef<typeof AccordionContent> {
+interface StyledAccordionContentProps extends React.ComponentPropsWithoutRef<
+  typeof AccordionContent
+> {
   /**
    * Whether to wrap content in the styled card container
    */
-  cardWrapper?: boolean;
+  cardWrapper?: boolean
 }
 
 export const StyledAccordionContent = forwardRef<
@@ -60,7 +61,7 @@ export const StyledAccordionContent = forwardRef<
   StyledAccordionContentProps
 >(({ className, cardWrapper = true, children, ...props }, ref) => {
   return (
-    <AccordionContent ref={ref} className={cn("", className)} {...props}>
+    <AccordionContent ref={ref} className={cn('', className)} {...props}>
       <div className="pt-4">
         {cardWrapper ? (
           <div className="border-border bg-card rounded-lg border-2 shadow-sm p-4">
@@ -71,7 +72,6 @@ export const StyledAccordionContent = forwardRef<
         )}
       </div>
     </AccordionContent>
-  );
-});
-StyledAccordionContent.displayName = "StyledAccordionContent";
-
+  )
+})
+StyledAccordionContent.displayName = 'StyledAccordionContent'

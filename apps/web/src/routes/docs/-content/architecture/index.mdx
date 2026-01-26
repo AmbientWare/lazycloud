@@ -1,0 +1,32 @@
+---
+title: Architecture
+description: "Understand LazyCloud's architecture: how builds, secrets, networking, scaling, and volumes work under the hood."
+---
+
+# Architecture
+
+How LazyCloud runs your applications.
+
+## Declarative by Default
+
+When deploying your services, LazyCloud favors explicit configuration over implicit behavior. Networks, volumes, environment variables, arguments, and other service properties should be declared in your compose file rather than relying on runtime inference.
+
+This declarative approach ensures:
+
+- **Reproducibility** — Deployments behave the same way every time
+- **Visibility** — Your entire configuration is visible in one place
+- **Portability** — Services work consistently across environments
+
+If a property isn't defined, LazyCloud applies sensible defaults (documented in each section below). But for production workloads, we recommend explicitly defining your configuration.
+
+## Topics
+
+| Topic                                       | Description                                       |
+| ------------------------------------------- | ------------------------------------------------- |
+| [Networking](/docs/architecture/networking) | Service communication, network isolation, domains |
+| [Builds](/docs/architecture/builds)         | Cloud-based image builds with Depot               |
+| [Scaling](/docs/architecture/scaling)       | Auto-scaling based on CPU and memory              |
+| [Volumes](/docs/architecture/volumes)       | Persistent storage for your data                  |
+| [Secrets](/docs/architecture/secrets)       | Environment variables and encrypted storage       |
+| [Resources](/docs/architecture/resources)   | CPU and memory limits                             |
+| [Security](/docs/architecture/security)     | Container isolation with gVisor                   |

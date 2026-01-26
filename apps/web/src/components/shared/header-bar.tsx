@@ -1,9 +1,9 @@
-import { type ReactNode } from "react";
-import TextLogo from "@/app/_components/textLogo";
+import { type ReactNode } from 'react'
+import TextLogo from '@/components/shared/textLogo'
 
 type HeaderBarProps = {
-  children?: ReactNode;
-};
+  children?: ReactNode
+}
 
 /**
  * HeaderBar - Sticky navigation header
@@ -24,5 +24,5 @@ export default function HeaderBar({ children }: HeaderBarProps) {
         </div>
       </div>
     </div>
-  );
+  )
 }

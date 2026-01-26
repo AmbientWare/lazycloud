@@ -1,0 +1,73 @@
+---
+title: Volumes
+description: Persistent storage for your Docker Compose services. Configure volumes for databases, file uploads, and stateful applications.
+---
+
+# Volumes
+
+Volumes persist data across deployments and restarts. Your database files, uploads, and cached data survive even when containers are replaced.
+
+## Defining Volumes
+
+Declare volumes in your compose file:
+
+```yaml
+services:
+  db:
+    image: postgres:16
+    volumes:
+      - db-data:/var/lib/postgresql/data
+
+  api:
+    build: .
+    volumes:
+      - uploads:/app/uploads
+
+volumes:
+  db-data:
+    labels:
+      lazycloud.volume.size: '20Gi'
+  uploads:
+    labels:
+      lazycloud.volume.size: '50Gi'
+```
+
+## Volume Types
+
+### Standard Volumes
+
+By default, volumes are dedicated to a single service. Use these for databases and service-specific data.
+
+### Shared Volumes
+
+When multiple services need access to the same files, use a shared volume:
+
+```yaml
+services:
+  api:
+    volumes:
+      - shared-files:/app/files
+
+  worker:
+    volumes:
+      - shared-files:/app/files
+
+volumes:
+  shared-files:
+    labels:
+      lazycloud.volume.size: '100Gi'
+      lazycloud.volume.shared: 'true'
+```
+
+<Note>
+  LazyCloud automatically detects when a volume is used by multiple services and
+  configures it as shared.
+</Note>
+
+## Default Size
+
+Volumes default to 10Gi if no size is specified. Set a larger size with the `lazycloud.volume.size` label.
+
+---
+
+See [Volume Labels](/docs/labels/volume) for all configuration options.

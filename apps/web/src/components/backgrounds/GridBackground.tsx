@@ -1,5 +1,5 @@
 interface GridBackgroundProps {
-  children?: React.ReactNode;
+  children?: React.ReactNode
 }
 
 export function GridBackground({ children }: GridBackgroundProps) {
@@ -15,38 +15,13 @@ export function GridBackground({ children }: GridBackgroundProps) {
               x2="100%"
               y2="100%"
             >
-              <stop
-                offset="0%"
-                stopColor="currentColor"
-                stopOpacity="0.15"
-              />
-              <stop
-                offset="50%"
-                stopColor="currentColor"
-                stopOpacity="0.08"
-              />
-              <stop
-                offset="100%"
-                stopColor="currentColor"
-                stopOpacity="0.04"
-              />
+              <stop offset="0%" stopColor="currentColor" stopOpacity="0.15" />
+              <stop offset="50%" stopColor="currentColor" stopOpacity="0.08" />
+              <stop offset="100%" stopColor="currentColor" stopOpacity="0.04" />
             </linearGradient>
-            <radialGradient
-              id="grid-radial"
-              cx="50%"
-              cy="50%"
-              r="50%"
-            >
-              <stop
-                offset="0%"
-                stopColor="currentColor"
-                stopOpacity="0.12"
-              />
-              <stop
-                offset="100%"
-                stopColor="currentColor"
-                stopOpacity="0"
-              />
+            <radialGradient id="grid-radial" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stopColor="currentColor" stopOpacity="0.12" />
+              <stop offset="100%" stopColor="currentColor" stopOpacity="0" />
             </radialGradient>
           </defs>
           <rect
@@ -86,5 +61,5 @@ export function GridBackground({ children }: GridBackgroundProps) {
       </div>
       {children}
     </div>
-  );
+  )
 }

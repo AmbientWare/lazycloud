@@ -1,13 +1,11 @@
-"use client";
-
-import { useState, useEffect } from "react";
+import { useState, useEffect } from 'react'
 
 export function CurrentYear() {
-  const [year, setYear] = useState(2025);
+  const [year, setYear] = useState(2025)
 
   useEffect(() => {
-    setYear(new Date().getFullYear());
-  }, []);
+    setYear(new Date().getFullYear())
+  }, [])
 
-  return <>{year}</>;
+  return <>{year}</>
 }

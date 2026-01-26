@@ -1,4 +1,4 @@
-import { forwardRef } from "react";
+import { forwardRef } from 'react'
 import {
   Card,
   CardContent,
@@ -6,11 +6,11 @@ import {
   CardFooter,
   CardHeader,
   CardTitle,
-} from "@/components/ui/card";
-import { cn } from "@/lib/utils";
+} from '@/components/ui/card'
+import { cn } from '@/lib/utils'
 
 interface StyledCardProps extends React.ComponentPropsWithoutRef<typeof Card> {
-  variant?: "default" | "interactive" | "minimal" | "elevated" | "static";
+  variant?: 'default' | 'interactive' | 'minimal' | 'elevated' | 'static'
 }
 
 /**
@@ -29,27 +29,27 @@ interface StyledCardProps extends React.ComponentPropsWithoutRef<typeof Card> {
  * @variant static - Same as elevated but without hover effect
  */
 export const StyledCard = forwardRef<HTMLDivElement, StyledCardProps>(
-  ({ className, variant = "default", ...props }, ref) => {
+  ({ className, variant = 'default', ...props }, ref) => {
     return (
       <Card
         ref={ref}
         className={cn(
           // Base styles for all variants
-          "relative overflow-hidden rounded-xl border-border/60 bg-card/90 backdrop-blur-md",
+          'relative overflow-hidden rounded-xl border-border/60 bg-card/90 backdrop-blur-md',
           // Variant-specific styles
-          variant === "default" && "shadow-sm transition-all duration-300",
-          variant === "interactive" && [
-            "shadow-sm transition-all duration-300",
-            "hover:-translate-y-0.5 hover:shadow-md hover:border-lazycloud/30",
-            "focus-visible:ring-2 focus-visible:ring-lazycloud/40 focus-visible:outline-none",
-            "group",
+          variant === 'default' && 'shadow-sm transition-all duration-300',
+          variant === 'interactive' && [
+            'shadow-sm transition-all duration-300',
+            'hover:-translate-y-0.5 hover:shadow-md hover:border-lazycloud/30',
+            'focus-visible:ring-2 focus-visible:ring-lazycloud/40 focus-visible:outline-none',
+            'group',
           ],
-          variant === "elevated" && [
-            "shadow-sm transition-all duration-300 hover:shadow-md",
+          variant === 'elevated' && [
+            'shadow-sm transition-all duration-300 hover:shadow-md',
           ],
-          variant === "static" && "shadow-sm",
-          variant === "minimal" && [
-            "rounded-lg border-border/40 bg-muted/60 shadow-sm",
+          variant === 'static' && 'shadow-sm',
+          variant === 'minimal' && [
+            'rounded-lg border-border/40 bg-muted/60 shadow-sm',
           ],
           className,
         )}
@@ -57,13 +57,13 @@ export const StyledCard = forwardRef<HTMLDivElement, StyledCardProps>(
       >
         {props.children}
       </Card>
-    );
+    )
   },
-);
-StyledCard.displayName = "StyledCard";
+)
+StyledCard.displayName = 'StyledCard'
 
-export const StyledCardHeader = CardHeader;
-export const StyledCardTitle = CardTitle;
-export const StyledCardDescription = CardDescription;
-export const StyledCardContent = CardContent;
-export const StyledCardFooter = CardFooter;
+export const StyledCardHeader = CardHeader
+export const StyledCardTitle = CardTitle
+export const StyledCardDescription = CardDescription
+export const StyledCardContent = CardContent
+export const StyledCardFooter = CardFooter

@@ -12,11 +12,15 @@ RUN bun install --frozen-lockfile
 ##### BUILDER
 
 FROM --platform=linux/amd64 oven/bun:1-alpine AS builder
+RUN apk add --no-cache libc6-compat
 WORKDIR /app
+
 COPY --from=deps /app/node_modules ./node_modules
 COPY apps/web/ .
 
-RUN SKIP_ENV_VALIDATION=1 bun run build
+# Build the TanStack Start app (outputs to .output/)
+ENV NODE_ENV=production
+RUN bun run build
 
 ##### RUNNER
 
@@ -25,16 +29,14 @@ RUN apk add --no-cache curl
 WORKDIR /app
 
 ENV NODE_ENV=production
+ENV PORT=3000
+ENV HOST=0.0.0.0
 
-COPY --from=builder /app/next.config.js ./
-COPY --from=builder /app/public ./public
+# Copy the built output
+COPY --from=builder /app/.output ./.output
 COPY --from=builder /app/package.json ./package.json
 
-COPY --from=builder /app/.next/standalone ./
-COPY --from=builder /app/.next/static ./.next/static
-
 EXPOSE 3000
-ENV PORT=3000
-ENV HOSTNAME=0.0.0.0
 
-CMD ["bun", "server.js"]
+# TanStack Start with Nitro outputs a server entry point
+CMD ["bun", ".output/server/index.mjs"]

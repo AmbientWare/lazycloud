@@ -1,109 +1,71 @@
 # LazyCloud Web
 
-A modern web application built with Next.js, featuring authentication, database integration, and a beautiful UI.
+TanStack Start frontend for the LazyCloud deployment dashboard.
 
-## Features
+## Tech Stack
 
-- **Modern Tech Stack**
-  - Next.js 16 with App Router
-  - TypeScript for type safety
-  - Tailwind CSS for styling
-  - Drizzle ORM for database operations
-  - WorkOS for authentication
-  - React Query for data fetching
-  - MDX support for content
-
-- **Development Experience**
-  - Hot reloading with Turbopack
-  - ESLint and Prettier for code quality
-  - TypeScript for type checking
-  - Docker support for containerization
-
-## Prerequisites
-
-- Bun (v1.3.5 or higher)
-- Docker and Docker Compose (for containerized deployment)
-- PostgreSQL database
-
-## Installation
-
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/AmbientWare/machines-web
-   cd machines-web
-   ```
-
-2. Install dependencies:
-   ```bash
-   bun install
-   ```
-
-3. Set up environment variables:
-   ```bash
-   cp .env.example .env
-   ```
-   Fill in the required environment variables in the `.env` file.
+- [TanStack Start](https://tanstack.com/start) - Full-stack React framework
+- [TanStack Router](https://tanstack.com/router) - File-based routing
+- [TanStack Query](https://tanstack.com/query) - Data fetching
+- [Tailwind CSS](https://tailwindcss.com/) - Styling
+- [Shadcn/ui](https://ui.shadcn.com/) - UI components
+- [WorkOS](https://workos.com/) - Authentication
+- [T3 Env](https://env.t3.gg/) - Type-safe environment variables
+- [Fumadocs](https://fumadocs.vercel.app/) - Documentation
 
 ## Development
 
-Start the development server:
 ```bash
+# Install dependencies
+bun install
+
+# Start dev server
 bun dev
-```
 
-The application will be available at `http://localhost:3000`.
-
-## Building for Production
-
-Build the application:
-```bash
+# Build for production
 bun run build
+
+# Run tests
+bun test
+
+# Lint & format
+bun lint
+bun format
 ```
-
-Start the production server:
-```bash
-bun start
-```
-
-## Docker Deployment
-
-The application can be deployed using Docker Compose:
-
-```bash
-docker compose up -d
-```
-
-This will start both the web application and an ngrok tunnel for external access.
-
-## Available Scripts
-
-- `bun dev` - Start development server with Turbopack
-- `bun run build` - Build the application
-- `bun start` - Start production server
-- `bun lint` - Run ESLint
-- `bun lint:fix` - Fix ESLint errors
-- `bun format:check` - Check code formatting
-- `bun format:write` - Format code
-- `bun typecheck` - Run TypeScript type checking
-- `bun db:generate` - Generate database migrations
-- `bun db:push` - Push database changes
-- `bun db:studio` - Open Drizzle Studio
 
 ## Environment Variables
 
-Required environment variables (see `.env.example` for full list):
+Copy `.env.example` to `.env.local` and fill in the values. See `src/env.ts` for the full schema.
 
-### Authentication (WorkOS)
-- `WORKOS_API_KEY` - WorkOS API key for server-side operations
+Required server-side variables:
+- `API_URL` - Backend API URL
+- `API_PREFIX` - API path prefix
+- `ADMIN_API_KEY` - Admin API key
 - `WORKOS_CLIENT_ID` - WorkOS client ID
-- `WORKOS_COOKIE_PASSWORD` - Secure password for session cookies (min 32 characters)
-- `WORKOS_REDIRECT_URI` - OAuth callback URL (e.g., `http://localhost:3000/callback`)
+- `WORKOS_API_KEY` - WorkOS API key
+- `WORKOS_COOKIE_PASSWORD` - WorkOS session cookie password
+- `WORKOS_REDIRECT_URI` - WorkOS OAuth callback URL
+- `POLAR_ACCESS_TOKEN` - Polar billing token
+- `SUPPORT_EMAIL` - Support email address
 
-### Database
-- `DATABASE_URL` - PostgreSQL connection string
+## Project Structure
 
-### Other Services
-- `POLAR_ACCESS_TOKEN` - Polar.sh API token for billing
-- `RESEND_API_KEY` - Resend API key for emails
-- `UPSTASH_REDIS_REST_URL` - Upstash Redis URL (optional, for rate limiting)
-- `UPSTASH_REDIS_REST_TOKEN` - Upstash Redis token (optional)
+```
+src/
+├── routes/           # File-based routes
+│   ├── __root.tsx    # Root layout
+│   ├── _authenticated/  # Auth-protected routes
+│   ├── _landing/     # Public landing pages
+│   └── docs/         # Documentation pages
+├── components/       # Shared components
+├── server/          # Server functions
+├── integrations/    # Third-party integrations
+├── lib/             # Utilities
+└── env.ts           # Environment schema
+```
+
+## Adding UI Components
+
+```bash
+bunx shadcn@latest add button
+```
