@@ -29,10 +29,12 @@ htmlcov/
 *.egg-info/
 
 # =============================================================================
-# Node / Next.js
+# Node / TanStack Start
 # =============================================================================
-node_modules/
-.next/
+**/node_modules/
+**/.output/
+**/.tanstack/
+**/.source/
 .pnp
 .pnp.js
 npm-debug.log*

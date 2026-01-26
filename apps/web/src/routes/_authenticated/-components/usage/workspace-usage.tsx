@@ -1,0 +1,714 @@
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
+import { formatUsageValue } from '@/lib/format-usage'
+import { formatShortDate } from '@/lib/format-date'
+import { cn } from '@/lib/utils'
+import { Accordion } from '@/components/ui/accordion'
+import {
+  StyledAccordionItem,
+  StyledAccordionTrigger,
+  StyledAccordionContent,
+} from '@/components/shared/styled-accordion'
+import { StyledCard } from '@/components/shared/styled-card'
+import { SectionIndicator } from '@/components/shared/section-header'
+import { Spinner } from '@/components/shared/spinner'
+import { SectionHeader } from './usage-cards'
+import { getDeploymentCostBreakdown } from '@/server/functions/usage'
+import type {
+  UsageMetrics,
+  UsagePeriodInfo,
+  DeploymentUsageOverview,
+  WorkspaceCostBreakdownResponse,
+} from '@/interfaces/usage'
+
+interface WorkspaceUsageCardProps {
+  workspaceName: string
+  usage: UsageMetrics
+  period: UsagePeriodInfo
+  deployments: DeploymentUsageOverview[]
+  startDate: string
+  endDate: string
+}
+
+export function WorkspaceUsageCard({
+  workspaceName,
+  usage,
+  period,
+  deployments,
+  startDate,
+  endDate,
+}: WorkspaceUsageCardProps) {
+  const [breakdowns, setBreakdowns] = useState<
+    Map<string, WorkspaceCostBreakdownResponse>
+  >(new Map())
+  const [loadingBreakdowns, setLoadingBreakdowns] = useState<Set<string>>(
+    new Set(),
+  )
+
+  const breakdownsRef = useRef(breakdowns)
+  const loadingBreakdownsRef = useRef(loadingBreakdowns)
+
+  useEffect(() => {
+    breakdownsRef.current = breakdowns
+  }, [breakdowns])
+
+  useEffect(() => {
+    loadingBreakdownsRef.current = loadingBreakdowns
+  }, [loadingBreakdowns])
+
+  const handleAccordionChange = useCallback(
+    async (value: string | undefined) => {
+      if (!value) return
+
+      const deploymentId = value
+      const deployment = deployments.find(
+        (d) => d.deployment_id === deploymentId,
+      )
+
+      if (!deployment) return
+
+      if (
+        breakdownsRef.current.has(deploymentId) ||
+        loadingBreakdownsRef.current.has(deploymentId)
+      ) {
+        return
+      }
+
+      setLoadingBreakdowns((prev) => new Set(prev).add(deploymentId))
+
+      try {
+        const breakdown = await getDeploymentCostBreakdown({
+          data: { deploymentId, startDate, endDate },
+        })
+
+        setBreakdowns((prev) => {
+          const next = new Map(prev)
+          next.set(deploymentId, breakdown)
+          return next
+        })
+      } catch (error) {
+        console.error(
+          `Failed to fetch cost breakdown for deployment ${deploymentId}:`,
+          error,
+        )
+      } finally {
+        setLoadingBreakdowns((prev) => {
+          const next = new Set(prev)
+          next.delete(deploymentId)
+          return next
+        })
+      }
+    },
+    [deployments, startDate, endDate],
+  )
+
+  const getDeploymentWithBreakdown = useCallback(
+    (
+      deployment: DeploymentUsageOverview,
+    ): DeploymentUsageOverview & {
+      cost_breakdown?: WorkspaceCostBreakdownResponse
+    } => {
+      const breakdown = breakdowns.get(deployment.deployment_id)
+      if (breakdown) {
+        return { ...deployment, cost_breakdown: breakdown }
+      }
+      return deployment
+    },
+    [breakdowns],
+  )
+
+  const [showZeroCostInactive, setShowZeroCostInactive] = useState(false)
+
+  const { activeDeployments, allInactiveDeployments } = useMemo(() => {
+    const active = deployments
+      .filter((d) => d.status === 'Active')
+      .sort((a, b) =>
+        (a.deployment_name || '').localeCompare(b.deployment_name || ''),
+      )
+
+    const inactive = deployments
+      .filter((d) => d.status === 'Inactive')
+      .sort((a, b) => {
+        const nameCompare = (a.deployment_name || '').localeCompare(
+          b.deployment_name || '',
+        )
+        if (nameCompare !== 0) return nameCompare
+        const dateA = a.deleted_at ? new Date(a.deleted_at).getTime() : 0
+        const dateB = b.deleted_at ? new Date(b.deleted_at).getTime() : 0
+        return dateA - dateB
+      })
+
+    return { activeDeployments: active, allInactiveDeployments: inactive }
+  }, [deployments])
+
+  const inactiveDeployments = useMemo(() => {
+    if (showZeroCostInactive) {
+      return allInactiveDeployments
+    }
+    return allInactiveDeployments.filter(
+      (d) => d.usage.costs && d.usage.costs.total_cost > 0,
+    )
+  }, [allInactiveDeployments, showZeroCostInactive])
+
+  const zeroCostCount = useMemo(() => {
+    return allInactiveDeployments.filter(
+      (d) => !d.usage.costs || d.usage.costs.total_cost === 0,
+    ).length
+  }, [allInactiveDeployments])
+
+  const renderDeploymentAccordionItem = (
+    deployment: DeploymentUsageOverview,
+  ) => {
+    const deploymentWithBreakdown = getDeploymentWithBreakdown(deployment)
+    const isLoading = loadingBreakdowns.has(deployment.deployment_id)
+
+    return (
+      <StyledAccordionItem
+        key={deployment.deployment_id}
+        value={deployment.deployment_id}
+      >
+        <StyledAccordionTrigger>
+          <div className="flex w-full items-center justify-between pr-4">
+            <div className="flex items-center gap-3">
+              <span className="size-2 rounded-full bg-lazycloud"></span>
+              <span className="text-sm font-semibold transition-colors group-data-[state=open]:text-lazycloud">
+                {deployment.deployment_name}
+              </span>
+              {deployment.usage.costs && (
+                <span className="rounded-md bg-lazycloud/10 px-2 py-0.5 text-xs font-bold text-lazycloud">
+                  ${deployment.usage.costs.total_cost.toFixed(2)}
+                </span>
+              )}
+            </div>
+            <div className="hidden items-center gap-3 sm:flex">
+              {deployment.status === 'Active' && deployment.deployed_at && (
+                <span className="text-xs text-muted-foreground">
+                  Deployed {formatShortDate(deployment.deployed_at)}
+                </span>
+              )}
+              {deployment.status === 'Inactive' && deployment.deleted_at && (
+                <span className="text-xs text-muted-foreground">
+                  Destroyed {formatShortDate(deployment.deleted_at)}
+                </span>
+              )}
+            </div>
+          </div>
+        </StyledAccordionTrigger>
+        <StyledAccordionContent>
+          {isLoading ? (
+            <div className="flex items-center justify-center">
+              <Spinner size="md" />
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {deploymentWithBreakdown.usage.costs && (
+                <div>
+                  <h3 className="mb-2 text-base font-bold">
+                    Deployment Cost: $
+                    {deploymentWithBreakdown.usage.costs.total_cost.toFixed(2)}
+                  </h3>
+                </div>
+              )}
+
+              <div className="space-y-3">
+                <SectionHeader>Usage Breakdown</SectionHeader>
+                <div className="overflow-hidden rounded-lg border bg-muted">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b bg-muted">
+                          <th className="p-3 text-left font-semibold">
+                            Metric
+                          </th>
+                          <th className="p-3 text-right font-semibold">
+                            Usage
+                          </th>
+                          <th className="p-3 text-right font-semibold">
+                            Cost
+                            <span className="ml-1 text-xs font-normal text-muted-foreground">
+                              ($)
+                            </span>
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr className="border-b bg-card">
+                          <td className="p-3">
+                            <span className="font-medium">CPU (core-hrs)</span>
+                          </td>
+                          <td className="p-3 text-right">
+                            {formatUsageValue(
+                              deploymentWithBreakdown.usage.cpu_core_hours,
+                            )}
+                          </td>
+                          <td className="p-3 text-right">
+                            {deploymentWithBreakdown.usage.costs ? (
+                              <span className="font-semibold">
+                                {deploymentWithBreakdown.usage.costs.cpu_cost.toFixed(
+                                  2,
+                                )}
+                              </span>
+                            ) : (
+                              <span className="text-muted-foreground">-</span>
+                            )}
+                          </td>
+                        </tr>
+                        <tr className="border-b bg-card">
+                          <td className="p-3">
+                            <span className="font-medium">Memory (GB-hrs)</span>
+                          </td>
+                          <td className="p-3 text-right">
+                            {formatUsageValue(
+                              deploymentWithBreakdown.usage.memory_gb_hours,
+                            )}
+                          </td>
+                          <td className="p-3 text-right">
+                            {deploymentWithBreakdown.usage.costs ? (
+                              <span className="font-semibold">
+                                {deploymentWithBreakdown.usage.costs.memory_cost.toFixed(
+                                  2,
+                                )}
+                              </span>
+                            ) : (
+                              <span className="text-muted-foreground">-</span>
+                            )}
+                          </td>
+                        </tr>
+                        <tr className="border-b bg-card">
+                          <td className="p-3">
+                            <span className="font-medium">
+                              Storage (GB-hrs)
+                            </span>
+                          </td>
+                          <td className="p-3 text-right">
+                            {formatUsageValue(
+                              deploymentWithBreakdown.usage.standard_gb_hours +
+                                deploymentWithBreakdown.usage.shared_gb_hours,
+                            )}
+                          </td>
+                          <td className="p-3 text-right">
+                            {deploymentWithBreakdown.usage.costs ? (
+                              <span className="font-semibold">
+                                {(
+                                  deploymentWithBreakdown.usage.costs
+                                    .standard_cost +
+                                  deploymentWithBreakdown.usage.costs
+                                    .shared_cost
+                                ).toFixed(2)}
+                              </span>
+                            ) : (
+                              <span className="text-muted-foreground">-</span>
+                            )}
+                          </td>
+                        </tr>
+                        <tr className="border-b bg-card">
+                          <td className="p-3">
+                            <span className="font-medium">Build (minutes)</span>
+                          </td>
+                          <td className="p-3 text-right">
+                            {formatUsageValue(
+                              deploymentWithBreakdown.usage.build_minutes,
+                            )}
+                          </td>
+                          <td className="p-3 text-right">
+                            {deploymentWithBreakdown.usage.costs ? (
+                              <span className="font-semibold">
+                                {deploymentWithBreakdown.usage.costs.build_cost.toFixed(
+                                  2,
+                                )}
+                              </span>
+                            ) : (
+                              <span className="text-muted-foreground">-</span>
+                            )}
+                          </td>
+                        </tr>
+                        <tr className="border-b bg-card last:border-b-0">
+                          <td className="p-3">
+                            <span className="font-medium">Endpoints (hrs)</span>
+                          </td>
+                          <td className="p-3 text-right">
+                            {formatUsageValue(
+                              deploymentWithBreakdown.usage
+                                .public_endpoint_hours,
+                            )}
+                          </td>
+                          <td className="p-3 text-right">
+                            {deploymentWithBreakdown.usage.costs ? (
+                              <span className="font-semibold">
+                                {deploymentWithBreakdown.usage.costs.endpoint_cost.toFixed(
+                                  2,
+                                )}
+                              </span>
+                            ) : (
+                              <span className="text-muted-foreground">-</span>
+                            )}
+                          </td>
+                        </tr>
+                      </tbody>
+                      {deploymentWithBreakdown.usage.costs && (
+                        <tfoot>
+                          <tr className="border-t-2 bg-muted">
+                            <td className="p-3 font-semibold">Total</td>
+                            <td className="p-3"></td>
+                            <td className="p-3 text-right font-semibold">
+                              {deploymentWithBreakdown.usage.costs.total_cost.toFixed(
+                                2,
+                              )}
+                            </td>
+                          </tr>
+                        </tfoot>
+                      )}
+                    </table>
+                  </div>
+                </div>
+              </div>
+
+              {deploymentWithBreakdown.cost_breakdown && (
+                <div className="hidden space-y-3 sm:block">
+                  <SectionHeader>Service Breakdown</SectionHeader>
+                  {deploymentWithBreakdown.cost_breakdown.service_breakdown &&
+                  deploymentWithBreakdown.cost_breakdown.service_breakdown
+                    .length > 0 ? (
+                    <div className="overflow-hidden rounded-lg border bg-muted">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b bg-muted">
+                              <th className="p-3 text-left font-semibold">
+                                Service
+                              </th>
+                              <th className="p-3 text-right font-semibold">
+                                CPU Usage
+                                <span className="ml-1 text-xs font-normal text-muted-foreground">
+                                  (core-hrs)
+                                </span>
+                              </th>
+                              <th className="p-3 text-right font-semibold">
+                                Memory Usage
+                                <span className="ml-1 text-xs font-normal text-muted-foreground">
+                                  (GB-hrs)
+                                </span>
+                              </th>
+                              <th className="p-3 text-right font-semibold">
+                                Cost
+                                <span className="ml-1 text-xs font-normal text-muted-foreground">
+                                  ($)
+                                </span>
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {deploymentWithBreakdown.cost_breakdown.service_breakdown.map(
+                              (service, idx) => (
+                                <tr
+                                  key={service.service_name}
+                                  className={cn(
+                                    'border-b last:border-b-0',
+                                    idx % 2 === 0 && 'bg-card',
+                                  )}
+                                >
+                                  <td className="p-3">
+                                    <div className="flex flex-col">
+                                      <span className="font-medium">
+                                        {service.service_name}
+                                      </span>
+                                      <span className="mt-0.5 text-xs text-muted-foreground">
+                                        {service.percentage_of_total.toFixed(1)}
+                                        % of deployment cost
+                                      </span>
+                                    </div>
+                                  </td>
+                                  <td className="p-3 text-right">
+                                    {service.cpu_core_hours != null ? (
+                                      <span>
+                                        {service.cpu_core_hours.toFixed(2)}
+                                      </span>
+                                    ) : (
+                                      <span className="text-muted-foreground">
+                                        -
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td className="p-3 text-right">
+                                    {service.memory_gb_hours != null ? (
+                                      <span>
+                                        {service.memory_gb_hours.toFixed(2)}
+                                      </span>
+                                    ) : (
+                                      <span className="text-muted-foreground">
+                                        -
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td className="p-3 text-right">
+                                    <span className="font-semibold">
+                                      {service.total_compute_cost.toFixed(4)}
+                                    </span>
+                                  </td>
+                                </tr>
+                              ),
+                            )}
+                          </tbody>
+                          <tfoot>
+                            <tr className="border-t-2 bg-muted">
+                              <td className="p-3 font-semibold" colSpan={3}>
+                                Total
+                              </td>
+                              <td className="p-3 text-right font-semibold">
+                                {deploymentWithBreakdown.cost_breakdown.service_breakdown
+                                  .reduce(
+                                    (sum, service) =>
+                                      sum + service.total_compute_cost,
+                                    0,
+                                  )
+                                  .toFixed(4)}
+                              </td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="py-4 text-center text-sm italic text-muted-foreground">
+                      No service breakdown available
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {deploymentWithBreakdown.cost_breakdown?.volume_breakdown &&
+                deploymentWithBreakdown.cost_breakdown.volume_breakdown.length >
+                  0 && (
+                  <div className="hidden space-y-3 sm:block">
+                    <SectionHeader>Volume Breakdown</SectionHeader>
+                    <div className="overflow-hidden rounded-lg border bg-muted">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b bg-muted">
+                              <th className="p-3 text-left font-semibold">
+                                Volume
+                              </th>
+                              <th className="p-3 text-left font-semibold">
+                                Type
+                              </th>
+                              <th className="p-3 text-right font-semibold">
+                                Cost
+                                <span className="ml-1 text-xs font-normal text-muted-foreground">
+                                  ($)
+                                </span>
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {deploymentWithBreakdown.cost_breakdown.volume_breakdown.map(
+                              (volume, idx) => (
+                                <tr
+                                  key={volume.volume_name}
+                                  className={cn(
+                                    'border-b last:border-b-0',
+                                    idx % 2 === 0 && 'bg-muted/10',
+                                  )}
+                                >
+                                  <td className="p-3">
+                                    <span className="font-medium">
+                                      {volume.volume_name}
+                                    </span>
+                                  </td>
+                                  <td className="p-3">
+                                    <div className="flex flex-col">
+                                      <span>
+                                        {volume.storage_class === 'ebs'
+                                          ? 'Standard'
+                                          : 'Shared'}
+                                      </span>
+                                      <span className="mt-0.5 text-xs text-muted-foreground">
+                                        {volume.percentage_of_total.toFixed(1)}%
+                                        of deployment cost
+                                      </span>
+                                    </div>
+                                  </td>
+                                  <td className="p-3 text-right">
+                                    <span className="font-semibold">
+                                      {volume.storage_cost.toFixed(4)}
+                                    </span>
+                                  </td>
+                                </tr>
+                              ),
+                            )}
+                          </tbody>
+                          <tfoot>
+                            <tr className="border-t-2 bg-muted">
+                              <td className="p-3 font-semibold" colSpan={2}>
+                                Total
+                              </td>
+                              <td className="p-3 text-right font-semibold">
+                                {deploymentWithBreakdown.cost_breakdown.volume_breakdown
+                                  .reduce(
+                                    (sum, volume) => sum + volume.storage_cost,
+                                    0,
+                                  )
+                                  .toFixed(4)}
+                              </td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                )}
+            </div>
+          )}
+        </StyledAccordionContent>
+      </StyledAccordionItem>
+    )
+  }
+
+  const periodStartDate = new Date(period.start)
+  const periodEndDate = new Date(period.end)
+  const daysDiff =
+    Math.max(
+      1,
+      Math.ceil(
+        (periodEndDate.getTime() - periodStartDate.getTime()) /
+          (1000 * 60 * 60 * 24),
+      ),
+    ) || 1
+
+  const avgCpu = usage.cpu_core_hours / daysDiff
+  const avgMemory = usage.memory_gb_hours / daysDiff
+  const avgStorage =
+    (usage.standard_gb_hours + usage.shared_gb_hours) / daysDiff
+  const avgBuild = usage.build_minutes / daysDiff
+  const avgEndpoints = usage.public_endpoint_hours / daysDiff
+
+  return (
+    <StyledCard className="border-l-2 border-l-lazycloud/40 shadow-md">
+      <div className="p-6 pb-4">
+        <div className="flex items-start justify-between">
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center gap-3">
+              <h3 className="text-lg font-semibold">{workspaceName}</h3>
+              {usage.costs && (
+                <span className="rounded-md bg-lazycloud/10 px-2.5 py-1 text-base font-bold text-lazycloud">
+                  ${usage.costs.total_cost.toFixed(2)}
+                </span>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-0.5 text-xs text-muted-foreground">
+              <span>
+                CPU:{' '}
+                <span className="font-semibold text-foreground">
+                  {formatUsageValue(avgCpu)}
+                </span>
+                /day
+              </span>
+              <span>
+                Memory:{' '}
+                <span className="font-semibold text-foreground">
+                  {formatUsageValue(avgMemory)}
+                </span>
+                /day
+              </span>
+              <span>
+                Storage:{' '}
+                <span className="font-semibold text-foreground">
+                  {formatUsageValue(avgStorage)}
+                </span>
+                /day
+              </span>
+              <span>
+                Build:{' '}
+                <span className="font-semibold text-foreground">
+                  {formatUsageValue(avgBuild)}
+                </span>
+                min/day
+              </span>
+              <span>
+                Endpoints:{' '}
+                <span className="font-semibold text-foreground">
+                  {formatUsageValue(avgEndpoints)}
+                </span>
+                hrs/day
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {deployments.length > 0 && (
+        <div className="relative px-6 py-4">
+          <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-border/20 to-transparent" />
+          <div className="mb-4 flex items-center gap-2 text-sm font-semibold">
+            <SectionIndicator size="sm" variant="subtle" />
+            <span>Deployment Breakdown</span>
+            <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-normal text-muted-foreground">
+              ({deployments.length})
+            </span>
+          </div>
+
+          <Accordion
+            type="single"
+            collapsible
+            className="w-full space-y-2"
+            onValueChange={handleAccordionChange}
+          >
+            {activeDeployments.length > 0 && (
+              <>
+                <div className="flex items-center gap-2 pb-1 pt-2">
+                  <span className="text-sm font-semibold text-green-600 dark:text-green-500">
+                    Active
+                  </span>
+                  <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+                    ({activeDeployments.length})
+                  </span>
+                </div>
+                {activeDeployments.map((deployment) =>
+                  renderDeploymentAccordionItem(deployment),
+                )}
+              </>
+            )}
+
+            {allInactiveDeployments.length > 0 && (
+              <>
+                <div className="flex items-center justify-between pb-1 pt-4">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-semibold text-amber-600 dark:text-amber-500">
+                      Inactive
+                    </span>
+                    <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+                      ({inactiveDeployments.length}
+                      {zeroCostCount > 0 && !showZeroCostInactive
+                        ? `/${allInactiveDeployments.length}`
+                        : ''}
+                      )
+                    </span>
+                  </div>
+                  {zeroCostCount > 0 && (
+                    <button
+                      onClick={() =>
+                        setShowZeroCostInactive(!showZeroCostInactive)
+                      }
+                      className="text-xs text-muted-foreground transition-colors hover:text-foreground"
+                    >
+                      {showZeroCostInactive ? 'Hide' : 'Show'} $0 (
+                      {zeroCostCount})
+                    </button>
+                  )}
+                </div>
+                {inactiveDeployments.length > 0 ? (
+                  inactiveDeployments.map((deployment) =>
+                    renderDeploymentAccordionItem(deployment),
+                  )
+                ) : (
+                  <p className="py-2 text-sm italic text-muted-foreground">
+                    No inactive deployments with costs
+                  </p>
+                )}
+              </>
+            )}
+          </Accordion>
+        </div>
+      )}
+    </StyledCard>
+  )
+}

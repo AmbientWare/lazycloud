@@ -1,0 +1,36 @@
+---
+title: Deployments
+description: List and manage your LazyCloud deployments. View deployment states and manage your applications.
+---
+
+# Deployments
+
+## List Deployments
+
+```bash
+lazycloud deployments list
+```
+
+Shows all deployments in your active workspace with their current state.
+
+## Deployment States
+
+| State     | Description           |
+| --------- | --------------------- |
+| Running   | Services are healthy  |
+| Deploying | In progress           |
+| Failed    | Something went wrong  |
+| Stopped   | Deployment is stopped |
+
+## Managing Deployments
+
+```bash
+# Deploy (from project directory)
+lazycloud deploy
+
+# Destroy
+lazycloud destroy my-app
+
+# View details
+lazycloud dashboard
+```
