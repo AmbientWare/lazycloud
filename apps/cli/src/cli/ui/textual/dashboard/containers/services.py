@@ -22,6 +22,7 @@ class ServicesContainer(Container):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._list_view = None
+        self._selection_timer = None
         self.border_title = f"{Icons.WRENCH} [2] Services"
 
     def compose(self) -> ComposeResult:
@@ -40,7 +41,7 @@ class ServicesContainer(Container):
         if self._list_view:
             self._list_view._empty_message = "Select a deployment to view services"
 
-    def on_focus(self) -> None:
+    async def on_focus(self) -> None:
         """Handle focus event."""
         self.border_subtitle = "↑↓/jk Navigate"
 
@@ -57,8 +58,17 @@ class ServicesContainer(Container):
                     and item.item_data.data
                     and isinstance(item.item_data.data, ServiceStatus)
                 ):
+                    # Only fetch and update if it's a different service
                     if self.selected_service != item.item_data.data:
                         self.selected_service = item.item_data.data
+                        # Fetch fresh status from API
+                        try:
+                            status = await api.services.get_service_status(
+                                self.deployment_id, item.item_data.data.name
+                            )
+                            self.selected_service = status.service
+                        except Exception as e:
+                            self.log.error(f"Failed to get service status: {e}")
 
     def on_blur(self) -> None:
         """Handle blur event."""
@@ -119,10 +129,19 @@ class ServicesContainer(Container):
         finally:
             self._list_view.hide_loading()
 
-    def _handle_selection(self, item_data: ListItemData) -> None:
+    async def _handle_selection(self, item_data: ListItemData) -> None:
         """Handle service selection (Enter key pressed)."""
         if item_data.data and isinstance(item_data.data, ServiceStatus):
+            # Set immediately for instant UI feedback (like deployments pattern)
             self.selected_service = item_data.data
+            # Then fetch fresh status from API
+            try:
+                status = await api.services.get_service_status(
+                    self.deployment_id, item_data.data.name
+                )
+                self.selected_service = status.service
+            except Exception as e:
+                self.log.error(f"Failed to get service status: {e}")
 
     def _handle_highlight(self, item_data: ListItemData) -> None:
         """Handle service highlight with api requestdebouncing."""
@@ -131,12 +150,23 @@ class ServicesContainer(Container):
             lambda: self._update_selected_service(item_data),
         )
 
-    def _update_selected_service(self, item_data: ListItemData) -> None:
+    async def _update_selected_service(self, item_data: ListItemData) -> None:
         """Fetch service status after debounce delay."""
         self._selection_timer = None
 
         if item_data.data and isinstance(item_data.data, ServiceStatus):
-            self.selected_service = item_data.data
+            # Only update content if the highlight actually changed to a different item
+            if self.selected_service != item_data.data:
+                # Set immediately for instant UI feedback (like deployments pattern)
+                self.selected_service = item_data.data
+                # Then fetch fresh status from API
+                try:
+                    status = await api.services.get_service_status(
+                        self.deployment_id, item_data.data.name
+                    )
+                    self.selected_service = status.service
+                except Exception as e:
+                    self.log.error(f"Failed to get service status: {e}")
 
     def clear_services(self) -> None:
         """Clear the services list."""
