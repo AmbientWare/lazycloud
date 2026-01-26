@@ -114,6 +114,7 @@ class DeploymentProgress:
         self.steps = []
         self.current_step = None
         self.start_time = datetime.now()
+        self.is_complete = False
 
     def add_step(self, step_name: str, status: str = "pending"):
         """Add a step to track."""
@@ -126,6 +127,10 @@ class DeploymentProgress:
                 step["status"] = status
                 break
 
+    def mark_complete(self):
+        """Mark the deployment as complete."""
+        self.is_complete = True
+
     def update_status(self, status: str, message: str):
         """Update the current step with a status message"""
         # Map status messages to appropriate steps
@@ -136,7 +141,8 @@ class DeploymentProgress:
             self.update_step("Creating deployment resources", message)
 
         elif "completed" in status.lower() or "success" in message.lower():
-            self.update_step("Finalizing deployment", message)
+            self.is_complete = True
+            self.update_step("Creating deployment resources", message)
         elif "failed" in status.lower() or "error" in message.lower():
             # Update the current in-progress step with failure
             for step in self.steps:
@@ -169,10 +175,15 @@ class DeploymentProgress:
                 or "sending" in status.lower()
                 or "storing" in status.lower()
                 or "monitoring" in status.lower()
+                or "waiting" in status.lower()
+                or "triggering" in status.lower()
             )
 
             # Create status display
-            if "complete" in status.lower() or "success" in status.lower():
+            # Note: check "completed" (past tense) to avoid matching "waiting for deployment to complete"
+            if (
+                "completed" in status.lower() or "success" in status.lower()
+            ) and "waiting" not in status.lower():
                 status_style = "green"
                 status_display = Text(f"✅ {status}", style=status_style)
 
@@ -190,12 +201,11 @@ class DeploymentProgress:
 
             table.add_row(f"{step_name}", status_display)
 
-        # Add elapsed time
+        # Add elapsed time (yellow while in progress, green when complete)
         duration = int((datetime.now() - self.start_time).total_seconds())
         if duration > 0:
-            table.add_row(
-                Text(f"Elapsed time: {duration}s", style=Colors.Ansi.success), ""
-            )
+            elapsed_style = Colors.Ansi.success if self.is_complete else "yellow"
+            table.add_row(Text(f"Elapsed time: {duration}s", style=elapsed_style), "")
 
         return Panel(
             table,

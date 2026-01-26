@@ -2078,13 +2078,25 @@ def _deploy(
                 "creating", "Waiting for deployment to complete..."
             )
 
-        async def wait_for_task():
-            return await api.deployments.wait_for_deployment(task_response.task_id)
+            async def wait_for_task():
+                return await api.deployments.wait_for_deployment(task_response.task_id)
 
-        final_status = asyncio.run(wait_for_task())
+            final_status = asyncio.run(wait_for_task())
 
-        if final_status is None:
-            raise Exception("Deployment ended without status")
+            if final_status is None:
+                raise Exception("Deployment ended without status")
+
+            # Update progress display based on final status
+            if final_status.status == TaskStatus.COMPLETED:
+                creation_progress.update_status("completed", "Deployment submitted")
+            elif final_status.status == TaskStatus.ERROR:
+                error_msg = final_status.message or "Task failed"
+                creation_progress.update_status("failed", error_msg)
+                raise Exception(f"Deployment failed: {error_msg}")
+            else:
+                raise Exception(
+                    f"Deployment ended with unexpected status: {final_status.status}"
+                )
 
         # Update .lazycloud file timestamp on success
         if final_status.status == TaskStatus.COMPLETED:
@@ -2094,15 +2106,6 @@ def _deploy(
                     lazycloud_file.update(last_deployed=datetime.now(UTC))
             except Exception:
                 pass  # Don't fail deployment if we can't update the timestamp
-
-        elif final_status.status == TaskStatus.ERROR:
-            error_msg = final_status.message or "Task failed"
-            raise Exception(f"Deployment failed: {error_msg}")
-
-        else:
-            raise Exception(
-                f"Deployment ended with unexpected status: {final_status.status}"
-            )
 
         # Show success message
         view.show_summary(
