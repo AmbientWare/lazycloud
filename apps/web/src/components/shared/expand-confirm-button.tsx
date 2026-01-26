@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, forwardRef } from 'react'
 import { Button } from '@/components/ui/button'
 import { ConfirmButtons } from '@/components/shared/confirm-btns'
 import type { LucideIcon } from 'lucide-react'
@@ -9,15 +9,14 @@ interface ExpandConfirmButtonProps {
   icon: LucideIcon
   onConfirm: () => Promise<void>
   color: 'yellow' | 'red'
-  buttonClassName?: string
+  size?: 'icon' | 'icon-sm' | 'icon-lg'
+  className?: string
 }
 
-export function ExpandConfirmButton({
-  icon: Icon,
-  onConfirm,
-  color,
-  buttonClassName = '',
-}: ExpandConfirmButtonProps) {
+export const ExpandConfirmButton = forwardRef<
+  HTMLButtonElement,
+  ExpandConfirmButtonProps
+>(({ icon: Icon, onConfirm, color, size = 'icon', className }, ref) => {
   const [showConfirm, setShowConfirm] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
 
@@ -33,34 +32,35 @@ export function ExpandConfirmButton({
     }
   }
 
-  const confirmColorMap = {
-    yellow: 'yellow',
-    red: 'red',
-  } as const
+  const colorClasses = {
+    yellow: 'text-yellow-500 hover:bg-yellow-500/10',
+    red: 'text-red-500 hover:bg-red-500/10',
+  }
+
+  if (showConfirm) {
+    return (
+      <ConfirmButtons
+        onConfirm={handleConfirm}
+        onCancel={() => setShowConfirm(false)}
+        isLoading={isLoading}
+        confirmColor={color}
+        disabled={isLoading}
+      />
+    )
+  }
 
   return (
-    <div
-      className={`flex gap-1 overflow-hidden transition-all duration-300 ease-in-out ${showConfirm ? 'max-w-48 opacity-100' : 'max-w-11 opacity-100'}`}
+    <Button
+      ref={ref}
+      variant="outline"
+      size={size}
+      onClick={() => setShowConfirm(true)}
+      className={`${colorClasses[color]} ${className ?? ''}`}
+      aria-label="Regenerate"
     >
-      {showConfirm ? (
-        <ConfirmButtons
-          onConfirm={handleConfirm}
-          onCancel={() => setShowConfirm(false)}
-          isLoading={isLoading}
-          confirmColor={confirmColorMap[color]}
-          disabled={isLoading}
-        />
-      ) : (
-        <Button
-          variant="outline"
-          size="icon"
-          onClick={() => setShowConfirm(true)}
-          className={`size-11 shrink-0 cursor-pointer ${buttonClassName}`}
-          aria-label="Confirm action"
-        >
-          <Icon className="size-4" />
-        </Button>
-      )}
-    </div>
+      <Icon className="size-4" />
+    </Button>
   )
-}
+})
+
+ExpandConfirmButton.displayName = 'ExpandConfirmButton'

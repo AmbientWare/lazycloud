@@ -5,9 +5,9 @@ const Footer = () => {
   return (
     <footer className="w-full border-t bg-background py-12">
       <div className="container mx-auto max-w-7xl px-4">
-        <div className="grid grid-cols-2 gap-8 md:grid-cols-4 lg:grid-cols-5 lg:gap-12">
+        <div className="grid grid-cols-2 gap-8 md:grid-cols-3 lg:grid-cols-4 lg:gap-12">
           {/* Company Info */}
-          <div className="col-span-2 space-y-4 md:col-span-4 lg:col-span-1">
+          <div className="col-span-2 space-y-4 md:col-span-3 lg:col-span-2">
             <h3 className="text-2xl font-bold tracking-tight text-lazycloud">
               LazyCloud
             </h3>
@@ -24,54 +24,18 @@ const Footer = () => {
             </div>
           </div>
 
-          {/* Product Links */}
-          <div className="space-y-4">
-            <h4 className="text-sm font-semibold">Product</h4>
-            <nav>
-              <ul className="space-y-2.5">
-                <li>
-                  <Link
-                    to="/"
-                    hash="how-it-works"
-                    className="text-sm text-muted-foreground transition-colors duration-200 hover:text-foreground"
-                  >
-                    How It Works
-                  </Link>
-                </li>
-                <li>
-                  <Link
-                    to="/pricing"
-                    className="text-sm text-muted-foreground transition-colors duration-200 hover:text-foreground"
-                  >
-                    Pricing
-                  </Link>
-                </li>
-                <li>
-                  <Link
-                    to="/login"
-                    className="text-sm text-muted-foreground transition-colors duration-200 hover:text-foreground"
-                  >
-                    Get Started
-                  </Link>
-                </li>
-              </ul>
-            </nav>
-          </div>
-
           {/* Resources Links */}
           <div className="space-y-4">
             <h4 className="text-sm font-semibold">Resources</h4>
             <nav>
               <ul className="space-y-2.5">
                 <li>
-                  <a
-                    href="https://docs.lazycloud.dev"
+                  <Link
+                    to="/docs"
                     className="text-sm text-muted-foreground transition-colors duration-200 hover:text-foreground"
-                    target="_blank"
-                    rel="noopener noreferrer"
                   >
                     Documentation
-                  </a>
+                  </Link>
                 </li>
                 <li>
                   <Link

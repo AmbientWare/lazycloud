@@ -34,7 +34,7 @@ export function ConfirmButtons({
         size={size}
         onClick={onConfirm}
         disabled={isLoading || disabled}
-        className={`min-h-[44px] cursor-pointer text-xs ${colorClasses[confirmColor]}`}
+        className={`cursor-pointer text-xs ${colorClasses[confirmColor]}`}
       >
         {isLoading ? <Loader2 className="mr-1 size-3 animate-spin" /> : null}
         {confirmText}
@@ -44,7 +44,7 @@ export function ConfirmButtons({
         size={size}
         onClick={onCancel}
         disabled={isLoading}
-        className="min-h-[44px] cursor-pointer text-xs"
+        className="cursor-pointer text-xs"
       >
         Cancel
       </Button>

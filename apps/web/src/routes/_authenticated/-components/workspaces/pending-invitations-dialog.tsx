@@ -198,11 +198,11 @@ export function PendingInvitationsDialog({
                               onConfirm={() => handleDelete(invitation)}
                               icon={Trash2}
                               color="red"
-                              buttonClassName={`text-red-500 hover:bg-red-500/10 cursor-pointer ${
+                              className={
                                 deletingEmail === invitation.email
                                   ? 'opacity-50 cursor-not-allowed'
                                   : ''
-                              }`}
+                              }
                             />
                           </div>
                         </StyledTooltip>

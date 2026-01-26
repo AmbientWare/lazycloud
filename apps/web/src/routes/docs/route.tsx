@@ -100,7 +100,7 @@ export const Route = createFileRoute('/docs')({
 
 function DocsLayout() {
   return (
-    <div className="min-h-screen w-full bg-background">
+    <div className="min-h-screen w-full bg-transparent">
       <SidebarProvider>
         <DocsSidebar />
         <SidebarInset className="bg-transparent">
