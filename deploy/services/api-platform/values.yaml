@@ -27,7 +27,7 @@ crons:
 image:
   # registry includes Depot project ID: registry.depot.dev/<project-id>
   # Image ref becomes: registry.depot.dev/<project-id>:<name>-<tag>
-  registry: registry.depot.dev/DEPOT_PROJECT_ID
+  registry: registry.depot.dev/pg748nvssw
   name: backend-api
   pullPolicy: Always
   tag: "latest"

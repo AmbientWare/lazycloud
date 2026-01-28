@@ -175,6 +175,9 @@ resource "kubernetes_secret" "aws_sm_credentials" {
 resource "kubernetes_namespace" "lazycloud_prod" {
   metadata {
     name = "lazycloud-prod"
+    labels = {
+      "lazycloud.dev/depot-registry" = "true"
+    }
   }
 
   depends_on = [helm_release.cilium]
@@ -183,6 +186,9 @@ resource "kubernetes_namespace" "lazycloud_prod" {
 resource "kubernetes_namespace" "lazycloud_staging" {
   metadata {
     name = "lazycloud-staging"
+    labels = {
+      "lazycloud.dev/depot-registry" = "true"
+    }
   }
 
   depends_on = [helm_release.cilium]
