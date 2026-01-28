@@ -3,7 +3,7 @@ from datetime import date, datetime, timezone
 from enum import StrEnum
 
 from models.billing import UsageCollectionConfig
-from models.storage import STORAGE_CLASS_EBS, STORAGE_CLASS_EFS
+from models.storage import STORAGE_CLASS_STANDARD
 from sqlalchemy import (
     UUID,
     Date,
@@ -57,8 +57,7 @@ class DailyUsageRecordTable(BaseTable):
     # Totals - updated atomically via SQL increment
     cpu_core_seconds: Mapped[float] = mapped_column(Float, default=0.0)
     memory_gb_seconds: Mapped[float] = mapped_column(Float, default=0.0)
-    standard_gb_hours: Mapped[float] = mapped_column(Float, default=0.0)
-    shared_gb_hours: Mapped[float] = mapped_column(Float, default=0.0)
+    storage_gb_months: Mapped[float] = mapped_column(Float, default=0.0)
     build_minutes: Mapped[float] = mapped_column(Float, default=0.0)
     public_endpoint_hours: Mapped[float] = mapped_column(Float, default=0.0)
 
@@ -149,8 +148,7 @@ class DailyUsageRecordPydantic(BaseDbPydanticModel):
     status: DailyUsageStatus
     cpu_core_seconds: float
     memory_gb_seconds: float
-    standard_gb_hours: float
-    shared_gb_hours: float
+    storage_gb_months: float
     build_minutes: float
     public_endpoint_hours: float
     intervals_collected: int
@@ -228,10 +226,8 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecordPydant
         record_id: str,
         cpu_core_seconds: float,
         memory_gb_seconds: float,
-        standard_gb_hours: float,
-        shared_gb_hours: float,
         build_minutes: float,
-        public_endpoint_hours: float,
+        storage_gb_months: float = 0.0,
     ) -> None:
         """Atomically increment usage totals - no race conditions."""
         await self._session.execute(
@@ -242,12 +238,9 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecordPydant
                 + cpu_core_seconds,
                 memory_gb_seconds=DailyUsageRecordTable.memory_gb_seconds
                 + memory_gb_seconds,
-                standard_gb_hours=DailyUsageRecordTable.standard_gb_hours
-                + standard_gb_hours,
-                shared_gb_hours=DailyUsageRecordTable.shared_gb_hours + shared_gb_hours,
                 build_minutes=DailyUsageRecordTable.build_minutes + build_minutes,
-                public_endpoint_hours=DailyUsageRecordTable.public_endpoint_hours
-                + public_endpoint_hours,
+                storage_gb_months=DailyUsageRecordTable.storage_gb_months
+                + storage_gb_months,
                 intervals_collected=DailyUsageRecordTable.intervals_collected + 1,
                 updated_at=func.now(),
             )
@@ -440,7 +433,7 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecordPydant
         deployment_id: str,
         start_date: datetime,
         end_date: datetime,
-    ) -> tuple[float, float, float, float, float, float]:
+    ) -> tuple[float, float, float, float, float]:
         """Get aggregated usage for a specific deployment."""
         compute_query = (
             select(
@@ -457,7 +450,6 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecordPydant
 
         storage_query = (
             select(
-                UsageBreakdownEventTable.storage_class,
                 func.sum(UsageBreakdownEventTable.gb_hours).label("gb_hours"),
             )
             .where(UsageBreakdownEventTable.deployment_id == deployment_id)
@@ -466,7 +458,6 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecordPydant
             )
             .where(UsageBreakdownEventTable.interval_start >= start_date)
             .where(UsageBreakdownEventTable.interval_start < end_date)
-            .group_by(UsageBreakdownEventTable.storage_class)
         )
 
         network_query = (
@@ -502,13 +493,7 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecordPydant
         cpu = compute_row[0] or 0.0
         memory = compute_row[1] or 0.0
 
-        standard_gb_hours = 0.0
-        shared_gb_hours = 0.0
-        for row in storage_result.all():
-            if row[0] == STORAGE_CLASS_EBS:
-                standard_gb_hours = row[1] or 0.0
-            elif row[0] == STORAGE_CLASS_EFS:
-                shared_gb_hours = row[1] or 0.0
+        storage_gb_hours = storage_result.scalar() or 0.0
 
         endpoint_hours = network_result.scalar() or 0.0
         build_minutes = build_result.scalar() or 0.0
@@ -516,8 +501,7 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecordPydant
         return (
             cpu,
             memory,
-            standard_gb_hours,
-            shared_gb_hours,
+            storage_gb_hours,
             endpoint_hours,
             build_minutes,
         )
@@ -569,7 +553,7 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecordPydant
         storage_sizes: dict[str, tuple[str, float]] = {}
         for row in result.all():
             volume_name = row[0]
-            storage_class = row[1] or STORAGE_CLASS_EBS
+            storage_class = row[1] or STORAGE_CLASS_STANDARD
             gb_hours = row[2] or 0.0
             size_gb = gb_hours / interval_hours if interval_hours > 0 else 0.0
             storage_sizes[volume_name] = (storage_class, size_gb)

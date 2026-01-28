@@ -1,0 +1,34 @@
+# Talos worker node patch for LazyCloud on Hetzner Cloud
+# All workers run gVisor — single node pool, no burstable/dedicated split
+# Storage: JuiceFS CSI (runs as pods, needs FUSE — built into Talos kernel)
+
+machine:
+  # Extensions: gVisor runtime
+  install:
+    extensions:
+      - image: ghcr.io/siderolabs/gvisor:20240826.0-v1.8.0
+  # Kubelet configuration
+  kubelet:
+    extraArgs:
+      cloud-provider: external
+    nodeIP:
+      validSubnets:
+        - 10.0.1.0/24
+  # Node labels for workload scheduling
+  nodeLabels:
+    runtime: gvisor
+    workload: sandbox
+  # Network configuration
+  network:
+    hostname: ""  # Set by Terraform
+    nameservers:
+      - 1.1.1.1
+      - 8.8.8.8
+    interfaces:
+      - deviceSelector:
+          physical: true
+        dhcp: true
+  # Time synchronization
+  time:
+    servers:
+      - time.cloudflare.com

@@ -1,0 +1,31 @@
+output "kubeconfig" {
+  description = "Kubeconfig for the cluster"
+  value       = talos_cluster_kubeconfig.this.kubeconfig_raw
+  sensitive   = true
+}
+
+output "talosconfig" {
+  description = "Talos client configuration"
+  value       = data.talos_client_configuration.this.talos_config
+  sensitive   = true
+}
+
+output "control_plane_vip" {
+  description = "Floating IP (VIP) for the kube API"
+  value       = local.cp_vip_ipv4
+}
+
+output "control_plane_ips" {
+  description = "Public IPv4 addresses of control plane nodes"
+  value       = local.cp_public_ipv4
+}
+
+output "network_id" {
+  description = "Hetzner network ID"
+  value       = hcloud_network.this.id
+}
+
+output "argocd_admin_password" {
+  description = "ArgoCD initial admin password (retrieve after apply)"
+  value       = "Run: kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d"
+}

@@ -5,7 +5,6 @@ from loguru import logger
 from models.compose import ComposeFile
 from models.workspaces import InvitationType
 
-from backend.billing.product_details.base import FREE_FEATURES
 from backend.billing.product_details.features import BaseFeatures
 from backend.database import get_db_context
 from backend.database.users import SubscriptionState, UserPydantic
@@ -40,6 +39,16 @@ class NoActiveSubscriptionError(Exception):
         )
 
 
+class BillingNotConfiguredError(Exception):
+    """Exception raised when billing service is not configured.
+
+    This allows callers to handle the case where billing is disabled
+    (e.g., local development) and potentially fall back to default features.
+    """
+
+    pass
+
+
 class SubscriptionService:
     """Service for managing subscription features and limits."""
 
@@ -66,10 +75,25 @@ class SubscriptionService:
             return None
 
     async def get_user_features(self, external_customer_id: str) -> BaseFeatures:
-        """Get product features for a user based on their subscription"""
+        """Get product features for a user based on their subscription.
+
+        Args:
+            external_customer_id: The external customer ID (e.g., workos_id)
+
+        Returns:
+            BaseFeatures for the user's subscription tier
+
+        Raises:
+            BillingNotConfiguredError: If billing service is not configured
+            NoActiveSubscriptionError: If user has no active subscription
+            ValueError: If subscription or product configuration is invalid
+            RuntimeError: If API call fails
+        """
         if not self.polar_service.enabled:
-            logger.info("Polar is disabled, returning Free features")
-            return FREE_FEATURES
+            raise BillingNotConfiguredError(
+                "Billing service is not configured. "
+                "Callers should catch this exception and fall back to default features if appropriate."
+            )
 
         try:
             subscriptions_response = (

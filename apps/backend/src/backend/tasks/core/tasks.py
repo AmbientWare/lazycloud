@@ -203,8 +203,22 @@ async def prepare_deployment(
 
         async with get_db_context() as db:
             secrets = await db.secrets.get_secrets(deployment_id)
+            owner_user = await db.workspaces.get_owner_user(deployment.workspace_id)
 
-        helm_generator = HelmValuesGenerator(deployment, secrets)
+        # Get features for instance class selection
+        features = None
+        if owner_user:
+            subscription_service = get_subscription_service()
+            try:
+                features = await subscription_service.get_user_features(
+                    owner_user.workos_id
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to get features for workspace {deployment.workspace_id}: {e}"
+                )
+
+        helm_generator = HelmValuesGenerator(deployment, secrets, features)
         helm_values, _ = helm_generator.generate_values(compose_file)
         helm_values.compose_yaml = compose_yaml
     else:

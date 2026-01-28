@@ -12,7 +12,7 @@ from backend.services.depot_service import DepotService
 from backend.services.polar import PolarService
 from backend.services.usage_service import UsageService
 from models.billing import SECONDS_PER_HOUR
-from models.storage import STORAGE_CLASS_EBS
+from models.storage import STORAGE_CLASS_STANDARD
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tests.billing.conftest import create_breakdown_events, create_daily_record
@@ -120,14 +120,14 @@ class TestWorkspaceAggregation:
             workspace_id=workspace_id,
             usage_date=yesterday,
             cpu_core_seconds=1000.0,
-            standard_gb_hours=5.0,
+            storage_gb_months=5.0 / 730.0,
         )
         await create_daily_record(
             db=billing_db,
             workspace_id=workspace_id,
             usage_date=today,
             cpu_core_seconds=2000.0,
-            standard_gb_hours=10.0,
+            storage_gb_months=10.0 / 730.0,
         )
 
         await billing_db_session.flush()
@@ -148,8 +148,9 @@ class TestWorkspaceAggregation:
         # Verify sum: (1000 + 2000) / 3600 hours
         expected_cpu_hours = 3000.0 / SECONDS_PER_HOUR
         assert metrics.cpu_core_hours == pytest.approx(expected_cpu_hours, rel=0.001)
-        # Storage is already in hours, so just sum
-        assert metrics.standard_gb_hours == 15.0
+        # Storage converted to GB-months: 15.0 / 730.0
+        # Storage: (5.0 + 10.0) / 730.0 stored directly as gb_months
+        assert metrics.storage_gb_months == pytest.approx(15.0 / 730.0, rel=0.001)
 
 
 class TestDeploymentBreakdown:
@@ -204,7 +205,7 @@ class TestDeploymentBreakdown:
             expected_memory_hours, rel=0.001
         )
 
-        assert metrics.standard_gb_hours == 10.0
+        assert metrics.storage_gb_months == pytest.approx(10.0 / 730.0, rel=0.001)
 
     async def test_get_deployment_breakdown_service_list(
         self,
@@ -289,7 +290,7 @@ class TestDeploymentBreakdown:
         for vol in volumes:
             assert vol.gb_hours == 25.0
             assert vol.volume_name.startswith("pvc-")
-            assert vol.storage_class == STORAGE_CLASS_EBS
+            assert vol.storage_class == STORAGE_CLASS_STANDARD
 
 
 class TestDailyByTimezone:
@@ -352,10 +353,8 @@ class TestAggregationEdgeCases:
 
         assert metrics.cpu_core_hours == 0.0
         assert metrics.memory_gb_hours == 0.0
-        assert metrics.standard_gb_hours == 0.0
-        assert metrics.shared_gb_hours == 0.0
+        assert metrics.storage_gb_months == 0.0
         assert metrics.build_minutes == 0.0
-        assert metrics.public_endpoint_hours == 0.0
 
     async def test_aggregate_with_all_metrics(
         self,
@@ -374,10 +373,8 @@ class TestAggregationEdgeCases:
             usage_date=yesterday,
             cpu_core_seconds=1000.0,
             memory_gb_seconds=2000.0,
-            standard_gb_hours=10.0,
-            shared_gb_hours=5.0,
+            storage_gb_months=0.5,
             build_minutes=15.0,
-            public_endpoint_hours=2.0,
         )
 
         await billing_db_session.flush()
@@ -396,11 +393,9 @@ class TestAggregationEdgeCases:
         # Seconds are converted to hours
         assert metrics.cpu_core_hours == pytest.approx(1000.0 / 3600.0, rel=0.001)
         assert metrics.memory_gb_hours == pytest.approx(2000.0 / 3600.0, rel=0.001)
-        # GB-hours and other metrics are stored directly
-        assert metrics.standard_gb_hours == 10.0
-        assert metrics.shared_gb_hours == 5.0
+        # Storage stored directly as GB-months
+        assert metrics.storage_gb_months == 0.5
         assert metrics.build_minutes == 15.0
-        assert metrics.public_endpoint_hours == 2.0
 
     async def test_nonexistent_workspace_returns_zeros(
         self,

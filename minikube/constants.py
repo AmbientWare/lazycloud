@@ -1,4 +1,4 @@
-from models.storage import STORAGE_CLASS_EBS, STORAGE_CLASS_EFS
+from models.storage import STORAGE_CLASS_SHARED, STORAGE_CLASS_STANDARD
 
 # Required tools for Minikube setup
 REQUIRED_TOOLS = {
@@ -30,7 +30,7 @@ EFS_STORAGE_CLASS_YAML = f"""
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
-  name: {STORAGE_CLASS_EFS}
+  name: {STORAGE_CLASS_SHARED}
   annotations:
     storageclass.kubernetes.io/is-default-class: "false"
 provisioner: hostpath.csi.k8s.io
@@ -44,7 +44,7 @@ EBS_STORAGE_CLASS_YAML = f"""
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
-  name: {STORAGE_CLASS_EBS}
+  name: {STORAGE_CLASS_STANDARD}
   annotations:
     storageclass.kubernetes.io/is-default-class: "false"
 provisioner: hostpath.csi.k8s.io

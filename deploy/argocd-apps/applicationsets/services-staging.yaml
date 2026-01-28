@@ -33,7 +33,6 @@ spec:
         helm:
           valueFiles:
             - values.yaml
-            - 'values-{{ index .metadata.labels "region" }}.yaml'
             - values-staging.yaml
       destination:
         server: '{{ .server }}'

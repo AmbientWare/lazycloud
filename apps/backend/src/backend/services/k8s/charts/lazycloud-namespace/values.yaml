@@ -11,6 +11,7 @@ namespace:
   labels:
     "lazycloud.dev/managed": "true"
     "lazycloud.dev/type": "user-namespace"
+    "lazycloud.dev/depot-registry": "true"
   
   # Annotations for the namespace
   annotations: {}

@@ -31,10 +31,14 @@ spec:
                   matchLabels:
                     app: {{ .Chart.Name }}-api
                 topologyKey: kubernetes.io/hostname
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       serviceAccountName: {{ .Chart.Name }}
       initContainers:
         - name: db-migrate
-          image: "{{ .Values.image.registry }}/{{ .Values.image.name }}:{{ .Values.image.tag }}"
+          image: "{{ .Values.image.registry }}:{{ .Values.image.name }}-{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["uv", "run", "--no-sync", "alembic", "upgrade", "head"]
           env:
@@ -50,7 +54,7 @@ spec:
               mountPath: /shared-storage
       containers:
         - name: api
-          image: "{{ .Values.image.registry }}/{{ .Values.image.name }}:{{ .Values.image.tag }}"
+          image: "{{ .Values.image.registry }}:{{ .Values.image.name }}-{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["uv", "run", "--no-sync", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
           ports:

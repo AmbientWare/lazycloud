@@ -211,8 +211,7 @@ def make_daily_usage_record(
     usage_date: datetime | None = None,
     cpu_core_seconds: float = 0.0,
     memory_gb_seconds: float = 0.0,
-    standard_gb_hours: float = 0.0,
-    shared_gb_hours: float = 0.0,
+    storage_gb_months: float = 0.0,
     build_minutes: float = 0.0,
     public_endpoint_hours: float = 0.0,
 ) -> DailyUsageRecordPydantic:
@@ -223,8 +222,7 @@ def make_daily_usage_record(
         status=DailyUsageStatus.COLLECTING,
         cpu_core_seconds=cpu_core_seconds,
         memory_gb_seconds=memory_gb_seconds,
-        standard_gb_hours=standard_gb_hours,
-        shared_gb_hours=shared_gb_hours,
+        storage_gb_months=storage_gb_months,
         build_minutes=build_minutes,
         public_endpoint_hours=public_endpoint_hours,
         intervals_collected=0,
@@ -239,7 +237,6 @@ def make_features(
     max_memory_per_service: int = 16,
     max_replicas: int = 10,
     custom_domains_enabled: bool = True,
-    support_level: str = "email",
 ) -> BaseFeatures:
     """Create test subscription features with specified limits."""
     return BaseFeatures(
@@ -249,7 +246,6 @@ def make_features(
         max_memory_per_service=max_memory_per_service,
         max_replicas_per_service=max_replicas,
         custom_domains_enabled=custom_domains_enabled,
-        support_level=support_level,
     )
 
 

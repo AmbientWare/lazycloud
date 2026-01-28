@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from models.storage import STORAGE_CLASS_EBS, STORAGE_CLASS_EFS
+from models.storage import STORAGE_CLASS_SHARED, STORAGE_CLASS_STANDARD
 from pydantic import BaseModel
 
 
@@ -13,10 +13,8 @@ class UsagePeriodInfo(BaseModel):
 class UsageMetrics(BaseModel):
     cpu_core_hours: float
     memory_gb_hours: float
-    standard_gb_hours: float
-    shared_gb_hours: float
     build_minutes: float
-    public_endpoint_hours: float
+    storage_gb_months: float = 0.0
     costs: "MeterCostBreakdown | None" = None
 
 
@@ -30,7 +28,7 @@ class ServiceUsageItem(BaseModel):
 
 class VolumeUsageItem(BaseModel):
     volume_name: str
-    storage_class: Literal[STORAGE_CLASS_EBS, STORAGE_CLASS_EFS]
+    storage_class: Literal[STORAGE_CLASS_STANDARD, STORAGE_CLASS_SHARED]
     gb_hours: float
 
 
@@ -38,10 +36,8 @@ class DailyUsageData(BaseModel):
     date: str
     cpu_core_hours: float
     memory_gb_hours: float
-    standard_gb_hours: float
-    shared_gb_hours: float
     build_minutes: float
-    public_endpoint_hours: float
+    storage_gb_months: float = 0.0
     costs: "MeterCostBreakdown | None" = None
 
 
@@ -82,10 +78,8 @@ class MeterCostBreakdown(BaseModel):
 
     cpu_cost: float
     memory_cost: float
-    standard_cost: float
-    shared_cost: float
     build_cost: float
-    endpoint_cost: float
+    storage_cost: float = 0.0
     total_cost: float
 
 
@@ -105,7 +99,7 @@ class VolumeCostBreakdown(BaseModel):
     """Cost breakdown for a single volume (estimated)."""
 
     volume_name: str
-    storage_class: Literal[STORAGE_CLASS_EBS, STORAGE_CLASS_EFS]
+    storage_class: Literal[STORAGE_CLASS_STANDARD, STORAGE_CLASS_SHARED]
     storage_cost: float
     percentage_of_total: float
 
