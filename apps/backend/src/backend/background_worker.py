@@ -13,6 +13,7 @@ from saq import Worker
 from sentry_sdk.integrations.loguru import LoguruIntegration
 
 from backend.config import app_config
+from backend.services.k8s.client import close_all_clients, initialize_cluster_clients
 from backend.tasks.jobs import BACKGROUND_JOBS
 from backend.tasks.queue import disconnect_queues, get_background_queue
 
@@ -29,11 +30,14 @@ if app_config.SENTRY_DSN:
 async def startup(ctx: dict):
     """Worker startup hook."""
     logger.info("SAQ background worker starting up")
+    await initialize_cluster_clients()
+    logger.info("Kubernetes cluster clients initialized")
 
 
 async def shutdown(ctx: dict):
     """Worker shutdown hook."""
     logger.info("SAQ background worker shutting down")
+    await close_all_clients()
     await disconnect_queues()
 
 

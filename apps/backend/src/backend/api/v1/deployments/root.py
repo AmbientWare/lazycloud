@@ -9,6 +9,7 @@ from api_requests.deployments import (
 from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
 from models.billing import UsageUnits
+from models.clusters import get_cluster_registry
 from models.deployments import DeploymentStates
 from models.statuses import TaskStatus
 from responses.deployments import (
@@ -87,6 +88,7 @@ async def list_deployments(
                 deployed_at=deployment.deployed_at,
                 created_at=deployment.created_at,
                 updated_at=deployment.updated_at,
+                cluster_id=deployment.cluster_id,
             )
             for deployment in deployments
             if deployment.id is not None and deployment.name is not None
@@ -154,6 +156,13 @@ async def create_deployment(
         raise HTTPException(403, "Admin or owner role required")
 
     namespace = create_ns_name(request.workspace_id)
+
+    # Get cluster for new deployment (uses default cluster for now)
+    registry = get_cluster_registry()
+    cluster = registry.get_default_cluster()
+    if not cluster:
+        raise HTTPException(503, "No available clusters for deployment")
+    target_cluster_id = cluster.name
 
     # Check if this is an update to an existing deployment
     existing_deployment = None
@@ -238,6 +247,7 @@ async def create_deployment(
                     pending_compose_yaml=request.compose_yaml,
                     state=DeploymentStates.PENDING,
                     status_message="Created",
+                    cluster_id=target_cluster_id,
                 )
                 deployment = await db.compose_deployments.create(deployment_data)
 
@@ -273,6 +283,7 @@ async def create_deployment(
                 pending_compose_yaml=request.compose_yaml,
                 state=DeploymentStates.PENDING,
                 status_message="Created",
+                cluster_id=target_cluster_id,
             )
             deployment = await db.compose_deployments.create(deployment_data)
 
@@ -319,6 +330,7 @@ async def create_deployment(
         deployed_at=deployment.deployed_at,
         created_at=deployment.created_at,
         updated_at=deployment.updated_at,
+        cluster_id=deployment.cluster_id,
         endpoints=endpoints,
     )
 

@@ -16,7 +16,8 @@ resource "hcloud_placement_group" "control_plane" {
   name = "${var.cluster_name}-control-plane"
   type = "spread"
   labels = {
-    cluster = var.cluster_name
+    cluster    = var.cluster_name
+    cluster_id = var.cluster_id
   }
 }
 
@@ -24,7 +25,8 @@ resource "hcloud_placement_group" "worker" {
   name = "${var.cluster_name}-worker"
   type = "spread"
   labels = {
-    cluster = var.cluster_name
+    cluster    = var.cluster_name
+    cluster_id = var.cluster_id
   }
 }
 
@@ -40,7 +42,8 @@ resource "hcloud_ssh_key" "this" {
   name       = "${var.cluster_name}-default"
   public_key = tls_private_key.ssh.public_key_openssh
   labels = {
-    cluster = var.cluster_name
+    cluster    = var.cluster_name
+    cluster_id = var.cluster_id
   }
 }
 
@@ -60,8 +63,9 @@ resource "hcloud_server" "control_plane" {
   firewall_ids       = [hcloud_firewall.this.id]
 
   labels = {
-    cluster = var.cluster_name
-    role    = "control-plane"
+    cluster    = var.cluster_name
+    cluster_id = var.cluster_id
+    role       = "control-plane"
   }
 
   public_net {
@@ -100,6 +104,7 @@ resource "hcloud_server" "worker" {
 
   labels = {
     cluster     = var.cluster_name
+    cluster_id  = var.cluster_id
     role        = "worker"
     server_type = var.worker_type
   }

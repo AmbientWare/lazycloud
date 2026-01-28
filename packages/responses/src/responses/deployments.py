@@ -26,6 +26,7 @@ class DeploymentResponse(BaseModel):
     created_at: datetime | None = None
     updated_at: datetime | None = None
     deployed_at: datetime | None = None
+    cluster_id: str | None = None  # Cluster where deployment is running
     endpoints: dict[str, ServiceEndpoints] | None = None  # Per-service endpoints
 
 
@@ -84,6 +85,7 @@ class DeploymentOverview(BaseModel):
     created_at: datetime | None = None
     updated_at: datetime | None = None
     deployed_at: datetime | None = None
+    cluster_id: str | None = None
     ready_services: int | None = None
 
 

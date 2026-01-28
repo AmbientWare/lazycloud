@@ -149,7 +149,8 @@ def main() -> None:
             limits = TIER_LIMITS[tier]
             key = tier.value
 
-            max_deploy_display = min(limits["max_deployments"], 200)
+            # Derive reasonable deployment slider max from service limit
+            max_deploy_display = max(2, min(limits["max_services"] // 2, 50))
             st.markdown(f"**{tier.value.title()}**")
             c1, c2, c3, c4, c5 = st.columns(5)
 
@@ -182,11 +183,12 @@ def main() -> None:
                 (defaults.builds_min, defaults.builds_max),
                 key=f"{key}_builds",
             )
+            max_vol_gb = float(limits["max_volume_gb"])
             storage_min, storage_max = c5.slider(
                 "Storage/vol (GB)",
                 0.5,
-                100.0,
-                (defaults.storage_min, defaults.storage_max),
+                max_vol_gb,
+                (defaults.storage_min, min(defaults.storage_max, max_vol_gb)),
                 step=0.5,
                 key=f"{key}_storage",
             )
