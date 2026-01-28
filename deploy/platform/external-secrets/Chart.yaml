@@ -1,6 +1,6 @@
 apiVersion: v2
 name: external-secrets
-description: External Secrets Operator with ClusterSecretStore
+description: External Secrets Operator with AWS Secrets Manager (Hetzner)
 type: application
 version: 0.1.0
 appVersion: "0.18.0"

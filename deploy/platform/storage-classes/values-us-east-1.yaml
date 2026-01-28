@@ -1,5 +1,0 @@
-# Regional values for us-east-1
-
-storageClasses:
-  efs:
-    fileSystemId: "fs-090be54c3d2d9cf09"
