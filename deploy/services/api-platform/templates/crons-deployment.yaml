@@ -16,10 +16,14 @@ spec:
         app: {{ .Chart.Name }}-crons
         component: cron
     spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       serviceAccountName: {{ .Chart.Name }}
       containers:
         - name: cron-worker
-          image: "{{ .Values.image.registry }}/{{ .Values.crons.image.name }}:{{ .Values.image.tag }}"
+          image: "{{ .Values.image.registry }}:{{ .Values.crons.image.name }}-{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["uv", "run", "--no-sync", "python", "-m", "backend.worker"]
           env:
