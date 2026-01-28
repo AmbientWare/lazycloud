@@ -72,7 +72,7 @@ class ClusterRegistry:
         self._clusters = {}
         for name, cfg in data.get("clusters", {}).items():
             self._clusters[name] = Cluster(
-                name=cfg["name"],
+                name=name,
                 display_name=cfg["display_name"],
                 provider=cfg["provider"],
                 location=cfg["location"],
@@ -121,28 +121,11 @@ class ClusterRegistry:
 
         return None
 
-    def get_clusters_for_region(self, region: str) -> list[Cluster]:
-        """Get active clusters in a region."""
-        region_cfg = self._regions.get(region)
-        if not region_cfg:
-            return []
-
-        return [
-            self._clusters[name]
-            for name in region_cfg.clusters
-            if name in self._clusters and self._clusters[name].accepts_new_deployments
-        ]
-
     def get_cluster_for_placement(
         self,
-        region_preference: str | None = None,
     ) -> Cluster | None:
         """Get best cluster for a new deployment."""
-        if region_preference:
-            clusters = self.get_clusters_for_region(region_preference)
-            if clusters:
-                return clusters[0]  # TODO: Could add capacity-based selection later
-
+        # TODO: Implement capacity-based selection later
         return self.get_default_cluster()
 
 

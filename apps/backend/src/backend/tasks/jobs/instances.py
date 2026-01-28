@@ -50,8 +50,8 @@ async def delete_instance_job(
     namespace = deployment.namespace
     resource_name = service.resourceName
 
-    # Initialize pod manager
-    pod_manager = KubernetesPodManager()
+    # Initialize pod manager with cluster_id
+    pod_manager = KubernetesPodManager(deployment.cluster_id)
 
     # Verify pod ownership before deletion
     logger.info(f"Verifying pod {pod_name} belongs to service {service_name}")

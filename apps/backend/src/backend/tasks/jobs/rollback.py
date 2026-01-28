@@ -37,14 +37,14 @@ async def rollback_compose_job(
         f"Starting rollback of deployment {deployment_id} to revision {revision}"
     )
 
-    helm_manager = HelmManager()
-
     # Step 1: Quick DB read to validate state and extract needed data
     async with get_db_context() as db:
         deployment = await db.compose_deployments.get_by_id(deployment_id)
 
     if deployment is None:
         raise ValueError(f"Deployment {deployment_id} not found")
+
+    helm_manager = HelmManager(deployment.cluster_id)
 
     if deployment.state not in (
         DeploymentStates.DEPLOYED,

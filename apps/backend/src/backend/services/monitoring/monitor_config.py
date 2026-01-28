@@ -38,6 +38,7 @@ class DeploymentMonitorConfig(MonitorConfigBase):
     namespace: str
     helm_values: HelmValues
     deployed_at: datetime
+    cluster_id: str
 
     def get_key(self) -> str:
         """Generate unique key for this monitor."""
@@ -57,6 +58,7 @@ class ServiceMonitorConfig(MonitorConfigBase):
     service_name: str
     namespace: str
     helm_values: HelmValues
+    cluster_id: str
 
     def get_key(self) -> str:
         """Generate unique key for this monitor."""
@@ -90,6 +92,7 @@ class LogMonitorConfig(MonitorConfigBase):
     namespace: str
     service_name: str
     pod_name: str
+    cluster_id: str
     tail_lines: int = 100
 
     def get_key(self) -> str:
@@ -109,6 +112,7 @@ class DeployProgressMonitorConfig(MonitorConfigBase):
     deployment_name: str
     namespace: str
     helm_values: HelmValues
+    cluster_id: str
 
     def get_key(self) -> str:
         """Generate unique key for this monitor."""

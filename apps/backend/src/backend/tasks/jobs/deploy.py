@@ -7,6 +7,8 @@ from models.deployments import DeploymentStates
 from models.secrets import SecretState
 
 from backend.database import get_db_context
+from backend.services.k8s import create_release_name
+from backend.services.k8s.helm_manager import HelmManager
 from backend.tasks.core import (
     check_deployment_idempotency,
     delete_existing_jobs,
@@ -18,8 +20,6 @@ from backend.tasks.core import (
     sync_deployment_to_db,
     update_deployment_state,
 )
-from backend.services.k8s import create_release_name
-from backend.services.k8s.helm_manager import HelmManager
 
 
 async def deploy_compose_job(
@@ -67,16 +67,17 @@ async def deploy_compose_job(
         await update_deployment_state(
             deployment_id, DeploymentStates.DEPLOYING, "Deploying namespace resources"
         )
-        await deploy_namespace_resources(namespace_config_result)
+        await deploy_namespace_resources(namespace_config_result, deployment.cluster_id)
 
         # Step 5: Delete existing jobs
         await update_deployment_state(
             deployment_id, DeploymentStates.DEPLOYING, "Cleaning up existing jobs"
         )
         await delete_existing_jobs(
-            deployment.namespace,
-            helm_values,
-            deployment_info.current_helm_values if deployment_info else None,
+            namespace=deployment.namespace,
+            helm_values=helm_values,
+            cluster_id=deployment.cluster_id,
+            current_helm_values=deployment_info.current_helm_values if deployment_info else None,
         )
 
         # Step 6: Deploy application
@@ -85,7 +86,7 @@ async def deploy_compose_job(
             deployment_id, DeploymentStates.DEPLOYING, "Deploying application"
         )
         deploy_result = await deploy_application(
-            name, deployment.namespace, helm_values
+            name, deployment.namespace, helm_values, deployment.cluster_id
         )
 
         # Step 7: Register custom domains with Cloudflare (non-blocking)
@@ -118,7 +119,7 @@ async def deploy_compose_job(
                 "Attempting to rollback Helm deployment to maintain consistency..."
             )
 
-            helm_manager = HelmManager()
+            helm_manager = HelmManager(deployment.cluster_id)
             helm_revision = deploy_result.revision
             if helm_revision and helm_revision > 1:
                 rollback_result = await helm_manager.rollback(

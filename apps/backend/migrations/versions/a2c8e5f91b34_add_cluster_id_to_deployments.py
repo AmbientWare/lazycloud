@@ -20,6 +20,11 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Add cluster_id column to compose_deployments table."""
+    # 'ash-1' is the original default cluster where all existing deployments reside.
+    # This is a one-time migration value for backfilling existing records.
+    # New deployments will get their cluster_id from the placement logic.
+    default_cluster = "ash-1"
+
     # Add column with server default for existing rows
     op.add_column(
         "compose_deployments",
@@ -27,7 +32,7 @@ def upgrade() -> None:
             "cluster_id",
             sa.String(length=50),
             nullable=True,
-            server_default="ash-1",
+            server_default=default_cluster,
         ),
     )
 
@@ -41,7 +46,7 @@ def upgrade() -> None:
 
     # Backfill existing rows (in case server_default doesn't apply to all)
     op.execute(
-        "UPDATE compose_deployments SET cluster_id = 'ash-1' WHERE cluster_id IS NULL"
+        f"UPDATE compose_deployments SET cluster_id = '{default_cluster}' WHERE cluster_id IS NULL"
     )
 
     # Now make the column non-nullable and remove server default

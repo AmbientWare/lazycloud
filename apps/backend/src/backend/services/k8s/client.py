@@ -69,8 +69,26 @@ def parse_k8s_size_to_gb(size_str: str) -> float:
 # -----------------------------------------------------------------------------
 
 _cluster_clients: dict[str, AsyncApiClient] = {}
+_cluster_kubeconfig_paths: dict[str, str] = {}  # cluster_id -> kubeconfig file path
 _clients_lock = asyncio.Lock()
 _initialized = False
+
+
+def _cleanup_stale_kubeconfigs() -> None:
+    """Remove any stale kubeconfig files from previous runs.
+
+    This handles the case where the process crashed before normal cleanup,
+    ensuring sensitive credentials don't persist in /tmp.
+    """
+    temp_dir = Path(tempfile.gettempdir())
+    for kubeconfig_file in temp_dir.glob("kubeconfig-*.yaml"):
+        try:
+            kubeconfig_file.unlink()
+            logger.debug(f"Cleaned up stale kubeconfig: {kubeconfig_file}")
+        except Exception as e:
+            logger.warning(
+                f"Failed to clean up stale kubeconfig {kubeconfig_file}: {e}"
+            )
 
 
 async def initialize_cluster_clients() -> None:
@@ -83,6 +101,9 @@ async def initialize_cluster_clients() -> None:
     async with _clients_lock:
         if _initialized:
             return
+
+        # Clean up any stale kubeconfig files from previous runs
+        _cleanup_stale_kubeconfigs()
 
         # Check if we have AWS credentials for Secrets Manager
         if app_config.AWS_ACCESS_KEY_ID and app_config.AWS_SECRET_ACCESS_KEY:
@@ -98,11 +119,14 @@ async def initialize_cluster_clients() -> None:
 async def _load_clients_from_secrets_manager() -> None:
     """Load kubeconfigs for all active clusters from Secrets Manager.
 
+    Kubeconfig files are persisted to disk so both the K8s Python client
+    and Helm CLI can use them.
+
     Raises:
         RuntimeError: If no active clusters could be loaded
     """
     registry = get_cluster_registry()
-    active_clusters = [c for c in registry.list_clusters() if c.status == "active"]
+    active_clusters = [c for c in registry.clusters.values() if c.status == "active"]
 
     if not active_clusters:
         logger.warning("No active clusters found in registry")
@@ -122,8 +146,11 @@ async def _load_clients_from_secrets_manager() -> None:
             continue
 
         try:
-            client = await _create_client_from_kubeconfig(kubeconfig)
+            client, kubeconfig_path = await _create_client_from_kubeconfig(
+                kubeconfig, cluster.name
+            )
             _cluster_clients[cluster.name] = client
+            _cluster_kubeconfig_paths[cluster.name] = kubeconfig_path
             logger.info(f"Loaded K8s client for cluster: {cluster.name}")
         except Exception as e:
             logger.error(f"Failed to create client for {cluster.name}: {e}")
@@ -146,58 +173,77 @@ async def _load_clients_from_secrets_manager() -> None:
 async def _load_client_from_local_config() -> None:
     """Load a single client from local kubeconfig (development mode)."""
     registry = get_cluster_registry()
-    default_cluster = registry.get_default_cluster()
-    cluster_name = default_cluster.name if default_cluster else "default"
+    default_cluster = registry.get_cluster_for_placement()
 
-    try:
-        # Try in-cluster config first (when running in Kubernetes)
-        try:
-            async_config.load_incluster_config()
-            logger.info("Loaded in-cluster Kubernetes configuration")
-            k8s_config = AsyncConfiguration.get_default_copy()
-        except async_config.ConfigException:
-            # Fall back to kubeconfig file
-            kubeconfig_path = os.getenv("KUBECONFIG")
-            if kubeconfig_path:
-                await async_config.load_kube_config(config_file=kubeconfig_path)
-                logger.info(f"Loaded Kubernetes configuration from {kubeconfig_path}")
-            else:
-                await async_config.load_kube_config()
-                logger.info("Loaded Kubernetes configuration from default location")
-            k8s_config = AsyncConfiguration.get_default_copy()
+    if default_cluster:
+        cluster_name = default_cluster.name
+    else:
+        # No default cluster for placement - try to find any active cluster
+        active_clusters = [
+            c for c in registry.clusters.values() if c.status == "active"
+        ]
+        if active_clusters:
+            cluster_name = active_clusters[0].name
+            logger.warning(
+                f"No default cluster for placement, using first active cluster: {cluster_name}"
+            )
+        else:
+            # No clusters configured at all - use fallback name
+            cluster_name = "default"
+            logger.warning(
+                "No clusters configured in registry. Using 'default' as cluster name. "
+                "Deployments must use cluster_id='default' to target this client."
+            )
 
-        k8s_config.connection_pool_maxsize = app_config.K8S_CONNECTION_POOL_SIZE
-        client = AsyncApiClient(configuration=k8s_config)
-        _cluster_clients[cluster_name] = client
-        logger.info(f"Loaded local K8s client as cluster: {cluster_name}")
+    # Use KUBECONFIG env var or default ~/.kube/config
+    kubeconfig_path = os.getenv("KUBECONFIG") or str(Path.home() / ".kube" / "config")
 
-    except Exception as e:
-        logger.error(f"Failed to initialize local Kubernetes client: {e}")
-        raise
+    await async_config.load_kube_config(config_file=kubeconfig_path)
+    logger.info(f"Loaded Kubernetes configuration from {kubeconfig_path}")
+
+    k8s_config = AsyncConfiguration.get_default_copy()
+    k8s_config.connection_pool_maxsize = app_config.K8S_CONNECTION_POOL_SIZE
+
+    client = AsyncApiClient(configuration=k8s_config)
+    _cluster_clients[cluster_name] = client
+    _cluster_kubeconfig_paths[cluster_name] = kubeconfig_path
+
+    logger.info(f"Loaded local K8s client as cluster: {cluster_name}")
 
 
-async def _create_client_from_kubeconfig(kubeconfig_yaml: str) -> AsyncApiClient:
+async def _create_client_from_kubeconfig(
+    kubeconfig_yaml: str, cluster_name: str
+) -> tuple[AsyncApiClient, str]:
     """Create an AsyncApiClient from kubeconfig YAML string.
+
+    The kubeconfig file is persisted to disk so it can be used by both
+    the K8s Python client and Helm CLI.
 
     Note: This function modifies global kubernetes Configuration state via
     load_kube_config(). It's safe because it's only called from within
     initialize_cluster_clients() which holds _clients_lock, ensuring
     sequential execution.
-    """
-    # Write to temp file (kubernetes_asyncio requires file path)
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-        f.write(kubeconfig_yaml)
-        config_path = f.name
 
-    try:
-        # load_kube_config sets the global default Configuration
-        await async_config.load_kube_config(config_file=config_path)
-        # get_default_copy() returns an independent copy of the current config
-        k8s_config = AsyncConfiguration.get_default_copy()
-        k8s_config.connection_pool_maxsize = app_config.K8S_CONNECTION_POOL_SIZE
-        return AsyncApiClient(configuration=k8s_config)
-    finally:
-        Path(config_path).unlink(missing_ok=True)
+    Args:
+        kubeconfig_yaml: The kubeconfig content as YAML string
+        cluster_name: Name of the cluster (used for file naming)
+
+    Returns:
+        Tuple of (AsyncApiClient, kubeconfig_file_path)
+    """
+    # Write to a named temp file that persists (for Helm CLI to use)
+    config_path = Path(tempfile.gettempdir()) / f"kubeconfig-{cluster_name}.yaml"
+    config_path.write_text(kubeconfig_yaml)
+    # Restrict permissions to owner only
+    config_path.chmod(0o600)
+
+    # load_kube_config sets the global default Configuration
+    await async_config.load_kube_config(config_file=str(config_path))
+    # get_default_copy() returns an independent copy of the current config
+    k8s_config = AsyncConfiguration.get_default_copy()
+    k8s_config.connection_pool_maxsize = app_config.K8S_CONNECTION_POOL_SIZE
+
+    return AsyncApiClient(configuration=k8s_config), str(config_path)
 
 
 async def get_cluster_client(cluster_id: str) -> AsyncApiClient:
@@ -225,28 +271,52 @@ async def get_cluster_client(cluster_id: str) -> AsyncApiClient:
     return _cluster_clients[cluster_id]
 
 
-async def get_async_api_client() -> AsyncApiClient:
-    """Get the default cluster client.
+def get_available_cluster_ids() -> list[str]:
+    """Get list of cluster IDs that have loaded K8s clients.
 
-    For backwards compatibility. Returns client for the default cluster
-    as defined in clusters.yaml.
+    Use this to filter placement candidates to only clusters we can operate on.
     """
-    if not _initialized:
-        await initialize_cluster_clients()
+    return list(_cluster_clients.keys())
 
-    registry = get_cluster_registry()
-    default = registry.get_default_cluster()
 
-    if default and default.name in _cluster_clients:
-        return _cluster_clients[default.name]
+def is_cluster_available(cluster_id: str) -> bool:
+    """Check if a cluster has a loaded K8s client."""
+    return cluster_id in _cluster_clients
 
-    # Fallback to first available client
-    if _cluster_clients:
-        first_cluster = next(iter(_cluster_clients.keys()))
-        logger.warning(f"No default cluster, using first available: {first_cluster}")
-        return _cluster_clients[first_cluster]
 
-    raise RuntimeError("No Kubernetes clients available")
+def get_kubeconfig_path(cluster_id: str) -> str:
+    """Get the kubeconfig file path for a cluster.
+
+    This is used by Helm CLI which needs a file path to operate on a cluster.
+
+    Args:
+        cluster_id: The cluster identifier
+
+    Returns:
+        Path to the kubeconfig file
+
+    Raises:
+        ValueError: If no kubeconfig is available for the cluster
+    """
+    if cluster_id not in _cluster_kubeconfig_paths:
+        available = list(_cluster_kubeconfig_paths.keys())
+        raise ValueError(
+            f"No kubeconfig available for cluster: {cluster_id}. "
+            f"Available clusters: {available}"
+        )
+    return _cluster_kubeconfig_paths[cluster_id]
+
+
+async def get_async_api_client(cluster_id: str) -> AsyncApiClient:
+    """Get AsyncApiClient for a specific cluster.
+
+    Args:
+        cluster_id: The cluster identifier (required).
+
+    Returns:
+        AsyncApiClient for the specified cluster.
+    """
+    return await get_cluster_client(cluster_id)
 
 
 # -----------------------------------------------------------------------------
@@ -254,42 +324,33 @@ async def get_async_api_client() -> AsyncApiClient:
 # -----------------------------------------------------------------------------
 
 
-async def get_async_core_v1_api(cluster_id: str | None = None) -> AsyncCoreV1Api:
+async def get_async_core_v1_api(cluster_id: str) -> AsyncCoreV1Api:
     """Get async CoreV1Api client for pods, services, secrets, PVCs, etc.
 
     Args:
-        cluster_id: Optional cluster identifier. Uses default cluster if not specified.
+        cluster_id: The cluster identifier (required).
     """
-    if cluster_id:
-        client = await get_cluster_client(cluster_id)
-    else:
-        client = await get_async_api_client()
+    client = await get_cluster_client(cluster_id)
     return AsyncCoreV1Api(client)
 
 
-async def get_async_apps_v1_api(cluster_id: str | None = None) -> AsyncAppsV1Api:
+async def get_async_apps_v1_api(cluster_id: str) -> AsyncAppsV1Api:
     """Get async AppsV1Api client for deployments, statefulsets, etc.
 
     Args:
-        cluster_id: Optional cluster identifier. Uses default cluster if not specified.
+        cluster_id: The cluster identifier (required).
     """
-    if cluster_id:
-        client = await get_cluster_client(cluster_id)
-    else:
-        client = await get_async_api_client()
+    client = await get_cluster_client(cluster_id)
     return AsyncAppsV1Api(client)
 
 
-async def get_async_batch_v1_api(cluster_id: str | None = None) -> AsyncBatchV1Api:
+async def get_async_batch_v1_api(cluster_id: str) -> AsyncBatchV1Api:
     """Get async BatchV1Api client for jobs, cronjobs, etc.
 
     Args:
-        cluster_id: Optional cluster identifier. Uses default cluster if not specified.
+        cluster_id: The cluster identifier (required).
     """
-    if cluster_id:
-        client = await get_cluster_client(cluster_id)
-    else:
-        client = await get_async_api_client()
+    client = await get_cluster_client(cluster_id)
     return AsyncBatchV1Api(client)
 
 
@@ -309,7 +370,19 @@ async def close_all_clients():
         except Exception as e:
             logger.warning(f"Error closing client for {cluster_id}: {e}")
 
+    # Clean up kubeconfig files (only temp files we created, not user's config)
+    temp_dir = tempfile.gettempdir()
+    for cluster_id, kubeconfig_path in _cluster_kubeconfig_paths.items():
+        # Only delete files in temp directory (ones we created from Secrets Manager)
+        if kubeconfig_path.startswith(temp_dir):
+            try:
+                Path(kubeconfig_path).unlink(missing_ok=True)
+                logger.debug(f"Removed kubeconfig for cluster: {cluster_id}")
+            except Exception as e:
+                logger.warning(f"Error removing kubeconfig for {cluster_id}: {e}")
+
     _cluster_clients.clear()
+    _cluster_kubeconfig_paths.clear()
     _initialized = False
     logger.info("All Kubernetes clients closed")
 
@@ -325,14 +398,12 @@ async def close_async_api_client():
 # -----------------------------------------------------------------------------
 
 
-async def get_namespace_pvcs(
-    namespace: str, cluster_id: str | None = None
-) -> dict[str, str]:
+async def get_namespace_pvcs(namespace: str, cluster_id: str) -> dict[str, str]:
     """Get existing PVCs in a namespace with their storage classes.
 
     Args:
         namespace: The Kubernetes namespace
-        cluster_id: Optional cluster identifier
+        cluster_id: The cluster identifier (required)
 
     Returns:
         Dict mapping PVC name to storage class name
@@ -351,13 +422,13 @@ async def get_namespace_pvcs(
 
 
 async def get_namespace_pvcs_with_details(
-    namespace: str, cluster_id: str | None = None
+    namespace: str, cluster_id: str
 ) -> list[PVCInfo]:
     """Get PVC details including size and bound PV info.
 
     Args:
         namespace: The Kubernetes namespace
-        cluster_id: Optional cluster identifier
+        cluster_id: The cluster identifier (required)
 
     Returns:
         List of PVCInfo objects with details

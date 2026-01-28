@@ -38,6 +38,7 @@ from backend.database.users import UserPydantic
 from backend.services.compose.parser import ComposeParser
 from backend.services.compose.validation import validate_deployment_request
 from backend.services.k8s import create_ns_name, create_release_name
+from backend.services.k8s.client import is_cluster_available
 from backend.services.k8s.generators.networking import compute_service_endpoints
 from backend.services.k8s.helm_manager import HelmManager
 from backend.services.k8s.status_watcher import StatusWatcher
@@ -122,6 +123,7 @@ async def get_deployment_status(
         helm_values=deployment.helm_values,
         deployment_name=deployment.name,
         deployed_at=deployment.deployed_at,
+        cluster_id=deployment.cluster_id,
     )
 
     deployment_status = await watcher.get_deployment_status()
@@ -159,9 +161,15 @@ async def create_deployment(
 
     # Get cluster for new deployment (uses default cluster for now)
     registry = get_cluster_registry()
-    cluster = registry.get_default_cluster()
+    cluster = registry.get_cluster_for_placement()
     if not cluster:
         raise HTTPException(503, "No available clusters for deployment")
+
+    # Verify the cluster has an available K8s client (guards against failed client loading)
+    if not is_cluster_available(cluster.name):
+        logger.error(f"Cluster {cluster.name} has no available K8s client")
+        raise HTTPException(503, f"Cluster {cluster.name} is not available")
+
     target_cluster_id = cluster.name
 
     # Check if this is an update to an existing deployment
@@ -505,7 +513,7 @@ async def get_deployment_history(
     if not name:
         raise HTTPException(status_code=400, detail="Deployment name is required")
 
-    helm_manager = HelmManager()
+    helm_manager = HelmManager(deployment.cluster_id)
     history = await helm_manager.get_history(name, namespace)
 
     revisions = [

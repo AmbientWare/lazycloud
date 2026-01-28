@@ -25,6 +25,7 @@ class LogStreamer:
         deployment_id: str,
         namespace: str,
         service_name: str,
+        cluster_id: str,
         follow: bool = True,
         tail_lines: int = 100,
         pod_name: str | None = None,
@@ -36,6 +37,7 @@ class LogStreamer:
         self.follow = follow
         self.tail_lines = tail_lines
         self.pod_name = pod_name
+        self.cluster_id = cluster_id
         self._running = False
 
     async def _check_pod_exists(self) -> tuple[bool, str | None]:
@@ -44,7 +46,7 @@ class LogStreamer:
             return True, None
 
         try:
-            core_v1 = await get_async_core_v1_api()
+            core_v1 = await get_async_core_v1_api(self.cluster_id)
 
             pod = await asyncio.wait_for(
                 core_v1.read_namespaced_pod(
@@ -171,7 +173,7 @@ class LogStreamer:
                     break
 
         try:
-            core_v1 = await get_async_core_v1_api()
+            core_v1 = await get_async_core_v1_api(self.cluster_id)
 
             pod_info = (
                 f"pod {self.pod_name}"
