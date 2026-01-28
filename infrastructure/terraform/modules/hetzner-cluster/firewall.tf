@@ -35,6 +35,7 @@ resource "hcloud_firewall" "this" {
   }
 
   labels = {
-    cluster = var.cluster_name
+    cluster    = var.cluster_name
+    cluster_id = var.cluster_id
   }
 }

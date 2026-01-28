@@ -45,46 +45,50 @@ class TierDistribution:
     volume_probability: float = 0.6  # fraction of services that use a volume
 
 
-# Distributions by tier - based on expected usage patterns
+# Distributions by tier - based on realistic indie/startup usage patterns
+# Most PaaS customers run small hobby/side projects, not enterprise workloads
 TIER_DISTRIBUTIONS: dict[Tier, TierDistribution] = {
     Tier.DEVELOPER: TierDistribution(
         tier=Tier.DEVELOPER,
         deployments_min=1,
         deployments_max=1,
         services_per_deployment_min=1,
-        services_per_deployment_max=3,
+        services_per_deployment_max=2,
         cpu_min=0.25,
-        cpu_max=1.0,
+        cpu_max=0.5,  # side projects, light usage
         builds_min=1,
-        builds_max=20,
+        builds_max=10,
         storage_min=0.5,
-        storage_max=5.0,
+        storage_max=2.0,
+        volume_probability=0.3,
     ),
     Tier.PRO: TierDistribution(
         tier=Tier.PRO,
         deployments_min=1,
-        deployments_max=10,
-        services_per_deployment_min=2,
-        services_per_deployment_max=8,
+        deployments_max=3,  # 1-3 projects
+        services_per_deployment_min=1,
+        services_per_deployment_max=4,  # web + api + worker + db
         cpu_min=0.25,
-        cpu_max=4.0,
-        builds_min=10,
-        builds_max=80,
+        cpu_max=1.0,  # small production apps
+        builds_min=5,
+        builds_max=30,  # weekly deploys
         storage_min=1.0,
-        storage_max=25.0,
+        storage_max=10.0,
+        volume_probability=0.5,
     ),
     Tier.SCALE: TierDistribution(
         tier=Tier.SCALE,
-        deployments_min=3,
-        deployments_max=25,
-        services_per_deployment_min=3,
-        services_per_deployment_max=10,
+        deployments_min=1,
+        deployments_max=5,  # multiple projects/environments
+        services_per_deployment_min=2,
+        services_per_deployment_max=6,  # modest microservices
         cpu_min=0.25,
-        cpu_max=8.0,
-        builds_min=50,
-        builds_max=150,
-        storage_min=1.0,
-        storage_max=50.0,
+        cpu_max=2.0,  # growing apps, not enterprise
+        builds_min=20,
+        builds_max=60,  # active development
+        storage_min=2.0,
+        storage_max=20.0,
+        volume_probability=0.6,
     ),
 }
 
@@ -116,7 +120,8 @@ def sample_customer_metrics(
     """Sample a random customer and return (revenue, cost).
 
     Each customer has N deployments, each with M services.
-    Storage is metered per GB-month (no per-volume cap).
+    Total services capped by tier max_services limit.
+    Storage is metered per GB-month, capped by tier max_volume_gb per service.
     Not all services use volumes — volume_probability controls this.
     Minimum compute enforced: 0.25 CPU, 0.5 GB per service.
     """
@@ -125,9 +130,8 @@ def sample_customer_metrics(
     limits = TIER_LIMITS[tier]
 
     num_deployments = int(rng.integers(dist.deployments_min, dist.deployments_max + 1))
-    num_deployments = min(num_deployments, limits["max_deployments"])
 
-    # Total services across all deployments
+    # Total services across all deployments (capped by tier limit)
     num_services = 0
     for _ in range(num_deployments):
         num_services += int(
@@ -136,6 +140,7 @@ def sample_customer_metrics(
                 dist.services_per_deployment_max + 1,
             )
         )
+    num_services = min(num_services, limits["max_services"])
 
     cpu_per_service = max(
         MIN_CPU_PER_SERVICE,
@@ -169,12 +174,16 @@ def sample_customer_metrics(
     total_cpu = num_services * cpu_per_service * avg_replicas
     total_memory = num_services * memory_per_service * avg_replicas
 
-    # Storage: not all services use volumes (no per-volume cap, purely metered)
+    # Storage: not all services use volumes (capped by tier limit per service)
+    max_volume_gb = limits["max_volume_gb"]
     services_with_volumes = sum(
         1 for _ in range(num_services) if rng.random() < dist.volume_probability
     )
     if services_with_volumes > 0:
-        storage_per_volume = rng.uniform(dist.storage_min, dist.storage_max)
+        storage_per_volume = min(
+            rng.uniform(dist.storage_min, dist.storage_max),
+            max_volume_gb,
+        )
         total_storage_gb = services_with_volumes * storage_per_volume
     else:
         total_storage_gb = 0
@@ -332,109 +341,109 @@ class Scenario:
 SCENARIOS: dict[str, Scenario] = {
     "worst": Scenario(
         name="Worst Case",
-        description="Heavy usage, poor utilization, many services at min compute, high storage",
-        distributions={
-            Tier.DEVELOPER: TierDistribution(
-                Tier.DEVELOPER,
-                deployments_min=1,
-                deployments_max=1,
-                services_per_deployment_min=2,
-                services_per_deployment_max=3,
-                cpu_min=0.25,
-                cpu_max=0.5,
-                builds_min=5,
-                builds_max=20,
-                storage_min=2.0,
-                storage_max=10.0,
-                volume_probability=0.8,
-            ),
-            Tier.PRO: TierDistribution(
-                Tier.PRO,
-                deployments_min=5,
-                deployments_max=10,
-                services_per_deployment_min=3,
-                services_per_deployment_max=8,
-                cpu_min=0.25,
-                cpu_max=0.5,
-                builds_min=20,
-                builds_max=80,
-                storage_min=5.0,
-                storage_max=50.0,
-                volume_probability=0.7,
-            ),
-            Tier.SCALE: TierDistribution(
-                Tier.SCALE,
-                deployments_min=10,
-                deployments_max=25,
-                services_per_deployment_min=5,
-                services_per_deployment_max=15,
-                cpu_min=0.25,
-                cpu_max=1.0,
-                builds_min=80,
-                builds_max=200,
-                storage_min=5.0,
-                storage_max=100.0,
-                volume_probability=0.7,
-            ),
-        },
-        overhead=OverheadFactors(node_utilization=0.65),  # poor packing
-        tier_mix={Tier.DEVELOPER: 0.60, Tier.PRO: 0.25, Tier.SCALE: 0.15},
-    ),
-    "base": Scenario(
-        name="Base Case",
-        description="Expected usage patterns, conservative utilization",
-        distributions=TIER_DISTRIBUTIONS,
-        overhead=OverheadFactors(node_utilization=0.75),
-        tier_mix=TIER_MIX,
-    ),
-    "best": Scenario(
-        name="Best Case",
-        description="Light usage, good utilization, low storage",
+        description="Heavier usage, more paying customers, higher storage",
         distributions={
             Tier.DEVELOPER: TierDistribution(
                 Tier.DEVELOPER,
                 deployments_min=1,
                 deployments_max=1,
                 services_per_deployment_min=1,
-                services_per_deployment_max=2,
+                services_per_deployment_max=3,
                 cpu_min=0.25,
-                cpu_max=0.25,
-                builds_min=1,
-                builds_max=10,
-                storage_min=0.5,
-                storage_max=2.0,
-                volume_probability=0.4,
+                cpu_max=0.75,
+                builds_min=5,
+                builds_max=15,
+                storage_min=1.0,
+                storage_max=5.0,
+                volume_probability=0.5,
             ),
             Tier.PRO: TierDistribution(
                 Tier.PRO,
-                deployments_min=1,
+                deployments_min=2,
                 deployments_max=5,
                 services_per_deployment_min=2,
                 services_per_deployment_max=5,
-                cpu_min=0.25,
-                cpu_max=0.5,
-                builds_min=5,
-                builds_max=40,
-                storage_min=0.5,
-                storage_max=5.0,
-                volume_probability=0.5,
+                cpu_min=0.5,
+                cpu_max=1.5,
+                builds_min=15,
+                builds_max=50,
+                storage_min=3.0,
+                storage_max=15.0,
+                volume_probability=0.6,
             ),
             Tier.SCALE: TierDistribution(
                 Tier.SCALE,
                 deployments_min=3,
-                deployments_max=15,
-                services_per_deployment_min=2,
+                deployments_max=8,
+                services_per_deployment_min=3,
                 services_per_deployment_max=8,
+                cpu_min=1.0,
+                cpu_max=3.0,
+                builds_min=40,
+                builds_max=100,
+                storage_min=5.0,
+                storage_max=30.0,
+                volume_probability=0.7,
+            ),
+        },
+        overhead=OverheadFactors(node_utilization=0.65),  # poor packing
+        tier_mix={Tier.DEVELOPER: 0.60, Tier.PRO: 0.28, Tier.SCALE: 0.12},
+    ),
+    "base": Scenario(
+        name="Base Case",
+        description="Realistic indie/startup usage patterns",
+        distributions=TIER_DISTRIBUTIONS,
+        overhead=OverheadFactors(node_utilization=0.75),
+        tier_mix=TIER_MIX,
+    ),
+    "best": Scenario(
+        name="Best Case",
+        description="Light hobby usage, mostly free tier",
+        distributions={
+            Tier.DEVELOPER: TierDistribution(
+                Tier.DEVELOPER,
+                deployments_min=1,
+                deployments_max=1,
+                services_per_deployment_min=1,
+                services_per_deployment_max=1,
+                cpu_min=0.25,
+                cpu_max=0.25,
+                builds_min=1,
+                builds_max=5,
+                storage_min=0.5,
+                storage_max=1.0,
+                volume_probability=0.2,
+            ),
+            Tier.PRO: TierDistribution(
+                Tier.PRO,
+                deployments_min=1,
+                deployments_max=2,
+                services_per_deployment_min=1,
+                services_per_deployment_max=3,
+                cpu_min=0.25,
+                cpu_max=0.5,
+                builds_min=3,
+                builds_max=15,
+                storage_min=0.5,
+                storage_max=3.0,
+                volume_probability=0.4,
+            ),
+            Tier.SCALE: TierDistribution(
+                Tier.SCALE,
+                deployments_min=1,
+                deployments_max=3,
+                services_per_deployment_min=2,
+                services_per_deployment_max=4,
                 cpu_min=0.5,
                 cpu_max=1.0,
-                builds_min=30,
-                builds_max=100,
+                builds_min=10,
+                builds_max=30,
                 storage_min=1.0,
-                storage_max=10.0,
+                storage_max=5.0,
                 volume_probability=0.5,
             ),
         },
         overhead=OverheadFactors(node_utilization=0.85),  # good packing
-        tier_mix={Tier.DEVELOPER: 0.75, Tier.PRO: 0.18, Tier.SCALE: 0.07},
+        tier_mix={Tier.DEVELOPER: 0.80, Tier.PRO: 0.15, Tier.SCALE: 0.05},
     ),
 }

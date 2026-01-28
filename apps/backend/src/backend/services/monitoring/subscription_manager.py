@@ -106,6 +106,7 @@ class SubscriptionManager:
                 namespace=config.namespace,
                 helm_values=config.helm_values,
                 deployed_at=config.deployed_at,
+                cluster_id=config.cluster_id,
                 callback=None,  # Callbacks will be added via add_callback
             )
         elif isinstance(config, ServiceMonitorConfig):
@@ -115,6 +116,7 @@ class SubscriptionManager:
                 service_name=config.service_name,
                 namespace=config.namespace,
                 helm_values=config.helm_values,
+                cluster_id=config.cluster_id,
                 callback=None,  # Callbacks will be added via add_callback
             )
         elif isinstance(config, TaskMonitorConfig):
@@ -129,6 +131,7 @@ class SubscriptionManager:
                 service_name=config.service_name,
                 pod_name=config.pod_name,
                 tail_lines=config.tail_lines,
+                cluster_id=config.cluster_id,
                 callback=None,  # Callbacks will be added via add_callback
             )
         elif isinstance(config, DeployProgressMonitorConfig):
@@ -137,6 +140,7 @@ class SubscriptionManager:
                 deployment_name=config.deployment_name,
                 namespace=config.namespace,
                 helm_values=config.helm_values,
+                cluster_id=config.cluster_id,
                 callback=None,  # Callbacks will be added via add_callback
             )
 

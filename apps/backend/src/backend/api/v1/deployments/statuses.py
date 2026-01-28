@@ -24,6 +24,7 @@ async def stream_deployment_status(
         helm_values=deployment.helm_values,
         deployment_name=deployment.name,
         deployed_at=deployment.deployed_at,
+        cluster_id=deployment.cluster_id,
     )
 
     return EventSourceResponse(
@@ -46,6 +47,7 @@ async def stream_deploy_progress(
         deployment_name=deployment.name,
         namespace=deployment.namespace,
         helm_values=deployment.helm_values,
+        cluster_id=deployment.cluster_id,
     )
 
     return EventSourceResponse(

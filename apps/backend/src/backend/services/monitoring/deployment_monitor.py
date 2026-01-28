@@ -20,6 +20,7 @@ class DeploymentMonitor(BaseMonitor[DeploymentStatus]):
         namespace: str,
         helm_values: HelmValues,
         deployed_at: datetime,
+        cluster_id: str,
         callback: Callable[[DeploymentStatus], None],
     ):
         super().__init__("Deployment Monitor", deployment_id, callback)
@@ -29,7 +30,12 @@ class DeploymentMonitor(BaseMonitor[DeploymentStatus]):
         self.deployment_name = deployment_name
         self.deployed_at = deployed_at
         self.status_watcher = StatusWatcher(
-            deployment_id, namespace, helm_values, deployment_name, deployed_at
+            deployment_id=deployment_id,
+            namespace=namespace,
+            helm_values=helm_values,
+            cluster_id=cluster_id,
+            deployment_name=deployment_name,
+            deployed_at=deployed_at,
         )
 
     async def _task(self) -> DeploymentStatus:

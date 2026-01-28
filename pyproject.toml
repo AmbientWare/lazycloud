@@ -25,6 +25,7 @@ members = [
     "packages/api_requests",
     "packages/responses",
     "business",
+    "packages/configs",
 ]
 
 [tool.hatch.build.targets.wheel]

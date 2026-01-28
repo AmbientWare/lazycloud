@@ -15,12 +15,14 @@ locals {
     local.cp_private_ipv4,
   ))
 
+  # Talos factory image URL
+  talos_install_image = "factory.talos.dev/installer/${var.talos_schematic_id}:${var.talos_version}"
+
   # Control plane machine config patch
   controlplane_patches = [for i in range(var.control_plane_count) : yamlencode({
     machine = {
       install = {
-        # Schematic includes: siderolabs/gvisor
-        image = "factory.talos.dev/installer/d9ff89777e246792e7642abd3220a616afb4e49822382e4213a2e528ab826fe5:${var.talos_version}"
+        image           = local.talos_install_image
         extraKernelArgs = ["ipv6.disable=1"]
       }
       certSANs = local.cert_sans
@@ -59,8 +61,8 @@ locals {
       }
       features = {
         kubernetesTalosAPIAccess = {
-          enabled                    = true
-          allowedRoles               = ["os:reader"]
+          enabled                     = true
+          allowedRoles                = ["os:reader"]
           allowedKubernetesNamespaces = ["kube-system"]
         }
         hostDNS = {
@@ -81,10 +83,10 @@ locals {
     cluster = {
       allowSchedulingOnControlPlanes = false
       network = {
-        dnsDomain = "cluster.local"
+        dnsDomain      = "cluster.local"
         podSubnets     = [var.pod_ipv4_cidr]
         serviceSubnets = [var.service_ipv4_cidr]
-        cni = { name = "none" }
+        cni            = { name = "none" }
       }
       proxy = { disabled = true }
       apiServer = {
@@ -137,8 +139,7 @@ locals {
   worker_patches = [for i in range(var.worker_count) : yamlencode({
     machine = {
       install = {
-        # Schematic includes: siderolabs/gvisor
-        image = "factory.talos.dev/installer/d9ff89777e246792e7642abd3220a616afb4e49822382e4213a2e528ab826fe5:${var.talos_version}"
+        image           = local.talos_install_image
         extraKernelArgs = ["ipv6.disable=1"]
       }
       certSANs = local.cert_sans
@@ -180,10 +181,10 @@ locals {
     }
     cluster = {
       network = {
-        dnsDomain = "cluster.local"
+        dnsDomain      = "cluster.local"
         podSubnets     = [var.pod_ipv4_cidr]
         serviceSubnets = [var.service_ipv4_cidr]
-        cni = { name = "none" }
+        cni            = { name = "none" }
       }
     }
   })]

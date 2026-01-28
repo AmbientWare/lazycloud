@@ -72,6 +72,9 @@ class ComposeDeploymentTable(BaseTable):
     depot_project_id: Mapped[str | None] = mapped_column(
         String, nullable=True, index=True
     )
+    # cluster_id is required - no default. The API must explicitly set this
+    # based on placement logic. Migration backfills existing rows with 'ash-1'.
+    cluster_id: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
 
     # Unique constraint to ensure one deployment per name per workspace (only for non-deleted)
     __table_args__ = (
@@ -116,6 +119,8 @@ class ComposeDeploymentPydantic(BaseDbPydanticModel):
     deleted_at: datetime | None = None
     current_task_run_id: UUIDStr | None = None
     depot_project_id: str | None = None
+    # cluster_id is required - must be set explicitly by API based on placement logic
+    cluster_id: str
 
     @field_validator("compose_yaml", "pending_compose_yaml", mode="before")
     @classmethod
@@ -451,3 +456,13 @@ class ComposeDeploymentService(
         result = await self._session.execute(query)
         db_models = list(result.scalars().all())
         return [self._to_pydantic(db_model) for db_model in db_models]
+
+    async def find_by_cluster(self, cluster_id: str) -> list[ComposeDeploymentPydantic]:
+        """Find all active deployments on a specific cluster."""
+        query = (
+            select(ComposeDeploymentTable)
+            .where(ComposeDeploymentTable.cluster_id == cluster_id)
+            .where(ComposeDeploymentTable.deleted_at.is_(None))
+        )
+        result = await self._session.execute(query)
+        return [self._to_pydantic(d) for d in result.scalars().all()]

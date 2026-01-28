@@ -10,7 +10,8 @@ resource "hcloud_network" "this" {
   name     = var.cluster_name
   ip_range = var.network_ipv4_cidr
   labels = {
-    cluster = var.cluster_name
+    cluster    = var.cluster_name
+    cluster_id = var.cluster_id
   }
 }
 
@@ -33,8 +34,9 @@ resource "hcloud_primary_ip" "control_plane" {
   auto_delete   = false
   location      = var.location
   labels = {
-    cluster = var.cluster_name
-    role    = "control-plane"
+    cluster    = var.cluster_name
+    cluster_id = var.cluster_id
+    role       = "control-plane"
   }
 }
 
@@ -46,8 +48,9 @@ resource "hcloud_primary_ip" "worker" {
   auto_delete   = false
   location      = var.location
   labels = {
-    cluster = var.cluster_name
-    role    = "worker"
+    cluster    = var.cluster_name
+    cluster_id = var.cluster_id
+    role       = "worker"
   }
 }
 
@@ -61,8 +64,9 @@ resource "hcloud_floating_ip" "control_plane_vip" {
   home_location = var.location
   description   = "Control plane VIP for kube API"
   labels = {
-    cluster = var.cluster_name
-    role    = "control-plane"
+    cluster    = var.cluster_name
+    cluster_id = var.cluster_id
+    role       = "control-plane"
   }
 }
 

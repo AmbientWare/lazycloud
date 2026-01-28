@@ -35,6 +35,7 @@ from backend.services.k8s.client import (
     get_async_apps_v1_api,
     get_async_batch_v1_api,
     get_async_core_v1_api,
+    get_kubeconfig_path,
 )
 
 
@@ -46,6 +47,7 @@ class StatusWatcher:
         deployment_id: str,
         namespace: str,
         helm_values: HelmValues,
+        cluster_id: str,
         deployment_name: str | None = None,
         deployed_at: datetime | None = None,
     ):
@@ -55,6 +57,7 @@ class StatusWatcher:
         self.helm_values = helm_values
         self.deployment_name = deployment_name
         self.deployed_at = deployed_at
+        self.cluster_id = cluster_id
 
     def _is_custom_domain(self, hostname: str | None) -> bool:
         """Check if hostname is a custom domain (not a platform domain)."""
@@ -272,8 +275,8 @@ class StatusWatcher:
 
         try:
             if is_job:
-                batch_v1 = await get_async_batch_v1_api()
-                api_client = await get_async_api_client()
+                batch_v1 = await get_async_batch_v1_api(self.cluster_id)
+                api_client = await get_async_api_client(self.cluster_id)
 
                 k8s_job = await asyncio.wait_for(
                     batch_v1.read_namespaced_job(
@@ -328,8 +331,8 @@ class StatusWatcher:
                         job_status = StatusPhase.PENDING
 
             else:
-                apps_v1 = await get_async_apps_v1_api()
-                api_client = await get_async_api_client()
+                apps_v1 = await get_async_apps_v1_api(self.cluster_id)
+                api_client = await get_async_api_client(self.cluster_id)
 
                 if service.workloadType == WorkloadType.DEPLOYMENT:
                     k8s_resource_raw = await asyncio.wait_for(
@@ -473,8 +476,8 @@ class StatusWatcher:
         """Get pod details for a specific service."""
 
         try:
-            core_v1 = await get_async_core_v1_api()
-            api_client = await get_async_api_client()
+            core_v1 = await get_async_core_v1_api(self.cluster_id)
+            api_client = await get_async_api_client(self.cluster_id)
 
             v1_pods = await asyncio.wait_for(
                 core_v1.list_namespaced_pod(
@@ -843,8 +846,11 @@ class StatusWatcher:
             # 2. kubectl top handles API availability gracefully
             # 3. Simpler than using CustomObjectsApi for metrics.k8s.io/v1beta1
 
+            kubeconfig_path = get_kubeconfig_path(self.cluster_id)
             cmd = [
                 "kubectl",
+                "--kubeconfig",
+                kubeconfig_path,
                 "top",
                 "pod",
                 pod_name,

@@ -32,6 +32,9 @@ class RestartAllResult(BaseModel):
 class WorkloadManager:
     """Handles Kubernetes workload operations like restart, scale, etc."""
 
+    def __init__(self, cluster_id: str):
+        self.cluster_id = cluster_id
+
     async def restart_workload(
         self, resource_type: str, resource_name: str, namespace: str
     ) -> RestartResult:
@@ -41,7 +44,7 @@ class WorkloadManager:
         )
 
         try:
-            apps_v1 = await get_async_apps_v1_api()
+            apps_v1 = await get_async_apps_v1_api(self.cluster_id)
 
             # Trigger restart by updating the restartedAt annotation
             # This is the same mechanism kubectl rollout restart uses
@@ -155,7 +158,7 @@ class WorkloadManager:
     ) -> tuple[bool, str]:
         """Check the rollout status of a workload."""
         try:
-            apps_v1 = await get_async_apps_v1_api()
+            apps_v1 = await get_async_apps_v1_api(self.cluster_id)
 
             if resource_type.lower() == "deployment":
                 deployment = await apps_v1.read_namespaced_deployment(
@@ -192,7 +195,7 @@ class WorkloadManager:
     ) -> tuple[bool, str]:
         """Scale a workload to specified number of replicas."""
         try:
-            apps_v1 = await get_async_apps_v1_api()
+            apps_v1 = await get_async_apps_v1_api(self.cluster_id)
 
             patch_body = {"spec": {"replicas": replicas}}
 

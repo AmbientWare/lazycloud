@@ -12,6 +12,7 @@ class LogMonitor(BaseGenerativeMonitor[str]):
         deployment_id: str,
         namespace: str,
         service_name: str,
+        cluster_id: str,
         pod_name: str | None = None,
         tail_lines: int = 100,
         callback: Callable[[str], None] | None = None,
@@ -26,6 +27,7 @@ class LogMonitor(BaseGenerativeMonitor[str]):
             follow=True,
             tail_lines=tail_lines,
             pod_name=pod_name,
+            cluster_id=cluster_id,
         )
 
     async def _stream(self):

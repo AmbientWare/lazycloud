@@ -69,36 +69,24 @@ def _get_service_names_from_diff(diff_response: DiffResponse | None) -> list[str
     return list(service_names)
 
 
-def _get_services_to_build_from_diff(
-    diff_response: DiffResponse | None,
+def _get_services_to_build(
     compose_data: dict,
     user_target_services: list[str] | None = None,
 ) -> list[str]:
-    """Get list of services that need to be built based on diff response"""
-    if not diff_response:
-        # No diff available, fall back to user targets or all buildable services
-        return user_target_services or []
+    """Get list of services that need to be built.
 
-    # Get services from diff (added + modified)
-    diff_services = set()
+    Always includes all services with build config.
+    This ensures build args are always collected and source code changes
+    (which don't show in compose diff) trigger rebuilds.
+    """
+    # Get all services with build config
+    buildable_services = [
+        service_name
+        for service_name, service_config in compose_data.get("services", {}).items()
+        if "build" in service_config
+    ]
 
-    # Added services
-    for added in diff_response.diff.services.added:
-        if isinstance(added, dict) and "name" in added:
-            diff_services.add(added["name"])
-
-    # Modified services
-    for service_name in diff_response.diff.services.modified.keys():
-        diff_services.add(service_name)
-
-    # Filter to only services with build config
-    buildable_services = []
-    for service_name in diff_services:
-        service_config = compose_data.get("services", {}).get(service_name, {})
-        if "build" in service_config:
-            buildable_services.append(service_name)
-
-    # If user specified targets, intersect with diff services
+    # If user specified targets, filter to those
     if user_target_services:
         buildable_services = [
             s for s in buildable_services if s in user_target_services
@@ -290,8 +278,7 @@ def deploy(
     update_diff_with_collected_secrets(diff_response, secrets, env)
 
     # Determine which services need to be built
-    services_to_build = _get_services_to_build_from_diff(
-        diff_response,
+    services_to_build = _get_services_to_build(
         compose_data,
         user_target_services=target_services if target_services else None,
     )

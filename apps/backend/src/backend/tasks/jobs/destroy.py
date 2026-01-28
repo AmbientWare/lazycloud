@@ -8,11 +8,11 @@ from loguru import logger
 from models.deployments import DeploymentStates
 
 from backend.database import get_db_context
-from backend.tasks.core import unregister_custom_domains, update_deployment_state
 from backend.services import get_depot_service
 from backend.services.compose.parser import ComposeParser
 from backend.services.k8s import create_release_name
 from backend.services.k8s.helm_manager import HelmManager
+from backend.tasks.core import unregister_custom_domains, update_deployment_state
 
 
 async def destroy_compose_job(
@@ -59,8 +59,8 @@ async def destroy_compose_job(
         except Exception as cf_error:
             logger.warning(f"Cloudflare domain cleanup failed (continuing): {cf_error}")
 
-    # Initialize Helm manager
-    helm_manager = HelmManager()
+    # Initialize Helm manager with cluster_id
+    helm_manager = HelmManager(deployment.cluster_id)
     name = create_release_name(deployment.workspace_id, deployment.name)
     namespace = deployment.namespace
 

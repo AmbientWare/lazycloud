@@ -78,6 +78,9 @@ class AppConfig(BaseModel):
     # Kubernetes Configuration
     K8S_CONNECTION_POOL_SIZE: int = int(os.getenv("K8S_CONNECTION_POOL_SIZE", "100"))
 
+    # AWS Secrets Manager Configuration
+    SECRETS_PREFIX: str = os.getenv("SECRETS_PREFIX", "lazycloud")
+
     # Ingress Configuration
     BASE_DOMAIN: str = os.getenv("BASE_DOMAIN", "lazycloud.dev")
 

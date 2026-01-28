@@ -76,27 +76,30 @@ STORAGE_COST_PER_GB_MONTH = (
     JUICEFS_CLOUD_PER_GB_MONTH + HETZNER_OBJECT_STORAGE_PER_GB_MONTH
 )  # $0.026
 
-# Per-tier limits (must match backend/billing/product_details/)
+# Per-tier limits (must match backend/billing/product_details/ and product.md)
 TIER_LIMITS: dict[Tier, dict] = {
     Tier.DEVELOPER: {
-        "max_deployments": 1,
-        "max_cpu": 1.0,
-        "max_memory": 4,
-        "max_replicas": 1,
+        "max_services": 3,  # total services across all deployments
+        "max_cpu": 1.0,  # per service
+        "max_memory": 4,  # per service (GB)
+        "max_volume_gb": 10,  # per service
+        "max_replicas": 1,  # no auto-scaling
         "ephemeral_gi": EPHEMERAL_LIMIT_GI,
     },
     Tier.PRO: {
-        "max_deployments": 10,
-        "max_cpu": 4.0,
-        "max_memory": 16,
-        "max_replicas": 2,
+        "max_services": 25,  # total services across all deployments
+        "max_cpu": 4.0,  # per service
+        "max_memory": 16,  # per service (GB)
+        "max_volume_gb": 50,  # per service
+        "max_replicas": 2,  # auto-scaling up to 2x
         "ephemeral_gi": EPHEMERAL_LIMIT_GI,
     },
     Tier.SCALE: {
-        "max_deployments": 25,
-        "max_cpu": 8.0,
-        "max_memory": 32,
-        "max_replicas": 5,
+        "max_services": 999,  # unlimited (use high number for simulation)
+        "max_cpu": 8.0,  # per service
+        "max_memory": 32,  # per service (GB)
+        "max_volume_gb": 100,  # per service
+        "max_replicas": 5,  # auto-scaling up to 5x
         "ephemeral_gi": EPHEMERAL_LIMIT_GI,
     },
 }

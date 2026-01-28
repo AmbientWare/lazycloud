@@ -17,8 +17,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKER_DIR="$SCRIPT_DIR/packer"
 
 if [[ -z "${HCLOUD_TOKEN:-}" ]]; then
-  echo "ERROR: HCLOUD_TOKEN not set" >&2
-  exit 1
+  echo "HCLOUD_TOKEN not set."
+  read -rsp "Enter Hetzner Cloud token: " HCLOUD_TOKEN
+  echo
+  if [[ -z "$HCLOUD_TOKEN" ]]; then
+    echo "ERROR: Token cannot be empty" >&2
+    exit 1
+  fi
+  export HCLOUD_TOKEN
 fi
 
 # Delete existing Talos snapshots

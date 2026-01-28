@@ -25,6 +25,7 @@ class DeployProgressMonitor(BaseMonitor[DeployProgressStatus]):
         deployment_name: str,
         namespace: str,
         helm_values: HelmValues,
+        cluster_id: str,
         callback: Callable[[DeployProgressStatus], None] | None = None,
     ):
         super().__init__(
@@ -43,6 +44,7 @@ class DeployProgressMonitor(BaseMonitor[DeployProgressStatus]):
             deployment_id=deployment_id,
             namespace=namespace,
             helm_values=helm_values,
+            cluster_id=cluster_id,
             deployment_name=deployment_name,
         )
 

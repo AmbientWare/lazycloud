@@ -130,6 +130,7 @@ async def stream_service_logs(
         namespace=deployment.namespace,
         service_name=service_name,
         pod_name=pod_name,
+        cluster_id=deployment.cluster_id,
         tail_lines=tail,
     )
 

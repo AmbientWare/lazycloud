@@ -18,6 +18,7 @@ class ServiceMonitor(BaseMonitor[ServiceStatus]):
         service_name: str,
         namespace: str,
         helm_values: HelmValues,
+        cluster_id: str,
         callback: Callable[[ServiceStatus], None],
         deployment_name: str | None = None,
     ):
@@ -28,7 +29,11 @@ class ServiceMonitor(BaseMonitor[ServiceStatus]):
         self.helm_values = helm_values
         self.deployment_name = deployment_name
         self.status_watcher = StatusWatcher(
-            deployment_id, namespace, helm_values, deployment_name
+            deployment_id=deployment_id,
+            namespace=namespace,
+            helm_values=helm_values,
+            cluster_id=cluster_id,
+            deployment_name=deployment_name,
         )
 
     async def _task(self) -> ServiceStatus:
