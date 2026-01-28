@@ -7,14 +7,21 @@ from models.helm import (
 from models.k8s import ResourceRequirements, Resources, SecurityCapabilities
 
 from backend.services.k8s.generators.converters import (
-    convert_cpu_value,
-    convert_memory_value,
     parse_cpu_to_cores,
     parse_memory_to_gb,
 )
 
-MIN_CPU_REQUEST_MILLICORES = 250
-MIN_MEMORY_REQUEST_MI = 256
+# Resource constraints
+# Minimum: 0.25 CPU, 0.5 GB (1:2 ratio)
+MIN_CPU_CORES = 0.25
+MIN_MEMORY_GB = 0.5
+
+# Ratio constraints: memory must be 1-4x CPU (in GB per core)
+MIN_MEMORY_RATIO = 1  # 1 GB per CPU core minimum
+MAX_MEMORY_RATIO = 4  # 4 GB per CPU core maximum
+
+# Limits are 4x requests to allow bursting
+LIMITS_MULTIPLIER = 4
 
 
 def parse_image(image_string: str) -> ImageConfig:
@@ -46,65 +53,126 @@ def determine_pull_policy(tag: str) -> str:
 
 
 def generate_resources_values(
-    resources_config: ResourcesConfig,
-) -> Resources | None:
-    """Generate Kubernetes resource constraints from Docker Compose deploy.resources."""
-    resources = Resources()
+    resources_config: ResourcesConfig | None = None,
+) -> Resources:
+    """Generate Kubernetes resource constraints from Docker Compose deploy.resources.
 
-    # Handle limits
-    if resources_config.limits:
-        limits = ResourceRequirements()
+    Enforces:
+    - Minimum: 0.25 CPU, 1 GB memory
+    - CPU:Memory ratio between 1:1 and 1:4 (1-4 GB per CPU core)
+    - Limits = 4x requests (allows bursting, user pays for max(used, requests))
+    """
+    # Parse user-specified values (prefer reservations over limits for requests)
+    cpu_cores: float | None = None
+    memory_gb: float | None = None
 
-        if resources_config.limits.cpus:
-            limits.cpu = convert_cpu_value(resources_config.limits.cpus)
-        if resources_config.limits.memory:
-            limits.memory = convert_memory_value(resources_config.limits.memory)
+    if resources_config:
+        # First check reservations (Docker Compose "reservations" = K8s "requests")
+        if resources_config.reservations:
+            if resources_config.reservations.cpus:
+                cpu_cores = parse_cpu_to_cores(resources_config.reservations.cpus)
+            if resources_config.reservations.memory:
+                memory_gb = parse_memory_to_gb(resources_config.reservations.memory)
 
-        if limits.cpu or limits.memory:
-            resources.limits = limits
+        # Fall back to limits if no reservations specified
+        if (
+            cpu_cores is None
+            and resources_config.limits
+            and resources_config.limits.cpus
+        ):
+            cpu_cores = parse_cpu_to_cores(resources_config.limits.cpus)
+        if (
+            memory_gb is None
+            and resources_config.limits
+            and resources_config.limits.memory
+        ):
+            memory_gb = parse_memory_to_gb(resources_config.limits.memory)
 
-    # Handle requests (from "reservations" in Docker Compose)
-    # Check if reservations has actual values (not just an empty ResourceConfig)
-    has_reservations = resources_config.reservations and (
-        resources_config.reservations.cpus or resources_config.reservations.memory
+    # Normalize and enforce ratio constraints
+    cpu_cores, memory_gb = _normalize_resources(cpu_cores, memory_gb)
+
+    # Build requests
+    requests = ResourceRequirements(
+        cpu=_format_cpu(cpu_cores),
+        memory=_format_memory(memory_gb),
     )
-    if has_reservations:
-        requests = ResourceRequirements()
 
-        if resources_config.reservations.cpus:
-            requests.cpu = convert_cpu_value(resources_config.reservations.cpus)
-        if resources_config.reservations.memory:
-            requests.memory = convert_memory_value(resources_config.reservations.memory)
+    # Build limits (4x requests for bursting)
+    limits = ResourceRequirements(
+        cpu=_format_cpu(cpu_cores * LIMITS_MULTIPLIER),
+        memory=_format_memory(memory_gb * LIMITS_MULTIPLIER),
+    )
 
-        if requests.cpu or requests.memory:
-            resources.requests = requests
+    return Resources(requests=requests, limits=limits)
 
-    # Auto-generate requests if only limits are specified (no explicit reservations)
-    elif resources.limits:
-        requests = ResourceRequirements()
 
-        if resources.limits.cpu:
-            cpu_limit = resources.limits.cpu
-            if cpu_limit.endswith("m"):
-                cpu_limit_value = float(cpu_limit[:-1])
-                requests.cpu = f"{int(cpu_limit_value * 0.5)}m"
-            else:
-                cpu_limit_value = float(cpu_limit)
-                requests.cpu = str(cpu_limit_value * 0.5)
+def _normalize_resources(
+    cpu_cores: float | None, memory_gb: float | None
+) -> tuple[float, float]:
+    """Normalize CPU and memory to enforce ratio and minimum constraints.
 
-        if resources.limits.memory:
-            memory_limit = resources.limits.memory
-            requests.memory = _calculate_memory_request(memory_limit, 0.8)
+    Rules:
+    - If only CPU specified: memory = cpu * MAX_MEMORY_RATIO (1:4)
+    - If only memory specified: cpu = memory / MAX_MEMORY_RATIO (1:4)
+    - If both specified: enforce ratio bounds (1:1 to 1:4)
+    - Enforce minimums after ratio adjustment
+    """
+    if cpu_cores is not None and memory_gb is not None:
+        # Both specified - enforce ratio bounds
+        ratio = memory_gb / cpu_cores if cpu_cores > 0 else MAX_MEMORY_RATIO
 
-        if requests.cpu or requests.memory:
-            resources.requests = requests
+        if ratio < MIN_MEMORY_RATIO:
+            # Too CPU-heavy, bump memory to 1:1
+            memory_gb = cpu_cores * MIN_MEMORY_RATIO
+        elif ratio > MAX_MEMORY_RATIO:
+            # Too memory-heavy, bump CPU to 1:4
+            cpu_cores = memory_gb / MAX_MEMORY_RATIO
 
-    # Enforce minimum requests
-    if resources.requests:
-        resources.requests.cpu = _enforce_min_cpu(resources.requests.cpu)
-        resources.requests.memory = _enforce_min_memory(resources.requests.memory)
+    elif cpu_cores is not None:
+        # Only CPU specified - default to 1:4 ratio
+        memory_gb = cpu_cores * MAX_MEMORY_RATIO
 
-    return resources if resources.limits or resources.requests else None
+    elif memory_gb is not None:
+        # Only memory specified - default to 1:4 ratio
+        cpu_cores = memory_gb / MAX_MEMORY_RATIO
+
+    else:
+        # Neither specified - use minimums
+        cpu_cores = MIN_CPU_CORES
+        memory_gb = MIN_MEMORY_GB
+
+    # Enforce minimums
+    cpu_cores = max(cpu_cores, MIN_CPU_CORES)
+    memory_gb = max(memory_gb, MIN_MEMORY_GB)
+
+    # Re-check ratio after minimums (minimums are 1:4, so should be fine)
+    # But if user specified very low values, we might need to adjust
+    ratio = memory_gb / cpu_cores
+    if ratio < MIN_MEMORY_RATIO:
+        memory_gb = cpu_cores * MIN_MEMORY_RATIO
+    elif ratio > MAX_MEMORY_RATIO:
+        cpu_cores = memory_gb / MAX_MEMORY_RATIO
+
+    return cpu_cores, memory_gb
+
+
+def _format_cpu(cores: float) -> str:
+    """Format CPU cores as Kubernetes string (millicores)."""
+    millicores = int(cores * 1000)
+    return f"{millicores}m"
+
+
+def _format_memory(gb: float) -> str:
+    """Format memory GB as Kubernetes string (Mi or Gi)."""
+    if gb >= 1.0:
+        # Use Gi for >= 1 GB
+        if gb == int(gb):
+            return f"{int(gb)}Gi"
+        return f"{gb:.1f}Gi"
+    else:
+        # Use Mi for < 1 GB
+        mi = int(gb * 1024)
+        return f"{mi}Mi"
 
 
 def generate_security_context_values() -> SecurityContext:
@@ -139,58 +207,3 @@ def generate_pod_security_context_values(
         pod_security_context.fs_group = 0  # Root group for maximum compatibility
 
     return pod_security_context
-
-
-def _calculate_memory_request(memory_limit: str, percentage: float = 0.8) -> str:
-    """Calculate memory request based on memory limit"""
-    if memory_limit.endswith("Gi"):
-        value = float(memory_limit[:-2])
-        return f"{value * percentage:.1f}Gi"
-
-    elif memory_limit.endswith("G"):
-        value = float(memory_limit[:-1])
-        return f"{value * percentage:.1f}G"
-
-    elif memory_limit.endswith("Mi"):
-        value = float(memory_limit[:-2])
-        return f"{int(value * percentage)}Mi"
-
-    elif memory_limit.endswith("M"):
-        value = float(memory_limit[:-1])
-        return f"{int(value * percentage)}M"
-
-    elif memory_limit.endswith("Ki"):
-        value = float(memory_limit[:-2])
-        return f"{int(value * percentage)}Ki"
-
-    elif memory_limit.endswith("K"):
-        value = float(memory_limit[:-1])
-        return f"{int(value * percentage)}K"
-
-    else:
-        # Assume bytes
-        try:
-            value = int(memory_limit)
-            return str(int(value * percentage))
-        except ValueError:
-            return "128Mi"
-
-
-def _enforce_min_cpu(cpu_value: str | None) -> str:
-    """Ensure CPU request meets minimum threshold."""
-    if not cpu_value:
-        return f"{MIN_CPU_REQUEST_MILLICORES}m"
-
-    cores = parse_cpu_to_cores(cpu_value)
-    millicores = int(cores * 1000)
-    return f"{max(millicores, MIN_CPU_REQUEST_MILLICORES)}m"
-
-
-def _enforce_min_memory(memory_value: str | None) -> str:
-    """Ensure memory request meets minimum threshold."""
-    if not memory_value:
-        return f"{MIN_MEMORY_REQUEST_MI}Mi"
-
-    gb = parse_memory_to_gb(memory_value)
-    mi_value = int(gb * 1024)
-    return f"{max(mi_value, MIN_MEMORY_REQUEST_MI)}Mi"

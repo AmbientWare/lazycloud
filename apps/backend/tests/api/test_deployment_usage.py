@@ -96,10 +96,8 @@ class TestGetDeploymentCostBreakdown:
                 UsageMetrics(
                     cpu_core_hours=0.0,
                     memory_gb_hours=0.0,
-                    standard_gb_hours=0.0,
-                    shared_gb_hours=0.0,
                     build_minutes=0.0,
-                    public_endpoint_hours=0.0,
+                    storage_gb_months=0.0,
                 ),
                 [],
                 [],

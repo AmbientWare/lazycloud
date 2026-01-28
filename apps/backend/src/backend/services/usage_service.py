@@ -60,18 +60,14 @@ class UsageService:
 
         total_cpu_seconds = sum(r.cpu_core_seconds for r in daily_records)
         total_memory_seconds = sum(r.memory_gb_seconds for r in daily_records)
-        total_standard_hours = sum(r.standard_gb_hours for r in daily_records)
-        total_shared_hours = sum(r.shared_gb_hours for r in daily_records)
         total_build_minutes = sum(r.build_minutes for r in daily_records)
-        total_endpoint_hours = sum(r.public_endpoint_hours for r in daily_records)
+        total_storage_gb_months = sum(r.storage_gb_months for r in daily_records)
 
         return UsageMetrics(
             cpu_core_hours=UsageUnits.seconds_to_hours(total_cpu_seconds),
             memory_gb_hours=UsageUnits.seconds_to_hours(total_memory_seconds),
-            standard_gb_hours=total_standard_hours,
-            shared_gb_hours=total_shared_hours,
             build_minutes=total_build_minutes,
-            public_endpoint_hours=total_endpoint_hours,
+            storage_gb_months=total_storage_gb_months,
         )
 
     async def get_deployment_breakdown(
@@ -86,9 +82,8 @@ class UsageService:
             (
                 cpu,
                 memory,
-                standard,
-                shared,
-                endpoints,
+                storage_gb_hours,
+                _,
                 build,
             ) = await db.usage.get_deployment_usage(
                 deployment_id=deployment_id,
@@ -113,10 +108,8 @@ class UsageService:
         metrics = UsageMetrics(
             cpu_core_hours=UsageUnits.seconds_to_hours(cpu),
             memory_gb_hours=UsageUnits.seconds_to_hours(memory),
-            standard_gb_hours=standard,
-            shared_gb_hours=shared,
             build_minutes=build,
-            public_endpoint_hours=endpoints,
+            storage_gb_months=UsageUnits.gb_hours_to_gb_months(storage_gb_hours),
         )
 
         services = [
@@ -193,10 +186,8 @@ class UsageService:
                 total_costs = MeterCostBreakdown(
                     cpu_cost=sum(c.cpu_cost for c in cost_results if c),
                     memory_cost=sum(c.memory_cost for c in cost_results if c),
-                    standard_cost=sum(c.standard_cost for c in cost_results if c),
-                    shared_cost=sum(c.shared_cost for c in cost_results if c),
                     build_cost=sum(c.build_cost for c in cost_results if c),
-                    endpoint_cost=sum(c.endpoint_cost for c in cost_results if c),
+                    storage_cost=sum(c.storage_cost for c in cost_results if c),
                     total_cost=sum(c.total_cost for c in cost_results if c),
                 )
             except Exception as e:
@@ -260,12 +251,8 @@ class UsageService:
                 else:
                     daily_data[day_key].cpu_core_hours += day_data.cpu_core_hours
                     daily_data[day_key].memory_gb_hours += day_data.memory_gb_hours
-                    daily_data[day_key].standard_gb_hours += day_data.standard_gb_hours
-                    daily_data[day_key].shared_gb_hours += day_data.shared_gb_hours
                     daily_data[day_key].build_minutes += day_data.build_minutes
-                    daily_data[
-                        day_key
-                    ].public_endpoint_hours += day_data.public_endpoint_hours
+                    daily_data[day_key].storage_gb_months += day_data.storage_gb_months
 
         self._fill_missing_days(daily_data, start_date, end_date, tz)
         await self.cost_service.calculate_costs_for_daily_data(
@@ -361,10 +348,8 @@ class UsageService:
         workspace_summaries: list[WorkspaceUsageSummary] = []
         total_cpu_hours = 0.0
         total_memory_hours = 0.0
-        total_standard_hours = 0.0
-        total_shared_hours = 0.0
         total_build_minutes = 0.0
-        total_endpoint_hours = 0.0
+        total_storage_gb_months = 0.0
 
         deployment_overview_tasks = []
         valid_workspace_indices = []
@@ -420,18 +405,14 @@ class UsageService:
 
             total_cpu_hours += usage.cpu_core_hours
             total_memory_hours += usage.memory_gb_hours
-            total_standard_hours += usage.standard_gb_hours
-            total_shared_hours += usage.shared_gb_hours
             total_build_minutes += usage.build_minutes
-            total_endpoint_hours += usage.public_endpoint_hours
+            total_storage_gb_months += usage.storage_gb_months
 
         total_usage = UsageMetrics(
             cpu_core_hours=total_cpu_hours,
             memory_gb_hours=total_memory_hours,
-            standard_gb_hours=total_standard_hours,
-            shared_gb_hours=total_shared_hours,
             build_minutes=total_build_minutes,
-            public_endpoint_hours=total_endpoint_hours,
+            storage_gb_months=total_storage_gb_months,
         )
 
         return workspace_summaries, total_usage
@@ -458,10 +439,7 @@ class UsageService:
                     date=utc_midnight.strftime("%Y-%m-%dT%H:%M:%SZ"),
                     cpu_core_hours=0.0,
                     memory_gb_hours=0.0,
-                    standard_gb_hours=0.0,
-                    shared_gb_hours=0.0,
                     build_minutes=0.0,
-                    public_endpoint_hours=0.0,
                 )
 
             daily_data[day_key].cpu_core_hours += UsageUnits.seconds_to_hours(
@@ -470,10 +448,8 @@ class UsageService:
             daily_data[day_key].memory_gb_hours += UsageUnits.seconds_to_hours(
                 record.memory_gb_seconds
             )
-            daily_data[day_key].standard_gb_hours += record.standard_gb_hours
-            daily_data[day_key].shared_gb_hours += record.shared_gb_hours
             daily_data[day_key].build_minutes += record.build_minutes
-            daily_data[day_key].public_endpoint_hours += record.public_endpoint_hours
+            daily_data[day_key].storage_gb_months += record.storage_gb_months
 
         return daily_data
 
@@ -499,9 +475,6 @@ class UsageService:
                     date=utc_midnight.strftime("%Y-%m-%dT%H:%M:%SZ"),
                     cpu_core_hours=0.0,
                     memory_gb_hours=0.0,
-                    standard_gb_hours=0.0,
-                    shared_gb_hours=0.0,
                     build_minutes=0.0,
-                    public_endpoint_hours=0.0,
                 )
             current_local_date += timedelta(days=1)

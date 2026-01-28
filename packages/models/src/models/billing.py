@@ -1,8 +1,6 @@
 from datetime import datetime, timedelta
 from enum import IntEnum, StrEnum
 
-from models.storage import STORAGE_CLASS_EBS, STORAGE_CLASS_EFS
-
 
 class UsageCollectionInterval(IntEnum):
     MINUTE = 1
@@ -47,13 +45,12 @@ class UsageCollectionConfig:
 class MeterNames(StrEnum):
     CPU_USAGE = "CPU Usage"
     MEMORY_USAGE = "Memory Usage"
-    STANDARD_STORAGE = "Standard Storage"
-    SHARED_STORAGE = "Shared Storage"
     BUILD_MINUTES = "Build Minutes"
-    PUBLIC_ENDPOINTS = "Public Endpoints"
+    STORAGE_USAGE = "Storage Usage"
 
 
 SECONDS_PER_HOUR = 3600
+HOURS_PER_MONTH = 730
 CENTS_PER_DOLLAR = 100
 
 USAGE_EVENT_NAME = "lazycloud-usage"
@@ -61,16 +58,13 @@ USAGE_EVENT_NAME = "lazycloud-usage"
 # Meter prices in cents per unit
 # - CPU: cents per core-hour
 # - Memory: cents per GB-hour
-# - Storage: cents per GB-hour
 # - Build: cents per minute
-# - Endpoints: cents per endpoint-hour
+# - Storage: cents per GB-month
 METER_PRICES_CENTS: dict[MeterNames, float] = {
-    MeterNames.CPU_USAGE: 4.0,  # $0.04 per core-hour
-    MeterNames.MEMORY_USAGE: 0.8,  # $0.008 per GB-hour
-    MeterNames.STANDARD_STORAGE: 0.015,  # $0.00015 per GB-hour (~$0.11/GB-month)
-    MeterNames.SHARED_STORAGE: 0.06,  # $0.0006 per GB-hour (~$0.43/GB-month)
+    MeterNames.CPU_USAGE: 4.0,  # $0.040 per core-hour
+    MeterNames.MEMORY_USAGE: 0.7,  # $0.007 per GB-hour
     MeterNames.BUILD_MINUTES: 4.0,  # $0.04 per minute
-    MeterNames.PUBLIC_ENDPOINTS: 0.07,  # $0.0007 per endpoint-hour (~$0.50/month)
+    MeterNames.STORAGE_USAGE: 10.0,  # $0.10 per GB-month
 }
 
 
@@ -86,6 +80,11 @@ class UsageUnits:
     def seconds_to_hours(seconds: float) -> float:
         """Convert seconds to hours."""
         return seconds / SECONDS_PER_HOUR
+
+    @staticmethod
+    def gb_hours_to_gb_months(gb_hours: float) -> float:
+        """Convert GB-hours to GB-months (1 month = 730 hours)."""
+        return gb_hours / HOURS_PER_MONTH
 
     @staticmethod
     def cents_to_dollars(cents: float) -> float:
@@ -129,13 +128,6 @@ class UsageUnits:
 METER_METADATA_FIELDS = {
     MeterNames.CPU_USAGE: "cpu_core_hours",
     MeterNames.MEMORY_USAGE: "memory_gb_hours",
-    MeterNames.STANDARD_STORAGE: "standard_gb_hours",
-    MeterNames.SHARED_STORAGE: "shared_gb_hours",
     MeterNames.BUILD_MINUTES: "build_minutes",
-    MeterNames.PUBLIC_ENDPOINTS: "public_endpoint_hours",
-}
-
-STORAGE_CLASS_TO_METER: dict[str, MeterNames] = {
-    STORAGE_CLASS_EBS: MeterNames.STANDARD_STORAGE,
-    STORAGE_CLASS_EFS: MeterNames.SHARED_STORAGE,
+    MeterNames.STORAGE_USAGE: "storage_gb_months",
 }

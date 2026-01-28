@@ -35,7 +35,10 @@ class AppConfig(BaseModel):
         os.getenv("CORS_ORIGINS", '["http://localhost:3000"]')
     )
 
-    # AWS Configuration (for CloudWatch metrics)
+    # Cloud provider ("aws" or "hetzner")
+    CLOUD_PROVIDER: str = os.getenv("CLOUD_PROVIDER", "hetzner")
+
+    # AWS Configuration (optional, only needed when CLOUD_PROVIDER=aws)
     AWS_ACCESS_KEY_ID: str = os.getenv("AWS_ACCESS_KEY_ID", "")
     AWS_SECRET_ACCESS_KEY: str = os.getenv("AWS_SECRET_ACCESS_KEY", "")
     AWS_REGION: str = os.getenv("AWS_REGION", "")
@@ -117,9 +120,6 @@ class AppConfig(BaseModel):
     required_env_vars: List[str] = [
         "ADMIN_API_KEY",
         "REDIS_URL",
-        "AWS_ACCESS_KEY_ID",
-        "AWS_SECRET_ACCESS_KEY",
-        "AWS_REGION",
         "DB_SECRET_KEY",
         "RESEND_API_KEY",
     ]

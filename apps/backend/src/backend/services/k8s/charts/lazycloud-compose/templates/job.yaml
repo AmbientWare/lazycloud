@@ -143,17 +143,29 @@ spec:
         {{- end }}
       {{- end }}
       restartPolicy: {{ $service.restartPolicy | default "Never" }}
-      {{- with $service.nodeSelector | default $.Values.nodeSelector }}
+      {{- if or $.Values.global.instanceClass $service.nodeSelector $.Values.nodeSelector }}
       nodeSelector:
+        {{- if $.Values.global.instanceClass }}
+        instance-class: {{ $.Values.global.instanceClass }}
+        {{- end }}
+        {{- with $service.nodeSelector | default $.Values.nodeSelector }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- end }}
       {{- with $service.affinity | default $.Values.affinity }}
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with $service.tolerations | default $.Values.tolerations }}
+      {{- if or $.Values.global.instanceClass $service.tolerations $.Values.tolerations }}
       tolerations:
+        {{- if $.Values.global.instanceClass }}
+        - key: instance-class
+          value: {{ $.Values.global.instanceClass }}
+          effect: NoSchedule
+        {{- end }}
+        {{- with $service.tolerations | default $.Values.tolerations }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- end }}
 {{- end }}
 {{- end }}

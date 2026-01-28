@@ -26,9 +26,6 @@ class StorageUsage(BaseModel):
 class UsageTotals(BaseModel):
     cpu_core_seconds: float = Field(default=0.0)
     memory_gb_seconds: float = Field(default=0.0)
-    storage_gb_hours: float = Field(default=0.0)
-    standard_gb_hours: float = Field(default=0.0)
-    shared_gb_hours: float = Field(default=0.0)
 
 
 class UsagePeriod(BaseModel):

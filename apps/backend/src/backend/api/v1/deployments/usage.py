@@ -86,10 +86,8 @@ async def get_deployment_cost_breakdown(
                     external_customer_id=current_user.workos_id,
                     cpu_core_hours=deployment_metrics.cpu_core_hours,
                     memory_gb_hours=deployment_metrics.memory_gb_hours,
-                    standard_gb_hours=deployment_metrics.standard_gb_hours,
-                    shared_gb_hours=deployment_metrics.shared_gb_hours,
                     build_minutes=deployment_metrics.build_minutes,
-                    public_endpoint_hours=deployment_metrics.public_endpoint_hours,
+                    storage_gb_months=deployment_metrics.storage_gb_months,
                     service_usage=service_usage_list if service_usage_list else None,
                     volume_usage=volume_usage_list if volume_usage_list else None,
                 )

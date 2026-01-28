@@ -47,7 +47,6 @@ async def get_user_features(
         max_memory_per_service=features.max_memory_per_service,
         max_replicas_per_service=features.max_replicas_per_service,
         custom_domains_enabled=features.custom_domains_enabled,
-        support_level=features.support_level,
     )
 
 

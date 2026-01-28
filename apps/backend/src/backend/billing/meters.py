@@ -53,40 +53,6 @@ METER_DEFINITIONS = [
         ),
     ),
     MeterDefinition(
-        name=MeterNames.STANDARD_STORAGE,
-        filter=Filter(
-            conjunction=polar_sdk.FilterConjunction.OR,
-            clauses=[
-                FilterClause(
-                    property="name",
-                    operator=polar_sdk.FilterOperator.EQ,
-                    value=USAGE_EVENT_NAME,
-                )
-            ],
-        ),
-        aggregation=PropertyAggregation(
-            func=polar_sdk.Func.SUM,
-            property=METER_METADATA_FIELDS[MeterNames.STANDARD_STORAGE],
-        ),
-    ),
-    MeterDefinition(
-        name=MeterNames.SHARED_STORAGE,
-        filter=Filter(
-            conjunction=polar_sdk.FilterConjunction.OR,
-            clauses=[
-                FilterClause(
-                    property="name",
-                    operator=polar_sdk.FilterOperator.EQ,
-                    value=USAGE_EVENT_NAME,
-                )
-            ],
-        ),
-        aggregation=PropertyAggregation(
-            func=polar_sdk.Func.SUM,
-            property=METER_METADATA_FIELDS[MeterNames.SHARED_STORAGE],
-        ),
-    ),
-    MeterDefinition(
         name=MeterNames.BUILD_MINUTES,
         filter=Filter(
             conjunction=polar_sdk.FilterConjunction.OR,
@@ -104,7 +70,7 @@ METER_DEFINITIONS = [
         ),
     ),
     MeterDefinition(
-        name=MeterNames.PUBLIC_ENDPOINTS,
+        name=MeterNames.STORAGE_USAGE,
         filter=Filter(
             conjunction=polar_sdk.FilterConjunction.OR,
             clauses=[
@@ -117,7 +83,7 @@ METER_DEFINITIONS = [
         ),
         aggregation=PropertyAggregation(
             func=polar_sdk.Func.SUM,
-            property=METER_METADATA_FIELDS[MeterNames.PUBLIC_ENDPOINTS],
+            property=METER_METADATA_FIELDS[MeterNames.STORAGE_USAGE],
         ),
     ),
 ]

@@ -557,10 +557,7 @@ class TestBillingAuditLogging:
             record_id=record.id,
             cpu_core_seconds=100.0,
             memory_gb_seconds=100.0,
-            standard_gb_hours=0.0,
-            shared_gb_hours=0.0,
             build_minutes=0.0,
-            public_endpoint_hours=0.0,
         )
 
         await finalize_and_bill()

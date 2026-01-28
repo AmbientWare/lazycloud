@@ -1,5 +1,7 @@
 import json
 
+from models.billing import MeterNames, UsageUnits
+
 from backend.billing.product_details.base_models import (
     METER_PRICES,
     ProductDefinition,
@@ -12,12 +14,11 @@ PRO_PRODUCT_NAME = "Pro"
 
 PRO_FEATURES = BaseFeatures(
     deployment_limit=10,
-    max_team_members=10,
-    max_cpu_per_service=8.0,
+    max_team_members=5,
+    max_cpu_per_service=4.0,
     max_memory_per_service=16,
-    max_replicas_per_service=5,  # Auto-scaling up to 5x
+    max_replicas_per_service=2,  # Auto-scaling up to 2x
     custom_domains_enabled=True,
-    support_level="priority",
 )
 
 DESCRIPTION_MARKDOWN = f"""
@@ -28,6 +29,7 @@ Ideal for teams and production workloads.
 - Custom domain names
 - Auto-scaling (up to {PRO_FEATURES.max_replicas_per_service}x)
 - Team collaboration (up to {PRO_FEATURES.max_team_members} members)
+- Storage metered (${UsageUnits.get_price_dollars(MeterNames.STORAGE_USAGE):.2f}/GB-month)
 """
 
 pro_product = ProductDefinition(
@@ -35,7 +37,7 @@ pro_product = ProductDefinition(
     description=DESCRIPTION_MARKDOWN,
     recurring_interval=SubscriptionRecurringInterval.MONTH,
     has_free_base=False,
-    monthly_fee=4900,  # $49/month
+    monthly_fee=1900,  # $19/month
     meter_prices=METER_PRICES,
     metadata=ProductMetadata(
         tier=PRO_PRODUCT_NAME.lower(),

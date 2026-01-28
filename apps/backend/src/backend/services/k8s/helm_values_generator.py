@@ -18,8 +18,9 @@ from models.helm import (
     VolumeValues,
     WorkloadType,
 )
-from models.storage import STORAGE_CLASS_EBS, STORAGE_CLASS_EFS
+from models.storage import STORAGE_CLASS_SHARED, STORAGE_CLASS_STANDARD
 
+from backend.billing.product_details.features import BaseFeatures
 from backend.config import app_config
 from backend.database.compose import ComposeDeploymentPydantic
 from backend.database.secrets import SecretPydantic
@@ -55,12 +56,16 @@ class HelmValuesGenerator:
     """Generates Helm chart values from Docker Compose configurations."""
 
     def __init__(
-        self, deployment: ComposeDeploymentPydantic, secrets: list[SecretPydantic]
+        self,
+        deployment: ComposeDeploymentPydantic,
+        secrets: list[SecretPydantic],
+        features: BaseFeatures | None = None,
     ):
         self.deployment = deployment
         self._secrets = (
             {secret.key: secret.value for secret in secrets} if secrets else {}
         )
+        self._features = features
 
     def generate_values(self, compose: ComposeFile) -> tuple[HelmValues, list[str]]:
         """Generate Helm values from a compose file."""
@@ -360,7 +365,7 @@ class HelmValuesGenerator:
         size = volume_labels.get(LazyCloudLabel.VOLUME_SIZE, "10Gi")
 
         # Select storage class and access mode based on shared status
-        storage_class = STORAGE_CLASS_EFS if use_shared else STORAGE_CLASS_EBS
+        storage_class = STORAGE_CLASS_SHARED if use_shared else STORAGE_CLASS_STANDARD
         access_mode = "ReadWriteMany" if use_shared else "ReadWriteOnce"
 
         # Merge user labels with system labels
