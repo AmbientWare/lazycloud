@@ -11,7 +11,10 @@
 # -----------------------------------------------------------------------------
 
 locals {
-  deploy_dir = "${path.module}/../../deploy"
+  deploy_dir = "${path.module}/../../../../deploy"
+
+  # Dynamic autoscaler node config key based on worker type and location
+  autoscaler_node_config_key = "${var.worker_type}-worker-${var.location}"
 }
 
 # =============================================================================
@@ -134,7 +137,7 @@ resource "kubernetes_secret" "cluster_autoscaler_config" {
         amd64 = tostring(data.hcloud_image.talos.id)
       }
       nodeConfigs = {
-        "cpx41-worker-ash" = {
+        (local.autoscaler_node_config_key) = {
           cloudInit = data.talos_machine_configuration.worker[0].machine_configuration
           labels = {
             "runtime"  = "gvisor"
@@ -171,24 +174,13 @@ resource "kubernetes_secret" "aws_sm_credentials" {
   depends_on = [kubernetes_namespace.external_secrets]
 }
 
-# App namespaces (external-secrets creates ExternalSecrets targeting these)
-resource "kubernetes_namespace" "lazycloud_prod" {
-  metadata {
-    name = "lazycloud-prod"
-    labels = {
-      "lazycloud.dev/depot-registry" = "true"
-    }
-  }
+# App namespaces (configurable via variable)
+resource "kubernetes_namespace" "app" {
+  for_each = { for ns in var.app_namespaces : ns.name => ns }
 
-  depends_on = [helm_release.cilium]
-}
-
-resource "kubernetes_namespace" "lazycloud_staging" {
   metadata {
-    name = "lazycloud-staging"
-    labels = {
-      "lazycloud.dev/depot-registry" = "true"
-    }
+    name   = each.value.name
+    labels = each.value.labels
   }
 
   depends_on = [helm_release.cilium]
@@ -226,6 +218,7 @@ resource "kubernetes_secret" "argocd_cluster_local" {
     labels = {
       "argocd.argoproj.io/secret-type" = "cluster"
       "provider"                       = "hetzner"
+      "cluster_id"                     = var.cluster_id
     }
   }
 
@@ -245,7 +238,7 @@ resource "helm_release" "argocd" {
 
   values = [yamlencode({
     global = {
-      domain = "argocd.lazycloud.dev"
+      domain = var.argocd_domain
     }
     server = {
       ingress = {
@@ -277,7 +270,7 @@ resource "kubernetes_secret" "argocd_repo" {
 
   data = {
     type          = "git"
-    url           = "git@github.com:AmbientWare/lazycloud.git"
+    url           = var.git_repo_url
     sshPrivateKey = file(pathexpand(var.argocd_repo_ssh_key_path))
   }
 

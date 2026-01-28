@@ -1,4 +1,18 @@
 # -----------------------------------------------------------------------------
+# Cluster Identity
+# -----------------------------------------------------------------------------
+
+variable "cluster_id" {
+  description = "Unique cluster identifier (e.g., ash-1, ash-2, fsn-1)"
+  type        = string
+}
+
+variable "cluster_name" {
+  description = "Name prefix for all resources"
+  type        = string
+}
+
+# -----------------------------------------------------------------------------
 # Hetzner Cloud
 # -----------------------------------------------------------------------------
 
@@ -6,12 +20,6 @@ variable "hcloud_token" {
   description = "Hetzner Cloud API token"
   type        = string
   sensitive   = true
-}
-
-variable "cluster_name" {
-  description = "Name prefix for all resources"
-  type        = string
-  default     = "lazycloud-prod"
 }
 
 variable "location" {
@@ -60,6 +68,12 @@ variable "talos_version" {
   default     = "v1.12.2"
 }
 
+variable "talos_schematic_id" {
+  description = "Talos factory schematic ID (includes extensions like gvisor)"
+  type        = string
+  default     = "d9ff89777e246792e7642abd3220a616afb4e49822382e4213a2e528ab826fe5"
+}
+
 # -----------------------------------------------------------------------------
 # Networking
 # -----------------------------------------------------------------------------
@@ -89,14 +103,8 @@ variable "service_ipv4_cidr" {
 }
 
 # -----------------------------------------------------------------------------
-# AWS
+# AWS (for JuiceFS S3 backend + External Secrets)
 # -----------------------------------------------------------------------------
-
-variable "aws_region" {
-  description = "AWS region for Secrets Manager"
-  type        = string
-  default     = "us-east-1"
-}
 
 variable "aws_access_key_id" {
   description = "AWS access key (used for JuiceFS S3 + External Secrets Operator)"
@@ -117,7 +125,6 @@ variable "aws_secret_access_key" {
 variable "juicefs_name" {
   description = "JuiceFS Cloud filesystem name"
   type        = string
-  default     = "lazycloud-prod"
 }
 
 variable "juicefs_token" {
@@ -130,8 +137,52 @@ variable "juicefs_token" {
 # ArgoCD
 # -----------------------------------------------------------------------------
 
+variable "argocd_domain" {
+  description = "Domain for ArgoCD ingress"
+  type        = string
+  default     = "argocd.lazycloud.dev"
+}
+
+variable "git_repo_url" {
+  description = "Git repository URL for ArgoCD"
+  type        = string
+  default     = "git@github.com:AmbientWare/lazycloud.git"
+}
+
 variable "argocd_repo_ssh_key_path" {
   description = "Path to SSH private key file for ArgoCD to access the Git repo"
   type        = string
   default     = "~/.ssh/id_rsa"
+}
+
+# -----------------------------------------------------------------------------
+# Application Configuration
+# -----------------------------------------------------------------------------
+
+variable "app_namespaces" {
+  description = "Application namespaces to create"
+  type = list(object({
+    name   = string
+    labels = optional(map(string), {})
+  }))
+  default = [
+    {
+      name   = "lazycloud-prod"
+      labels = { "lazycloud.dev/depot-registry" = "true" }
+    },
+    {
+      name   = "lazycloud-staging"
+      labels = { "lazycloud.dev/depot-registry" = "true" }
+    }
+  ]
+}
+
+# -----------------------------------------------------------------------------
+# AWS Secrets Manager
+# -----------------------------------------------------------------------------
+
+variable "secrets_prefix" {
+  description = "Prefix for AWS Secrets Manager secret names"
+  type        = string
+  default     = "lazycloud"
 }

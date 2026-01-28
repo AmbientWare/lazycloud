@@ -5,7 +5,7 @@ from loguru import logger
 from backend.database.crud import update_admin_api_keys
 from backend.database.session import shutdown_database
 from backend.services import get_depot_service
-from backend.services.k8s.client import close_async_api_client
+from backend.services.k8s.client import close_all_clients, initialize_cluster_clients
 from backend.services.monitoring import (
     initialize_subscription_manager,
     shutdown_subscription_manager,
@@ -18,6 +18,10 @@ async def startup_application() -> None:
 
     # Update admin API keys (creates admin user/workspace if needed)
     await update_admin_api_keys()
+
+    # Initialize Kubernetes clients for all clusters
+    await initialize_cluster_clients()
+    logger.info("Kubernetes cluster clients initialized")
 
     # Initialize subscription manager for shared monitoring (sse streams)
     initialize_subscription_manager()
@@ -34,9 +38,9 @@ async def shutdown_application():
     await shutdown_subscription_manager()
     logger.info("Subscription manager shutdown complete")
 
-    # Close async Kubernetes client
-    await close_async_api_client()
-    logger.info("Async Kubernetes client closed")
+    # Close all Kubernetes cluster clients
+    await close_all_clients()
+    logger.info("Kubernetes cluster clients closed")
 
     # Close Depot service connections (Redis, HTTP client)
     try:

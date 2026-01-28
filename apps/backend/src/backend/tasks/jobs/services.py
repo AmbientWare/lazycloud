@@ -46,7 +46,7 @@ async def restart_service_job(
     service = next(s for s in deployment.helm_values.services if s.name == service_name)
 
     # Use WorkloadManager to restart the service
-    workload_ops = WorkloadManager()
+    workload_ops = WorkloadManager(deployment.cluster_id)
     result = await workload_ops.restart_service(
         service=service,
         namespace=deployment.namespace,
@@ -85,7 +85,7 @@ async def restart_all_services_job(
         raise ValueError(f"Deployment {deployment_id} has no services configured")
 
     # Use WorkloadManager to restart all services
-    workload_ops = WorkloadManager()
+    workload_ops = WorkloadManager(deployment.cluster_id)
     result = await workload_ops.restart_all_services(
         helm_values=deployment.helm_values, namespace=deployment.namespace
     )

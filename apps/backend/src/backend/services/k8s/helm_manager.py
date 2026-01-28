@@ -18,6 +18,7 @@ from backend.services.k8s.client import (
     get_async_api_client,
     get_async_apps_v1_api,
     get_async_core_v1_api,
+    get_kubeconfig_path,
 )
 
 
@@ -64,13 +65,13 @@ class HelmManager:
     are wrapped with asyncio.to_thread() for non-blocking execution.
     """
 
-    def __init__(self):
-        pass
+    def __init__(self, cluster_id: str):
+        self.cluster_id = cluster_id
 
     async def _namespace_exists(self, namespace: str) -> bool:
         """Check if a namespace exists."""
         try:
-            core_v1 = await get_async_core_v1_api()
+            core_v1 = await get_async_core_v1_api(self.cluster_id)
             await core_v1.read_namespace(name=namespace)
             return True
 
@@ -422,7 +423,7 @@ class HelmManager:
 
     async def _clear_helm_locks(self, release_name: str, namespace: str) -> None:
         """Clear Helm lock secrets for a release to unstick operations."""
-        core_v1 = await get_async_core_v1_api()
+        core_v1 = await get_async_core_v1_api(self.cluster_id)
         lock_prefix = f"sh.helm.release.v1.{release_name}."
 
         try:
@@ -477,9 +478,9 @@ class HelmManager:
         """Get status of all resources in a release."""
 
         resources: dict[str, list[dict[str, Any]]] = {}
-        apps_v1 = await get_async_apps_v1_api()
-        core_v1 = await get_async_core_v1_api()
-        api_client = await get_async_api_client()
+        apps_v1 = await get_async_apps_v1_api(self.cluster_id)
+        core_v1 = await get_async_core_v1_api(self.cluster_id)
+        api_client = await get_async_api_client(self.cluster_id)
         label_selector = f"app.kubernetes.io/instance={release_name}"
 
         try:
@@ -650,7 +651,15 @@ class HelmManager:
     async def _run_helm_command(
         self, cmd: list[str], suppress_not_found_warning: bool = False
     ) -> subprocess.CompletedProcess:
-        """Run a Helm command asynchronously with proper error handling."""
+        """Run a Helm command asynchronously with proper error handling.
+
+        Automatically injects --kubeconfig flag to target the correct cluster.
+        """
+        # Inject kubeconfig flag to target the correct cluster
+        kubeconfig_path = get_kubeconfig_path(self.cluster_id)
+        # Insert --kubeconfig after 'helm' command
+        cmd = [cmd[0], "--kubeconfig", kubeconfig_path] + cmd[1:]
+
         logger.debug(f"Running command: {' '.join(cmd)}")
 
         process = await asyncio.create_subprocess_exec(

@@ -30,12 +30,14 @@ dependencies = [
     "saq[redis]>=0.26.1",
     "redis>=6.4.0",
     "asyncpg>=0.31.0",
+    "configs",
 ]
 
 [tool.uv.sources]
 models = { workspace = true }
 responses = { workspace = true }
 api_requests = { workspace = true }
+configs = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

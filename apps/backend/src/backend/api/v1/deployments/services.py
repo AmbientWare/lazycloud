@@ -33,6 +33,7 @@ async def list_services(
         deployment_id=deployment.id,
         namespace=deployment.namespace,
         helm_values=deployment.helm_values,
+        cluster_id=deployment.cluster_id,
     )
 
     service_statuses = await watcher.get_service_statuses_for_deployment()
@@ -62,6 +63,7 @@ async def get_service_status(
         deployment_id=deployment.id,
         namespace=deployment.namespace,
         helm_values=deployment.helm_values,
+        cluster_id=deployment.cluster_id,
     )
 
     service_status = await watcher.get_service_status(service_name)
@@ -148,6 +150,7 @@ async def stream_service_status(
         namespace=deployment.namespace,
         helm_values=deployment.helm_values,
         deployment_name=deployment.name,
+        cluster_id=deployment.cluster_id,
     )
 
     return EventSourceResponse(

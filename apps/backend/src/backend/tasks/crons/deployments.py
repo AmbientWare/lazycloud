@@ -46,8 +46,6 @@ async def reconcile_rollback_states_job(
     errors = 0
     skipped = 0
 
-    helm_manager = HelmManager()
-
     for deployment in stuck_deployments:
         try:
             name = create_release_name(deployment.workspace_id, deployment.name)
@@ -58,6 +56,8 @@ async def reconcile_rollback_states_job(
                 skipped += 1
                 continue
 
+            # Create HelmManager with the deployment's cluster_id
+            helm_manager = HelmManager(deployment.cluster_id)
             helm_revision = await helm_manager._get_latest_revision(name, namespace)
             db_revision = deployment.current_helm_revision
 

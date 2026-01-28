@@ -313,9 +313,10 @@ async def prepare_namespace_config(
 
 async def deploy_namespace_resources(
     namespace_config: HelmDeploymentConfig,
+    cluster_id: str,
 ) -> None:
     """Deploy namespace resources (NetworkPolicy, ResourceQuota, etc.)."""
-    helm_manager = HelmManager()
+    helm_manager = HelmManager(cluster_id)
     result = await helm_manager.deploy(namespace_config)
     if not result.success:
         raise Exception(f"Failed to deploy namespace: {result.error}")
@@ -324,6 +325,7 @@ async def deploy_namespace_resources(
 async def delete_existing_jobs(
     namespace: str,
     helm_values: HelmValues,
+    cluster_id: str,
     current_helm_values: HelmValues | None = None,
 ) -> None:
     """Delete existing Jobs before deployment."""
@@ -362,6 +364,7 @@ async def delete_existing_jobs(
                 service.resourceName,
                 namespace,
                 app_config.ROLLBACK_JOB_DELETION_TIMEOUT_SECONDS,
+                cluster_id,
             )
             logger.info(f"Deleted existing Job: {service.name}")
 
@@ -382,9 +385,10 @@ async def deploy_application(
     name: str,
     namespace: str,
     helm_values: HelmValues,
+    cluster_id: str,
 ) -> DeploymentResult:
     """Deploy application using Helm."""
-    helm_manager = HelmManager()
+    helm_manager = HelmManager(cluster_id)
 
     helm_app_config = HelmDeploymentConfig(
         release_name=name,

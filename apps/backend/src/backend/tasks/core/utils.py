@@ -14,10 +14,13 @@ from backend.services.k8s.client import get_async_batch_v1_api
 
 
 async def delete_job_with_timeout(
-    job_name: str, namespace: str, timeout_seconds: int
+    job_name: str,
+    namespace: str,
+    timeout_seconds: int,
+    cluster_id: str,
 ) -> None:
     """Delete a Kubernetes Job and wait for it to be fully removed."""
-    batch_v1 = await get_async_batch_v1_api()
+    batch_v1 = await get_async_batch_v1_api(cluster_id)
 
     # Initiate deletion
     try:
