@@ -23,6 +23,7 @@ cat > terraform.tfvars <<EOF
 hcloud_token              = "YOUR_HCLOUD_TOKEN"
 aws_access_key_id         = "YOUR_AWS_ACCESS_KEY"
 aws_secret_access_key     = "YOUR_AWS_SECRET_KEY"
+juicefs_name              = "lazycloud-prod"
 juicefs_token             = "YOUR_JUICEFS_TOKEN"
 argocd_repo_ssh_key_path  = "~/.ssh/id_rsa"
 EOF
@@ -67,7 +68,7 @@ aws secretsmanager put-secret-value --secret-id lazycloud/staging-secrets \
 ## 5. Deploy Platform via ArgoCD
 The ApplicationSet deploys all platform charts from `deploy/platform/`.
 ```bash
-kubectl apply -f deploy/argocd-apps/applicationsets/hetzner.yaml -n argocd
+kubectl apply -f deploy/argocd-apps/applicationsets/platform.yaml -n argocd
 ```
 
 ## 6. Update Billing
