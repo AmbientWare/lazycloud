@@ -264,10 +264,7 @@ class TestUsageTrackingWorkflow:
                 record_id=record.id,
                 cpu_core_seconds=100.0 * (i + 1),
                 memory_gb_seconds=0.0,
-                standard_gb_hours=0.0,
-                shared_gb_hours=0.0,
                 build_minutes=0.0,
-                public_endpoint_hours=0.0,
             )
 
         records = await db.usage.get_workspace_daily_usage(
@@ -296,10 +293,7 @@ class TestUsageTrackingWorkflow:
             record_id=record.id,
             cpu_core_seconds=500.0,
             memory_gb_seconds=0.0,
-            standard_gb_hours=0.0,
-            shared_gb_hours=0.0,
             build_minutes=0.0,
-            public_endpoint_hours=0.0,
         )
 
         # Mark as billed

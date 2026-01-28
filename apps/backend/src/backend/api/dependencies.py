@@ -2,6 +2,7 @@ from fastapi import Depends, HTTPException
 from models.compose import ComposeFile
 
 from backend.api.security import get_current_active_user
+from backend.billing.product_details.base import DEVELOPER_FEATURES
 from backend.billing.product_details.features import ADMIN_FEATURES, BaseFeatures
 from backend.database import Database, get_db
 from backend.database.compose import ComposeDeploymentPydantic
@@ -10,6 +11,7 @@ from backend.database.users import UserPydantic, UserRole
 from backend.models.workspace_access import WorkspaceAccess
 from backend.services import get_polar_service, get_subscription_service
 from backend.services.subscription_service import (
+    BillingNotConfiguredError,
     NoActiveSubscriptionError,
     SubscriptionLimitError,
 )
@@ -212,6 +214,10 @@ async def get_user_product_features(
             external_customer_id=current_user.workos_id
         )
 
+    except BillingNotConfiguredError:
+        # Fallback when billing is disabled (e.g., local development)
+        return DEVELOPER_FEATURES
+
     except ValueError as e:
         raise HTTPException(status_code=402, detail=str(e))
 
@@ -271,6 +277,37 @@ async def get_owner_with_active_subscription(
     return owner_user
 
 
+async def get_features_for_owner(
+    owner_user: UserPydantic,
+) -> BaseFeatures:
+    """Get subscription features for a workspace owner.
+
+    Admin users (role == ADMIN) get unlimited admin features.
+    """
+    if owner_user.role == UserRole.ADMIN:
+        return ADMIN_FEATURES
+
+    subscription_service = get_subscription_service()
+    try:
+        return await subscription_service.get_user_features(owner_user.workos_id)
+
+    except BillingNotConfiguredError:
+        # Fallback when billing is disabled (e.g., local development)
+        return DEVELOPER_FEATURES
+
+    except NoActiveSubscriptionError:
+        raise HTTPException(
+            status_code=402,
+            detail="No active subscription. Please subscribe to access this feature.",
+        )
+
+    except (ValueError, RuntimeError):
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to verify subscription status. Please try again.",
+        )
+
+
 async def check_deployment_limit_for_owner(
     owner_user: UserPydantic,
 ) -> None:
@@ -288,6 +325,14 @@ async def check_deployment_limit_for_owner(
             owner_user.workos_id
         )
         await subscription_service.check_deployment_limit(owner_user.id, owner_features)
+
+    except BillingNotConfiguredError:
+        # Fallback when billing is disabled (e.g., local development)
+        from backend.billing.product_details.base import DEVELOPER_FEATURES
+
+        await subscription_service.check_deployment_limit(
+            owner_user.id, DEVELOPER_FEATURES
+        )
 
     except SubscriptionLimitError as e:
         raise HTTPException(status_code=e.status_code, detail=str(e))

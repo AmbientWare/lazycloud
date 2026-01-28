@@ -1,0 +1,40 @@
+# Talos control plane patch for LazyCloud on Hetzner Cloud
+# Applied on top of the default Talos controlplane config
+
+cluster:
+  # Disable default Flannel CNI — we use Cilium
+  network:
+    cni:
+      name: none
+  # Proxy disabled — Cilium replaces kube-proxy
+  proxy:
+    disabled: true
+  # Allow scheduling on control plane for small clusters
+  allowSchedulingOnControlPlanes: false
+
+machine:
+  # Enable gVisor runtime
+  install:
+    extensions:
+      - image: ghcr.io/siderolabs/gvisor:20240826.0-v1.8.0
+  # Kubelet configuration
+  kubelet:
+    extraArgs:
+      cloud-provider: external
+    nodeIP:
+      validSubnets:
+        - 10.0.1.0/24
+  # Network configuration
+  network:
+    hostname: ""  # Set by Terraform
+    nameservers:
+      - 1.1.1.1
+      - 8.8.8.8
+    interfaces:
+      - deviceSelector:
+          physical: true
+        dhcp: true
+  # Time synchronization
+  time:
+    servers:
+      - time.cloudflare.com

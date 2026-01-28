@@ -1,7 +1,7 @@
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
-  name: lazycloud-platform
+  name: lazycloud-platform-hetzner
   namespace: argocd
 spec:
   goTemplate: true
@@ -13,6 +13,7 @@ spec:
               selector:
                 matchLabels:
                   argocd.argoproj.io/secret-type: cluster
+                  provider: hetzner
           - list:
               elements:
                 - app: storage-classes
@@ -20,64 +21,54 @@ spec:
                   syncWave: "1"
                   createNamespace: "false"
                   serverSideApply: "true"
-                  hasRegionValues: "true"
                 - app: reloader
                   namespace: kube-system
                   syncWave: "1"
                   createNamespace: "false"
                   serverSideApply: "false"
-                  hasRegionValues: "false"
                 - app: argo-rollouts
                   namespace: argo-rollouts
                   syncWave: "1"
                   createNamespace: "true"
                   serverSideApply: "true"
-                  hasRegionValues: "false"
+                - app: gvisor
+                  namespace: kube-system
+                  syncWave: "1"
+                  createNamespace: "false"
+                  serverSideApply: "false"
+                # Cilium is managed by Terraform (bootstrap dependency, needs privileged on Talos)
                 - app: external-secrets
                   namespace: external-secrets-system
                   syncWave: "2"
                   createNamespace: "true"
                   serverSideApply: "false"
-                  hasRegionValues: "true"
                 - app: nginx-ingress
                   namespace: ingress-nginx
                   syncWave: "3"
                   createNamespace: "true"
                   serverSideApply: "false"
-                  hasRegionValues: "false"
                 - app: cloudflare-tunnel
                   namespace: cloudflare-system
                   syncWave: "4"
                   createNamespace: "true"
                   serverSideApply: "false"
-                  hasRegionValues: "true"
-                - app: karpenter
+                - app: cluster-autoscaler
                   namespace: kube-system
                   syncWave: "4"
                   createNamespace: "false"
                   serverSideApply: "false"
-                  hasRegionValues: "true"
                 - app: loki
                   namespace: monitoring
                   syncWave: "5"
                   createNamespace: "true"
                   serverSideApply: "false"
-                  hasRegionValues: "false"
                 - app: prometheus-stack
                   namespace: monitoring
                   syncWave: "6"
                   createNamespace: "true"
                   serverSideApply: "true"
-                  hasRegionValues: "false"
   templatePatch: |
     spec:
-      source:
-        helm:
-          valueFiles:
-            - values.yaml
-            {{- if eq .hasRegionValues "true" }}
-            - values-{{ index .metadata.labels "region" }}.yaml
-            {{- end }}
       syncPolicy:
         syncOptions:
           - CreateNamespace={{ .createNamespace }}
@@ -104,6 +95,14 @@ spec:
       destination:
         server: '{{ .server }}'
         namespace: '{{ .namespace }}'
+      # Kubernetes mutates CRD status/preserveUnknownFields
+      # fields, causing permanent OutOfSync. This is the documented fix (argo-helm#3301).
+      ignoreDifferences:
+        - group: apiextensions.k8s.io
+          kind: CustomResourceDefinition
+          jsonPointers:
+            - /status
+            - /spec/preserveUnknownFields
       syncPolicy:
         automated:
           prune: true
@@ -111,6 +110,7 @@ spec:
           allowEmpty: false
         syncOptions:
           - CreateNamespace=false
+          - RespectIgnoreDifferences=true
         retry:
           limit: 5
           backoff:

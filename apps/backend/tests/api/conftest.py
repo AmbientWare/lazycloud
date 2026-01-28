@@ -49,7 +49,6 @@ def make_test_features() -> BaseFeatures:
         max_memory_per_service=16,
         max_replicas_per_service=10,
         custom_domains_enabled=True,
-        support_level="email",
     )
 
 
@@ -137,10 +136,8 @@ def make_mock_usage_service() -> AsyncMock:
             "usage": {
                 "cpu_core_hours": 0.0,
                 "memory_gb_hours": 0.0,
-                "standard_gb_hours": 0.0,
-                "shared_gb_hours": 0.0,
                 "build_minutes": 0.0,
-                "public_endpoint_hours": 0.0,
+                "storage_gb_months": 0.0,
             },
             "workspace_count": 0,
             "record_count": 0,
@@ -161,10 +158,8 @@ def make_mock_usage_service() -> AsyncMock:
             "meter_breakdown": {
                 "cpu_cost": 0.0,
                 "memory_cost": 0.0,
-                "standard_cost": 0.0,
-                "shared_cost": 0.0,
                 "build_cost": 0.0,
-                "endpoint_cost": 0.0,
+                "storage_cost": 0.0,
                 "total_cost": 0.0,
             },
             "service_breakdown": [],

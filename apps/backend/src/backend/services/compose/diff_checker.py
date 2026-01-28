@@ -1,5 +1,4 @@
 from loguru import logger
-from models.storage import STORAGE_CLASS_EBS, STORAGE_CLASS_EFS
 from models.compose import (
     ComposeFile,
     ComposeNetwork,
@@ -17,6 +16,7 @@ from models.diffs import (
     ResourceSection,
     StorageTypeChange,
 )
+from models.storage import STORAGE_CLASS_SHARED, STORAGE_CLASS_STANDARD
 from pydantic import BaseModel
 
 
@@ -430,7 +430,9 @@ def detect_storage_type_changes(
             volume_labels.get(LazyCloudLabel.VOLUME_SHARED) == "true"
             or volume.name in shared_volumes
         )
-        new_storage_class = STORAGE_CLASS_EFS if use_shared else STORAGE_CLASS_EBS
+        new_storage_class = (
+            STORAGE_CLASS_SHARED if use_shared else STORAGE_CLASS_STANDARD
+        )
 
         # Check if this volume exists with a different storage class
         if volume.name in existing_pvcs:

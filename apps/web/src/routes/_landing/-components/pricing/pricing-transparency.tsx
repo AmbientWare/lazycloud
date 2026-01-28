@@ -31,28 +31,16 @@ export function PricingTransparency({
       rate: pricing.memory_usage / 100,
     },
     {
-      label: 'Standard Storage',
-      description: 'Per GB-hour of block storage (fast, local to service)',
-      unit: 'GB-hour',
-      rate: pricing.standard_storage / 100,
-    },
-    {
-      label: 'Shared Storage',
-      description: 'Per GB-hour of network storage (shared across services)',
-      unit: 'GB-hour',
-      rate: pricing.shared_storage / 100,
-    },
-    {
       label: 'Build Minutes',
       description: 'Per minute of container build time',
       unit: 'minute',
       rate: pricing.build_minutes / 100,
     },
     {
-      label: 'Public Endpoints',
-      description: 'Per hour of exposed public endpoint',
-      unit: 'endpoint-hour',
-      rate: pricing.public_endpoints / 100,
+      label: 'Storage',
+      description: 'Per GB-month of persistent volume storage',
+      unit: 'GB-month',
+      rate: pricing.storage_usage / 100,
     },
   ]
 

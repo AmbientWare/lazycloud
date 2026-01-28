@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from backend.database import Database
 from backend.database.usage import BreakdownType, DailyUsageStatus
-from models.storage import STORAGE_CLASS_EBS
+from models.storage import STORAGE_CLASS_STANDARD
 
 from tests.fixtures.database import (
     make_user,
@@ -76,10 +76,8 @@ class TestAtomicIncrement:
             record_id=record.id,
             cpu_core_seconds=100.0,
             memory_gb_seconds=200.0,
-            standard_gb_hours=10.0,
-            shared_gb_hours=5.0,
+            storage_gb_months=0.5,
             build_minutes=15.0,
-            public_endpoint_hours=2.0,
         )
 
         records = await db.usage.get_workspace_daily_usage(
@@ -92,10 +90,8 @@ class TestAtomicIncrement:
         updated = records[0]
         assert updated.cpu_core_seconds == 100.0
         assert updated.memory_gb_seconds == 200.0
-        assert updated.standard_gb_hours == 10.0
-        assert updated.shared_gb_hours == 5.0
+        assert updated.storage_gb_months == 0.5
         assert updated.build_minutes == 15.0
-        assert updated.public_endpoint_hours == 2.0
         assert updated.intervals_collected == 1
 
     async def test_multiple_increments_accumulate(self, db: Database):
@@ -115,10 +111,7 @@ class TestAtomicIncrement:
             record_id=record.id,
             cpu_core_seconds=100.0,
             memory_gb_seconds=0.0,
-            standard_gb_hours=0.0,
-            shared_gb_hours=0.0,
             build_minutes=0.0,
-            public_endpoint_hours=0.0,
         )
 
         # Second increment
@@ -126,10 +119,7 @@ class TestAtomicIncrement:
             record_id=record.id,
             cpu_core_seconds=150.0,
             memory_gb_seconds=0.0,
-            standard_gb_hours=0.0,
-            shared_gb_hours=0.0,
             build_minutes=0.0,
-            public_endpoint_hours=0.0,
         )
 
         records = await db.usage.get_workspace_daily_usage(
@@ -289,7 +279,7 @@ class TestBreakdownEvents:
             interval_end=interval_end,
             breakdown_type=BreakdownType.STORAGE,
             resource_name="data-vol",
-            storage_class=STORAGE_CLASS_EBS,
+            storage_class=STORAGE_CLASS_STANDARD,
             gb_hours=10.0,
         )
 
@@ -301,7 +291,7 @@ class TestBreakdownEvents:
 
         assert len(breakdown) == 1
         assert breakdown[0][0] == "data-vol"
-        assert breakdown[0][1] == STORAGE_CLASS_EBS
+        assert breakdown[0][1] == STORAGE_CLASS_STANDARD
         assert breakdown[0][2] == 10.0
 
 
@@ -323,8 +313,8 @@ class TestMultipleWorkspaces:
         rec1 = await db.usage.get_or_create_daily_record(ws1.id, today)
         rec2 = await db.usage.get_or_create_daily_record(ws2.id, today)
 
-        await db.usage.atomic_increment_usage(rec1.id, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0)
-        await db.usage.atomic_increment_usage(rec2.id, 200.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        await db.usage.atomic_increment_usage(rec1.id, 100.0, 0.0, 0.0)
+        await db.usage.atomic_increment_usage(rec2.id, 200.0, 0.0, 0.0)
 
         ws1_records = await db.usage.get_workspace_daily_usage(ws1.id, today, today)
         ws2_records = await db.usage.get_workspace_daily_usage(ws2.id, today, today)

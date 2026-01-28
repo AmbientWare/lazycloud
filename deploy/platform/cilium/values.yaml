@@ -1,0 +1,52 @@
+# Cilium CNI for Hetzner Cloud (Talos Linux)
+
+# VXLAN tunnel mode for Hetzner private network
+routingMode: tunnel
+tunnelProtocol: vxlan
+
+# Replace kube-proxy (Talos disables kube-proxy)
+kubeProxyReplacement: true
+k8sServiceHost: "localhost"
+k8sServicePort: "7445"  # Talos proxy port
+
+# Enable Hubble observability
+hubble:
+  enabled: true
+  relay:
+    enabled: true
+  ui:
+    enabled: true
+
+# Operator
+operator:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# Agent resources
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# BPF masquerade (required when kubeProxyReplacement is true)
+bpf:
+  masquerade: true
+
+# Talos requires privileged mode — non-privileged containers cannot apply capabilities
+securityContext:
+  privileged: true
+
+# Talos mounts cgroup at /sys/fs/cgroup, disable auto-mount
+cgroup:
+  autoMount:
+    enabled: false
+  hostRoot: /sys/fs/cgroup

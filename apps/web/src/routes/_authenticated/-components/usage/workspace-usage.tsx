@@ -275,33 +275,6 @@ export function WorkspaceUsageCard({
                         </tr>
                         <tr className="border-b bg-card">
                           <td className="p-3">
-                            <span className="font-medium">
-                              Storage (GB-hrs)
-                            </span>
-                          </td>
-                          <td className="p-3 text-right">
-                            {formatUsageValue(
-                              deploymentWithBreakdown.usage.standard_gb_hours +
-                                deploymentWithBreakdown.usage.shared_gb_hours,
-                            )}
-                          </td>
-                          <td className="p-3 text-right">
-                            {deploymentWithBreakdown.usage.costs ? (
-                              <span className="font-semibold">
-                                {(
-                                  deploymentWithBreakdown.usage.costs
-                                    .standard_cost +
-                                  deploymentWithBreakdown.usage.costs
-                                    .shared_cost
-                                ).toFixed(2)}
-                              </span>
-                            ) : (
-                              <span className="text-muted-foreground">-</span>
-                            )}
-                          </td>
-                        </tr>
-                        <tr className="border-b bg-card">
-                          <td className="p-3">
                             <span className="font-medium">Build (minutes)</span>
                           </td>
                           <td className="p-3 text-right">
@@ -321,26 +294,34 @@ export function WorkspaceUsageCard({
                             )}
                           </td>
                         </tr>
-                        <tr className="border-b bg-card last:border-b-0">
+                        <tr className="border-b bg-card">
                           <td className="p-3">
-                            <span className="font-medium">Endpoints (hrs)</span>
+                            <span className="font-medium">Storage (GB-mo)</span>
                           </td>
                           <td className="p-3 text-right">
                             {formatUsageValue(
-                              deploymentWithBreakdown.usage
-                                .public_endpoint_hours,
+                              deploymentWithBreakdown.usage.storage_gb_months,
                             )}
                           </td>
                           <td className="p-3 text-right">
                             {deploymentWithBreakdown.usage.costs ? (
                               <span className="font-semibold">
-                                {deploymentWithBreakdown.usage.costs.endpoint_cost.toFixed(
+                                {deploymentWithBreakdown.usage.costs.storage_cost.toFixed(
                                   2,
                                 )}
                               </span>
                             ) : (
                               <span className="text-muted-foreground">-</span>
                             )}
+                          </td>
+                        </tr>
+                        <tr className="border-b bg-card last:border-b-0">
+                          <td className="p-3">
+                            <span className="font-medium">Endpoints</span>
+                          </td>
+                          <td className="p-3 text-right"></td>
+                          <td className="p-3 text-right">
+                            <span className="text-muted-foreground">Included</span>
                           </td>
                         </tr>
                       </tbody>
@@ -517,9 +498,9 @@ export function WorkspaceUsageCard({
                                   <td className="p-3">
                                     <div className="flex flex-col">
                                       <span>
-                                        {volume.storage_class === 'ebs'
-                                          ? 'Standard'
-                                          : 'Shared'}
+                                        {volume.storage_class.includes('shared')
+                                          ? 'Shared'
+                                          : 'Standard'}
                                       </span>
                                       <span className="mt-0.5 text-xs text-muted-foreground">
                                         {volume.percentage_of_total.toFixed(1)}%
@@ -576,10 +557,7 @@ export function WorkspaceUsageCard({
 
   const avgCpu = usage.cpu_core_hours / daysDiff
   const avgMemory = usage.memory_gb_hours / daysDiff
-  const avgStorage =
-    (usage.standard_gb_hours + usage.shared_gb_hours) / daysDiff
   const avgBuild = usage.build_minutes / daysDiff
-  const avgEndpoints = usage.public_endpoint_hours / daysDiff
 
   return (
     <StyledCard className="border-l-2 border-l-lazycloud/40 shadow-md">
@@ -610,25 +588,11 @@ export function WorkspaceUsageCard({
                 /day
               </span>
               <span>
-                Storage:{' '}
-                <span className="font-semibold text-foreground">
-                  {formatUsageValue(avgStorage)}
-                </span>
-                /day
-              </span>
-              <span>
                 Build:{' '}
                 <span className="font-semibold text-foreground">
                   {formatUsageValue(avgBuild)}
                 </span>
                 min/day
-              </span>
-              <span>
-                Endpoints:{' '}
-                <span className="font-semibold text-foreground">
-                  {formatUsageValue(avgEndpoints)}
-                </span>
-                hrs/day
               </span>
             </div>
           </div>

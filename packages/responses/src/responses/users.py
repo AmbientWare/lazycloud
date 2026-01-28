@@ -13,7 +13,6 @@ class CurrentUserResponse(BaseModel):
 class UserFeaturesResponse(BaseModel):
     """User subscription features response.
 
-    Simplified flat structure with 6 core limits.
     Workspaces are unlimited (organizational only).
     Services, volumes, and networks per deployment are unlimited.
     """
@@ -25,4 +24,3 @@ class UserFeaturesResponse(BaseModel):
     max_memory_per_service: int  # GB
     max_replicas_per_service: int
     custom_domains_enabled: bool
-    support_level: str

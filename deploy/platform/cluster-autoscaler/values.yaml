@@ -1,0 +1,39 @@
+# Cluster Autoscaler for Hetzner Cloud
+
+cluster-autoscaler:
+  cloudProvider: hetzner
+  autoDiscovery:
+    clusterName: lazycloud-prod
+
+  extraEnvSecrets:
+    HCLOUD_TOKEN:
+      name: hetzner-cloud-token
+      key: token
+    HCLOUD_CLUSTER_CONFIG:
+      name: cluster-autoscaler-config
+      key: cluster-config
+
+  autoscalingGroups:
+    - name: cpx41-worker-ash
+      minSize: 2
+      maxSize: 20
+      instanceType: CPX41
+      region: ASH
+
+  extraArgs:
+    scale-down-delay-after-add: "5m"
+    scale-down-unneeded-time: "5m"
+    scale-down-utilization-threshold: "0.5"
+    skip-nodes-with-local-storage: "false"
+    balance-similar-node-groups: "true"
+    expander: "least-waste"
+    scan-interval: "10s"
+    new-pod-scale-up-delay: "0s"
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 200m
+      memory: 512Mi

@@ -2,7 +2,6 @@
 
 from loguru import logger
 from models.billing import UsageUnits
-from models.storage import STORAGE_CLASS_EBS, STORAGE_CLASS_EFS
 from pydantic import BaseModel
 from responses.usage import (
     MeterCostBreakdown,
@@ -38,14 +37,12 @@ class PolarCostBreakdownModule:
         external_customer_id: str,
         cpu_core_hours: float,
         memory_gb_hours: float,
-        standard_gb_hours: float,
-        shared_gb_hours: float,
         build_minutes: float,
-        public_endpoint_hours: float,
+        storage_gb_months: float = 0.0,
         service_usage: list[ServiceUsageItem] | None = None,
         volume_usage: list[VolumeUsageItem] | None = None,
     ) -> WorkspaceCostBreakdown:
-        """Calculate complete cost breakdown for workspace usage"""
+        """Calculate complete cost breakdown for workspace usage."""
         # Get meter prices from cache or Polar
         try:
             prices = await self.pricing.get_meter_prices(external_customer_id)
@@ -59,10 +56,8 @@ class PolarCostBreakdownModule:
             prices=prices,
             cpu_core_hours=cpu_core_hours,
             memory_gb_hours=memory_gb_hours,
-            standard_gb_hours=standard_gb_hours,
-            shared_gb_hours=shared_gb_hours,
             build_minutes=build_minutes,
-            public_endpoint_hours=public_endpoint_hours,
+            storage_gb_months=storage_gb_months,
         )
 
         # Calculate service-level breakdown if provided
@@ -74,15 +69,27 @@ class PolarCostBreakdownModule:
                 total_cost=meter_breakdown.cpu_cost + meter_breakdown.memory_cost,
             )
 
-        # Calculate volume-level breakdown if provided
+        # Volume breakdown with actual storage costs
         volume_breakdown = []
         if volume_usage:
-            volume_breakdown = self._calculate_volume_costs(
-                prices=prices,
-                volume_usage=volume_usage,
-                total_storage_cost=meter_breakdown.standard_cost
-                + meter_breakdown.shared_cost,
-            )
+            total_volume_gb_hours = sum(v.gb_hours for v in volume_usage)
+            for v in volume_usage:
+                # Convert gb_hours to gb_months and calculate cost
+                v_gb_months = UsageUnits.gb_hours_to_gb_months(v.gb_hours)
+                v_cost = v_gb_months * prices.storage_price_per_unit
+                v_pct = (
+                    (v.gb_hours / total_volume_gb_hours * 100)
+                    if total_volume_gb_hours > 0
+                    else 0
+                )
+                volume_breakdown.append(
+                    VolumeCostBreakdown(
+                        volume_name=v.volume_name,
+                        storage_class=v.storage_class,
+                        storage_cost=round(v_cost, 4),
+                        percentage_of_total=round(v_pct, 2),
+                    )
+                )
 
         return WorkspaceCostBreakdown(
             meter_breakdown=meter_breakdown,
@@ -96,34 +103,21 @@ class PolarCostBreakdownModule:
         prices: MeterPrices,
         cpu_core_hours: float,
         memory_gb_hours: float,
-        standard_gb_hours: float,
-        shared_gb_hours: float,
         build_minutes: float,
-        public_endpoint_hours: float,
+        storage_gb_months: float = 0.0,
     ) -> MeterCostBreakdown:
         """Calculate costs by meter type"""
         cpu_cost = cpu_core_hours * prices.cpu_price_per_unit
         memory_cost = memory_gb_hours * prices.memory_price_per_unit
-        standard_cost = standard_gb_hours * prices.standard_price_per_unit
-        shared_cost = shared_gb_hours * prices.shared_price_per_unit
         build_cost = build_minutes * prices.build_minutes_price_per_unit
-        endpoint_cost = public_endpoint_hours * prices.endpoint_hours_price_per_unit
-        total_cost = (
-            cpu_cost
-            + memory_cost
-            + standard_cost
-            + shared_cost
-            + build_cost
-            + endpoint_cost
-        )
+        storage_cost = storage_gb_months * prices.storage_price_per_unit
+        total_cost = cpu_cost + memory_cost + build_cost + storage_cost
 
         return MeterCostBreakdown(
             cpu_cost=round(cpu_cost, 4),
             memory_cost=round(memory_cost, 4),
-            standard_cost=round(standard_cost, 4),
-            shared_cost=round(shared_cost, 4),
             build_cost=round(build_cost, 4),
-            endpoint_cost=round(endpoint_cost, 4),
+            storage_cost=round(storage_cost, 4),
             total_cost=round(total_cost, 4),
         )
 
@@ -163,52 +157,5 @@ class PolarCostBreakdownModule:
 
         # Sort by total cost descending
         breakdowns.sort(key=lambda x: x.total_compute_cost, reverse=True)
-
-        return breakdowns
-
-    def _calculate_volume_costs(
-        self,
-        prices: MeterPrices,
-        volume_usage: list[VolumeUsageItem],
-        total_storage_cost: float,
-    ) -> list[VolumeCostBreakdown]:
-        """Calculate costs per volume from storage usage breakdown"""
-        if not volume_usage:
-            return []
-
-        breakdowns = []
-        for volume in volume_usage:
-            gb_hours = volume.gb_hours
-            storage_class = volume.storage_class
-
-            # Map storage class to meter price
-            if storage_class == STORAGE_CLASS_EBS:
-                storage_cost = gb_hours * prices.standard_price_per_unit
-            elif storage_class == STORAGE_CLASS_EFS:
-                storage_cost = gb_hours * prices.shared_price_per_unit
-            else:
-                logger.warning(
-                    f"Unknown storage class '{storage_class}' for volume {volume.volume_name}, "
-                    f"defaulting to EBS pricing"
-                )
-                storage_cost = gb_hours * prices.standard_price_per_unit
-
-            percentage = (
-                (storage_cost / total_storage_cost * 100)
-                if total_storage_cost > 0
-                else 0
-            )
-
-            breakdowns.append(
-                VolumeCostBreakdown(
-                    volume_name=volume.volume_name,
-                    storage_class=storage_class,
-                    storage_cost=round(storage_cost, 4),
-                    percentage_of_total=round(percentage, 2),
-                )
-            )
-
-        # Sort by cost descending
-        breakdowns.sort(key=lambda x: x.storage_cost, reverse=True)
 
         return breakdowns

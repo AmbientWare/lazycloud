@@ -149,8 +149,7 @@ function UsagePage() {
     (workspace) =>
       workspace.usage.cpu_core_hours > 0 ||
       workspace.usage.memory_gb_hours > 0 ||
-      workspace.usage.standard_gb_hours > 0 ||
-      workspace.usage.shared_gb_hours > 0,
+      workspace.usage.build_minutes > 0,
   )
 
   return (

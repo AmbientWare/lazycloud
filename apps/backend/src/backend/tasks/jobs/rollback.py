@@ -10,11 +10,12 @@ from models.k8s import WorkloadType
 
 from backend.config import app_config
 from backend.database import get_db_context
-from backend.tasks.core import delete_job_with_timeout, update_deployment_state
+from backend.services import get_subscription_service
 from backend.services.compose.parser import ComposeParser
 from backend.services.k8s import create_release_name
 from backend.services.k8s.helm_manager import HelmManager
 from backend.services.k8s.helm_values_generator import HelmValuesGenerator
+from backend.tasks.core import delete_job_with_timeout, update_deployment_state
 
 
 async def rollback_compose_job(
@@ -182,11 +183,25 @@ async def rollback_compose_job(
         async with get_db_context() as db:
             secrets = await db.secrets.get_secrets(deployment_id)
             current_deployment = await db.compose_deployments.get_by_id(deployment_id)
+            owner_user = await db.workspaces.get_owner_user(workspace_id)
 
         if current_deployment is None:
             raise ValueError(f"Deployment {deployment_id} not found during rollback")
 
-        helm_generator = HelmValuesGenerator(current_deployment, secrets)
+        # Get features for instance class selection
+        features = None
+        if owner_user:
+            subscription_service = get_subscription_service()
+            try:
+                features = await subscription_service.get_user_features(
+                    owner_user.workos_id
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to get features for {owner_user.workos_id}: {e}"
+                )
+
+        helm_generator = HelmValuesGenerator(current_deployment, secrets, features)
         helm_values, _ = helm_generator.generate_values(compose_file)
         helm_values.compose_yaml = compose_yaml
 

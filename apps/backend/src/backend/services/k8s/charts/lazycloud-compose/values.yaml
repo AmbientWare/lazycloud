@@ -99,14 +99,14 @@ defaultResources:
     memory: 2048Mi
   requests:
     cpu: 250m
-    memory: 256Mi
+    memory: 512Mi
 
 # Default storage settings
 defaultStorage:
   size: 1Gi
   accessModes:
-    - ReadWriteOnce  # EBS default, EFS uses ReadWriteMany
-  storageClass: "ebs-gp3"  # EBS-backed storage by default, use volume labels for EFS
+    - ReadWriteOnce  # JuiceFS standard (RWO), shared uses ReadWriteMany
+  storageClass: "juicefs-standard"  # JuiceFS-backed storage by default
 
 # Service defaults
 defaultService:

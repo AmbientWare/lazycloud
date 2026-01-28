@@ -1,0 +1,13 @@
+# gVisor RuntimeClass and placeholder
+# On Hetzner/Talos, all nodes have gVisor — no node selector needed
+
+placeholder:
+  enabled: true
+  replicas: 1
+  resources:
+    requests:
+      cpu: 1m
+      memory: 32Mi
+    limits:
+      cpu: 10m
+      memory: 64Mi

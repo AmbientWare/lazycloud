@@ -25,10 +25,14 @@ spec:
                   matchLabels:
                     app: {{ .Chart.Name }}-background-workers
                 topologyKey: kubernetes.io/hostname
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       serviceAccountName: {{ .Chart.Name }}
       containers:
         - name: background-worker
-          image: "{{ .Values.image.registry }}/{{ .Values.backgroundWorkers.image.name }}:{{ .Values.image.tag }}"
+          image: "{{ .Values.image.registry }}:{{ .Values.backgroundWorkers.image.name }}-{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["uv", "run", "--no-sync", "python", "-m", "backend.background_worker"]
           env:

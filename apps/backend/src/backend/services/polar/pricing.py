@@ -14,10 +14,8 @@ class MeterPrices(BaseModel):
 
     cpu_price_per_unit: float
     memory_price_per_unit: float
-    standard_price_per_unit: float
-    shared_price_per_unit: float
     build_minutes_price_per_unit: float
-    endpoint_hours_price_per_unit: float
+    storage_price_per_unit: float
 
 
 class PolarPricingModule:
@@ -152,25 +150,17 @@ class PolarPricingModule:
             f"Fetched meter prices for {external_customer_id}: "
             f"CPU=${meter_prices_dict[MeterNames.CPU_USAGE.value]:.4f}, "
             f"Memory=${meter_prices_dict[MeterNames.MEMORY_USAGE.value]:.4f}, "
-            f"Standard=${meter_prices_dict[MeterNames.STANDARD_STORAGE.value]:.4f}, "
-            f"Shared=${meter_prices_dict[MeterNames.SHARED_STORAGE.value]:.4f}, "
             f"Build=${meter_prices_dict[MeterNames.BUILD_MINUTES.value]:.4f}, "
-            f"Endpoints=${meter_prices_dict[MeterNames.PUBLIC_ENDPOINTS.value]:.6f}"
+            f"Storage=${meter_prices_dict[MeterNames.STORAGE_USAGE.value]:.4f}"
         )
 
         return MeterPrices(
             cpu_price_per_unit=meter_prices_dict[MeterNames.CPU_USAGE.value],
             memory_price_per_unit=meter_prices_dict[MeterNames.MEMORY_USAGE.value],
-            standard_price_per_unit=meter_prices_dict[
-                MeterNames.STANDARD_STORAGE.value
-            ],
-            shared_price_per_unit=meter_prices_dict[MeterNames.SHARED_STORAGE.value],
             build_minutes_price_per_unit=meter_prices_dict[
                 MeterNames.BUILD_MINUTES.value
             ],
-            endpoint_hours_price_per_unit=meter_prices_dict[
-                MeterNames.PUBLIC_ENDPOINTS.value
-            ],
+            storage_price_per_unit=meter_prices_dict[MeterNames.STORAGE_USAGE.value],
         )
 
     def clear_cache(self, external_customer_id: str | None = None) -> None:

@@ -4,7 +4,7 @@ from pydantic import BaseModel, ConfigDict, Field
 class BaseFeatures(BaseModel):
     """Subscription feature limits.
 
-    Simplified flat structure with 6 core limits:
+    Simplified flat structure with core limits:
     - deployment_limit: Total deployments across all workspaces
     - max_team_members: Team members per workspace
     - max_cpu_per_service: CPU cores per service
@@ -28,7 +28,7 @@ class BaseFeatures(BaseModel):
         description="Maximum CPU cores per service",
     )
     max_memory_per_service: int = Field(
-        default=2,
+        default=4,
         description="Maximum memory GB per service",
     )
     max_replicas_per_service: int = Field(
@@ -38,10 +38,6 @@ class BaseFeatures(BaseModel):
     custom_domains_enabled: bool = Field(
         default=False,
         description="Whether custom domains are allowed",
-    )
-    support_level: str = Field(
-        default="community",
-        description="Support tier: community, email, priority, dedicated",
     )
 
     model_config = ConfigDict(extra="ignore")
@@ -55,5 +51,4 @@ ADMIN_FEATURES = BaseFeatures(
     max_memory_per_service=256,
     max_replicas_per_service=100,
     custom_domains_enabled=True,
-    support_level="dedicated",
 )

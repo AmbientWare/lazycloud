@@ -4,6 +4,7 @@ import yaml
 from loguru import logger
 from models.helm import HelmValues
 
+from backend.billing.product_details.features import BaseFeatures
 from backend.config import app_config
 from backend.database import get_db_context
 from backend.database.compose import ComposeDeploymentPydantic
@@ -16,6 +17,7 @@ async def validate_deployment_request(
     deployment: ComposeDeploymentPydantic,
     existing_deployment: ComposeDeploymentPydantic | None = None,
     service_names: list[str] | None = None,
+    features: BaseFeatures | None = None,
 ) -> tuple[HelmValues, list[str]]:
     """Validate deployment request before queuing task.
 
@@ -66,7 +68,7 @@ async def validate_deployment_request(
 
     # Generate Helm values (this validates compose file)
     try:
-        helm_generator = HelmValuesGenerator(deployment, secrets)
+        helm_generator = HelmValuesGenerator(deployment, secrets, features)
         helm_values, warnings = helm_generator.generate_values(compose_file)
         helm_values.compose_yaml = compose_yaml
 

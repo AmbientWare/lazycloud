@@ -1,4 +1,4 @@
-from models.storage import STORAGE_CLASS_EBS
+from models.storage import STORAGE_CLASS_STANDARD
 from responses.usage import ServiceCostBreakdown, VolumeCostBreakdown
 from textual.widgets import DataTable
 
@@ -17,47 +17,32 @@ class UsageMetricsTable(DataTable):
         self,
         cpu_hours,
         memory_hours,
-        standard_hours,
-        shared_hours,
         build_minutes,
-        public_endpoint_hours,
+        storage_gb_months=0.0,
         cpu_cost=None,
         memory_cost=None,
-        standard_cost=None,
-        shared_cost=None,
         build_cost=None,
-        endpoint_cost=None,
+        storage_cost=None,
     ):
         """Update the table with usage metrics and costs"""
         self.clear()
         cpu_cost_str = f"{cpu_cost:.2f}" if cpu_cost is not None else "-"
         memory_cost_str = f"{memory_cost:.2f}" if memory_cost is not None else "-"
-
-        # Combined storage
-        storage_hours = standard_hours + shared_hours
-        storage_cost = None
-        if standard_cost is not None and shared_cost is not None:
-            storage_cost = standard_cost + shared_cost
-        storage_cost_str = f"{storage_cost:.2f}" if storage_cost is not None else "-"
-
         build_cost_str = f"{build_cost:.2f}" if build_cost is not None else "-"
-        endpoint_cost_str = f"{endpoint_cost:.2f}" if endpoint_cost is not None else "-"
+        storage_cost_str = f"{storage_cost:.2f}" if storage_cost is not None else "-"
 
         self.add_row("CPU (core-hrs)", f"{cpu_hours:.2f}", cpu_cost_str, key="cpu")
         self.add_row(
             "Memory (GB-hrs)", f"{memory_hours:.2f}", memory_cost_str, key="memory"
         )
         self.add_row(
-            "Storage (GB-hrs)", f"{storage_hours:.2f}", storage_cost_str, key="storage"
-        )
-        self.add_row(
             "Build (minutes)", f"{build_minutes:.2f}", build_cost_str, key="build"
         )
         self.add_row(
-            "Endpoints (hrs)",
-            f"{public_endpoint_hours:.2f}",
-            endpoint_cost_str,
-            key="endpoints",
+            "Storage (GB-mo)",
+            f"{storage_gb_months:.4f}",
+            storage_cost_str,
+            key="storage",
         )
 
 
@@ -108,11 +93,14 @@ class VolumesCostTable(DataTable):
         self.clear()
         for idx, volume in enumerate(volumes):
             storage_type = (
-                "Standard" if volume.storage_class == STORAGE_CLASS_EBS else "Shared"
+                "Standard"
+                if volume.storage_class == STORAGE_CLASS_STANDARD
+                else "Shared"
             )
+            cost_str = f"{volume.storage_cost:.4f}"
             self.add_row(
                 volume.volume_name,
                 storage_type,
-                f"{volume.storage_cost:.4f}",
+                cost_str,
                 key=str(idx),
             )

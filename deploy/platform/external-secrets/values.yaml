@@ -1,16 +1,21 @@
-# External Secrets values
-# Region-specific values (region) are in values-{region}.yaml
+# External Secrets with AWS Secrets Manager for Hetzner
+# Uses static AWS credentials (stored as K8s secret) since IRSA is not available outside AWS.
 
-# Shared across all regions
 orgName: lazycloud
 environment: prod
+
+# AWS Secrets Manager configuration
+aws:
+  region: us-east-1
+  # Namespace where the aws-sm-credentials secret lives
+  credentialsSecretNamespace: external-secrets-system
 
 # Depot registry secret (for user deployment image pulls)
 depotRegistry:
   enabled: true
   awsSecretName: lazycloud/shared-secrets
 
-# App secrets settings (for lazycloud apps)
+# App secrets
 appSecrets:
   prod:
     enabled: true

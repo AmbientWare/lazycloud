@@ -8,8 +8,6 @@ from typing import Any
 import yaml
 from loguru import logger
 from models.billing import (
-    STORAGE_CLASS_EBS,
-    STORAGE_CLASS_EFS,
     UsageCollectionConfig,
     UsageUnits,
 )
@@ -30,7 +28,6 @@ from backend.database.usage import (
     DailyUsageStatus,
 )
 from backend.services import (
-    get_aws_metrics_service,
     get_depot_service,
     get_metrics_service,
     get_polar_service,
@@ -52,30 +49,12 @@ def sanitize_volume_name(name: str) -> str:
 async def collect_storage_usage(
     namespace: str, interval_hours: float
 ) -> list[StorageUsage]:
-    """Collect storage: K8s API for EBS size, CloudWatch for EFS actual usage."""
+    """Collect storage usage from K8s PVC API (works with Longhorn and any CSI driver)."""
     pvcs = await get_namespace_pvcs_with_details(namespace)
-    aws_metrics = get_aws_metrics_service()
 
     storage_list = []
     for pvc in pvcs:
-        if pvc.storage_class == STORAGE_CLASS_EBS:
-            size_gb = pvc.requested_size_gb
-
-        elif pvc.storage_class == STORAGE_CLASS_EFS:
-            if not aws_metrics.enabled:
-                size_gb = pvc.requested_size_gb
-            elif not pvc.volume_handle:
-                raise ValueError(f"EFS PVC {pvc.name} has no volume handle")
-            else:
-                efs_id = pvc.volume_handle.split("::")[0]
-                usage_bytes = await aws_metrics.get_efs_storage_bytes(efs_id)
-                if usage_bytes is None:
-                    raise ValueError(f"CloudWatch unavailable for EFS {efs_id}")
-                size_gb = usage_bytes / (1024**3)
-
-        else:
-            size_gb = pvc.requested_size_gb
-
+        size_gb = pvc.requested_size_gb
         gb_hours = size_gb * interval_hours
         storage_list.append(
             StorageUsage(
@@ -221,24 +200,17 @@ async def collect_workspace_interval(
                         build_minutes_by_deployment[deployment.id] = mins
                         total_build_minutes += mins
 
-        # Calculate totals
-        standard_gb_hours = sum(
-            s.gb_hours for s in storage_list if s.storage_class == STORAGE_CLASS_EBS
-        )
-        shared_gb_hours = sum(
-            s.gb_hours for s in storage_list if s.storage_class == STORAGE_CLASS_EFS
-        )
-        public_endpoint_hours = len(ctx.active_endpoints) * interval_hours
+        # Aggregate storage and convert to GB-months
+        total_storage_gb_hours = sum(s.gb_hours for s in storage_list)
+        storage_gb_months = UsageUnits.gb_hours_to_gb_months(total_storage_gb_hours)
 
-        # Atomic increment of daily record totals
+        # Atomic increment of daily record totals (all metered resources)
         await db.usage.atomic_increment_usage(
             record_id=daily_record.id,
             cpu_core_seconds=breakdown.totals.cpu_core_seconds,
             memory_gb_seconds=breakdown.totals.memory_gb_seconds,
-            standard_gb_hours=standard_gb_hours,
-            shared_gb_hours=shared_gb_hours,
             build_minutes=total_build_minutes,
-            public_endpoint_hours=public_endpoint_hours,
+            storage_gb_months=storage_gb_months,
         )
 
         # Mark interval as collected (idempotency)

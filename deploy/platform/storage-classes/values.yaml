@@ -1,25 +1,18 @@
-# Storage Classes values
+# JuiceFS Storage Classes for Hetzner
 
 storageClasses:
-  ebsGp3:
+  juicefsStandard:
     enabled: true
-    name: ebs-gp3
+    name: juicefs-standard
     isDefault: true
     reclaimPolicy: Delete
-    volumeBindingMode: WaitForFirstConsumer
+    volumeBindingMode: Immediate
     allowVolumeExpansion: true
 
-  ebsGp2:
+  juicefsShared:
     enabled: true
-    name: ebs-gp2
+    name: juicefs-shared
     isDefault: false
     reclaimPolicy: Delete
-    volumeBindingMode: WaitForFirstConsumer
-    allowVolumeExpansion: true
-
-  efs:
-    enabled: true
-    name: efs-sc
-    fileSystemId: ""  # Set via regional values file after CDK deploy
-    reclaimPolicy: Delete
     volumeBindingMode: Immediate
+    allowVolumeExpansion: true

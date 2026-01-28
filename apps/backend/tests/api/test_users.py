@@ -58,7 +58,6 @@ class TestUserFeatures:
         assert "max_memory_per_service" in data
         assert "max_replicas_per_service" in data
         assert "custom_domains_enabled" in data
-        assert "support_level" in data
 
     async def test_features_response_structure(self, client: AsyncClient):
         """Features have correct types."""
@@ -76,7 +75,6 @@ class TestUserFeatures:
         assert isinstance(data["max_memory_per_service"], int)
         assert isinstance(data["max_replicas_per_service"], int)
         assert isinstance(data["custom_domains_enabled"], bool)
-        assert isinstance(data["support_level"], str)
 
     async def test_deployment_count_reflects_total_deployments(
         self, client: AsyncClient, api_db: Database, api_user: UserPydantic

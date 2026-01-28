@@ -83,14 +83,8 @@ class PolarUsageModule:
             "raw_memory_seconds": record.memory_gb_seconds,
             METER_METADATA_FIELDS[MeterNames.CPU_USAGE]: cpu_core_hours,
             METER_METADATA_FIELDS[MeterNames.MEMORY_USAGE]: memory_gb_hours,
-            METER_METADATA_FIELDS[
-                MeterNames.STANDARD_STORAGE
-            ]: record.standard_gb_hours,
-            METER_METADATA_FIELDS[MeterNames.SHARED_STORAGE]: record.shared_gb_hours,
             METER_METADATA_FIELDS[MeterNames.BUILD_MINUTES]: record.build_minutes,
-            METER_METADATA_FIELDS[
-                MeterNames.PUBLIC_ENDPOINTS
-            ]: record.public_endpoint_hours,
+            METER_METADATA_FIELDS[MeterNames.STORAGE_USAGE]: record.storage_gb_months,
         }
 
         success = await self.send_usage_event(
@@ -104,8 +98,7 @@ class PolarUsageModule:
             logger.info(
                 f"Sent daily usage for {record.workspace_id} ({record.usage_date}): "
                 f"CPU={cpu_core_hours:.4f}h, Memory={memory_gb_hours:.4f}GB-h, "
-                f"Standard={record.standard_gb_hours:.2f}GB-h, Shared={record.shared_gb_hours:.2f}GB-h, "
-                f"Build={record.build_minutes:.2f}min, Endpoints={record.public_endpoint_hours:.2f}h"
+                f"Build={record.build_minutes:.2f}min, Storage={record.storage_gb_months:.4f}GB-mo"
             )
 
         return success

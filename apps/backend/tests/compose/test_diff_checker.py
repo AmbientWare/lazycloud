@@ -1,6 +1,6 @@
 """Tests for ComposeDiffChecker."""
 
-from models.storage import STORAGE_CLASS_EBS, STORAGE_CLASS_EFS
+from models.storage import STORAGE_CLASS_STANDARD, STORAGE_CLASS_SHARED
 from models.compose import (
     ComposeFile,
     ComposeNetwork,
@@ -599,14 +599,14 @@ class TestStorageTypeChangeDetection:
         )
 
         # Existing PVC with EBS storage class
-        existing_pvcs = {"data": STORAGE_CLASS_EBS}
+        existing_pvcs = {"data": STORAGE_CLASS_STANDARD}
 
         changes = detect_storage_type_changes(compose, existing_pvcs)
 
         assert len(changes) == 1
         assert changes[0].volume_name == "data"
-        assert changes[0].old_storage_class == STORAGE_CLASS_EBS
-        assert changes[0].new_storage_class == STORAGE_CLASS_EFS
+        assert changes[0].old_storage_class == STORAGE_CLASS_STANDARD
+        assert changes[0].new_storage_class == STORAGE_CLASS_SHARED
 
     def test_detect_efs_to_ebs_change(self):
         """Test detecting EFS to EBS storage type change."""
@@ -625,13 +625,13 @@ class TestStorageTypeChangeDetection:
         )
 
         # Existing PVC with EFS storage class
-        existing_pvcs = {"data": STORAGE_CLASS_EFS}
+        existing_pvcs = {"data": STORAGE_CLASS_SHARED}
 
         changes = detect_storage_type_changes(compose, existing_pvcs)
 
         assert len(changes) == 1
-        assert changes[0].old_storage_class == STORAGE_CLASS_EFS
-        assert changes[0].new_storage_class == STORAGE_CLASS_EBS
+        assert changes[0].old_storage_class == STORAGE_CLASS_SHARED
+        assert changes[0].new_storage_class == STORAGE_CLASS_STANDARD
 
     def test_no_change_when_same_storage_class(self):
         """Test no change detected when storage class is the same."""
@@ -649,7 +649,7 @@ class TestStorageTypeChangeDetection:
         )
 
         # Same storage class
-        existing_pvcs = {"data": STORAGE_CLASS_EBS}
+        existing_pvcs = {"data": STORAGE_CLASS_STANDARD}
 
         changes = detect_storage_type_changes(compose, existing_pvcs)
 
@@ -696,13 +696,13 @@ class TestStorageTypeChangeDetection:
             ],
         )
 
-        existing_pvcs = {"data": STORAGE_CLASS_EBS}
+        existing_pvcs = {"data": STORAGE_CLASS_STANDARD}
 
         changes = detect_storage_type_changes(compose, existing_pvcs)
 
         # Should detect change because label forces EFS
         assert len(changes) == 1
-        assert changes[0].new_storage_class == STORAGE_CLASS_EFS
+        assert changes[0].new_storage_class == STORAGE_CLASS_SHARED
 
 
 class TestDiffHasChanges:

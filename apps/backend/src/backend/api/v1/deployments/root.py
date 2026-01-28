@@ -25,6 +25,7 @@ from backend.api.dependencies import (
     check_deployment_limit_for_owner,
     get_deployment_with_access,
     get_deployment_with_active_subscription,
+    get_features_for_owner,
     get_owner_with_active_subscription,
     require_workspace_member,
 )
@@ -390,12 +391,17 @@ async def deploy_deployment(
     )
     temp_deployment.id = str(deployment.id)
 
+    # Get owner features for helm values generation (instance class selection)
+    owner_user = await db.workspaces.get_owner_user(deployment.workspace_id)
+    features = await get_features_for_owner(owner_user) if owner_user else None
+
     # Full validation (compose parsing, helm generation, quotas)
     try:
         helm_values, _ = await validate_deployment_request(
             temp_deployment,
             deployment,
             service_names=request.service_names,
+            features=features,
         )
 
     except ValueError as e:

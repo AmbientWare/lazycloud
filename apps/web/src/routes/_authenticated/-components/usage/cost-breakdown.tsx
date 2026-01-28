@@ -95,14 +95,11 @@ export const VolumeCostCard = forwardRef<HTMLDivElement, VolumeCostCardProps>(
         <div className="flex flex-col">
           <span className="text-xs font-semibold">{volume.volume_name}</span>
           <span className="mt-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-            {volume.storage_class} &bull;{' '}
-            {volume.percentage_of_total.toFixed(1)}% of deployment cost
+            {volume.storage_class}
           </span>
         </div>
-        <span className="text-xs">
-          <span className="font-bold text-foreground">
-            ${volume.storage_cost.toFixed(4)}
-          </span>
+        <span className="text-xs font-medium text-muted-foreground">
+          ${volume.storage_cost.toFixed(4)}
         </span>
       </div>
     )

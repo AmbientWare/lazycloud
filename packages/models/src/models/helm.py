@@ -2,7 +2,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from models.storage import STORAGE_CLASS_EBS, STORAGE_CLASS_EFS
 from models.k8s import (
     PodSecurityContext,
     ProbeConfig,
@@ -13,6 +12,7 @@ from models.k8s import (
     VolumeMount,
     WorkloadType,
 )
+from models.storage import STORAGE_CLASS_SHARED, STORAGE_CLASS_STANDARD
 
 
 class PortConfig(BaseModel):
@@ -144,7 +144,9 @@ class VolumeValues(BaseModel):
     enabled: bool = True
     size: str = "1Gi"
     accessModes: list[str] = ["ReadWriteOnce"]
-    storageClass: Literal[STORAGE_CLASS_EBS, STORAGE_CLASS_EFS] = STORAGE_CLASS_EBS
+    storageClass: Literal[STORAGE_CLASS_STANDARD, STORAGE_CLASS_SHARED] = (
+        STORAGE_CLASS_STANDARD
+    )
     labels: dict[str, str] = {}
     annotations: dict[str, str] = {}
 

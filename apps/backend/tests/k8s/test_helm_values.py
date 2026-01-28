@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 from backend.services.compose.parser import ComposeParser
 from backend.services.k8s.helm_values_generator import HelmValuesGenerator
-from models.storage import STORAGE_CLASS_EBS, STORAGE_CLASS_EFS
+from models.storage import STORAGE_CLASS_STANDARD, STORAGE_CLASS_SHARED
 from models.compose import (
     ComposeFile,
     ComposeNetwork,
@@ -243,7 +243,7 @@ class TestVolumeValuesGeneration:
         values, _ = helm_generator.generate_values(compose)
 
         # Single-service volume should use EBS (ReadWriteOnce)
-        assert values.volumes[0].storageClass == STORAGE_CLASS_EBS
+        assert values.volumes[0].storageClass == STORAGE_CLASS_STANDARD
         assert "ReadWriteOnce" in values.volumes[0].accessModes
 
     def test_volume_efs_storage_class_shared_volume(
@@ -255,7 +255,7 @@ class TestVolumeValuesGeneration:
         values, _ = helm_generator.generate_values(shared_volume_compose_file)
 
         # Shared volume should use EFS (ReadWriteMany)
-        assert values.volumes[0].storageClass == STORAGE_CLASS_EFS
+        assert values.volumes[0].storageClass == STORAGE_CLASS_SHARED
         assert "ReadWriteMany" in values.volumes[0].accessModes
 
     def test_volume_efs_from_label(
@@ -280,7 +280,7 @@ class TestVolumeValuesGeneration:
 
         values, _ = helm_generator.generate_values(compose)
 
-        assert values.volumes[0].storageClass == STORAGE_CLASS_EFS
+        assert values.volumes[0].storageClass == STORAGE_CLASS_SHARED
 
     def test_volume_size_from_label(
         self,

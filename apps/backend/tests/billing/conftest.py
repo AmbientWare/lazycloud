@@ -6,7 +6,7 @@ import pytest
 from backend.database import Database, _create_database
 from backend.database.session import session_manager
 from backend.database.usage import BreakdownType, DailyUsageRecordPydantic
-from models.storage import STORAGE_CLASS_EBS
+from models.storage import STORAGE_CLASS_STANDARD
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tests.fixtures.database import (
@@ -71,10 +71,8 @@ async def create_daily_record(
     usage_date: date,
     cpu_core_seconds: float = 3600.0,
     memory_gb_seconds: float = 3600.0,
-    standard_gb_hours: float = 0.0,
-    shared_gb_hours: float = 0.0,
+    storage_gb_months: float = 0.0,
     build_minutes: float = 0.0,
-    public_endpoint_hours: float = 0.0,
     intervals_collected: int = 1,
     billing_attempts: int = 0,
 ) -> DailyUsageRecordPydantic:
@@ -90,10 +88,8 @@ async def create_daily_record(
         record_id=record.id,
         cpu_core_seconds=cpu_core_seconds,
         memory_gb_seconds=memory_gb_seconds,
-        standard_gb_hours=standard_gb_hours,
-        shared_gb_hours=shared_gb_hours,
+        storage_gb_months=storage_gb_months,
         build_minutes=build_minutes,
-        public_endpoint_hours=public_endpoint_hours,
     )
 
     # If caller wants more intervals, add zero-value increments
@@ -102,10 +98,7 @@ async def create_daily_record(
             record_id=record.id,
             cpu_core_seconds=0.0,
             memory_gb_seconds=0.0,
-            standard_gb_hours=0.0,
-            shared_gb_hours=0.0,
             build_minutes=0.0,
-            public_endpoint_hours=0.0,
         )
 
     # Set billing attempts if specified
@@ -155,6 +148,6 @@ async def create_breakdown_events(
             breakdown_type=BreakdownType.STORAGE,
             resource_name=f"pvc-{i}",
             deployment_id=deployment_id,
-            storage_class=STORAGE_CLASS_EBS,
+            storage_class=STORAGE_CLASS_STANDARD,
             gb_hours=gb_hours_per_pvc,
         )

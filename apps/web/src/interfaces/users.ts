@@ -6,5 +6,4 @@ export interface UserFeaturesResponse {
   max_memory_per_service: number
   max_replicas_per_service: number
   custom_domains_enabled: boolean
-  support_level: string
 }

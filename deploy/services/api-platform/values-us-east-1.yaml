@@ -1,5 +1,0 @@
-image:
-  registry: 534742592531.dkr.ecr.us-east-1.amazonaws.com
-
-ingress:
-  annotations: {}

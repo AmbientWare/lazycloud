@@ -15,15 +15,13 @@ billing_router = APIRouter(prefix="/billing", tags=["billing"])
 class MeterPricingResponse(BaseModel):
     """Response model for meter pricing information.
 
-    All prices are in cents per unit-hour (or per minute for build minutes).
+    All prices are in cents per unit.
     """
 
     cpu_usage: float  # cents per core-hour
     memory_usage: float  # cents per GB-hour
-    standard_storage: float  # cents per GB-hour
-    shared_storage: float  # cents per GB-hour
     build_minutes: float  # cents per minute
-    public_endpoints: float  # cents per endpoint-hour
+    storage_usage: float  # cents per GB-month
 
 
 @billing_router.get("/meter-pricing", response_model=MeterPricingResponse)
@@ -32,10 +30,8 @@ async def get_meter_pricing() -> MeterPricingResponse:
     return MeterPricingResponse(
         cpu_usage=METER_PRICES_CENTS[MeterNames.CPU_USAGE],
         memory_usage=METER_PRICES_CENTS[MeterNames.MEMORY_USAGE],
-        standard_storage=METER_PRICES_CENTS[MeterNames.STANDARD_STORAGE],
-        shared_storage=METER_PRICES_CENTS[MeterNames.SHARED_STORAGE],
         build_minutes=METER_PRICES_CENTS[MeterNames.BUILD_MINUTES],
-        public_endpoints=METER_PRICES_CENTS[MeterNames.PUBLIC_ENDPOINTS],
+        storage_usage=METER_PRICES_CENTS[MeterNames.STORAGE_USAGE],
     )
 
 

@@ -174,9 +174,14 @@ spec:
         {{- end }}
       {{- end }}
       restartPolicy: {{ $service.restartPolicy | default "Always" }}
-      {{- with $service.nodeSelector | default $.Values.nodeSelector }}
+      {{- if or $.Values.global.instanceClass $service.nodeSelector $.Values.nodeSelector }}
       nodeSelector:
+        {{- if $.Values.global.instanceClass }}
+        instance-class: {{ $.Values.global.instanceClass }}
+        {{- end }}
+        {{- with $service.nodeSelector | default $.Values.nodeSelector }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- end }}
       {{- if or $service.affinity $.Values.affinity }}
       affinity:
@@ -194,9 +199,16 @@ spec:
                     app.kubernetes.io/instance: {{ $.Release.Name }}
                 topologyKey: kubernetes.io/hostname
       {{- end }}
-      {{- with $service.tolerations | default $.Values.tolerations }}
+      {{- if or $.Values.global.instanceClass $service.tolerations $.Values.tolerations }}
       tolerations:
+        {{- if $.Values.global.instanceClass }}
+        - key: instance-class
+          value: {{ $.Values.global.instanceClass }}
+          effect: NoSchedule
+        {{- end }}
+        {{- with $service.tolerations | default $.Values.tolerations }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- end }}
 {{- end }}
 {{- end }}

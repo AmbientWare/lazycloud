@@ -3,7 +3,6 @@ from datetime import UTC, datetime
 
 from kubernetes_asyncio.client.exceptions import ApiException
 from loguru import logger
-from models.storage import STORAGE_CLASS_EFS
 from models.compose import LazyCloudLabel
 from models.helm import (
     CurrentUsage,
@@ -28,7 +27,7 @@ from models.statuses import (
     StatusPhase,
     VolumeStatusSummary,
 )
-from models.storage import StorageType
+from models.storage import STORAGE_CLASS_SHARED, StorageType
 
 from backend.config import app_config
 from backend.services.k8s.client import (
@@ -217,7 +216,7 @@ class StatusWatcher:
             for v in self.helm_values.volumes:
                 # Determine storage type from storage class
                 storage_type = StorageType.STANDARD
-                if v.storageClass == STORAGE_CLASS_EFS or (
+                if v.storageClass == STORAGE_CLASS_SHARED or (
                     v.labels and v.labels.get(LazyCloudLabel.VOLUME_SHARED) == "true"
                 ):
                     storage_type = StorageType.SHARED

@@ -7,9 +7,9 @@ description: Control how much CPU and memory your Docker Compose services can us
 
 Control how much CPU and memory your services can use.
 
-## Setting Limits
+## Setting Resources
 
-Define resource limits in your compose file:
+Define resource reservations in your compose file:
 
 ```yaml
 services:
@@ -17,23 +17,25 @@ services:
     build: .
     deploy:
       resources:
-        limits:
-          cpus: '2.0'
-          memory: 1024M
         reservations:
           cpus: '0.5'
-          memory: 512M
+          memory: 2G
 ```
 
-## Limits vs Reservations
+## Reservations and Limits
 
-- **Limits** — Maximum resources a service can use. If exceeded, the service may be throttled (CPU) or restarted (memory).
-- **Reservations** — Minimum resources guaranteed to the service. LazyCloud ensures these are always available.
+- **Reservations** — Resources guaranteed to your service. This is what you're billed for as a minimum.
+- **Limits** — LazyCloud automatically sets limits to 4× your reservations, allowing your service to burst when needed.
+
+For example, reserving 0.5 CPU and 2GB memory gives your service:
+- **Guaranteed**: 0.5 CPU, 2GB memory
+- **Burst capacity**: Up to 2 CPU, 8GB memory if available
 
 ## CPU
 
 CPU is measured in cores:
 
+- `"0.25"` — Quarter core (minimum)
 - `"0.5"` — Half a CPU core
 - `"1.0"` — One full core
 - `"2.0"` — Two cores
@@ -42,18 +44,39 @@ CPU is measured in cores:
 
 Memory uses standard units:
 
-- `256M` — 256 megabytes
+- `512M` — 512 megabytes (minimum)
 - `1G` — 1 gigabyte
-- `2048M` — 2 gigabytes
+- `2G` — 2 gigabytes
+- `4G` — 4 gigabytes
+
+## Resource Ratio
+
+Memory must be between 1-4 GB per CPU core. LazyCloud automatically adjusts your resources to fit this ratio:
+
+| CPU | Memory Range |
+|-----|--------------|
+| 0.25 | 0.5G - 1G |
+| 0.5 | 0.5G - 2G |
+| 1.0 | 1G - 4G |
+| 2.0 | 2G - 8G |
+
+If you specify resources outside this range, LazyCloud bumps the lower resource up to match.
 
 ## Defaults
 
-If you don't specify resources, LazyCloud applies sensible defaults:
+If you don't specify resources, LazyCloud applies:
 
-- CPU: 0.25 cores reserved, 2 cores limit
-- Memory: 256MB reserved, 2GB limit
+- **CPU**: 0.25 cores reserved, 1 core limit
+- **Memory**: 1GB reserved, 4GB limit
+
+## Billing
+
+You're billed for the greater of your actual usage or your reservations. This means:
+
+- If you reserve 1 CPU but only use 0.5 CPU, you pay for 1 CPU
+- If you reserve 1 CPU but burst to 2 CPU, you pay for 2 CPU
 
 <Tip>
-  Start with conservative limits and increase based on actual usage. Check the
-  dashboard to see how much your services actually use.
+  Start with the defaults and scale up based on actual usage. Check the
+  dashboard to monitor your services and optimize costs.
 </Tip>

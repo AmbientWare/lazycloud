@@ -102,10 +102,8 @@ export function UsageOverviewWithChart({
   const hasUsage =
     usage.cpu_core_hours > 0 ||
     usage.memory_gb_hours > 0 ||
-    usage.standard_gb_hours > 0 ||
-    usage.shared_gb_hours > 0 ||
     usage.build_minutes > 0 ||
-    usage.public_endpoint_hours > 0
+    usage.storage_gb_months > 0
 
   const rawData = dailyData.daily_usage.map((day) => {
     // Parse ISO 8601 UTC timestamp (e.g., "2025-11-05T00:00:00Z")
@@ -252,7 +250,7 @@ export function UsageOverviewWithChart({
             )}
 
             {/* Usage and Cost Metrics Cards */}
-            <div className="grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-3 lg:grid-cols-6">
+            <div className="grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-5">
               {usage.costs && (
                 <UsageMetricCard
                   label="Total"
@@ -274,26 +272,16 @@ export function UsageOverviewWithChart({
                 cost={usage.costs?.memory_cost}
               />
               <UsageMetricCard
-                label="Storage"
-                value={usage.standard_gb_hours + usage.shared_gb_hours}
-                unit="GB-hrs"
-                cost={
-                  usage.costs
-                    ? usage.costs.standard_cost + usage.costs.shared_cost
-                    : undefined
-                }
-              />
-              <UsageMetricCard
                 label="Build"
                 value={usage.build_minutes}
                 unit="minutes"
                 cost={usage.costs?.build_cost}
               />
               <UsageMetricCard
-                label="Endpoints"
-                value={usage.public_endpoint_hours}
-                unit="hrs"
-                cost={usage.costs?.endpoint_cost}
+                label="Storage"
+                value={usage.storage_gb_months}
+                unit="GB-mo"
+                cost={usage.costs?.storage_cost}
               />
             </div>
           </div>

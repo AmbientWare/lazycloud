@@ -158,14 +158,10 @@ export function ProductCard({
 
           {/* Price */}
           <div className="mb-5">
-            {monthlyPrice ? (
-              <div className="flex items-baseline gap-1">
-                <span className="text-3xl font-bold">{monthlyPrice}</span>
-                <span className="text-muted-foreground text-sm">/mo</span>
-              </div>
-            ) : (
-              <div className="text-3xl font-bold">Free</div>
-            )}
+            <div className="flex items-baseline gap-1">
+              <span className="text-3xl font-bold">{monthlyPrice ?? '$0'}</span>
+              <span className="text-muted-foreground text-sm">/mo</span>
+            </div>
             <div className="text-muted-foreground mt-1 text-xs">
               + usage-based pricing
             </div>
@@ -219,16 +215,12 @@ export function ProductCard({
                 <div className="text-2xl font-bold sm:text-3xl lg:text-4xl">
                   Contact Us
                 </div>
-              ) : monthlyPrice ? (
+              ) : (
                 <div className="flex items-baseline gap-1.5">
                   <span className="text-2xl font-bold sm:text-3xl lg:text-4xl">
-                    {monthlyPrice}
+                    {monthlyPrice ?? '$0'}
                   </span>
                   <span className="text-muted-foreground text-sm">/month</span>
-                </div>
-              ) : (
-                <div className="text-2xl font-bold sm:text-3xl lg:text-4xl">
-                  Free
                 </div>
               )}
               {!isEnterprise && (

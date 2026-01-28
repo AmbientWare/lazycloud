@@ -21,10 +21,8 @@ class CostBreakdownService:
         self,
         cpu_core_hours: float,
         memory_gb_hours: float,
-        standard_gb_hours: float,
-        shared_gb_hours: float,
         build_minutes: float,
-        public_endpoint_hours: float,
+        storage_gb_months: float,
         external_customer_id: str,
     ) -> MeterCostBreakdown:
         """Calculate costs from usage metrics without requiring database records"""
@@ -36,22 +34,12 @@ class CostBreakdownService:
                 external_customer_id=external_customer_id,
                 cpu_core_hours=cpu_core_hours,
                 memory_gb_hours=memory_gb_hours,
-                standard_gb_hours=standard_gb_hours,
-                shared_gb_hours=shared_gb_hours,
                 build_minutes=build_minutes,
-                public_endpoint_hours=public_endpoint_hours,
+                storage_gb_months=storage_gb_months,
             )
         )
 
-        return MeterCostBreakdown(
-            cpu_cost=cost_breakdown.meter_breakdown.cpu_cost,
-            memory_cost=cost_breakdown.meter_breakdown.memory_cost,
-            standard_cost=cost_breakdown.meter_breakdown.standard_cost,
-            shared_cost=cost_breakdown.meter_breakdown.shared_cost,
-            build_cost=cost_breakdown.meter_breakdown.build_cost,
-            endpoint_cost=cost_breakdown.meter_breakdown.endpoint_cost,
-            total_cost=cost_breakdown.meter_breakdown.total_cost,
-        )
+        return cost_breakdown.meter_breakdown
 
     async def calculate_costs_batch(
         self,
@@ -69,10 +57,8 @@ class CostBreakdownService:
             self.calculate_costs_from_usage(
                 cpu_core_hours=usage.cpu_core_hours,
                 memory_gb_hours=usage.memory_gb_hours,
-                standard_gb_hours=usage.standard_gb_hours,
-                shared_gb_hours=usage.shared_gb_hours,
                 build_minutes=usage.build_minutes,
-                public_endpoint_hours=usage.public_endpoint_hours,
+                storage_gb_months=usage.storage_gb_months,
                 external_customer_id=external_customer_id,
             )
             for usage in usages
@@ -101,10 +87,8 @@ class CostBreakdownService:
             self.calculate_costs_from_usage(
                 cpu_core_hours=day_data.cpu_core_hours,
                 memory_gb_hours=day_data.memory_gb_hours,
-                standard_gb_hours=day_data.standard_gb_hours,
-                shared_gb_hours=day_data.shared_gb_hours,
                 build_minutes=day_data.build_minutes,
-                public_endpoint_hours=day_data.public_endpoint_hours,
+                storage_gb_months=day_data.storage_gb_months,
                 external_customer_id=external_customer_id,
             )
             for day_data in daily_data.values()

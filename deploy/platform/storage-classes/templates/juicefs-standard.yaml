@@ -1,0 +1,19 @@
+{{- if .Values.storageClasses.juicefsStandard.enabled }}
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ .Values.storageClasses.juicefsStandard.name }}
+  {{- if .Values.storageClasses.juicefsStandard.isDefault }}
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+  {{- end }}
+provisioner: csi.juicefs.com
+parameters:
+  csi.storage.k8s.io/provisioner-secret-name: juicefs-secret
+  csi.storage.k8s.io/provisioner-secret-namespace: kube-system
+  csi.storage.k8s.io/node-publish-secret-name: juicefs-secret
+  csi.storage.k8s.io/node-publish-secret-namespace: kube-system
+reclaimPolicy: {{ .Values.storageClasses.juicefsStandard.reclaimPolicy }}
+volumeBindingMode: {{ .Values.storageClasses.juicefsStandard.volumeBindingMode }}
+allowVolumeExpansion: {{ .Values.storageClasses.juicefsStandard.allowVolumeExpansion }}
+{{- end }}
