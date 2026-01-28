@@ -8,18 +8,14 @@ export const UsagePeriodInfoSchema = z.object({
 export const UsageMetricsSchema = z.object({
   cpu_core_hours: z.number(),
   memory_gb_hours: z.number(),
-  standard_gb_hours: z.number(),
-  shared_gb_hours: z.number(),
   build_minutes: z.number(),
-  public_endpoint_hours: z.number(),
+  storage_gb_months: z.number().default(0),
   costs: z
     .object({
       cpu_cost: z.number(),
       memory_cost: z.number(),
-      standard_cost: z.number(),
-      shared_cost: z.number(),
       build_cost: z.number(),
-      endpoint_cost: z.number(),
+      storage_cost: z.number().default(0),
       total_cost: z.number(),
     })
     .optional(),
@@ -29,18 +25,14 @@ export const DailyUsageDataSchema = z.object({
   date: z.string(),
   cpu_core_hours: z.number(),
   memory_gb_hours: z.number(),
-  standard_gb_hours: z.number(),
-  shared_gb_hours: z.number(),
   build_minutes: z.number(),
-  public_endpoint_hours: z.number(),
+  storage_gb_months: z.number().default(0),
   costs: z
     .object({
       cpu_cost: z.number(),
       memory_cost: z.number(),
-      standard_cost: z.number(),
-      shared_cost: z.number(),
       build_cost: z.number(),
-      endpoint_cost: z.number(),
+      storage_cost: z.number().default(0),
       total_cost: z.number(),
     })
     .optional(),
@@ -99,10 +91,8 @@ export type AggregatedDailyUsageResponse = z.infer<
 export const MeterCostBreakdownSchema = z.object({
   cpu_cost: z.number(),
   memory_cost: z.number(),
-  standard_cost: z.number(),
-  shared_cost: z.number(),
   build_cost: z.number(),
-  endpoint_cost: z.number(),
+  storage_cost: z.number().default(0),
   total_cost: z.number(),
 })
 
@@ -146,10 +136,8 @@ export type DeploymentUsageOverview = z.infer<
 export const MeterPricingResponseSchema = z.object({
   cpu_usage: z.number(),
   memory_usage: z.number(),
-  standard_storage: z.number(),
-  shared_storage: z.number(),
   build_minutes: z.number(),
-  public_endpoints: z.number(),
+  storage_usage: z.number(),
 })
 
 export type MeterPricingResponse = z.infer<typeof MeterPricingResponseSchema>
