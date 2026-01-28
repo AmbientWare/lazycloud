@@ -45,9 +45,8 @@ class UsageOverviewSection(Container):
             # Show placeholder rows while loading
             self._metrics_table.add_row("CPU (core-hrs)", "-", "-", key="cpu")
             self._metrics_table.add_row("Memory (GB-hrs)", "-", "-", key="memory")
-            self._metrics_table.add_row("Storage (GB-hrs)", "-", "-", key="storage")
             self._metrics_table.add_row("Build (minutes)", "-", "-", key="build")
-            self._metrics_table.add_row("Endpoints (hrs)", "-", "-", key="endpoints")
+            self._metrics_table.add_row("Storage (GB-mo)", "-", "-", key="storage")
             self._metrics_table.add_row("Total", "", "-", key="total")
             yield self._metrics_table
 
@@ -148,17 +147,6 @@ class UsageOverviewSection(Container):
             key="memory",
         )
 
-        # Storage row (combined EBS + EFS)
-        storage_hours = metrics.standard_gb_hours + metrics.shared_gb_hours
-        storage_cost = (costs.standard_cost + costs.shared_cost) if costs else None
-        storage_cost_str = f"{storage_cost:.2f}" if storage_cost is not None else "-"
-        self._metrics_table.add_row(
-            "Storage (GB-hrs)",
-            f"{storage_hours:.2f}",
-            storage_cost_str,
-            key="storage",
-        )
-
         # Build Minutes row
         build_cost_str = f"{costs.build_cost:.2f}" if costs else "-"
         self._metrics_table.add_row(
@@ -168,13 +156,13 @@ class UsageOverviewSection(Container):
             key="build",
         )
 
-        # Endpoints row
-        endpoint_cost_str = f"{costs.endpoint_cost:.2f}" if costs else "-"
+        # Storage row
+        storage_cost_str = f"{costs.storage_cost:.2f}" if costs else "-"
         self._metrics_table.add_row(
-            "Endpoints (hrs)",
-            f"{metrics.public_endpoint_hours:.2f}",
-            endpoint_cost_str,
-            key="endpoints",
+            "Storage (GB-mo)",
+            f"{metrics.storage_gb_months:.4f}",
+            storage_cost_str,
+            key="storage",
         )
 
         # Total row

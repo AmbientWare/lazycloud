@@ -194,16 +194,12 @@ class DeploymentBreakdownSection(Container):
         self._usage_table.update_metrics(
             cpu_hours=deployment.usage.cpu_core_hours,
             memory_hours=deployment.usage.memory_gb_hours,
-            standard_hours=deployment.usage.standard_gb_hours,
-            shared_hours=deployment.usage.shared_gb_hours,
             build_minutes=deployment.usage.build_minutes,
-            public_endpoint_hours=deployment.usage.public_endpoint_hours,
+            storage_gb_months=deployment.usage.storage_gb_months,
             cpu_cost=costs.cpu_cost if costs else None,
             memory_cost=costs.memory_cost if costs else None,
-            standard_cost=costs.standard_cost if costs else None,
-            shared_cost=costs.shared_cost if costs else None,
             build_cost=costs.build_cost if costs else None,
-            endpoint_cost=costs.endpoint_cost if costs else None,
+            storage_cost=costs.storage_cost if costs else None,
         )
 
         # Service Breakdown section
