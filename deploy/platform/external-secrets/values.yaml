@@ -1,5 +1,16 @@
 # External Secrets with AWS Secrets Manager for Hetzner
 # Uses static AWS credentials (stored as K8s secret) since IRSA is not available outside AWS.
+#
+# NOTE: The ESO operator and ClusterSecretStore are installed by Terraform.
+# This chart only manages the ExternalSecret resources for app secrets.
+
+# Operator is installed by Terraform - disable here to avoid conflict
+operator:
+  enabled: false
+
+# ClusterSecretStore is created by Terraform - disable here
+clusterSecretStore:
+  enabled: false
 
 orgName: lazycloud
 environment: prod

@@ -22,8 +22,7 @@ locals {
   controlplane_patches = [for i in range(var.control_plane_count) : yamlencode({
     machine = {
       install = {
-        image           = local.talos_install_image
-        extraKernelArgs = ["ipv6.disable=1"]
+        image = local.talos_install_image
       }
       certSANs = local.cert_sans
       kubelet = {
@@ -36,6 +35,7 @@ locals {
         }
       }
       network = {
+        nameservers = ["1.1.1.1", "8.8.8.8"]
         interfaces = [
           {
             interface = "eth0"
@@ -67,7 +67,7 @@ locals {
         }
         hostDNS = {
           enabled              = true
-          forwardKubeDNSToHost = true
+          forwardKubeDNSToHost = false
           resolveMemberNames   = true
         }
       }
@@ -139,8 +139,7 @@ locals {
   worker_patches = [for i in range(var.worker_count) : yamlencode({
     machine = {
       install = {
-        image           = local.talos_install_image
-        extraKernelArgs = ["ipv6.disable=1"]
+        image = local.talos_install_image
       }
       certSANs = local.cert_sans
       kubelet = {
@@ -153,6 +152,11 @@ locals {
         }
       }
       network = {
+        nameservers = ["1.1.1.1", "8.8.8.8"]
+        interfaces = [
+          { interface = "eth0", dhcp = true },
+          { interface = "eth1", dhcp = true },
+        ]
         kubespan = { enabled = false }
       }
       kernel = {
@@ -166,7 +170,7 @@ locals {
       features = {
         hostDNS = {
           enabled              = true
-          forwardKubeDNSToHost = true
+          forwardKubeDNSToHost = false
           resolveMemberNames   = true
         }
       }
@@ -241,4 +245,35 @@ resource "talos_cluster_kubeconfig" "this" {
   client_configuration = talos_machine_secrets.this.client_configuration
   node                 = local.cp_public_ipv4[0]
   depends_on           = [talos_machine_bootstrap.this]
+}
+
+# -----------------------------------------------------------------------------
+# Wait for cluster to be healthy before proceeding with Helm/K8s resources
+# -----------------------------------------------------------------------------
+
+resource "null_resource" "wait_for_cluster_health" {
+  provisioner "local-exec" {
+    command = <<-EOT
+      echo "Waiting for Kubernetes API to be ready (CNI not yet installed, nodes will be NotReady)..."
+      for i in $(seq 1 60); do
+        # Check if API server responds and can list nodes
+        # Nodes won't be Ready until CNI is installed, but API must be accessible for Helm
+        if kubectl --kubeconfig <(echo "$KUBECONFIG") get --raw /readyz >/dev/null 2>&1; then
+          echo "Kubernetes API is ready!"
+          kubectl --kubeconfig <(echo "$KUBECONFIG") get nodes
+          exit 0
+        fi
+        echo "Attempt $i/60: API not ready yet, waiting 10s..."
+        sleep 10
+      done
+      echo "Timed out waiting for Kubernetes API"
+      exit 1
+    EOT
+    environment = {
+      KUBECONFIG = talos_cluster_kubeconfig.this.kubeconfig_raw
+    }
+    interpreter = ["bash", "-c"]
+  }
+
+  depends_on = [talos_machine_bootstrap.this]
 }

@@ -12,6 +12,9 @@ resource "aws_secretsmanager_secret" "kubeconfig" {
   name        = "${var.secrets_prefix}/clusters/${var.cluster_id}/kubeconfig"
   description = "Kubeconfig for cluster ${var.cluster_id}"
 
+  # Allow immediate recreation without recovery window (for cluster rebuilds)
+  recovery_window_in_days = 0
+
   tags = {
     cluster_id = var.cluster_id
     managed_by = "terraform"

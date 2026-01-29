@@ -189,3 +189,29 @@ variable "app_namespaces" {
     }
   ]
 }
+
+# -----------------------------------------------------------------------------
+# Firewall
+# -----------------------------------------------------------------------------
+
+variable "management_cidrs" {
+  description = "CIDRs allowed to access Kube API (6443) and Talos API (50000). Empty uses auto-detected current IP."
+  type        = list(string)
+  default     = []
+}
+
+variable "enable_public_ingress" {
+  description = "Open ports 80/443 on nodes for ingress traffic. Not needed with Cloudflare Tunnel."
+  type        = bool
+  default     = false
+}
+
+# -----------------------------------------------------------------------------
+# Destroy Helpers
+# -----------------------------------------------------------------------------
+
+variable "skip_bootstrap" {
+  description = "Skip all Kubernetes/Helm bootstrap resources. Set to true before destroy."
+  type        = bool
+  default     = false
+}

@@ -1,8 +1,13 @@
 # Cilium CNI for Hetzner Cloud (Talos Linux)
 
-# VXLAN tunnel mode for Hetzner private network
+# Tunnel mode required for Hetzner (nodes not directly connected at L2)
 routingMode: tunnel
 tunnelProtocol: vxlan
+
+# IPAM: Use Kubernetes-assigned pod CIDRs (10.244.0.0/16, /24 per node)
+# This prevents IP conflicts with the node subnet (10.0.1.0/24)
+ipam:
+  mode: kubernetes
 
 # Replace kube-proxy (Talos disables kube-proxy)
 kubeProxyReplacement: true
