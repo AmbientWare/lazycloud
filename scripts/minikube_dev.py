@@ -292,10 +292,6 @@ def stop_minikube(
             ],
             "test namespace",
         ),
-        (
-            ["kubectl", "delete", "storageclass", "efs-sc", "--ignore-not-found=true"],
-            "EFS storage class",
-        ),
     ]
 
     # Optionally clean up monitoring stack
@@ -377,10 +373,6 @@ def show_status():
             "Test Namespace": (
                 ["kubectl", "get", "namespace", "lazycloud-test"],
                 "lazycloud-test namespace exists",
-            ),
-            "EFS StorageClass": (
-                ["kubectl", "get", "storageclass", "efs-sc"],
-                "EFS storage class exists",
             ),
             "Sample Compose": (None, Path("/tmp/test-compose.yml").exists()),
         }

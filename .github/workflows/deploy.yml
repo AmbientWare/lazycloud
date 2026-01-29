@@ -11,6 +11,10 @@ on:
           - staging
           - production
 
+permissions:
+  contents: write
+  id-token: write
+
 jobs:
   # Determine which services to build
   prepare:

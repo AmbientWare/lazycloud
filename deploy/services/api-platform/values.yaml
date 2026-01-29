@@ -54,7 +54,7 @@ resources:
     memory: 1Gi
 
 storage:
-  storageClassName: efs-sc
+  storageClassName: juicefs-shared
   size: 10Gi
 
 # Environment variables pulled from External Secrets
