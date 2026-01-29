@@ -8,5 +8,4 @@ dependencies:
   - name: external-secrets
     version: "0.18.0"
     repository: https://charts.external-secrets.io
-    # Operator installed by Terraform; disable here to avoid conflict
     condition: operator.enabled

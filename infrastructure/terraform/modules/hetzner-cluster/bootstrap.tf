@@ -1,5 +1,5 @@
 # -----------------------------------------------------------------------------
-# Cluster bootstrap: CNI, CSI, storage, gVisor, secrets, ESO, ArgoCD
+# Cluster bootstrap: CNI, CSI, storage, gVisor, secrets, ArgoCD
 #
 # Order of operations is controlled via depends_on chains:
 #   0. Wait for cluster API to be healthy (talos_cluster_health)
@@ -8,8 +8,10 @@
 #   3. Storage classes
 #   4. gVisor RuntimeClass
 #   5. Namespaces + secrets (hcloud token, AWS creds, app namespaces, monitoring)
-#   5b. External Secrets Operator + ClusterSecretStore
 #   6. ArgoCD (+ repo credential)
+#
+# NOTE: External Secrets Operator is managed by ArgoCD (not Terraform).
+#       Terraform only creates the namespace + aws-sm-credentials secret for bootstrap.
 #
 # DESTROY: Set var.skip_bootstrap = true, run `terraform apply`, then `terraform destroy`
 # -----------------------------------------------------------------------------
@@ -231,72 +233,6 @@ resource "kubernetes_secret" "aws_sm_credentials" {
   depends_on = [kubernetes_namespace.external_secrets]
 }
 
-# =============================================================================
-# 5b. External Secrets Operator + ClusterSecretStore
-# =============================================================================
-
-resource "helm_release" "external_secrets" {
-  count = local.bootstrap_count
-
-  name             = "external-secrets"
-  namespace        = "external-secrets-system"
-  repository       = "https://charts.external-secrets.io"
-  chart            = "external-secrets"
-  version          = "0.18.0"
-  create_namespace = false
-
-  values = [yamlencode({
-    installCRDs = true
-    serviceAccount = {
-      create = true
-      name   = "external-secrets"
-    }
-  })]
-
-  wait    = true
-  timeout = 300
-
-  depends_on = [kubernetes_secret.aws_sm_credentials]
-}
-
-# ClusterSecretStore for AWS Secrets Manager
-# Using null_resource + kubectl because kubernetes_manifest requires cluster at plan time
-resource "null_resource" "cluster_secret_store" {
-  count = local.bootstrap_count
-
-  provisioner "local-exec" {
-    command = <<-EOT
-      kubectl --kubeconfig <(echo "$KUBECONFIG_RAW") apply -f - <<'EOF'
-      apiVersion: external-secrets.io/v1
-      kind: ClusterSecretStore
-      metadata:
-        name: lazycloud-prod-secrets
-      spec:
-        provider:
-          aws:
-            service: SecretsManager
-            region: us-east-1
-            auth:
-              secretRef:
-                accessKeyIDSecretRef:
-                  name: aws-sm-credentials
-                  namespace: external-secrets-system
-                  key: access-key
-                secretAccessKeySecretRef:
-                  name: aws-sm-credentials
-                  namespace: external-secrets-system
-                  key: secret-key
-      EOF
-    EOT
-    environment = {
-      KUBECONFIG_RAW = talos_cluster_kubeconfig.this.kubeconfig_raw
-    }
-    interpreter = ["bash", "-c"]
-  }
-
-  depends_on = [helm_release.external_secrets]
-}
-
 # App namespaces (configurable via variable)
 resource "kubernetes_namespace" "app" {
   for_each = local.app_namespaces
@@ -455,33 +391,81 @@ resource "null_resource" "bootstrap_cleanup" {
   provisioner "local-exec" {
     when        = destroy
     command     = <<-EOT
-      echo "=== Bootstrap Cleanup (skip_bootstrap=true) ==="
+      echo "=== Bootstrap Cleanup ==="
 
-      # Remove ArgoCD application finalizers
-      echo "Removing ArgoCD application finalizers..."
+      # Remove ArgoCD application/applicationset finalizers and delete
+      echo "Cleaning up ArgoCD resources..."
       for app in $(kubectl get applications.argoproj.io -n argocd -o name 2>/dev/null); do
         kubectl patch "$app" -n argocd --type=json -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
       done
-
-      # Remove ApplicationSet finalizers
-      echo "Removing ApplicationSet finalizers..."
       for appset in $(kubectl get applicationsets.argoproj.io -n argocd -o name 2>/dev/null); do
         kubectl patch "$appset" -n argocd --type=json -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
       done
+      kubectl delete applications.argoproj.io -n argocd --all --timeout=10s 2>/dev/null || true
+      kubectl delete applicationsets.argoproj.io -n argocd --all --timeout=10s 2>/dev/null || true
 
-      # Delete ArgoCD apps (now without finalizers, they'll delete immediately)
-      echo "Deleting ArgoCD applications..."
-      kubectl delete applications.argoproj.io -n argocd --all 2>/dev/null || true
-      kubectl delete applicationsets.argoproj.io -n argocd --all 2>/dev/null || true
+      # Clean up External Secrets resources (CRs block namespace deletion)
+      echo "Cleaning up External Secrets resources..."
+      for es in $(kubectl get externalsecrets -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}' 2>/dev/null); do
+        ns=$(echo "$es" | cut -d/ -f1)
+        name=$(echo "$es" | cut -d/ -f2)
+        kubectl patch externalsecret "$name" -n "$ns" --type=json -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
+      done
+      kubectl delete externalsecrets --all -A --force --grace-period=0 2>/dev/null || true
+      kubectl delete clustersecretstores --all --force --grace-period=0 2>/dev/null || true
 
-      # Force delete stuck pods in monitoring
-      echo "Force deleting monitoring pods..."
-      kubectl delete pods -n monitoring --all --force --grace-period=0 2>/dev/null || true
+      # Force delete all helm releases that might be stuck
+      echo "Cleaning up Helm releases..."
+      for ns in external-secrets-system argocd monitoring ingress-nginx cloudflare-system; do
+        for release in $(helm list -n "$ns" -q 2>/dev/null); do
+          helm uninstall "$release" -n "$ns" --wait=false 2>/dev/null || true
+        done
+      done
 
-      # Remove PVC finalizers in monitoring
-      echo "Removing PVC finalizers..."
-      for pvc in $(kubectl get pvc -n monitoring -o name 2>/dev/null); do
-        kubectl patch "$pvc" -n monitoring --type=json -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
+      # Force delete stuck pods and PVCs in all app namespaces
+      echo "Force deleting pods and PVCs..."
+      for ns in monitoring argocd lazycloud-prod lazycloud-staging external-secrets-system ingress-nginx cloudflare-system; do
+        kubectl delete pods -n "$ns" --all --force --grace-period=0 2>/dev/null || true
+        for pvc in $(kubectl get pvc -n "$ns" -o name 2>/dev/null); do
+          kubectl patch "$pvc" -n "$ns" --type=json -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
+        done
+        kubectl delete pvc -n "$ns" --all --force --grace-period=0 2>/dev/null || true
+      done
+
+      # Remove namespace finalizers so they can be deleted
+      echo "Removing namespace finalizers..."
+      for ns in monitoring argocd lazycloud-prod lazycloud-staging external-secrets-system ingress-nginx cloudflare-system argo-rollouts; do
+        kubectl patch namespace "$ns" --type=json -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
+        kubectl patch namespace "$ns" --type=json -p='[{"op": "remove", "path": "/spec/finalizers"}]' 2>/dev/null || true
+      done
+
+      # Force finalize stuck namespaces via API (nuclear option for Terminating namespaces)
+      echo "Force finalizing stuck namespaces..."
+      for ns in monitoring argocd lazycloud-prod lazycloud-staging external-secrets-system ingress-nginx cloudflare-system argo-rollouts; do
+        kubectl get namespace "$ns" -o json 2>/dev/null | \
+          jq '.spec.finalizers = []' | \
+          kubectl replace --raw "/api/v1/namespaces/$ns/finalize" -f - 2>/dev/null || true
+      done
+
+      # Wait for namespaces to actually be deleted (avoid race with Terraform)
+      echo "Waiting for namespaces to be deleted..."
+      NAMESPACES="monitoring argocd lazycloud-prod lazycloud-staging external-secrets-system ingress-nginx cloudflare-system argo-rollouts"
+      TIMEOUT=180
+      ELAPSED=0
+      while [ $ELAPSED -lt $TIMEOUT ]; do
+        REMAINING=""
+        for ns in $NAMESPACES; do
+          if kubectl get namespace "$ns" >/dev/null 2>&1; then
+            REMAINING="$REMAINING $ns"
+          fi
+        done
+        if [ -z "$REMAINING" ]; then
+          echo "All namespaces deleted"
+          break
+        fi
+        echo "Waiting for:$REMAINING ($ELAPSED/$TIMEOUT sec)"
+        sleep 2
+        ELAPSED=$((ELAPSED + 2))
       done
 
       echo "=== Cleanup complete ==="

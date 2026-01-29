@@ -36,20 +36,15 @@ spec:
                   syncWave: "1"
                   createNamespace: "false"
                   serverSideApply: "false"
-                # Cilium is managed by Terraform (bootstrap dependency, needs privileged on Talos)
+                # Namespace created by Terraform (for aws-sm-credentials bootstrap secret)
                 - app: external-secrets
                   namespace: external-secrets-system
                   syncWave: "2"
-                  createNamespace: "true"
+                  createNamespace: "false"
                   serverSideApply: "false"
                 - app: nginx-ingress
                   namespace: ingress-nginx
                   syncWave: "3"
-                  createNamespace: "true"
-                  serverSideApply: "false"
-                - app: cloudflare-tunnel
-                  namespace: cloudflare-system
-                  syncWave: "4"
                   createNamespace: "true"
                   serverSideApply: "false"
                 - app: cluster-autoscaler
@@ -67,6 +62,11 @@ spec:
                   syncWave: "6"
                   createNamespace: "true"
                   serverSideApply: "true"
+                - app: cloudflare-tunnel
+                  namespace: cloudflare-system
+                  syncWave: "7"
+                  createNamespace: "true"
+                  serverSideApply: "false"
   templatePatch: |
     spec:
       syncPolicy:
