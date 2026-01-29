@@ -52,3 +52,7 @@ podDisruptionBudget:
 # Topology spread for HA
 topologySpreadConstraints:
   enabled: true
+
+# ServiceMonitor for Prometheus metrics scraping
+serviceMonitor:
+  enabled: true
