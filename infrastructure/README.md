@@ -80,16 +80,6 @@ terraform apply
 
 ## 6. Get Credentials (for local access)
 ```bash
-# Kubeconfig (also stored in Secrets Manager for backend)
-terraform output -raw kubeconfig > ~/.kube/lazycloud
-export KUBECONFIG=~/.kube/lazycloud
-
-# Talos config (for node management)
-terraform output -raw talosconfig > ~/.talos/config
-```
-
-Or use the helper script:
-```bash
 source ./infrastructure/kubesetup.sh
 ```
 
@@ -99,34 +89,74 @@ The ApplicationSet deploys all platform charts from `deploy/platform/`.
 kubectl apply -f deploy/argocd-apps/applicationsets/platform.yaml -n argocd
 ```
 
-## 8. Update Billing
+## 8. DNS Cutover and Argo dashboard
+- Update Cloudflare tunnel to point to new cluster's NGINX ingress
+- Get the cluster status and info:
+```bash
+./infrastructure/cluster-info.sh
+```
+- Update the dns CNAMEs shown as 'needed'
+- use the displayed argo Admin password to login to https://argocd.lazycloud.dev
+
+## 9. Update Billing
 Creates/updates meters and products in Polar:
 ```bash
 uv run update-billing
 ```
 
-## 9. DNS Cutover
-- Update Cloudflare tunnel to point to new cluster's NGINX ingress
-- Run `./infrastructure/validate.sh` to get the ingress IP
-- Verify: `curl -I https://lazycloud.dev`
+## 10. If deploying the LazyCloud main apps:
+- Run the Staging and Production actions in GitHub (builds container images)
+- Then add the apps to ArgoCD:
+```bash
+kubectl apply -f deploy/argocd-apps/applicationsets/services-staging.yaml -n argocd
+kubectl apply -f deploy/argocd-apps/applicationsets/services-prod.yaml -n argocd
+```
 
-## 10. Verify
-- [ ] Nodes ready (`kubectl get nodes`)
-- [ ] Pods running with gVisor (`kubectl get runtimeclass`)
-- [ ] JuiceFS CSI pods running (`kubectl get pods -n kube-system -l app=juicefs-csi-driver`)
-- [ ] Storage classes created (`kubectl get sc`)
-- [ ] ArgoCD accessible (`kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d`)
-- [ ] Kubeconfig in Secrets Manager (`aws secretsmanager get-secret-value --secret-id lazycloud/clusters/ash-1/kubeconfig`)
-- [ ] Deploy a test workspace
-- [ ] Confirm builds (Depot), storage (PVCs), ingress (public URL)
 
 ## Teardown
-```bash
-# Destroy cluster first
-cd infrastructure/terraform/clusters/ash-1
-terraform destroy
 
-# Optionally destroy global resources (deletes all shared secrets!)
+### Clean Destroy (recommended)
+The cluster has Kubernetes/Helm resources that can't be deleted once the API server is gone.
+Use the `skip_bootstrap` variable to cleanly remove them from Terraform state first:
+
+```bash
+cd infrastructure/terraform/clusters/ash-1
+
+# Step 1: Remove K8s/Helm resources from Terraform management
+terraform apply -var="skip_bootstrap=true"
+
+# Step 2: Destroy infrastructure (only Hetzner resources remain)
+terraform destroy
+```
+
+### Full Reset (start completely fresh)
+If you need to completely reset and start over:
+
+```bash
+cd infrastructure/terraform/clusters/ash-1
+
+# 1. Remove K8s resources from state (skip if cluster is already dead)
+terraform apply -var="skip_bootstrap=true" || true
+
+# 2. Destroy infrastructure
+terraform destroy || true
+
+# 3. Force delete the kubeconfig secret from AWS (it may be scheduled for deletion)
+aws secretsmanager delete-secret \
+  --secret-id lazycloud/clusters/ash-1/kubeconfig \
+  --force-delete-without-recovery
+
+# 4. Clear Terraform state from S3
+aws s3 rm s3://lazycloud-terraform-state/clusters/ash-1/terraform.tfstate
+
+# 5. Reinitialize and apply fresh
+terraform init -backend-config=backend.hcl
+terraform apply
+```
+
+### Destroy Global Resources
+Only do this if you want to delete ALL shared secrets:
+```bash
 cd infrastructure/terraform/global
 terraform destroy
 ```

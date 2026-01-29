@@ -125,6 +125,13 @@ module "cluster" {
 
   # AWS Secrets Manager
   secrets_prefix = var.secrets_prefix
+
+  # Firewall
+  management_cidrs      = var.management_cidrs
+  enable_public_ingress = var.enable_public_ingress
+
+  # Destroy helpers
+  skip_bootstrap = var.skip_bootstrap
 }
 
 # -----------------------------------------------------------------------------

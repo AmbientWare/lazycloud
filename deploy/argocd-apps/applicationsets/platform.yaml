@@ -90,6 +90,7 @@ spec:
         targetRevision: main
         path: 'deploy/platform/{{ .app }}'
         helm:
+          releaseName: '{{ .app }}'
           valueFiles:
             - values.yaml
       destination:

@@ -113,10 +113,10 @@ coverage_html/
 # =============================================================================
 hetzner.token
 infrastructure/secrets-backup/
-infrastructure/terraform/.terraform/
 infrastructure/terraform/kubeconfig
 infrastructure/terraform/talosconfig
 infrastructure/terraform/terraform.tfvars
+.terraform/
 
 # =============================================================================
 # CDK
