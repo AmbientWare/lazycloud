@@ -66,12 +66,16 @@ jobs:
           SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
           TAG_PREFIX="${{ inputs.tag_prefix }}"
           IMAGE_NAME="${{ inputs.image_name }}"
-          # Tag format: registry.depot.dev/<project-id>:<image-name>-<sha>
-          IMAGE_TAG="registry.depot.dev/${DEPOT_PROJECT_ID}:${IMAGE_NAME}-${TAG_PREFIX}${SHORT_SHA}"
+          # Save tag is just: <image-name>-<sha> (Depot adds registry.depot.dev/<project-id>: automatically)
+          SAVE_TAG="${IMAGE_NAME}-${TAG_PREFIX}${SHORT_SHA}"
+          # Full image tag for reference
+          IMAGE_TAG="registry.depot.dev/${DEPOT_PROJECT_ID}:${SAVE_TAG}"
 
+          echo "save_tag=${SAVE_TAG}" >> $GITHUB_OUTPUT
           echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
           echo "image_sha=${TAG_PREFIX}${SHORT_SHA}" >> $GITHUB_OUTPUT
-          echo "Generated image tag: ${IMAGE_TAG}"
+          echo "Generated save tag: ${SAVE_TAG}"
+          echo "Full image tag: ${IMAGE_TAG}"
         env:
           DEPOT_PROJECT_ID: ${{ secrets.DEPOT_PROJECT_ID }}
 
@@ -93,7 +97,7 @@ jobs:
           file: ${{ inputs.dockerfile_path }}
           target: ${{ inputs.docker_target }}
           save: true
-          tags: ${{ steps.meta.outputs.image_tag }}
+          save-tags: ${{ steps.meta.outputs.save_tag }}
           build-args: ${{ steps.build-args.outputs.build_args }}
           platforms: linux/amd64
 
