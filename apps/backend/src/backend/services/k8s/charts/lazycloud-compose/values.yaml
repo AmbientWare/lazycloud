@@ -32,11 +32,13 @@ services: []
   #   resources: {}
   #   ingress:
   #     enabled: false
-  #     className: nginx
-  #     hostnamePrefix: my-app
-  #     domain: example.com
+  #     protocol: http  # http (default), tcp, or udp
+  #     # For HTTP:
+  #     hostname: my-app.example.com
   #     path: /
   #     pathType: Prefix
+  #     # For TCP/UDP (must add port to gateway.tcpPorts/udpPorts):
+  #     # port: 5432
   #     tls:
   #       enabled: false
   #       secretName: ""
@@ -164,9 +166,14 @@ tolerations: []
 # Affinity settings for all pods
 affinity: {}
 
+# Gateway configuration for HTTPRoute
+gateway:
+  name: lazycloud-gateway
+  namespace: envoy-gateway-system
+
 # NetworkPolicy settings
 networkPolicies:
   enabled: true  # Enable per-service network policies
   allowExternal: true  # Allow external traffic (gVisor provides sandbox isolation)
-  ingressNamespace: ingress-nginx  # Namespace where ingress controller runs
+  ingressNamespace: envoy-gateway-system  # Namespace where Envoy Gateway runs
   monitoringNamespace: monitoring  # Namespace where monitoring stack runs

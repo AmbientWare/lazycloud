@@ -182,29 +182,31 @@ def generate_ports_values(ports: list[str | int | ComposePort]) -> list[PortConf
 def generate_ingress_values(
     service: ComposeService, deployment_id: str | None, cluster_id: str
 ) -> IngressValues | None:
-    """Generate ingress configuration from service labels."""
+    """Generate ingress configuration for a service.
+
+    Currently only HTTP routing is supported. TCP/UDP routing infrastructure
+    exists (templates, models) but requires dynamic port allocation to work
+    in a multi-tenant environment - not yet implemented.
+    """
     # No ports means no ingress
     if not service.ports:
         return None
 
-    # Determine the hostname
+    # Always use HTTP routing for now
+    # TODO: Implement dynamic port allocation for TCP/UDP support
     if service.domain:
-        # Use custom domain directly
         hostname = service.domain
     else:
-        # Use service name, or generate petname if not available
         name = service.name if service.name else generate_petname(deployment_id or "")
         hostname = build_public_hostname(name, deployment_id, cluster_id)
 
-    ingress_config = IngressValues(
+    return IngressValues(
         enabled=True,
-        className="nginx",
+        protocol="http",
         hostname=hostname,
         tls=IngressTLS(enabled=False),  # Cloudflare handles TLS termination
         annotations={},
     )
-
-    return ingress_config
 
 
 def generate_petname(service_name: str) -> str:

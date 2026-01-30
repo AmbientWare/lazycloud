@@ -46,7 +46,7 @@ spec:
   - from:
     - namespaceSelector:
         matchLabels:
-          kubernetes.io/metadata.name: {{ $.Values.networkPolicies.ingressNamespace | default "ingress-nginx" }}
+          kubernetes.io/metadata.name: {{ $.Values.networkPolicies.ingressNamespace | default "envoy-gateway-system" }}
   {{- end }}
   {{- end }}
   

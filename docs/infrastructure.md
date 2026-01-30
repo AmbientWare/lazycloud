@@ -162,7 +162,7 @@ kubectl apply -f deploy/argocd-apps/root-app.yaml
 This triggers the full platform deployment via sync waves:
 1. storage-classes, reloader, argo-rollouts
 2. external-secrets
-3. nginx-ingress
+3. envoy-gateway
 4. cloudflare-tunnel, karpenter
 5. loki
 6. prometheus-stack

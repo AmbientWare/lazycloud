@@ -42,11 +42,11 @@ spec:
                   syncWave: "2"
                   createNamespace: "false"
                   serverSideApply: "false"
-                - app: nginx-ingress
-                  namespace: ingress-nginx
+                - app: envoy-gateway
+                  namespace: envoy-gateway-system
                   syncWave: "3"
                   createNamespace: "true"
-                  serverSideApply: "false"
+                  serverSideApply: "true"
                 - app: cluster-autoscaler
                   namespace: kube-system
                   syncWave: "4"

@@ -287,7 +287,32 @@ resource "null_resource" "monitoring_cleanup" {
 }
 
 # =============================================================================
-# 6. ArgoCD
+# 6. Gateway API CRDs (needed for HTTPRoute before envoy-gateway is deployed)
+# =============================================================================
+
+resource "null_resource" "gateway_api_crds" {
+  count = local.bootstrap_count
+
+  provisioner "local-exec" {
+    command = "kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.0/standard-install.yaml"
+  }
+
+  depends_on = [helm_release.cilium]
+}
+
+# Create envoy-gateway-system namespace for HTTPRoute parentRef
+resource "kubernetes_namespace" "envoy_gateway_system" {
+  count = local.bootstrap_count
+
+  metadata {
+    name = "envoy-gateway-system"
+  }
+
+  depends_on = [null_resource.gateway_api_crds]
+}
+
+# =============================================================================
+# 7. ArgoCD
 # =============================================================================
 
 resource "kubernetes_namespace" "argocd" {
@@ -297,7 +322,7 @@ resource "kubernetes_namespace" "argocd" {
     name = "argocd"
   }
 
-  depends_on = [helm_release.cilium]
+  depends_on = [kubernetes_namespace.envoy_gateway_system]
 }
 
 resource "helm_release" "argocd" {
@@ -313,13 +338,20 @@ resource "helm_release" "argocd" {
       domain = var.argocd_domain
     }
     server = {
+      # Run in insecure mode - Cloudflare terminates TLS
+      insecure = true
+      # Disable traditional Ingress
       ingress = {
-        enabled          = true
-        ingressClassName = "nginx"
-        annotations = {
-          "nginx.ingress.kubernetes.io/ssl-passthrough"  = "true"
-          "nginx.ingress.kubernetes.io/backend-protocol" = "HTTPS"
-        }
+        enabled = false
+      }
+      # Enable Gateway API HTTPRoute (experimental but supported)
+      httproute = {
+        enabled   = true
+        hostnames = [var.argocd_domain]
+        parentRefs = [{
+          name      = "lazycloud-gateway"
+          namespace = "envoy-gateway-system"
+        }]
       }
     }
   })]
@@ -370,7 +402,7 @@ resource "null_resource" "bootstrap_cleanup" {
     when        = destroy
     command     = <<-EOT
       echo "=== Bootstrap Cleanup ==="
-      NAMESPACES="monitoring argocd ingress-nginx cloudflare-system argo-rollouts external-secrets-system"
+      NAMESPACES="monitoring argocd envoy-gateway-system cloudflare-system argo-rollouts external-secrets-system"
 
       # 1. Delete webhooks FIRST - they can block API calls and cause timeouts
       echo "Deleting webhooks..."
