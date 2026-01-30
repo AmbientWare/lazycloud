@@ -4,6 +4,7 @@ import yaml
 from api_requests.deployments import DiffRequest, DiffType
 from fastapi import APIRouter, Body, Depends, HTTPException
 from loguru import logger
+from models.clusters import get_cluster_registry
 from models.deployments import DeploymentStates
 from models.diffs import EnvVarChanges, StorageTypeChange
 from models.secrets import SecretSource
@@ -126,6 +127,14 @@ async def get_deployment_diff(
     full_validation_errors = []
     warnings = []
     try:
+        # Determine cluster_id: use existing deployment's cluster or get from placement
+        if deployment:
+            cluster_id = deployment.cluster_id
+        else:
+            registry = get_cluster_registry()
+            cluster = registry.get_cluster_for_placement()
+            cluster_id = cluster.name if cluster else "default"
+
         # Create temporary deployment for full validation
         temp_deployment = ComposeDeploymentPydantic(
             workspace_id=workspace_id,
@@ -133,6 +142,7 @@ async def get_deployment_diff(
             namespace=namespace,
             compose_yaml=request.compose_yaml,
             state=DeploymentStates.PENDING,
+            cluster_id=cluster_id,
         )
 
         if deployment:

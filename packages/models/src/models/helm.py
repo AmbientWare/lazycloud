@@ -206,6 +206,7 @@ class ServiceValues(BaseModel):
     podSecurityContext: PodSecurityContext | None = None
     terminationGracePeriodSeconds: int | None = None
     imagePullSecrets: list[dict[str, str]] | None = None
+    allowExternal: bool = True  # Allow external egress (gVisor provides sandbox isolation)
 
 
 class NamespaceConfig(BaseModel):

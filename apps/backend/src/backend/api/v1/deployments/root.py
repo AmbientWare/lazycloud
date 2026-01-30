@@ -194,12 +194,17 @@ async def create_deployment(
         await check_deployment_limit_for_owner(owner_user)
 
     # Create a temporary deployment object for basic validation
+    # For updates, keep the deployment on its existing cluster
+    validation_cluster_id = (
+        existing_deployment.cluster_id if existing_deployment else target_cluster_id
+    )
     temp_deployment = ComposeDeploymentPydantic(
         workspace_id=request.workspace_id,
         name=request.name or "",
         namespace=namespace,
         compose_yaml=request.compose_yaml,
         state=DeploymentStates.PENDING,
+        cluster_id=validation_cluster_id,
     )
     if existing_deployment:
         temp_deployment.id = str(existing_deployment.id)
@@ -408,6 +413,7 @@ async def deploy_deployment(
         compose_yaml=compose_yaml,
         state=deployment.state,
         depot_project_id=deployment.depot_project_id,
+        cluster_id=deployment.cluster_id,
     )
     temp_deployment.id = str(deployment.id)
 

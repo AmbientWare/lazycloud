@@ -1,4 +1,0 @@
-# Region-specific values for us-east-1
-# NOTE: Update tunnel.id after creating the tunnel with `cloudflared tunnel create`
-tunnel:
-  id: "21b63c8e-365b-4074-8914-de65b1cfc7b0"

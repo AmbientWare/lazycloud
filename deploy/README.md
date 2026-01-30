@@ -57,3 +57,24 @@ kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.pas
    - `services-staging.yaml`
    - `services-prod.yaml`
 3. Create `values-{region}.yaml` for region-specific values (certificates, etc.)
+
+## Cloudflare Tunnel
+
+The cluster uses a Cloudflare Tunnel for ingress traffic. The tunnel is **remote-managed**, meaning routing configuration lives in the Cloudflare Zero Trust dashboard.
+
+### Setup
+
+1. **Create tunnel** in [Cloudflare Zero Trust](https://one.dash.cloudflare.com/) > Networks > Tunnels
+2. **Copy the token** from the tunnel install command
+3. **Store token** in AWS Secrets Manager at `lazycloud/shared-secrets` with key `CLOUDFLARE_TUNNEL_TOKEN`
+4. **Configure routes** in the tunnel's "Public Hostname" tab:
+   - `lazycloud.dev` → `http://nginx-ingress-controller.ingress-nginx.svc.cluster.local:80`
+   - `*.lazycloud.dev` → `http://nginx-ingress-controller.ingress-nginx.svc.cluster.local:80`
+
+### How Traffic Flows
+
+```
+User → Cloudflare Edge (TLS termination) → Cloudflare Tunnel → NGINX Ingress → Service
+```
+
+Cloudflare handles TLS termination at the edge, so traffic between the tunnel and NGINX is HTTP.
