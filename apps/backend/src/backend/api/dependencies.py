@@ -10,9 +10,9 @@ from backend.database.user_workspaces import WorkspaceRole
 from backend.database.users import UserPydantic, UserRole
 from backend.models.workspace_access import WorkspaceAccess
 from backend.services import get_polar_service, get_subscription_service
+from backend.services.exceptions import NoActiveSubscriptionError
 from backend.services.subscription_service import (
     BillingNotConfiguredError,
-    NoActiveSubscriptionError,
     SubscriptionLimitError,
 )
 

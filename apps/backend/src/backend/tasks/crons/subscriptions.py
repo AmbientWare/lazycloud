@@ -7,7 +7,7 @@ from loguru import logger
 from backend.database import get_db_context
 from backend.database.users import SubscriptionState, UserStatus
 from backend.services import get_subscription_service
-from backend.services.subscription_service import NoActiveSubscriptionError
+from backend.services.exceptions import NoActiveSubscriptionError
 
 
 async def monitor_subscription_states_job(ctx: dict[str, Any]) -> dict[str, Any]:

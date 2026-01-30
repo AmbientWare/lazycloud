@@ -12,7 +12,7 @@ from backend.database.users import (
 )
 from backend.database.utils import api_key_is_expired
 from backend.services import get_polar_service, get_subscription_service
-from backend.services.subscription_service import NoActiveSubscriptionError
+from backend.services.exceptions import NoActiveSubscriptionError
 
 security = HTTPBearer(auto_error=False)
 
