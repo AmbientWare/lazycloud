@@ -48,15 +48,40 @@ export const Route = createFileRoute('/_authenticated/usage')({
       presetId = 'this-month'
     }
 
-    // Fetch usage data
-    const [aggregatedUsage, aggregatedDailyUsage] = await Promise.all([
-      getAggregatedUsage({
-        data: { startDate: startDateISO, endDate: endDateISO },
-      }),
-      getAggregatedDailyUsage({
-        data: { startDate: startDateISO, endDate: endDateISO, timezone: 'UTC' },
-      }),
-    ])
+    // Fetch usage data with fallback on error
+    let aggregatedUsage: AggregatedUsageResponse
+    let aggregatedDailyUsage: AggregatedDailyUsageResponse
+
+    try {
+      ;[aggregatedUsage, aggregatedDailyUsage] = await Promise.all([
+        getAggregatedUsage({
+          data: { startDate: startDateISO, endDate: endDateISO },
+        }),
+        getAggregatedDailyUsage({
+          data: { startDate: startDateISO, endDate: endDateISO, timezone: 'UTC' },
+        }),
+      ])
+    } catch (error) {
+      console.error('Failed to fetch usage data:', error)
+      // Return empty defaults so page still renders
+      aggregatedUsage = {
+        period: { start: startDateISO, end: endDateISO },
+        usage: {
+          cpu_core_hours: 0,
+          memory_gb_hours: 0,
+          build_minutes: 0,
+          storage_gb_months: 0,
+        },
+        workspace_count: 0,
+        record_count: 0,
+        workspaces: [],
+      }
+      aggregatedDailyUsage = {
+        period: { start: startDateISO, end: endDateISO },
+        daily_usage: [],
+        workspace_count: 0,
+      }
+    }
 
     return {
       billingCycle,
