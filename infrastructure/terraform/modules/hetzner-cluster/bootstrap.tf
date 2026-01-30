@@ -300,28 +300,6 @@ resource "kubernetes_namespace" "argocd" {
   depends_on = [helm_release.cilium]
 }
 
-# ArgoCD cluster-local secret (so ArgoCD can deploy to itself)
-resource "kubernetes_secret" "argocd_cluster_local" {
-  count = local.bootstrap_count
-
-  metadata {
-    name      = "cluster-local"
-    namespace = "argocd"
-    labels = {
-      "argocd.argoproj.io/secret-type" = "cluster"
-      "provider"                       = "hetzner"
-      "cluster_id"                     = var.cluster_id
-    }
-  }
-
-  data = {
-    name   = "local"
-    server = "https://kubernetes.default.svc"
-  }
-
-  depends_on = [kubernetes_namespace.argocd]
-}
-
 resource "helm_release" "argocd" {
   count = local.bootstrap_count
 
@@ -349,7 +327,7 @@ resource "helm_release" "argocd" {
   wait    = true
   timeout = 600
 
-  depends_on = [kubernetes_namespace.argocd, kubernetes_secret.argocd_cluster_local]
+  depends_on = [kubernetes_namespace.argocd]
 }
 
 # ArgoCD repo credentials

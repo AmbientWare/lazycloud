@@ -106,7 +106,7 @@ ArgoCD uses cluster secrets to know which clusters to deploy to. The first clust
 
 ```bash
 # Register the first cluster (uses in-cluster API since ArgoCD runs here)
-kubectl apply -f deploy/argocd-apps/applicationsets/local-cluster.yaml
+kubectl apply -f deploy/argocd-apps/applicationsets/cluster-ash-1.yaml
 ```
 
 The cluster secret contains labels that ApplicationSets use:
@@ -343,7 +343,7 @@ To add a second cluster (e.g., `ash-2` or `fsn-1`):
 │        cluster_id: ash-2  → cluster-specific values files           │
 │                                                                     │
 │  Cluster secrets: deploy/argocd-apps/applicationsets/cluster-*.yaml │
-│  First cluster:   deploy/argocd-apps/applicationsets/local-cluster.yaml │
+│  First cluster:   deploy/argocd-apps/applicationsets/cluster-ash-1.yaml │
 └─────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────┐
