@@ -31,11 +31,11 @@ class Cluster:
     network_cidr: str
     pod_cidr: str
     service_cidr: str
-    tunnel_id: str
     api_endpoint: str
     status: ClusterStatus
     default: bool
     autoscaler: AutoscalerConfig
+    tunnel_id: str | None = None  # Optional: set via terraform output cloudflare_tunnel_id
 
     @property
     def is_active(self) -> bool:
@@ -82,11 +82,11 @@ class ClusterRegistry:
                 network_cidr=cfg["network_cidr"],
                 pod_cidr=cfg["pod_cidr"],
                 service_cidr=cfg["service_cidr"],
-                tunnel_id=cfg["tunnel_id"],
                 api_endpoint=cfg["api_endpoint"],
                 status=cfg["status"],
                 default=cfg.get("default", False),
                 autoscaler=AutoscalerConfig(**cfg["autoscaler"]),
+                tunnel_id=cfg.get("tunnel_id"),
             )
 
         self._regions = {}
