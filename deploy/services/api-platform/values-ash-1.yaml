@@ -1,0 +1,4 @@
+# Cluster-specific values for ash-1 cluster
+
+ingress:
+  hostname: api.ash-1.lazycloud.dev

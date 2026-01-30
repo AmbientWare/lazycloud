@@ -121,9 +121,14 @@ class HelmValuesGenerator:
                 all_env_vars.update(env_secret_data)
 
         # Transform .public URLs in environment variables
-        # e.g., https://api.public -> https://api-xxxxx.lazycloud.dev
+        # e.g., https://api.public -> https://api-xxxxx.{cluster_id}.lazycloud.dev
         all_env_vars = (
-            transform_environment_urls(all_env_vars, service_names, self.deployment.id)
+            transform_environment_urls(
+                all_env_vars,
+                service_names,
+                self.deployment.id,
+                self.deployment.cluster_id,
+            )
             or {}
         )
 
@@ -288,7 +293,9 @@ class HelmValuesGenerator:
             service_values.healthcheck = healthcheck_values
 
         # Add ingress configuration
-        ingress_config = generate_ingress_values(service, self.deployment.id)
+        ingress_config = generate_ingress_values(
+            service, self.deployment.id, self.deployment.cluster_id
+        )
         if ingress_config:
             service_values.ingress = ingress_config
 

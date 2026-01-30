@@ -1,16 +1,6 @@
 """Tests for generator functions."""
 
 import pytest
-from models.compose import (
-    ComposeFile,
-    ComposePort,
-    ComposeService,
-    ComposeVolume,
-    ResourceConfig,
-    ResourcesConfig,
-    ServiceVolume,
-)
-
 from backend.services.k8s.generators.configuration import (
     generate_healthcheck_values,
     generate_service_volumes_values,
@@ -27,6 +17,15 @@ from backend.services.k8s.generators.workloads import (
     generate_resources_values,
     generate_security_context_values,
     parse_image,
+)
+from models.compose import (
+    ComposeFile,
+    ComposePort,
+    ComposeService,
+    ComposeVolume,
+    ResourceConfig,
+    ResourcesConfig,
+    ServiceVolume,
 )
 
 
@@ -182,44 +181,61 @@ class TestResourcesGeneration:
     """Tests for resource values generation."""
 
     def test_generate_resources_with_limits_and_requests(self):
-        """Test generating resources with both limits and requests."""
+        """Test generating resources with both limits and requests.
+
+        When reservations are specified, they become the base for requests.
+        Limits are then set to 4x requests for bursting capability.
+        """
         resources_config = ResourcesConfig(
             limits=ResourceConfig(cpus="1", memory="1G"),
-            reservations=ResourceConfig(cpus="0.5", memory="512M"),
+            reservations=ResourceConfig(cpus="0.5", memory="512Mi"),
         )
 
         result = generate_resources_values(resources_config)
 
-        assert result.limits.cpu == "1"
-        assert result.limits.memory == "1Gi"
-        # Requests are enforced to minimum thresholds in millicores format
+        # Requests come from reservations (0.5 CPU, 512Mi)
         assert result.requests.cpu == "500m"  # 0.5 cores = 500m
         assert result.requests.memory == "512Mi"
+        # Limits are 4x requests for bursting
+        assert result.limits.cpu == "2000m"  # 0.5 * 4 = 2 cores = 2000m
+        assert result.limits.memory == "2Gi"  # 0.5GB * 4 = 2GB
 
     def test_generate_resources_with_default_reservations(self):
-        """Test resources auto-generates requests from limits when no reservations specified."""
+        """Test resources uses limits as base when no reservations specified.
+
+        When only limits are provided, they become the base for requests.
+        Then limits are recalculated as 4x that base.
+        """
         resources_config = ResourcesConfig(
             limits=ResourceConfig(cpus="2", memory="2Gi"),
         )
 
         result = generate_resources_values(resources_config)
 
-        # Limits should be set correctly
-        assert result.limits.cpu == "2"
-        assert result.limits.memory == "2Gi"
-        # Requests are auto-generated at 50% CPU, 80% memory from limits
-        assert result.requests is not None
-        assert result.requests.cpu == "1000m"  # 50% of 2 cores = 1 core = 1000m
-        assert result.requests.memory == "1638Mi"  # 80% of 2Gi ≈ 1638Mi
+        # Requests use the limits as base
+        assert result.requests.cpu == "2000m"  # 2 cores = 2000m
+        assert result.requests.memory == "2Gi"
+        # Limits are 4x requests for bursting
+        assert result.limits.cpu == "8000m"  # 2 * 4 = 8 cores = 8000m
+        assert result.limits.memory == "8Gi"  # 2GB * 4 = 8GB
 
-    def test_generate_resources_returns_none_when_empty(self):
-        """Test returns None when no resources specified."""
+    def test_generate_resources_returns_defaults_when_empty(self):
+        """Test returns default resources when no config specified.
+
+        Even with no resources specified, defaults are applied:
+        - Minimum: 0.25 CPU, 0.5 GB memory
+        - Limits: 4x requests
+        """
         resources_config = ResourcesConfig()
 
         result = generate_resources_values(resources_config)
 
-        # No limits or reservations = no resources generated
-        assert result is None
+        # Defaults are applied (0.25 CPU, 0.5 GB minimum)
+        assert result.requests.cpu == "250m"  # 0.25 cores = 250m
+        assert result.requests.memory == "512Mi"  # 0.5 GB = 512Mi
+        # Limits are 4x requests
+        assert result.limits.cpu == "1000m"  # 0.25 * 4 = 1 core = 1000m
+        assert result.limits.memory == "2Gi"  # 0.5GB * 4 = 2GB
 
 
 class TestSecurityContextGeneration:
@@ -406,13 +422,14 @@ class TestIngressGeneration:
             ports=[ComposePort(published=8080, target=8080, protocol="tcp")],
         )
         deployment_id = "abc123def456"
+        cluster_id = "ash-1"
 
-        result = generate_ingress_values(service, deployment_id)
+        result = generate_ingress_values(service, deployment_id, cluster_id)
 
         assert result is not None
         assert result.enabled is True
-        # Hostname should include service name, short deployment ID, and base domain
-        assert result.hostname == "api-abc12.lazycloud.dev"
+        # Hostname should include service name, short deployment ID, cluster ID, and base domain
+        assert result.hostname == "api-abc12.ash-1.lazycloud.dev"
 
     def test_ingress_not_generated_without_ports(self):
         """Test ingress is not generated for service without ports."""
@@ -422,8 +439,9 @@ class TestIngressGeneration:
             ports=None,
         )
         deployment_id = "abc123def456"
+        cluster_id = "ash-1"
 
-        result = generate_ingress_values(service, deployment_id)
+        result = generate_ingress_values(service, deployment_id, cluster_id)
 
         assert result is None
 
@@ -435,8 +453,9 @@ class TestIngressGeneration:
             ports=[ComposePort(published=80, target=80, protocol="tcp")],
         )
         deployment_id = "xyz789ghi012"
+        cluster_id = "ash-1"
 
-        result = generate_ingress_values(service, deployment_id)
+        result = generate_ingress_values(service, deployment_id, cluster_id)
 
         assert result.className == "nginx"
 
@@ -448,10 +467,11 @@ class TestIngressGeneration:
             ports=[ComposePort(published=3000, target=3000, protocol="tcp")],
         )
         deployment_id = "deploy12345"
+        cluster_id = "fra-1"
 
-        result = generate_ingress_values(service, deployment_id)
+        result = generate_ingress_values(service, deployment_id, cluster_id)
 
-        assert result.hostname == "myservice-deplo.lazycloud.dev"
+        assert result.hostname == "myservice-deplo.fra-1.lazycloud.dev"
 
     def test_ingress_uses_custom_domain_when_specified(self):
         """Test ingress uses custom domain from service.domain if specified."""
@@ -462,8 +482,9 @@ class TestIngressGeneration:
             domain="api.example.com",
         )
         deployment_id = "abc123def456"
+        cluster_id = "ash-1"
 
-        result = generate_ingress_values(service, deployment_id)
+        result = generate_ingress_values(service, deployment_id, cluster_id)
 
         assert result is not None
         assert result.hostname == "api.example.com"

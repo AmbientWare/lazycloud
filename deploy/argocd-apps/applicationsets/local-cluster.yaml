@@ -1,15 +1,16 @@
 apiVersion: v1
 kind: Secret
 metadata:
-  name: cluster-local
+  name: cluster-ash-1
   namespace: argocd
   labels:
     argocd.argoproj.io/secret-type: cluster
+    provider: hetzner
+    cluster_id: ash-1
     region: us-east-1
-    cluster-id: use1
     is-hub: "true"
     supports-staging: "false" # NOTE: enable later for staging
 type: Opaque
 stringData:
-  name: local
+  name: ash-1
   server: https://kubernetes.default.svc

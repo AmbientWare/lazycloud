@@ -200,7 +200,9 @@ async def get_deployment_diff(
     # Compute service endpoints
     # For existing deployments, use the real ID; for new, use None (will show placeholder)
     deployment_id_for_endpoints = deployment.id if deployment else None
-    endpoints = compute_service_endpoints(compose_file, deployment_id_for_endpoints)
+    endpoints = compute_service_endpoints(
+        compose_file, deployment_id_for_endpoints, cluster_id
+    )
 
     return DiffResponse(
         deployment_id=deployment.id if deployment else "new",

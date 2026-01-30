@@ -1,0 +1,9 @@
+# Cluster-specific values for ash-1 cluster (Ashburn)
+# Override the secret path to point to this cluster's secrets
+
+tunnel:
+  name: "lazycloud-prod-ash-1"
+
+secrets:
+  # All cluster secrets are at lazycloud/clusters/{cluster_id}
+  awsSecretName: lazycloud/clusters/ash-1

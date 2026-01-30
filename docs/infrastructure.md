@@ -36,33 +36,28 @@ uv run cdk deploy lazycloud-shared
 
 Creates: IAM roles, Secrets Manager secrets (empty)
 
-### 2. Configure Cloudflare Tunnel
+### 2. Configure Cloudflare (Automated via Terraform)
 
-Create tunnel:
-```bash
-cloudflared tunnel login
-cloudflared tunnel create lazycloud-prod
-```
+Cloudflare Tunnels are **automatically created by Terraform** when provisioning a cluster. You only need to:
 
-Copy the tunnel ID from output and update:
-```
-deploy/platform/cloudflare-tunnel/values-us-east-1.yaml
-```
+1. Get your Cloudflare Account ID and Zone ID from the dashboard
+2. Create an API token with `Cloudflare Tunnel:Edit`, `DNS:Edit`, and `SSL and Certificates:Edit` permissions
+3. Set the token as an environment variable: `export TF_VAR_cloudflare_api_token="..."`
 
-Get tunnel token and add to AWS Secrets Manager (`lazycloud/shared-secrets`):
-```bash
-cloudflared tunnel token lazycloud-prod
-```
+When you run `terraform apply` for a cluster, it automatically:
+- Creates tunnel `lazycloud-prod-{cluster_id}`
+- Configures ingress routes for `*.{cluster_id}.lazycloud.dev`
+- Creates wildcard DNS CNAME pointing to the tunnel
+- Creates Advanced SSL certificate for `*.{cluster_id}.lazycloud.dev`
+- Stores the tunnel token in AWS Secrets Manager at `lazycloud/clusters/{cluster_id}`
 
-```json
-{
-  "CLOUDFLARE_TUNNEL_TOKEN": "<token-from-above>"
-}
+Create cluster-specific values file at `deploy/platform/cloudflare-tunnel/values-{cluster_id}.yaml`:
+```yaml
+tunnel:
+  name: "lazycloud-prod-{cluster_id}"
+secrets:
+  awsSecretName: lazycloud/clusters/{cluster_id}
 ```
-
-Configure DNS in Cloudflare dashboard:
-- Add CNAME: `*.lazycloud.dev` → `<tunnel-id>.cfargotunnel.com`
-- Add CNAME: `lazycloud.dev` → `<tunnel-id>.cfargotunnel.com`
 
 #### Security Settings
 

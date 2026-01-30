@@ -392,8 +392,14 @@ resource "null_resource" "bootstrap_cleanup" {
     when        = destroy
     command     = <<-EOT
       echo "=== Bootstrap Cleanup ==="
+      NAMESPACES="monitoring argocd ingress-nginx cloudflare-system argo-rollouts external-secrets-system"
 
-      # Remove ArgoCD application/applicationset finalizers and delete
+      # 1. Delete webhooks FIRST - they can block API calls and cause timeouts
+      echo "Deleting webhooks..."
+      kubectl delete validatingwebhookconfiguration --all 2>/dev/null || true
+      kubectl delete mutatingwebhookconfiguration --all 2>/dev/null || true
+
+      # 2. Remove ArgoCD finalizers and delete apps
       echo "Cleaning up ArgoCD resources..."
       for app in $(kubectl get applications.argoproj.io -n argocd -o name 2>/dev/null); do
         kubectl patch "$app" -n argocd --type=json -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
@@ -401,62 +407,61 @@ resource "null_resource" "bootstrap_cleanup" {
       for appset in $(kubectl get applicationsets.argoproj.io -n argocd -o name 2>/dev/null); do
         kubectl patch "$appset" -n argocd --type=json -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
       done
-      kubectl delete applications.argoproj.io -n argocd --all --timeout=10s 2>/dev/null || true
-      kubectl delete applicationsets.argoproj.io -n argocd --all --timeout=10s 2>/dev/null || true
+      kubectl delete applications.argoproj.io -n argocd --all --timeout=5s 2>/dev/null || true
+      kubectl delete applicationsets.argoproj.io -n argocd --all --timeout=5s 2>/dev/null || true
 
-      # Clean up External Secrets resources (CRs block namespace deletion)
-      echo "Cleaning up External Secrets resources..."
-      for es in $(kubectl get externalsecrets -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}' 2>/dev/null); do
-        ns=$(echo "$es" | cut -d/ -f1)
-        name=$(echo "$es" | cut -d/ -f2)
-        kubectl patch externalsecret "$name" -n "$ns" --type=json -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
-      done
+      # 3. Clean up External Secrets CRs
+      echo "Cleaning up External Secrets..."
       kubectl delete externalsecrets --all -A --force --grace-period=0 2>/dev/null || true
       kubectl delete clustersecretstores --all --force --grace-period=0 2>/dev/null || true
+      kubectl delete secretstores --all -A --force --grace-period=0 2>/dev/null || true
 
-      # Force delete all helm releases that might be stuck
+      # 4. Clean up Prometheus CRs (they have finalizers)
+      echo "Cleaning up Prometheus CRs..."
+      for crd in prometheuses alertmanagers servicemonitors podmonitors prometheusrules; do
+        kubectl delete "$crd" --all -A --force --grace-period=0 2>/dev/null || true
+      done
+
+      # 5. Force delete helm releases
       echo "Cleaning up Helm releases..."
-      for ns in external-secrets-system argocd monitoring ingress-nginx cloudflare-system; do
+      for ns in $NAMESPACES; do
         for release in $(helm list -n "$ns" -q 2>/dev/null); do
           helm uninstall "$release" -n "$ns" --wait=false 2>/dev/null || true
         done
       done
 
-      # Force delete stuck pods and PVCs in all app namespaces
+      # 6. Force delete pods and PVCs
       echo "Force deleting pods and PVCs..."
-      for ns in monitoring argocd lazycloud-prod lazycloud-staging external-secrets-system ingress-nginx cloudflare-system; do
+      for ns in $NAMESPACES; do
         kubectl delete pods -n "$ns" --all --force --grace-period=0 2>/dev/null || true
-        for pvc in $(kubectl get pvc -n "$ns" -o name 2>/dev/null); do
-          kubectl patch "$pvc" -n "$ns" --type=json -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
-        done
         kubectl delete pvc -n "$ns" --all --force --grace-period=0 2>/dev/null || true
       done
 
-      # Remove namespace finalizers so they can be deleted
-      echo "Removing namespace finalizers..."
-      for ns in monitoring argocd lazycloud-prod lazycloud-staging external-secrets-system ingress-nginx cloudflare-system argo-rollouts; do
-        kubectl patch namespace "$ns" --type=json -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
-        kubectl patch namespace "$ns" --type=json -p='[{"op": "remove", "path": "/spec/finalizers"}]' 2>/dev/null || true
+      # 7. Delete the namespaces
+      echo "Deleting namespaces..."
+      for ns in $NAMESPACES; do
+        kubectl delete namespace "$ns" --timeout=5s 2>/dev/null || true
       done
 
-      # Force finalize stuck namespaces via API (nuclear option for Terminating namespaces)
-      echo "Force finalizing stuck namespaces..."
-      for ns in monitoring argocd lazycloud-prod lazycloud-staging external-secrets-system ingress-nginx cloudflare-system argo-rollouts; do
+      # 8. Force finalize helper function
+      force_finalize_ns() {
+        local ns=$1
         kubectl get namespace "$ns" -o json 2>/dev/null | \
           jq '.spec.finalizers = []' | \
           kubectl replace --raw "/api/v1/namespaces/$ns/finalize" -f - 2>/dev/null || true
-      done
+      }
 
-      # Wait for namespaces to actually be deleted (avoid race with Terraform)
+      # 9. Wait loop with repeated force-finalize attempts
       echo "Waiting for namespaces to be deleted..."
-      NAMESPACES="monitoring argocd lazycloud-prod lazycloud-staging external-secrets-system ingress-nginx cloudflare-system argo-rollouts"
-      TIMEOUT=180
+      TIMEOUT=60
       ELAPSED=0
       while [ $ELAPSED -lt $TIMEOUT ]; do
         REMAINING=""
         for ns in $NAMESPACES; do
           if kubectl get namespace "$ns" >/dev/null 2>&1; then
             REMAINING="$REMAINING $ns"
+            # Keep trying to force-finalize stuck namespaces
+            force_finalize_ns "$ns"
           fi
         done
         if [ -z "$REMAINING" ]; then
@@ -467,6 +472,12 @@ resource "null_resource" "bootstrap_cleanup" {
         sleep 2
         ELAPSED=$((ELAPSED + 2))
       done
+
+      # 10. Final nuclear option - if still stuck, just continue (VMs will be deleted anyway)
+      if [ -n "$REMAINING" ]; then
+        echo "Warning: Some namespaces still exist:$REMAINING"
+        echo "Continuing anyway - Hetzner will delete the VMs"
+      fi
 
       echo "=== Cleanup complete ==="
     EOT

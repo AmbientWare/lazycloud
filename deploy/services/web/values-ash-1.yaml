@@ -1,0 +1,6 @@
+# Cluster-specific values for ash-1 cluster
+
+ingress:
+  # Using cluster-specific subdomain for multi-cluster support
+  # The root domain (lazycloud.dev) would need separate DNS/cert handling
+  hostname: app.ash-1.lazycloud.dev

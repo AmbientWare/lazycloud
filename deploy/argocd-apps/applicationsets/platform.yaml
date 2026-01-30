@@ -91,8 +91,10 @@ spec:
         path: 'deploy/platform/{{ .app }}'
         helm:
           releaseName: '{{ .app }}'
+          ignoreMissingValueFiles: true
           valueFiles:
             - values.yaml
+            - 'values-{{ index .metadata.labels "cluster_id" }}.yaml'
       destination:
         server: '{{ .server }}'
         namespace: '{{ .namespace }}'

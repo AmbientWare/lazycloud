@@ -28,6 +28,26 @@ VALID_PROTOCOLS = ["tcp", "udp", "sctp"]
 PUBLIC_SUFFIX = ".public"
 
 
+def build_public_hostname(
+    service_name: str, deployment_id: str | None, cluster_id: str
+) -> str:
+    """Build a public hostname for a service.
+
+    Format: {service_name}-{short_deployment_id}.{cluster_id}.{base_domain}
+    Example: api-abc12.ash-1.lazycloud.dev
+
+    Args:
+        service_name: Name of the service
+        deployment_id: Deployment ID (first 5 chars used, or 'xxxxx' placeholder)
+        cluster_id: Cluster ID for multi-cluster routing
+
+    Returns:
+        Public hostname string
+    """
+    short_id = deployment_id[:5] if deployment_id else "xxxxx"
+    return f"{service_name}-{short_id}.{cluster_id}.{app_config.BASE_DOMAIN}"
+
+
 def parse_port_string(port_str: str) -> ParsedPort:
     """Parse a port string in various formats.
 
@@ -160,7 +180,7 @@ def generate_ports_values(ports: list[str | int | ComposePort]) -> list[PortConf
 
 
 def generate_ingress_values(
-    service: ComposeService, deployment_id: str | None
+    service: ComposeService, deployment_id: str | None, cluster_id: str
 ) -> IngressValues | None:
     """Generate ingress configuration from service labels."""
     # No ports means no ingress
@@ -172,16 +192,9 @@ def generate_ingress_values(
         # Use custom domain directly
         hostname = service.domain
     else:
-        # Generate hostname with deployment ID for DNS uniqueness
-        # Format: {service_name}-{short_deployment_id}.{base_domain}
-        # Use placeholder for validation when deployment_id is None (new deployments)
-        short_id = deployment_id[:5] if deployment_id else "xxxxx"
-        hostname_prefix = (
-            f"{service.name}-{short_id}"
-            if service.name
-            else generate_petname(deployment_id or service.name)
-        )
-        hostname = f"{hostname_prefix}.{app_config.BASE_DOMAIN}"
+        # Use service name, or generate petname if not available
+        name = service.name if service.name else generate_petname(deployment_id or "")
+        hostname = build_public_hostname(name, deployment_id, cluster_id)
 
     ingress_config = IngressValues(
         enabled=True,
@@ -216,12 +229,13 @@ def transform_service_url(
     value: str,
     service_names: set[str],
     deployment_id: str | None,
+    cluster_id: str,
 ) -> str:
     """Transform .public suffixes in URL values.
 
     Transforms:
-    - https://api.public -> https://api-{short_id}.{base_domain}
-    - https://api.public:8080/v1 -> https://api-{short_id}.{base_domain}:8080/v1
+    - https://api.public -> https://api-{short_id}.{cluster_id}.{base_domain}
+    - https://api.public:8080/v1 -> https://api-{short_id}.{cluster_id}.{base_domain}:8080/v1
 
     Note: For internal service communication, use the service name directly
     (e.g., redis:6379). K8s DNS handles resolution automatically.
@@ -230,6 +244,7 @@ def transform_service_url(
         value: The environment variable value to transform
         service_names: Set of valid service names in the compose file
         deployment_id: Deployment ID for generating public URLs
+        cluster_id: Cluster ID for multi-cluster routing
 
     Returns:
         Transformed value with .public replaced
@@ -242,7 +257,9 @@ def transform_service_url(
         parsed = urlparse(value)
         if parsed.scheme and parsed.netloc:
             # It's a full URL - transform the netloc (host:port)
-            new_netloc = _transform_netloc(parsed.netloc, service_names, deployment_id)
+            new_netloc = _transform_netloc(
+                parsed.netloc, service_names, deployment_id, cluster_id
+            )
             # Rebuild URL with transformed netloc
             return urlunparse(
                 (
@@ -259,13 +276,11 @@ def transform_service_url(
 
     # Not a standard URL format, try direct host:port transformation
     # This handles cases like "api.public:8080" without a scheme
-    return _transform_netloc(value, service_names, deployment_id)
+    return _transform_netloc(value, service_names, deployment_id, cluster_id)
 
 
 def _transform_netloc(
-    netloc: str,
-    service_names: set[str],
-    deployment_id: str | None,
+    netloc: str, service_names: set[str], deployment_id: str | None, cluster_id: str
 ) -> str:
     """Transform a netloc (host or host:port) with .public suffix.
 
@@ -273,6 +288,7 @@ def _transform_netloc(
         netloc: The host or host:port string
         service_names: Set of valid service names
         deployment_id: Deployment ID for public URLs
+        cluster_id: Cluster ID for multi-cluster routing
 
     Returns:
         Transformed netloc
@@ -290,9 +306,7 @@ def _transform_netloc(
     if host.endswith(PUBLIC_SUFFIX):
         service_name = host[: -len(PUBLIC_SUFFIX)]
         if service_name in service_names:
-            # Generate public hostname
-            short_id = deployment_id[:5] if deployment_id else "xxxxx"
-            public_host = f"{service_name}-{short_id}.{app_config.BASE_DOMAIN}"
+            public_host = build_public_hostname(service_name, deployment_id, cluster_id)
             return f"{public_host}{port_suffix}"
         # Service not found, return unchanged
         return netloc
@@ -304,6 +318,7 @@ def transform_environment_urls(
     environment: dict[str, str] | None,
     service_names: set[str],
     deployment_id: str | None,
+    cluster_id: str,
 ) -> dict[str, str] | None:
     """Transform all .public URLs in environment variables.
 
@@ -311,6 +326,7 @@ def transform_environment_urls(
         environment: Dictionary of environment variables
         service_names: Set of valid service names in the compose file
         deployment_id: Deployment ID for generating public URLs
+        cluster_id: Cluster ID for multi-cluster routing
 
     Returns:
         Transformed environment dictionary
@@ -320,19 +336,22 @@ def transform_environment_urls(
 
     transformed = {}
     for key, value in environment.items():
-        transformed[key] = transform_service_url(value, service_names, deployment_id)
+        transformed[key] = transform_service_url(
+            value, service_names, deployment_id, cluster_id
+        )
 
     return transformed
 
 
 def compute_service_endpoints(
-    compose_file: ComposeFile, deployment_id: str | None
+    compose_file: ComposeFile, deployment_id: str | None, cluster_id: str
 ) -> dict[str, ServiceEndpoints]:
     """Compute internal and public endpoints for all services.
 
     Args:
         compose_file: Parsed compose file with services
         deployment_id: Deployment ID (used for public URL generation)
+        cluster_id: Cluster ID for multi-cluster routing
 
     Returns:
         Dictionary mapping service names to their endpoints
@@ -356,9 +375,10 @@ def compute_service_endpoints(
                 # Custom domain
                 public_url = f"https://{service.domain}"
             else:
-                # Auto-generated hostname
-                short_id = deployment_id[:5] if deployment_id else "xxxxx"
-                hostname = f"{service.name}-{short_id}.{app_config.BASE_DOMAIN}"
+                # Auto-generated hostname with cluster_id
+                hostname = build_public_hostname(
+                    service.name, deployment_id, cluster_id
+                )
                 public_url = f"https://{hostname}"
 
         endpoints[service.name] = ServiceEndpoints(

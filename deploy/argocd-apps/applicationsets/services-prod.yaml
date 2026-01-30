@@ -33,6 +33,7 @@ spec:
           valueFiles:
             - values.yaml
             - values-prod.yaml
+            - 'values-{{ .name }}.yaml'
       destination:
         server: '{{ .server }}'
         namespace: lazycloud-prod

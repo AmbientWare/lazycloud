@@ -215,3 +215,35 @@ variable "skip_bootstrap" {
   type        = bool
   default     = false
 }
+
+# -----------------------------------------------------------------------------
+# Cloudflare
+# -----------------------------------------------------------------------------
+
+variable "cloudflare_api_token" {
+  description = "Cloudflare API token with Cloudflare Tunnel:Edit and DNS:Edit permissions"
+  type        = string
+  sensitive   = true
+}
+
+variable "cloudflare_account_id" {
+  description = "Cloudflare account ID"
+  type        = string
+}
+
+variable "cloudflare_zone_id" {
+  description = "Cloudflare zone ID for the domain"
+  type        = string
+}
+
+variable "cloudflare_zone" {
+  description = "Cloudflare zone (domain name, e.g., lazycloud.dev)"
+  type        = string
+  default     = "lazycloud.dev"
+}
+
+variable "route_root_domain" {
+  description = "Also route root domain (lazycloud.dev and *.lazycloud.dev) through this cluster's tunnel"
+  type        = bool
+  default     = false
+}
