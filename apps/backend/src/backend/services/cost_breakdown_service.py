@@ -3,6 +3,7 @@ import asyncio
 from loguru import logger
 from responses.usage import DailyUsageData, MeterCostBreakdown, UsageMetrics
 
+from backend.services.exceptions import NoActiveSubscriptionError
 from backend.services.polar import PolarService
 
 from .polar.cost_breakdown import WorkspaceCostBreakdown
@@ -69,8 +70,11 @@ class CostBreakdownService:
             r if not isinstance(r, Exception) else None for r in cost_results_raw
         ]
         for result in cost_results_raw:
-            if isinstance(result, Exception):
-                logger.warning(f"Failed to calculate costs: {result}", exc_info=True)
+            if isinstance(result, NoActiveSubscriptionError):
+                # Expected case - user has no subscription, skip silently
+                pass
+            elif isinstance(result, Exception):
+                logger.warning(f"Failed to calculate costs: {result}")
 
         return cost_results
 
@@ -96,11 +100,19 @@ class CostBreakdownService:
 
         cost_results = await asyncio.gather(*cost_tasks, return_exceptions=True)
 
+        # Check if first result is NoActiveSubscriptionError - if so, skip all silently
+        # (all days will fail the same way for the same customer)
+        if cost_results and isinstance(cost_results[0], NoActiveSubscriptionError):
+            # Expected case - user has no subscription, leave costs as None
+            return
+
         for (day_key, day_data), cost_result in zip(daily_data.items(), cost_results):
-            if isinstance(cost_result, Exception):
+            if isinstance(cost_result, NoActiveSubscriptionError):
+                # Expected case - user has no subscription, skip silently
+                pass
+            elif isinstance(cost_result, Exception):
                 logger.warning(
-                    f"Failed to calculate costs for {day_key}: {cost_result}",
-                    exc_info=True,
+                    f"Failed to calculate costs for {day_key}: {cost_result}"
                 )
             else:
                 day_data.costs = cost_result

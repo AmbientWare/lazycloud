@@ -11,6 +11,7 @@ from backend.database import get_db_context
 from backend.database.users import SubscriptionState, UserPydantic
 from backend.services.cache import CacheService
 from backend.services.compose.parser import ComposeParser
+from backend.services.exceptions import NoActiveSubscriptionError
 from backend.services.k8s.generators.converters import (
     parse_cpu_to_cores,
     parse_memory_to_gb,
@@ -28,21 +29,6 @@ class SubscriptionLimitError(Exception):
     def __init__(self, message: str, status_code: int = 403):
         self.status_code = status_code
         super().__init__(message)
-
-
-class NoActiveSubscriptionError(Exception):
-    """Exception raised when a user has no active subscription.
-
-    This is a recoverable error - the user may be an admin/test user
-    or simply needs to subscribe.
-    """
-
-    def __init__(self, external_customer_id: str):
-        self.external_customer_id = external_customer_id
-        super().__init__(
-            f"No active subscription found for {external_customer_id}. "
-            f"User must have an active subscription."
-        )
 
 
 class BillingNotConfiguredError(Exception):
@@ -76,7 +62,11 @@ class SubscriptionService:
             else "Subscription features will be cached"
         )
         logger.info(message)
-        return CacheService(redis_url=app_config.REDIS_URL) if should_cache_features else None
+        return (
+            CacheService(redis_url=app_config.REDIS_URL)
+            if should_cache_features
+            else None
+        )
 
     def _parse_features_from_metadata(
         self, metadata: dict[str, str] | None

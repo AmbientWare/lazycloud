@@ -6,6 +6,8 @@ from models.billing import MeterNames, UsageUnits
 from polar_sdk import Polar
 from pydantic import BaseModel
 
+from backend.services.exceptions import NoActiveSubscriptionError
+
 from .products import PolarProductsModule
 
 
@@ -65,6 +67,10 @@ class PolarPricingModule:
                 logger.debug(f"Cached prices for customer {external_customer_id}")
                 return prices
 
+            except NoActiveSubscriptionError:
+                # Expected case - user doesn't have a subscription, don't log as error
+                raise
+
             except Exception as e:
                 logger.error(
                     f"Failed to fetch meter prices for customer {external_customer_id}: {e}"
@@ -87,9 +93,7 @@ class PolarPricingModule:
             or not subscriptions_response.result
             or not subscriptions_response.result.items
         ):
-            raise ValueError(
-                f"No active subscription found for customer {external_customer_id}"
-            )
+            raise NoActiveSubscriptionError(external_customer_id)
 
         subscription = subscriptions_response.result.items[0]
         if not subscription.product:

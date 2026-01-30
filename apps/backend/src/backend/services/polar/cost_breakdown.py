@@ -11,6 +11,8 @@ from responses.usage import (
     VolumeUsageItem,
 )
 
+from backend.services.exceptions import NoActiveSubscriptionError
+
 from .pricing import MeterPrices, PolarPricingModule
 
 
@@ -46,6 +48,10 @@ class PolarCostBreakdownModule:
         # Get meter prices from cache or Polar
         try:
             prices = await self.pricing.get_meter_prices(external_customer_id)
+
+        except NoActiveSubscriptionError:
+            # Expected case - re-raise without logging as error
+            raise
 
         except Exception as e:
             logger.error(f"Failed to get meter prices for cost calculation: {e}")
