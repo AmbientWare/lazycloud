@@ -11,6 +11,8 @@ from backend.database.users import (
     UserStatus,
 )
 from backend.database.utils import api_key_is_expired
+from backend.services import get_polar_service, get_subscription_service
+from backend.services.subscription_service import NoActiveSubscriptionError
 
 security = HTTPBearer(auto_error=False)
 
@@ -183,6 +185,36 @@ async def get_current_active_user(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User account is not active",
         )
+    return current_user
+
+
+async def get_current_active_user_with_sub(
+    current_user: UserPydantic = Depends(get_current_active_user),
+) -> UserPydantic:
+    """Require authenticated active user with an active subscription.
+
+    Use this for user-level actions that require billing (e.g., workspace creation).
+    Admins bypass the subscription check.
+    """
+    # Admin users bypass subscription requirement
+    if current_user.role == UserRole.ADMIN:
+        return current_user
+
+    # Check if billing is enabled
+    polar_service = get_polar_service()
+    if not polar_service.enabled:
+        return current_user
+
+    subscription_service = get_subscription_service()
+    try:
+        await subscription_service.get_user_features(current_user.workos_id)
+
+    except NoActiveSubscriptionError:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail="Payment method required. Please add a payment method to continue.",
+        )
+
     return current_user
 
 

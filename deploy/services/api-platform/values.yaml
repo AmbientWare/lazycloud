@@ -79,6 +79,7 @@ secrets:
     - "POLAR_ACCESS_TOKEN"
     - "POLAR_ORGANIZATION_ID"
     - "IS_POLAR_SANDBOX"
+    - "POLAR_WEBHOOK_SECRET"
     # Depot (remote builds)
     - "DEPOT_API_TOKEN"
     - "DEPOT_ORG_ID"
