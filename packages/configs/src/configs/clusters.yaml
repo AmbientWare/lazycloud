@@ -27,7 +27,8 @@ clusters:
     service_cidr: "10.96.0.0/12"
 
     # Endpoints (tunnel auto-created by Terraform as lazycloud-prod-{cluster_id})
-    api_endpoint: "https://ash-1.internal.lazycloud.dev:6443"
+    tunnel_id: "b320e1a6-4ac8-403d-8d45-846628754721"
+    api_endpoint: "https://5.161.17.148:6443"
 
     # Status
     status: active         # active | draining | maintenance

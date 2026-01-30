@@ -82,6 +82,9 @@ First, update `terraform.tfvars` with your Cloudflare IDs:
 ```hcl
 cloudflare_account_id = "your-account-id"  # From Cloudflare dashboard
 cloudflare_zone_id    = "your-zone-id"     # From zone's API section
+
+# Optional: Route root domain through this cluster (only enable on ONE cluster)
+route_root_domain = true  # Routes lazycloud.dev and *.lazycloud.dev
 ```
 
 Then apply:
@@ -97,13 +100,27 @@ terraform apply
 source ./infrastructure/kubesetup.sh
 ```
 
-## 7. Deploy Platform via ArgoCD
-The ApplicationSet deploys all platform charts from `deploy/platform/`.
+## 7. Register Cluster with ArgoCD
+
+ArgoCD uses cluster secrets to know which clusters to deploy to. The first cluster (hub) needs to be registered so ApplicationSets can target it.
+
 ```bash
-kubectl apply -f deploy/argocd-apps/applicationsets/platform.yaml -n argocd
+# Register the first cluster (uses in-cluster API since ArgoCD runs here)
+kubectl apply -f deploy/argocd-apps/applicationsets/local-cluster.yaml
 ```
 
-## 8. Verify Deployment and Access ArgoCD
+The cluster secret contains labels that ApplicationSets use:
+- `provider: hetzner` - matches platform ApplicationSet selector
+- `cluster_id: ash-1` - used for cluster-specific values files (`values-ash-1.yaml`)
+- `is-hub: "true"` - identifies this as the ArgoCD hub cluster
+
+## 8. Deploy Platform via ArgoCD
+The ApplicationSet deploys all platform charts from `deploy/platform/` to clusters with `provider: hetzner` label.
+```bash
+kubectl apply -f deploy/argocd-apps/applicationsets/platform-hetzner.yaml -n argocd
+```
+
+## 9. Verify Deployment and Access ArgoCD
 Cloudflare tunnel and DNS are automatically configured by Terraform.
 ```bash
 # Get cluster status and ArgoCD password
@@ -112,13 +129,14 @@ Cloudflare tunnel and DNS are automatically configured by Terraform.
 - Login to ArgoCD at https://argocd.{cluster_id}.lazycloud.dev (e.g., `argocd.ash-1.lazycloud.dev`) with the displayed admin password
 - Verify platform apps are syncing in the ArgoCD dashboard
 
-## 9. Update Billing
+## 10. Update Billing
 Creates/updates meters and products in Polar:
 ```bash
 uv run update-billing
 ```
 
-## 10. If deploying the LazyCloud main apps:
+## 11. Deploy LazyCloud Apps (optional)
+If deploying the LazyCloud main apps:
 - Run the Staging and Production actions in GitHub (builds container images)
 - Then add the apps to ArgoCD:
 ```bash
@@ -188,16 +206,15 @@ To add a second cluster (e.g., `ash-2` or `fsn-1`):
    ```
 
 2. Update `clusters/ash-2/terraform.tfvars`:
-   - Change network CIDRs (must not overlap)
-   - Update cluster name and ID
-   - Cloudflare settings are inherited (same zone)
+   - Change `cluster_name` and ensure unique network CIDRs
+   - Set `route_root_domain = false` (only one cluster should route root domain)
+   - Cloudflare account/zone settings stay the same
 
 3. Update `clusters/ash-2/backend.hcl`:
    - Change state key to `clusters/ash-2/terraform.tfstate`
 
 4. Create cloudflare-tunnel values file:
    ```bash
-   # Create deploy/platform/cloudflare-tunnel/values-{cluster_id}.yaml
    cat > deploy/platform/cloudflare-tunnel/values-ash-2.yaml << 'EOF'
    tunnel:
      name: "lazycloud-prod-ash-2"
@@ -209,15 +226,68 @@ To add a second cluster (e.g., `ash-2` or `fsn-1`):
 5. Add to cluster registry:
    - Edit `packages/configs/src/configs/clusters.yaml`
    - Add new cluster with unique CIDRs
+   - `tunnel_id` is optional, can be added after Terraform apply:
+     ```bash
+     # After terraform apply (output is in state)
+     terraform output cloudflare_tunnel_id
 
-6. Apply:
+     # Or from existing state before apply updates outputs
+     terraform state show 'module.cluster.cloudflare_zero_trust_tunnel_cloudflared.cluster_tunnel' | grep ' id '
+     ```
+
+6. Apply Terraform:
    ```bash
    cd clusters/ash-2
    terraform init -backend-config=backend.hcl
    terraform apply
    ```
 
-7. The backend will automatically load the new cluster's kubeconfig from Secrets Manager on restart.
+7. Register cluster with ArgoCD (hub-spoke model):
+   ArgoCD on ash-1 manages all clusters. Create a cluster secret for the remote cluster:
+   ```bash
+   # Get the control plane VIP from terraform output
+   cd clusters/ash-2
+   terraform output control_plane_vip
+
+   # Get kubeconfig credentials from Secrets Manager
+   aws secretsmanager get-secret-value --secret-id lazycloud/clusters/ash-2 \
+     --query SecretString --output text | jq -r '.kubeconfig'
+   ```
+
+   Create `deploy/argocd-apps/applicationsets/cluster-ash-2.yaml`:
+   ```yaml
+   apiVersion: v1
+   kind: Secret
+   metadata:
+     name: cluster-ash-2
+     namespace: argocd
+     labels:
+       argocd.argoproj.io/secret-type: cluster
+       provider: hetzner
+       cluster_id: ash-2
+       region: us-east-1
+       is-hub: "false"
+   type: Opaque
+   stringData:
+     name: ash-2
+     server: https://<control-plane-vip>:6443
+     config: |
+       {
+         "tlsClientConfig": {
+           "caData": "<base64-ca-from-kubeconfig>",
+           "certData": "<base64-cert-from-kubeconfig>",
+           "keyData": "<base64-key-from-kubeconfig>"
+         }
+       }
+   ```
+
+   Apply to ArgoCD (on ash-1):
+   ```bash
+   kubectl apply -f deploy/argocd-apps/applicationsets/cluster-ash-2.yaml
+   ```
+   The ApplicationSets will auto-deploy platform components to the new cluster.
+
+8. The backend will automatically load the new cluster's kubeconfig from Secrets Manager on restart.
 
 ## Multi-Cluster Architecture
 
@@ -242,16 +312,38 @@ To add a second cluster (e.g., `ash-2` or `fsn-1`):
 ┌─────────────────────────────────────────────────────────────────────┐
 │  Cloudflare (auto-configured by Terraform per cluster)              │
 ├─────────────────────────────────────────────────────────────────────┤
-│  Cluster: ash-1                                                     │
+│  Cluster: ash-1 (with route_root_domain=true)                       │
 │    Tunnel: lazycloud-prod-ash-1                                     │
+│      └─ Ingress: lazycloud.dev        → nginx-ingress-controller    │
+│      └─ Ingress: *.lazycloud.dev      → nginx-ingress-controller    │
 │      └─ Ingress: *.ash-1.lazycloud.dev → nginx-ingress-controller   │
-│    DNS: *.ash-1.lazycloud.dev → tunnel CNAME                        │
+│    DNS: @, *, *.ash-1 → tunnel CNAME                                │
 │    SSL: Advanced Certificate for *.ash-1.lazycloud.dev              │
-│  Cluster: ash-2 (when added)                                        │
+│         (root domain uses Cloudflare Universal SSL)                 │
+│                                                                     │
+│  Cluster: ash-2 (when added, route_root_domain=false)               │
 │    Tunnel: lazycloud-prod-ash-2                                     │
 │      └─ Ingress: *.ash-2.lazycloud.dev → nginx-ingress-controller   │
-│    DNS: *.ash-2.lazycloud.dev → tunnel CNAME                        │
+│    DNS: *.ash-2 → tunnel CNAME                                      │
 │    SSL: Advanced Certificate for *.ash-2.lazycloud.dev              │
+└─────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────┐
+│  ArgoCD (Hub-Spoke Model)                                           │
+├─────────────────────────────────────────────────────────────────────┤
+│  ash-1 (Hub):                                                       │
+│    - ArgoCD runs here (is-hub: "true")                              │
+│    - Manages itself via kubernetes.default.svc                      │
+│    - Manages remote clusters via their API endpoints                │
+│                                                                     │
+│  ash-2, fsn-1, etc. (Spokes):                                       │
+│    - Registered as cluster secrets in ArgoCD                        │
+│    - ApplicationSets auto-deploy based on label selectors:          │
+│        provider: hetzner  → platform components                     │
+│        cluster_id: ash-2  → cluster-specific values files           │
+│                                                                     │
+│  Cluster secrets: deploy/argocd-apps/applicationsets/cluster-*.yaml │
+│  First cluster:   deploy/argocd-apps/applicationsets/local-cluster.yaml │
 └─────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -262,4 +354,21 @@ To add a second cluster (e.g., `ash-2` or `fsn-1`):
 │  3. Extracts kubeconfig and creates K8s client per cluster          │
 │  4. Operations use deployment.cluster_id to route to correct client │
 └─────────────────────────────────────────────────────────────────────┘
+```
+
+## Terraform Outputs
+
+Useful outputs after `terraform apply`:
+
+```bash
+cd infrastructure/terraform/clusters/ash-1
+
+# Kubernetes API endpoint
+terraform output control_plane_vip
+
+# Cloudflare tunnel ID (for clusters.yaml if needed)
+terraform output cloudflare_tunnel_id
+
+# AWS Secrets Manager ARN
+terraform output cluster_secret_arn
 ```

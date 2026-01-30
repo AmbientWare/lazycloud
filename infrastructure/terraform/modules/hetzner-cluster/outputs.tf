@@ -71,3 +71,8 @@ output "cluster_secret_arn" {
   description = "ARN of the cluster secrets in Secrets Manager (contains kubeconfig and tunnel token)"
   value       = aws_secretsmanager_secret.cluster.arn
 }
+
+output "cloudflare_tunnel_id" {
+  description = "Cloudflare Tunnel ID for this cluster"
+  value       = cloudflare_zero_trust_tunnel_cloudflared.cluster_tunnel.id
+}

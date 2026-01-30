@@ -180,3 +180,8 @@ output "argocd_admin_password" {
   description = "ArgoCD initial admin password (retrieve after apply)"
   value       = module.cluster.argocd_admin_password
 }
+
+output "cloudflare_tunnel_id" {
+  description = "Cloudflare Tunnel ID for this cluster"
+  value       = module.cluster.cloudflare_tunnel_id
+}

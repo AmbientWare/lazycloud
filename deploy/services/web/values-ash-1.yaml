@@ -1,6 +1,6 @@
 # Cluster-specific values for ash-1 cluster
+# ash-1 is the primary cluster with route_root_domain=true in Terraform
 
 ingress:
-  # Using cluster-specific subdomain for multi-cluster support
-  # The root domain (lazycloud.dev) would need separate DNS/cert handling
-  hostname: app.ash-1.lazycloud.dev
+  # Root domain - ash-1 handles lazycloud.dev and *.lazycloud.dev
+  hostname: lazycloud.dev
