@@ -167,6 +167,6 @@ affinity: {}
 # NetworkPolicy settings
 networkPolicies:
   enabled: true  # Enable per-service network policies
-  allowExternal: false  # Deny external traffic by default for services
+  allowExternal: true  # Allow external traffic (gVisor provides sandbox isolation)
   ingressNamespace: ingress-nginx  # Namespace where ingress controller runs
   monitoringNamespace: monitoring  # Namespace where monitoring stack runs

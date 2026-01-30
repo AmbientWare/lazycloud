@@ -150,6 +150,7 @@ def make_deployment(
         workspace_id=workspace_id,
         compose_yaml="version: '3.8'\nservices:\n  web:\n    image: nginx",
         state=state,
+        cluster_id="ash-1",
     )
 
 

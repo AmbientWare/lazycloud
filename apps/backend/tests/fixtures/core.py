@@ -160,6 +160,7 @@ def test_deployment(test_workspace: WorkspacePydantic) -> ComposeDeploymentPydan
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
         depot_project_id="test-depot-project",
+        cluster_id="ash-1",
     )
 
 

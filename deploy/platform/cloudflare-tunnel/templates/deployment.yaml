@@ -17,9 +17,6 @@ spec:
       labels:
         app.kubernetes.io/name: cloudflare-tunnel
         app.kubernetes.io/instance: {{ .Release.Name }}
-      annotations:
-        # Restart on config changes
-        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
     spec:
       containers:
         - name: cloudflared
@@ -27,8 +24,8 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - tunnel
-            - --config
-            - /etc/cloudflared/config.yaml
+            - --metrics
+            - 0.0.0.0:2000
             - run
             - --token
             - $(TUNNEL_TOKEN)
@@ -36,7 +33,7 @@ spec:
             - name: TUNNEL_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: cloudflare-tunnel-credentials
+                  name: cloudflare-tunnel-token
                   key: token
           ports:
             - name: metrics
@@ -56,11 +53,6 @@ spec:
             periodSeconds: 5
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-          volumeMounts:
-            - name: config
-              mountPath: /etc/cloudflared/config.yaml
-              subPath: config.yaml
-              readOnly: true
           securityContext:
             readOnlyRootFilesystem: true
             runAsNonRoot: true
@@ -69,10 +61,6 @@ spec:
             capabilities:
               drop:
                 - ALL
-      volumes:
-        - name: config
-          configMap:
-            name: cloudflare-tunnel-config
       {{- if .Values.topologySpreadConstraints.enabled }}
       topologySpreadConstraints:
         - maxSkew: 1

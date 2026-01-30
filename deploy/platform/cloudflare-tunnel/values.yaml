@@ -1,10 +1,9 @@
-# Cloudflare Tunnel configuration
-# Routes traffic from Cloudflare edge to NGINX Ingress Controller
+# Cloudflare Tunnel configuration (Remote-managed)
+# Tunnel config is managed in Cloudflare Zero Trust dashboard
+# This chart only deploys the cloudflared connector
 
 # Tunnel configuration
 tunnel:
-  # Tunnel ID (from `cloudflared tunnel create`)
-  id: ""  # Set in values-{region}.yaml
   name: "lazycloud-prod"
 
 # AWS Secrets Manager configuration
@@ -15,18 +14,6 @@ secrets:
   awsSecretName: lazycloud/shared-secrets
   # Property within the secret containing the tunnel token
   awsSecretProperty: CLOUDFLARE_TUNNEL_TOKEN
-
-# Ingress rules for the tunnel
-# Routes traffic to NGINX Ingress Controller
-ingress:
-  # Apex domain (wildcard doesn't cover this)
-  - hostname: "lazycloud.dev"
-    service: http://nginx-ingress-controller.ingress-nginx.svc.cluster.local:80
-  # Wildcard for all subdomains (platform + customer services)
-  - hostname: "*.lazycloud.dev"
-    service: http://nginx-ingress-controller.ingress-nginx.svc.cluster.local:80
-  # Catch-all returns 404
-  - service: http_status:404
 
 # Deployment configuration
 replicas: 2

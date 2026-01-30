@@ -187,7 +187,7 @@ def generate_ingress_values(
         enabled=True,
         className="nginx",
         hostname=hostname,
-        tls=IngressTLS(enabled=True),
+        tls=IngressTLS(enabled=False),  # Cloudflare handles TLS termination
         annotations={},
     )
 
