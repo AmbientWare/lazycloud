@@ -10,10 +10,11 @@ tunnel:
 secrets:
   # ClusterSecretStore name (from external-secrets chart)
   secretStoreName: lazycloud-prod-secrets
-  # AWS Secrets Manager secret name
-  awsSecretName: lazycloud/shared-secrets
-  # Property within the secret containing the tunnel token
-  awsSecretProperty: CLOUDFLARE_TUNNEL_TOKEN
+  # AWS Secrets Manager secret name (override per-cluster in values-{cluster_id}.yaml)
+  # Each cluster stores secrets at: lazycloud/clusters/{cluster_id}
+  awsSecretName: lazycloud/clusters/default
+  # Property within the secret containing the tunnel token (same for all clusters)
+  awsSecretProperty: cloudflare_tunnel_token
 
 # Deployment configuration
 replicas: 2

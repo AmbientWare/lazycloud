@@ -329,7 +329,9 @@ async def create_deployment(
         try:
             compose_data = yaml.safe_load(compose_yaml_to_parse)
             compose_file = ComposeParser.parse_dict(compose_data)
-            endpoints = compute_service_endpoints(compose_file, deployment.id)
+            endpoints = compute_service_endpoints(
+                compose_file, deployment.id, deployment.cluster_id
+            )
         except Exception as e:
             logger.warning(f"Failed to compute endpoints: {e}")
 

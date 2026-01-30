@@ -3,7 +3,7 @@
 # -----------------------------------------------------------------------------
 
 variable "cluster_id" {
-  description = "Unique cluster identifier (e.g., ash-1, ash-2, fsn-1)"
+  description = "Unique cluster identifier (e.g., ash-1, ash2, fsn1)"
   type        = string
 }
 
@@ -209,6 +209,38 @@ variable "enable_public_ingress" {
 
 variable "skip_bootstrap" {
   description = "Skip all Kubernetes/Helm bootstrap resources. Set to true before destroy to avoid errors."
+  type        = bool
+  default     = false
+}
+
+# -----------------------------------------------------------------------------
+# Cloudflare
+# -----------------------------------------------------------------------------
+
+variable "cloudflare_api_token" {
+  description = "Cloudflare API token with Cloudflare Tunnel:Edit and DNS:Edit permissions"
+  type        = string
+  sensitive   = true
+}
+
+variable "cloudflare_account_id" {
+  description = "Cloudflare account ID"
+  type        = string
+}
+
+variable "cloudflare_zone_id" {
+  description = "Cloudflare zone ID for the domain"
+  type        = string
+}
+
+variable "cloudflare_zone" {
+  description = "Cloudflare zone (domain name, e.g., lazycloud.dev)"
+  type        = string
+  default     = "lazycloud.dev"
+}
+
+variable "route_root_domain" {
+  description = "Also route root domain (lazycloud.dev and *.lazycloud.dev) through this cluster's tunnel. Only enable on one cluster."
   type        = bool
   default     = false
 }

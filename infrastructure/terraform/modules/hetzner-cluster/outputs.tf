@@ -67,7 +67,7 @@ output "autoscaler_node_config_key" {
   value       = local.autoscaler_node_config_key
 }
 
-output "kubeconfig_secret_arn" {
-  description = "ARN of the kubeconfig secret in Secrets Manager"
-  value       = aws_secretsmanager_secret.kubeconfig.arn
+output "cluster_secret_arn" {
+  description = "ARN of the cluster secrets in Secrets Manager (contains kubeconfig and tunnel token)"
+  value       = aws_secretsmanager_secret.cluster.arn
 }

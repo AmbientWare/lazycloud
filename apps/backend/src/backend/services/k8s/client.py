@@ -6,6 +6,7 @@ a per-cluster client cache. Falls back to local kubeconfig for development.
 """
 
 import asyncio
+import json
 import os
 import re
 import tempfile
@@ -135,12 +136,28 @@ async def _load_clients_from_secrets_manager() -> None:
     failed_clusters: list[str] = []
 
     for cluster in active_clusters:
-        secret_id = f"{app_config.SECRETS_PREFIX}/clusters/{cluster.name}/kubeconfig"
-        kubeconfig = get_secret(secret_id)
+        # Cluster secrets are stored as JSON at {prefix}/clusters/{cluster_id}
+        # with properties: kubeconfig, cloudflare_tunnel_token
+        secret_id = f"{app_config.SECRETS_PREFIX}/clusters/{cluster.name}"
+        cluster_secrets = get_secret(secret_id)
+
+        if not cluster_secrets:
+            logger.error(f"No secrets found for cluster {cluster.name} at {secret_id}")
+            failed_clusters.append(cluster.name)
+            continue
+
+        # Parse JSON and extract kubeconfig
+        try:
+            secrets_data = json.loads(cluster_secrets)
+            kubeconfig = secrets_data.get("kubeconfig")
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse secrets JSON for {cluster.name}: {e}")
+            failed_clusters.append(cluster.name)
+            continue
 
         if not kubeconfig:
             logger.error(
-                f"No kubeconfig found for cluster {cluster.name} at {secret_id}"
+                f"No kubeconfig property in secrets for cluster {cluster.name}"
             )
             failed_clusters.append(cluster.name)
             continue
@@ -152,6 +169,7 @@ async def _load_clients_from_secrets_manager() -> None:
             _cluster_clients[cluster.name] = client
             _cluster_kubeconfig_paths[cluster.name] = kubeconfig_path
             logger.info(f"Loaded K8s client for cluster: {cluster.name}")
+
         except Exception as e:
             logger.error(f"Failed to create client for {cluster.name}: {e}")
             failed_clusters.append(cluster.name)

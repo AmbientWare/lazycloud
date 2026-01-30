@@ -34,6 +34,7 @@ spec:
           valueFiles:
             - values.yaml
             - values-staging.yaml
+            - 'values-{{ .name }}.yaml'
       destination:
         server: '{{ .server }}'
         namespace: lazycloud-staging

@@ -3,6 +3,9 @@
 ## Prerequisites
 - Hetzner Cloud account with API token (read/write)
 - JuiceFS Cloud account (metadata service) + AWS S3 bucket (data)
+- Cloudflare account with API token:
+  - **Account permissions**: Cloudflare Tunnel:Edit
+  - **Zone permissions**: DNS:Edit, SSL and Certificates:Edit
 - Terraform >= 1.8
 - AWS account with S3 (for Terraform state) and SecretsManager access
 - helm, kubectl installed
@@ -37,6 +40,7 @@ export TF_VAR_hcloud_token="your-hetzner-token"
 export TF_VAR_aws_access_key_id="your-aws-key"
 export TF_VAR_aws_secret_access_key="your-aws-secret"
 export TF_VAR_juicefs_token="your-juicefs-token"
+export TF_VAR_cloudflare_api_token="your-cloudflare-token"
 ```
 
 ## 3. Provision Global Resources (one-time)
@@ -68,9 +72,19 @@ Single `terraform apply` provisions the Hetzner cluster **and** bootstraps all p
 - Storage classes (`juicefs-standard`, `juicefs-shared`)
 - gVisor RuntimeClass
 - Cluster Autoscaler
-- Kubeconfig stored in AWS Secrets Manager (`lazycloud/clusters/ash-1/kubeconfig`)
-- ArgoCD (with ingress at `argocd.lazycloud.dev`)
+- Cluster secrets stored in AWS Secrets Manager (`lazycloud/clusters/{cluster_id}`)
+  - Contains: `kubeconfig` + `cloudflare_tunnel_token`
+- ArgoCD (with ingress at `argocd.{cluster_id}.lazycloud.dev`)
+- Cloudflare Tunnel (auto-created with DNS `*.{cluster_id}.lazycloud.dev` → tunnel)
+- Advanced SSL Certificate for `*.{cluster_id}.lazycloud.dev` (requires ACM add-on ~$10/mo)
 
+First, update `terraform.tfvars` with your Cloudflare IDs:
+```hcl
+cloudflare_account_id = "your-account-id"  # From Cloudflare dashboard
+cloudflare_zone_id    = "your-zone-id"     # From zone's API section
+```
+
+Then apply:
 ```bash
 cd infrastructure/terraform/clusters/ash-1
 terraform init -backend-config=backend.hcl
@@ -89,14 +103,14 @@ The ApplicationSet deploys all platform charts from `deploy/platform/`.
 kubectl apply -f deploy/argocd-apps/applicationsets/platform.yaml -n argocd
 ```
 
-## 8. DNS Cutover and Argo dashboard
-- Update Cloudflare tunnel to point to new cluster's NGINX ingress
-- Get the cluster status and info:
+## 8. Verify Deployment and Access ArgoCD
+Cloudflare tunnel and DNS are automatically configured by Terraform.
 ```bash
+# Get cluster status and ArgoCD password
 ./infrastructure/cluster-info.sh
 ```
-- Update the dns CNAMEs shown as 'needed'
-- use the displayed argo Admin password to login to https://argocd.lazycloud.dev
+- Login to ArgoCD at https://argocd.{cluster_id}.lazycloud.dev (e.g., `argocd.ash-1.lazycloud.dev`) with the displayed admin password
+- Verify platform apps are syncing in the ArgoCD dashboard
 
 ## 9. Update Billing
 Creates/updates meters and products in Polar:
@@ -141,9 +155,9 @@ terraform apply -var="skip_bootstrap=true" || true
 # 2. Destroy infrastructure
 terraform destroy || true
 
-# 3. Force delete the kubeconfig secret from AWS (it may be scheduled for deletion)
+# 3. Force delete the cluster secret from AWS (it may be scheduled for deletion)
 aws secretsmanager delete-secret \
-  --secret-id lazycloud/clusters/ash-1/kubeconfig \
+  --secret-id lazycloud/clusters/ash-1 \
   --force-delete-without-recovery
 
 # 4. Clear Terraform state from S3
@@ -162,6 +176,10 @@ terraform destroy
 ```
 
 ## Adding a New Cluster
+
+Each cluster gets its own subdomain: `*.{cluster_id}.lazycloud.dev`
+Terraform automatically creates the DNS record and Advanced SSL certificate.
+
 To add a second cluster (e.g., `ash-2` or `fsn-1`):
 
 1. Create cluster directory:
@@ -172,22 +190,34 @@ To add a second cluster (e.g., `ash-2` or `fsn-1`):
 2. Update `clusters/ash-2/terraform.tfvars`:
    - Change network CIDRs (must not overlap)
    - Update cluster name and ID
+   - Cloudflare settings are inherited (same zone)
 
 3. Update `clusters/ash-2/backend.hcl`:
    - Change state key to `clusters/ash-2/terraform.tfstate`
 
-4. Add to cluster registry:
+4. Create cloudflare-tunnel values file:
+   ```bash
+   # Create deploy/platform/cloudflare-tunnel/values-{cluster_id}.yaml
+   cat > deploy/platform/cloudflare-tunnel/values-ash-2.yaml << 'EOF'
+   tunnel:
+     name: "lazycloud-prod-ash-2"
+   secrets:
+     awsSecretName: lazycloud/clusters/ash-2
+   EOF
+   ```
+
+5. Add to cluster registry:
    - Edit `packages/configs/src/configs/clusters.yaml`
    - Add new cluster with unique CIDRs
 
-5. Apply:
+6. Apply:
    ```bash
    cd clusters/ash-2
    terraform init -backend-config=backend.hcl
    terraform apply
    ```
 
-6. The backend will automatically load the new cluster's kubeconfig from Secrets Manager on restart.
+7. The backend will automatically load the new cluster's kubeconfig from Secrets Manager on restart.
 
 ## Multi-Cluster Architecture
 
@@ -197,20 +227,39 @@ To add a second cluster (e.g., `ash-2` or `fsn-1`):
 ├─────────────────────────────────────────────────────────────────────┤
 │  Global (from terraform/global):                                    │
 │    lazycloud/prod-secrets      - Production app secrets             │
-│    lazycloud/shared-secrets    - Cloudflare, Depot, etc.            │
+│    lazycloud/shared-secrets    - Depot token, etc.                  │
 │    lazycloud/staging-secrets   - Staging app secrets                │
 │                                                                     │
-│  Per-Cluster (from terraform/clusters/*):                           │
-│    lazycloud/clusters/ash-1/kubeconfig                              │
-│    lazycloud/clusters/ash-2/kubeconfig  (when added)                │
+│  Per-Cluster (from terraform/clusters/* - JSON object):             │
+│    lazycloud/clusters/ash-1                                         │
+│      ├─ kubeconfig              (for backend K8s client)            │
+│      └─ cloudflare_tunnel_token (for cloudflared pods)              │
+│    lazycloud/clusters/ash-2     (when added)                        │
+│      ├─ kubeconfig                                                  │
+│      └─ cloudflare_tunnel_token                                     │
+└─────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────┐
+│  Cloudflare (auto-configured by Terraform per cluster)              │
+├─────────────────────────────────────────────────────────────────────┤
+│  Cluster: ash-1                                                     │
+│    Tunnel: lazycloud-prod-ash-1                                     │
+│      └─ Ingress: *.ash-1.lazycloud.dev → nginx-ingress-controller   │
+│    DNS: *.ash-1.lazycloud.dev → tunnel CNAME                        │
+│    SSL: Advanced Certificate for *.ash-1.lazycloud.dev              │
+│  Cluster: ash-2 (when added)                                        │
+│    Tunnel: lazycloud-prod-ash-2                                     │
+│      └─ Ingress: *.ash-2.lazycloud.dev → nginx-ingress-controller   │
+│    DNS: *.ash-2.lazycloud.dev → tunnel CNAME                        │
+│    SSL: Advanced Certificate for *.ash-2.lazycloud.dev              │
 └─────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────┐
 │  Backend Startup                                                    │
 ├─────────────────────────────────────────────────────────────────────┤
 │  1. Reads clusters.yaml to get list of active clusters              │
-│  2. For each cluster, fetches kubeconfig from Secrets Manager       │
-│  3. Creates K8s client per cluster                                  │
+│  2. For each cluster, fetches secrets JSON from Secrets Manager     │
+│  3. Extracts kubeconfig and creates K8s client per cluster          │
 │  4. Operations use deployment.cluster_id to route to correct client │
 └─────────────────────────────────────────────────────────────────────┘
 ```

@@ -1,9 +1,10 @@
-# Ash-1 Cluster Configuration
+# ash-1 Cluster Configuration
 # Sensitive values should be set via environment variables:
 #   export TF_VAR_hcloud_token="..."
 #   export TF_VAR_aws_access_key_id="..."
 #   export TF_VAR_aws_secret_access_key="..."
 #   export TF_VAR_juicefs_token="..."
+#   export TF_VAR_cloudflare_api_token="..."
 
 # Cluster identity
 cluster_name = "lazycloud-prod"
@@ -29,6 +30,17 @@ service_ipv4_cidr = "10.96.0.0/12"
 juicefs_name = "lazycloud-prod"
 
 # ArgoCD
-argocd_domain            = "argocd.lazycloud.dev"
+argocd_domain            = "argocd.ash-1.lazycloud.dev"
 git_repo_url             = "git@github.com:AmbientWare/lazycloud.git"
 argocd_repo_ssh_key_path = "~/.ssh/id_rsa"
+
+# Cloudflare (get these from Cloudflare dashboard)
+# Account ID: https://dash.cloudflare.com/ → select account → Account ID in sidebar
+# Zone ID: https://dash.cloudflare.com/ → select zone → API section → Zone ID
+cloudflare_account_id = "9c3af886ee7a3e3df120e61daea2ee1c"
+cloudflare_zone_id    = "7de4ad3cd44f8592d1c47db937c59f4f"
+cloudflare_zone       = "lazycloud.dev"
+
+# Route root domain (lazycloud.dev and *.lazycloud.dev) through this cluster
+# Only enable on one cluster - this is the primary cluster for the main app
+route_root_domain = true

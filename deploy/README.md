@@ -60,16 +60,58 @@ kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.pas
 
 ## Cloudflare Tunnel
 
-The cluster uses a Cloudflare Tunnel for ingress traffic. The tunnel is **remote-managed**, meaning routing configuration lives in the Cloudflare Zero Trust dashboard.
+Each cluster uses its own Cloudflare Tunnel for ingress traffic. Tunnels are **remote-managed** and **fully automated via Terraform**.
 
-### Setup
+### URL Pattern
 
-1. **Create tunnel** in [Cloudflare Zero Trust](https://one.dash.cloudflare.com/) > Networks > Tunnels
-2. **Copy the token** from the tunnel install command
-3. **Store token** in AWS Secrets Manager at `lazycloud/shared-secrets` with key `CLOUDFLARE_TUNNEL_TOKEN`
-4. **Configure routes** in the tunnel's "Public Hostname" tab:
-   - `lazycloud.dev` → `http://nginx-ingress-controller.ingress-nginx.svc.cluster.local:80`
-   - `*.lazycloud.dev` → `http://nginx-ingress-controller.ingress-nginx.svc.cluster.local:80`
+Each cluster has its own subdomain with per-cluster Advanced SSL certificate:
+```
+{service}-{deploymentId}.{cluster_id}.lazycloud.dev
+```
+
+Example: `api-abc12.ash-1.lazycloud.dev`, `web-xyz99.ash-2.lazycloud.dev`
+
+### How It Works
+
+When you deploy a cluster with Terraform, it automatically:
+1. Creates a Cloudflare Tunnel named `lazycloud-prod-{cluster_id}`
+2. Configures ingress routes for `*.{cluster_id}.lazycloud.dev` → nginx ingress
+3. Creates the wildcard DNS CNAME `*.{cluster_id}.lazycloud.dev` → tunnel
+4. Creates an Advanced SSL certificate for `*.{cluster_id}.lazycloud.dev` (requires ACM add-on ~$10/mo)
+5. Stores the tunnel token in AWS Secrets Manager at `lazycloud/clusters/{cluster_id}`
+
+The ArgoCD-managed `cloudflare-tunnel` chart then deploys `cloudflared` pods that connect to the tunnel using the token from Secrets Manager.
+
+### Prerequisites
+
+Before deploying a cluster, ensure you have:
+1. A Cloudflare API token with `Cloudflare Tunnel:Edit` and `DNS:Edit` permissions
+2. Your Cloudflare Account ID and Zone ID (from the Cloudflare dashboard)
+
+Set these in your cluster's `terraform.tfvars`:
+```hcl
+cloudflare_account_id = "your-account-id"
+cloudflare_zone_id    = "your-zone-id"
+cloudflare_zone       = "lazycloud.dev"
+```
+
+And the API token via environment variable:
+```bash
+export TF_VAR_cloudflare_api_token="your-api-token"
+```
+
+### Cluster Values File
+
+Each cluster needs a values file at `deploy/platform/cloudflare-tunnel/values-{cluster_id}.yaml`:
+```yaml
+tunnel:
+  name: "lazycloud-prod-{cluster_id}"
+secrets:
+  # Points to the cluster's secret in AWS Secrets Manager
+  awsSecretName: lazycloud/clusters/{cluster_id}
+```
+
+The cluster secret is a JSON object containing both `kubeconfig` and `cloudflare_tunnel_token` properties, automatically created by Terraform.
 
 ### How Traffic Flows
 

@@ -26,8 +26,7 @@ clusters:
     pod_cidr: "10.244.0.0/16"
     service_cidr: "10.96.0.0/12"
 
-    # Endpoints
-    tunnel_id: "${CLOUDFLARE_TUNNEL_ASH1}"  # Resolved from env/secrets
+    # Endpoints (tunnel auto-created by Terraform as lazycloud-prod-{cluster_id})
     api_endpoint: "https://ash-1.internal.lazycloud.dev:6443"
 
     # Status
@@ -52,7 +51,6 @@ clusters:
 #   network_cidr: "10.1.0.0/16"  # Different CIDR per cluster
 #   pod_cidr: "10.245.0.0/16"
 #   service_cidr: "10.112.0.0/12"
-#   tunnel_id: "${CLOUDFLARE_TUNNEL_ASH2}"
 #   api_endpoint: "https://ash-2.internal.lazycloud.dev:6443"
 #   status: planned
 #   default: false

@@ -1,5 +1,5 @@
 # -----------------------------------------------------------------------------
-# Ash-1 Cluster (US East - Ashburn)
+# ash-1 Cluster (US East - Ashburn)
 # -----------------------------------------------------------------------------
 # Primary production cluster for LazyCloud
 #
@@ -39,6 +39,10 @@ terraform {
     kubernetes = {
       source  = "hashicorp/kubernetes"
       version = "~> 2.35"
+    }
+    cloudflare = {
+      source  = "cloudflare/cloudflare"
+      version = "~> 5.1"
     }
   }
 
@@ -132,6 +136,13 @@ module "cluster" {
 
   # Destroy helpers
   skip_bootstrap = var.skip_bootstrap
+
+  # Cloudflare Tunnel (auto-creates tunnel, DNS, and stores token in Secrets Manager)
+  cloudflare_api_token  = var.cloudflare_api_token
+  cloudflare_account_id = var.cloudflare_account_id
+  cloudflare_zone_id    = var.cloudflare_zone_id
+  cloudflare_zone       = var.cloudflare_zone
+  route_root_domain     = var.route_root_domain
 }
 
 # -----------------------------------------------------------------------------
