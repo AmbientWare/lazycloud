@@ -23,10 +23,16 @@ export function ProductCard({
   product,
   isEnterprise,
   summary = false,
+  onButtonClick,
+  buttonText,
 }: {
   product: PolarProduct
   isEnterprise?: boolean
   summary?: boolean
+  /** Custom click handler - if provided, overrides the default checkout/portal behavior */
+  onButtonClick?: (product: PolarProduct) => void
+  /** Custom button text - if provided, overrides the default text */
+  buttonText?: string
 }) {
   const fixedPrice = product.prices.find((p) => p.amountType === 'fixed')
   const isFree = !fixedPrice || fixedPrice.priceAmount === 0
@@ -58,6 +64,12 @@ export function ProductCard({
 
     if (!user) {
       navigate({ to: '/signup' })
+      return
+    }
+
+    // Use custom handler if provided
+    if (onButtonClick) {
+      onButtonClick(product)
       return
     }
 
@@ -297,6 +309,8 @@ export function ProductCard({
                   <Loader2 className="mr-2 size-4 animate-spin" />
                   Loading...
                 </>
+              ) : buttonText ? (
+                buttonText
               ) : isEnterprise ? (
                 'Contact Sales'
               ) : isFree ? (

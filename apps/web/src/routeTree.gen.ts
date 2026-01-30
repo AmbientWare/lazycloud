@@ -10,7 +10,6 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as SupportRouteImport } from './routes/support'
-import { Route as SubscribeRouteImport } from './routes/subscribe'
 import { Route as SignupRouteImport } from './routes/signup'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as ApiRouteImport } from './routes/api'
@@ -23,6 +22,7 @@ import { Route as DocsSplatRouteImport } from './routes/docs/$'
 import { Route as CheckoutSuccessRouteImport } from './routes/checkout/success'
 import { Route as ApiSearchRouteImport } from './routes/api/search'
 import { Route as ApiHealthRouteImport } from './routes/api/health'
+import { Route as LandingSubscribeRouteImport } from './routes/_landing/subscribe'
 import { Route as LandingPricingRouteImport } from './routes/_landing/pricing'
 import { Route as AuthenticatedWorkspacesRouteImport } from './routes/_authenticated/workspaces'
 import { Route as AuthenticatedUsageRouteImport } from './routes/_authenticated/usage'
@@ -34,11 +34,6 @@ import { Route as LandingLegalAcceptableUseRouteImport } from './routes/_landing
 const SupportRoute = SupportRouteImport.update({
   id: '/support',
   path: '/support',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SubscribeRoute = SubscribeRouteImport.update({
-  id: '/subscribe',
-  path: '/subscribe',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SignupRoute = SignupRouteImport.update({
@@ -99,6 +94,11 @@ const ApiHealthRoute = ApiHealthRouteImport.update({
   path: '/health',
   getParentRoute: () => ApiRoute,
 } as any)
+const LandingSubscribeRoute = LandingSubscribeRouteImport.update({
+  id: '/subscribe',
+  path: '/subscribe',
+  getParentRoute: () => LandingRoute,
+} as any)
 const LandingPricingRoute = LandingPricingRouteImport.update({
   id: '/pricing',
   path: '/pricing',
@@ -142,11 +142,11 @@ export interface FileRoutesByFullPath {
   '/api': typeof ApiRouteWithChildren
   '/login': typeof LoginRoute
   '/signup': typeof SignupRoute
-  '/subscribe': typeof SubscribeRoute
   '/support': typeof SupportRoute
   '/usage': typeof AuthenticatedUsageRoute
   '/workspaces': typeof AuthenticatedWorkspacesRoute
   '/pricing': typeof LandingPricingRoute
+  '/subscribe': typeof LandingSubscribeRoute
   '/api/health': typeof ApiHealthRoute
   '/api/search': typeof ApiSearchRoute
   '/checkout/success': typeof CheckoutSuccessRoute
@@ -162,11 +162,11 @@ export interface FileRoutesByTo {
   '/api': typeof ApiRouteWithChildren
   '/login': typeof LoginRoute
   '/signup': typeof SignupRoute
-  '/subscribe': typeof SubscribeRoute
   '/support': typeof SupportRoute
   '/usage': typeof AuthenticatedUsageRoute
   '/workspaces': typeof AuthenticatedWorkspacesRoute
   '/pricing': typeof LandingPricingRoute
+  '/subscribe': typeof LandingSubscribeRoute
   '/api/health': typeof ApiHealthRoute
   '/api/search': typeof ApiSearchRoute
   '/checkout/success': typeof CheckoutSuccessRoute
@@ -185,11 +185,11 @@ export interface FileRoutesById {
   '/api': typeof ApiRouteWithChildren
   '/login': typeof LoginRoute
   '/signup': typeof SignupRoute
-  '/subscribe': typeof SubscribeRoute
   '/support': typeof SupportRoute
   '/_authenticated/usage': typeof AuthenticatedUsageRoute
   '/_authenticated/workspaces': typeof AuthenticatedWorkspacesRoute
   '/_landing/pricing': typeof LandingPricingRoute
+  '/_landing/subscribe': typeof LandingSubscribeRoute
   '/api/health': typeof ApiHealthRoute
   '/api/search': typeof ApiSearchRoute
   '/checkout/success': typeof CheckoutSuccessRoute
@@ -209,11 +209,11 @@ export interface FileRouteTypes {
     | '/api'
     | '/login'
     | '/signup'
-    | '/subscribe'
     | '/support'
     | '/usage'
     | '/workspaces'
     | '/pricing'
+    | '/subscribe'
     | '/api/health'
     | '/api/search'
     | '/checkout/success'
@@ -229,11 +229,11 @@ export interface FileRouteTypes {
     | '/api'
     | '/login'
     | '/signup'
-    | '/subscribe'
     | '/support'
     | '/usage'
     | '/workspaces'
     | '/pricing'
+    | '/subscribe'
     | '/api/health'
     | '/api/search'
     | '/checkout/success'
@@ -251,11 +251,11 @@ export interface FileRouteTypes {
     | '/api'
     | '/login'
     | '/signup'
-    | '/subscribe'
     | '/support'
     | '/_authenticated/usage'
     | '/_authenticated/workspaces'
     | '/_landing/pricing'
+    | '/_landing/subscribe'
     | '/api/health'
     | '/api/search'
     | '/checkout/success'
@@ -275,7 +275,6 @@ export interface RootRouteChildren {
   ApiRoute: typeof ApiRouteWithChildren
   LoginRoute: typeof LoginRoute
   SignupRoute: typeof SignupRoute
-  SubscribeRoute: typeof SubscribeRoute
   SupportRoute: typeof SupportRoute
   CheckoutSuccessRoute: typeof CheckoutSuccessRoute
 }
@@ -287,13 +286,6 @@ declare module '@tanstack/react-router' {
       path: '/support'
       fullPath: '/support'
       preLoaderRoute: typeof SupportRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/subscribe': {
-      id: '/subscribe'
-      path: '/subscribe'
-      fullPath: '/subscribe'
-      preLoaderRoute: typeof SubscribeRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/signup': {
@@ -380,6 +372,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiHealthRouteImport
       parentRoute: typeof ApiRoute
     }
+    '/_landing/subscribe': {
+      id: '/_landing/subscribe'
+      path: '/subscribe'
+      fullPath: '/subscribe'
+      preLoaderRoute: typeof LandingSubscribeRouteImport
+      parentRoute: typeof LandingRoute
+    }
     '/_landing/pricing': {
       id: '/_landing/pricing'
       path: '/pricing'
@@ -462,6 +461,7 @@ const AuthenticatedRouteWithChildren = AuthenticatedRoute._addFileChildren(
 
 interface LandingRouteChildren {
   LandingPricingRoute: typeof LandingPricingRoute
+  LandingSubscribeRoute: typeof LandingSubscribeRoute
   LandingIndexRoute: typeof LandingIndexRoute
   LandingLegalAcceptableUseRoute: typeof LandingLegalAcceptableUseRoute
   LandingLegalPrivacyRoute: typeof LandingLegalPrivacyRoute
@@ -470,6 +470,7 @@ interface LandingRouteChildren {
 
 const LandingRouteChildren: LandingRouteChildren = {
   LandingPricingRoute: LandingPricingRoute,
+  LandingSubscribeRoute: LandingSubscribeRoute,
   LandingIndexRoute: LandingIndexRoute,
   LandingLegalAcceptableUseRoute: LandingLegalAcceptableUseRoute,
   LandingLegalPrivacyRoute: LandingLegalPrivacyRoute,
@@ -500,7 +501,6 @@ const rootRouteChildren: RootRouteChildren = {
   ApiRoute: ApiRouteWithChildren,
   LoginRoute: LoginRoute,
   SignupRoute: SignupRoute,
-  SubscribeRoute: SubscribeRoute,
   SupportRoute: SupportRoute,
   CheckoutSuccessRoute: CheckoutSuccessRoute,
 }
