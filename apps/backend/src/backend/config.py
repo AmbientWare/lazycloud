@@ -92,6 +92,7 @@ class AppConfig(BaseModel):
     # Billing Configuration
     POLAR_ORGANIZATION_ID: str = os.getenv("POLAR_ORGANIZATION_ID", "")
     POLAR_ACCESS_TOKEN: str = os.getenv("POLAR_ACCESS_TOKEN", "")
+    POLAR_WEBHOOK_SECRET: str = os.getenv("POLAR_WEBHOOK_SECRET", "")
     IS_POLAR_SANDBOX: bool = os.getenv("IS_POLAR_SANDBOX", "false").lower() == "true"
 
     # Secrets Configuration
@@ -120,29 +121,46 @@ class AppConfig(BaseModel):
     SUPPORT_EMAIL: str = os.getenv("SUPPORT_EMAIL", "support@lazycloud.dev")
 
     # Required Environment Variables
-    required_env_vars: List[str] = [
+    all_environment_variables: List[str] = [
         "ADMIN_API_KEY",
         "REDIS_URL",
         "DB_SECRET_KEY",
         "RESEND_API_KEY",
+        "POLAR_ACCESS_TOKEN",
+        "POLAR_ORGANIZATION_ID",
+        "IS_POLAR_SANDBOX",
+        "DEPOT_API_TOKEN",
+        "DEPOT_ORG_ID",
+        "CLOUDFLARE_API_KEY",
+        "CLOUDFLARE_ZONE_ID",
+        "CLOUDFLARE_ACCOUNT_ID",
+        "PROMETHEUS_URL",
+    ]
+
+    production_environment_variables: List[str] = [
+        "POLAR_WEBHOOK_SECRET",
     ]
 
     @model_validator(mode="after")
     def validate_required_env_vars(self: "AppConfig") -> "AppConfig":
         logger.info("Validating required environment variables")
         missing_vars = []
-        for var in self.required_env_vars:
+        for var in self.all_environment_variables:
             value = os.getenv(var)
             if not value or value.strip() == "":
                 missing_vars.append(var)
+
+        if self.ENV == ENVIRONMENT.PROD:
+            # only check production environment variables if we are in production
+            for var in self.production_environment_variables:
+                value = os.getenv(var)
+                if not value or value.strip() == "":
+                    missing_vars.append(var)
 
         if missing_vars:
             raise ValueError(
                 f"Missing required environment variables: {', '.join(missing_vars)}"
             )
-
-        if not self.PROMETHEUS_URL:
-            raise ValueError("PROMETHEUS_URL is required")
 
         return self
 

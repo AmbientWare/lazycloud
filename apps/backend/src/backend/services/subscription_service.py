@@ -6,14 +6,20 @@ from models.compose import ComposeFile
 from models.workspaces import InvitationType
 
 from backend.billing.product_details.features import BaseFeatures
+from backend.config import app_config
 from backend.database import get_db_context
 from backend.database.users import SubscriptionState, UserPydantic
+from backend.services.cache import CacheService
 from backend.services.compose.parser import ComposeParser
 from backend.services.k8s.generators.converters import (
     parse_cpu_to_cores,
     parse_memory_to_gb,
 )
 from backend.services.polar import PolarService
+
+# Cache key prefix and TTL for user features (5 minutes)
+FEATURES_CACHE_PREFIX = "features:"
+FEATURES_CACHE_TTL_SECONDS = 300
 
 
 class SubscriptionLimitError(Exception):
@@ -54,6 +60,23 @@ class SubscriptionService:
 
     def __init__(self, polar_service: PolarService):
         self.polar_service = polar_service
+        self._cache = self._init_cache()
+
+    def _init_cache(self) -> CacheService | None:
+        """
+        Initialize the cache.
+        Only cache features if the webhook secret is configured.
+        This is mainly a prod/dev feature toggle.
+        We do not use the webhook in dev.
+        """
+        should_cache_features = bool(app_config.POLAR_WEBHOOK_SECRET)
+        message = (
+            "Subscription features will not be cached"
+            if not should_cache_features
+            else "Subscription features will be cached"
+        )
+        logger.info(message)
+        return CacheService(redis_url=app_config.REDIS_URL) if should_cache_features else None
 
     def _parse_features_from_metadata(
         self, metadata: dict[str, str] | None
@@ -85,16 +108,43 @@ class SubscriptionService:
 
         Raises:
             BillingNotConfiguredError: If billing service is not configured
-            NoActiveSubscriptionError: If user has no active subscription
+            NoActiveSubscriptionError: If user has no active subscription (not cached)
             ValueError: If subscription or product configuration is invalid
             RuntimeError: If API call fails
         """
+
         if not self.polar_service.enabled:
             raise BillingNotConfiguredError(
                 "Billing service is not configured. "
                 "Callers should catch this exception and fall back to default features if appropriate."
             )
 
+        # Check Redis cache first
+        if self._cache is not None:
+            cache_key = f"{FEATURES_CACHE_PREFIX}{external_customer_id}"
+            cached_data = await self._cache.get(cache_key)
+            if cached_data is not None:
+                logger.debug(f"Using cached features for {external_customer_id}")
+                return BaseFeatures.model_validate(cached_data)
+
+        # Fetch from Polar API
+        features = await self._fetch_user_features_from_polar(external_customer_id)
+
+        # Cache successful lookups only (not NoActiveSubscriptionError)
+        if self._cache is not None:
+            await self._cache.set(
+                cache_key,
+                features.model_dump(),
+                FEATURES_CACHE_TTL_SECONDS,
+            )
+            logger.debug(f"Cached features for {external_customer_id}")
+
+        return features
+
+    async def _fetch_user_features_from_polar(
+        self, external_customer_id: str
+    ) -> BaseFeatures:
+        """Fetch user features from Polar API (no caching)."""
         try:
             subscriptions_response = (
                 await self.polar_service.client.subscriptions.list_async(
@@ -145,6 +195,33 @@ class SubscriptionService:
         )
         return features
 
+    async def clear_features_cache(
+        self, external_customer_id: str | None = None
+    ) -> None:
+        """Clear features cache for a specific customer or all customers.
+
+        Called by webhook handler when subscription changes.
+        """
+
+        if self._cache is None:
+            logger.warning(
+                "Subscription features are not cached - skipping cache clear"
+            )
+            return
+
+        if external_customer_id:
+            cache_key = f"{FEATURES_CACHE_PREFIX}{external_customer_id}"
+            deleted = await self._cache.delete(cache_key)
+            if deleted:
+                logger.info(f"Cleared features cache for {external_customer_id}")
+        else:
+            # For clearing all, we'd need Redis SCAN/KEYS which isn't in CacheService
+            # This is rarely used - just log a warning
+            logger.warning(
+                "clear_features_cache called without customer_id - "
+                "Redis doesn't support clearing by prefix without SCAN"
+            )
+
     async def _update_user_subscription_state(
         self,
         user: UserPydantic,
@@ -168,12 +245,31 @@ class SubscriptionService:
         """Audit user's resource usage and update subscription_state accordingly.
 
         Checks total deployments across all workspaces against the deployment limit.
+
+        Note: This only manages OVER_LIMITS ↔ WITHIN_LIMITS transitions.
+        Payment states (PAYMENT_FAILED, SUSPENDED) are managed by Polar webhooks
+        and take precedence - this function won't overwrite them.
         """
+        # Payment states managed by webhooks - don't overwrite
+        PAYMENT_STATES = {
+            SubscriptionState.PAYMENT_FAILED,
+            SubscriptionState.SUSPENDED,
+            SubscriptionState.TRIAL_EXPIRED,
+        }
+
         async with get_db_context() as db:
             user = await db.users.get_by_id(user_id)
 
         if user is None:
             return None
+
+        # Don't modify users with payment issues - those are managed by webhooks
+        if user.subscription_state in PAYMENT_STATES:
+            logger.debug(
+                f"Skipping audit for user {user.email} - state {user.subscription_state.value} "
+                "is managed by webhooks"
+            )
+            return user
 
         # Get total deployment count across all user's workspaces
         async with get_db_context() as db:

@@ -22,7 +22,10 @@ from backend.api.dependencies import (
     get_workspace_with_any_access,
     get_workspace_with_owner_access,
 )
-from backend.api.security import get_current_active_user
+from backend.api.security import (
+    get_current_active_user,
+    get_current_active_user_with_sub,
+)
 from backend.api.utils import normalize_usage_date_range
 from backend.database import Database, get_db
 from backend.database.user_workspaces import (
@@ -161,7 +164,7 @@ async def get_workspace_with_deployments(
 @workspaces_router.post("")
 async def create_workspace(
     request: CreateWorkspaceRequest,
-    current_user: UserPydantic = Depends(get_current_active_user),
+    current_user: UserPydantic = Depends(get_current_active_user_with_sub),
     db: Database = Depends(get_db),
 ) -> WorkspaceResponse:
     """Create a new workspace"""

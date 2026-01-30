@@ -30,6 +30,7 @@ from backend.api.v1 import (
     users_router,
     workspaces_router,
 )
+from backend.api.webhooks import webhooks_router
 from backend.config import ENVIRONMENT, app_config
 from backend.lifecycle import shutdown_application, startup_application
 from backend.log_config import setup_logger
@@ -135,6 +136,7 @@ non_versionsed_routes = APIRouter()
 non_versionsed_routes.include_router(health_router)
 non_versionsed_routes.include_router(cli_version_router)
 non_versionsed_routes.include_router(auth_config_router)
+non_versionsed_routes.include_router(webhooks_router)
 app.include_router(non_versionsed_routes)
 
 
