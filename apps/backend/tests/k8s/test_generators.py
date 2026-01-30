@@ -414,8 +414,8 @@ class TestVolumesMountGeneration:
 class TestIngressGeneration:
     """Tests for ingress values generation."""
 
-    def test_generate_ingress_with_ports(self):
-        """Test generating ingress for service with ports."""
+    def test_generate_http_ingress_with_tcp_ports(self):
+        """Test generating HTTP ingress for service with TCP ports (default)."""
         service = ComposeService(
             name="api",
             image="myapp:latest",
@@ -428,8 +428,27 @@ class TestIngressGeneration:
 
         assert result is not None
         assert result.enabled is True
+        assert result.protocol == "http"
         # Hostname should include service name, short deployment ID, cluster ID, and base domain
         assert result.hostname == "api-abc12.ash-1.lazycloud.dev"
+
+    def test_udp_ports_get_http_routing(self):
+        """Test UDP ports still get HTTP routing (UDP routing not yet supported)."""
+        service = ComposeService(
+            name="dns",
+            image="coredns:latest",
+            ports=[ComposePort(published=53, target=53, protocol="udp")],
+        )
+        deployment_id = "abc123def456"
+        cluster_id = "ash-1"
+
+        result = generate_ingress_values(service, deployment_id, cluster_id)
+
+        # UDP services still get HTTP routing until dynamic port allocation is implemented
+        assert result is not None
+        assert result.enabled is True
+        assert result.protocol == "http"
+        assert result.hostname == "dns-abc12.ash-1.lazycloud.dev"
 
     def test_ingress_not_generated_without_ports(self):
         """Test ingress is not generated for service without ports."""
@@ -445,20 +464,6 @@ class TestIngressGeneration:
 
         assert result is None
 
-    def test_ingress_uses_nginx_class(self):
-        """Test ingress uses NGINX ingress class for Cloudflare Tunnel routing."""
-        service = ComposeService(
-            name="web",
-            image="nginx:latest",
-            ports=[ComposePort(published=80, target=80, protocol="tcp")],
-        )
-        deployment_id = "xyz789ghi012"
-        cluster_id = "ash-1"
-
-        result = generate_ingress_values(service, deployment_id, cluster_id)
-
-        assert result.className == "nginx"
-
     def test_ingress_hostname_includes_deployment_id(self):
         """Test ingress hostname includes short deployment ID for uniqueness."""
         service = ComposeService(
@@ -471,6 +476,7 @@ class TestIngressGeneration:
 
         result = generate_ingress_values(service, deployment_id, cluster_id)
 
+        assert result.protocol == "http"
         assert result.hostname == "myservice-deplo.fra-1.lazycloud.dev"
 
     def test_ingress_uses_custom_domain_when_specified(self):
@@ -487,6 +493,7 @@ class TestIngressGeneration:
         result = generate_ingress_values(service, deployment_id, cluster_id)
 
         assert result is not None
+        assert result.protocol == "http"
         assert result.hostname == "api.example.com"
 
 

@@ -39,18 +39,18 @@ resource "cloudflare_zero_trust_tunnel_cloudflared_config" "cluster_tunnel_confi
       var.route_root_domain ? [
         {
           hostname = var.cloudflare_zone
-          service  = "http://nginx-ingress-controller.ingress-nginx.svc.cluster.local:80"
+          service  = "http://lazycloud-gateway.envoy-gateway-system.svc.cluster.local:80"
         },
         {
           hostname = "*.${var.cloudflare_zone}"
-          service  = "http://nginx-ingress-controller.ingress-nginx.svc.cluster.local:80"
+          service  = "http://lazycloud-gateway.envoy-gateway-system.svc.cluster.local:80"
         }
       ] : [],
       # Cluster-specific routes (always)
       [
         {
           hostname = "*.${var.cluster_id}.${var.cloudflare_zone}"
-          service  = "http://nginx-ingress-controller.ingress-nginx.svc.cluster.local:80"
+          service  = "http://lazycloud-gateway.envoy-gateway-system.svc.cluster.local:80"
         },
         {
           # Catch-all rule (required by Cloudflare)

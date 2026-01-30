@@ -10,7 +10,7 @@ deploy/
 │   ├── root-app.yaml               # App of Apps entry point
 │   └── applicationsets/            # ApplicationSets for multi-cluster
 ├── platform/                       # Platform Helm charts
-│   ├── nginx-ingress/
+│   ├── envoy-gateway/
 │   ├── cloudflare-tunnel/
 │   ├── karpenter/
 │   ├── external-secrets/
@@ -75,7 +75,7 @@ Example: `api-abc12.ash-1.lazycloud.dev`, `web-xyz99.ash-2.lazycloud.dev`
 
 When you deploy a cluster with Terraform, it automatically:
 1. Creates a Cloudflare Tunnel named `lazycloud-prod-{cluster_id}`
-2. Configures ingress routes for `*.{cluster_id}.lazycloud.dev` → nginx ingress
+2. Configures ingress routes for `*.{cluster_id}.lazycloud.dev` → Envoy Gateway
 3. Creates the wildcard DNS CNAME `*.{cluster_id}.lazycloud.dev` → tunnel
 4. Creates an Advanced SSL certificate for `*.{cluster_id}.lazycloud.dev` (requires ACM add-on ~$10/mo)
 5. Stores the tunnel token in AWS Secrets Manager at `lazycloud/clusters/{cluster_id}`
@@ -116,7 +116,7 @@ The cluster secret is a JSON object containing both `kubeconfig` and `cloudflare
 ### How Traffic Flows
 
 ```
-User → Cloudflare Edge (TLS termination) → Cloudflare Tunnel → NGINX Ingress → Service
+User → Cloudflare Edge (TLS termination) → Cloudflare Tunnel → Envoy Gateway → Service
 ```
 
-Cloudflare handles TLS termination at the edge, so traffic between the tunnel and NGINX is HTTP.
+Cloudflare handles TLS termination at the edge, so traffic between the tunnel and Envoy is HTTP.

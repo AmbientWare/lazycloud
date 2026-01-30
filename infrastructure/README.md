@@ -117,7 +117,7 @@ The cluster secret contains labels that ApplicationSets use:
 ## 8. Deploy Platform via ArgoCD
 The ApplicationSet deploys all platform charts from `deploy/platform/` to clusters with `provider: hetzner` label.
 ```bash
-kubectl apply -f deploy/argocd-apps/applicationsets/platform-hetzner.yaml -n argocd
+kubectl apply -f deploy/argocd-apps/applicationsets/platform.yaml -n argocd
 ```
 
 ## 9. Verify Deployment and Access ArgoCD
@@ -314,16 +314,16 @@ To add a second cluster (e.g., `ash-2` or `fsn-1`):
 ├─────────────────────────────────────────────────────────────────────┤
 │  Cluster: ash-1 (with route_root_domain=true)                       │
 │    Tunnel: lazycloud-prod-ash-1                                     │
-│      └─ Ingress: lazycloud.dev        → nginx-ingress-controller    │
-│      └─ Ingress: *.lazycloud.dev      → nginx-ingress-controller    │
-│      └─ Ingress: *.ash-1.lazycloud.dev → nginx-ingress-controller   │
+│      └─ Ingress: lazycloud.dev        → lazycloud-gateway    │
+│      └─ Ingress: *.lazycloud.dev      → lazycloud-gateway    │
+│      └─ Ingress: *.ash-1.lazycloud.dev → lazycloud-gateway   │
 │    DNS: @, *, *.ash-1 → tunnel CNAME                                │
 │    SSL: Advanced Certificate for *.ash-1.lazycloud.dev              │
 │         (root domain uses Cloudflare Universal SSL)                 │
 │                                                                     │
 │  Cluster: ash-2 (when added, route_root_domain=false)               │
 │    Tunnel: lazycloud-prod-ash-2                                     │
-│      └─ Ingress: *.ash-2.lazycloud.dev → nginx-ingress-controller   │
+│      └─ Ingress: *.ash-2.lazycloud.dev → lazycloud-gateway   │
 │    DNS: *.ash-2 → tunnel CNAME                                      │
 │    SSL: Advanced Certificate for *.ash-2.lazycloud.dev              │
 └─────────────────────────────────────────────────────────────────────┘

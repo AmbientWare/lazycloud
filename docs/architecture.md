@@ -8,7 +8,7 @@ flowchart LR
     Cloudflare -->|TLS termination| Tunnel[cloudflare-tunnel]
 
     subgraph EKS[EKS Cluster]
-        Tunnel --> NGINX[nginx-ingress]
+        Tunnel --> Envoy[envoy-gateway]
 
         subgraph LazyCloud[LazyCloud Apps]
             API[api]
@@ -20,8 +20,8 @@ flowchart LR
             App2[customer-app-2]
         end
 
-        NGINX --> LazyCloud
-        NGINX --> Customer
+        Envoy --> LazyCloud
+        Envoy --> Customer
     end
 ```
 
@@ -38,7 +38,7 @@ flowchart TB
         subgraph EKS[EKS Cluster]
             subgraph Platform
                 Tunnel[cloudflare-tunnel]
-                NGINX[nginx-ingress]
+                Envoy[envoy-gateway]
                 ArgoCD[argocd]
                 Rollouts[argo-rollouts]
                 Karpenter[karpenter]
@@ -67,8 +67,8 @@ flowchart TB
 
     DNS --> Tunnel
     Tunnel --> NGINX
-    NGINX --> LazyCloud
-    NGINX --> Customer
+    Envoy --> LazyCloud
+    Envoy --> Customer
     ESO --> SM
     Customer --> Registry
 ```
@@ -106,7 +106,7 @@ flowchart LR
     end
 
     subgraph Wave3[Wave 3]
-        NG[nginx-ingress]
+        EG[envoy-gateway]
     end
 
     subgraph Wave4[Wave 4]

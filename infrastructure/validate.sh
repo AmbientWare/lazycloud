@@ -124,26 +124,19 @@ else
 fi
 echo ""
 
-echo "=== NGINX Ingress ==="
-INGRESS_IP=$(kubectl get svc -n ingress-nginx nginx-ingress-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
-if [[ -n "$INGRESS_IP" ]]; then
-  pass "NGINX Ingress LB: $INGRESS_IP"
+echo "=== Envoy Gateway ==="
+GATEWAY_IP=$(kubectl get svc -n envoy-gateway-system lazycloud-gateway -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
+if [[ -n "$GATEWAY_IP" ]]; then
+  pass "Envoy Gateway LB: $GATEWAY_IP"
   echo ""
-  echo -e "  ${YELLOW}Cloudflare Tunnel origin:${NC} http://$INGRESS_IP:80"
-  echo -e "  ${YELLOW}Or DNS A record:${NC} *.lazycloud.dev → $INGRESS_IP"
+  echo -e "  ${YELLOW}Cloudflare Tunnel origin:${NC} http://$GATEWAY_IP:80"
+  echo -e "  ${YELLOW}Or DNS A record:${NC} *.lazycloud.dev → $GATEWAY_IP"
 else
-  INGRESS_NODE_PORT=$(kubectl get svc -n ingress-nginx nginx-ingress-controller -o jsonpath='{.spec.ports[?(@.name=="http")].nodePort}' 2>/dev/null || true)
-  INGRESS_CLUSTER_IP=$(kubectl get svc -n ingress-nginx nginx-ingress-controller -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)
-  if [[ -n "$INGRESS_NODE_PORT" ]]; then
-    NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="ExternalIP")].address}' 2>/dev/null || true)
-    pass "NGINX Ingress NodePort: $INGRESS_NODE_PORT"
-    echo ""
-    echo -e "  ${YELLOW}Cloudflare Tunnel origin:${NC} http://$NODE_IP:$INGRESS_NODE_PORT"
-    echo -e "  ${YELLOW}Or DNS A record:${NC} *.lazycloud.dev → $NODE_IP"
-  elif [[ -n "$INGRESS_CLUSTER_IP" ]]; then
-    pass "NGINX Ingress ClusterIP: $INGRESS_CLUSTER_IP (accessed via Cloudflare Tunnel)"
+  GATEWAY_CLUSTER_IP=$(kubectl get svc -n envoy-gateway-system lazycloud-gateway -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)
+  if [[ -n "$GATEWAY_CLUSTER_IP" ]]; then
+    pass "Envoy Gateway ClusterIP: $GATEWAY_CLUSTER_IP (accessed via Cloudflare Tunnel)"
   else
-    warn "NGINX Ingress not found (may not be synced yet)"
+    warn "Envoy Gateway not found (may not be synced yet)"
   fi
 fi
 echo ""

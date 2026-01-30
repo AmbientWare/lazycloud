@@ -93,8 +93,9 @@ class IngressValues(BaseModel):
     """Model for ingress configuration."""
 
     enabled: bool = True
-    className: str = "alb"
-    hostname: str
+    protocol: Literal["http", "tcp", "udp"] = "http"  # Routing protocol
+    hostname: str | None = None  # For HTTP routing
+    port: int | None = None  # For TCP/UDP routing
     tls: IngressTLS | None = None
     annotations: dict[str, str] = {}
 
@@ -206,7 +207,9 @@ class ServiceValues(BaseModel):
     podSecurityContext: PodSecurityContext | None = None
     terminationGracePeriodSeconds: int | None = None
     imagePullSecrets: list[dict[str, str]] | None = None
-    allowExternal: bool = True  # Allow external egress (gVisor provides sandbox isolation)
+    allowExternal: bool = (
+        True  # Allow external egress (gVisor provides sandbox isolation)
+    )
 
 
 class NamespaceConfig(BaseModel):

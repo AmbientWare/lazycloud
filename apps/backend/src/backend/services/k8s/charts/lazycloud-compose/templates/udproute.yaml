@@ -1,0 +1,44 @@
+{{/*
+Create UDPRoute for each service that has UDP ingress enabled
+Used for DNS, gaming servers, streaming, and other UDP-based services
+*/}}
+{{- range $service := .Values.services }}
+{{- $protocol := $service.ingress.protocol | default "http" }}
+{{- if and $service.enabled $service.ingress $service.ingress.enabled $service.ports (eq $protocol "udp") }}
+---
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: UDPRoute
+metadata:
+  name: {{ $service.name }}
+  namespace: {{ include "lazycloud-compose.serviceNamespace" (dict "serviceName" $service.name "Values" $.Values "root" $) }}
+  labels:
+    {{- include "lazycloud-compose.labels" $ | nindent 4 }}
+    app.kubernetes.io/name: {{ $service.name }}
+    app.kubernetes.io/component: udproute
+    lazycloud.dev/service: {{ $service.name }}
+    {{- if $service.labels }}
+    {{- toYaml $service.labels | nindent 4 }}
+    {{- end }}
+    {{- if $service.ingress.labels }}
+    {{- toYaml $service.ingress.labels | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- include "lazycloud-compose.annotations" $ | nindent 4 }}
+    {{- if $service.annotations }}
+    {{- toYaml $service.annotations | nindent 4 }}
+    {{- end }}
+    {{- if $service.ingress.annotations }}
+    {{- toYaml $service.ingress.annotations | nindent 4 }}
+    {{- end }}
+spec:
+  parentRefs:
+    - name: {{ $.Values.gateway.name | default "lazycloud-gateway" }}
+      namespace: {{ $.Values.gateway.namespace | default "envoy-gateway-system" }}
+      sectionName: udp-{{ $service.ingress.port }}
+  rules:
+    - backendRefs:
+        {{- $firstPort := index $service.ports 0 }}
+        - name: {{ $service.name }}
+          port: {{ $firstPort.port }}
+{{- end }}
+{{- end }}
