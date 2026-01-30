@@ -21,7 +21,12 @@ export const Route = createFileRoute('/_authenticated/workspaces')({
   pendingMs: 0,
   pendingMinMs: 200,
   loader: async () => {
-    const workspaces = await getWorkspaces()
+    let workspaces: Workspace[] = []
+    try {
+      workspaces = await getWorkspaces()
+    } catch (error) {
+      console.error('Failed to fetch workspaces:', error)
+    }
     const defaultWorkspace =
       workspaces.find((w) => w.is_personal) ?? workspaces[0]
 

@@ -1,6 +1,6 @@
 import { createServerFn } from '@tanstack/react-start'
 import { z } from 'zod'
-import { authMiddleware } from '../middleware/auth'
+import { authMiddleware, userMiddleware } from '../middleware/auth'
 import lazycloudApi from '../lazycloud-api'
 import polarService from '../polar'
 import type { UserFeaturesResponse } from '@/interfaces/users'
@@ -19,11 +19,11 @@ export const getUserFeatures = createServerFn({ method: 'GET' })
   })
 
 export const getUserSubscriptionTier = createServerFn({ method: 'GET' })
-  .middleware([authMiddleware])
+  .middleware([userMiddleware])
   .handler(async ({ context }): Promise<string | undefined> => {
     try {
       const customerState = await polarService.getCustomerStateExternal(
-        context.accessToken,
+        context.userId,
       )
       const activeSub = customerState.activeSubscriptions[0]
       if (!activeSub?.productId) return undefined
@@ -39,11 +39,11 @@ export const getUserSubscriptionTier = createServerFn({ method: 'GET' })
   })
 
 export const hasActiveSubscription = createServerFn({ method: 'GET' })
-  .middleware([authMiddleware])
+  .middleware([userMiddleware])
   .handler(async ({ context }): Promise<boolean> => {
     try {
       const customerState = await polarService.getCustomerStateExternal(
-        context.accessToken,
+        context.userId,
       )
       return (customerState?.activeSubscriptions?.length ?? 0) > 0
     } catch {
