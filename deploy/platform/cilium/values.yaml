@@ -14,6 +14,11 @@ kubeProxyReplacement: true
 k8sServiceHost: "localhost"
 k8sServicePort: "7445"  # Talos proxy port
 
+# Bypass socket-level LB for sandboxed runtimes (gVisor, Kata)
+# Required for VXLAN tunneling to work with gVisor's netstack
+socketLB:
+  hostNamespaceOnly: true
+
 # Enable Hubble observability
 hubble:
   enabled: true
