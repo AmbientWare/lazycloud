@@ -26,6 +26,7 @@ from backend.api.dependencies import (
     check_deployment_limit_for_owner,
     get_deployment_with_access,
     get_deployment_with_active_subscription,
+    get_deployment_with_admin_access,
     get_features_for_owner,
     get_owner_with_active_subscription,
     require_workspace_member,
@@ -475,9 +476,7 @@ async def deploy_deployment(
     "/{deployment_id}", response_model=DeploymentTaskStatusResponse
 )
 async def delete_deployment(
-    deployment: ComposeDeploymentPydantic = Depends(
-        get_deployment_with_active_subscription
-    ),
+    deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_admin_access),
     db: Database = Depends(get_db),
 ) -> DeploymentTaskStatusResponse:
     """Delete a deployment."""
@@ -543,9 +542,7 @@ async def get_deployment_history(
 )
 async def rollback_deployment(
     request: RollbackRequest,
-    deployment: ComposeDeploymentPydantic = Depends(
-        get_deployment_with_active_subscription
-    ),
+    deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_admin_access),
     db: Database = Depends(get_db),
 ) -> DeploymentTaskStatusResponse:
     """Rollback a deployment to a previous Helm revision."""

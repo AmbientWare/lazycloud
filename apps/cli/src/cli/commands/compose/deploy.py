@@ -399,7 +399,6 @@ def deploy(
             compose_data,
             compose_file_path,
             deployment_name,
-            yes,
             target_services=services_to_build if services_to_build else None,
             build_args=build_args,
         )
@@ -1142,9 +1141,7 @@ def _extract_build_args(
         if isinstance(args_config, dict):
             for key, value in args_config.items():
                 # Check if value needs to be resolved
-                resolved_value = _resolve_build_arg_value(
-                    value, env_files_content, compose_data
-                )
+                resolved_value = _resolve_build_arg_value(value, env_files_content)
                 args.append(BuildArg(key=key, value=resolved_value))
         elif isinstance(args_config, list):
             for item in args_config:
@@ -1152,7 +1149,7 @@ def _extract_build_args(
                     if "=" in item:
                         key, value = item.split("=", 1)
                         resolved_value = _resolve_build_arg_value(
-                            value, env_files_content, compose_data
+                            value, env_files_content
                         )
                         args.append(BuildArg(key=key, value=resolved_value))
                     else:
@@ -1170,7 +1167,6 @@ def _extract_build_args(
 def _resolve_build_arg_value(
     value: str | None,
     env_files_content: dict,
-    compose_data: dict,
 ) -> str | None:
     """Resolve a build arg value, handling variable substitution.
 
@@ -1537,7 +1533,6 @@ def _run_depot_bake(
 def _handle_builds_with_depot(
     compose_data: dict,
     compose_file_path: Path,
-    deployment_name: str,
     services_to_build: list[dict],
     depot_token: DepotTokenResponse,
     build_args: BuildArgsCollection | None = None,
@@ -1778,7 +1773,6 @@ def _handle_builds(
     compose_data: dict,
     compose_file_path: Path,
     deployment_name: str,
-    yes: bool = False,
     target_services: list[str] | None = None,
     build_args: BuildArgsCollection | None = None,
 ) -> tuple[str, int | None]:
@@ -1846,7 +1840,6 @@ def _handle_builds(
     return _handle_builds_with_depot(
         compose_data=compose_data,
         compose_file_path=compose_file_path,
-        deployment_name=deployment_name,
         services_to_build=services_to_build,
         depot_token=depot_token,
         build_args=build_args,
@@ -2051,6 +2044,9 @@ def _deploy(
                     raise Exception(
                         "Authentication failed. Please run 'lazycloud login'"
                     )
+                elif e.status_code == 402:
+                    console.print(SubscriptionRequiredCard())
+                    raise typer.Exit(1)
                 elif e.status_code and 500 <= e.status_code < 600:
                     raise Exception(f"Server error: {e}")
                 else:
