@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from responses.billing import BillingCycleResponse
 
 from backend.api.security import get_current_active_user
-from backend.database.models import User
+from backend.database.models import UserInDb
 from backend.services import get_polar_service
 
 billing_router = APIRouter(prefix="/billing", tags=["billing"])
@@ -37,7 +37,7 @@ async def get_meter_pricing() -> MeterPricingResponse:
 
 @billing_router.get("/cycle", response_model=BillingCycleResponse)
 async def get_billing_cycle(
-    current_user: User = Depends(get_current_active_user),
+    current_user: UserInDb = Depends(get_current_active_user),
 ) -> BillingCycleResponse:
     """Get the current billing cycle dates for the authenticated user."""
     polar_service = get_polar_service()

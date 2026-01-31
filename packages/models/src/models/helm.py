@@ -12,7 +12,7 @@ from models.k8s import (
     VolumeMount,
     WorkloadType,
 )
-from models.storage import STORAGE_CLASS_SHARED, STORAGE_CLASS_STANDARD
+from models.storage import STORAGE_CLASS_STANDARD, StorageClassLiteral
 
 
 class PortConfig(BaseModel):
@@ -145,9 +145,7 @@ class VolumeValues(BaseModel):
     enabled: bool = True
     size: str = "1Gi"
     accessModes: list[str] = ["ReadWriteOnce"]
-    storageClass: Literal[STORAGE_CLASS_STANDARD, STORAGE_CLASS_SHARED] = (
-        STORAGE_CLASS_STANDARD
-    )
+    storageClass: StorageClassLiteral = STORAGE_CLASS_STANDARD
     labels: dict[str, str] = {}
     annotations: dict[str, str] = {}
 

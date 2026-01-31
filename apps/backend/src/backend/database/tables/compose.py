@@ -32,7 +32,7 @@ class ComposeDeploymentTable(BaseTable):
 
     __tablename__ = "compose_deployments"
 
-    name: Mapped[str | None] = mapped_column(String, index=True)
+    name: Mapped[str] = mapped_column(String, index=True)
     namespace: Mapped[str] = mapped_column(String)
     compose_yaml: Mapped[str] = mapped_column(Text)
     pending_compose_yaml: Mapped[str | None] = mapped_column(Text)

@@ -1,11 +1,10 @@
-import uuid
-
 from pydantic import BaseModel
+
 from responses.deployments import DeploymentOverview
 
 
 class WorkspaceResponse(BaseModel):
-    id: uuid.UUID
+    id: str
     name: str
     is_personal: bool
     role: str  # owner, admin, member, viewer
@@ -32,7 +31,7 @@ class InviteUserResponse(BaseModel):
 class WorkspaceWithDeploymentsResponse(BaseModel):
     """Workspace with deployment overviews."""
 
-    id: uuid.UUID
+    id: str
     name: str
     is_personal: bool
     role: str

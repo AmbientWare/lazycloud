@@ -1,15 +1,15 @@
 from api_requests.secrets import SecretsRequest
 from fastapi import APIRouter, Depends, HTTPException, Query
-from models.secrets import Secret, SecretState
+from models.secrets import SecretNoDeploymentId, SecretState
 from responses.secrets import SecretsResponse, SecretsStoredResponse
 
 from backend.api.dependencies import get_deployment_with_admin_access
 from backend.api.security import get_current_active_user, require_admin
 from backend.database import Database, get_db
 from backend.database.models import (
-    ComposeDeployment,
+    ComposeDeploymentInDb,
     Secret,
-    User,
+    UserInDb,
     WorkspaceRole,
 )
 
@@ -21,9 +21,9 @@ secrets_router = APIRouter(
 async def _require_admin_for_secret_values(
     deployment_id: str,
     show_values: bool = False,
-    current_user: User = Depends(get_current_active_user),
+    current_user: UserInDb = Depends(get_current_active_user),
     db: Database = Depends(get_db),
-) -> ComposeDeployment:
+) -> ComposeDeploymentInDb:
     """Verify user has appropriate access to deployment secrets."""
     deployment, role = await db.compose_deployments.get_with_workspace_access(
         deployment_id, current_user.id
@@ -44,14 +44,14 @@ async def get_secrets(
     show_values: bool = Query(
         default=False, description="Show actual secret values (requires admin)"
     ),
-    deployment: ComposeDeployment = Depends(_require_admin_for_secret_values),
+    deployment: ComposeDeploymentInDb = Depends(_require_admin_for_secret_values),
     db: Database = Depends(get_db),
 ) -> SecretsResponse:
     """Get secrets for a deployment"""
     secrets = await db.secrets.get_secrets(deployment.id)
 
     response_secrets = [
-        Secret(
+        SecretNoDeploymentId(
             key=secret.key,
             value=secret.value if show_values else "● ● ● ● ● ● ● ●",
             source=secret.source,
@@ -66,7 +66,7 @@ async def get_secrets(
 @secrets_router.get("/value/{key}")
 async def get_secret_value(
     key: str,
-    deployment: ComposeDeployment = Depends(get_deployment_with_admin_access),
+    deployment: ComposeDeploymentInDb = Depends(get_deployment_with_admin_access),
     db: Database = Depends(get_db),
 ) -> str:
     """Get a secret value for a deployment."""
@@ -80,7 +80,7 @@ async def get_secret_value(
 @secrets_router.post("")
 async def store_secrets(
     request: SecretsRequest,
-    deployment: ComposeDeployment = Depends(get_deployment_with_admin_access),
+    deployment: ComposeDeploymentInDb = Depends(get_deployment_with_admin_access),
     db: Database = Depends(get_db),
 ) -> SecretsStoredResponse:
     """Create secrets for a deployment"""
@@ -124,7 +124,7 @@ async def store_secrets(
 @secrets_router.patch("")
 async def update_secrets(
     request: SecretsRequest,
-    deployment: ComposeDeployment = Depends(get_deployment_with_admin_access),
+    deployment: ComposeDeploymentInDb = Depends(get_deployment_with_admin_access),
     db: Database = Depends(get_db),
 ) -> SecretsStoredResponse:
     """Update existing secrets for a deployment. Does not create new secrets."""
@@ -156,7 +156,7 @@ async def update_secrets(
 @secrets_router.delete("")
 async def delete_secrets(
     request: SecretsRequest,
-    deployment: ComposeDeployment = Depends(get_deployment_with_admin_access),
+    deployment: ComposeDeploymentInDb = Depends(get_deployment_with_admin_access),
     db: Database = Depends(get_db),
 ) -> SecretsStoredResponse:
     """Delete existing secrets for a deployment"""

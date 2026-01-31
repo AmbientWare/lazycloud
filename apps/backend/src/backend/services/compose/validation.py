@@ -14,6 +14,7 @@ from backend.tasks.core.utils import verify_quota_capacity
 
 
 async def validate_deployment_request(
+    deployment_id: str | None,
     deployment: ComposeDeployment,
     existing_deployment: ComposeDeployment | None = None,
     service_names: list[str] | None = None,
@@ -62,9 +63,9 @@ async def validate_deployment_request(
 
     # Get secrets (only if deployment exists)
     secrets = []
-    if deployment.id:
+    if deployment_id:
         async with get_db_context() as db:
-            secrets = await db.secrets.get_secrets(deployment.id)
+            secrets = await db.secrets.get_secrets(deployment_id)
 
     # Generate Helm values (this validates compose file)
     try:

@@ -4,7 +4,6 @@ import yaml
 from api_requests.deployments import DiffRequest, DiffType
 from fastapi import APIRouter, Body, Depends, HTTPException
 from loguru import logger
-from models.clusters import get_cluster_registry
 from models.deployments import DeploymentStates
 from models.diffs import EnvVarChanges, StorageTypeChange
 from models.secrets import SecretSource
@@ -13,7 +12,7 @@ from responses.deployments import DiffResponse
 from backend.api.dependencies import require_workspace_admin
 from backend.api.security import get_current_active_user
 from backend.database import Database, get_db
-from backend.database.models import ComposeDeployment, User
+from backend.database.models import ComposeDeployment, ComposeDeploymentInDb, UserInDb
 from backend.services.compose.diff_checker import (
     ComposeDiffChecker,
     detect_storage_type_changes,
@@ -29,7 +28,7 @@ diff_router = APIRouter(prefix="/diff")
 
 async def _get_deployment_or_verify_workspace(
     request: DiffRequest,
-    current_user: User = Depends(get_current_active_user),
+    current_user: UserInDb = Depends(get_current_active_user),
     db: Database = Depends(get_db),
 ):
     """Get deployment by name for existing, verify workspace access for new."""
@@ -55,10 +54,18 @@ async def _get_deployment_or_verify_workspace(
 @diff_router.post("", response_model=DiffResponse)
 async def get_deployment_diff(
     request: DiffRequest = Body(...),
-    deployment: ComposeDeployment | None = Depends(_get_deployment_or_verify_workspace),
+    deployment: ComposeDeploymentInDb | None = Depends(
+        _get_deployment_or_verify_workspace
+    ),
     db: Database = Depends(get_db),
 ) -> DiffResponse:
     """Compare current deployment with proposed changes."""
+
+    if deployment is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Deployment not found",
+        )
 
     # Parse new compose file
     compose_data = yaml.safe_load(request.compose_yaml)
@@ -127,10 +134,6 @@ async def get_deployment_diff(
         # Determine cluster_id: use existing deployment's cluster or get from placement
         if deployment:
             cluster_id = deployment.cluster_id
-        else:
-            registry = get_cluster_registry()
-            cluster = registry.get_cluster_for_placement()
-            cluster_id = cluster.name if cluster else "default"
 
         # Create temporary deployment for full validation
         temp_deployment = ComposeDeployment(
@@ -142,15 +145,11 @@ async def get_deployment_diff(
             cluster_id=cluster_id,
         )
 
-        if deployment:
-            # Ensure id is string (direct assignment bypasses Pydantic validators)
-            temp_deployment.id = str(deployment.id)
-        else:
-            # For new deployments, don't set id to avoid unnecessary DB secret lookup
-            temp_deployment.id = None
-
         # Run full validation (includes compose validation via HelmValuesGenerator)
-        _, warnings = await validate_deployment_request(temp_deployment, deployment)
+        deployment_id = deployment.id if deployment else None
+        _, warnings = await validate_deployment_request(
+            deployment_id, temp_deployment, deployment
+        )
 
     except ValueError as e:
         # User-friendly validation errors

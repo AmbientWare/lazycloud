@@ -1,7 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
-from uuid import UUID
 
 from models.helm import HelmValues
 
@@ -36,8 +35,8 @@ class DeploymentMonitorConfig(MonitorConfigBase):
     deployment_id: str
     deployment_name: str
     namespace: str
-    helm_values: HelmValues
-    deployed_at: datetime
+    helm_values: HelmValues | None
+    deployed_at: datetime | None
     cluster_id: str
 
     def get_key(self) -> str:
@@ -57,7 +56,7 @@ class ServiceMonitorConfig(MonitorConfigBase):
     deployment_name: str
     service_name: str
     namespace: str
-    helm_values: HelmValues
+    helm_values: HelmValues | None
     cluster_id: str
 
     def get_key(self) -> str:
@@ -73,7 +72,7 @@ class ServiceMonitorConfig(MonitorConfigBase):
 class TaskMonitorConfig(MonitorConfigBase):
     """Configuration for a task monitor."""
 
-    task_id: UUID
+    task_id: str
 
     def get_key(self) -> str:
         """Generate unique key for this monitor."""
@@ -111,7 +110,7 @@ class DeployProgressMonitorConfig(MonitorConfigBase):
     deployment_id: str
     deployment_name: str
     namespace: str
-    helm_values: HelmValues
+    helm_values: HelmValues | None
     cluster_id: str
 
     def get_key(self) -> str:

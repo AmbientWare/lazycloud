@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Any, Generic, TypeVar
 
@@ -97,21 +98,15 @@ class DatabaseService(Generic[TableT, ModelT]):
 
     async def create(self, model: BaseModel) -> ModelT:
         """Create a new model instance."""
-        model_data = model.model_dump(exclude={"id", "created_at", "updated_at"})
-        db_model = self.db_model_class(**model_data)
+        db_model = self.db_model_class(**model.model_dump())
         self._session.add(db_model)
         await self._session.flush()
         await self._session.refresh(db_model)
         return self._to_pydantic(db_model)
 
-    async def create_bulk(self, models: list[BaseModel]) -> list[ModelT]:
+    async def create_bulk(self, models: Sequence[BaseModel]) -> list[ModelT]:
         """Create multiple model instances."""
-        db_models = [
-            self.db_model_class(
-                **model.model_dump(exclude={"id", "created_at", "updated_at"})
-            )
-            for model in models
-        ]
+        db_models = [self.db_model_class(**model.model_dump()) for model in models]
         self._session.add_all(db_models)
         await self._session.flush()
 

@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from backend.api.security import get_current_active_user
 from backend.database import Database, get_db
-from backend.database.models import ApiKey, User
+from backend.database.models import ApiKey, ApiKeyInDb, UserInDb
 from backend.database.utils import (
     generate_api_key,
     generate_api_key_expires_at,
@@ -14,9 +14,9 @@ api_keys_router = APIRouter(prefix="/api-keys", tags=["api-keys"])
 
 @api_keys_router.get("")
 async def get_api_keys(
-    current_user: User = Depends(get_current_active_user),
+    current_user: UserInDb = Depends(get_current_active_user),
     db: Database = Depends(get_db),
-) -> list[ApiKey]:
+) -> list[ApiKeyInDb]:
     """Get all API keys for the current user."""
     return await db.api_keys.find(filters={"user_id": current_user.id})
 
@@ -24,9 +24,9 @@ async def get_api_keys(
 @api_keys_router.post("")
 async def create_api_key(
     request: CreateApiKeyRequest,
-    current_user: User = Depends(get_current_active_user),
+    current_user: UserInDb = Depends(get_current_active_user),
     db: Database = Depends(get_db),
-) -> ApiKey:
+) -> ApiKeyInDb:
     """Create a new API key for the current user."""
     # Check if an API key with this name already exists for the user
     existing_key = await db.api_keys.find_one(
@@ -56,9 +56,9 @@ async def create_api_key(
 async def update_api_key(
     api_key_id: str,
     request: UpdateApiKeyRequest,
-    current_user: User = Depends(get_current_active_user),
+    current_user: UserInDb = Depends(get_current_active_user),
     db: Database = Depends(get_db),
-) -> ApiKey:
+) -> ApiKeyInDb:
     """Regenerate an API key for the current user."""
     api_key = await db.api_keys.find_one(
         filters={"id": api_key_id, "user_id": current_user.id}
@@ -80,9 +80,9 @@ async def update_api_key(
 @api_keys_router.delete("/{api_key_id}")
 async def delete_api_key(
     api_key_id: str,
-    current_user: User = Depends(get_current_active_user),
+    current_user: UserInDb = Depends(get_current_active_user),
     db: Database = Depends(get_db),
-) -> ApiKey:
+) -> ApiKeyInDb:
     """Delete an API key for the current user."""
     api_key = await db.api_keys.find_one(
         filters={"id": api_key_id, "user_id": current_user.id}

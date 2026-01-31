@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
 from models.deployments import DeploymentStates
@@ -12,7 +14,7 @@ from backend.api.dependencies import (
     get_deployment_with_admin_access,
 )
 from backend.api.utils import create_sse_stream_with_subscription
-from backend.database.models import ComposeDeployment
+from backend.database.models import ComposeDeploymentInDb
 from backend.services.monitoring.monitor_config import LogMonitorConfig
 from backend.tasks.client import run_delete_instance
 
@@ -42,7 +44,7 @@ async def delete_instance(
     force: bool = Query(
         False, description="Force delete the pod (bypasses graceful shutdown)"
     ),
-    deployment: ComposeDeployment = Depends(get_deployment_with_admin_access),
+    deployment: ComposeDeploymentInDb = Depends(get_deployment_with_admin_access),
 ) -> InstanceTaskStatusResponse:
     """Delete a specific instance in a deployment."""
     try:
@@ -82,7 +84,7 @@ async def delete_instance(
         )
 
         return InstanceTaskStatusResponse(
-            task_id=job_key,
+            task_id=UUID(job_key),
             status=TaskStatus.PENDING,
             message=f"Instance {pod_name} deletion task submitted",
             deployment_id=deployment.id,
@@ -104,7 +106,7 @@ async def delete_instance(
 async def stream_service_logs(
     pod_name: str,
     tail: int = Query(100),
-    deployment: ComposeDeployment = Depends(get_deployment_with_access),
+    deployment: ComposeDeploymentInDb = Depends(get_deployment_with_access),
 ):
     """Stream real-time service logs."""
     # Check for helm_values

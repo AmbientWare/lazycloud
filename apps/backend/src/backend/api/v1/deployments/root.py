@@ -1,5 +1,3 @@
-import uuid
-
 import yaml
 from api_requests.deployments import (
     DeploymentCreateRequest,
@@ -35,7 +33,8 @@ from backend.api.security import get_current_active_user
 from backend.database import Database, get_db
 from backend.database.models import (
     ComposeDeployment,
-    User,
+    ComposeDeploymentInDb,
+    UserInDb,
     WorkspaceRole,
 )
 from backend.services.compose.parser import ComposeParser
@@ -100,7 +99,7 @@ async def list_deployments(
 
         return DeploymentListResponse(
             deployments=deployment_responses,
-            total=total,
+            total=total or 0,
             cursor=str(offset + limit)
             if total is not None and total > offset + limit
             else None,
@@ -117,9 +116,12 @@ async def list_deployments(
     "/{deployment_id}/status", response_model=DeploymentStatusResponse
 )
 async def get_deployment_status(
-    deployment: ComposeDeployment = Depends(get_deployment_with_access),
+    deployment: ComposeDeploymentInDb = Depends(get_deployment_with_access),
 ) -> DeploymentStatusResponse:
     """Get resource status for a deployment."""
+    if not deployment.helm_values:
+        raise HTTPException(400, "Deployment has no helm values")
+
     watcher = StatusWatcher(
         deployment_id=deployment.id,
         namespace=deployment.namespace,
@@ -145,7 +147,7 @@ async def get_deployment_status(
 @deployments_router.post("", response_model=DeploymentResponse)
 async def create_deployment(
     request: DeploymentCreateRequest,
-    current_user: User = Depends(get_current_active_user),
+    current_user: UserInDb = Depends(get_current_active_user),
     db: Database = Depends(get_db),
 ) -> DeploymentResponse:
     """Create or update a deployment record (does not trigger deployment)."""
@@ -209,14 +211,12 @@ async def create_deployment(
         state=DeploymentStates.PENDING,
         cluster_id=validation_cluster_id,
     )
-    if existing_deployment:
-        temp_deployment.id = str(existing_deployment.id)
-    else:
-        # Generate temporary ID for validation
-        temp_deployment.id = str(uuid.uuid4())
 
     try:
-        _, _ = await validate_deployment_request(temp_deployment, existing_deployment)
+        deployment_id = existing_deployment.id if existing_deployment else None
+        _, _ = await validate_deployment_request(
+            deployment_id, temp_deployment, existing_deployment
+        )
 
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -293,7 +293,7 @@ async def create_deployment(
         try:
             deployment_data = ComposeDeployment(
                 workspace_id=request.workspace_id,
-                name=request.name,
+                name=request.name or "tmp-deployment",
                 namespace=namespace,
                 compose_yaml="",
                 pending_compose_yaml=request.compose_yaml,
@@ -358,7 +358,9 @@ async def create_deployment(
 )
 async def deploy_deployment(
     request: DeploymentRunRequest,
-    deployment: ComposeDeployment = Depends(get_deployment_with_active_subscription),
+    deployment: ComposeDeploymentInDb = Depends(
+        get_deployment_with_active_subscription
+    ),
     db: Database = Depends(get_db),
 ) -> DeploymentTaskStatusResponse:
     """Trigger deployment of a deployment record."""
@@ -370,20 +372,18 @@ async def deploy_deployment(
         )
 
     # If compose_yaml provided in request, update it first
-    if request.compose_yaml:
-        deployment = await db.compose_deployments.get_by_id(
-            deployment.id, with_lock=True
-        )
-        if deployment:
-            deployment.pending_compose_yaml = request.compose_yaml
-            # Reset to PENDING if updating from terminal state
-            if deployment.state in (
-                DeploymentStates.DEPLOYED,
-                DeploymentStates.FAILED,
-                DeploymentStates.DELETED,
-            ):
-                deployment.state = DeploymentStates.PENDING
-            await db.compose_deployments.update(deployment)
+    if request.compose_yaml is not None:
+        deployment.pending_compose_yaml = request.compose_yaml
+        # Reset to PENDING if updating from terminal state
+        if deployment.state in (
+            DeploymentStates.DEPLOYED,
+            DeploymentStates.FAILED,
+            DeploymentStates.DELETED,
+        ):
+            deployment.state = DeploymentStates.PENDING
+        updated_deployment = await db.compose_deployments.update(deployment)
+        if updated_deployment:
+            deployment = updated_deployment
 
     # Validate service-specific deployment requirements
     # compose file not set until deployment is created and migrated from pending_compose_yaml
@@ -418,7 +418,6 @@ async def deploy_deployment(
         depot_project_id=deployment.depot_project_id,
         cluster_id=deployment.cluster_id,
     )
-    temp_deployment.id = str(deployment.id)
 
     # Get owner features for helm values generation (instance class selection)
     owner_user = await db.workspaces.get_owner_user(deployment.workspace_id)
@@ -427,8 +426,9 @@ async def deploy_deployment(
     # Full validation (compose parsing, helm generation, quotas)
     try:
         helm_values, _ = await validate_deployment_request(
-            temp_deployment,
-            deployment,
+            deployment_id=deployment.id,
+            deployment=temp_deployment,
+            existing_deployment=deployment,
             service_names=request.service_names,
             features=features,
         )
@@ -442,12 +442,10 @@ async def deploy_deployment(
             status_code=500, detail="Failed to validate deployment configuration"
         ) from e
 
-    # Update deployment with helm_values BEFORE triggering task
-    # This prevents race condition where task checks its own status
-    deployment = await db.compose_deployments.get_by_id(deployment.id, with_lock=True)
-    if deployment:
-        deployment.helm_values = helm_values
-        await db.compose_deployments.update(deployment)
+    deployment.helm_values = helm_values
+    updated_deployment = await db.compose_deployments.update(deployment)
+    if updated_deployment:
+        deployment = updated_deployment
 
     # Trigger the deploy job
     job_key = await run_deploy_compose(
@@ -458,11 +456,11 @@ async def deploy_deployment(
 
     # Update deployment with job_key after job is enqueued
     # The job's idempotency check handles the PENDING state correctly
-    deployment = await db.compose_deployments.get_by_id(deployment.id, with_lock=True)
-    if deployment:
-        deployment.current_task_run_id = job_key
-        deployment.status_message = "Deployment task queued"
-        await db.compose_deployments.update(deployment)
+    deployment.current_task_run_id = job_key
+    deployment.status_message = "Deployment task queued"
+    updated_deployment = await db.compose_deployments.update(deployment)
+    if updated_deployment:
+        deployment = updated_deployment
 
     return DeploymentTaskStatusResponse(
         task_id=job_key,
@@ -476,16 +474,13 @@ async def deploy_deployment(
     "/{deployment_id}", response_model=DeploymentTaskStatusResponse
 )
 async def delete_deployment(
-    deployment: ComposeDeployment = Depends(get_deployment_with_admin_access),
+    deployment: ComposeDeploymentInDb = Depends(get_deployment_with_admin_access),
     db: Database = Depends(get_db),
 ) -> DeploymentTaskStatusResponse:
     """Delete a deployment."""
     try:
         job_key = await run_destroy_compose(deployment_id=deployment.id)
 
-        deployment = await db.compose_deployments.get_by_id(
-            deployment.id, with_lock=True
-        )
         if deployment:
             deployment.current_task_run_id = job_key
             deployment.state = DeploymentStates.DELETING
@@ -542,7 +537,7 @@ async def get_deployment_history(
 )
 async def rollback_deployment(
     request: RollbackRequest,
-    deployment: ComposeDeployment = Depends(get_deployment_with_admin_access),
+    deployment: ComposeDeploymentInDb = Depends(get_deployment_with_admin_access),
     db: Database = Depends(get_db),
 ) -> DeploymentTaskStatusResponse:
     """Rollback a deployment to a previous Helm revision."""
@@ -575,12 +570,12 @@ async def rollback_deployment(
         revision=request.revision,
     )
 
-    deployment = await db.compose_deployments.get_by_id(deployment.id, with_lock=True)
-    if deployment:
-        deployment.current_task_run_id = job_key
-        deployment.state = DeploymentStates.DEPLOYING
-        deployment.status_message = f"Rollback to revision {request.revision} queued"
-        await db.compose_deployments.update(deployment)
+    deployment.current_task_run_id = job_key
+    deployment.state = DeploymentStates.DEPLOYING
+    deployment.status_message = f"Rollback to revision {request.revision} queued"
+    updated_deployment = await db.compose_deployments.update(deployment)
+    if updated_deployment:
+        deployment = updated_deployment
 
     return DeploymentTaskStatusResponse(
         task_id=job_key,

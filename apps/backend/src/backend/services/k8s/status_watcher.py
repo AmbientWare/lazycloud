@@ -46,7 +46,7 @@ class StatusWatcher:
         self,
         deployment_id: str,
         namespace: str,
-        helm_values: HelmValues,
+        helm_values: HelmValues | None,
         cluster_id: str,
         deployment_name: str | None = None,
         deployed_at: datetime | None = None,

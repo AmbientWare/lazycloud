@@ -9,9 +9,9 @@ from backend.api.security import get_current_active_user
 from backend.database import Database, get_db
 from backend.database.models import (
     InvitationType,
-    User,
+    UserInDb,
     UserWorkspaceStatus,
-    WorkspaceInvitation,
+    WorkspaceInvitationInDb,
 )
 from backend.services import (
     InvitationService,
@@ -39,7 +39,7 @@ class InvitationDetailsResponse(BaseModel):
 
 @invitations_router.get("/pending")
 async def get_pending_invitations(
-    current_user: User = Depends(get_current_active_user),
+    current_user: UserInDb = Depends(get_current_active_user),
     db: Database = Depends(get_db),
 ) -> list[InvitationDetailsResponse]:
     """Get all pending invitations for the current user (including ownership transfers)"""
@@ -74,7 +74,7 @@ async def get_pending_invitations(
 @invitations_router.post("/{invitation_id}/accept")
 async def accept_invitation(
     invitation_id: str,
-    current_user: User = Depends(get_current_active_user),
+    current_user: UserInDb = Depends(get_current_active_user),
     subscription_service: SubscriptionService = Depends(get_subscription_service),
     invitation_service: InvitationService = Depends(get_invitation_service),
     db: Database = Depends(get_db),
@@ -98,8 +98,8 @@ async def accept_invitation(
 
 
 async def _accept_invitation_logic(
-    invitation: WorkspaceInvitation,
-    current_user: User,
+    invitation: WorkspaceInvitationInDb,
+    current_user: UserInDb,
     subscription_service: SubscriptionService,
     invitation_service: InvitationService,
     db: Database,
@@ -169,7 +169,7 @@ async def _accept_invitation_logic(
 @invitations_router.post("/{invitation_id}/decline")
 async def decline_invitation(
     invitation_id: str,
-    current_user: User = Depends(get_current_active_user),
+    current_user: UserInDb = Depends(get_current_active_user),
     db: Database = Depends(get_db),
 ) -> WorkspaceSuccessResponse:
     """Decline an invitation by ID (for logged-in users)"""

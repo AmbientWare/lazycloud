@@ -141,6 +141,8 @@ async def update_member_role(
 
     target_membership.role = request.role
     updated_membership = await db.user_workspaces.update(target_membership)
+    if updated_membership is None:
+        raise HTTPException(status_code=500, detail="Failed to update member role")
 
     user = await db.users.get_by_id(request.user_id)
     if not user:

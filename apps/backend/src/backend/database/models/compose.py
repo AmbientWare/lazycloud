@@ -22,7 +22,7 @@ from backend.database.utils import (
 class ComposeDeployment(BaseModel):
     """Pydantic model for a compose deployment with automatic encryption/decryption."""
 
-    name: str | None = None
+    name: str
     workspace_id: UUIDStr
     namespace: str
     compose_yaml: str
