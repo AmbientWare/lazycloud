@@ -24,7 +24,7 @@ from backend.api.v1 import (
 from backend.billing.product_details.features import BaseFeatures
 from backend.config import app_config
 from backend.database import Database, _create_database, get_db
-from backend.database.models import UserPydantic, UserRole
+from backend.database.models import User, UserRole
 from backend.database.session import session_manager
 from backend.services import (
     get_depot_service,
@@ -112,7 +112,7 @@ def api_db(api_db_session: AsyncSession) -> Database:
 
 
 @pytest.fixture
-async def api_user(api_db: Database) -> UserPydantic:
+async def api_user(api_db: Database) -> User:
     """Create a test user for API tests."""
     return await api_db.users.create(make_user())
 
@@ -195,7 +195,7 @@ def make_mock_depot_service() -> AsyncMock:
 
 
 @pytest.fixture
-async def api_admin_user(api_db: Database) -> UserPydantic:
+async def api_admin_user(api_db: Database) -> User:
     """Create an admin user for API key tests."""
     user = make_user("admin")
     user.role = UserRole.ADMIN
@@ -244,7 +244,7 @@ def mock_saq_tasks():
 
 
 @pytest.fixture
-async def client(api_db: Database, api_user: UserPydantic) -> AsyncClient:
+async def client(api_db: Database, api_user: User) -> AsyncClient:
     """Async HTTP client with mocked auth and database dependencies."""
     app = get_test_app()
 
@@ -276,7 +276,7 @@ async def client(api_db: Database, api_user: UserPydantic) -> AsyncClient:
 
 
 @pytest.fixture
-async def admin_client(api_db: Database, api_admin_user: UserPydantic) -> AsyncClient:
+async def admin_client(api_db: Database, api_admin_user: User) -> AsyncClient:
     """Async HTTP client with admin user for API key tests."""
 
     app = get_test_app()

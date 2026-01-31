@@ -2,7 +2,7 @@
 
 import pytest
 from backend.database import Database
-from backend.database.models import UserPydantic, WorkspaceRole
+from backend.database.models import User, WorkspaceRole
 from httpx import AsyncClient
 
 from tests.fixtures.database import (
@@ -20,7 +20,7 @@ class TestGetPendingInvitations:
     """Tests for GET /v1/invitations/pending."""
 
     async def test_get_pending_invitations(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """User can see their pending invitations."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -40,7 +40,7 @@ class TestAcceptInvitation:
     """Tests for POST /v1/invitations/{id}/accept."""
 
     async def test_accept_invitation_success(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """User can accept invitation."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -59,7 +59,7 @@ class TestAcceptInvitation:
         assert response.json()["success"] is True
 
     async def test_accept_invitation_wrong_user_fails(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """User cannot accept invitation for different email."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -77,7 +77,7 @@ class TestDeclineInvitation:
     """Tests for POST /v1/invitations/{id}/decline."""
 
     async def test_decline_invitation_success(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """User can decline invitation."""
         workspace = await api_db.workspaces.create(make_workspace())

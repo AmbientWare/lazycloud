@@ -9,7 +9,7 @@ from responses.usage import (
 
 from backend.api.dependencies import get_deployment_with_admin_access_for_usage
 from backend.api.security import get_current_active_user
-from backend.database.models import ComposeDeploymentPydantic, UserPydantic
+from backend.database.models import ComposeDeployment, User
 from backend.services import (
     PolarService,
     UsageService,
@@ -24,10 +24,8 @@ MAX_DATE_RANGE_DAYS = 365
 
 @usage_router.get("/breakdown")
 async def get_deployment_cost_breakdown(
-    deployment: ComposeDeploymentPydantic = Depends(
-        get_deployment_with_admin_access_for_usage
-    ),
-    current_user: UserPydantic = Depends(get_current_active_user),
+    deployment: ComposeDeployment = Depends(get_deployment_with_admin_access_for_usage),
+    current_user: User = Depends(get_current_active_user),
     start_date: datetime | None = Query(
         None, description="Start date (defaults to start of current month)"
     ),

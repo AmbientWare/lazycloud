@@ -23,7 +23,7 @@ from models.statuses import TaskStatus
 
 from backend.config import app_config
 from backend.database import get_db_context
-from backend.database.models import ComposeDeploymentPydantic, SecretPydantic
+from backend.database.models import ComposeDeployment, Secret
 from backend.services import get_cloudflare_service, get_subscription_service
 from backend.services.compose.parser import ComposeParser
 from backend.services.k8s import get_chart_paths
@@ -241,7 +241,7 @@ async def prepare_deployment(
 
 
 async def prepare_namespace_config(
-    deployment: ComposeDeploymentPydantic,
+    deployment: ComposeDeployment,
 ) -> HelmDeploymentConfig:
     """Prepare namespace configuration with quota."""
     async with get_db_context() as db:
@@ -473,7 +473,7 @@ async def sync_deployment_to_db(
     deployment_id: str,
     helm_values: HelmValues,
     helm_revision: int | None,
-    secrets: list[SecretPydantic],
+    secrets: list[Secret],
 ) -> None:
     """Sync deployment state to database after successful Helm deployment."""
     async with get_db_context() as db:

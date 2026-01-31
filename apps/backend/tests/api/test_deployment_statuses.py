@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pytest
 from backend.database import Database
-from backend.database.models import UserPydantic, WorkspaceRole
+from backend.database.models import User, WorkspaceRole
 from httpx import AsyncClient
 
 from tests.fixtures.database import (
@@ -21,7 +21,7 @@ class TestStreamDeploymentStatus:
     """Tests for GET /v1/deployments/{id}/status/stream."""
 
     async def test_stream_deployment_status(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Stream deployment status returns SSE stream."""
         workspace = await api_db.workspaces.create(make_workspace())

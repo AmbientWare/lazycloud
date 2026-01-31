@@ -6,7 +6,7 @@ from jwt import PyJWKClient
 from backend.config import ENVIRONMENT, app_config
 from backend.database import Database, get_db
 from backend.database.models import (
-    UserPydantic,
+    User,
     UserRole,
     UserStatus,
 )
@@ -43,7 +43,7 @@ def get_jwks_client(force_refresh: bool = False) -> PyJWKClient:
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
     db: Database = Depends(get_db),
-) -> UserPydantic:
+) -> User:
     # Dev mode bypass
     if app_config.ENV.value == ENVIRONMENT.DEV.value and (
         credentials is None or not credentials.credentials
@@ -73,7 +73,7 @@ async def get_current_user(
         return await _authenticate_workos_token(token, db)
 
 
-async def _authenticate_api_key(api_key: str, db: Database) -> UserPydantic:
+async def _authenticate_api_key(api_key: str, db: Database) -> User:
     """Authenticate using API key (sk_ prefix)"""
     db_api_key = await db.api_keys.find_one(filters={"value": api_key})
 
@@ -95,7 +95,7 @@ async def _authenticate_api_key(api_key: str, db: Database) -> UserPydantic:
     return user
 
 
-async def _authenticate_workos_token(token: str, db: Database) -> UserPydantic:
+async def _authenticate_workos_token(token: str, db: Database) -> User:
     """Authenticate using WorkOS access token."""
     # Try validation, and if it fails due to key issues, retry with refreshed keys
     for attempt in range(2):
@@ -171,8 +171,8 @@ async def _authenticate_workos_token(token: str, db: Database) -> UserPydantic:
 
 
 async def get_current_active_user(
-    current_user: UserPydantic = Depends(get_current_user),
-) -> UserPydantic:
+    current_user: User = Depends(get_current_user),
+) -> User:
     if current_user.status != UserStatus.ACTIVE:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -182,8 +182,8 @@ async def get_current_active_user(
 
 
 async def get_current_active_user_with_sub(
-    current_user: UserPydantic = Depends(get_current_active_user),
-) -> UserPydantic:
+    current_user: User = Depends(get_current_active_user),
+) -> User:
     """Require authenticated active user with an active subscription.
 
     Use this for user-level actions that require billing (e.g., workspace creation).
@@ -212,8 +212,8 @@ async def get_current_active_user_with_sub(
 
 
 async def require_admin(
-    current_user: UserPydantic = Depends(get_current_user),
-) -> UserPydantic:
+    current_user: User = Depends(get_current_user),
+) -> User:
     if current_user.role != UserRole.ADMIN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Not enough permissions"

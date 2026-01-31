@@ -5,11 +5,11 @@ from models.api_keys import ApiKeyExpirationDays
 
 from backend.database import get_db_context
 from backend.database.models import (
-    ApiKeyPydantic,
-    UserPydantic,
-    UserWorkspacePydantic,
+    ApiKey,
+    User,
+    UserWorkspace,
     UserWorkspaceStatus,
-    WorkspacePydantic,
+    Workspace,
     WorkspaceRole,
 )
 from backend.database.utils import generate_api_key, generate_api_key_expires_at
@@ -22,7 +22,7 @@ class UserOnboardingService:
     def __init__(self, polar_service: PolarService):
         self.polar_service = polar_service
 
-    async def onboard_user(self, workos_id: str, name: str, email: str) -> UserPydantic:
+    async def onboard_user(self, workos_id: str, name: str, email: str) -> User:
         """Onboard a new user with proper transaction handling."""
 
         # Check if user already exists - return existing user for idempotency
@@ -39,20 +39,20 @@ class UserOnboardingService:
 
         return user
 
-    async def _get_user_by_workos_id(self, workos_id: str) -> Optional[UserPydantic]:
+    async def _get_user_by_workos_id(self, workos_id: str) -> Optional[User]:
         """Get user by workos_id."""
         async with get_db_context() as db:
             return await db.users.get_by_workos_id(workos_id=workos_id)
 
     async def _create_user_with_entities(
         self, workos_id: str, name: str, email: str
-    ) -> UserPydantic:
+    ) -> User:
         """Create user and all related entities in a single transaction."""
         try:
             # All database operations in one atomic transaction
             async with get_db_context() as db:
                 # Create user
-                user = UserPydantic(
+                user = User(
                     name=name,
                     email=email,
                     workos_id=workos_id,
@@ -60,7 +60,7 @@ class UserOnboardingService:
                 user = await db.users.create(user)
 
                 # Create API key
-                api_key = ApiKeyPydantic(
+                api_key = ApiKey(
                     name="default",
                     user_id=user.id,
                     value=generate_api_key(),
@@ -69,14 +69,14 @@ class UserOnboardingService:
                 await db.api_keys.create(api_key)
 
                 # Create personal workspace
-                workspace = WorkspacePydantic(
+                workspace = Workspace(
                     name="Personal",
                     is_personal=True,
                 )
                 workspace = await db.workspaces.create(workspace)
 
                 # Link user to workspace
-                user_workspace = UserWorkspacePydantic(
+                user_workspace = UserWorkspace(
                     user_id=user.id,
                     workspace_id=workspace.id,
                     role=WorkspaceRole.OWNER,
@@ -91,7 +91,7 @@ class UserOnboardingService:
             logger.error(f"Failed to onboard user {workos_id}: {e}")
             raise
 
-    async def _create_polar_customer(self, user: UserPydantic) -> None:
+    async def _create_polar_customer(self, user: User) -> None:
         """Create customer in Polar (external service)."""
         try:
             # Check if customer already exists (idempotency)

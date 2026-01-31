@@ -29,10 +29,10 @@ from backend.api.security import (
 from backend.api.utils import normalize_usage_date_range
 from backend.database import Database, get_db
 from backend.database.models import (
-    UserPydantic,
-    UserWorkspacePydantic,
+    User,
+    UserWorkspace,
     UserWorkspaceStatus,
-    WorkspacePydantic,
+    Workspace,
     WorkspaceRole,
     WorkspaceStatus,
 )
@@ -48,7 +48,7 @@ workspaces_router = APIRouter(prefix="/workspaces", tags=["workspaces"])
 
 @workspaces_router.get("")
 async def get_workspaces(
-    current_user: UserPydantic = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user),
     start_date: datetime | None = Query(
         None,
         description="Optional start date for usage context (includes deleted workspaces active during range)",
@@ -165,7 +165,7 @@ async def get_workspace_with_deployments(
 @workspaces_router.post("")
 async def create_workspace(
     request: CreateWorkspaceRequest,
-    current_user: UserPydantic = Depends(get_current_active_user_with_sub),
+    current_user: User = Depends(get_current_active_user_with_sub),
     db: Database = Depends(get_db),
 ) -> WorkspaceResponse:
     """Create a new workspace"""
@@ -176,14 +176,14 @@ async def create_workspace(
 
     try:
         # Create workspace and membership in a single transaction
-        workspace = WorkspacePydantic(
+        workspace = Workspace(
             name=validated_name,
             is_personal=False,
         )
         workspace = await db.workspaces.create(workspace)
 
         # Add current user as owner
-        membership = UserWorkspacePydantic(
+        membership = UserWorkspace(
             user_id=current_user.id,
             workspace_id=workspace.id,
             role=WorkspaceRole.OWNER,
@@ -252,7 +252,7 @@ async def delete_workspace(
 
 @workspaces_router.get("/usage/all")
 async def get_aggregated_usage(
-    current_user: UserPydantic = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user),
     start_date: datetime | None = Query(
         None, description="Start date (defaults to start of current month)"
     ),
@@ -278,7 +278,7 @@ async def get_aggregated_usage(
 
 @workspaces_router.get("/usage/all/daily")
 async def get_aggregated_daily_usage(
-    current_user: UserPydantic = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user),
     start_date: datetime | None = Query(
         None, description="Start date (defaults to start of current month)"
     ),

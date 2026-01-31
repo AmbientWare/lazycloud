@@ -6,20 +6,20 @@ from models.api_keys import ApiKeyExpirationDays
 
 from backend.config import app_config
 from backend.database import get_db_context
-from backend.database.api_keys import ApiKeyPydantic
+from backend.database.api_keys import ApiKey
 from backend.database.user_workspaces import (
-    UserWorkspacePydantic,
+    UserWorkspace,
     UserWorkspaceStatus,
     WorkspaceRole,
 )
 from backend.database.users import (
     SubscriptionState,
-    UserPydantic,
+    User,
     UserRole,
     UserStatus,
 )
 from backend.database.utils import api_key_is_expired, generate_api_key_expires_at
-from backend.database.workspaces import WorkspacePydantic
+from backend.database.workspaces import Workspace
 from backend.services import get_polar_service
 
 
@@ -32,7 +32,7 @@ async def update_admin_api_keys():
         if not user:
             # Create admin user with workspace
             logger.info("Creating admin user and workspace...")
-            user = UserPydantic(
+            user = User(
                 id=uuid.uuid4(),
                 name="admin user",
                 email="admin@lazycloud.com",
@@ -44,14 +44,14 @@ async def update_admin_api_keys():
             user = await db.users.create(user)
 
             # Create personal workspace
-            personal_workspace = WorkspacePydantic(
+            personal_workspace = Workspace(
                 name="Personal",
                 is_personal=True,
             )
             personal_workspace = await db.workspaces.create(personal_workspace)
 
             # Link admin user to their personal workspace as owner
-            user_workspace_membership = UserWorkspacePydantic(
+            user_workspace_membership = UserWorkspace(
                 user_id=user.id,
                 workspace_id=personal_workspace.id,
                 role=WorkspaceRole.OWNER,
@@ -65,14 +65,14 @@ async def update_admin_api_keys():
             personal_workspace = await db.workspaces.get_personal_workspace(user.id)
             if not personal_workspace:
                 logger.info("Creating personal workspace for admin user...")
-                personal_workspace = WorkspacePydantic(
+                personal_workspace = Workspace(
                     name="Personal",
                     is_personal=True,
                 )
                 personal_workspace = await db.workspaces.create(personal_workspace)
 
                 # Link admin user to their personal workspace as owner
-                user_workspace_membership = UserWorkspacePydantic(
+                user_workspace_membership = UserWorkspace(
                     user_id=user.id,
                     workspace_id=personal_workspace.id,
                     role=WorkspaceRole.OWNER,
@@ -121,7 +121,7 @@ async def update_admin_api_keys():
             logger.info("Admin api key already exists. Skipping replacement...")
             return user
 
-        api_key = ApiKeyPydantic(
+        api_key = ApiKey(
             name="lzy_admin_api_key",
             user_id=user.id,
             value=app_config.ADMIN_API_KEY,

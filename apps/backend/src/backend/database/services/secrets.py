@@ -2,23 +2,23 @@ from models.secrets import SecretSource, SecretState
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
-from backend.database.models import SecretPydantic
+from backend.database.models import Secret
 from backend.database.services.base import DatabaseService
 from backend.database.tables import SecretTable
 
 
-class SecretService(DatabaseService[SecretTable, SecretPydantic]):
+class SecretService(DatabaseService[SecretTable, Secret]):
     """Service layer for secret operations.
 
     Encryption/decryption is handled automatically by Pydantic validators/serializers.
     """
 
     def __init__(self, session: AsyncSession):
-        super().__init__(SecretTable, SecretPydantic, session)
+        super().__init__(SecretTable, Secret, session)
 
     async def get_secrets(
         self, deployment_id: str, source: SecretSource | None = None
-    ) -> list[SecretPydantic]:
+    ) -> list[Secret]:
         """Get secrets by deployment id."""
         query = select(SecretTable).where(SecretTable.deployment_id == deployment_id)
         if source:
@@ -28,9 +28,7 @@ class SecretService(DatabaseService[SecretTable, SecretPydantic]):
         db_secrets = result.scalars().all()
         return [self._to_pydantic(secret) for secret in db_secrets]
 
-    async def get_secret_by_key(
-        self, deployment_id: str, key: str
-    ) -> SecretPydantic | None:
+    async def get_secret_by_key(self, deployment_id: str, key: str) -> Secret | None:
         """Get a single secret by deployment_id and key."""
         query = select(SecretTable).where(
             SecretTable.deployment_id == deployment_id,
@@ -47,14 +45,14 @@ class SecretService(DatabaseService[SecretTable, SecretPydantic]):
         value: str,
         source: SecretSource,
         state: SecretState,
-    ) -> SecretPydantic | None:
+    ) -> Secret | None:
         """Update an existing secret by deployment_id and key. Returns None if not found."""
         existing = await self.get_secret_by_key(deployment_id, key)
         if not existing:
             return None
 
         # Create updated model
-        updated_secret = SecretPydantic(
+        updated_secret = Secret(
             id=existing.id,
             deployment_id=deployment_id,
             key=key,

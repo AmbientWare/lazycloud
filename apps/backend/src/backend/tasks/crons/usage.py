@@ -23,8 +23,8 @@ from tenacity import (
 from backend.database import get_db_context
 from backend.database.models import (
     BreakdownType,
-    ComposeDeploymentPydantic,
-    DailyUsageRecordPydantic,
+    ComposeDeployment,
+    DailyUsageRecord,
     DailyUsageStatus,
 )
 from backend.services import (
@@ -94,7 +94,7 @@ class ServiceEndpoint:
 
 @dataclass
 class WorkspaceDeploymentContext:
-    deployments: list[ComposeDeploymentPydantic]
+    deployments: list[ComposeDeployment]
     deployment_map: dict[str, str]
     pvc_map: dict[str, str]
     active_endpoints: list[ServiceEndpoint]
@@ -376,7 +376,7 @@ async def spawn_usage_collection_job(ctx: dict[str, Any]) -> dict[str, Any]:
 )
 async def _send_to_polar_with_retry(
     polar_service: PolarService,
-    record: DailyUsageRecordPydantic,
+    record: DailyUsageRecord,
     external_customer_id: str,
     idempotency_key: str,
 ) -> bool:

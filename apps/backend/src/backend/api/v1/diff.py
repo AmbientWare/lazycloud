@@ -13,7 +13,7 @@ from responses.deployments import DiffResponse
 from backend.api.dependencies import require_workspace_admin
 from backend.api.security import get_current_active_user
 from backend.database import Database, get_db
-from backend.database.models import ComposeDeploymentPydantic, UserPydantic
+from backend.database.models import ComposeDeployment, User
 from backend.services.compose.diff_checker import (
     ComposeDiffChecker,
     detect_storage_type_changes,
@@ -29,7 +29,7 @@ diff_router = APIRouter(prefix="/diff")
 
 async def _get_deployment_or_verify_workspace(
     request: DiffRequest,
-    current_user: UserPydantic = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user),
     db: Database = Depends(get_db),
 ):
     """Get deployment by name for existing, verify workspace access for new."""
@@ -55,9 +55,7 @@ async def _get_deployment_or_verify_workspace(
 @diff_router.post("", response_model=DiffResponse)
 async def get_deployment_diff(
     request: DiffRequest = Body(...),
-    deployment: ComposeDeploymentPydantic | None = Depends(
-        _get_deployment_or_verify_workspace
-    ),
+    deployment: ComposeDeployment | None = Depends(_get_deployment_or_verify_workspace),
     db: Database = Depends(get_db),
 ) -> DiffResponse:
     """Compare current deployment with proposed changes."""
@@ -135,7 +133,7 @@ async def get_deployment_diff(
             cluster_id = cluster.name if cluster else "default"
 
         # Create temporary deployment for full validation
-        temp_deployment = ComposeDeploymentPydantic(
+        temp_deployment = ComposeDeployment(
             workspace_id=workspace_id,
             name=request.deployment_name or "",
             namespace=namespace,

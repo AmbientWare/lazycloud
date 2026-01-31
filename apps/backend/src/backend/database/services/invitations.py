@@ -6,7 +6,7 @@ from sqlalchemy.future import select
 
 from backend.database.models import (
     InvitationType,
-    WorkspaceInvitationPydantic,
+    WorkspaceInvitation,
     WorkspaceRole,
 )
 from backend.database.services.base import DatabaseService
@@ -14,12 +14,12 @@ from backend.database.tables import WorkspaceInvitationTable
 
 
 class WorkspaceInvitationService(
-    DatabaseService[WorkspaceInvitationTable, WorkspaceInvitationPydantic]
+    DatabaseService[WorkspaceInvitationTable, WorkspaceInvitation]
 ):
     """Service layer for workspace invitation operations"""
 
     def __init__(self, session: AsyncSession):
-        super().__init__(WorkspaceInvitationTable, WorkspaceInvitationPydantic, session)
+        super().__init__(WorkspaceInvitationTable, WorkspaceInvitation, session)
 
     async def create_invitation(
         self,
@@ -30,9 +30,9 @@ class WorkspaceInvitationService(
         token: str,
         expires_at: datetime,
         invitation_type: str = InvitationType.MEMBER.value,
-    ) -> WorkspaceInvitationPydantic:
+    ) -> WorkspaceInvitation:
         """Create a new invitation"""
-        invitation = WorkspaceInvitationPydantic(
+        invitation = WorkspaceInvitation(
             workspace_id=workspace_id,
             email=email.lower().strip(),
             role=role,
@@ -43,14 +43,14 @@ class WorkspaceInvitationService(
         )
         return await self.create(invitation)
 
-    async def get_by_token(self, token: str) -> WorkspaceInvitationPydantic | None:
+    async def get_by_token(self, token: str) -> WorkspaceInvitation | None:
         """Get invitation by token"""
         filters = {"token": token}
         return await self.find_one(filters=filters)
 
     async def get_by_workspace(
         self, workspace_id: str, include_accepted: bool = False
-    ) -> list[WorkspaceInvitationPydantic]:
+    ) -> list[WorkspaceInvitation]:
         """Get all invitations for a workspace"""
         query = select(WorkspaceInvitationTable).where(
             WorkspaceInvitationTable.workspace_id == workspace_id
@@ -61,9 +61,7 @@ class WorkspaceInvitationService(
         invitations = result.scalars().all()
         return [self._to_pydantic(inv) for inv in invitations if inv]
 
-    async def get_pending_by_email(
-        self, email: str
-    ) -> list[WorkspaceInvitationPydantic]:
+    async def get_pending_by_email(self, email: str) -> list[WorkspaceInvitation]:
         """Get all pending invitations for an email"""
         query = (
             select(WorkspaceInvitationTable)
@@ -75,9 +73,7 @@ class WorkspaceInvitationService(
         invitations = result.scalars().all()
         return [self._to_pydantic(inv) for inv in invitations if inv]
 
-    async def accept_invitation(
-        self, invitation_id: str
-    ) -> WorkspaceInvitationPydantic | None:
+    async def accept_invitation(self, invitation_id: str) -> WorkspaceInvitation | None:
         """Mark invitation as accepted"""
         invitation = await self.get_by_id(invitation_id)
         if not invitation:
@@ -99,7 +95,7 @@ class WorkspaceInvitationService(
 
     async def get_by_workspace_and_email(
         self, workspace_id: str, email: str
-    ) -> WorkspaceInvitationPydantic | None:
+    ) -> WorkspaceInvitation | None:
         """Get invitation by workspace and email"""
         filters = {
             "workspace_id": workspace_id,
@@ -109,7 +105,7 @@ class WorkspaceInvitationService(
 
     async def get_by_workspace_and_email_and_type(
         self, workspace_id: str, email: str, invitation_type: str
-    ) -> WorkspaceInvitationPydantic | None:
+    ) -> WorkspaceInvitation | None:
         """Get invitation by workspace, email, and invitation type"""
         filters = {
             "workspace_id": workspace_id,

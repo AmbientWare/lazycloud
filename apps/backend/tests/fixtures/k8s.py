@@ -1,20 +1,20 @@
 """K8s test fixtures."""
 
 import pytest
-from backend.database.models import ComposeDeploymentPydantic, SecretPydantic
+from backend.database.models import ComposeDeployment, Secret
 from backend.services.k8s.helm_values_generator import HelmValuesGenerator
 
 
 @pytest.fixture
-def helm_generator(test_deployment: ComposeDeploymentPydantic) -> HelmValuesGenerator:
+def helm_generator(test_deployment: ComposeDeployment) -> HelmValuesGenerator:
     """Create a HelmValuesGenerator instance."""
     return HelmValuesGenerator(test_deployment, [])
 
 
 @pytest.fixture
 def helm_generator_with_secrets(
-    test_deployment: ComposeDeploymentPydantic,
-    test_secret: SecretPydantic,
+    test_deployment: ComposeDeployment,
+    test_secret: Secret,
 ) -> HelmValuesGenerator:
     """Create a HelmValuesGenerator instance with secrets."""
     return HelmValuesGenerator(test_deployment, [test_secret])

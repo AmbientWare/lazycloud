@@ -2,7 +2,7 @@
 
 import pytest
 from backend.database import Database
-from backend.database.models import UserPydantic, WorkspaceRole
+from backend.database.models import User, WorkspaceRole
 from httpx import AsyncClient
 
 from tests.fixtures.database import (
@@ -19,7 +19,7 @@ class TestGetWorkspaceWithDeployments:
     """Tests for GET /v1/workspaces/{id}/with-deployments."""
 
     async def test_get_workspace_with_deployments(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Get workspace includes deployment list."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -45,7 +45,7 @@ class TestGetAggregatedUsage:
     """Tests for GET /v1/workspaces/usage/all."""
 
     async def test_get_aggregated_usage(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Get aggregated usage across workspaces."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -68,7 +68,7 @@ class TestGetDailyUsage:
     """Tests for GET /v1/workspaces/usage/all/daily."""
 
     async def test_get_daily_usage(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Get daily aggregated usage."""
         workspace = await api_db.workspaces.create(make_workspace())

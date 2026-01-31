@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database.models import (
     BreakdownType,
-    DailyUsageRecordPydantic,
+    DailyUsageRecord,
     DailyUsageStatus,
 )
 from backend.database.services.base import DatabaseService
@@ -22,9 +22,9 @@ from backend.database.tables import (
 )
 
 
-class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecordPydantic]):
+class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecord]):
     def __init__(self, session: AsyncSession):
-        super().__init__(DailyUsageRecordTable, DailyUsageRecordPydantic, session)
+        super().__init__(DailyUsageRecordTable, DailyUsageRecord, session)
 
     async def is_interval_collected(
         self, workspace_id: str, interval_start: datetime
@@ -39,7 +39,7 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecordPydant
 
     async def get_or_create_daily_record(
         self, workspace_id: str, usage_date: date, expected_intervals: int = 96
-    ) -> DailyUsageRecordPydantic:
+    ) -> DailyUsageRecord:
         """Get existing daily record or create a new one."""
         result = await self._session.execute(
             select(DailyUsageRecordTable)
@@ -49,7 +49,7 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecordPydant
         record = result.scalar_one_or_none()
 
         if record:
-            return record.to_pydantic(DailyUsageRecordPydantic)
+            return record.to_pydantic(DailyUsageRecord)
 
         new_record = DailyUsageRecordTable(
             workspace_id=workspace_id,
@@ -60,7 +60,7 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecordPydant
         self._session.add(new_record)
         await self._session.flush()
         await self._session.refresh(new_record)
-        return new_record.to_pydantic(DailyUsageRecordPydantic)
+        return new_record.to_pydantic(DailyUsageRecord)
 
     async def atomic_increment_usage(
         self,
@@ -132,9 +132,7 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecordPydant
         )
         self._session.add(event)
 
-    async def get_unbilled_for_date(
-        self, usage_date: date
-    ) -> list[DailyUsageRecordPydantic]:
+    async def get_unbilled_for_date(self, usage_date: date) -> list[DailyUsageRecord]:
         """Get all daily records that are collecting and ready to bill."""
         result = await self._session.execute(
             select(DailyUsageRecordTable)
@@ -143,7 +141,7 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecordPydant
             .order_by(DailyUsageRecordTable.workspace_id)
         )
         records = result.scalars().all()
-        return [r.to_pydantic(DailyUsageRecordPydantic) for r in records]
+        return [r.to_pydantic(DailyUsageRecord) for r in records]
 
     async def mark_as_billed(self, record_id: str, billing_id: str) -> None:
         """Mark a daily record as billed."""
@@ -175,9 +173,7 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecordPydant
             .values(**values)
         )
 
-    async def get_stuck_records(
-        self, before_date: date
-    ) -> list[DailyUsageRecordPydantic]:
+    async def get_stuck_records(self, before_date: date) -> list[DailyUsageRecord]:
         """Get records stuck in collecting status from before the given date."""
         result = await self._session.execute(
             select(DailyUsageRecordTable)
@@ -186,14 +182,14 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecordPydant
             .order_by(DailyUsageRecordTable.usage_date)
         )
         records = result.scalars().all()
-        return [r.to_pydantic(DailyUsageRecordPydantic) for r in records]
+        return [r.to_pydantic(DailyUsageRecord) for r in records]
 
     async def get_workspace_daily_usage(
         self,
         workspace_id: str,
         start_date: date,
         end_date: date,
-    ) -> list[DailyUsageRecordPydantic]:
+    ) -> list[DailyUsageRecord]:
         """Get daily usage records for a workspace in a date range."""
         result = await self._session.execute(
             select(DailyUsageRecordTable)
@@ -203,7 +199,7 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecordPydant
             .order_by(DailyUsageRecordTable.usage_date)
         )
         records = result.scalars().all()
-        return [r.to_pydantic(DailyUsageRecordPydantic) for r in records]
+        return [r.to_pydantic(DailyUsageRecord) for r in records]
 
     async def get_service_breakdown(
         self,

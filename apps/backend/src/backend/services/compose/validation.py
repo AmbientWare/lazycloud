@@ -7,15 +7,15 @@ from models.helm import HelmValues
 from backend.billing.product_details.features import BaseFeatures
 from backend.config import app_config
 from backend.database import get_db_context
-from backend.database.models import ComposeDeploymentPydantic
+from backend.database.models import ComposeDeployment
 from backend.services.compose.parser import ComposeParser
 from backend.services.k8s.helm_values_generator import HelmValuesGenerator
 from backend.tasks.core.utils import verify_quota_capacity
 
 
 async def validate_deployment_request(
-    deployment: ComposeDeploymentPydantic,
-    existing_deployment: ComposeDeploymentPydantic | None = None,
+    deployment: ComposeDeployment,
+    existing_deployment: ComposeDeployment | None = None,
     service_names: list[str] | None = None,
     features: BaseFeatures | None = None,
 ) -> tuple[HelmValues, list[str]]:

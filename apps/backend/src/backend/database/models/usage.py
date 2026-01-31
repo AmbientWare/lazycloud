@@ -2,7 +2,7 @@ from datetime import date, datetime
 from enum import StrEnum
 
 from backend.database.models.base import (
-    BaseDbPydanticModel,
+    BaseDbModel,
     UUIDStr,
 )
 
@@ -19,7 +19,7 @@ class BreakdownType(StrEnum):
     BUILD = "build"
 
 
-class DailyUsageRecordPydantic(BaseDbPydanticModel):
+class DailyUsageRecord(BaseDbModel):
     workspace_id: UUIDStr
     usage_date: date
     status: DailyUsageStatus
@@ -37,12 +37,12 @@ class DailyUsageRecordPydantic(BaseDbPydanticModel):
     last_billing_attempt_at: datetime | None = None
 
 
-class CollectedIntervalPydantic(BaseDbPydanticModel):
+class CollectedInterval(BaseDbModel):
     workspace_id: UUIDStr
     interval_start: datetime
 
 
-class UsageBreakdownEventPydantic(BaseDbPydanticModel):
+class UsageBreakdownEvent(BaseDbModel):
     workspace_id: UUIDStr
     deployment_id: UUIDStr | None = None
     interval_start: datetime

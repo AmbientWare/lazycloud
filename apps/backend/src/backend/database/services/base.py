@@ -6,11 +6,11 @@ from sqlalchemy import delete, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
-from backend.database.models import BaseDbPydanticModel
+from backend.database.models import BaseDbModel
 from backend.database.tables import BaseTable
 
 baseDbType = TypeVar("baseDbType", bound=BaseTable)
-basePydanticType = TypeVar("basePydanticType", bound=BaseDbPydanticModel)
+basePydanticType = TypeVar("basePydanticType", bound=BaseDbModel)
 
 
 class DatabaseService(Generic[baseDbType, basePydanticType]):

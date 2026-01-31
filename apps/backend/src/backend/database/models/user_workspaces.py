@@ -1,6 +1,6 @@
 from enum import StrEnum
 
-from backend.database.models.base import BaseDbPydanticModel, UUIDStr
+from backend.database.models.base import BaseDbModel, UUIDStr
 
 
 class WorkspaceRole(StrEnum):
@@ -19,7 +19,7 @@ class UserWorkspaceStatus(StrEnum):
     SUSPENDED = "suspended"
 
 
-class UserWorkspacePydantic(BaseDbPydanticModel):
+class UserWorkspace(BaseDbModel):
     """Pydantic model for user-workspace membership"""
 
     user_id: UUIDStr

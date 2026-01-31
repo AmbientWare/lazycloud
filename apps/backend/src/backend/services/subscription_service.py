@@ -7,7 +7,7 @@ from models.compose import ComposeFile
 from backend.billing.product_details.features import BaseFeatures
 from backend.config import app_config
 from backend.database import get_db_context
-from backend.database.models import InvitationType, SubscriptionState, UserPydantic
+from backend.database.models import InvitationType, SubscriptionState, User
 from backend.services.cache import CacheService
 from backend.services.compose.parser import ComposeParser
 from backend.services.exceptions import NoActiveSubscriptionError
@@ -213,9 +213,9 @@ class SubscriptionService:
 
     async def _update_user_subscription_state(
         self,
-        user: UserPydantic,
+        user: User,
         new_state: SubscriptionState,
-    ) -> UserPydantic:
+    ) -> User:
         """Update user's subscription_state and return updated Pydantic model."""
         user.subscription_state = new_state
         async with get_db_context() as db:
@@ -230,7 +230,7 @@ class SubscriptionService:
 
     async def _audit_and_update_subscription_state(
         self, user_id: str, features: BaseFeatures
-    ) -> UserPydantic | None:
+    ) -> User | None:
         """Audit user's resource usage and update subscription_state accordingly.
 
         Checks total deployments across all workspaces against the deployment limit.

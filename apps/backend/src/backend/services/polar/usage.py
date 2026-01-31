@@ -8,7 +8,7 @@ from models.billing import (
 from polar_sdk import Polar
 from polar_sdk.models import EventCreateExternalCustomer, EventsIngest
 
-from backend.database.usage import DailyUsageRecordPydantic
+from backend.database.usage import DailyUsageRecord
 
 
 class PolarUsageModule:
@@ -59,7 +59,7 @@ class PolarUsageModule:
 
     async def send_daily_usage(
         self,
-        record: DailyUsageRecordPydantic,
+        record: DailyUsageRecord,
         external_customer_id: str,
         idempotency_key: str,
     ) -> bool:

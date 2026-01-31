@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from backend.database import Database
-from backend.database.models import BreakdownType, UserPydantic, WorkspaceRole
+from backend.database.models import BreakdownType, User, WorkspaceRole
 from backend.services import (
     get_polar_service,
     get_usage_service,
@@ -35,7 +35,7 @@ class TestGetDeploymentCostBreakdown:
         self,
         client: AsyncClient,
         api_db: Database,
-        api_user: UserPydantic,
+        api_user: User,
     ):
         """Get cost breakdown for deployment."""
         workspace = await api_db.workspaces.create(make_workspace())

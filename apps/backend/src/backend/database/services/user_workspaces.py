@@ -4,8 +4,8 @@ from sqlalchemy.future import select
 
 from backend.database.models import (
     InvitationType,
-    UserPydantic,
-    UserWorkspacePydantic,
+    User,
+    UserWorkspace,
     UserWorkspaceStatus,
     WorkspaceRole,
 )
@@ -17,34 +17,32 @@ from backend.database.tables import (
 )
 
 
-class UserWorkspaceService(DatabaseService[UserWorkspaceTable, UserWorkspacePydantic]):
+class UserWorkspaceService(DatabaseService[UserWorkspaceTable, UserWorkspace]):
     """Service layer for user-workspace membership operations"""
 
     def __init__(self, session: AsyncSession):
-        super().__init__(UserWorkspaceTable, UserWorkspacePydantic, session)
+        super().__init__(UserWorkspaceTable, UserWorkspace, session)
 
     async def get_by_user_and_workspace(
         self,
         user_id: str,
         workspace_id: str,
-    ) -> UserWorkspacePydantic | None:
+    ) -> UserWorkspace | None:
         """Get membership by user and workspace"""
         filters = {"user_id": user_id, "workspace_id": workspace_id}
         return await self.find_one(filters=filters)
 
-    async def get_user_memberships(self, user_id: str) -> list[UserWorkspacePydantic]:
+    async def get_user_memberships(self, user_id: str) -> list[UserWorkspace]:
         """Get all workspace memberships for a user"""
         return await self.find({"user_id": user_id})
 
-    async def get_workspace_members(
-        self, workspace_id: str
-    ) -> list[UserWorkspacePydantic]:
+    async def get_workspace_members(self, workspace_id: str) -> list[UserWorkspace]:
         """Get all members of a workspace"""
         return await self.find({"workspace_id": workspace_id})
 
     async def get_workspace_members_with_users(
         self, workspace_id: str
-    ) -> list[tuple[UserWorkspacePydantic, UserPydantic]]:
+    ) -> list[tuple[UserWorkspace, User]]:
         """Get all members of a workspace with their user information"""
         query = (
             select(UserWorkspaceTable, UserTable)
@@ -55,13 +53,12 @@ class UserWorkspaceService(DatabaseService[UserWorkspaceTable, UserWorkspacePyda
         rows = result.all()
 
         return [
-            (self._to_pydantic(member), user.to_pydantic(UserPydantic))
-            for member, user in rows
+            (self._to_pydantic(member), user.to_pydantic(User)) for member, user in rows
         ]
 
     async def get_workspace_members_with_invitations(
         self, workspace_id: str
-    ) -> list[tuple[UserWorkspacePydantic, UserPydantic, str | None]]:
+    ) -> list[tuple[UserWorkspace, User, str | None]]:
         """Get all members of a workspace with their user information and pending invitation IDs"""
         # LEFT JOIN to get invitation_id for members with pending invitations
         # Join on email (lowercased) and workspace_id, and filter for pending (not accepted) invitations
@@ -91,7 +88,7 @@ class UserWorkspaceService(DatabaseService[UserWorkspaceTable, UserWorkspacePyda
         return [
             (
                 self._to_pydantic(member),
-                user.to_pydantic(UserPydantic),
+                user.to_pydantic(User),
                 str(invitation_id) if invitation_id is not None else None,
             )
             for member, user, invitation_id in rows
@@ -102,7 +99,7 @@ class UserWorkspaceService(DatabaseService[UserWorkspaceTable, UserWorkspacePyda
         user_id: str,
         workspace_id: str,
         role: WorkspaceRole,
-    ) -> UserWorkspacePydantic | None:
+    ) -> UserWorkspace | None:
         """Update a user's role in a workspace"""
         membership = await self.get_by_user_and_workspace(user_id, workspace_id)
         if not membership:
@@ -113,7 +110,7 @@ class UserWorkspaceService(DatabaseService[UserWorkspaceTable, UserWorkspacePyda
 
     async def update_status(
         self, user_id: str, workspace_id: str, status: UserWorkspaceStatus
-    ) -> UserWorkspacePydantic | None:
+    ) -> UserWorkspace | None:
         """Update a user's status in a workspace"""
         membership = await self.get_by_user_and_workspace(user_id, workspace_id)
         if not membership:

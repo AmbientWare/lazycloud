@@ -6,11 +6,11 @@ from sqlalchemy import DateTime, orm
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from backend.database.models import BaseDbPydanticModel
+from backend.database.models import BaseDbModel
 
 Base = orm.declarative_base()
 
-_PydanticT = TypeVar("_PydanticT", bound=BaseDbPydanticModel)
+_PydanticT = TypeVar("_PydanticT", bound=BaseDbModel)
 
 
 class BaseTable(Base):

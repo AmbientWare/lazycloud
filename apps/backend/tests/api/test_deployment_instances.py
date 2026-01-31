@@ -2,7 +2,7 @@
 
 import pytest
 from backend.database import Database
-from backend.database.models import UserPydantic, WorkspaceRole
+from backend.database.models import User, WorkspaceRole
 from httpx import AsyncClient
 from models.helm import HelmValues, ImageConfig, ServiceValues
 
@@ -23,7 +23,7 @@ class TestDeleteInstance:
         self,
         client: AsyncClient,
         api_db: Database,
-        api_user: UserPydantic,
+        api_user: User,
         mock_saq_tasks,
     ):
         """Deleting an instance triggers SAQ job."""

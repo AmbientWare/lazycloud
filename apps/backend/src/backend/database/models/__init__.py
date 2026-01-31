@@ -1,53 +1,53 @@
-from backend.database.models.api_keys import ApiKeyPydantic
-from backend.database.models.base import BaseDbPydanticModel, UUIDStr
-from backend.database.models.billing_audit import BillingAuditLogPydantic
-from backend.database.models.compose import ComposeDeploymentPydantic
+from backend.database.models.api_keys import ApiKey
+from backend.database.models.base import BaseDbModel, UUIDStr
+from backend.database.models.billing_audit import BillingAuditLog
+from backend.database.models.compose import ComposeDeployment
 from backend.database.models.invitations import (
     InvitationType,
-    WorkspaceInvitationPydantic,
+    WorkspaceInvitation,
 )
-from backend.database.models.secrets import SecretPydantic
+from backend.database.models.secrets import Secret
 from backend.database.models.usage import (
     BreakdownType,
-    CollectedIntervalPydantic,
-    DailyUsageRecordPydantic,
+    CollectedInterval,
+    DailyUsageRecord,
     DailyUsageStatus,
-    UsageBreakdownEventPydantic,
+    UsageBreakdownEvent,
 )
 from backend.database.models.user_workspaces import (
-    UserWorkspacePydantic,
+    UserWorkspace,
     UserWorkspaceStatus,
     WorkspaceRole,
 )
 from backend.database.models.users import (
     SubscriptionState,
-    UserPydantic,
+    User,
     UserRole,
     UserStatus,
 )
-from backend.database.models.workspaces import WorkspacePydantic, WorkspaceStatus
+from backend.database.models.workspaces import Workspace, WorkspaceStatus
 
 __all__ = [
-    "ApiKeyPydantic",
-    "BaseDbPydanticModel",
+    "ApiKey",
+    "BaseDbModel",
     "UUIDStr",
     "UserRole",
     "UserStatus",
     "SubscriptionState",
-    "BillingAuditLogPydantic",
-    "ComposeDeploymentPydantic",
+    "BillingAuditLog",
+    "ComposeDeployment",
     "InvitationType",
-    "WorkspaceInvitationPydantic",
+    "WorkspaceInvitation",
     "UserWorkspaceStatus",
     "WorkspaceRole",
-    "SecretPydantic",
-    "DailyUsageRecordPydantic",
-    "CollectedIntervalPydantic",
+    "Secret",
+    "DailyUsageRecord",
+    "CollectedInterval",
     "DailyUsageStatus",
     "BreakdownType",
-    "UsageBreakdownEventPydantic",
-    "UserWorkspacePydantic",
+    "UsageBreakdownEvent",
+    "UserWorkspace",
     "WorkspaceStatus",
-    "UserPydantic",
-    "WorkspacePydantic",
+    "User",
+    "Workspace",
 ]

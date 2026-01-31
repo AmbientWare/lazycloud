@@ -5,7 +5,7 @@ from backend.config import app_config
 from backend.database import get_db_context
 from backend.database.models import (
     InvitationType,
-    UserWorkspacePydantic,
+    UserWorkspace,
     UserWorkspaceStatus,
     WorkspaceRole,
 )
@@ -140,7 +140,7 @@ class InvitationService:
                 )
 
                 if not existing_membership:
-                    membership = UserWorkspacePydantic(
+                    membership = UserWorkspace(
                         user_id=existing_user.id,
                         workspace_id=workspace_id,
                         role=role,
@@ -187,7 +187,7 @@ class InvitationService:
                 existing_membership.role = invitation.role
                 await db.user_workspaces.update(existing_membership)
             else:
-                membership = UserWorkspacePydantic(
+                membership = UserWorkspace(
                     user_id=user_id,
                     workspace_id=invitation.workspace_id,
                     role=invitation.role,

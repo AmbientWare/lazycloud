@@ -8,7 +8,7 @@ from models.helm import HelmValues
 from pydantic import field_serializer, field_validator
 
 from backend.database.models.base import (
-    BaseDbPydanticModel,
+    BaseDbModel,
     UUIDStr,
 )
 from backend.database.utils import (
@@ -19,7 +19,7 @@ from backend.database.utils import (
 )
 
 
-class ComposeDeploymentPydantic(BaseDbPydanticModel):
+class ComposeDeployment(BaseDbModel):
     """Pydantic model for a compose deployment with automatic encryption/decryption."""
 
     name: str | None = None

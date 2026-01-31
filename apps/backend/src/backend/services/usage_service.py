@@ -18,7 +18,7 @@ from responses.usage import (
 )
 
 from backend.database import get_db_context
-from backend.database.models import DailyUsageRecordPydantic
+from backend.database.models import DailyUsageRecord
 from backend.services.cost_breakdown_service import CostBreakdownService
 from backend.services.depot_service import DepotService
 
@@ -426,7 +426,7 @@ class UsageService:
 
     def _aggregate_daily_records_by_day(
         self,
-        daily_records: list[DailyUsageRecordPydantic],
+        daily_records: list[DailyUsageRecord],
         tz: ZoneInfo,
     ) -> dict[str, DailyUsageData]:
         """Aggregate daily records by calendar day in the given timezone."""

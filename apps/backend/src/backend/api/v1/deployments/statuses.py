@@ -4,7 +4,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from backend.api.dependencies import get_deployment_with_access
 from backend.api.utils import create_sse_stream_with_subscription
-from backend.database.models import ComposeDeploymentPydantic
+from backend.database.models import ComposeDeployment
 from backend.services.monitoring.monitor_config import (
     DeploymentMonitorConfig,
     DeployProgressMonitorConfig,
@@ -15,7 +15,7 @@ status_router = APIRouter(prefix="/{deployment_id}/status")
 
 @status_router.get("/stream")
 async def stream_deployment_status(
-    deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_access),
+    deployment: ComposeDeployment = Depends(get_deployment_with_access),
 ):
     """Stream real-time deployment status updates."""
     config = DeploymentMonitorConfig(
@@ -39,7 +39,7 @@ async def stream_deployment_status(
 
 @status_router.get("/deploy/stream")
 async def stream_deploy_progress(
-    deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_access),
+    deployment: ComposeDeployment = Depends(get_deployment_with_access),
 ):
     """Stream deployment progress with per-service status and early failure detection."""
     config = DeployProgressMonitorConfig(

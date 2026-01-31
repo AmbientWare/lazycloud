@@ -1,12 +1,12 @@
 from datetime import datetime
 
 from backend.database.models.base import (
-    BaseDbPydanticModel,
+    BaseDbModel,
     UUIDStr,
 )
 
 
-class ApiKeyPydantic(BaseDbPydanticModel):
+class ApiKey(BaseDbModel):
     """Pydantic model for a api key"""
 
     name: str

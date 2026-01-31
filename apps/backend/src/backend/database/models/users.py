@@ -1,6 +1,6 @@
 from enum import StrEnum
 
-from backend.database.models.base import BaseDbPydanticModel
+from backend.database.models.base import BaseDbModel
 
 
 class UserStatus(StrEnum):
@@ -26,7 +26,7 @@ class UserRole(StrEnum):
     USER = "user"
 
 
-class UserPydantic(BaseDbPydanticModel):
+class User(BaseDbModel):
     """Pydantic model for a user account"""
 
     name: str

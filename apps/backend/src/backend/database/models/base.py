@@ -19,7 +19,7 @@ def _uuid_to_str(v):
 UUIDStr = Annotated[str, BeforeValidator(_uuid_to_str)]
 
 
-class BaseDbPydanticModel(PydanticBaseModel):
+class BaseDbModel(PydanticBaseModel):
     """Base class for all Pydantic models with an id"""
 
     id: UUIDStr

@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from backend.database import Database
-from backend.database.models import UserPydantic, WorkspaceRole
+from backend.database.models import User, WorkspaceRole
 from httpx import AsyncClient
 from models.deployments import DeploymentStates
 from models.statuses import TaskStatus
@@ -37,7 +37,7 @@ class TestListDeployments:
         assert response.status_code == 422
 
     async def test_list_deployments_empty(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Empty workspace returns empty deployment list."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -53,7 +53,7 @@ class TestListDeployments:
         assert data["total"] == 0
 
     async def test_list_deployments_returns_user_deployments(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """User sees deployments from their workspaces."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -77,7 +77,7 @@ class TestListDeployments:
         assert names == {"deploy-1", "deploy-2"}
 
     async def test_list_deployments_pagination(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Deployment list supports pagination."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -101,7 +101,7 @@ class TestListDeployments:
         assert data["cursor"] is not None
 
     async def test_list_deployments_filters_by_status(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Deployment list can filter by status."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -155,7 +155,7 @@ class TestCreateDeployment:
     """Tests for POST /v1/deployments."""
 
     async def test_create_deployment_success(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Successfully create a new deployment."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -179,7 +179,7 @@ class TestCreateDeployment:
         assert data["workspace_id"] == str(workspace.id)
 
     async def test_create_deployment_requires_admin_or_owner(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Only admins and owners can create deployments."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -199,7 +199,7 @@ class TestCreateDeployment:
         assert response.status_code == 403
 
     async def test_create_deployment_invalid_compose(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Invalid compose YAML is rejected."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -219,7 +219,7 @@ class TestCreateDeployment:
         assert response.status_code == 400
 
     async def test_create_deployment_duplicate_name(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Creating deployment with duplicate name updates existing."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -250,7 +250,7 @@ class TestGetDeploymentStatus:
     """Tests for GET /v1/deployments/{id}/status."""
 
     async def test_get_deployment_status(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Get deployment status returns status information."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -282,7 +282,7 @@ class TestDeployDeployment:
         self,
         client: AsyncClient,
         api_db: Database,
-        api_user: UserPydantic,
+        api_user: User,
         mock_saq_tasks,
     ):
         """Deploying a deployment triggers SAQ job."""
@@ -308,7 +308,7 @@ class TestDeployDeployment:
         mock_saq_tasks["deploy"].assert_called_once()
 
     async def test_deploy_deployment_requires_admin(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Only admins and owners can deploy."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -335,7 +335,7 @@ class TestDeleteDeployment:
         self,
         client: AsyncClient,
         api_db: Database,
-        api_user: UserPydantic,
+        api_user: User,
         mock_saq_tasks,
     ):
         """Deleting a deployment triggers destroy job."""
@@ -357,7 +357,7 @@ class TestDeleteDeployment:
         mock_saq_tasks["destroy"].assert_called_once()
 
     async def test_delete_deployment_requires_admin(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Only admins and owners can delete deployments."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -381,7 +381,7 @@ class TestRollbackDeployment:
         self,
         client: AsyncClient,
         api_db: Database,
-        api_user: UserPydantic,
+        api_user: User,
         mock_saq_tasks,
     ):
         """Rolling back a deployment triggers rollback job."""
@@ -410,7 +410,7 @@ class TestGetDeploymentHistory:
     """Tests for GET /v1/deployments/{id}/history."""
 
     async def test_get_deployment_history(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Get deployment history returns Helm revisions."""
         workspace = await api_db.workspaces.create(make_workspace())

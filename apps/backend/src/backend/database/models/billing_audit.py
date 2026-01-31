@@ -1,7 +1,7 @@
-from backend.database.models.base import BaseDbPydanticModel, UUIDStr
+from backend.database.models.base import BaseDbModel, UUIDStr
 
 
-class BillingAuditLogPydantic(BaseDbPydanticModel):
+class BillingAuditLog(BaseDbModel):
     event_type: str
     workspace_id: UUIDStr
     record_id: UUIDStr | None = None

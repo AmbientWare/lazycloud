@@ -4,7 +4,7 @@ from datetime import date, datetime
 
 import pytest
 from backend.database import Database, _create_database
-from backend.database.models import BreakdownType, DailyUsageRecordPydantic
+from backend.database.models import BreakdownType, DailyUsageRecord
 from backend.database.session import session_manager
 from models.storage import STORAGE_CLASS_STANDARD
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -75,7 +75,7 @@ async def create_daily_record(
     build_minutes: float = 0.0,
     intervals_collected: int = 1,
     billing_attempts: int = 0,
-) -> DailyUsageRecordPydantic:
+) -> DailyUsageRecord:
     """Create a daily usage record for testing with specified values."""
     record = await db.usage.get_or_create_daily_record(
         workspace_id=workspace_id,

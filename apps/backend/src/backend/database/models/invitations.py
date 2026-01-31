@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import StrEnum
 
 from backend.database.models.base import (
-    BaseDbPydanticModel,
+    BaseDbModel,
     UUIDStr,
 )
 from backend.database.models.user_workspaces import WorkspaceRole
@@ -15,7 +15,7 @@ class InvitationType(StrEnum):
     OWNERSHIP_TRANSFER = "ownership_transfer"
 
 
-class WorkspaceInvitationPydantic(BaseDbPydanticModel):
+class WorkspaceInvitation(BaseDbModel):
     """Pydantic model for workspace invitation"""
 
     workspace_id: UUIDStr

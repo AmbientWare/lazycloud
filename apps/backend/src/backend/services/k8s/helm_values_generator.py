@@ -22,8 +22,8 @@ from models.storage import STORAGE_CLASS_SHARED, STORAGE_CLASS_STANDARD
 
 from backend.billing.product_details.features import BaseFeatures
 from backend.config import app_config
-from backend.database.compose import ComposeDeploymentPydantic
-from backend.database.secrets import SecretPydantic
+from backend.database.compose import ComposeDeployment
+from backend.database.secrets import Secret
 from backend.services.compose.diff_checker import get_shared_volumes
 from backend.services.compose.validator import ComposeValidator
 from backend.services.k8s.generators.configuration import (
@@ -57,8 +57,8 @@ class HelmValuesGenerator:
 
     def __init__(
         self,
-        deployment: ComposeDeploymentPydantic,
-        secrets: list[SecretPydantic],
+        deployment: ComposeDeployment,
+        secrets: list[Secret],
         features: BaseFeatures | None = None,
     ):
         self.deployment = deployment

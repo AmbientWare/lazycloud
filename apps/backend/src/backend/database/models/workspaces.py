@@ -1,7 +1,7 @@
 from datetime import datetime
 from enum import StrEnum
 
-from backend.database.models.base import BaseDbPydanticModel
+from backend.database.models.base import BaseDbModel
 
 
 class WorkspaceStatus(StrEnum):
@@ -12,7 +12,7 @@ class WorkspaceStatus(StrEnum):
     DELETED = "deleted"
 
 
-class WorkspacePydantic(BaseDbPydanticModel):
+class Workspace(BaseDbModel):
     """Pydantic model for a workspace"""
 
     name: str

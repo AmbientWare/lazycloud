@@ -34,8 +34,8 @@ from backend.api.dependencies import (
 from backend.api.security import get_current_active_user
 from backend.database import Database, get_db
 from backend.database.models import (
-    ComposeDeploymentPydantic,
-    UserPydantic,
+    ComposeDeployment,
+    User,
     WorkspaceRole,
 )
 from backend.services.compose.parser import ComposeParser
@@ -117,7 +117,7 @@ async def list_deployments(
     "/{deployment_id}/status", response_model=DeploymentStatusResponse
 )
 async def get_deployment_status(
-    deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_access),
+    deployment: ComposeDeployment = Depends(get_deployment_with_access),
 ) -> DeploymentStatusResponse:
     """Get resource status for a deployment."""
     watcher = StatusWatcher(
@@ -145,7 +145,7 @@ async def get_deployment_status(
 @deployments_router.post("", response_model=DeploymentResponse)
 async def create_deployment(
     request: DeploymentCreateRequest,
-    current_user: UserPydantic = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user),
     db: Database = Depends(get_db),
 ) -> DeploymentResponse:
     """Create or update a deployment record (does not trigger deployment)."""
@@ -201,7 +201,7 @@ async def create_deployment(
     validation_cluster_id = (
         existing_deployment.cluster_id if existing_deployment else target_cluster_id
     )
-    temp_deployment = ComposeDeploymentPydantic(
+    temp_deployment = ComposeDeployment(
         workspace_id=request.workspace_id,
         name=request.name or "",
         namespace=namespace,
@@ -255,7 +255,7 @@ async def create_deployment(
 
             else:
                 # New deployment: pending_compose_yaml, compose_yaml stays empty
-                deployment_data = ComposeDeploymentPydantic(
+                deployment_data = ComposeDeployment(
                     workspace_id=request.workspace_id,
                     name=request.name,
                     namespace=namespace,
@@ -291,7 +291,7 @@ async def create_deployment(
 
     else:
         try:
-            deployment_data = ComposeDeploymentPydantic(
+            deployment_data = ComposeDeployment(
                 workspace_id=request.workspace_id,
                 name=request.name,
                 namespace=namespace,
@@ -358,9 +358,7 @@ async def create_deployment(
 )
 async def deploy_deployment(
     request: DeploymentRunRequest,
-    deployment: ComposeDeploymentPydantic = Depends(
-        get_deployment_with_active_subscription
-    ),
+    deployment: ComposeDeployment = Depends(get_deployment_with_active_subscription),
     db: Database = Depends(get_db),
 ) -> DeploymentTaskStatusResponse:
     """Trigger deployment of a deployment record."""
@@ -411,7 +409,7 @@ async def deploy_deployment(
         )
 
     # Create temp deployment for validation with the compose yaml
-    temp_deployment = ComposeDeploymentPydantic(
+    temp_deployment = ComposeDeployment(
         workspace_id=deployment.workspace_id,
         name=deployment.name,
         namespace=deployment.namespace,
@@ -478,7 +476,7 @@ async def deploy_deployment(
     "/{deployment_id}", response_model=DeploymentTaskStatusResponse
 )
 async def delete_deployment(
-    deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_admin_access),
+    deployment: ComposeDeployment = Depends(get_deployment_with_admin_access),
     db: Database = Depends(get_db),
 ) -> DeploymentTaskStatusResponse:
     """Delete a deployment."""
@@ -513,7 +511,7 @@ async def delete_deployment(
     "/{deployment_id}/history", response_model=DeploymentHistoryResponse
 )
 async def get_deployment_history(
-    deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_access),
+    deployment: ComposeDeployment = Depends(get_deployment_with_access),
 ) -> DeploymentHistoryResponse:
     """Get Helm release history for a deployment."""
     name = create_release_name(deployment.workspace_id, deployment.name)
@@ -544,7 +542,7 @@ async def get_deployment_history(
 )
 async def rollback_deployment(
     request: RollbackRequest,
-    deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_admin_access),
+    deployment: ComposeDeployment = Depends(get_deployment_with_admin_access),
     db: Database = Depends(get_db),
 ) -> DeploymentTaskStatusResponse:
     """Rollback a deployment to a previous Helm revision."""

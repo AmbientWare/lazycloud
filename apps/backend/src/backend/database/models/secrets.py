@@ -5,13 +5,13 @@ from models.secrets import SecretSource, SecretState
 from pydantic import field_serializer, field_validator
 
 from backend.database.models.base import (
-    BaseDbPydanticModel,
+    BaseDbModel,
     UUIDStr,
 )
 from backend.database.utils import decrypt_string, encrypt_string
 
 
-class SecretPydantic(BaseDbPydanticModel):
+class Secret(BaseDbModel):
     """Pydantic model for deployment secrets with automatic encryption/decryption."""
 
     deployment_id: UUIDStr
