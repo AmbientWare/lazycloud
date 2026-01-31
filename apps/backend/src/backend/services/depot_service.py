@@ -8,7 +8,7 @@ from loguru import logger
 from models.depot import DepotBuildCredentials, DepotProject, DepotProjectToken
 
 from backend.database import get_db_context
-from backend.database.compose import ComposeDeploymentPydantic
+from backend.database.models import ComposeDeploymentPydantic
 from backend.services.depot_token_cache import DepotTokenCache
 
 # Token lifetime when creating new tokens (1 hour)

@@ -4,12 +4,12 @@ from typing import Any
 from uuid import UUID
 
 from loguru import logger
-from saq import Status
-
-from backend.tasks.queue import get_background_queue
 
 # Import TaskStatus from models
 from models.statuses import TaskStatus
+from saq import Status
+
+from backend.tasks.queue import get_background_queue
 
 # Map SAQ Status to TaskStatus
 SAQ_STATUS_MAP: dict[Status, TaskStatus] = {

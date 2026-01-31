@@ -1,11 +1,10 @@
 import secrets
 from datetime import datetime, timedelta, timezone
 
-from models.workspaces import InvitationType
-
 from backend.config import app_config
 from backend.database import get_db_context
-from backend.database.user_workspaces import (
+from backend.database.models import (
+    InvitationType,
     UserWorkspacePydantic,
     UserWorkspaceStatus,
     WorkspaceRole,

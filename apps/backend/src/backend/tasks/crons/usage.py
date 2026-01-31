@@ -21,9 +21,9 @@ from tenacity import (
 )
 
 from backend.database import get_db_context
-from backend.database.compose import ComposeDeploymentPydantic
-from backend.database.usage import (
+from backend.database.models import (
     BreakdownType,
+    ComposeDeploymentPydantic,
     DailyUsageRecordPydantic,
     DailyUsageStatus,
 )

@@ -4,15 +4,15 @@ from loguru import logger
 from models.api_keys import ApiKeyExpirationDays
 
 from backend.database import get_db_context
-from backend.database.api_keys import ApiKeyPydantic
-from backend.database.user_workspaces import (
+from backend.database.models import (
+    ApiKeyPydantic,
+    UserPydantic,
     UserWorkspacePydantic,
     UserWorkspaceStatus,
+    WorkspacePydantic,
     WorkspaceRole,
 )
-from backend.database.users import UserPydantic
 from backend.database.utils import generate_api_key, generate_api_key_expires_at
-from backend.database.workspaces import WorkspacePydantic
 from backend.services import PolarService
 
 

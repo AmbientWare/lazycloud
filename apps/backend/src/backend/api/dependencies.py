@@ -1,5 +1,6 @@
 from fastapi import Depends, HTTPException
 from models.compose import ComposeFile
+from pydantic import BaseModel
 
 from backend.api.security import get_current_active_user
 from backend.billing.product_details.base import DEVELOPER_FEATURES
@@ -9,15 +10,24 @@ from backend.database.models import (
     ComposeDeploymentPydantic,
     UserPydantic,
     UserRole,
+    UserWorkspacePydantic,
+    WorkspacePydantic,
     WorkspaceRole,
 )
-from backend.models.workspace_access import WorkspaceAccess
 from backend.services import get_polar_service, get_subscription_service
 from backend.services.exceptions import NoActiveSubscriptionError
 from backend.services.subscription_service import (
     BillingNotConfiguredError,
     SubscriptionLimitError,
 )
+
+
+class WorkspaceAccess(BaseModel):
+    """Container for workspace access information"""
+
+    membership: UserWorkspacePydantic
+    workspace: WorkspacePydantic
+    user: UserPydantic
 
 
 async def require_workspace_member(

@@ -18,7 +18,7 @@ from responses.usage import (
 )
 
 from backend.database import get_db_context
-from backend.database.usage import DailyUsageRecordPydantic
+from backend.database.models import DailyUsageRecordPydantic
 from backend.services.cost_breakdown_service import CostBreakdownService
 from backend.services.depot_service import DepotService
 

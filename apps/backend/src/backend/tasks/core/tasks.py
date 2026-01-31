@@ -23,8 +23,7 @@ from models.statuses import TaskStatus
 
 from backend.config import app_config
 from backend.database import get_db_context
-from backend.database.compose import ComposeDeploymentPydantic
-from backend.database.secrets import SecretPydantic
+from backend.database.models import ComposeDeploymentPydantic, SecretPydantic
 from backend.services import get_cloudflare_service, get_subscription_service
 from backend.services.compose.parser import ComposeParser
 from backend.services.k8s import get_chart_paths

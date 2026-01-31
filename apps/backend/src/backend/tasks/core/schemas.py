@@ -4,8 +4,7 @@ from models.compose import ComposeFile
 from models.helm import HelmValues
 from pydantic import BaseModel
 
-from backend.database.compose import ComposeDeploymentPydantic
-from backend.database.secrets import SecretPydantic
+from backend.database.models import ComposeDeploymentPydantic, SecretPydantic
 
 
 class DeploymentPreparationResult(BaseModel):

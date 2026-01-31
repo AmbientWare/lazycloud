@@ -3,12 +3,11 @@ import json
 import yaml
 from loguru import logger
 from models.compose import ComposeFile
-from models.workspaces import InvitationType
 
 from backend.billing.product_details.features import BaseFeatures
 from backend.config import app_config
 from backend.database import get_db_context
-from backend.database.users import SubscriptionState, UserPydantic
+from backend.database.models import InvitationType, SubscriptionState, UserPydantic
 from backend.services.cache import CacheService
 from backend.services.compose.parser import ComposeParser
 from backend.services.exceptions import NoActiveSubscriptionError
