@@ -174,7 +174,7 @@ async def get_deployment_diff(
     if deployment and request.diff_type == DiffType.EXISTING:
         try:
             existing_pvcs = await asyncio.wait_for(
-                get_namespace_pvcs(namespace),
+                get_namespace_pvcs(namespace, cluster_id),
                 timeout=3.0,
             )
             if existing_pvcs:
@@ -205,7 +205,7 @@ async def get_deployment_diff(
     )
 
     return DiffResponse(
-        deployment_id=deployment.id if deployment else "new",
+        deployment_id=str(deployment.id) if deployment else "new",
         namespace=namespace,
         has_changes=compose_diff.has_changes(),
         diff=compose_diff,

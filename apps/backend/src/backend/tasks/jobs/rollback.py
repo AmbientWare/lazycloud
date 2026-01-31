@@ -234,9 +234,10 @@ async def rollback_compose_job(
             for service in all_jobs.values():
                 try:
                     await delete_job_with_timeout(
-                        service.resourceName,
-                        namespace,
-                        app_config.ROLLBACK_JOB_DELETION_TIMEOUT_SECONDS,
+                        job_name=service.resourceName,
+                        namespace=namespace,
+                        timeout_seconds=app_config.ROLLBACK_JOB_DELETION_TIMEOUT_SECONDS,
+                        cluster_id=deployment.cluster_id,
                     )
                     logger.info(f"Deleted existing Job: {service.name}")
                 except TimeoutError as e:

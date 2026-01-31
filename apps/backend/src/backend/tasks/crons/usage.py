@@ -47,10 +47,10 @@ def sanitize_volume_name(name: str) -> str:
 
 
 async def collect_storage_usage(
-    namespace: str, interval_hours: float
+    namespace: str, interval_hours: float, cluster_id: str
 ) -> list[StorageUsage]:
     """Collect storage usage from K8s PVC API (works with Longhorn and any CSI driver)."""
-    pvcs = await get_namespace_pvcs_with_details(namespace)
+    pvcs = await get_namespace_pvcs_with_details(namespace, cluster_id)
 
     storage_list = []
     for pvc in pvcs:
@@ -182,7 +182,12 @@ async def collect_workspace_interval(
         interval_hours = UsageUnits.seconds_to_hours(
             (interval_end - interval_start).total_seconds()
         )
-        storage_list = await collect_storage_usage(namespace, interval_hours)
+
+        # Get cluster_id from the first deployment (all deployments in a workspace use same cluster)
+        cluster_id = ctx.deployments[0].cluster_id if ctx.deployments else "ash-1"
+        storage_list = await collect_storage_usage(
+            namespace, interval_hours, cluster_id
+        )
 
         # Collect build minutes from Depot
         build_minutes_by_deployment: dict[str, float] = {}
