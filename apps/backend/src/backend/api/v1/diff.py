@@ -13,8 +13,7 @@ from responses.deployments import DiffResponse
 from backend.api.dependencies import require_workspace_admin
 from backend.api.security import get_current_active_user
 from backend.database import Database, get_db
-from backend.database.compose import ComposeDeploymentPydantic
-from backend.database.users import UserPydantic
+from backend.database.models import ComposeDeploymentPydantic, UserPydantic
 from backend.services.compose.diff_checker import (
     ComposeDiffChecker,
     detect_storage_type_changes,

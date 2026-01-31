@@ -2,12 +2,12 @@
 
 from fastapi import APIRouter, HTTPException, Request
 from loguru import logger
-from polar_sdk.webhooks import WebhookVerificationError, validate_event
+from polar_sdk._webhooks import WebhookVerificationError, validate_event
 from starlette.responses import Response
 
 from backend.config import app_config
 from backend.database import get_db_context
-from backend.database.users import SubscriptionState
+from backend.database.models import SubscriptionState
 from backend.services import get_subscription_service
 
 webhooks_router = APIRouter(prefix="/webhooks", tags=["webhooks"])
@@ -82,7 +82,7 @@ async def handle_polar_webhook(request: Request) -> Response:
 
     try:
         event = validate_event(
-            payload=payload,
+            body=payload,
             headers=headers,
             secret=app_config.POLAR_WEBHOOK_SECRET,
         )
@@ -90,7 +90,7 @@ async def handle_polar_webhook(request: Request) -> Response:
         logger.warning(f"Polar webhook signature verification failed: {e}")
         raise HTTPException(status_code=401, detail="Invalid webhook signature")
 
-    event_type = event.type
+    event_type: str = getattr(event, "type", "unknown")
     logger.info(f"Received Polar webhook: {event_type}")
 
     # Handle subscription events

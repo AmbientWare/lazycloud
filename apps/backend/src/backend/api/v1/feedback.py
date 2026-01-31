@@ -3,7 +3,7 @@ from loguru import logger
 from models.feedback import FeedbackRequest, FeedbackResponse
 
 from backend.api.security import get_current_active_user
-from backend.database.users import UserPydantic
+from backend.database.models import UserPydantic
 from backend.rate_limit import limiter
 from backend.services.email import email_service
 

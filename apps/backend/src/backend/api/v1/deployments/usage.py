@@ -9,8 +9,7 @@ from responses.usage import (
 
 from backend.api.dependencies import get_deployment_with_admin_access_for_usage
 from backend.api.security import get_current_active_user
-from backend.database.compose import ComposeDeploymentPydantic
-from backend.database.users import UserPydantic
+from backend.database.models import ComposeDeploymentPydantic, UserPydantic
 from backend.services import (
     PolarService,
     UsageService,

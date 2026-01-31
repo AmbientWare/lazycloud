@@ -28,14 +28,15 @@ from backend.api.security import (
 )
 from backend.api.utils import normalize_usage_date_range
 from backend.database import Database, get_db
-from backend.database.user_workspaces import (
+from backend.database.models import (
+    UserPydantic,
     UserWorkspacePydantic,
     UserWorkspaceStatus,
+    WorkspacePydantic,
     WorkspaceRole,
+    WorkspaceStatus,
 )
-from backend.database.users import UserPydantic
 from backend.database.utils import validate_workspace_name
-from backend.database.workspaces import WorkspacePydantic, WorkspaceStatus
 from backend.services import (
     UsageService,
     get_usage_service,

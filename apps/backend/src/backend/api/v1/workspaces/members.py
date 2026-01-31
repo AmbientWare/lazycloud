@@ -5,7 +5,6 @@ from api_requests.workspaces import (
 )
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
-from models.workspaces import InvitationType
 from responses.workspaces import (
     InviteUserResponse,
     WorkspaceMemberResponse,
@@ -20,7 +19,8 @@ from backend.api.dependencies import (
 )
 from backend.config import app_config
 from backend.database import Database, get_db
-from backend.database.user_workspaces import (
+from backend.database.models import (
+    InvitationType,
     UserWorkspaceStatus,
     WorkspaceRole,
 )

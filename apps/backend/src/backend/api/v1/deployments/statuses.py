@@ -4,7 +4,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from backend.api.dependencies import get_deployment_with_access
 from backend.api.utils import create_sse_stream_with_subscription
-from backend.database.compose import ComposeDeploymentPydantic
+from backend.database.models import ComposeDeploymentPydantic
 from backend.services.monitoring.monitor_config import (
     DeploymentMonitorConfig,
     DeployProgressMonitorConfig,

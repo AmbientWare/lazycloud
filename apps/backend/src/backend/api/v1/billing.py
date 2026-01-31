@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from responses.billing import BillingCycleResponse
 
 from backend.api.security import get_current_active_user
-from backend.database.users import UserPydantic
+from backend.database.models import UserPydantic
 from backend.services import get_polar_service
 
 billing_router = APIRouter(prefix="/billing", tags=["billing"])

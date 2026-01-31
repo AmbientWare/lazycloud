@@ -2,14 +2,17 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
-from models.workspaces import InvitationType, UserWorkspaceStatus
 from pydantic import BaseModel
 from responses.workspaces import WorkspaceSuccessResponse
 
 from backend.api.security import get_current_active_user
 from backend.database import Database, get_db
-from backend.database.invitations import WorkspaceInvitationPydantic
-from backend.database.users import UserPydantic
+from backend.database.models import (
+    InvitationType,
+    UserPydantic,
+    UserWorkspaceStatus,
+    WorkspaceInvitationPydantic,
+)
 from backend.services import (
     InvitationService,
     get_invitation_service,

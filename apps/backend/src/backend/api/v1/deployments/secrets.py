@@ -1,7 +1,6 @@
 from api_requests.secrets import SecretsRequest
 from fastapi import APIRouter, Depends, HTTPException, Query
 from models.secrets import Secret, SecretState
-from models.workspaces import WorkspaceRole
 from responses.secrets import SecretsResponse, SecretsStoredResponse
 
 from backend.api.dependencies import get_deployment_with_admin_access
@@ -11,6 +10,7 @@ from backend.database.models import (
     ComposeDeploymentPydantic,
     SecretPydantic,
     UserPydantic,
+    WorkspaceRole,
 )
 
 secrets_router = APIRouter(

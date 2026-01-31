@@ -13,10 +13,10 @@ from backend.api.dependencies import (
 from backend.api.utils import (
     create_sse_stream_with_subscription,
 )
-from backend.database.compose import ComposeDeploymentPydantic
-from backend.tasks.client import run_restart_all_services, run_restart_service
+from backend.database.models import ComposeDeploymentPydantic
 from backend.services.k8s.status_watcher import StatusWatcher
 from backend.services.monitoring.monitor_config import ServiceMonitorConfig
+from backend.tasks.client import run_restart_all_services, run_restart_service
 
 services_router = APIRouter(prefix="/{deployment_id}/services")
 

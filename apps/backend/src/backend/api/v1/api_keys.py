@@ -3,8 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from backend.api.security import get_current_active_user
 from backend.database import Database, get_db
-from backend.database.api_keys import ApiKeyPydantic
-from backend.database.users import UserPydantic
+from backend.database.models import ApiKeyPydantic, UserPydantic
 from backend.database.utils import (
     generate_api_key,
     generate_api_key_expires_at,

@@ -5,7 +5,7 @@ from jwt import PyJWKClient
 
 from backend.config import ENVIRONMENT, app_config
 from backend.database import Database, get_db
-from backend.database.users import (
+from backend.database.models import (
     UserPydantic,
     UserRole,
     UserStatus,
@@ -159,13 +159,6 @@ async def _authenticate_workos_token(token: str, db: Database) -> UserPydantic:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail=detail,
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        except jwt.ExpiredSignatureError:
-            # Expired tokens should not retry - the token itself is expired
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Token has expired",
                 headers={"WWW-Authenticate": "Bearer"},
             )
 

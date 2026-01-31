@@ -5,9 +5,12 @@ from backend.api.security import get_current_active_user
 from backend.billing.product_details.base import DEVELOPER_FEATURES
 from backend.billing.product_details.features import ADMIN_FEATURES, BaseFeatures
 from backend.database import Database, get_db
-from backend.database.compose import ComposeDeploymentPydantic
-from backend.database.user_workspaces import WorkspaceRole
-from backend.database.users import UserPydantic, UserRole
+from backend.database.models import (
+    ComposeDeploymentPydantic,
+    UserPydantic,
+    UserRole,
+    WorkspaceRole,
+)
 from backend.models.workspace_access import WorkspaceAccess
 from backend.services import get_polar_service, get_subscription_service
 from backend.services.exceptions import NoActiveSubscriptionError
