@@ -1,13 +1,10 @@
-import uuid
 from datetime import datetime
 from enum import StrEnum
 
-from sqlalchemy import UUID, Index, String
-from sqlalchemy.dialects.postgresql import JSON
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Mapped, mapped_column
 
-from backend.database.base import BaseDbPydanticModel, BaseTable, UUIDStr
+from backend.database.models import BillingAuditLogPydantic
+from backend.database.tables import BillingAuditLogTable
 
 
 class BillingEventType(StrEnum):
@@ -20,32 +17,6 @@ class BillingEventType(StrEnum):
     BILLING_FAILED = "billing_failed"
     BILLING_SKIPPED = "billing_skipped"
     BILLING_RETRY = "billing_retry"
-
-
-class BillingAuditLogTable(BaseTable):
-    """Immutable audit trail for billing operations."""
-
-    __tablename__ = "billing_audit_log"
-
-    event_type: Mapped[str] = mapped_column(String, index=True)
-    workspace_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
-    record_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), nullable=True, index=True
-    )
-    actor: Mapped[str | None] = mapped_column(String, nullable=True)
-    details: Mapped[dict] = mapped_column(JSON, default=dict)
-
-    __table_args__ = (
-        Index("ix_billing_audit_workspace_date", "workspace_id", "created_at"),
-    )
-
-
-class BillingAuditLogPydantic(BaseDbPydanticModel):
-    event_type: str
-    workspace_id: UUIDStr
-    record_id: UUIDStr | None = None
-    actor: str | None = None
-    details: dict = {}
 
 
 class BillingAuditService:

@@ -1,66 +1,22 @@
 from datetime import UTC, datetime
-from enum import StrEnum
-from typing import TYPE_CHECKING, List
 
-from sqlalchemy import Boolean, DateTime, String, and_, func, update
+from sqlalchemy import and_, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from backend.database.base import BaseDbPydanticModel, BaseTable, DatabaseService
-from backend.database.user_workspaces import (
+from backend.database.models import (
+    UserPydantic,
     UserWorkspacePydantic,
-    UserWorkspaceTable,
+    WorkspacePydantic,
     WorkspaceRole,
+    WorkspaceStatus,
 )
-from backend.database.users import UserPydantic, UserTable
-
-if TYPE_CHECKING:
-    from backend.database.compose import ComposeDeploymentTable
-
-
-class WorkspaceStatus(StrEnum):
-    """Status of a workspace"""
-
-    ACTIVE = "active"
-    INACTIVE = "inactive"
-    DELETED = "deleted"
-
-
-class WorkspaceTable(BaseTable):
-    """SQLAlchemy model for a workspace"""
-
-    __tablename__ = "workspaces"
-
-    name: Mapped[str] = mapped_column(String)
-    is_personal: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
-    status: Mapped[str] = mapped_column(String, default=WorkspaceStatus.ACTIVE.value)
-    deleted_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True, index=True
-    )
-
-    # Relationships - using Association Object pattern (SQLAlchemy 2.0 best practice)
-    user_workspaces: Mapped[List["UserWorkspaceTable"]] = relationship(
-        "UserWorkspaceTable",
-        back_populates="workspace",
-        cascade="all, delete-orphan",
-        lazy="selectin",
-    )
-    deployments: Mapped[List["ComposeDeploymentTable"]] = relationship(
-        "ComposeDeploymentTable",
-        back_populates="workspace",
-        cascade="all, delete-orphan",
-        lazy="selectin",
-    )
-
-
-class WorkspacePydantic(BaseDbPydanticModel):
-    """Pydantic model for a workspace"""
-
-    name: str
-    is_personal: bool = False
-    status: WorkspaceStatus = WorkspaceStatus.ACTIVE
-    deleted_at: datetime | None = None
+from backend.database.services.base import DatabaseService
+from backend.database.tables import (
+    UserTable,
+    UserWorkspaceTable,
+    WorkspaceTable,
+)
 
 
 class WorkspaceService(DatabaseService[WorkspaceTable, WorkspacePydantic]):
@@ -186,7 +142,7 @@ class WorkspaceService(DatabaseService[WorkspaceTable, WorkspacePydantic]):
         """Update the status of a workspace."""
         update_values = {"status": status.value}
         if status == WorkspaceStatus.DELETED:
-            update_values["deleted_at"] = datetime.now(UTC)
+            update_values["deleted_at"] = datetime.now(UTC).isoformat()
 
         stmt = (
             update(WorkspaceTable)

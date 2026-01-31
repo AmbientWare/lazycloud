@@ -1,184 +1,25 @@
-import uuid
 from datetime import date, datetime, timezone
-from enum import StrEnum
 
 from models.billing import UsageCollectionConfig
 from models.storage import STORAGE_CLASS_STANDARD
 from sqlalchemy import (
-    UUID,
-    Date,
-    DateTime,
-    Float,
-    ForeignKey,
-    Index,
-    Integer,
-    String,
-    UniqueConstraint,
     func,
     select,
     update,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Mapped, mapped_column
 
-from backend.database.base import (
-    BaseDbPydanticModel,
-    BaseTable,
-    DatabaseService,
-    UUIDStr,
+from backend.database.models import (
+    BreakdownType,
+    DailyUsageRecordPydantic,
+    DailyUsageStatus,
 )
-
-
-class DailyUsageStatus(StrEnum):
-    COLLECTING = "collecting"
-    BILLED = "billed"
-
-
-class BreakdownType(StrEnum):
-    COMPUTE = "compute"
-    STORAGE = "storage"
-    NETWORK = "network"
-    BUILD = "build"
-
-
-class DailyUsageRecordTable(BaseTable):
-    """One record per workspace per day - totals updated via atomic increment."""
-
-    __tablename__ = "daily_usage_records"
-
-    workspace_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="RESTRICT"), index=True
-    )
-    usage_date: Mapped[date] = mapped_column(Date, index=True)
-    status: Mapped[str] = mapped_column(
-        String, default=DailyUsageStatus.COLLECTING.value
-    )
-
-    # Totals - updated atomically via SQL increment
-    cpu_core_seconds: Mapped[float] = mapped_column(Float, default=0.0)
-    memory_gb_seconds: Mapped[float] = mapped_column(Float, default=0.0)
-    storage_gb_months: Mapped[float] = mapped_column(Float, default=0.0)
-    build_minutes: Mapped[float] = mapped_column(Float, default=0.0)
-    public_endpoint_hours: Mapped[float] = mapped_column(Float, default=0.0)
-
-    # Tracking
-    intervals_collected: Mapped[int] = mapped_column(Integer, default=0)
-    expected_intervals: Mapped[int] = mapped_column(Integer, default=96)
-
-    # Billing
-    billing_id: Mapped[str | None] = mapped_column(String, nullable=True)
-    billed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-
-    # Billing attempts tracking
-    billing_attempts: Mapped[int] = mapped_column(Integer, default=0)
-    last_billing_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    last_billing_attempt_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-
-    __table_args__ = (
-        UniqueConstraint(
-            "workspace_id", "usage_date", name="uq_daily_usage_workspace_date"
-        ),
-        Index("ix_daily_usage_status_date", "status", "usage_date"),
-    )
-
-
-class CollectedIntervalTable(BaseTable):
-    """Tracks which intervals have been collected - enables idempotency."""
-
-    __tablename__ = "collected_intervals"
-
-    workspace_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
-    interval_start: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), index=True
-    )
-
-    __table_args__ = (
-        UniqueConstraint(
-            "workspace_id", "interval_start", name="uq_collected_interval"
-        ),
-    )
-
-
-class UsageBreakdownEventTable(BaseTable):
-    """Append-only breakdown events for dashboard queries. Never updated."""
-
-    __tablename__ = "usage_breakdown_events"
-
-    workspace_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
-    deployment_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), nullable=True, index=True
-    )
-    interval_start: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), index=True
-    )
-    interval_end: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-
-    breakdown_type: Mapped[str] = mapped_column(String, index=True)
-    resource_name: Mapped[str] = mapped_column(String, index=True)
-    service_name: Mapped[str | None] = mapped_column(String, nullable=True)
-    storage_class: Mapped[str | None] = mapped_column(String, nullable=True)
-
-    cpu_core_seconds: Mapped[float] = mapped_column(Float, default=0.0)
-    memory_gb_seconds: Mapped[float] = mapped_column(Float, default=0.0)
-    gb_hours: Mapped[float] = mapped_column(Float, default=0.0)
-    endpoint_hours: Mapped[float] = mapped_column(Float, default=0.0)
-    build_minutes: Mapped[float] = mapped_column(Float, default=0.0)
-
-    __table_args__ = (
-        Index(
-            "ix_breakdown_events_query",
-            "workspace_id",
-            "interval_start",
-            "breakdown_type",
-        ),
-        Index("ix_breakdown_events_deployment", "deployment_id", "interval_start"),
-    )
-
-
-# Pydantic Models
-
-
-class DailyUsageRecordPydantic(BaseDbPydanticModel):
-    workspace_id: UUIDStr
-    usage_date: date
-    status: DailyUsageStatus
-    cpu_core_seconds: float
-    memory_gb_seconds: float
-    storage_gb_months: float
-    build_minutes: float
-    public_endpoint_hours: float
-    intervals_collected: int
-    expected_intervals: int
-    billing_id: str | None = None
-    billed_at: datetime | None = None
-    billing_attempts: int = 0
-    last_billing_error: str | None = None
-    last_billing_attempt_at: datetime | None = None
-
-
-class CollectedIntervalPydantic(BaseDbPydanticModel):
-    workspace_id: UUIDStr
-    interval_start: datetime
-
-
-class UsageBreakdownEventPydantic(BaseDbPydanticModel):
-    workspace_id: UUIDStr
-    deployment_id: UUIDStr | None = None
-    interval_start: datetime
-    interval_end: datetime
-    breakdown_type: str
-    resource_name: str
-    service_name: str | None = None
-    storage_class: str | None = None
-    cpu_core_seconds: float = 0.0
-    memory_gb_seconds: float = 0.0
-    gb_hours: float = 0.0
-    endpoint_hours: float = 0.0
-    build_minutes: float = 0.0
+from backend.database.services.base import DatabaseService
+from backend.database.tables import (
+    CollectedIntervalTable,
+    DailyUsageRecordTable,
+    UsageBreakdownEventTable,
+)
 
 
 class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecordPydantic]):

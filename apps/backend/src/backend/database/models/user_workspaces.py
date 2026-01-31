@@ -1,5 +1,7 @@
 from enum import StrEnum
 
+from backend.database.models.base import BaseDbPydanticModel, UUIDStr
+
 
 class WorkspaceRole(StrEnum):
     """Role of a user in a workspace"""
@@ -17,8 +19,10 @@ class UserWorkspaceStatus(StrEnum):
     SUSPENDED = "suspended"
 
 
-class InvitationType(StrEnum):
-    """Type of workspace invitation"""
+class UserWorkspacePydantic(BaseDbPydanticModel):
+    """Pydantic model for user-workspace membership"""
 
-    MEMBER = "member"
-    OWNERSHIP_TRANSFER = "ownership_transfer"
+    user_id: UUIDStr
+    workspace_id: UUIDStr
+    role: WorkspaceRole
+    status: UserWorkspaceStatus

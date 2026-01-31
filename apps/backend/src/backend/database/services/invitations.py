@@ -1,73 +1,16 @@
-import uuid
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
 
-from models.workspaces import InvitationType, WorkspaceRole
-from sqlalchemy import DateTime, ForeignKey, Index, String, and_, delete
+from sqlalchemy import and_, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from backend.database.base import (
-    BaseDbPydanticModel,
-    BaseTable,
-    DatabaseService,
-    UUIDStr,
+from backend.database.models import (
+    InvitationType,
+    WorkspaceInvitationPydantic,
+    WorkspaceRole,
 )
-from backend.database.users import UserTable
-
-if TYPE_CHECKING:
-    from backend.database.workspaces import WorkspaceTable
-
-
-class WorkspaceInvitationTable(BaseTable):
-    """Table for workspace invitations"""
-
-    __tablename__ = "workspace_invitations"
-
-    workspace_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("workspaces.id", ondelete="CASCADE"),
-        index=True,
-    )
-    email: Mapped[str] = mapped_column(String, index=True)
-    role: Mapped[str] = mapped_column(String, default=WorkspaceRole.MEMBER)
-    token: Mapped[str] = mapped_column(String, unique=True, index=True)
-    invitation_type: Mapped[str] = mapped_column(
-        String, default=InvitationType.MEMBER.value
-    )
-    invited_by_user_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE")
-    )
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-    accepted_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-
-    workspace: Mapped["WorkspaceTable"] = relationship(
-        "WorkspaceTable",
-        lazy="selectin",
-    )
-    invited_by: Mapped["UserTable"] = relationship(
-        "UserTable",
-        lazy="selectin",
-    )
-
-    __table_args__ = (
-        Index("idx_workspace_invitations_workspace_email", "workspace_id", "email"),
-    )
-
-
-class WorkspaceInvitationPydantic(BaseDbPydanticModel):
-    """Pydantic model for workspace invitation"""
-
-    workspace_id: UUIDStr
-    email: str
-    role: WorkspaceRole
-    token: str
-    invited_by_user_id: UUIDStr
-    expires_at: datetime
-    accepted_at: datetime | None = None
-    invitation_type: str = InvitationType.MEMBER.value
+from backend.database.services.base import DatabaseService
+from backend.database.tables import WorkspaceInvitationTable
 
 
 class WorkspaceInvitationService(
@@ -152,7 +95,7 @@ class WorkspaceInvitationService(
             )
         )
         result = await self._session.execute(query)
-        return result.rowcount or 0
+        return result.rowcount or 0  # type: ignore[union-attr]
 
     async def get_by_workspace_and_email(
         self, workspace_id: str, email: str

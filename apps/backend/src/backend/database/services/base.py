@@ -1,61 +1,16 @@
 import asyncio
-import uuid
 from datetime import datetime, timezone
-from typing import Annotated, Generic, Type, TypeVar
+from typing import Generic, Type, TypeVar
 
-from pydantic import BaseModel as PydanticBaseModel
-from pydantic.functional_validators import BeforeValidator
-from sqlalchemy import DateTime, delete, func, orm, update
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import delete, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy.orm import Mapped, mapped_column
 
-Base = orm.declarative_base()
+from backend.database.models import BaseDbPydanticModel
+from backend.database.tables import BaseTable
 
-
-# Custom type that automatically converts UUID to string
-def _uuid_to_str(v):
-    if isinstance(v, uuid.UUID):
-        return str(v)
-    return v
-
-
-UUIDStr = Annotated[str, BeforeValidator(_uuid_to_str)]
-
-
-class BaseTable(Base):
-    __abstract__ = True
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
-        onupdate=lambda: datetime.now(timezone.utc),
-    )
-
-    def to_pydantic(
-        self, pydantic_class: Type["basePydanticType"]
-    ) -> "basePydanticType":
-        """Convert the model to a Pydantic model"""
-        return pydantic_class.model_validate(self, from_attributes=True)
-
-
-class BaseDbPydanticModel(PydanticBaseModel):
-    """Base class for all Pydantic models with an id"""
-
-    id: UUIDStr | None = None
-    created_at: datetime | None = None
-    updated_at: datetime | None = None
-
-
-basePydanticType = TypeVar("basePydanticType", bound=BaseDbPydanticModel)
 baseDbType = TypeVar("baseDbType", bound=BaseTable)
+basePydanticType = TypeVar("basePydanticType", bound=BaseDbPydanticModel)
 
 
 class DatabaseService(Generic[baseDbType, basePydanticType]):
@@ -71,10 +26,8 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
         self.pydantic_model_class = pydantic_model_class
         self._session = session
 
-    def _to_pydantic(self, db_model: baseDbType | None) -> basePydanticType | None:
+    def _to_pydantic(self, db_model: baseDbType) -> basePydanticType:
         """Convert SQLAlchemy model to Pydantic model"""
-        if db_model is None:
-            return None
         return db_model.to_pydantic(self.pydantic_model_class)
 
     def _apply_default_filters(self, query):
@@ -108,7 +61,7 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
         query = select(self.db_model_class)
         query = self._apply_default_filters(query)
         result = await self._session.execute(query)
-        db_models = list(result.scalars().all())
+        db_models = list[baseDbType](result.scalars().all())
         return [self._to_pydantic(db_model) for db_model in db_models]
 
     async def get_by_id(
@@ -126,7 +79,7 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
         result = await self._session.execute(query)
         db_model = result.scalar_one_or_none()
 
-        return self._to_pydantic(db_model)
+        return self._to_pydantic(db_model) if db_model else None
 
     async def get_by_user_id(self, user_id: str) -> list[basePydanticType]:
         """Get all model instances by user id"""
@@ -135,8 +88,8 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
         )
         query = self._apply_default_filters(query)
         result = await self._session.execute(query)
-        db_models = list(result.scalars().all())
-        return [model.to_pydantic(self.pydantic_model_class) for model in db_models]
+        db_models = list[baseDbType](result.scalars().all())
+        return [self._to_pydantic(model) for model in db_models]
 
     async def create(self, model: basePydanticType) -> basePydanticType:
         """Create a new model instance"""
@@ -145,7 +98,7 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
         self._session.add(db_model)
         await self._session.flush()
         await self._session.refresh(db_model)
-        return db_model.to_pydantic(self.pydantic_model_class)
+        return self._to_pydantic(db_model)
 
     async def create_bulk(
         self, models: list[basePydanticType]
@@ -181,7 +134,7 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
             stmt, execution_options={"populate_existing": True}
         )
         updated_model = result.scalar_one_or_none()
-        return self._to_pydantic(updated_model)
+        return self._to_pydantic(updated_model) if updated_model else None
 
     async def delete(self, id: str) -> None:
         """Delete a model instance"""
@@ -202,14 +155,14 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
         query = self._build_filtered_query(filters, include_deleted=False)
         result = await self._session.execute(query)
         db_models = list(result.scalars().all())
-        return [model.to_pydantic(self.pydantic_model_class) for model in db_models]
+        return [self._to_pydantic(model) for model in db_models]
 
     async def find_one(self, filters: dict) -> basePydanticType | None:
         """Find a single model matching the filters"""
         query = self._build_filtered_query(filters, include_deleted=False)
         result = await self._session.execute(query)
         db_model = result.scalar_one_or_none()
-        return self._to_pydantic(db_model)
+        return self._to_pydantic(db_model) if db_model else None
 
     async def find_paginated(
         self,
@@ -237,6 +190,4 @@ class DatabaseService(Generic[baseDbType, basePydanticType]):
             total = None
 
         db_models = list(data_result.scalars().all())
-        return total, [
-            model.to_pydantic(self.pydantic_model_class) for model in db_models
-        ]
+        return total, [self._to_pydantic(model) for model in db_models]

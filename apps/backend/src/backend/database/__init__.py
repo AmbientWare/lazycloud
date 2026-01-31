@@ -5,16 +5,18 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.database.api_keys import ApiKeyService
-from backend.database.billing_audit import BillingAuditService
-from backend.database.compose import ComposeDeploymentService
-from backend.database.invitations import WorkspaceInvitationService
-from backend.database.secrets import SecretService
+from backend.database.services import (
+    ApiKeyService,
+    BillingAuditService,
+    ComposeDeploymentService,
+    SecretService,
+    UsageService,
+    UserService,
+    UserWorkspaceService,
+    WorkspaceInvitationService,
+    WorkspaceService,
+)
 from backend.database.session import session_manager
-from backend.database.usage import UsageService
-from backend.database.user_workspaces import UserWorkspaceService
-from backend.database.users import UserService
-from backend.database.workspaces import WorkspaceService
 
 _current_db: ContextVar["Database | None"] = ContextVar("_current_db", default=None)
 

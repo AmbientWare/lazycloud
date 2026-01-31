@@ -1,68 +1,20 @@
-import uuid
-from typing import TYPE_CHECKING
-
-from models.workspaces import InvitationType, UserWorkspaceStatus, WorkspaceRole
-from sqlalchemy import UUID, ForeignKey, String, and_, func
+from sqlalchemy import and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from backend.database.base import (
-    BaseDbPydanticModel,
-    BaseTable,
-    DatabaseService,
-    UUIDStr,
+from backend.database.models import (
+    InvitationType,
+    UserPydantic,
+    UserWorkspacePydantic,
+    UserWorkspaceStatus,
+    WorkspaceRole,
 )
-from backend.database.invitations import WorkspaceInvitationTable
-from backend.database.users import UserPydantic, UserTable
-
-if TYPE_CHECKING:
-    from backend.database.workspaces import WorkspaceTable
-
-
-class UserWorkspaceTable(BaseTable):
-    """Association object for many-to-many relationship between users and workspaces"""
-
-    __tablename__ = "user_workspaces"
-
-    # Foreign keys
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="CASCADE"),
-        primary_key=True,
-    )
-    workspace_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("workspaces.id", ondelete="CASCADE"),
-        primary_key=True,
-    )
-
-    # Additional relationship metadata
-    role: Mapped[str] = mapped_column(String, default=WorkspaceRole.MEMBER, index=True)
-    status: Mapped[str] = mapped_column(
-        String, default=UserWorkspaceStatus.ACTIVE, index=True
-    )
-
-    # Relationships to actual objects
-    user: Mapped["UserTable"] = relationship(
-        "UserTable",
-        back_populates="user_workspaces",
-        lazy="selectin",
-    )
-    workspace: Mapped["WorkspaceTable"] = relationship(
-        "WorkspaceTable",
-        back_populates="user_workspaces",
-        lazy="selectin",
-    )
-
-
-class UserWorkspacePydantic(BaseDbPydanticModel):
-    """Pydantic model for user-workspace membership"""
-
-    user_id: UUIDStr
-    workspace_id: UUIDStr
-    role: WorkspaceRole
-    status: UserWorkspaceStatus
+from backend.database.services.base import DatabaseService
+from backend.database.tables import (
+    UserTable,
+    UserWorkspaceTable,
+    WorkspaceInvitationTable,
+)
 
 
 class UserWorkspaceService(DatabaseService[UserWorkspaceTable, UserWorkspacePydantic]):
@@ -100,7 +52,7 @@ class UserWorkspaceService(DatabaseService[UserWorkspaceTable, UserWorkspacePyda
             .where(UserWorkspaceTable.workspace_id == workspace_id)
         )
         result = await self._session.execute(query)
-        rows: list[tuple[UserWorkspaceTable, UserTable]] = result.all()
+        rows = result.all()
 
         return [
             (self._to_pydantic(member), user.to_pydantic(UserPydantic))

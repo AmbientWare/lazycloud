@@ -12,9 +12,9 @@ from backend.api.dependencies import (
     get_deployment_with_admin_access,
 )
 from backend.api.utils import create_sse_stream_with_subscription
-from backend.database.compose import ComposeDeploymentPydantic
-from backend.tasks.client import run_delete_instance
+from backend.database.models import ComposeDeploymentPydantic
 from backend.services.monitoring.monitor_config import LogMonitorConfig
+from backend.tasks.client import run_delete_instance
 
 instances_router = APIRouter(prefix="/{deployment_id}/instances")
 

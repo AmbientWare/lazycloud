@@ -12,6 +12,7 @@ from models.billing import UsageUnits
 from models.clusters import get_cluster_registry
 from models.deployments import DeploymentStates
 from models.statuses import TaskStatus
+from models.workspaces import WorkspaceRole
 from responses.deployments import (
     DeploymentHistoryResponse,
     DeploymentListResponse,
@@ -33,9 +34,10 @@ from backend.api.dependencies import (
 )
 from backend.api.security import get_current_active_user
 from backend.database import Database, get_db
-from backend.database.compose import ComposeDeploymentPydantic
-from backend.database.user_workspaces import WorkspaceRole
-from backend.database.users import UserPydantic
+from backend.database.models import (
+    ComposeDeploymentPydantic,
+    UserPydantic,
+)
 from backend.services.compose.parser import ComposeParser
 from backend.services.compose.validation import validate_deployment_request
 from backend.services.k8s import create_ns_name, create_release_name

@@ -1,201 +1,23 @@
-import uuid
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, List
 
-from cryptography.fernet import InvalidToken
 from models.deployments import DeploymentStates
-from models.helm import HelmValues
-from pydantic import field_serializer, field_validator
 from sqlalchemy import (
-    UUID,
-    DateTime,
-    ForeignKey,
-    Index,
-    Integer,
-    String,
-    Text,
     func,
     or_,
     select,
-    text,
-)
-from sqlalchemy import (
-    Enum as SQLAEnum,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from backend.database.base import (
-    BaseDbPydanticModel,
-    BaseTable,
-    DatabaseService,
-    UUIDStr,
+from backend.database.models import (
+    ComposeDeploymentPydantic,
+    WorkspaceRole,
 )
-from backend.database.user_workspaces import UserWorkspaceTable, WorkspaceRole
-from backend.database.utils import (
-    decrypt_dict,
-    decrypt_string,
-    encrypt_dict,
-    encrypt_string,
+from backend.database.services.base import DatabaseService
+from backend.database.tables import (
+    ComposeDeploymentTable,
+    UserWorkspaceTable,
+    WorkspaceTable,
 )
-from backend.database.workspaces import WorkspaceTable
-
-if TYPE_CHECKING:
-    from backend.database.secrets import SecretTable
-
-
-class ComposeDeploymentTable(BaseTable):
-    """SQLAlchemy model for a compose deployment."""
-
-    __tablename__ = "compose_deployments"
-
-    name: Mapped[str | None] = mapped_column(String, index=True)
-    namespace: Mapped[str] = mapped_column(String)
-    compose_yaml: Mapped[str] = mapped_column(Text)
-    pending_compose_yaml: Mapped[str | None] = mapped_column(Text)
-    helm_values: Mapped[str | None] = mapped_column(Text)
-    current_helm_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    state: Mapped[DeploymentStates] = mapped_column(
-        SQLAEnum(DeploymentStates), default=DeploymentStates.PENDING, index=True
-    )
-    status_message: Mapped[str | None] = mapped_column(Text)
-    deployed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    deleted_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True, index=True
-    )
-    current_task_run_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), nullable=True, index=True
-    )
-    workspace_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE")
-    )
-    depot_project_id: Mapped[str | None] = mapped_column(
-        String, nullable=True, index=True
-    )
-    # cluster_id is required - no default. The API must explicitly set this
-    # based on placement logic. Migration backfills existing rows with 'ash-1'.
-    cluster_id: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
-
-    # Unique constraint to ensure one deployment per name per workspace (only for non-deleted)
-    __table_args__ = (
-        Index(
-            "uq_workspace_deployment_name",
-            "workspace_id",
-            "name",
-            unique=True,
-            postgresql_where=text("deleted_at IS NULL"),
-        ),
-        Index("ix_compose_deployments_workspace_id_name", "workspace_id", "name"),
-    )
-
-    # Relationships
-    secrets: Mapped[List["SecretTable"]] = relationship(
-        "SecretTable",
-        back_populates="deployment",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
-        lazy="selectin",
-    )
-    workspace: Mapped["WorkspaceTable"] = relationship(
-        "WorkspaceTable",
-        back_populates="deployments",
-        lazy="selectin",
-    )
-
-
-class ComposeDeploymentPydantic(BaseDbPydanticModel):
-    """Pydantic model for a compose deployment with automatic encryption/decryption."""
-
-    name: str | None = None
-    workspace_id: UUIDStr
-    namespace: str
-    compose_yaml: str
-    pending_compose_yaml: str | None = None
-    helm_values: HelmValues | None = None
-    current_helm_revision: int | None = None
-    state: DeploymentStates = DeploymentStates.PENDING
-    status_message: str | None = None
-    deployed_at: datetime | None = None
-    deleted_at: datetime | None = None
-    current_task_run_id: UUIDStr | None = None
-    depot_project_id: str | None = None
-    # cluster_id is required - must be set explicitly by API based on placement logic
-    cluster_id: str
-
-    @field_validator("compose_yaml", "pending_compose_yaml", mode="before")
-    @classmethod
-    def decrypt_compose_fields(cls, value: Any) -> str | None:
-        """Automatically decrypt compose fields when loading from database."""
-        if value is None:
-            return None
-        if isinstance(value, str):
-            try:
-                return decrypt_string(value)
-            except InvalidToken:
-                # Not encrypted (migration from old data or new deployment)
-                return value
-            except Exception as e:
-                # Real decryption error (corrupt data, wrong key, etc.)
-                raise ValueError(f"Failed to decrypt compose field: {e}") from e
-        return value
-
-    @field_serializer("compose_yaml", "pending_compose_yaml", when_used="always")
-    def serialize_compose_fields(self, value: str | None) -> str | None:
-        """Automatically encrypt compose fields when dumping for database storage."""
-        if value is None:
-            return None
-        try:
-            return encrypt_string(value)
-        except Exception as e:
-            raise ValueError(f"Failed to encrypt compose field: {e}") from e
-
-    @field_serializer("current_task_run_id", when_used="always")
-    def serialize_task_run_id(self, value: uuid.UUID | str | None) -> str | None:
-        """Ensure task_run_id is serialized as string."""
-        if value is None:
-            return None
-        if isinstance(value, uuid.UUID):
-            return str(value)
-        return value
-
-    @field_validator("helm_values", mode="before")
-    @classmethod
-    def decrypt_helm_values(cls, value: Any) -> HelmValues | None:
-        """Automatically decrypt helm_values when loading from database."""
-        if value is None:
-            return None
-
-        if isinstance(value, str):
-            try:
-                decrypted_dict = decrypt_dict(value)
-                return HelmValues(**decrypted_dict)
-
-            except InvalidToken:
-                # Not encrypted - shouldn't happen in normal flow
-                raise ValueError(
-                    "helm_values is not encrypted - possible data corruption"
-                )
-
-            except Exception as e:
-                raise ValueError(f"Failed to decrypt helm_values: {e}") from e
-
-        # Already a HelmValues object or dict
-        return value
-
-    @field_serializer("helm_values", when_used="always")
-    def serialize_helm_values(self, value: HelmValues | None) -> str | None:
-        """Automatically encrypt helm_values when dumping for database storage."""
-        if value is None:
-            return None
-
-        if isinstance(value, HelmValues):
-            # Encrypt it
-            try:
-                helm_dict = value.model_dump(by_alias=True)
-                return encrypt_dict(helm_dict)
-
-            except Exception as e:
-                raise ValueError(f"Failed to encrypt helm_values: {e}") from e
 
 
 class ComposeDeploymentService(

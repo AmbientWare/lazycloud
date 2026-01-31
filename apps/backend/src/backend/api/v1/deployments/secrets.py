@@ -1,15 +1,17 @@
 from api_requests.secrets import SecretsRequest
 from fastapi import APIRouter, Depends, HTTPException, Query
 from models.secrets import Secret, SecretState
+from models.workspaces import WorkspaceRole
 from responses.secrets import SecretsResponse, SecretsStoredResponse
 
 from backend.api.dependencies import get_deployment_with_admin_access
 from backend.api.security import get_current_active_user, require_admin
 from backend.database import Database, get_db
-from backend.database.compose import ComposeDeploymentPydantic
-from backend.database.secrets import SecretPydantic
-from backend.database.user_workspaces import WorkspaceRole
-from backend.database.users import UserPydantic
+from backend.database.models import (
+    ComposeDeploymentPydantic,
+    SecretPydantic,
+    UserPydantic,
+)
 
 secrets_router = APIRouter(
     prefix="/{deployment_id}/secrets", dependencies=[Depends(require_admin)]
