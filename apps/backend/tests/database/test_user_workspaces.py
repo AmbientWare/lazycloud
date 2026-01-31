@@ -1,7 +1,7 @@
 """Tests for UserWorkspaceService database operations."""
 
 from backend.database import Database
-from models.workspaces import UserWorkspaceStatus, WorkspaceRole
+from backend.database.models import UserWorkspaceStatus, WorkspaceRole
 
 from tests.fixtures.database import (
     make_user,

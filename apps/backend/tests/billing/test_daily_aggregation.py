@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from backend.database import Database
-from backend.database.usage import DailyUsageStatus
+from backend.database.models import DailyUsageStatus
 from backend.tasks.crons.usage import finalize_and_bill
 
 from tests.billing.conftest import create_daily_record

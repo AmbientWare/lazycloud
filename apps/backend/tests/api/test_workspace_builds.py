@@ -5,11 +5,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 from backend.database import Database
-from backend.database.users import UserPydantic
+from backend.database.models import UserPydantic, WorkspaceRole
 from backend.services import get_depot_service
 from httpx import AsyncClient
 from models.depot import DepotBuildCredentials
-from models.workspaces import WorkspaceRole
 
 from tests.api.conftest import get_test_app
 from tests.fixtures.database import (

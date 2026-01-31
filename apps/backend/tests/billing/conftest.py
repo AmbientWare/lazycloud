@@ -4,8 +4,8 @@ from datetime import date, datetime
 
 import pytest
 from backend.database import Database, _create_database
+from backend.database.models import BreakdownType, DailyUsageRecordPydantic
 from backend.database.session import session_manager
-from backend.database.usage import BreakdownType, DailyUsageRecordPydantic
 from models.storage import STORAGE_CLASS_STANDARD
 from sqlalchemy.ext.asyncio import AsyncSession
 

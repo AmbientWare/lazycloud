@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from backend.database import Database
-from backend.database.usage import BreakdownType, DailyUsageStatus
+from backend.database.models import BreakdownType, DailyUsageStatus
 from models.storage import STORAGE_CLASS_STANDARD
 
 from tests.fixtures.database import (

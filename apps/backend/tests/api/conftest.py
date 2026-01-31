@@ -24,8 +24,8 @@ from backend.api.v1 import (
 from backend.billing.product_details.features import BaseFeatures
 from backend.config import app_config
 from backend.database import Database, _create_database, get_db
+from backend.database.models import UserPydantic, UserRole
 from backend.database.session import session_manager
-from backend.database.users import UserPydantic, UserRole
 from backend.services import (
     get_depot_service,
     get_invitation_service,

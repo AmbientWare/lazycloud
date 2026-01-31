@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 import pytest
 from backend.database import Database
-from backend.database.billing_audit import BillingEventType
+from backend.database.services import BillingEventType
 
 from tests.fixtures.database import requires_db
 

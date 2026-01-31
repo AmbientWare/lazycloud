@@ -5,8 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from backend.database import Database
-from backend.database.usage import BreakdownType
-from backend.database.users import UserPydantic
+from backend.database.models import BreakdownType, UserPydantic, WorkspaceRole
 from backend.services import (
     get_polar_service,
     get_usage_service,
@@ -16,7 +15,6 @@ from backend.services.polar.cost_breakdown import (
     WorkspaceCostBreakdown,
 )
 from httpx import AsyncClient
-from models.workspaces import WorkspaceRole
 from responses.usage import UsageMetrics
 
 from tests.api.conftest import get_test_app

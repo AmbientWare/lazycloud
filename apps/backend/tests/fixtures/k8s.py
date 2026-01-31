@@ -1,9 +1,7 @@
 """K8s test fixtures."""
 
 import pytest
-
-from backend.database.compose import ComposeDeploymentPydantic
-from backend.database.secrets import SecretPydantic
+from backend.database.models import ComposeDeploymentPydantic, SecretPydantic
 from backend.services.k8s.helm_values_generator import HelmValuesGenerator
 
 

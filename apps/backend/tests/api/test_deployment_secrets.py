@@ -4,10 +4,9 @@ import json
 
 import pytest
 from backend.database import Database
-from backend.database.users import UserPydantic
+from backend.database.models import UserPydantic, WorkspaceRole
 from httpx import AsyncClient
 from models.secrets import SecretSource
-from models.workspaces import WorkspaceRole
 
 from tests.fixtures.database import (
     make_deployment,

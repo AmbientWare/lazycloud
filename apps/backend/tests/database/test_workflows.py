@@ -3,10 +3,13 @@
 from datetime import datetime, timezone
 
 from backend.database import Database
-from backend.database.usage import DailyUsageStatus
-from backend.database.workspaces import WorkspaceStatus
+from backend.database.models import (
+    DailyUsageStatus,
+    UserWorkspaceStatus,
+    WorkspaceRole,
+    WorkspaceStatus,
+)
 from models.deployments import DeploymentStates
-from models.workspaces import UserWorkspaceStatus, WorkspaceRole
 
 from tests.fixtures.database import (
     make_api_key,
@@ -44,7 +47,7 @@ class TestUserOnboardingWorkflow:
     async def test_user_onboarding_creates_api_key(self, db: Database):
         """Test that user onboarding can create initial API key."""
         user = await db.users.create(make_user())
-        api_key = await db.api_keys.create(make_api_key(user.id, name="Default Key"))
+        _ = await db.api_keys.create(make_api_key(user.id, name="Default Key"))
 
         keys = await db.api_keys.get_by_user_id(user.id)
 
@@ -224,7 +227,7 @@ class TestWorkspaceCollaborationWorkflow:
         await db.user_workspaces.create(
             make_user_workspace(owner.id, workspace.id, WorkspaceRole.OWNER)
         )
-        member_ws = await db.user_workspaces.create(
+        _ = await db.user_workspaces.create(
             make_user_workspace(member.id, workspace.id, WorkspaceRole.MEMBER)
         )
 

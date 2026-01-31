@@ -4,19 +4,21 @@ import uuid
 from datetime import UTC, datetime
 
 import pytest
-from backend.database.compose import ComposeDeploymentPydantic
-from backend.database.secrets import SecretPydantic
-from backend.database.user_workspaces import UserWorkspacePydantic
-from backend.database.users import (
+from backend.database.models import (
+    ComposeDeploymentPydantic,
+    SecretPydantic,
     SubscriptionState,
     UserPydantic,
     UserRole,
     UserStatus,
+    UserWorkspacePydantic,
+    UserWorkspaceStatus,
+    WorkspacePydantic,
+    WorkspaceRole,
+    WorkspaceStatus,
 )
-from backend.database.workspaces import WorkspacePydantic, WorkspaceStatus
 from models.deployments import DeploymentStates
 from models.secrets import SecretSource, SecretState
-from models.workspaces import UserWorkspaceStatus, WorkspaceRole
 
 TEST_USER_ID = str(uuid.uuid4())
 TEST_WORKSPACE_ID = str(uuid.uuid4())
@@ -27,7 +29,7 @@ TEST_DEPLOYMENT_ID = str(uuid.uuid4())
 def test_user() -> UserPydantic:
     """Create a test user."""
     return UserPydantic(
-        id=uuid.UUID(TEST_USER_ID),
+        id=TEST_USER_ID,
         name="Test User",
         email="test@example.com",
         workos_id="workos_test_123",
@@ -43,7 +45,7 @@ def test_user() -> UserPydantic:
 def admin_user() -> UserPydantic:
     """Create an admin test user."""
     return UserPydantic(
-        id=uuid.uuid4(),
+        id=str(uuid.uuid4() or ""),
         name="Admin User",
         email="admin@example.com",
         workos_id="workos_admin_123",
@@ -59,7 +61,7 @@ def admin_user() -> UserPydantic:
 def member_user() -> UserPydantic:
     """Create a regular member user."""
     return UserPydantic(
-        id=uuid.uuid4(),
+        id=str(uuid.uuid4() or ""),
         name="Member User",
         email="member@example.com",
         workos_id="workos_member_123",
@@ -75,7 +77,7 @@ def member_user() -> UserPydantic:
 def inactive_user() -> UserPydantic:
     """Create an inactive user."""
     return UserPydantic(
-        id=uuid.uuid4(),
+        id=str(uuid.uuid4() or ""),
         name="Inactive User",
         email="inactive@example.com",
         workos_id="workos_inactive_123",
@@ -91,7 +93,7 @@ def inactive_user() -> UserPydantic:
 def test_workspace() -> WorkspacePydantic:
     """Create a test workspace."""
     return WorkspacePydantic(
-        id=uuid.UUID(TEST_WORKSPACE_ID),
+        id=TEST_WORKSPACE_ID,
         name="test-workspace",
         is_personal=False,
         status=WorkspaceStatus.ACTIVE,
@@ -106,6 +108,7 @@ def test_membership(
 ) -> UserWorkspacePydantic:
     """Create a test workspace membership with owner role."""
     return UserWorkspacePydantic(
+        id=str(uuid.uuid4() or ""),
         user_id=str(test_user.id),
         workspace_id=str(test_workspace.id),
         role=WorkspaceRole.OWNER,
@@ -121,6 +124,7 @@ def admin_membership(
 ) -> UserWorkspacePydantic:
     """Create an admin workspace membership."""
     return UserWorkspacePydantic(
+        id=str(uuid.uuid4() or ""),
         user_id=str(admin_user.id),
         workspace_id=str(test_workspace.id),
         role=WorkspaceRole.ADMIN,
@@ -136,6 +140,7 @@ def member_membership(
 ) -> UserWorkspacePydantic:
     """Create a member workspace membership."""
     return UserWorkspacePydantic(
+        id=str(uuid.uuid4() or ""),
         user_id=str(member_user.id),
         workspace_id=str(test_workspace.id),
         role=WorkspaceRole.MEMBER,
@@ -149,7 +154,7 @@ def member_membership(
 def test_deployment(test_workspace: WorkspacePydantic) -> ComposeDeploymentPydantic:
     """Create a test deployment."""
     return ComposeDeploymentPydantic(
-        id=uuid.UUID(TEST_DEPLOYMENT_ID),
+        id=TEST_DEPLOYMENT_ID,
         name="test-deployment",
         workspace_id=str(test_workspace.id),
         namespace=f"lc-{test_workspace.id}",
@@ -168,7 +173,7 @@ def test_deployment(test_workspace: WorkspacePydantic) -> ComposeDeploymentPydan
 def test_secret(test_deployment: ComposeDeploymentPydantic) -> SecretPydantic:
     """Create a test secret."""
     return SecretPydantic(
-        id=uuid.uuid4(),
+        id=str(uuid.uuid4() or ""),
         deployment_id=str(test_deployment.id),
         key="TEST_SECRET",
         value="secret_value",

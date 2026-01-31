@@ -5,11 +5,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from backend.database import Database
-from backend.database.users import UserPydantic
+from backend.database.models import UserPydantic, WorkspaceRole
 from httpx import AsyncClient
 from models.k8s import WorkloadType
-from models.statuses import StatusPhase, ServiceStatus
-from models.workspaces import WorkspaceRole
+from models.statuses import ServiceStatus, StatusPhase
 
 from tests.fixtures.database import (
     make_deployment,
