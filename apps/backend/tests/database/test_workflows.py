@@ -263,7 +263,7 @@ class TestUsageTrackingWorkflow:
         )
 
         for i in range(3):
-            await db.usage.atomic_increment_usage(
+            await db.usage.increment_usage(
                 record_id=record.id,
                 cpu_core_seconds=100.0 * (i + 1),
                 memory_gb_seconds=0.0,
@@ -292,7 +292,7 @@ class TestUsageTrackingWorkflow:
             usage_date=today,
         )
 
-        await db.usage.atomic_increment_usage(
+        await db.usage.increment_usage(
             record_id=record.id,
             cpu_core_seconds=500.0,
             memory_gb_seconds=0.0,

@@ -210,7 +210,7 @@ async def collect_workspace_interval(
         storage_gb_months = UsageUnits.gb_hours_to_gb_months(total_storage_gb_hours)
 
         # Atomic increment of daily record totals (all metered resources)
-        await db.usage.atomic_increment_usage(
+        await db.usage.increment_usage(
             record_id=daily_record.id,
             cpu_core_seconds=breakdown.totals.cpu_core_seconds,
             memory_gb_seconds=breakdown.totals.memory_gb_seconds,

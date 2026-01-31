@@ -1,20 +1,20 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
-from backend.database.models.api_keys import ApiKey
+from backend.database.models.api_keys import ApiKeyInDb
 from backend.database.services.base import (
     DatabaseService,
 )
 from backend.database.tables.api_keys import ApiKeyTable
 
 
-class ApiKeyService(DatabaseService[ApiKeyTable, ApiKey]):
+class ApiKeyService(DatabaseService[ApiKeyTable, ApiKeyInDb]):
     """Service layer for api key operations"""
 
     def __init__(self, session: AsyncSession):
-        super().__init__(ApiKeyTable, ApiKey, session)
+        super().__init__(ApiKeyTable, ApiKeyInDb, session)
 
-    async def get_by_user_id(self, user_id: str) -> list[ApiKey]:
+    async def get_by_user_id(self, user_id: str) -> list[ApiKeyInDb]:
         """Get a api key by reference id"""
         query = select(ApiKeyTable).where(ApiKeyTable.user_id == user_id)
         result = await self._session.execute(query)

@@ -1,6 +1,8 @@
 from datetime import datetime
 from enum import StrEnum
 
+from pydantic import BaseModel
+
 from backend.database.models.base import (
     BaseDbModel,
     UUIDStr,
@@ -15,7 +17,7 @@ class InvitationType(StrEnum):
     OWNERSHIP_TRANSFER = "ownership_transfer"
 
 
-class WorkspaceInvitation(BaseDbModel):
+class WorkspaceInvitation(BaseModel):
     """Pydantic model for workspace invitation"""
 
     workspace_id: UUIDStr
@@ -26,3 +28,9 @@ class WorkspaceInvitation(BaseDbModel):
     expires_at: datetime
     accepted_at: datetime | None = None
     invitation_type: str = InvitationType.MEMBER.value
+
+
+class WorkspaceInvitationInDb(WorkspaceInvitation, BaseDbModel):
+    """Pydantic model for a workspace invitation that is stored in the database"""
+
+    ...

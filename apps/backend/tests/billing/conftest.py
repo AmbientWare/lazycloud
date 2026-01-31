@@ -84,7 +84,7 @@ async def create_daily_record(
     )
 
     # Increment usage - this adds 1 to intervals_collected
-    await db.usage.atomic_increment_usage(
+    await db.usage.increment_usage(
         record_id=record.id,
         cpu_core_seconds=cpu_core_seconds,
         memory_gb_seconds=memory_gb_seconds,
@@ -94,7 +94,7 @@ async def create_daily_record(
 
     # If caller wants more intervals, add zero-value increments
     for _ in range(intervals_collected - 1):
-        await db.usage.atomic_increment_usage(
+        await db.usage.increment_usage(
             record_id=record.id,
             cpu_core_seconds=0.0,
             memory_gb_seconds=0.0,

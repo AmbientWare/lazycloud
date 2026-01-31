@@ -1,6 +1,8 @@
 from datetime import date, datetime
 from enum import StrEnum
 
+from pydantic import BaseModel
+
 from backend.database.models.base import (
     BaseDbModel,
     UUIDStr,
@@ -19,7 +21,7 @@ class BreakdownType(StrEnum):
     BUILD = "build"
 
 
-class DailyUsageRecord(BaseDbModel):
+class DailyUsageRecord(BaseModel):
     workspace_id: UUIDStr
     usage_date: date
     status: DailyUsageStatus
@@ -37,12 +39,24 @@ class DailyUsageRecord(BaseDbModel):
     last_billing_attempt_at: datetime | None = None
 
 
-class CollectedInterval(BaseDbModel):
+class DailyUsageRecordInDb(DailyUsageRecord, BaseDbModel):
+    """Pydantic model for a daily usage record that is stored in the database"""
+
+    ...
+
+
+class CollectedInterval(BaseModel):
     workspace_id: UUIDStr
     interval_start: datetime
 
 
-class UsageBreakdownEvent(BaseDbModel):
+class CollectedIntervalInDb(CollectedInterval, BaseDbModel):
+    """Pydantic model for a collected interval that is stored in the database"""
+
+    ...
+
+
+class UsageBreakdownEvent(BaseModel):
     workspace_id: UUIDStr
     deployment_id: UUIDStr | None = None
     interval_start: datetime
@@ -56,3 +70,9 @@ class UsageBreakdownEvent(BaseDbModel):
     gb_hours: float = 0.0
     endpoint_hours: float = 0.0
     build_minutes: float = 0.0
+
+
+class UsageBreakdownEventInDb(UsageBreakdownEvent, BaseDbModel):
+    """Pydantic model for a usage breakdown event that is stored in the database"""
+
+    ...

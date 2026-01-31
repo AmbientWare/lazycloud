@@ -1,17 +1,16 @@
+import asyncio
 from datetime import date, datetime, timezone
 
 from models.billing import UsageCollectionConfig
 from models.storage import STORAGE_CLASS_STANDARD
-from sqlalchemy import (
-    func,
-    select,
-    update,
-)
+from sqlalchemy import exists as sql_exists
+from sqlalchemy import func, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 
 from backend.database.models import (
     BreakdownType,
-    DailyUsageRecord,
+    DailyUsageRecordInDb,
     DailyUsageStatus,
 )
 from backend.database.services.base import DatabaseService
@@ -22,24 +21,27 @@ from backend.database.tables import (
 )
 
 
-class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecord]):
+class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecordInDb]):
+    """Service layer for usage tracking and billing operations."""
+
     def __init__(self, session: AsyncSession):
-        super().__init__(DailyUsageRecordTable, DailyUsageRecord, session)
+        super().__init__(DailyUsageRecordTable, DailyUsageRecordInDb, session)
 
     async def is_interval_collected(
         self, workspace_id: str, interval_start: datetime
     ) -> bool:
         """Check if an interval has already been collected."""
-        result = await self._session.execute(
-            select(CollectedIntervalTable)
+        query = select(
+            sql_exists()
             .where(CollectedIntervalTable.workspace_id == workspace_id)
             .where(CollectedIntervalTable.interval_start == interval_start)
         )
-        return result.scalar_one_or_none() is not None
+        result = await self._session.execute(query)
+        return result.scalar() or False
 
     async def get_or_create_daily_record(
         self, workspace_id: str, usage_date: date, expected_intervals: int = 96
-    ) -> DailyUsageRecord:
+    ) -> DailyUsageRecordInDb:
         """Get existing daily record or create a new one."""
         result = await self._session.execute(
             select(DailyUsageRecordTable)
@@ -49,7 +51,7 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecord]):
         record = result.scalar_one_or_none()
 
         if record:
-            return record.to_pydantic(DailyUsageRecord)
+            return self._to_pydantic(record)
 
         new_record = DailyUsageRecordTable(
             workspace_id=workspace_id,
@@ -60,9 +62,9 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecord]):
         self._session.add(new_record)
         await self._session.flush()
         await self._session.refresh(new_record)
-        return new_record.to_pydantic(DailyUsageRecord)
+        return self._to_pydantic(new_record)
 
-    async def atomic_increment_usage(
+    async def increment_usage(
         self,
         record_id: str,
         cpu_core_seconds: float,
@@ -83,7 +85,7 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecord]):
                 storage_gb_months=DailyUsageRecordTable.storage_gb_months
                 + storage_gb_months,
                 intervals_collected=DailyUsageRecordTable.intervals_collected + 1,
-                updated_at=func.now(),
+                updated_at=datetime.now(timezone.utc),
             )
         )
 
@@ -132,7 +134,9 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecord]):
         )
         self._session.add(event)
 
-    async def get_unbilled_for_date(self, usage_date: date) -> list[DailyUsageRecord]:
+    async def get_unbilled_for_date(
+        self, usage_date: date
+    ) -> list[DailyUsageRecordInDb]:
         """Get all daily records that are collecting and ready to bill."""
         result = await self._session.execute(
             select(DailyUsageRecordTable)
@@ -140,8 +144,7 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecord]):
             .where(DailyUsageRecordTable.usage_date == usage_date)
             .order_by(DailyUsageRecordTable.workspace_id)
         )
-        records = result.scalars().all()
-        return [r.to_pydantic(DailyUsageRecord) for r in records]
+        return [self._to_pydantic(r) for r in result.scalars().all()]
 
     async def mark_as_billed(self, record_id: str, billing_id: str) -> None:
         """Mark a daily record as billed."""
@@ -152,7 +155,7 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecord]):
                 status=DailyUsageStatus.BILLED.value,
                 billing_id=billing_id,
                 billed_at=datetime.now(timezone.utc),
-                updated_at=func.now(),
+                updated_at=datetime.now(timezone.utc),
             )
         )
 
@@ -160,10 +163,10 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecord]):
         self, record_id: str, error: str | None = None
     ) -> None:
         """Increment billing attempt counter and optionally record error."""
-        values = {
+        values: dict = {
             "billing_attempts": DailyUsageRecordTable.billing_attempts + 1,
             "last_billing_attempt_at": datetime.now(timezone.utc),
-            "updated_at": func.now(),
+            "updated_at": datetime.now(timezone.utc),
         }
         if error:
             values["last_billing_error"] = error[:500]
@@ -173,7 +176,7 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecord]):
             .values(**values)
         )
 
-    async def get_stuck_records(self, before_date: date) -> list[DailyUsageRecord]:
+    async def get_stuck_records(self, before_date: date) -> list[DailyUsageRecordInDb]:
         """Get records stuck in collecting status from before the given date."""
         result = await self._session.execute(
             select(DailyUsageRecordTable)
@@ -181,15 +184,14 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecord]):
             .where(DailyUsageRecordTable.usage_date < before_date)
             .order_by(DailyUsageRecordTable.usage_date)
         )
-        records = result.scalars().all()
-        return [r.to_pydantic(DailyUsageRecord) for r in records]
+        return [self._to_pydantic(r) for r in result.scalars().all()]
 
     async def get_workspace_daily_usage(
         self,
         workspace_id: str,
         start_date: date,
         end_date: date,
-    ) -> list[DailyUsageRecord]:
+    ) -> list[DailyUsageRecordInDb]:
         """Get daily usage records for a workspace in a date range."""
         result = await self._session.execute(
             select(DailyUsageRecordTable)
@@ -198,8 +200,7 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecord]):
             .where(DailyUsageRecordTable.usage_date <= end_date)
             .order_by(DailyUsageRecordTable.usage_date)
         )
-        records = result.scalars().all()
-        return [r.to_pydantic(DailyUsageRecord) for r in records]
+        return [self._to_pydantic(r) for r in result.scalars().all()]
 
     async def get_service_breakdown(
         self,
@@ -286,9 +287,7 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecord]):
         )
 
         storage_query = (
-            select(
-                func.sum(UsageBreakdownEventTable.gb_hours).label("gb_hours"),
-            )
+            select(func.sum(UsageBreakdownEventTable.gb_hours).label("gb_hours"))
             .where(UsageBreakdownEventTable.deployment_id == deployment_id)
             .where(
                 UsageBreakdownEventTable.breakdown_type == BreakdownType.STORAGE.value
@@ -321,27 +320,27 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecord]):
             .where(UsageBreakdownEventTable.interval_start < end_date)
         )
 
-        compute_result = await self._session.execute(compute_query)
-        storage_result = await self._session.execute(storage_query)
-        network_result = await self._session.execute(network_query)
-        build_result = await self._session.execute(build_query)
+        # Run all queries in parallel
+        (
+            compute_result,
+            storage_result,
+            network_result,
+            build_result,
+        ) = await asyncio.gather(
+            self._session.execute(compute_query),
+            self._session.execute(storage_query),
+            self._session.execute(network_query),
+            self._session.execute(build_query),
+        )
 
         compute_row = compute_result.one()
         cpu = compute_row[0] or 0.0
         memory = compute_row[1] or 0.0
-
         storage_gb_hours = storage_result.scalar() or 0.0
-
         endpoint_hours = network_result.scalar() or 0.0
         build_minutes = build_result.scalar() or 0.0
 
-        return (
-            cpu,
-            memory,
-            storage_gb_hours,
-            endpoint_hours,
-            build_minutes,
-        )
+        return (cpu, memory, storage_gb_hours, endpoint_hours, build_minutes)
 
     async def get_latest_storage_sizes(
         self,
@@ -354,7 +353,6 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecord]):
         For EBS: this is the provisioned size.
         For EFS: this is the actual used size from CloudWatch.
         """
-        # Get the most recent interval for this deployment
         latest_interval_query = (
             select(func.max(UsageBreakdownEventTable.interval_start))
             .where(UsageBreakdownEventTable.deployment_id == deployment_id)
@@ -367,7 +365,6 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecord]):
         if not latest_interval:
             return {}
 
-        # Get all storage events from that interval
         query = (
             select(
                 UsageBreakdownEventTable.resource_name,
@@ -384,7 +381,6 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecord]):
         result = await self._session.execute(query)
 
         # Convert gb_hours back to size_gb
-        # gb_hours = size_gb * interval_hours, so size_gb = gb_hours / interval_hours
         interval_hours = UsageCollectionConfig.COLLECTION_INTERVAL.value / 60.0
 
         storage_sizes: dict[str, tuple[str, float]] = {}

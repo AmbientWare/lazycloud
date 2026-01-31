@@ -1,53 +1,98 @@
-from backend.database.models.api_keys import ApiKey
+# Base
+# API Keys
+from backend.database.models.api_keys import ApiKey, ApiKeyInDb
 from backend.database.models.base import BaseDbModel, UUIDStr
-from backend.database.models.billing_audit import BillingAuditLog
-from backend.database.models.compose import ComposeDeployment
+
+# Billing
+from backend.database.models.billing_audit import BillingAuditLog, BillingAuditLogInDb
+
+# Compose Deployments
+from backend.database.models.compose import ComposeDeployment, ComposeDeploymentInDb
+
+# Invitations
 from backend.database.models.invitations import (
     InvitationType,
     WorkspaceInvitation,
+    WorkspaceInvitationInDb,
 )
-from backend.database.models.secrets import Secret
+
+# Secrets
+from backend.database.models.secrets import Secret, SecretInDb
+
+# Usage
 from backend.database.models.usage import (
     BreakdownType,
     CollectedInterval,
+    CollectedIntervalInDb,
     DailyUsageRecord,
+    DailyUsageRecordInDb,
     DailyUsageStatus,
     UsageBreakdownEvent,
+    UsageBreakdownEventInDb,
 )
+
+# User-Workspace Membership
 from backend.database.models.user_workspaces import (
     UserWorkspace,
+    UserWorkspaceInDb,
     UserWorkspaceStatus,
     WorkspaceRole,
 )
+
+# Users
 from backend.database.models.users import (
     SubscriptionState,
     User,
+    UserInDb,
     UserRole,
     UserStatus,
 )
-from backend.database.models.workspaces import Workspace, WorkspaceStatus
+
+# Workspaces
+from backend.database.models.workspaces import Workspace, WorkspaceInDb, WorkspaceStatus
 
 __all__ = [
-    "ApiKey",
+    # Base
     "BaseDbModel",
     "UUIDStr",
-    "UserRole",
-    "UserStatus",
-    "SubscriptionState",
+    # API Keys
+    "ApiKey",
+    "ApiKeyInDb",
+    # Billing
     "BillingAuditLog",
+    "BillingAuditLogInDb",
+    # Compose Deployments
     "ComposeDeployment",
+    "ComposeDeploymentInDb",
+    # Invitations
     "InvitationType",
     "WorkspaceInvitation",
+    "WorkspaceInvitationInDb",
+    # Secrets
+    "Secret",
+    "SecretInDb",
+    # Usage
+    "BreakdownType",
+    "CollectedInterval",
+    "CollectedIntervalInDb",
+    "DailyUsageRecord",
+    "DailyUsageRecordInDb",
+    "DailyUsageStatus",
+    "UsageBreakdownEvent",
+    "UsageBreakdownEventInDb",
+    # Users
+    "SubscriptionState",
+    "User",
+    "UserInDb",
+    "UserRole",
+    "UserStatus",
+    # User-Workspace Membership
+    "UserWorkspace",
+    "UserWorkspaceInDb",
     "UserWorkspaceStatus",
     "WorkspaceRole",
-    "Secret",
-    "DailyUsageRecord",
-    "CollectedInterval",
-    "DailyUsageStatus",
-    "BreakdownType",
-    "UsageBreakdownEvent",
-    "UserWorkspace",
-    "WorkspaceStatus",
-    "User",
+    # Workspaces
     "Workspace",
+    "WorkspaceInDb",
+    "WorkspaceStatus",
 ]

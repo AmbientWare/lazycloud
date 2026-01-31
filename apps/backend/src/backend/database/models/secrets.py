@@ -2,7 +2,7 @@ from typing import Any
 
 from cryptography.fernet import InvalidToken
 from models.secrets import SecretSource, SecretState
-from pydantic import field_serializer, field_validator
+from pydantic import BaseModel, field_serializer, field_validator
 
 from backend.database.models.base import (
     BaseDbModel,
@@ -11,7 +11,7 @@ from backend.database.models.base import (
 from backend.database.utils import decrypt_string, encrypt_string
 
 
-class Secret(BaseDbModel):
+class Secret(BaseModel):
     """Pydantic model for deployment secrets with automatic encryption/decryption."""
 
     deployment_id: UUIDStr
@@ -43,3 +43,9 @@ class Secret(BaseDbModel):
             return encrypt_string(value)
         except Exception as e:
             raise ValueError(f"Failed to encrypt secret value: {e}") from e
+
+
+class SecretInDb(Secret, BaseDbModel):
+    """Pydantic model for a secret that is stored in the database"""
+
+    ...

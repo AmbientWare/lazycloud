@@ -5,7 +5,7 @@ from typing import Any
 from cryptography.fernet import InvalidToken
 from models.deployments import DeploymentStates
 from models.helm import HelmValues
-from pydantic import field_serializer, field_validator
+from pydantic import BaseModel, field_serializer, field_validator
 
 from backend.database.models.base import (
     BaseDbModel,
@@ -19,7 +19,7 @@ from backend.database.utils import (
 )
 
 
-class ComposeDeployment(BaseDbModel):
+class ComposeDeployment(BaseModel):
     """Pydantic model for a compose deployment with automatic encryption/decryption."""
 
     name: str | None = None
@@ -112,3 +112,9 @@ class ComposeDeployment(BaseDbModel):
 
             except Exception as e:
                 raise ValueError(f"Failed to encrypt helm_values: {e}") from e
+
+
+class ComposeDeploymentInDb(ComposeDeployment, BaseDbModel):
+    """Pydantic model for a compose deployment that is stored in the database"""
+
+    ...

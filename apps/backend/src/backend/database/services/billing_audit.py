@@ -1,9 +1,10 @@
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.database.models import BillingAuditLog
+from backend.database.models import BillingAuditLogInDb
 from backend.database.tables import BillingAuditLogTable
 
 
@@ -31,8 +32,8 @@ class BillingAuditService:
         workspace_id: str,
         record_id: str | None = None,
         actor: str | None = None,
-        details: dict | None = None,
-    ) -> BillingAuditLog:
+        details: dict[str, Any] | None = None,
+    ) -> BillingAuditLogInDb:
         """Create an audit log entry."""
         audit_entry = BillingAuditLogTable(
             event_type=event_type.value,
@@ -44,7 +45,7 @@ class BillingAuditService:
         self._session.add(audit_entry)
         await self._session.flush()
         await self._session.refresh(audit_entry)
-        return audit_entry.to_pydantic(BillingAuditLog)
+        return audit_entry.to_pydantic(BillingAuditLogInDb)
 
     async def log_collection_completed(
         self,
@@ -53,7 +54,7 @@ class BillingAuditService:
         interval_start: datetime,
         cpu_seconds: float,
         memory_seconds: float,
-    ) -> BillingAuditLog:
+    ) -> BillingAuditLogInDb:
         """Log successful interval collection."""
         return await self.log_event(
             event_type=BillingEventType.COLLECTION_COMPLETED,
@@ -72,7 +73,7 @@ class BillingAuditService:
         record_id: str,
         usage_date: str,
         attempt: int,
-    ) -> BillingAuditLog:
+    ) -> BillingAuditLogInDb:
         """Log billing attempt started."""
         return await self.log_event(
             event_type=BillingEventType.BILLING_STARTED,
@@ -90,7 +91,7 @@ class BillingAuditService:
         record_id: str,
         billing_id: str,
         usage_date: str,
-    ) -> BillingAuditLog:
+    ) -> BillingAuditLogInDb:
         """Log successful billing."""
         return await self.log_event(
             event_type=BillingEventType.BILLING_COMPLETED,
@@ -109,7 +110,7 @@ class BillingAuditService:
         error: str,
         attempt: int,
         usage_date: str,
-    ) -> BillingAuditLog:
+    ) -> BillingAuditLogInDb:
         """Log failed billing attempt."""
         return await self.log_event(
             event_type=BillingEventType.BILLING_FAILED,
@@ -128,7 +129,7 @@ class BillingAuditService:
         record_id: str,
         reason: str,
         usage_date: str,
-    ) -> BillingAuditLog:
+    ) -> BillingAuditLogInDb:
         """Log skipped billing (e.g., incomplete intervals or max attempts exceeded)."""
         return await self.log_event(
             event_type=BillingEventType.BILLING_SKIPPED,

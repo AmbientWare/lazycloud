@@ -553,7 +553,7 @@ class TestBillingAuditLogging:
             usage_date=yesterday,
             expected_intervals=96,
         )
-        await billing_db.usage.atomic_increment_usage(
+        await billing_db.usage.increment_usage(
             record_id=record.id,
             cpu_core_seconds=100.0,
             memory_gb_seconds=100.0,

@@ -1,13 +1,14 @@
-from datetime import UTC, datetime
+import asyncio
+from datetime import datetime, timezone
 
-from sqlalchemy import and_, func, update
+from sqlalchemy import func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from backend.database.models import (
-    User,
-    UserWorkspace,
-    Workspace,
+    UserInDb,
+    UserWorkspaceInDb,
+    WorkspaceInDb,
     WorkspaceRole,
     WorkspaceStatus,
 )
@@ -19,50 +20,42 @@ from backend.database.tables import (
 )
 
 
-class WorkspaceService(DatabaseService[WorkspaceTable, Workspace]):
-    """Service layer for workspace operations"""
+class WorkspaceService(DatabaseService[WorkspaceTable, WorkspaceInDb]):
+    """Service layer for workspace operations."""
 
     def __init__(self, session: AsyncSession):
-        super().__init__(WorkspaceTable, Workspace, session)
+        super().__init__(WorkspaceTable, WorkspaceInDb, session)
 
     async def get_user_workspaces_with_membership(
         self, user_id: str, status: WorkspaceStatus = WorkspaceStatus.ACTIVE
-    ) -> list[tuple[Workspace, UserWorkspace]]:
-        """Get all workspaces for a user with membership info in a single query"""
-
+    ) -> list[tuple[WorkspaceInDb, UserWorkspaceInDb]]:
+        """Get all workspaces for a user with membership info in a single query."""
         query = (
             select(WorkspaceTable, UserWorkspaceTable)
             .join(UserWorkspaceTable)
             .where(UserWorkspaceTable.user_id == user_id)
             .where(WorkspaceTable.status == status.value)
         )
-
         result = await self._session.execute(query)
-        rows = result.all()
-
         return [
-            (
-                self._to_pydantic(workspace),
-                membership.to_pydantic(UserWorkspace),
-            )
-            for workspace, membership in rows
+            (self._to_pydantic(workspace), membership.to_pydantic(UserWorkspaceInDb))
+            for workspace, membership in result.all()
         ]
 
-    async def get_personal_workspace(self, user_id: str) -> Workspace | None:
-        """Get a user's personal workspace"""
+    async def get_personal_workspace(self, user_id: str) -> WorkspaceInDb | None:
+        """Get a user's personal workspace."""
         query = (
             select(WorkspaceTable)
             .join(UserWorkspaceTable)
             .where(UserWorkspaceTable.user_id == user_id)
             .where(WorkspaceTable.is_personal.is_(True))
         )
-
         result = await self._session.execute(query)
         workspace = result.scalar_one_or_none()
-        return self._to_pydantic(workspace)
+        return self._to_pydantic(workspace) if workspace else None
 
-    async def get_owner(self, workspace_id: str) -> "UserWorkspace | None":
-        """Get the owner membership for a workspace"""
+    async def get_owner(self, workspace_id: str) -> UserWorkspaceInDb | None:
+        """Get the owner membership for a workspace."""
         query = (
             select(UserWorkspaceTable)
             .where(UserWorkspaceTable.workspace_id == workspace_id)
@@ -70,38 +63,27 @@ class WorkspaceService(DatabaseService[WorkspaceTable, Workspace]):
         )
         result = await self._session.execute(query)
         membership = result.scalar_one_or_none()
+        return membership.to_pydantic(UserWorkspaceInDb) if membership else None
 
-        if membership:
-            return membership.to_pydantic(UserWorkspace)
-
-        return None
-
-    async def get_owner_user(self, workspace_id: str) -> User | None:
-        """Get the owner user for a workspace in a single query"""
-
+    async def get_owner_user(self, workspace_id: str) -> UserInDb | None:
+        """Get the owner user for a workspace in a single query."""
         query = (
             select(UserTable)
             .join(UserWorkspaceTable, UserTable.id == UserWorkspaceTable.user_id)
             .where(UserWorkspaceTable.workspace_id == workspace_id)
             .where(UserWorkspaceTable.role == WorkspaceRole.OWNER.value)
         )
-
         result = await self._session.execute(query)
         user = result.scalar_one_or_none()
-
-        if user:
-            return user.to_pydantic(User)
-
-        return None
+        return user.to_pydantic(UserInDb) if user else None
 
     async def transfer_ownership(
         self,
         workspace_id: str,
         current_owner_id: str,
         new_owner_id: str,
-    ) -> tuple["UserWorkspace | None", "UserWorkspace | None"]:
-        """Transfer ownership from one user to another"""
-        # Fetch both memberships
+    ) -> tuple[UserWorkspaceInDb | None, UserWorkspaceInDb | None]:
+        """Transfer ownership from one user to another."""
         query = (
             select(UserWorkspaceTable)
             .where(UserWorkspaceTable.workspace_id == workspace_id)
@@ -113,7 +95,6 @@ class WorkspaceService(DatabaseService[WorkspaceTable, Workspace]):
         current_owner_membership = None
         new_owner_membership = None
 
-        # Compare as strings
         for membership in memberships:
             if str(membership.user_id) == current_owner_id:
                 current_owner_membership = membership
@@ -123,7 +104,6 @@ class WorkspaceService(DatabaseService[WorkspaceTable, Workspace]):
         if not current_owner_membership or not new_owner_membership:
             return (None, None)
 
-        # Update both roles
         current_owner_membership.role = WorkspaceRole.ADMIN.value
         new_owner_membership.role = WorkspaceRole.OWNER.value
 
@@ -132,17 +112,20 @@ class WorkspaceService(DatabaseService[WorkspaceTable, Workspace]):
         await self._session.refresh(new_owner_membership)
 
         return (
-            current_owner_membership.to_pydantic(UserWorkspace),
-            new_owner_membership.to_pydantic(UserWorkspace),
+            current_owner_membership.to_pydantic(UserWorkspaceInDb),
+            new_owner_membership.to_pydantic(UserWorkspaceInDb),
         )
 
     async def update_status(
         self, workspace_id: str, status: WorkspaceStatus
-    ) -> Workspace | None:
+    ) -> WorkspaceInDb | None:
         """Update the status of a workspace."""
-        update_values = {"status": status.value}
+        update_values: dict = {
+            "status": status.value,
+            "updated_at": datetime.now(timezone.utc),
+        }
         if status == WorkspaceStatus.DELETED:
-            update_values["deleted_at"] = datetime.now(UTC).isoformat()
+            update_values["deleted_at"] = datetime.now(timezone.utc)
 
         stmt = (
             update(WorkspaceTable)
@@ -154,53 +137,46 @@ class WorkspaceService(DatabaseService[WorkspaceTable, Workspace]):
             stmt, execution_options={"populate_existing": True}
         )
         updated_workspace = result.scalar_one_or_none()
-        return self._to_pydantic(updated_workspace)
+        return self._to_pydantic(updated_workspace) if updated_workspace else None
 
-    async def get_active_workspaces(self) -> list[Workspace]:
-        """Get all active workspaces"""
+    async def get_active_workspaces(self) -> list[WorkspaceInDb]:
+        """Get all active workspaces."""
         return await self.find({"status": WorkspaceStatus.ACTIVE.value})
 
     async def get_active_workspaces_before(
         self, before_date: datetime
-    ) -> list[Workspace]:
-        """Get all active workspaces created before a specific date"""
+    ) -> list[WorkspaceInDb]:
+        """Get all active workspaces created before a specific date."""
         query = (
             select(WorkspaceTable)
             .where(WorkspaceTable.status == WorkspaceStatus.ACTIVE.value)
             .where(WorkspaceTable.created_at < before_date)
         )
         result = await self._session.execute(query)
-        workspaces = result.scalars().all()
-        return [self._to_pydantic(ws) for ws in workspaces]
+        return [self._to_pydantic(ws) for ws in result.scalars().all()]
 
     async def get_deleted_in_range(
         self, start_date: datetime, end_date: datetime
-    ) -> list[Workspace]:
-        """Get all workspaces deleted within a date range (inclusive)"""
+    ) -> list[WorkspaceInDb]:
+        """Get all workspaces deleted within a date range (inclusive)."""
         query = (
             select(WorkspaceTable)
             .where(WorkspaceTable.status == WorkspaceStatus.DELETED.value)
-            .where(
-                and_(
-                    WorkspaceTable.deleted_at >= start_date,
-                    WorkspaceTable.deleted_at <= end_date,
-                )
-            )
+            .where(WorkspaceTable.deleted_at >= start_date)
+            .where(WorkspaceTable.deleted_at <= end_date)
         )
         result = await self._session.execute(query)
-        workspaces = result.scalars().all()
-        return [self._to_pydantic(ws) for ws in workspaces]
+        return [self._to_pydantic(ws) for ws in result.scalars().all()]
 
     async def get_user_workspaces_active_during_range(
         self, user_id: str, start_date: datetime, end_date: datetime
-    ) -> list[tuple[Workspace, UserWorkspace]]:
+    ) -> list[tuple[WorkspaceInDb, UserWorkspaceInDb]]:
         """Get all workspaces for a user that were active during the date range.
 
         Includes:
         - Active workspaces (status = ACTIVE)
         - Deleted workspaces that were deleted during or after the date range
         """
-        # Get active workspaces
         active_query = (
             select(WorkspaceTable, UserWorkspaceTable)
             .join(UserWorkspaceTable)
@@ -208,7 +184,6 @@ class WorkspaceService(DatabaseService[WorkspaceTable, Workspace]):
             .where(WorkspaceTable.status == WorkspaceStatus.ACTIVE.value)
         )
 
-        # Get deleted workspaces that were deleted during or after the date range
         deleted_query = (
             select(WorkspaceTable, UserWorkspaceTable)
             .join(UserWorkspaceTable)
@@ -217,30 +192,24 @@ class WorkspaceService(DatabaseService[WorkspaceTable, Workspace]):
             .where(WorkspaceTable.deleted_at >= start_date)
         )
 
-        # Combine both queries
-        active_result = await self._session.execute(active_query)
-        deleted_result = await self._session.execute(deleted_query)
+        active_result, deleted_result = await asyncio.gather(
+            self._session.execute(active_query),
+            self._session.execute(deleted_query),
+        )
 
-        workspaces = []
-        for workspace, membership in active_result.all():
-            workspaces.append(
-                (
-                    self._to_pydantic(workspace),
-                    membership.to_pydantic(UserWorkspace),
-                )
-            )
-        for workspace, membership in deleted_result.all():
-            workspaces.append(
-                (
-                    self._to_pydantic(workspace),
-                    membership.to_pydantic(UserWorkspace),
-                )
-            )
+        workspaces = [
+            (self._to_pydantic(ws), membership.to_pydantic(UserWorkspaceInDb))
+            for ws, membership in active_result.all()
+        ]
+        workspaces.extend(
+            (self._to_pydantic(ws), membership.to_pydantic(UserWorkspaceInDb))
+            for ws, membership in deleted_result.all()
+        )
 
         return workspaces
 
     async def get_active_workspace_count(self, user_id: str) -> int:
-        """Count active workspaces for a user using a single COUNT query."""
+        """Count active workspaces for a user."""
         query = (
             select(func.count(WorkspaceTable.id))
             .join(UserWorkspaceTable)

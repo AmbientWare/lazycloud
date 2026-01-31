@@ -1,5 +1,7 @@
 from enum import StrEnum
 
+from pydantic import BaseModel
+
 from backend.database.models.base import BaseDbModel
 
 
@@ -26,7 +28,7 @@ class UserRole(StrEnum):
     USER = "user"
 
 
-class User(BaseDbModel):
+class User(BaseModel):
     """Pydantic model for a user account"""
 
     name: str
@@ -35,3 +37,9 @@ class User(BaseDbModel):
     role: UserRole = UserRole.USER
     status: UserStatus = UserStatus.ACTIVE
     subscription_state: SubscriptionState = SubscriptionState.WITHIN_LIMITS
+
+
+class UserInDb(User, BaseDbModel):
+    """Pydantic model for a user account that is stored in the database"""
+
+    ...
