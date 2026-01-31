@@ -46,6 +46,7 @@ build-backend = "hatchling.build"
 [dependency-groups]
 dev = [
     "httpx>=0.28.1",
+    "pyright>=1.1.408",
     "pytest>=9.0.1",
     "pytest-asyncio>=1.3.0",
     "pytest-cov>=7.0.0",
@@ -67,3 +68,14 @@ env = [
     "DATABASE_URL=postgresql+asyncpg://lc_dev:password@localhost:6432/postgres",
     "REDIS_URL=redis://localhost:6379",
 ]
+
+[tool.pyright]
+include = ["src"]
+pythonVersion = "3.13"
+typeCheckingMode = "basic"
+reportArgumentType = "warning"
+reportReturnType = "warning"
+reportAttributeAccessIssue = "warning"
+reportOptionalMemberAccess = "warning"
+reportCallIssue = "error"  # missing arguments
+reportGeneralTypeIssues = "warning"  # kubernetes-asyncio has poor stubs
