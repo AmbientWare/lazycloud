@@ -337,9 +337,13 @@ resource "helm_release" "argocd" {
     global = {
       domain = var.argocd_domain
     }
+    configs = {
+      params = {
+        # Run in insecure mode - Cloudflare terminates TLS
+        "server.insecure" = true
+      }
+    }
     server = {
-      # Run in insecure mode - Cloudflare terminates TLS
-      insecure = true
       # Disable traditional Ingress
       ingress = {
         enabled = false

@@ -9,6 +9,22 @@ spec:
     kubernetes:
       envoyService:
         type: ClusterIP
+      envoyHpa:
+        minReplicas: {{ .Values.envoyProxy.minReplicas }}
+        maxReplicas: {{ .Values.envoyProxy.maxReplicas }}
+        metrics:
+          - type: Resource
+            resource:
+              name: cpu
+              target:
+                type: Utilization
+                averageUtilization: 70
+          - type: Resource
+            resource:
+              name: memory
+              target:
+                type: Utilization
+                averageUtilization: 80
       envoyDeployment:
         replicas: {{ .Values.envoyProxy.minReplicas }}
         pod:
