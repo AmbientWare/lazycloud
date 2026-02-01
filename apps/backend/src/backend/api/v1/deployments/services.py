@@ -30,8 +30,13 @@ async def list_services(
 ) -> list[ServiceStatusResponse]:
     """Get the status of all services within a deployment."""
 
+    if not deployment.helm_values:
+        raise HTTPException(400, "Deployment has no helm values")
+
     watcher = StatusWatcher(
         deployment_id=deployment.id,
+        deployment_name=deployment.name,
+        deployed_at=deployment.deployed_at,
         namespace=deployment.namespace,
         helm_values=deployment.helm_values,
         cluster_id=deployment.cluster_id,
@@ -60,8 +65,13 @@ async def get_service_status(
 ) -> ServiceStatusResponse:
     """Get the status of a specific service within a deployment."""
 
+    if not deployment.helm_values:
+        raise HTTPException(400, "Deployment has no helm values")
+
     watcher = StatusWatcher(
         deployment_id=deployment.id,
+        deployment_name=deployment.name,
+        deployed_at=deployment.deployed_at,
         namespace=deployment.namespace,
         helm_values=deployment.helm_values,
         cluster_id=deployment.cluster_id,
@@ -145,6 +155,9 @@ async def stream_service_status(
     deployment: ComposeDeploymentInDb = Depends(get_deployment_with_access),
 ):
     """Stream real-time service status updates."""
+    if not deployment.helm_values:
+        raise HTTPException(400, "Deployment has no helm values")
+
     config = ServiceMonitorConfig(
         deployment_id=deployment.id,
         service_name=service_name,

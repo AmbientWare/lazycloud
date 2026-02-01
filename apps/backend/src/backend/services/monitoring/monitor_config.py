@@ -35,8 +35,8 @@ class DeploymentMonitorConfig(MonitorConfigBase):
     deployment_id: str
     deployment_name: str
     namespace: str
-    helm_values: HelmValues | None
-    deployed_at: datetime | None
+    helm_values: HelmValues
+    deployed_at: datetime
     cluster_id: str
 
     def get_key(self) -> str:
@@ -56,7 +56,7 @@ class ServiceMonitorConfig(MonitorConfigBase):
     deployment_name: str
     service_name: str
     namespace: str
-    helm_values: HelmValues | None
+    helm_values: HelmValues
     cluster_id: str
 
     def get_key(self) -> str:
@@ -110,7 +110,7 @@ class DeployProgressMonitorConfig(MonitorConfigBase):
     deployment_id: str
     deployment_name: str
     namespace: str
-    helm_values: HelmValues | None
+    helm_values: HelmValues
     cluster_id: str
 
     def get_key(self) -> str:

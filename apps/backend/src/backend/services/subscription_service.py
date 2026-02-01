@@ -3,11 +3,12 @@ import json
 import yaml
 from loguru import logger
 from models.compose import ComposeFile
+from polar_sdk.models import ProductMetadata
 
 from backend.billing.product_details.features import BaseFeatures
 from backend.config import app_config
 from backend.database import get_db_context
-from backend.database.models import InvitationType, SubscriptionState, User
+from backend.database.models import InvitationType, SubscriptionState, UserInDb
 from backend.services.cache import CacheService
 from backend.services.compose.parser import ComposeParser
 from backend.services.exceptions import NoActiveSubscriptionError
@@ -68,14 +69,15 @@ class SubscriptionService:
         )
 
     def _parse_features_from_metadata(
-        self, metadata: dict[str, str] | None
+        self, metadata: dict[str, ProductMetadata] | None
     ) -> BaseFeatures | None:
         """Parse features from product metadata JSON string"""
         if not metadata:
             return None
 
-        features_json = metadata.get("features")
-        if not features_json:
+        features_json = metadata.get("features_json")
+        if not features_json or not isinstance(features_json, str):
+            logger.warning(f"Invalid features JSON: {features_json}")
             return None
 
         try:
@@ -135,6 +137,9 @@ class SubscriptionService:
     ) -> BaseFeatures:
         """Fetch user features from Polar API (no caching)."""
         try:
+            if self.polar_service.client is None:
+                raise RuntimeError("Polar client is not initialized")
+
             subscriptions_response = (
                 await self.polar_service.client.subscriptions.list_async(
                     external_customer_id=external_customer_id,
@@ -213,9 +218,9 @@ class SubscriptionService:
 
     async def _update_user_subscription_state(
         self,
-        user: User,
+        user: UserInDb,
         new_state: SubscriptionState,
-    ) -> User:
+    ) -> UserInDb:
         """Update user's subscription_state and return updated Pydantic model."""
         user.subscription_state = new_state
         async with get_db_context() as db:
@@ -230,7 +235,7 @@ class SubscriptionService:
 
     async def _audit_and_update_subscription_state(
         self, user_id: str, features: BaseFeatures
-    ) -> User | None:
+    ) -> UserInDb | None:
         """Audit user's resource usage and update subscription_state accordingly.
 
         Checks total deployments across all workspaces against the deployment limit.

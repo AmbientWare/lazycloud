@@ -1,7 +1,6 @@
 from functools import lru_cache
 
 from backend.config import app_config
-from backend.services.aws_metrics import AWSMetricsService
 from backend.services.cache import CacheService
 from backend.services.cloudflare import CloudflareService
 from backend.services.cost_breakdown_service import CostBreakdownService
@@ -80,23 +79,12 @@ def get_depot_service() -> DepotService:
 
 
 @lru_cache(maxsize=1)
-def get_aws_metrics_service() -> AWSMetricsService:
-    return AWSMetricsService(
-        region=app_config.AWS_REGION,
-        access_key_id=app_config.AWS_ACCESS_KEY_ID,
-        secret_access_key=app_config.AWS_SECRET_ACCESS_KEY,
-        endpoint_url=app_config.AWS_ENDPOINT_URL,
-    )
-
-
-@lru_cache(maxsize=1)
 def get_cache_service() -> CacheService:
     """Get the singleton cache service instance."""
     return CacheService(redis_url=app_config.REDIS_URL)
 
 
 __all__ = [
-    "AWSMetricsService",
     "CacheService",
     "DepotService",
     "CloudflareService",
@@ -107,7 +95,6 @@ __all__ = [
     "InvitationService",
     "UserOnboardingService",
     "UsageService",
-    "get_aws_metrics_service",
     "get_cache_service",
     "get_depot_service",
     "get_cloudflare_service",

@@ -3,7 +3,7 @@
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Sequence
 
 import yaml
 from loguru import logger
@@ -23,8 +23,8 @@ from tenacity import (
 from backend.database import get_db_context
 from backend.database.models import (
     BreakdownType,
-    ComposeDeployment,
-    DailyUsageRecord,
+    ComposeDeploymentInDb,
+    DailyUsageRecordInDb,
     DailyUsageStatus,
 )
 from backend.services import (
@@ -94,7 +94,7 @@ class ServiceEndpoint:
 
 @dataclass
 class WorkspaceDeploymentContext:
-    deployments: list[ComposeDeployment]
+    deployments: Sequence[ComposeDeploymentInDb]
     deployment_map: dict[str, str]
     pvc_map: dict[str, str]
     active_endpoints: list[ServiceEndpoint]
@@ -376,7 +376,7 @@ async def spawn_usage_collection_job(ctx: dict[str, Any]) -> dict[str, Any]:
 )
 async def _send_to_polar_with_retry(
     polar_service: PolarService,
-    record: DailyUsageRecord,
+    record: DailyUsageRecordInDb,
     external_customer_id: str,
     idempotency_key: str,
 ) -> bool:

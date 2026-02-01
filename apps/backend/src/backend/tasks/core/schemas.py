@@ -1,10 +1,12 @@
 """Schemas for task data transfer."""
 
+from typing import Sequence
+
 from models.compose import ComposeFile
 from models.helm import HelmValues
 from pydantic import BaseModel
 
-from backend.database.models import ComposeDeployment, Secret
+from backend.database.models import ComposeDeployment, SecretInDb
 
 
 class DeploymentPreparationResult(BaseModel):
@@ -13,4 +15,4 @@ class DeploymentPreparationResult(BaseModel):
     deployment: ComposeDeployment
     compose_file: ComposeFile | None
     helm_values: HelmValues
-    secrets: list[Secret]
+    secrets: Sequence[SecretInDb]

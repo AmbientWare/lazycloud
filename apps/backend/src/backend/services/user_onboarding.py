@@ -12,6 +12,7 @@ from backend.database.models import (
     Workspace,
     WorkspaceRole,
 )
+from backend.database.models.users import UserInDb
 from backend.database.utils import generate_api_key, generate_api_key_expires_at
 from backend.services import PolarService
 
@@ -22,7 +23,7 @@ class UserOnboardingService:
     def __init__(self, polar_service: PolarService):
         self.polar_service = polar_service
 
-    async def onboard_user(self, workos_id: str, name: str, email: str) -> User:
+    async def onboard_user(self, workos_id: str, name: str, email: str) -> UserInDb:
         """Onboard a new user with proper transaction handling."""
 
         # Check if user already exists - return existing user for idempotency
@@ -39,14 +40,14 @@ class UserOnboardingService:
 
         return user
 
-    async def _get_user_by_workos_id(self, workos_id: str) -> Optional[User]:
+    async def _get_user_by_workos_id(self, workos_id: str) -> Optional[UserInDb]:
         """Get user by workos_id."""
         async with get_db_context() as db:
             return await db.users.get_by_workos_id(workos_id=workos_id)
 
     async def _create_user_with_entities(
         self, workos_id: str, name: str, email: str
-    ) -> User:
+    ) -> UserInDb:
         """Create user and all related entities in a single transaction."""
         try:
             # All database operations in one atomic transaction
@@ -91,7 +92,7 @@ class UserOnboardingService:
             logger.error(f"Failed to onboard user {workos_id}: {e}")
             raise
 
-    async def _create_polar_customer(self, user: User) -> None:
+    async def _create_polar_customer(self, user: UserInDb) -> None:
         """Create customer in Polar (external service)."""
         try:
             # Check if customer already exists (idempotency)

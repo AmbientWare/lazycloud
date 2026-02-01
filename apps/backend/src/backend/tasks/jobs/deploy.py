@@ -77,7 +77,9 @@ async def deploy_compose_job(
             namespace=deployment.namespace,
             helm_values=helm_values,
             cluster_id=deployment.cluster_id,
-            current_helm_values=deployment_info.current_helm_values if deployment_info else None,
+            current_helm_values=deployment_info.current_helm_values
+            if deployment_info
+            else None,
         )
 
         # Step 6: Deploy application

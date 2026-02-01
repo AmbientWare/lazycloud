@@ -18,7 +18,7 @@ from responses.usage import (
 )
 
 from backend.database import get_db_context
-from backend.database.models import DailyUsageRecord
+from backend.database.models import DailyUsageRecordInDb
 from backend.services.cost_breakdown_service import CostBreakdownService
 from backend.services.depot_service import DepotService
 
@@ -161,7 +161,7 @@ class UsageService:
 
         workspace_usage_results: list[UsageMetrics | None] = []
         for result in results:
-            if isinstance(result, Exception):
+            if isinstance(result, BaseException):
                 logger.warning(f"Failed to fetch usage: {result}", exc_info=True)
                 workspace_usage_results.append(None)
             else:
@@ -238,7 +238,7 @@ class UsageService:
 
         daily_data: dict[str, DailyUsageData] = {}
         for usage_records in all_usage_records_lists:
-            if isinstance(usage_records, Exception):
+            if isinstance(usage_records, BaseException):
                 logger.warning(
                     f"Failed to fetch workspace usage: {usage_records}", exc_info=True
                 )
@@ -383,7 +383,7 @@ class UsageService:
             usage = usages[i]
 
             deployment_overviews = deployment_overview_results[idx]
-            if isinstance(deployment_overviews, Exception):
+            if isinstance(deployment_overviews, BaseException):
                 logger.warning(
                     f"Failed to build deployment overviews for workspace {workspace.id}: {deployment_overviews}",
                     exc_info=True,
@@ -426,7 +426,7 @@ class UsageService:
 
     def _aggregate_daily_records_by_day(
         self,
-        daily_records: list[DailyUsageRecord],
+        daily_records: list[DailyUsageRecordInDb],
         tz: ZoneInfo,
     ) -> dict[str, DailyUsageData]:
         """Aggregate daily records by calendar day in the given timezone."""

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from models.monitoring import StreamEventType
 from sse_starlette.sse import EventSourceResponse
 
@@ -18,6 +18,9 @@ async def stream_deployment_status(
     deployment: ComposeDeploymentInDb = Depends(get_deployment_with_access),
 ):
     """Stream real-time deployment status updates."""
+    if not deployment.helm_values or not deployment.deployed_at:
+        raise HTTPException(400, "Deployment has no helm values or deployed at")
+
     config = DeploymentMonitorConfig(
         deployment_id=deployment.id,
         namespace=deployment.namespace,
@@ -42,6 +45,9 @@ async def stream_deploy_progress(
     deployment: ComposeDeploymentInDb = Depends(get_deployment_with_access),
 ):
     """Stream deployment progress with per-service status and early failure detection."""
+    if not deployment.helm_values or not deployment.deployed_at:
+        raise HTTPException(400, "Deployment has no helm values or deployed at")
+
     config = DeployProgressMonitorConfig(
         deployment_id=str(deployment.id),
         deployment_name=deployment.name,

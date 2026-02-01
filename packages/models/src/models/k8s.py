@@ -1,7 +1,7 @@
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class WorkloadType(StrEnum):
@@ -56,10 +56,12 @@ class ContainerPort(BaseModel):
 class HttpGetProbe(BaseModel):
     """HTTP GET probe configuration."""
 
+    model_config = ConfigDict(populate_by_name=True)
+
     path: str
     port: int
     scheme: str | None = None
-    http_headers: list[dict[str, str]] | None = Field(None, alias="httpHeaders")
+    http_headers: list[dict[str, str]] | None = Field(default=None, alias="httpHeaders")
 
 
 class ExecProbe(BaseModel):
@@ -77,14 +79,16 @@ class TcpSocketProbe(BaseModel):
 class ProbeConfig(BaseModel):
     """Kubernetes probe configuration."""
 
-    http_get: HttpGetProbe | None = Field(None, alias="httpGet")
-    tcp_socket: TcpSocketProbe | None = Field(None, alias="tcpSocket")
+    model_config = ConfigDict(populate_by_name=True)
+
+    http_get: HttpGetProbe | None = Field(default=None, alias="httpGet")
+    tcp_socket: TcpSocketProbe | None = Field(default=None, alias="tcpSocket")
     exec: ExecProbe | None = None
-    initial_delay_seconds: int | None = Field(None, alias="initialDelaySeconds")
-    timeout_seconds: int | None = Field(None, alias="timeoutSeconds")
-    period_seconds: int | None = Field(None, alias="periodSeconds")
-    success_threshold: int | None = Field(None, alias="successThreshold")
-    failure_threshold: int | None = Field(None, alias="failureThreshold")
+    initial_delay_seconds: int | None = Field(default=None, alias="initialDelaySeconds")
+    timeout_seconds: int | None = Field(default=None, alias="timeoutSeconds")
+    period_seconds: int | None = Field(default=None, alias="periodSeconds")
+    success_threshold: int | None = Field(default=None, alias="successThreshold")
+    failure_threshold: int | None = Field(default=None, alias="failureThreshold")
 
 
 class VolumeMount(BaseModel):
@@ -121,11 +125,15 @@ class SecurityContext(BaseModel):
 class PodSecurityContext(BaseModel):
     """Pod-level security context."""
 
-    fs_group: int | None = Field(None, alias="fsGroup")
-    run_as_user: int | None = Field(None, alias="runAsUser")
-    run_as_group: int | None = Field(None, alias="runAsGroup")
-    run_as_non_root: bool | None = Field(None, alias="runAsNonRoot")
-    supplemental_groups: list[int] | None = Field(None, alias="supplementalGroups")
+    model_config = ConfigDict(populate_by_name=True)
+
+    fs_group: int | None = Field(default=None, alias="fsGroup")
+    run_as_user: int | None = Field(default=None, alias="runAsUser")
+    run_as_group: int | None = Field(default=None, alias="runAsGroup")
+    run_as_non_root: bool | None = Field(default=None, alias="runAsNonRoot")
+    supplemental_groups: list[int] | None = Field(
+        default=None, alias="supplementalGroups"
+    )
 
 
 class LabelSelector(BaseModel):

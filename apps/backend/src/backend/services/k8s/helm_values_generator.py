@@ -18,12 +18,13 @@ from models.helm import (
     VolumeValues,
     WorkloadType,
 )
+from models.k8s import Protocol
 from models.storage import STORAGE_CLASS_SHARED, STORAGE_CLASS_STANDARD
 
 from backend.billing.product_details.features import BaseFeatures
 from backend.config import app_config
-from backend.database.compose import ComposeDeployment
-from backend.database.secrets import Secret
+from backend.database.models.compose import ComposeDeploymentInDb
+from backend.database.models.secrets import SecretInDb
 from backend.services.compose.diff_checker import get_shared_volumes
 from backend.services.compose.validator import ComposeValidator
 from backend.services.k8s.generators.configuration import (
@@ -57,8 +58,8 @@ class HelmValuesGenerator:
 
     def __init__(
         self,
-        deployment: ComposeDeployment,
-        secrets: list[Secret],
+        deployment: ComposeDeploymentInDb,
+        secrets: list[SecretInDb],
         features: BaseFeatures | None = None,
     ):
         self.deployment = deployment
@@ -79,19 +80,19 @@ class HelmValuesGenerator:
 
         # Generate global values with user context
         global_values = GlobalValues(
-            deploymentId=str(self.deployment.id),
-            workspaceId=str(self.deployment.workspace_id),
+            deploymentId=self.deployment.id,
+            workspaceId=self.deployment.workspace_id,
             managedBy="lazycloud",
             createdBy="lazycloud-api",
             runtimeClassName="gvisor",
             labels={
-                "lazycloud.dev/deployment-id": str(self.deployment.id),
-                "lazycloud.dev/workspace-id": str(self.deployment.workspace_id),
+                "lazycloud.dev/deployment-id": self.deployment.id,
+                "lazycloud.dev/workspace-id": self.deployment.workspace_id,
                 "lazycloud.dev/managed-by": "lazycloud",
             },
             annotations={
-                "lazycloud.dev/deployment-id": str(self.deployment.id),
-                "lazycloud.dev/workspace-id": str(self.deployment.workspace_id),
+                "lazycloud.dev/deployment-id": self.deployment.id,
+                "lazycloud.dev/workspace-id": self.deployment.workspace_id,
                 "lazycloud.dev/created-by": "lazycloud-api",
             },
         )
@@ -185,6 +186,7 @@ class HelmValuesGenerator:
 
         service_values = ServiceValues(
             replicas=service.deploy.replicas,
+            workloadType=WorkloadType.DEPLOYMENT,  # NOTE: deployment default
             # resources will be set later after conversion
             restartPolicy=service.deploy.restart_policy,
             # healthcheck and hpa will be set later after conversion
@@ -268,7 +270,7 @@ class HelmValuesGenerator:
                         name=f"port-{port_num}",
                         port=port_num,
                         targetPort=port_num,
-                        protocol="TCP",
+                        protocol=Protocol.TCP,
                     )
                 )
         if all_port_configs:
@@ -318,7 +320,9 @@ class HelmValuesGenerator:
 
         # Add networks for namespace determination
         if service.networks:
-            service_values.networks = service.networks
+            service_values.networks = [
+                NetworkValues(name=network.name) for network in service.networks
+            ]
 
         # Generate security contexts
         security_context = generate_security_context_values()

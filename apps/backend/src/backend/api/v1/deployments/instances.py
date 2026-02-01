@@ -1,5 +1,3 @@
-from uuid import UUID
-
 from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
 from models.deployments import DeploymentStates
@@ -84,7 +82,7 @@ async def delete_instance(
         )
 
         return InstanceTaskStatusResponse(
-            task_id=UUID(job_key),
+            task_id=job_key,
             status=TaskStatus.PENDING,
             message=f"Instance {pod_name} deletion task submitted",
             deployment_id=deployment.id,

@@ -1,4 +1,6 @@
 import asyncio
+from datetime import datetime, timezone
+from uuid import uuid4
 
 import yaml
 from api_requests.deployments import DiffRequest, DiffType
@@ -12,7 +14,7 @@ from responses.deployments import DiffResponse
 from backend.api.dependencies import require_workspace_admin
 from backend.api.security import get_current_active_user
 from backend.database import Database, get_db
-from backend.database.models import ComposeDeployment, ComposeDeploymentInDb, UserInDb
+from backend.database.models import ComposeDeploymentInDb, UserInDb
 from backend.services.compose.diff_checker import (
     ComposeDiffChecker,
     detect_storage_type_changes,
@@ -136,7 +138,10 @@ async def get_deployment_diff(
             cluster_id = deployment.cluster_id
 
         # Create temporary deployment for full validation
-        temp_deployment = ComposeDeployment(
+        temp_deployment = ComposeDeploymentInDb(
+            id=str(uuid4()),
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
             workspace_id=workspace_id,
             name=request.deployment_name or "",
             namespace=namespace,
@@ -146,9 +151,9 @@ async def get_deployment_diff(
         )
 
         # Run full validation (includes compose validation via HelmValuesGenerator)
-        deployment_id = deployment.id if deployment else None
         _, warnings = await validate_deployment_request(
-            deployment_id, temp_deployment, deployment
+            new_deployment=temp_deployment,
+            existing_deployment=deployment,
         )
 
     except ValueError as e:

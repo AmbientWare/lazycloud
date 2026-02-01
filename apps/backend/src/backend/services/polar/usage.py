@@ -6,9 +6,13 @@ from models.billing import (
     UsageUnits,
 )
 from polar_sdk import Polar
-from polar_sdk.models import EventCreateExternalCustomer, EventsIngest
+from polar_sdk.models import (
+    EventCreateExternalCustomer,
+    EventMetadataInput,
+    EventsIngest,
+)
 
-from backend.database.usage import DailyUsageRecord
+from backend.database.models import DailyUsageRecordInDb
 
 
 class PolarUsageModule:
@@ -20,7 +24,7 @@ class PolarUsageModule:
         self,
         external_customer_id: str,
         event_name: str,
-        metadata: dict[str, str | float | int],
+        metadata: dict[str, EventMetadataInput],
         idempotency_key: str | None = None,
     ) -> bool:
         """Send a usage event to Polar with optional idempotency key."""
@@ -59,7 +63,7 @@ class PolarUsageModule:
 
     async def send_daily_usage(
         self,
-        record: DailyUsageRecord,
+        record: DailyUsageRecordInDb,
         external_customer_id: str,
         idempotency_key: str,
     ) -> bool:

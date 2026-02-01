@@ -1,4 +1,5 @@
 import asyncio
+from typing import Sequence
 
 from loguru import logger
 from responses.usage import DailyUsageData, MeterCostBreakdown, UsageMetrics
@@ -44,7 +45,7 @@ class CostBreakdownService:
 
     async def calculate_costs_batch(
         self,
-        usages: list[UsageMetrics | None],
+        usages: Sequence[UsageMetrics | None],
         external_customer_id: str,
     ) -> list[MeterCostBreakdown | None]:
         """Calculate costs for multiple usage metrics in parallel.
@@ -66,15 +67,16 @@ class CostBreakdownService:
             if usage is not None
         ]
         cost_results_raw = await asyncio.gather(*cost_tasks, return_exceptions=True)
-        cost_results = [
-            r if not isinstance(r, Exception) else None for r in cost_results_raw
-        ]
+        cost_results: list[MeterCostBreakdown | None] = []
         for result in cost_results_raw:
             if isinstance(result, NoActiveSubscriptionError):
                 # Expected case - user has no subscription, skip silently
-                pass
-            elif isinstance(result, Exception):
+                cost_results.append(None)
+            elif isinstance(result, BaseException):
                 logger.warning(f"Failed to calculate costs: {result}")
+                cost_results.append(None)
+            else:
+                cost_results.append(result)
 
         return cost_results
 
@@ -110,7 +112,7 @@ class CostBreakdownService:
             if isinstance(cost_result, NoActiveSubscriptionError):
                 # Expected case - user has no subscription, skip silently
                 pass
-            elif isinstance(cost_result, Exception):
+            elif isinstance(cost_result, BaseException):
                 logger.warning(
                     f"Failed to calculate costs for {day_key}: {cost_result}"
                 )

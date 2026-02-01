@@ -470,9 +470,9 @@ async def get_namespace_pvcs_with_details(
             volume_handle = None
             if pvc.spec.volume_name:
                 try:
-                    pv = await core_v1.read_persistent_volume(name=pvc.spec.volume_name)
-                    if pv.spec.csi and pv.spec.csi.volume_handle:
-                        volume_handle = pv.spec.csi.volume_handle
+                    pv = await core_v1.read_persistent_volume(name=pvc.spec.volume_name)  # type: ignore[misc]
+                    if pv.spec and pv.spec.csi and pv.spec.csi.volume_handle:  # type: ignore[union-attr]
+                        volume_handle = pv.spec.csi.volume_handle  # type: ignore[union-attr]
                 except Exception as e:
                     logger.debug(f"Could not get PV for {pvc.spec.volume_name}: {e}")
 

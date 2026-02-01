@@ -1,3 +1,6 @@
+from datetime import datetime, timezone
+from uuid import uuid4
+
 import yaml
 from api_requests.deployments import (
     DeploymentCreateRequest,
@@ -203,7 +206,10 @@ async def create_deployment(
     validation_cluster_id = (
         existing_deployment.cluster_id if existing_deployment else target_cluster_id
     )
-    temp_deployment = ComposeDeployment(
+    temp_deployment = ComposeDeploymentInDb(
+        id=str(uuid4()),
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
         workspace_id=request.workspace_id,
         name=request.name or "",
         namespace=namespace,
@@ -213,9 +219,9 @@ async def create_deployment(
     )
 
     try:
-        deployment_id = existing_deployment.id if existing_deployment else None
         _, _ = await validate_deployment_request(
-            deployment_id, temp_deployment, existing_deployment
+            new_deployment=temp_deployment,
+            existing_deployment=existing_deployment,
         )
 
     except ValueError as e:
@@ -358,14 +364,14 @@ async def create_deployment(
 )
 async def deploy_deployment(
     request: DeploymentRunRequest,
-    deployment: ComposeDeploymentInDb = Depends(
+    existing_deployment: ComposeDeploymentInDb = Depends(
         get_deployment_with_active_subscription
     ),
     db: Database = Depends(get_db),
 ) -> DeploymentTaskStatusResponse:
     """Trigger deployment of a deployment record."""
     # Block if actively deleting
-    if deployment.state == DeploymentStates.DELETING:
+    if existing_deployment.state == DeploymentStates.DELETING:
         raise HTTPException(
             409,
             "Deployment is currently being deleted. Please wait for it to complete.",
@@ -373,21 +379,21 @@ async def deploy_deployment(
 
     # If compose_yaml provided in request, update it first
     if request.compose_yaml is not None:
-        deployment.pending_compose_yaml = request.compose_yaml
+        existing_deployment.pending_compose_yaml = request.compose_yaml
         # Reset to PENDING if updating from terminal state
-        if deployment.state in (
+        if existing_deployment.state in (
             DeploymentStates.DEPLOYED,
             DeploymentStates.FAILED,
             DeploymentStates.DELETED,
         ):
-            deployment.state = DeploymentStates.PENDING
-        updated_deployment = await db.compose_deployments.update(deployment)
+            existing_deployment.state = DeploymentStates.PENDING
+        updated_deployment = await db.compose_deployments.update(existing_deployment)
         if updated_deployment:
-            deployment = updated_deployment
+            existing_deployment = updated_deployment
 
     # Validate service-specific deployment requirements
     # compose file not set until deployment is created and migrated from pending_compose_yaml
-    if request.service_names and not deployment.compose_yaml:
+    if request.service_names and not existing_deployment.compose_yaml:
         services_str = ", ".join(request.service_names)
         raise HTTPException(
             400,
@@ -398,8 +404,8 @@ async def deploy_deployment(
     # Get compose yaml to validate (use request if provided, else pending, else current)
     compose_yaml = (
         request.compose_yaml
-        or deployment.pending_compose_yaml
-        or deployment.compose_yaml
+        or existing_deployment.pending_compose_yaml
+        or existing_deployment.compose_yaml
     )
 
     if not compose_yaml:
@@ -409,26 +415,28 @@ async def deploy_deployment(
         )
 
     # Create temp deployment for validation with the compose yaml
-    temp_deployment = ComposeDeployment(
-        workspace_id=deployment.workspace_id,
-        name=deployment.name,
-        namespace=deployment.namespace,
+    temp_deployment = ComposeDeploymentInDb(
+        id=str(uuid4()),
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+        workspace_id=existing_deployment.workspace_id,
+        name=existing_deployment.name,
+        namespace=existing_deployment.namespace,
         compose_yaml=compose_yaml,
-        state=deployment.state,
-        depot_project_id=deployment.depot_project_id,
-        cluster_id=deployment.cluster_id,
+        state=existing_deployment.state,
+        depot_project_id=existing_deployment.depot_project_id,
+        cluster_id=existing_deployment.cluster_id,
     )
 
     # Get owner features for helm values generation (instance class selection)
-    owner_user = await db.workspaces.get_owner_user(deployment.workspace_id)
+    owner_user = await db.workspaces.get_owner_user(existing_deployment.workspace_id)
     features = await get_features_for_owner(owner_user) if owner_user else None
 
     # Full validation (compose parsing, helm generation, quotas)
     try:
         helm_values, _ = await validate_deployment_request(
-            deployment_id=deployment.id,
-            deployment=temp_deployment,
-            existing_deployment=deployment,
+            new_deployment=temp_deployment,
+            existing_deployment=existing_deployment,
             service_names=request.service_names,
             features=features,
         )
@@ -442,31 +450,31 @@ async def deploy_deployment(
             status_code=500, detail="Failed to validate deployment configuration"
         ) from e
 
-    deployment.helm_values = helm_values
-    updated_deployment = await db.compose_deployments.update(deployment)
+    existing_deployment.helm_values = helm_values
+    updated_deployment = await db.compose_deployments.update(existing_deployment)
     if updated_deployment:
-        deployment = updated_deployment
+        existing_deployment = updated_deployment
 
     # Trigger the deploy job
     job_key = await run_deploy_compose(
-        deployment_id=deployment.id,
+        deployment_id=existing_deployment.id,
         wait_for_secrets=request.secrets,
         service_names=request.service_names,
     )
 
     # Update deployment with job_key after job is enqueued
     # The job's idempotency check handles the PENDING state correctly
-    deployment.current_task_run_id = job_key
-    deployment.status_message = "Deployment task queued"
-    updated_deployment = await db.compose_deployments.update(deployment)
+    existing_deployment.current_task_run_id = job_key
+    existing_deployment.status_message = "Deployment task queued"
+    updated_deployment = await db.compose_deployments.update(existing_deployment)
     if updated_deployment:
-        deployment = updated_deployment
+        existing_deployment = updated_deployment
 
     return DeploymentTaskStatusResponse(
         task_id=job_key,
         status=TaskStatus.PENDING,
         message="Deployment task queued",
-        deployment_id=deployment.id,
+        deployment_id=existing_deployment.id,
     )
 
 

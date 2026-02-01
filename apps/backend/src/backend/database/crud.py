@@ -1,4 +1,3 @@
-import uuid
 from datetime import datetime, timedelta, timezone
 
 from loguru import logger
@@ -6,20 +5,18 @@ from models.api_keys import ApiKeyExpirationDays
 
 from backend.config import app_config
 from backend.database import get_db_context
-from backend.database.api_keys import ApiKey
-from backend.database.user_workspaces import (
-    UserWorkspace,
-    UserWorkspaceStatus,
-    WorkspaceRole,
-)
-from backend.database.users import (
+from backend.database.models import (
+    ApiKey,
     SubscriptionState,
     User,
     UserRole,
     UserStatus,
+    UserWorkspace,
+    UserWorkspaceStatus,
+    Workspace,
+    WorkspaceRole,
 )
 from backend.database.utils import api_key_is_expired, generate_api_key_expires_at
-from backend.database.workspaces import Workspace
 from backend.services import get_polar_service
 
 
@@ -33,7 +30,6 @@ async def update_admin_api_keys():
             # Create admin user with workspace
             logger.info("Creating admin user and workspace...")
             user = User(
-                id=uuid.uuid4(),
                 name="admin user",
                 email="admin@lazycloud.com",
                 workos_id="lzy_admin",
