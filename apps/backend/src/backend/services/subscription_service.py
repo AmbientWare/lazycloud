@@ -75,7 +75,7 @@ class SubscriptionService:
         if not metadata:
             return None
 
-        features_json = metadata.get("features_json")
+        features_json = metadata.get("features")
         if not features_json or not isinstance(features_json, str):
             logger.warning(f"Invalid features JSON: {features_json}")
             return None
@@ -180,8 +180,8 @@ class SubscriptionService:
         features = self._parse_features_from_metadata(product.metadata)
         if features is None:
             raise ValueError(
-                f"Product {subscription.product.id} has no features in metadata. "
-                f"Please update the product metadata with features JSON."
+                f"Product {subscription.product.id} has no 'features' key in metadata. "
+                f"Please update the product metadata with a 'features' JSON string."
             )
 
         logger.debug(
