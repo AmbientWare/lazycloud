@@ -34,7 +34,10 @@ class DeploymentsContainer(Container):
     def compose(self) -> ComposeResult:
         """Create the deployments widget."""
         self._list_view = ListView(
-            on_select=self._handle_selection,
+            on_select=lambda item_data: (
+                self.call_later(self._handle_selection, item_data),
+                None,
+            )[-1],
             on_highlight=self._handle_highlight,
             empty_message="No deployments found",
             id="deployments-list",
@@ -189,7 +192,9 @@ class DeploymentsContainer(Container):
         """Handle deployment highlight with api request debouncing."""
         self._selection_timer = self.handle_debounce(
             self._selection_timer,
-            lambda: self._fetch_deployment_status(item_data),
+            lambda: (self.call_later(self._fetch_deployment_status, item_data), None)[
+                -1
+            ],
         )
 
     async def _fetch_deployment_status(self, item_data: ListItemData) -> None:

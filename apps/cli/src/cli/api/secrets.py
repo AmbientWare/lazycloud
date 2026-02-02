@@ -1,5 +1,5 @@
 from api_requests.secrets import SecretsRequest
-from models.secrets import Secret
+from models.secrets import BasicSecret
 from responses.secrets import SecretsResponse, SecretsStoredResponse
 
 from cli.api.base import BaseAPI
@@ -24,7 +24,7 @@ class SecretsAPI(BaseAPI):
         return await self._get_async(f"/{deployment_id}/secrets/value/{key}")
 
     def update_secrets(
-        self, deployment_id: str, secrets: list[Secret]
+        self, deployment_id: str, secrets: list[BasicSecret]
     ) -> SecretsStoredResponse:
         """Update existing secrets for a deployment"""
         request_data = SecretsRequest(secrets=secrets)
@@ -35,7 +35,7 @@ class SecretsAPI(BaseAPI):
         return SecretsStoredResponse(**response_data)
 
     def delete_secrets(
-        self, deployment_id: str, secrets: list[Secret]
+        self, deployment_id: str, secrets: list[BasicSecret]
     ) -> SecretsStoredResponse:
         """Delete existing secrets for a deployment"""
         request_data = SecretsRequest(secrets=secrets)
@@ -46,7 +46,7 @@ class SecretsAPI(BaseAPI):
         return SecretsStoredResponse(**response_data)
 
     def store_secrets(
-        self, deployment_id: str, secrets: list[Secret]
+        self, deployment_id: str, secrets: list[BasicSecret]
     ) -> SecretsStoredResponse:
         """Create new secrets for a deployment"""
         request_data = SecretsRequest(secrets=secrets)

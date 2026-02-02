@@ -27,7 +27,10 @@ class ServicesContainer(Container):
     def compose(self) -> ComposeResult:
         """Create the services list"""
         self._list_view = ListView(
-            on_select=self._handle_selection,
+            on_select=lambda item_data: (
+                self.call_later(self._handle_selection, item_data),
+                None,
+            )[-1],
             on_highlight=self._handle_highlight,
             id="services-list",
         )
@@ -61,13 +64,14 @@ class ServicesContainer(Container):
                     if self.selected_service != item.item_data.data:
                         self.selected_service = item.item_data.data
                         # Fetch fresh status from API
-                        try:
-                            status = await api.services.get_service_status(
-                                self.deployment_id, item.item_data.data.name
-                            )
-                            self.selected_service = status.service
-                        except Exception as e:
-                            self.log.error(f"Failed to get service status: {e}")
+                        if self.deployment_id:
+                            try:
+                                status = await api.services.get_service_status(
+                                    self.deployment_id, item.item_data.data.name
+                                )
+                                self.selected_service = status.service
+                            except Exception as e:
+                                self.log.error(f"Failed to get service status: {e}")
 
     def on_blur(self) -> None:
         """Handle blur event."""
@@ -95,7 +99,7 @@ class ServicesContainer(Container):
 
     async def refresh_services(self) -> None:
         """Update the services list for a selected deployment."""
-        if not self._list_view:
+        if not self._list_view or not self.deployment_id:
             return
 
         self._list_view.show_loading("Loading services...")
@@ -134,19 +138,23 @@ class ServicesContainer(Container):
             # Set immediately for instant UI feedback (like deployments pattern)
             self.selected_service = item_data.data
             # Then fetch fresh status from API
-            try:
-                status = await api.services.get_service_status(
-                    self.deployment_id, item_data.data.name
-                )
-                self.selected_service = status.service
-            except Exception as e:
-                self.log.error(f"Failed to get service status: {e}")
+            if self.deployment_id:
+                try:
+                    status = await api.services.get_service_status(
+                        self.deployment_id, item_data.data.name
+                    )
+                    self.selected_service = status.service
+                except Exception as e:
+                    self.log.error(f"Failed to get service status: {e}")
 
     def _handle_highlight(self, item_data: ListItemData) -> None:
         """Handle service highlight with api request debouncing."""
         self._selection_timer = self.handle_debounce(
             self._selection_timer,
-            lambda: self.call_later(self._update_selected_service, item_data),
+            lambda: (
+                self.call_later(self._update_selected_service, item_data),
+                None,
+            )[-1],
         )
 
     async def _update_selected_service(self, item_data: ListItemData) -> None:
@@ -159,13 +167,14 @@ class ServicesContainer(Container):
                 # Set immediately for instant UI feedback (like deployments pattern)
                 self.selected_service = item_data.data
                 # Then fetch fresh status from API
-                try:
-                    status = await api.services.get_service_status(
-                        self.deployment_id, item_data.data.name
-                    )
-                    self.selected_service = status.service
-                except Exception as e:
-                    self.log.error(f"Failed to get service status: {e}")
+                if self.deployment_id:
+                    try:
+                        status = await api.services.get_service_status(
+                            self.deployment_id, item_data.data.name
+                        )
+                        self.selected_service = status.service
+                    except Exception as e:
+                        self.log.error(f"Failed to get service status: {e}")
 
     def clear_services(self) -> None:
         """Clear the services list."""
