@@ -14,6 +14,7 @@ from models.billing import (
 from models.deployments import DeploymentStates
 from models.metrics import StorageUsage
 from models.usage import BreakdownType, DailyUsageStatus
+from saq.types import Context
 from tenacity import (
     RetryError,
     retry,
@@ -310,7 +311,7 @@ async def collect_interval_usage(workspace_id: str) -> dict:
         }
 
 
-async def spawn_usage_collection_job(ctx: dict[str, Any]) -> dict[str, Any]:
+async def spawn_usage_collection_job(ctx: Context) -> dict[str, Any]:
     """Spawn usage collection for all active workspaces - parallel execution.
 
     Args:
@@ -390,7 +391,7 @@ async def _send_to_polar_with_retry(
     return success
 
 
-async def finalize_and_bill_job(ctx: dict[str, Any]) -> dict[str, Any]:
+async def finalize_and_bill_job(ctx: Context) -> dict[str, Any]:
     """Finalize yesterday's usage and send to Polar for billing.
 
     Args:
@@ -581,10 +582,10 @@ async def finalize_and_bill() -> dict[str, Any]:
     Returns:
         Result dict with billed, failed, and skipped counts
     """
-    return await finalize_and_bill_job({})
+    return await finalize_and_bill_job({})  # type: ignore[arg-type]
 
 
-async def catch_up_missing_intervals_job(ctx: dict[str, Any]) -> dict[str, Any]:
+async def catch_up_missing_intervals_job(ctx: Context) -> dict[str, Any]:
     """Catch up any missed intervals for active workspaces.
 
     Args:
@@ -648,7 +649,7 @@ async def catch_up_missing_intervals_job(ctx: dict[str, Any]) -> dict[str, Any]:
         await get_depot_service().close()
 
 
-async def alert_stuck_records_job(ctx: dict[str, Any]) -> dict[str, Any]:
+async def alert_stuck_records_job(ctx: Context) -> dict[str, Any]:
     """Alert on records stuck in collecting status for 1+ days.
 
     Args:

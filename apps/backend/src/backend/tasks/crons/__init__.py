@@ -37,55 +37,55 @@ CRON_FUNCTIONS = [
 # CronJob definitions with schedules
 CRON_JOBS = [
     CronJob(
-        function=spawn_usage_collection_job.__call__,
+        function=spawn_usage_collection_job,
         cron=UsageCollectionConfig.get_cron_expression(),  # Every 15 mins
         timeout=600,  # 10 minute timeout
         retries=0,
     ),
     CronJob(
-        function=finalize_and_bill_job.__call__,
+        function=finalize_and_bill_job,
         cron="15 0 * * *",  # 00:15 UTC daily
         timeout=1800,  # 30 minute timeout
         retries=0,
     ),
     CronJob(
-        function=catch_up_missing_intervals_job.__call__,
+        function=catch_up_missing_intervals_job,
         cron="0 */2 * * *",  # Every 2 hours
         timeout=1800,
         retries=0,
     ),
     CronJob(
-        function=alert_stuck_records_job.__call__,
+        function=alert_stuck_records_job,
         cron="0 1 * * *",  # 01:00 UTC daily
         timeout=300,
         retries=0,
     ),
     CronJob(
-        function=monitor_subscription_states_job.__call__,
+        function=monitor_subscription_states_job,
         cron="0 */4 * * *",  # Every 4 hours
         timeout=600,
         retries=0,
     ),
     CronJob(
-        function=reconcile_rollback_states_job.__call__,
+        function=reconcile_rollback_states_job,
         cron=f"*/{app_config.ROLLBACK_RECONCILIATION_INTERVAL_MINUTES} * * * *",  # Every 10 mins
         timeout=300,
         retries=0,
     ),
     CronJob(
-        function=cleanup_orphaned_deployments_job.__call__,
+        function=cleanup_orphaned_deployments_job,
         cron="* * * * *",  # Every minute
         timeout=120,
         retries=0,
     ),
     CronJob(
-        function=cleanup_stale_pending_job.__call__,
+        function=cleanup_stale_pending_job,
         cron="0 3 * * *",  # Daily 03:00 UTC
         timeout=300,
         retries=0,
     ),
     CronJob(
-        function=cleanup_stranded_depot_projects_job.__call__,
+        function=cleanup_stranded_depot_projects_job,
         cron="0 4 * * *",  # Daily 04:00 UTC
         timeout=300,
         retries=0,

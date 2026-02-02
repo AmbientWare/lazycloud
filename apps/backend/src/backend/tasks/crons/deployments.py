@@ -5,6 +5,7 @@ from typing import Any
 
 from loguru import logger
 from models.deployments import DeploymentStates
+from saq.types import Context
 
 from backend.config import app_config
 from backend.database import get_db_context
@@ -14,7 +15,7 @@ from backend.tasks.client import run_destroy_compose
 
 
 async def reconcile_rollback_states_job(
-    ctx: dict[str, Any],
+    ctx: Context,
     minutes_old: int | None = None,
 ) -> dict[str, Any]:
     """Reconcile Helm and database states for stuck deployments.
@@ -140,7 +141,7 @@ async def reconcile_rollback_states_job(
 
 
 async def cleanup_stale_pending_job(
-    ctx: dict[str, Any],
+    ctx: Context,
     hours_old: int = 24,
 ) -> dict[str, Any]:
     """Clean up PENDING deployments older than TTL.
@@ -230,7 +231,7 @@ async def cleanup_stale_pending_job(
     return result
 
 
-async def cleanup_orphaned_deployments_job(ctx: dict[str, Any]) -> dict[str, Any]:
+async def cleanup_orphaned_deployments_job(ctx: Context) -> dict[str, Any]:
     """Clean up deployments in deleted workspaces that haven't been cleaned up yet.
 
     Args:
@@ -313,7 +314,7 @@ async def cleanup_orphaned_deployments_job(ctx: dict[str, Any]) -> dict[str, Any
     }
 
 
-async def cleanup_stranded_depot_projects_job(ctx: dict[str, Any]) -> dict[str, Any]:
+async def cleanup_stranded_depot_projects_job(ctx: Context) -> dict[str, Any]:
     """Retry Depot project deletion for DELETED deployments that still have a depot_project_id.
 
     This handles cases where the Depot API call failed during deployment deletion.

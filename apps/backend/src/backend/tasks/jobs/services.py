@@ -3,13 +3,14 @@
 from typing import Any
 
 from loguru import logger
+from saq.types import Context
 
 from backend.database import get_db_context
 from backend.services.k8s.workload_manager import WorkloadManager
 
 
 async def restart_service_job(
-    ctx: dict[str, Any],
+    ctx: Context,
     deployment_id: str,
     service_name: str,
 ) -> dict[str, Any]:
@@ -60,7 +61,7 @@ async def restart_service_job(
 
 
 async def restart_all_services_job(
-    ctx: dict[str, Any],
+    ctx: Context,
     deployment_id: str,
 ) -> dict[str, Any]:
     """Restart all services within a deployment.

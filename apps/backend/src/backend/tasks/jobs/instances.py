@@ -3,13 +3,14 @@
 from typing import Any
 
 from loguru import logger
+from saq.types import Context
 
 from backend.database import get_db_context
 from backend.services.k8s.pod_manager import KubernetesPodManager
 
 
 async def delete_instance_job(
-    ctx: dict[str, Any],
+    ctx: Context,
     deployment_id: str,
     service_name: str,
     pod_name: str,

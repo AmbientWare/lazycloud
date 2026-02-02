@@ -7,6 +7,7 @@ from kubernetes_asyncio.client.exceptions import ApiException
 from loguru import logger
 from models.deployments import DeploymentStates
 from models.k8s import WorkloadType
+from saq.types import Context
 
 from backend.config import app_config
 from backend.database import get_db_context
@@ -19,7 +20,7 @@ from backend.tasks.core import delete_job_with_timeout, update_deployment_state
 
 
 async def rollback_compose_job(
-    ctx: dict[str, Any],
+    ctx: Context,
     deployment_id: str,
     revision: int,
 ) -> dict[str, Any]:

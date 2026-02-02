@@ -10,6 +10,7 @@ import asyncio
 import sentry_sdk
 from loguru import logger
 from saq import Worker
+from saq.types import Context
 from sentry_sdk.integrations.loguru import LoguruIntegration
 
 from backend.config import app_config
@@ -27,28 +28,28 @@ if app_config.SENTRY_DSN:
     logger.info("Sentry initialized for SAQ background worker")
 
 
-async def startup(ctx: dict):
+async def startup(ctx: Context):
     """Worker startup hook."""
     logger.info("SAQ background worker starting up")
     await initialize_cluster_clients()
     logger.info("Kubernetes cluster clients initialized")
 
 
-async def shutdown(ctx: dict):
+async def shutdown(ctx: Context):
     """Worker shutdown hook."""
     logger.info("SAQ background worker shutting down")
     await close_all_clients()
     await disconnect_queues()
 
 
-async def before_process(ctx: dict):
+async def before_process(ctx: Context):
     """Called before each job processes."""
     job = ctx.get("job")
     if job:
         logger.debug(f"Processing job: {job.function} (key: {job.key})")
 
 
-async def after_process(ctx: dict):
+async def after_process(ctx: Context):
     """Called after each job processes."""
     job = ctx.get("job")
     if job:

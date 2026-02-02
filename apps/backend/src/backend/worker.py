@@ -9,6 +9,7 @@ import asyncio
 import sentry_sdk
 from loguru import logger
 from saq import Worker
+from saq.types import Context
 from sentry_sdk.integrations.loguru import LoguruIntegration
 
 from backend.config import app_config
@@ -26,14 +27,14 @@ if app_config.SENTRY_DSN:
     logger.info("Sentry initialized for SAQ cron worker")
 
 
-async def startup(ctx: dict):
+async def startup(ctx: Context):
     """Worker startup hook."""
     logger.info("SAQ cron worker starting up")
     await initialize_cluster_clients()
     logger.info("Kubernetes cluster clients initialized")
 
 
-async def shutdown(ctx: dict):
+async def shutdown(ctx: Context):
     """Worker shutdown hook."""
     logger.info("SAQ cron worker shutting down")
     await close_all_clients()

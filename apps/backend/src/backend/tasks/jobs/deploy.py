@@ -5,6 +5,7 @@ from typing import Any
 from loguru import logger
 from models.deployments import DeploymentStates
 from models.secrets import SecretState
+from saq.types import Context
 
 from backend.database import get_db_context
 from backend.services.k8s import create_release_name
@@ -23,7 +24,7 @@ from backend.tasks.core import (
 
 
 async def deploy_compose_job(
-    ctx: dict[str, Any],
+    ctx: Context,
     deployment_id: str,
     wait_for_secrets: bool = False,
     service_names: list[str] | None = None,
