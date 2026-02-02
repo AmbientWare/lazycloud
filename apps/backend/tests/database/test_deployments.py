@@ -3,8 +3,8 @@
 from datetime import datetime, timedelta, timezone
 
 from backend.database import Database
+from backend.database.models import WorkspaceRole
 from models.deployments import DeploymentStates
-from models.workspaces import WorkspaceRole
 
 from tests.fixtures.database import (
     make_deployment,

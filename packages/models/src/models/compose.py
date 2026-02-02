@@ -117,7 +117,7 @@ class ComposeService(BaseModel):
     working_dir: str | None = None
     stop_grace_period: int | None = None
     ports: list[ComposePort] | None = None
-    expose: list[int | str] | None = None  # Internal ports (no external exposure)
+    expose: list[int] | None = None  # Internal ports (no external exposure)
     environment: dict[str, str] | None = None  # Environment variables
     volumes: list[ServiceVolume] | None = None
     networks: list[ServiceNetwork] | None = None

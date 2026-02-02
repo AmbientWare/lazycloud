@@ -62,7 +62,7 @@ class WorkloadManager:
             }
 
             if resource_type.lower() == "deployment":
-                await apps_v1.patch_namespaced_deployment(
+                await apps_v1.patch_namespaced_deployment(  # type: ignore[arg-type]
                     name=resource_name,
                     namespace=namespace,
                     body=patch_body,
@@ -161,12 +161,12 @@ class WorkloadManager:
             apps_v1 = await get_async_apps_v1_api(self.cluster_id)
 
             if resource_type.lower() == "deployment":
-                deployment = await apps_v1.read_namespaced_deployment(
+                deployment = await apps_v1.read_namespaced_deployment(  # type: ignore[arg-type]
                     name=resource_name, namespace=namespace
                 )
-                if deployment.status:
+                if deployment.status:  # type: ignore[union-attr]
                     # Check if rollout is complete
-                    conditions = deployment.status.conditions or []
+                    conditions = deployment.status.conditions or []  # type: ignore[union-attr]
                     progressing_condition = next(
                         (c for c in conditions if c.type == "Progressing"),
                         None,
@@ -200,7 +200,7 @@ class WorkloadManager:
             patch_body = {"spec": {"replicas": replicas}}
 
             if resource_type.lower() == "deployment":
-                await apps_v1.patch_namespaced_deployment(
+                await apps_v1.patch_namespaced_deployment(  # type: ignore[arg-type]
                     name=resource_name,
                     namespace=namespace,
                     body=patch_body,

@@ -2,9 +2,8 @@
 
 import pytest
 from backend.database import Database
-from backend.database.users import UserPydantic
+from backend.database.models import User, WorkspaceRole
 from httpx import AsyncClient
-from models.workspaces import WorkspaceRole
 
 from tests.fixtures.database import (
     make_invitation,
@@ -21,7 +20,7 @@ class TestListMembers:
     """Tests for GET /v1/workspaces/{id}/members."""
 
     async def test_list_members_includes_active_members(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """List includes all active workspace members."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -48,7 +47,7 @@ class TestListMembers:
         assert WorkspaceRole.MEMBER.value in roles
 
     async def test_list_members_includes_pending_invitations(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """List includes pending invitations."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -76,7 +75,7 @@ class TestUpdateMemberRole:
     """Tests for PATCH /v1/workspaces/{id}/members/{user_id}/role."""
 
     async def test_update_member_role_success(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Successfully update member role."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -99,7 +98,7 @@ class TestUpdateMemberRole:
         assert data["role"] == WorkspaceRole.ADMIN.value
 
     async def test_update_member_role_requires_admin(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Only admins and owners can update roles."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -120,7 +119,7 @@ class TestUpdateMemberRole:
         assert response.status_code == 403
 
     async def test_update_owner_role_fails(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Cannot change owner role."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -140,7 +139,7 @@ class TestRemoveMember:
     """Tests for DELETE /v1/workspaces/{id}/members/{user_id}."""
 
     async def test_remove_member_success(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Successfully remove a member."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -161,7 +160,7 @@ class TestRemoveMember:
         assert response.json()["success"] is True
 
     async def test_remove_owner_fails(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Cannot remove workspace owner."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -180,7 +179,7 @@ class TestInviteUser:
     """Tests for POST /v1/workspaces/{id}/members/invite."""
 
     async def test_invite_user_success(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Successfully invite a user."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -199,7 +198,7 @@ class TestInviteUser:
         assert "token" in data
 
     async def test_invite_user_requires_admin(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Only admins and owners can invite users."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -219,7 +218,7 @@ class TestLeaveWorkspace:
     """Tests for POST /v1/workspaces/{id}/members/leave."""
 
     async def test_leave_workspace_success(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Successfully leave a workspace."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -233,7 +232,7 @@ class TestLeaveWorkspace:
         assert response.json()["success"] is True
 
     async def test_leave_workspace_as_owner_fails(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Owner cannot leave workspace."""
         workspace = await api_db.workspaces.create(make_workspace())

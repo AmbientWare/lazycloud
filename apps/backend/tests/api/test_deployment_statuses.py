@@ -4,9 +4,8 @@ from unittest.mock import patch
 
 import pytest
 from backend.database import Database
-from backend.database.users import UserPydantic
+from backend.database.models import UserInDb, WorkspaceRole
 from httpx import AsyncClient
-from models.workspaces import WorkspaceRole
 
 from tests.fixtures.database import (
     make_deployment,
@@ -22,7 +21,7 @@ class TestStreamDeploymentStatus:
     """Tests for GET /v1/deployments/{id}/status/stream."""
 
     async def test_stream_deployment_status(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: UserInDb
     ):
         """Stream deployment status returns SSE stream."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -31,7 +30,7 @@ class TestStreamDeploymentStatus:
         )
 
         deployment = await api_db.compose_deployments.create(
-            make_deployment(workspace.id, name="test-deploy")
+            make_deployment(workspace.id, name="test-deploy", with_helm_values=True)
         )
 
         # Mock the SSE stream to return immediately without blocking
@@ -51,3 +50,10 @@ class TestStreamDeploymentStatus:
 
         assert response.status_code == 200
         assert "text/event-stream" in response.headers["content-type"]
+
+    async def test_stream_deployment_status_not_found(self, client: AsyncClient):
+        """Non-existent deployment returns 404."""
+        response = await client.get(
+            "/v1/deployments/00000000-0000-0000-0000-000000000000/status/stream"
+        )
+        assert response.status_code == 404

@@ -6,6 +6,7 @@ from polar_sdk import Polar
 from polar_sdk.models import (
     Product,
     ProductCreateRecurring,
+    ProductCreateRecurringMetadata,
     ProductCreateRecurringPrices,
     ProductUpdate,
     SubscriptionRecurringInterval,
@@ -29,7 +30,7 @@ class PolarProductsModule:
         name: str,
         prices: list[ProductCreateRecurringPrices],
         recurring_interval: SubscriptionRecurringInterval,
-        metadata: dict[str, str] | None = None,
+        metadata: dict[str, ProductCreateRecurringMetadata] | None = None,
         description: str | None = None,
         recurring_interval_count: int = 1,
     ) -> Product | None:
@@ -101,13 +102,14 @@ class PolarProductsModule:
             return []
 
         try:
-            # Build kwargs for list call
-            kwargs = {"organization_id": organization_id}
-            if is_archived is not None:
-                kwargs["is_archived"] = is_archived
-
             # List products for the organization
-            result = await self.client.products.list_async(**kwargs)
+            result = await self.client.products.list_async(
+                organization_id=organization_id,
+                is_archived=is_archived,
+            )
+            if result is None or result.result is None:
+                return []
+
             logger.info(f"Retrieved {len(result.result.items)} Polar products")
             return result.result.items
 

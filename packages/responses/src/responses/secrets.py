@@ -1,11 +1,11 @@
-from models.secrets import Secret
+from models.secrets import BasicSecret
 from pydantic import BaseModel
 
 
 class SecretsResponse(BaseModel):
     """Response for secrets"""
 
-    secrets: list[Secret]
+    secrets: list[BasicSecret]
 
 
 class SecretsStoredResponse(BaseModel):

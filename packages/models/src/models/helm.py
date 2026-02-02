@@ -1,6 +1,6 @@
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from models.k8s import (
     PodSecurityContext,
@@ -12,7 +12,7 @@ from models.k8s import (
     VolumeMount,
     WorkloadType,
 )
-from models.storage import STORAGE_CLASS_SHARED, STORAGE_CLASS_STANDARD
+from models.storage import STORAGE_CLASS_STANDARD, StorageClassLiteral
 
 
 class PortConfig(BaseModel):
@@ -20,11 +20,9 @@ class PortConfig(BaseModel):
 
     name: str | None = None
     port: int | str  # Service port
-    target_port: int | str | None = Field(
-        None, alias="targetPort"
-    )  # Container/pod port
+    targetPort: int | str | None = None  # Container/pod port
     protocol: Protocol = Protocol.TCP
-    node_port: int | None = Field(None, alias="nodePort")
+    nodePort: int | None = None
 
 
 class CurrentUsage(BaseModel):
@@ -145,9 +143,7 @@ class VolumeValues(BaseModel):
     enabled: bool = True
     size: str = "1Gi"
     accessModes: list[str] = ["ReadWriteOnce"]
-    storageClass: Literal[STORAGE_CLASS_STANDARD, STORAGE_CLASS_SHARED] = (
-        STORAGE_CLASS_STANDARD
-    )
+    storageClass: StorageClassLiteral = STORAGE_CLASS_STANDARD
     labels: dict[str, str] = {}
     annotations: dict[str, str] = {}
 
@@ -187,7 +183,7 @@ class ServiceValues(BaseModel):
     resourceName: str
     labels: dict[str, str] = {}
     annotations: dict[str, str] = {}
-    workloadType: WorkloadType | None = None
+    workloadType: WorkloadType
     command: list[str] | None = None
     args: list[str] | None = None
     workingDir: str | None = None
@@ -202,7 +198,7 @@ class ServiceValues(BaseModel):
     ingress: IngressValues | None = None
     hpa: HPAValues | None = None
     metrics: MetricsValues | None = None
-    networks: list[ServiceNetwork] | None = None
+    networks: list[NetworkValues] | None = None
     securityContext: SecurityContext | None = None
     podSecurityContext: PodSecurityContext | None = None
     terminationGracePeriodSeconds: int | None = None
@@ -233,9 +229,11 @@ class HelmNamespaceValues(BaseModel):
 class HelmValues(BaseModel):
     """Model for the complete Helm values structure."""
 
+    model_config = ConfigDict(populate_by_name=True)
+
     global_values: GlobalValues = Field(
         default_factory=lambda: GlobalValues(deploymentId="", workspaceId=""),
-        alias="global",
+        serialization_alias="global",
     )
     services: list[ServiceValues] = []
     networks: list[NetworkValues] = []

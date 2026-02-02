@@ -13,10 +13,10 @@ from backend.api.dependencies import (
 from backend.api.utils import (
     create_sse_stream_with_subscription,
 )
-from backend.database.compose import ComposeDeploymentPydantic
-from backend.tasks.client import run_restart_all_services, run_restart_service
+from backend.database.models import ComposeDeploymentInDb
 from backend.services.k8s.status_watcher import StatusWatcher
 from backend.services.monitoring.monitor_config import ServiceMonitorConfig
+from backend.tasks.client import run_restart_all_services, run_restart_service
 
 services_router = APIRouter(prefix="/{deployment_id}/services")
 
@@ -26,11 +26,17 @@ services_router = APIRouter(prefix="/{deployment_id}/services")
     response_model=list[ServiceStatusResponse],
 )
 async def list_services(
-    deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_access),
+    deployment: ComposeDeploymentInDb = Depends(get_deployment_with_access),
 ) -> list[ServiceStatusResponse]:
     """Get the status of all services within a deployment."""
+
+    if not deployment.helm_values:
+        raise HTTPException(400, "Deployment has no helm values")
+
     watcher = StatusWatcher(
         deployment_id=deployment.id,
+        deployment_name=deployment.name,
+        deployed_at=deployment.deployed_at,
         namespace=deployment.namespace,
         helm_values=deployment.helm_values,
         cluster_id=deployment.cluster_id,
@@ -55,12 +61,17 @@ async def list_services(
 )
 async def get_service_status(
     service_name: str,
-    deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_access),
+    deployment: ComposeDeploymentInDb = Depends(get_deployment_with_access),
 ) -> ServiceStatusResponse:
     """Get the status of a specific service within a deployment."""
 
+    if not deployment.helm_values:
+        raise HTTPException(400, "Deployment has no helm values")
+
     watcher = StatusWatcher(
         deployment_id=deployment.id,
+        deployment_name=deployment.name,
+        deployed_at=deployment.deployed_at,
         namespace=deployment.namespace,
         helm_values=deployment.helm_values,
         cluster_id=deployment.cluster_id,
@@ -86,7 +97,7 @@ async def get_service_status(
     response_model=ServiceTaskStatusResponse,
 )
 async def restart_all_services(
-    deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_admin_access),
+    deployment: ComposeDeploymentInDb = Depends(get_deployment_with_admin_access),
 ) -> ServiceTaskStatusResponse:
     """Restart all services within a deployment."""
     try:
@@ -112,7 +123,7 @@ async def restart_all_services(
 )
 async def restart_service(
     service_name: str,
-    deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_admin_access),
+    deployment: ComposeDeploymentInDb = Depends(get_deployment_with_admin_access),
 ) -> ServiceTaskStatusResponse:
     """Restart a specific service within a deployment."""
     try:
@@ -141,9 +152,12 @@ async def restart_service(
 @services_router.get("/{service_name}/status/stream")
 async def stream_service_status(
     service_name: str,
-    deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_access),
+    deployment: ComposeDeploymentInDb = Depends(get_deployment_with_access),
 ):
     """Stream real-time service status updates."""
+    if not deployment.helm_values:
+        raise HTTPException(400, "Deployment has no helm values")
+
     config = ServiceMonitorConfig(
         deployment_id=deployment.id,
         service_name=service_name,

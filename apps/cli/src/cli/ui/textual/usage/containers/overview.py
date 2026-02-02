@@ -121,60 +121,66 @@ class UsageOverviewSection(Container):
         usage = self.usage_data
 
         # Always show workspace totals
-        metrics = usage.usage
-        costs = metrics.costs
+        metrics = usage.usage if usage else None
+        costs = metrics.costs if metrics else None
         if self._section_container:
             self._section_container.border_title = f"{Icons.COMPUTER} Workspace Totals"
 
         # Clear and update the table
-        self._metrics_table.clear()
+        if self._metrics_table:
+            self._metrics_table.clear()
 
         # CPU row
         cpu_cost_str = f"{costs.cpu_cost:.2f}" if costs else "-"
-        self._metrics_table.add_row(
-            "CPU (core-hrs)",
-            f"{metrics.cpu_core_hours:.2f}",
-            cpu_cost_str,
-            key="cpu",
-        )
+        if self._metrics_table and metrics:
+            self._metrics_table.add_row(
+                "CPU (core-hrs)",
+                f"{metrics.cpu_core_hours:.2f}",
+                cpu_cost_str,
+                key="cpu",
+            )
 
         # Memory row
         memory_cost_str = f"{costs.memory_cost:.2f}" if costs else "-"
-        self._metrics_table.add_row(
-            "Memory (GB-hrs)",
-            f"{metrics.memory_gb_hours:.2f}",
-            memory_cost_str,
-            key="memory",
-        )
+        if self._metrics_table and metrics:
+            self._metrics_table.add_row(
+                "Memory (GB-hrs)",
+                f"{metrics.memory_gb_hours:.2f}",
+                memory_cost_str,
+                key="memory",
+            )
 
         # Build Minutes row
         build_cost_str = f"{costs.build_cost:.2f}" if costs else "-"
-        self._metrics_table.add_row(
-            "Build (minutes)",
-            f"{metrics.build_minutes:.2f}",
-            build_cost_str,
-            key="build",
-        )
+        if self._metrics_table and metrics:
+            self._metrics_table.add_row(
+                "Build (minutes)",
+                f"{metrics.build_minutes:.2f}",
+                build_cost_str,
+                key="build",
+            )
 
         # Storage row
         storage_cost_str = f"{costs.storage_cost:.2f}" if costs else "-"
-        self._metrics_table.add_row(
-            "Storage (GB-mo)",
-            f"{metrics.storage_gb_months:.4f}",
-            storage_cost_str,
-            key="storage",
-        )
+        if self._metrics_table and metrics:
+            self._metrics_table.add_row(
+                "Storage (GB-mo)",
+                f"{metrics.storage_gb_months:.4f}",
+                storage_cost_str,
+                key="storage",
+            )
 
         # Total row
         if costs:
             success_color = Colors.Hex.success
             total_cost_str = f"{costs.total_cost:.2f}"
-            self._metrics_table.add_row(
-                f"[bold {success_color}]Total[/bold {success_color}]",
-                "",
-                f"[bold {success_color}]{total_cost_str}[/bold {success_color}]",
-                key="total",
-            )
+            if self._metrics_table:
+                self._metrics_table.add_row(
+                    f"[bold {success_color}]Total[/bold {success_color}]",
+                    "",
+                    f"[bold {success_color}]{total_cost_str}[/bold {success_color}]",
+                    key="total",
+                )
 
     def refresh_usage(
         self, start_date: datetime | None = None, end_date: datetime | None = None

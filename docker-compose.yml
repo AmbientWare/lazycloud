@@ -17,6 +17,7 @@ x-backend-volumes: &backend-volumes
 
 services:
   api:
+    profiles: [backend]
     networks:
       - lazycloud
     image: lazycloud-api:latest
@@ -53,6 +54,7 @@ services:
         condition: service_started
 
   crons:
+    profiles: [backend]
     networks:
       - lazycloud
     image: lazycloud-worker:latest
@@ -77,6 +79,7 @@ services:
         condition: service_started
 
   background-workers:
+    profiles: [backend]
     networks:
       - lazycloud
     image: lazycloud-background-worker:latest
@@ -103,6 +106,7 @@ services:
         condition: service_healthy
 
   db-migration:
+    profiles: [backend, db]
     networks:
       - lazycloud
     image: lazycloud-api:latest
@@ -111,11 +115,9 @@ services:
       dockerfile: ./apps/backend/Dockerfile
       target: api
     volumes: *backend-volumes
-    env_file:
-      - path: ./apps/backend/.env
-        required: false
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://lc_dev:lc_dev@postgres:5432/lazycloud}
+      DATABASE_URL: "postgresql+asyncpg://lc_dev:lc_dev@postgres:5432/lazycloud"
+      SKIP_ENV_VALIDATION: "true"
     working_dir: /workspace/apps/backend
     command: ["uv", "run", "--no-sync", "alembic", "upgrade", "head"]
     restart: "no"
@@ -125,6 +127,7 @@ services:
 
   postgres:
     image: postgres:17
+    profiles: [db]
     networks:
       - lazycloud
     env_file:
@@ -150,6 +153,7 @@ services:
 
   pgbouncer:
     image: edoburu/pgbouncer:latest
+    profiles: [db]
     networks:
       - lazycloud
     environment:
@@ -174,6 +178,7 @@ services:
 
   redis:
     image: redis:latest
+    profiles: [db]
     networks:
       - lazycloud
     volumes:
@@ -185,6 +190,7 @@ services:
       retries: 5
 
   localstack:
+    profiles: [backend]
     labels:
       lazycloud.ignore: "true"
     image: localstack/localstack-pro:latest

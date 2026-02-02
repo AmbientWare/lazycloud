@@ -7,15 +7,15 @@ from models.helm import HelmValues
 from backend.billing.product_details.features import BaseFeatures
 from backend.config import app_config
 from backend.database import get_db_context
-from backend.database.compose import ComposeDeploymentPydantic
+from backend.database.models import ComposeDeploymentInDb
 from backend.services.compose.parser import ComposeParser
 from backend.services.k8s.helm_values_generator import HelmValuesGenerator
 from backend.tasks.core.utils import verify_quota_capacity
 
 
 async def validate_deployment_request(
-    deployment: ComposeDeploymentPydantic,
-    existing_deployment: ComposeDeploymentPydantic | None = None,
+    new_deployment: ComposeDeploymentInDb,
+    existing_deployment: ComposeDeploymentInDb | None = None,
     service_names: list[str] | None = None,
     features: BaseFeatures | None = None,
 ) -> tuple[HelmValues, list[str]]:
@@ -27,7 +27,7 @@ async def validate_deployment_request(
     Returns:
         Tuple of (helm_values, warnings)
     """
-    compose_yaml = deployment.pending_compose_yaml or deployment.compose_yaml
+    compose_yaml = new_deployment.pending_compose_yaml or new_deployment.compose_yaml
 
     # Parse YAML
     try:
@@ -62,13 +62,13 @@ async def validate_deployment_request(
 
     # Get secrets (only if deployment exists)
     secrets = []
-    if deployment.id:
+    if new_deployment.id:
         async with get_db_context() as db:
-            secrets = await db.secrets.get_secrets(deployment.id)
+            secrets = await db.secrets.get_secrets(new_deployment.id)
 
     # Generate Helm values (this validates compose file)
     try:
-        helm_generator = HelmValuesGenerator(deployment, secrets, features)
+        helm_generator = HelmValuesGenerator(new_deployment, secrets, features)
         helm_values, warnings = helm_generator.generate_values(compose_file)
         helm_values.compose_yaml = compose_yaml
 
@@ -86,7 +86,7 @@ async def validate_deployment_request(
     # Verify quota capacity (only for new deployments, not updates)
     try:
         await verify_quota_capacity(
-            deployment.workspace_id,
+            new_deployment.workspace_id,
             is_update=existing_deployment is not None,
         )
     except ValueError as e:

@@ -1,4 +1,4 @@
-from models.workspaces import WorkspaceRole
+from models.user_workspaces import WorkspaceRole
 from pydantic import BaseModel
 
 

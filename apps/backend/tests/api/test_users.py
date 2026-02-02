@@ -2,9 +2,8 @@
 
 import pytest
 from backend.database import Database
-from backend.database.users import UserPydantic
+from backend.database.models import User, WorkspaceRole
 from httpx import AsyncClient
-from models.workspaces import WorkspaceRole
 
 from tests.fixtures.database import (
     make_deployment,
@@ -19,9 +18,7 @@ pytestmark = [pytest.mark.asyncio, requires_db]
 class TestCurrentUser:
     """Tests for GET /v1/users/current."""
 
-    async def test_returns_current_user_id(
-        self, client: AsyncClient, api_user: UserPydantic
-    ):
+    async def test_returns_current_user_id(self, client: AsyncClient, api_user: User):
         """Current user endpoint returns authenticated user's id."""
         response = await client.get("/v1/users/current")
 
@@ -30,7 +27,7 @@ class TestCurrentUser:
         assert data["id"] == str(api_user.id)
 
     async def test_response_structure(self, client: AsyncClient):
-        """CurrentUserResponse only includes id field."""
+        """CurrentUserResponse includes id field."""
         response = await client.get("/v1/users/current")
 
         assert response.status_code == 200
@@ -77,7 +74,7 @@ class TestUserFeatures:
         assert isinstance(data["custom_domains_enabled"], bool)
 
     async def test_deployment_count_reflects_total_deployments(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Deployment count matches total deployments across all workspaces."""
         # Create 2 workspaces with deployments

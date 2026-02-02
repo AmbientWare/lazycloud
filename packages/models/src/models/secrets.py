@@ -13,7 +13,7 @@ class SecretSource(StrEnum):
     USER = "user"  # added by user via UI/CLI
 
 
-class Secret(BaseModel):
+class BasicSecret(BaseModel):
     key: str
     value: str
     source: SecretSource
@@ -21,5 +21,5 @@ class Secret(BaseModel):
 
 
 class SecretCollection(BaseModel):
-    added: list[Secret] | None = None
-    removed: list[Secret] | None = None
+    added: list[BasicSecret] | None = None
+    removed: list[BasicSecret] | None = None

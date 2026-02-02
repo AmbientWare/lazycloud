@@ -1,14 +1,19 @@
 from fastapi import Depends, HTTPException
 from models.compose import ComposeFile
+from pydantic import BaseModel
 
 from backend.api.security import get_current_active_user
 from backend.billing.product_details.base import DEVELOPER_FEATURES
 from backend.billing.product_details.features import ADMIN_FEATURES, BaseFeatures
 from backend.database import Database, get_db
-from backend.database.compose import ComposeDeploymentPydantic
-from backend.database.user_workspaces import WorkspaceRole
-from backend.database.users import UserPydantic, UserRole
-from backend.models.workspace_access import WorkspaceAccess
+from backend.database.models import (
+    ComposeDeploymentInDb,
+    UserInDb,
+    UserRole,
+    UserWorkspaceInDb,
+    WorkspaceInDb,
+    WorkspaceRole,
+)
 from backend.services import get_polar_service, get_subscription_service
 from backend.services.exceptions import NoActiveSubscriptionError
 from backend.services.subscription_service import (
@@ -17,9 +22,17 @@ from backend.services.subscription_service import (
 )
 
 
+class WorkspaceAccess(BaseModel):
+    """Container for workspace access information"""
+
+    membership: UserWorkspaceInDb
+    workspace: WorkspaceInDb
+    user: UserInDb
+
+
 async def require_workspace_member(
     workspace_id: str,
-    current_user: UserPydantic = Depends(get_current_active_user),
+    current_user: UserInDb = Depends(get_current_active_user),
     db: Database = Depends(get_db),
 ) -> None:
     """Verify user is a member of workspace (any role)"""
@@ -32,7 +45,7 @@ async def require_workspace_member(
 
 async def require_workspace_admin(
     workspace_id: str,
-    current_user: UserPydantic = Depends(get_current_active_user),
+    current_user: UserInDb = Depends(get_current_active_user),
     db: Database = Depends(get_db),
 ) -> None:
     """Verify user is admin or owner of workspace"""
@@ -47,7 +60,7 @@ async def require_workspace_admin(
 
 async def get_workspace_with_any_access(
     workspace_id: str,
-    current_user: UserPydantic = Depends(get_current_active_user),
+    current_user: UserInDb = Depends(get_current_active_user),
     db: Database = Depends(get_db),
 ) -> WorkspaceAccess:
     """Get workspace and verify user has any access"""
@@ -68,7 +81,7 @@ async def get_workspace_with_any_access(
 
 async def get_workspace_with_admin_access(
     workspace_id: str,
-    current_user: UserPydantic = Depends(get_current_active_user),
+    current_user: UserInDb = Depends(get_current_active_user),
     db: Database = Depends(get_db),
 ) -> WorkspaceAccess:
     """Get workspace and verify user has admin/owner access"""
@@ -91,7 +104,7 @@ async def get_workspace_with_admin_access(
 
 async def get_workspace_with_owner_access(
     workspace_id: str,
-    current_user: UserPydantic = Depends(get_current_active_user),
+    current_user: UserInDb = Depends(get_current_active_user),
     db: Database = Depends(get_db),
 ) -> WorkspaceAccess:
     """Get workspace and verify user has owner access"""
@@ -115,7 +128,7 @@ async def get_workspace_with_owner_access(
 
 async def get_workspace_with_admin_access_for_usage(
     workspace_id: str,
-    current_user: UserPydantic = Depends(get_current_active_user),
+    current_user: UserInDb = Depends(get_current_active_user),
     db: Database = Depends(get_db),
 ) -> WorkspaceAccess:
     """Get workspace and verify user has admin/owner access, including deleted workspaces (for usage reporting)"""
@@ -138,9 +151,9 @@ async def get_workspace_with_admin_access_for_usage(
 
 async def get_deployment_with_access(
     deployment_id: str,
-    current_user: UserPydantic = Depends(get_current_active_user),
+    current_user: UserInDb = Depends(get_current_active_user),
     db: Database = Depends(get_db),
-) -> ComposeDeploymentPydantic:
+) -> ComposeDeploymentInDb:
     """Get deployment and verify user has access (any role)"""
     deployment, role = await db.compose_deployments.get_with_workspace_access(
         deployment_id, current_user.id
@@ -154,10 +167,10 @@ async def get_deployment_with_access(
 
 async def get_deployment_with_admin_access(
     deployment_id: str,
-    current_user: UserPydantic = Depends(get_current_active_user),
+    current_user: UserInDb = Depends(get_current_active_user),
     include_deleted: bool = False,
     db: Database = Depends(get_db),
-) -> ComposeDeploymentPydantic:
+) -> ComposeDeploymentInDb:
     """Get deployment and verify user has admin/owner access"""
     deployment, role = await db.compose_deployments.get_with_workspace_access(
         deployment_id, current_user.id, include_deleted=include_deleted
@@ -174,9 +187,9 @@ async def get_deployment_with_admin_access(
 
 async def get_deployment_with_admin_access_for_usage(
     deployment_id: str,
-    current_user: UserPydantic = Depends(get_current_active_user),
+    current_user: UserInDb = Depends(get_current_active_user),
     db: Database = Depends(get_db),
-) -> ComposeDeploymentPydantic:
+) -> ComposeDeploymentInDb:
     """Get deployment with admin access, including deleted deployments for usage purposes"""
     return await get_deployment_with_admin_access(
         deployment_id, current_user, include_deleted=True, db=db
@@ -184,10 +197,10 @@ async def get_deployment_with_admin_access_for_usage(
 
 
 async def get_deployment_with_active_subscription(
-    deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_admin_access),
-    current_user: UserPydantic = Depends(get_current_active_user),
+    deployment: ComposeDeploymentInDb = Depends(get_deployment_with_admin_access),
+    current_user: UserInDb = Depends(get_current_active_user),
     db: Database = Depends(get_db),
-) -> ComposeDeploymentPydantic:
+) -> ComposeDeploymentInDb:
     """Get deployment with admin access and verify workspace owner has active subscription."""
     await get_owner_with_active_subscription(
         workspace_id=deployment.workspace_id,
@@ -198,7 +211,7 @@ async def get_deployment_with_active_subscription(
 
 
 async def get_user_product_features(
-    current_user: UserPydantic = Depends(get_current_active_user),
+    current_user: UserInDb = Depends(get_current_active_user),
 ) -> BaseFeatures:
     """Get product features for the current user based on their subscription.
 
@@ -227,9 +240,9 @@ async def get_user_product_features(
 
 async def get_owner_with_active_subscription(
     workspace_id: str,
-    current_user: UserPydantic = Depends(get_current_active_user),
+    current_user: UserInDb = Depends(get_current_active_user),
     db: Database = Depends(get_db),
-) -> UserPydantic:
+) -> UserInDb:
     """Get workspace owner after verifying access and active subscription.
 
     Verifies:
@@ -278,7 +291,7 @@ async def get_owner_with_active_subscription(
 
 
 async def get_features_for_owner(
-    owner_user: UserPydantic,
+    owner_user: UserInDb,
 ) -> BaseFeatures:
     """Get subscription features for a workspace owner.
 
@@ -309,7 +322,7 @@ async def get_features_for_owner(
 
 
 async def check_deployment_limit_for_owner(
-    owner_user: UserPydantic,
+    owner_user: UserInDb,
 ) -> None:
     """Check if workspace owner can create a new deployment based on their subscription tier.
 

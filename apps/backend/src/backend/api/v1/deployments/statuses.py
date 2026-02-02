@@ -1,10 +1,10 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from models.monitoring import StreamEventType
 from sse_starlette.sse import EventSourceResponse
 
 from backend.api.dependencies import get_deployment_with_access
 from backend.api.utils import create_sse_stream_with_subscription
-from backend.database.compose import ComposeDeploymentPydantic
+from backend.database.models import ComposeDeploymentInDb
 from backend.services.monitoring.monitor_config import (
     DeploymentMonitorConfig,
     DeployProgressMonitorConfig,
@@ -15,9 +15,12 @@ status_router = APIRouter(prefix="/{deployment_id}/status")
 
 @status_router.get("/stream")
 async def stream_deployment_status(
-    deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_access),
+    deployment: ComposeDeploymentInDb = Depends(get_deployment_with_access),
 ):
     """Stream real-time deployment status updates."""
+    if not deployment.helm_values or not deployment.deployed_at:
+        raise HTTPException(400, "Deployment has no helm values or deployed at")
+
     config = DeploymentMonitorConfig(
         deployment_id=deployment.id,
         namespace=deployment.namespace,
@@ -39,9 +42,12 @@ async def stream_deployment_status(
 
 @status_router.get("/deploy/stream")
 async def stream_deploy_progress(
-    deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_access),
+    deployment: ComposeDeploymentInDb = Depends(get_deployment_with_access),
 ):
     """Stream deployment progress with per-service status and early failure detection."""
+    if not deployment.helm_values or not deployment.deployed_at:
+        raise HTTPException(400, "Deployment has no helm values or deployed at")
+
     config = DeployProgressMonitorConfig(
         deployment_id=str(deployment.id),
         deployment_name=deployment.name,

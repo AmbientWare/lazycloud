@@ -15,12 +15,12 @@ class ServiceMonitor(BaseMonitor[ServiceStatus]):
     def __init__(
         self,
         deployment_id: str,
+        deployment_name: str,
         service_name: str,
         namespace: str,
         helm_values: HelmValues,
         cluster_id: str,
-        callback: Callable[[ServiceStatus], None],
-        deployment_name: str | None = None,
+        callback: Callable[[ServiceStatus], None] | None = None,
     ):
         super().__init__("Service Monitor", service_name, callback)
         self.deployment_id = deployment_id
@@ -34,7 +34,8 @@ class ServiceMonitor(BaseMonitor[ServiceStatus]):
             helm_values=helm_values,
             cluster_id=cluster_id,
             deployment_name=deployment_name,
+            deployed_at=None,
         )
 
-    async def _task(self) -> ServiceStatus:
+    async def _task(self) -> ServiceStatus | None:
         return await self.status_watcher.get_service_status(self.service_name)

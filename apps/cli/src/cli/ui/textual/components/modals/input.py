@@ -1,5 +1,5 @@
 import inspect
-from typing import Callable
+from typing import Awaitable, Callable
 
 from textual import on
 from textual.app import ComposeResult
@@ -22,7 +22,7 @@ class InputModal(BaseModalScreen):
         message: str,
         placeholder: str = "",
         initial_value: str = "",
-        on_confirm: Callable[[str], bool] | None = None,
+        on_confirm: Callable[[str], bool | Awaitable[bool]] | None = None,
         on_cancel: Callable | None = None,
         icon: str = "✏️",
         password: bool = False,

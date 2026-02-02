@@ -5,7 +5,6 @@ from api_requests.workspaces import (
 )
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
-from models.workspaces import InvitationType
 from responses.workspaces import (
     InviteUserResponse,
     WorkspaceMemberResponse,
@@ -20,7 +19,8 @@ from backend.api.dependencies import (
 )
 from backend.config import app_config
 from backend.database import Database, get_db
-from backend.database.user_workspaces import (
+from backend.database.models import (
+    InvitationType,
     UserWorkspaceStatus,
     WorkspaceRole,
 )
@@ -141,6 +141,8 @@ async def update_member_role(
 
     target_membership.role = request.role
     updated_membership = await db.user_workspaces.update(target_membership)
+    if updated_membership is None:
+        raise HTTPException(status_code=500, detail="Failed to update member role")
 
     user = await db.users.get_by_id(request.user_id)
     if not user:

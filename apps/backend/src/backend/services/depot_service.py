@@ -8,7 +8,7 @@ from loguru import logger
 from models.depot import DepotBuildCredentials, DepotProject, DepotProjectToken
 
 from backend.database import get_db_context
-from backend.database.compose import ComposeDeploymentPydantic
+from backend.database.models import ComposeDeploymentInDb
 from backend.services.depot_token_cache import DepotTokenCache
 
 # Token lifetime when creating new tokens (1 hour)
@@ -74,7 +74,7 @@ class DepotService:
 
     @staticmethod
     def _extract_deployment_id(
-        deployment: ComposeDeploymentPydantic,
+        deployment: ComposeDeploymentInDb,
     ) -> str:
         """Extract deployment ID from deployment object."""
         if not deployment.id:
@@ -228,6 +228,12 @@ class DepotService:
                 project_name = project_data.get("name")
                 project_id = self._extract_project_id(project_data)
 
+                if not project_id:
+                    logger.warning(
+                        f"Project ID not found in API response: {project_data}"
+                    )
+                    continue
+
                 if project_name == name:
                     logger.debug(f"Found project '{name}' with ID '{project_id}'")
                     return DepotProject(id=project_id, name=project_name)
@@ -305,7 +311,7 @@ class DepotService:
 
     async def delete_deployment_project(
         self,
-        deployment: ComposeDeploymentPydantic | None = None,
+        deployment: ComposeDeploymentInDb | None = None,
         deployment_id: str | None = None,
     ) -> bool:
         """Delete a Depot project for a deployment and clear DB reference."""
@@ -365,7 +371,7 @@ class DepotService:
 
     async def get_build_token(
         self,
-        deployment: ComposeDeploymentPydantic,
+        deployment: ComposeDeploymentInDb,
         registry_url: str,
     ) -> DepotBuildCredentials:
         """Get a build token for a deployment.
@@ -533,7 +539,7 @@ class DepotService:
         workspace_id: str,
         start_at: datetime,
         end_at: datetime,
-        deployments: list[ComposeDeploymentPydantic] | None = None,
+        deployments: list[ComposeDeploymentInDb] | None = None,
     ) -> float:
         """Get total build minutes for all deployments in a workspace. Raises on API failure."""
         if not self.is_configured:

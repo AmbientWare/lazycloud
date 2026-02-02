@@ -4,10 +4,9 @@ import json
 
 import pytest
 from backend.database import Database
-from backend.database.users import UserPydantic
+from backend.database.models import User, WorkspaceRole
 from httpx import AsyncClient
 from models.secrets import SecretSource
-from models.workspaces import WorkspaceRole
 
 from tests.fixtures.database import (
     make_deployment,
@@ -24,7 +23,7 @@ class TestListSecrets:
     """Tests for GET /v1/deployments/{id}/secrets."""
 
     async def test_list_secrets_hides_values_by_default(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Secret values are hidden by default."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -49,7 +48,7 @@ class TestListSecrets:
         assert data["secrets"][0]["value"] == "● ● ● ● ● ● ● ●"
 
     async def test_list_secrets_shows_values_for_admin(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Admin users can see secret values."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -74,7 +73,7 @@ class TestListSecrets:
         assert data["secrets"][0]["value"] == "secret-value"
 
     async def test_list_secrets_member_cannot_see_values(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Members cannot see secret values even with show_values=true."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -93,7 +92,7 @@ class TestListSecrets:
         assert response.status_code == 403
 
     async def test_list_secrets_empty_deployment(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Deployment with no secrets returns empty list."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -115,7 +114,7 @@ class TestGetSecretValue:
     """Tests for GET /v1/deployments/{id}/secrets/value/{key}."""
 
     async def test_get_secret_value_admin(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Admin can get individual secret value."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -141,7 +140,7 @@ class TestGetSecretValue:
         assert value == "secret-value"
 
     async def test_get_secret_value_not_found(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Getting non-existent secret returns 404."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -160,7 +159,7 @@ class TestGetSecretValue:
         assert response.status_code == 404
 
     async def test_get_secret_value_requires_admin(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Members cannot get secret values."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -183,7 +182,7 @@ class TestCreateSecrets:
     """Tests for POST /v1/deployments/{id}/secrets."""
 
     async def test_create_secrets_success(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Successfully create secrets."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -213,7 +212,7 @@ class TestCreateSecrets:
         assert data["secrets_count"] == 1
 
     async def test_create_secrets_duplicate_fails(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Creating duplicate secret fails."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -245,7 +244,7 @@ class TestCreateSecrets:
         assert response.status_code == 409
 
     async def test_create_secrets_requires_admin(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Only admins can create secrets."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -277,7 +276,7 @@ class TestUpdateSecrets:
     """Tests for PATCH /v1/deployments/{id}/secrets."""
 
     async def test_update_secrets_success(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Successfully update existing secrets."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -311,7 +310,7 @@ class TestUpdateSecrets:
         assert data["secrets_count"] == 1
 
     async def test_update_secrets_not_found_fails(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Updating non-existent secret fails."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -343,7 +342,7 @@ class TestDeleteSecrets:
     """Tests for DELETE /v1/deployments/{id}/secrets."""
 
     async def test_delete_secrets_success(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Successfully delete secrets."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -381,7 +380,7 @@ class TestDeleteSecrets:
         assert data["secrets_count"] == 0
 
     async def test_delete_secrets_not_found_fails(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Deleting non-existent secret fails."""
         workspace = await api_db.workspaces.create(make_workspace())

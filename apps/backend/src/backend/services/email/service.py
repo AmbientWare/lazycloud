@@ -5,6 +5,7 @@ from pathlib import Path
 
 import resend
 from loguru import logger
+from resend import Emails
 
 from backend.config import app_config
 
@@ -60,7 +61,7 @@ class EmailService:
         inviter_name: str,
         workspaces_url: str,
         expiration_days: int = 14,
-    ) -> dict:
+    ) -> Emails.SendResponse:
         """Send workspace invitation email"""
         try:
             # Get logo attachment if available
@@ -94,7 +95,7 @@ class EmailService:
             if logo_attachment:
                 params["attachments"] = [logo_attachment]
 
-            response = resend.Emails.send(params)
+            response = resend.Emails.send(Emails.SendParams(**params))
 
             logger.info(
                 f"Sent invitation email to {email} for workspace {workspace_name}"
@@ -111,7 +112,7 @@ class EmailService:
         current_owner_name: str,
         workspaces_url: str,
         expiration_days: int = 14,
-    ) -> dict:
+    ) -> Emails.SendResponse:
         """Send ownership transfer invitation email"""
         try:
             # Get logo attachment if available
@@ -145,7 +146,7 @@ class EmailService:
             if logo_attachment:
                 params["attachments"] = [logo_attachment]
 
-            response = resend.Emails.send(params)
+            response = resend.Emails.send(Emails.SendParams(**params))
 
             logger.info(
                 f"Sent ownership transfer invitation email to {email} for workspace {workspace_name}"
@@ -162,7 +163,7 @@ class EmailService:
         feedback_type: str,
         message: str,
         source: str = "cli",
-    ) -> dict:
+    ) -> Emails.SendResponse:
         """Send user feedback email to support team"""
         try:
             type_labels = {
@@ -205,7 +206,7 @@ class EmailService:
                 "reply_to": user_email,
             }
 
-            response = resend.Emails.send(params)
+            response = resend.Emails.send(Emails.SendParams(**params))
 
             logger.info(f"Sent feedback email from {user_email} ({feedback_type})")
             return response

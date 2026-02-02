@@ -1,12 +1,14 @@
 """API test fixtures with AsyncClient and dependency overrides."""
 
 import uuid
+from typing import AsyncGenerator
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from backend.api.dependencies import get_user_product_features
 from backend.api.security import (
     get_current_active_user,
+    get_current_active_user_with_sub,
     get_current_user,
     require_admin,
 )
@@ -24,8 +26,8 @@ from backend.api.v1 import (
 from backend.billing.product_details.features import BaseFeatures
 from backend.config import app_config
 from backend.database import Database, _create_database, get_db
+from backend.database.models import User, UserRole
 from backend.database.session import session_manager
-from backend.database.users import UserPydantic, UserRole
 from backend.services import (
     get_depot_service,
     get_invitation_service,
@@ -83,7 +85,7 @@ def get_test_app():
 
 
 @pytest.fixture
-async def api_db_session() -> AsyncSession:
+async def api_db_session() -> AsyncGenerator[AsyncSession, None]:
     """Provide a transactional session that rolls back after each test."""
     await session_manager.reset()
     session_manager._ensure_initialized()
@@ -112,7 +114,7 @@ def api_db(api_db_session: AsyncSession) -> Database:
 
 
 @pytest.fixture
-async def api_user(api_db: Database) -> UserPydantic:
+async def api_user(api_db: Database) -> User:
     """Create a test user for API tests."""
     return await api_db.users.create(make_user())
 
@@ -195,7 +197,7 @@ def make_mock_depot_service() -> AsyncMock:
 
 
 @pytest.fixture
-async def api_admin_user(api_db: Database) -> UserPydantic:
+async def api_admin_user(api_db: Database) -> User:
     """Create an admin user for API key tests."""
     user = make_user("admin")
     user.role = UserRole.ADMIN
@@ -244,7 +246,7 @@ def mock_saq_tasks():
 
 
 @pytest.fixture
-async def client(api_db: Database, api_user: UserPydantic) -> AsyncClient:
+async def client(api_db: Database, api_user: User) -> AsyncGenerator[AsyncClient, None]:
     """Async HTTP client with mocked auth and database dependencies."""
     app = get_test_app()
 
@@ -252,6 +254,7 @@ async def client(api_db: Database, api_user: UserPydantic) -> AsyncClient:
     app.dependency_overrides[get_db] = lambda: api_db
     app.dependency_overrides[get_current_user] = lambda: api_user
     app.dependency_overrides[get_current_active_user] = lambda: api_user
+    app.dependency_overrides[get_current_active_user_with_sub] = lambda: api_user
     app.dependency_overrides[require_admin] = lambda: api_user
     app.dependency_overrides[get_user_product_features] = make_test_features
     app.dependency_overrides[get_usage_service] = make_mock_usage_service
@@ -276,7 +279,9 @@ async def client(api_db: Database, api_user: UserPydantic) -> AsyncClient:
 
 
 @pytest.fixture
-async def admin_client(api_db: Database, api_admin_user: UserPydantic) -> AsyncClient:
+async def admin_client(
+    api_db: Database, api_admin_user: User
+) -> AsyncGenerator[AsyncClient, None]:
     """Async HTTP client with admin user for API key tests."""
 
     app = get_test_app()
@@ -284,8 +289,13 @@ async def admin_client(api_db: Database, api_admin_user: UserPydantic) -> AsyncC
     app.dependency_overrides[get_db] = lambda: api_db
     app.dependency_overrides[get_current_user] = lambda: api_admin_user
     app.dependency_overrides[get_current_active_user] = lambda: api_admin_user
+    app.dependency_overrides[get_current_active_user_with_sub] = lambda: api_admin_user
     app.dependency_overrides[require_admin] = lambda: api_admin_user
     app.dependency_overrides[get_user_product_features] = make_test_features
+    app.dependency_overrides[get_usage_service] = make_mock_usage_service
+    app.dependency_overrides[get_subscription_service] = make_mock_subscription_service
+    app.dependency_overrides[get_invitation_service] = make_mock_invitation_service
+    app.dependency_overrides[get_depot_service] = make_mock_depot_service
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:

@@ -4,19 +4,21 @@ import uuid
 from datetime import UTC, datetime
 
 import pytest
-from backend.database.compose import ComposeDeploymentPydantic
-from backend.database.secrets import SecretPydantic
-from backend.database.user_workspaces import UserWorkspacePydantic
-from backend.database.users import (
+from backend.database.models import (
+    ComposeDeploymentInDb,
+    SecretInDb,
     SubscriptionState,
-    UserPydantic,
+    UserInDb,
     UserRole,
     UserStatus,
+    UserWorkspaceInDb,
+    UserWorkspaceStatus,
+    WorkspaceInDb,
+    WorkspaceRole,
+    WorkspaceStatus,
 )
-from backend.database.workspaces import WorkspacePydantic, WorkspaceStatus
 from models.deployments import DeploymentStates
 from models.secrets import SecretSource, SecretState
-from models.workspaces import UserWorkspaceStatus, WorkspaceRole
 
 TEST_USER_ID = str(uuid.uuid4())
 TEST_WORKSPACE_ID = str(uuid.uuid4())
@@ -24,10 +26,10 @@ TEST_DEPLOYMENT_ID = str(uuid.uuid4())
 
 
 @pytest.fixture
-def test_user() -> UserPydantic:
+def test_user() -> UserInDb:
     """Create a test user."""
-    return UserPydantic(
-        id=uuid.UUID(TEST_USER_ID),
+    return UserInDb(
+        id=TEST_USER_ID,
         name="Test User",
         email="test@example.com",
         workos_id="workos_test_123",
@@ -40,10 +42,10 @@ def test_user() -> UserPydantic:
 
 
 @pytest.fixture
-def admin_user() -> UserPydantic:
+def admin_user() -> UserInDb:
     """Create an admin test user."""
-    return UserPydantic(
-        id=uuid.uuid4(),
+    return UserInDb(
+        id=str(uuid.uuid4() or ""),
         name="Admin User",
         email="admin@example.com",
         workos_id="workos_admin_123",
@@ -56,10 +58,10 @@ def admin_user() -> UserPydantic:
 
 
 @pytest.fixture
-def member_user() -> UserPydantic:
+def member_user() -> UserInDb:
     """Create a regular member user."""
-    return UserPydantic(
-        id=uuid.uuid4(),
+    return UserInDb(
+        id=str(uuid.uuid4() or ""),
         name="Member User",
         email="member@example.com",
         workos_id="workos_member_123",
@@ -72,10 +74,10 @@ def member_user() -> UserPydantic:
 
 
 @pytest.fixture
-def inactive_user() -> UserPydantic:
+def inactive_user() -> UserInDb:
     """Create an inactive user."""
-    return UserPydantic(
-        id=uuid.uuid4(),
+    return UserInDb(
+        id=str(uuid.uuid4() or ""),
         name="Inactive User",
         email="inactive@example.com",
         workos_id="workos_inactive_123",
@@ -88,10 +90,10 @@ def inactive_user() -> UserPydantic:
 
 
 @pytest.fixture
-def test_workspace() -> WorkspacePydantic:
+def test_workspace() -> WorkspaceInDb:
     """Create a test workspace."""
-    return WorkspacePydantic(
-        id=uuid.UUID(TEST_WORKSPACE_ID),
+    return WorkspaceInDb(
+        id=TEST_WORKSPACE_ID,
         name="test-workspace",
         is_personal=False,
         status=WorkspaceStatus.ACTIVE,
@@ -102,10 +104,11 @@ def test_workspace() -> WorkspacePydantic:
 
 @pytest.fixture
 def test_membership(
-    test_user: UserPydantic, test_workspace: WorkspacePydantic
-) -> UserWorkspacePydantic:
+    test_user: UserInDb, test_workspace: WorkspaceInDb
+) -> UserWorkspaceInDb:
     """Create a test workspace membership with owner role."""
-    return UserWorkspacePydantic(
+    return UserWorkspaceInDb(
+        id=str(uuid.uuid4() or ""),
         user_id=str(test_user.id),
         workspace_id=str(test_workspace.id),
         role=WorkspaceRole.OWNER,
@@ -117,10 +120,11 @@ def test_membership(
 
 @pytest.fixture
 def admin_membership(
-    admin_user: UserPydantic, test_workspace: WorkspacePydantic
-) -> UserWorkspacePydantic:
+    admin_user: UserInDb, test_workspace: WorkspaceInDb
+) -> UserWorkspaceInDb:
     """Create an admin workspace membership."""
-    return UserWorkspacePydantic(
+    return UserWorkspaceInDb(
+        id=str(uuid.uuid4() or ""),
         user_id=str(admin_user.id),
         workspace_id=str(test_workspace.id),
         role=WorkspaceRole.ADMIN,
@@ -132,10 +136,11 @@ def admin_membership(
 
 @pytest.fixture
 def member_membership(
-    member_user: UserPydantic, test_workspace: WorkspacePydantic
-) -> UserWorkspacePydantic:
+    member_user: UserInDb, test_workspace: WorkspaceInDb
+) -> UserWorkspaceInDb:
     """Create a member workspace membership."""
-    return UserWorkspacePydantic(
+    return UserWorkspaceInDb(
+        id=str(uuid.uuid4() or ""),
         user_id=str(member_user.id),
         workspace_id=str(test_workspace.id),
         role=WorkspaceRole.MEMBER,
@@ -146,10 +151,10 @@ def member_membership(
 
 
 @pytest.fixture
-def test_deployment(test_workspace: WorkspacePydantic) -> ComposeDeploymentPydantic:
+def test_deployment(test_workspace: WorkspaceInDb) -> ComposeDeploymentInDb:
     """Create a test deployment."""
-    return ComposeDeploymentPydantic(
-        id=uuid.UUID(TEST_DEPLOYMENT_ID),
+    return ComposeDeploymentInDb(
+        id=TEST_DEPLOYMENT_ID,
         name="test-deployment",
         workspace_id=str(test_workspace.id),
         namespace=f"lc-{test_workspace.id}",
@@ -165,10 +170,10 @@ def test_deployment(test_workspace: WorkspacePydantic) -> ComposeDeploymentPydan
 
 
 @pytest.fixture
-def test_secret(test_deployment: ComposeDeploymentPydantic) -> SecretPydantic:
+def test_secret(test_deployment: ComposeDeploymentInDb) -> SecretInDb:
     """Create a test secret."""
-    return SecretPydantic(
-        id=uuid.uuid4(),
+    return SecretInDb(
+        id=str(uuid.uuid4() or ""),
         deployment_id=str(test_deployment.id),
         key="TEST_SECRET",
         value="secret_value",

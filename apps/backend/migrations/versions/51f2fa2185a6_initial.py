@@ -1,8 +1,8 @@
-"""init
+"""initial
 
-Revision ID: 8aa9084ce224
+Revision ID: 51f2fa2185a6
 Revises: 
-Create Date: 2026-01-30 00:36:13.438871
+Create Date: 2026-02-01 22:49:21.019031
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = '8aa9084ce224'
+revision: str = '51f2fa2185a6'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -118,7 +118,7 @@ def upgrade() -> None:
     op.create_index('ix_api_keys_user_id_name', 'api_keys', ['user_id', 'name'], unique=False)
     op.create_index(op.f('ix_api_keys_value'), 'api_keys', ['value'], unique=True)
     op.create_table('compose_deployments',
-    sa.Column('name', sa.String(), nullable=True),
+    sa.Column('name', sa.String(), nullable=False),
     sa.Column('namespace', sa.String(), nullable=False),
     sa.Column('compose_yaml', sa.Text(), nullable=False),
     sa.Column('pending_compose_yaml', sa.Text(), nullable=True),

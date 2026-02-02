@@ -34,7 +34,7 @@ class BaseMonitor(ABC, Generic[T]):
         self._callback_lock = asyncio.Lock()
 
     @abstractmethod
-    async def _task(self):
+    async def _task(self) -> T | None:
         """Abstract method to be implemented by subclasses"""
         pass
 
@@ -87,6 +87,9 @@ class BaseMonitor(ABC, Generic[T]):
         while self._running:
             try:
                 task_result = await self._task()
+
+                if task_result is None:
+                    continue
 
                 # Emit if always_emit is set or if result changed
                 if self._always_emit or task_result != self._latest_result:

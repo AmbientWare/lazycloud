@@ -4,9 +4,9 @@ from logging.config import fileConfig
 
 from alembic import context
 
-# Import Base and all models to register them with metadata
-from backend.database.base import Base
-from backend.database.models import *  # noqa: F401, F403
+# Import Base and all tables to register them with metadata
+from backend.database.tables import *  # noqa: F401, F403
+from backend.database.tables.base import Base
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config

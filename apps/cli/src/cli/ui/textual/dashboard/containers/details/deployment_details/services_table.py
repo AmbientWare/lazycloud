@@ -1,4 +1,4 @@
-from models.statuses import DeploymentStatus, ServiceStatus
+from models.statuses import DeploymentStatus, ServiceStatusSummary
 from textual.widgets import DataTable
 
 from cli.ui.colors import Colors
@@ -16,7 +16,9 @@ class ServicesTable(DataTable):
         self._column_keys: list = []
         self._column_keys = self.add_columns("Name", "Status", "Replicas", "Restarts")
 
-    def _build_row_data(self, service: ServiceStatus) -> tuple[str, str, str, str]:
+    def _build_row_data(
+        self, service: ServiceStatusSummary
+    ) -> tuple[str, str, str, str]:
         """Build the display values for a service row."""
         color = get_status_color(service.status)
         status_text = f"[{color}]{service.status.upper()}[/{color}]"

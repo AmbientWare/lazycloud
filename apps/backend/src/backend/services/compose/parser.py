@@ -20,7 +20,7 @@ from models.compose import (
 from models.k8s import RestartPolicy
 
 
-def _get_int(scaling_labels, key, default=None):
+def _get_int(scaling_labels: dict[str, str], key: str, default: int = 1) -> int:
     return int(scaling_labels[key]) if key in scaling_labels else default
 
 
@@ -363,8 +363,8 @@ class ComposeParser:
             == "true",
             min=_get_int(scaling_labels, LazyCloudLabel.SCALING_MIN),
             max=_get_int(scaling_labels, LazyCloudLabel.SCALING_MAX),
-            cpu=scaling_labels.get(LazyCloudLabel.SCALING_CPU),
-            memory=scaling_labels.get(LazyCloudLabel.SCALING_MEMORY),
+            cpu=scaling_labels.get(LazyCloudLabel.SCALING_CPU, "0.7"),
+            memory=scaling_labels.get(LazyCloudLabel.SCALING_MEMORY, "0.7"),
         )
 
     @staticmethod
@@ -551,8 +551,13 @@ class ComposeParser:
             )
 
         else:
+            network_name = config.get("name")
+
+            if not network_name:
+                raise ValueError(f"Network name is required: {config}")
+
             return ComposeNetwork(
-                name=config.get("name"),
+                name=network_name,
             )
 
     @staticmethod
@@ -563,8 +568,13 @@ class ComposeParser:
                 name=config,
             )
         else:
+            volume_name = config.get("name")
+
+            if not volume_name:
+                raise ValueError(f"Volume name is required: {config}")
+
             return ComposeVolume(
-                name=config.get("name"),
+                name=volume_name,
                 labels=config.get("labels"),
                 external=config.get("external", False),
             )

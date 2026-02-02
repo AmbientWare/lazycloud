@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from backend.database import Database
-from backend.database.usage import DailyUsageStatus
 from backend.tasks.crons.usage import finalize_and_bill
+from models.usage import DailyUsageStatus
 
 from tests.billing.conftest import create_daily_record
 from tests.fixtures.database import requires_db
@@ -267,7 +267,7 @@ class TestBillingErrorHandling:
         billing_db: Database,
         billing_workspace,
     ):
-        """Verify records are marked billed when Polar is disabled."""
+        """Verify records are skipped when Polar is disabled."""
         workspace_id = str(billing_workspace.id)
         yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
 
@@ -285,18 +285,18 @@ class TestBillingErrorHandling:
 
             result = await finalize_and_bill()
 
-            # Should mark as billed even when Polar is disabled
-            assert result["billed"] == 1
+            # Records should be skipped when Polar is disabled
+            assert result["billed"] == 0
             assert result["failed"] == 0
+            assert result["skipped"] == 1
 
-        # Verify record is marked billed
+        # Verify record is NOT marked as billed (remains in collecting status)
         records = await billing_db.usage.get_workspace_daily_usage(
             workspace_id=workspace_id,
             start_date=yesterday,
             end_date=yesterday,
         )
-        assert records[0].status == DailyUsageStatus.BILLED
-        assert "disabled" in records[0].billing_id
+        assert records[0].status != DailyUsageStatus.BILLED
 
 
 class TestBillingRetryBehavior:
@@ -448,6 +448,7 @@ class TestBillingAuditLogging:
     async def test_logs_billing_started_event(
         self,
         billing_db: Database,
+        billing_db_session,
         billing_workspace,
         mock_polar_service,
     ):
@@ -464,10 +465,10 @@ class TestBillingAuditLogging:
         await finalize_and_bill()
 
         # Check audit log has billing_started event
-        from backend.database.billing_audit import BillingAuditLogTable
+        from backend.database.tables.billing_audit import BillingAuditLogTable
         from sqlalchemy import select
 
-        result = await billing_db._session.execute(
+        result = await billing_db_session.execute(
             select(BillingAuditLogTable)
             .where(BillingAuditLogTable.workspace_id == workspace_id)
             .where(BillingAuditLogTable.event_type == "billing_started")
@@ -478,6 +479,7 @@ class TestBillingAuditLogging:
     async def test_logs_billing_completed_event(
         self,
         billing_db: Database,
+        billing_db_session,
         billing_workspace,
         mock_polar_service,
     ):
@@ -493,10 +495,10 @@ class TestBillingAuditLogging:
 
         await finalize_and_bill()
 
-        from backend.database.billing_audit import BillingAuditLogTable
+        from backend.database.tables.billing_audit import BillingAuditLogTable
         from sqlalchemy import select
 
-        result = await billing_db._session.execute(
+        result = await billing_db_session.execute(
             select(BillingAuditLogTable)
             .where(BillingAuditLogTable.workspace_id == workspace_id)
             .where(BillingAuditLogTable.event_type == "billing_completed")
@@ -508,6 +510,7 @@ class TestBillingAuditLogging:
     async def test_logs_billing_failed_event(
         self,
         billing_db: Database,
+        billing_db_session,
         billing_workspace,
         mock_polar_service,
     ):
@@ -525,10 +528,10 @@ class TestBillingAuditLogging:
 
         await finalize_and_bill()
 
-        from backend.database.billing_audit import BillingAuditLogTable
+        from backend.database.tables.billing_audit import BillingAuditLogTable
         from sqlalchemy import select
 
-        result = await billing_db._session.execute(
+        result = await billing_db_session.execute(
             select(BillingAuditLogTable)
             .where(BillingAuditLogTable.workspace_id == workspace_id)
             .where(BillingAuditLogTable.event_type == "billing_failed")
@@ -540,6 +543,7 @@ class TestBillingAuditLogging:
     async def test_logs_billing_skipped_for_incomplete_intervals(
         self,
         billing_db: Database,
+        billing_db_session,
         billing_workspace,
         mock_polar_service,
     ):
@@ -553,7 +557,7 @@ class TestBillingAuditLogging:
             usage_date=yesterday,
             expected_intervals=96,
         )
-        await billing_db.usage.atomic_increment_usage(
+        await billing_db.usage.increment_usage(
             record_id=record.id,
             cpu_core_seconds=100.0,
             memory_gb_seconds=100.0,
@@ -562,10 +566,10 @@ class TestBillingAuditLogging:
 
         await finalize_and_bill()
 
-        from backend.database.billing_audit import BillingAuditLogTable
+        from backend.database.tables.billing_audit import BillingAuditLogTable
         from sqlalchemy import select
 
-        result = await billing_db._session.execute(
+        result = await billing_db_session.execute(
             select(BillingAuditLogTable)
             .where(BillingAuditLogTable.workspace_id == workspace_id)
             .where(BillingAuditLogTable.event_type == "billing_skipped")

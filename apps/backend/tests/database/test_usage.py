@@ -4,8 +4,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from backend.database import Database
-from backend.database.usage import BreakdownType, DailyUsageStatus
 from models.storage import STORAGE_CLASS_STANDARD
+from models.usage import BreakdownType, DailyUsageStatus
 
 from tests.fixtures.database import (
     make_user,
@@ -72,7 +72,7 @@ class TestAtomicIncrement:
             usage_date=today,
         )
 
-        await db.usage.atomic_increment_usage(
+        await db.usage.increment_usage(
             record_id=record.id,
             cpu_core_seconds=100.0,
             memory_gb_seconds=200.0,
@@ -107,7 +107,7 @@ class TestAtomicIncrement:
         )
 
         # First increment
-        await db.usage.atomic_increment_usage(
+        await db.usage.increment_usage(
             record_id=record.id,
             cpu_core_seconds=100.0,
             memory_gb_seconds=0.0,
@@ -115,7 +115,7 @@ class TestAtomicIncrement:
         )
 
         # Second increment
-        await db.usage.atomic_increment_usage(
+        await db.usage.increment_usage(
             record_id=record.id,
             cpu_core_seconds=150.0,
             memory_gb_seconds=0.0,
@@ -313,8 +313,8 @@ class TestMultipleWorkspaces:
         rec1 = await db.usage.get_or_create_daily_record(ws1.id, today)
         rec2 = await db.usage.get_or_create_daily_record(ws2.id, today)
 
-        await db.usage.atomic_increment_usage(rec1.id, 100.0, 0.0, 0.0)
-        await db.usage.atomic_increment_usage(rec2.id, 200.0, 0.0, 0.0)
+        await db.usage.increment_usage(rec1.id, 100.0, 0.0, 0.0)
+        await db.usage.increment_usage(rec2.id, 200.0, 0.0, 0.0)
 
         ws1_records = await db.usage.get_workspace_daily_usage(ws1.id, today, today)
         ws2_records = await db.usage.get_workspace_daily_usage(ws2.id, today, today)

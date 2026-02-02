@@ -1,7 +1,7 @@
 import re
-from typing import Any
+from collections.abc import Sequence
 
-from models.compose import ComposeFile
+from models.compose import ComposeFile, ComposeNetwork, ComposeVolume
 from models.validation import ValidationError
 from responses.deployments import ValidationResult
 
@@ -98,7 +98,7 @@ class ComposeValidator:
         self._validate_resource_names("network", compose.networks)
 
     def _validate_resource_names(
-        self, resource_type: str, resources: dict[str, Any] | None
+        self, resource_type: str, resources: Sequence[ComposeVolume | ComposeNetwork]
     ):
         """Validate that resource names are kubernetes compliant."""
         if not resources:
