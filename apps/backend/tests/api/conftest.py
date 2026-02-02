@@ -1,12 +1,14 @@
 """API test fixtures with AsyncClient and dependency overrides."""
 
 import uuid
+from typing import AsyncGenerator
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from backend.api.dependencies import get_user_product_features
 from backend.api.security import (
     get_current_active_user,
+    get_current_active_user_with_sub,
     get_current_user,
     require_admin,
 )
@@ -83,7 +85,7 @@ def get_test_app():
 
 
 @pytest.fixture
-async def api_db_session() -> AsyncSession:
+async def api_db_session() -> AsyncGenerator[AsyncSession, None]:
     """Provide a transactional session that rolls back after each test."""
     await session_manager.reset()
     session_manager._ensure_initialized()
@@ -244,7 +246,7 @@ def mock_saq_tasks():
 
 
 @pytest.fixture
-async def client(api_db: Database, api_user: User) -> AsyncClient:
+async def client(api_db: Database, api_user: User) -> AsyncGenerator[AsyncClient, None]:
     """Async HTTP client with mocked auth and database dependencies."""
     app = get_test_app()
 
@@ -252,6 +254,7 @@ async def client(api_db: Database, api_user: User) -> AsyncClient:
     app.dependency_overrides[get_db] = lambda: api_db
     app.dependency_overrides[get_current_user] = lambda: api_user
     app.dependency_overrides[get_current_active_user] = lambda: api_user
+    app.dependency_overrides[get_current_active_user_with_sub] = lambda: api_user
     app.dependency_overrides[require_admin] = lambda: api_user
     app.dependency_overrides[get_user_product_features] = make_test_features
     app.dependency_overrides[get_usage_service] = make_mock_usage_service
@@ -276,7 +279,9 @@ async def client(api_db: Database, api_user: User) -> AsyncClient:
 
 
 @pytest.fixture
-async def admin_client(api_db: Database, api_admin_user: User) -> AsyncClient:
+async def admin_client(
+    api_db: Database, api_admin_user: User
+) -> AsyncGenerator[AsyncClient, None]:
     """Async HTTP client with admin user for API key tests."""
 
     app = get_test_app()
@@ -284,8 +289,13 @@ async def admin_client(api_db: Database, api_admin_user: User) -> AsyncClient:
     app.dependency_overrides[get_db] = lambda: api_db
     app.dependency_overrides[get_current_user] = lambda: api_admin_user
     app.dependency_overrides[get_current_active_user] = lambda: api_admin_user
+    app.dependency_overrides[get_current_active_user_with_sub] = lambda: api_admin_user
     app.dependency_overrides[require_admin] = lambda: api_admin_user
     app.dependency_overrides[get_user_product_features] = make_test_features
+    app.dependency_overrides[get_usage_service] = make_mock_usage_service
+    app.dependency_overrides[get_subscription_service] = make_mock_subscription_service
+    app.dependency_overrides[get_invitation_service] = make_mock_invitation_service
+    app.dependency_overrides[get_depot_service] = make_mock_depot_service
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:

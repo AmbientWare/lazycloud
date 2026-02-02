@@ -71,7 +71,7 @@ async def list_deployments(
     """List compose deployments."""
     filters = {"workspace_id": workspace_id}
     if status:
-        filters["status"] = status
+        filters["state"] = status  # API param is "status", model field is "state"
     if deployment_id:
         filters["id"] = deployment_id
     if name:

@@ -2,14 +2,13 @@
 
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from zoneinfo import ZoneInfo
 
 import pytest
 from backend.database import Database
 from backend.services.cost_breakdown_service import CostBreakdownService
 from backend.services.depot_service import DepotService
-from backend.services.polar import PolarService
 from backend.services.usage_service import UsageService
 from models.billing import SECONDS_PER_HOUR
 from models.storage import STORAGE_CLASS_STANDARD
@@ -28,8 +27,13 @@ pytestmark = [
 @pytest.fixture
 def usage_service() -> UsageService:
     """Create a UsageService instance with mock dependencies."""
-    polar_service = PolarService(access_token="", is_sandbox=True)
-    cost_service = CostBreakdownService(polar_service=polar_service)
+    # Mock PolarService since it requires real credentials
+    mock_polar_service = MagicMock()
+    mock_polar_service.enabled = False
+    mock_polar_service.cost_breakdown = MagicMock()
+    mock_polar_service.cost_breakdown.get_cost_breakdown = AsyncMock(return_value=None)
+
+    cost_service = CostBreakdownService(polar_service=mock_polar_service)
     depot_service = DepotService(api_token="", org_id="")
     return UsageService(cost_service=cost_service, depot_service=depot_service)
 

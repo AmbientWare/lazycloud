@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from backend.database import Database
-from backend.database.models import BreakdownType, User, WorkspaceRole
+from backend.database.models import UserInDb, WorkspaceRole
 from backend.services import (
     get_polar_service,
     get_usage_service,
@@ -15,6 +15,7 @@ from backend.services.polar.cost_breakdown import (
     WorkspaceCostBreakdown,
 )
 from httpx import AsyncClient
+from models.usage import BreakdownType
 from responses.usage import UsageMetrics
 
 from tests.api.conftest import get_test_app
@@ -35,7 +36,7 @@ class TestGetDeploymentCostBreakdown:
         self,
         client: AsyncClient,
         api_db: Database,
-        api_user: User,
+        api_user: UserInDb,
     ):
         """Get cost breakdown for deployment."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -109,6 +110,21 @@ class TestGetDeploymentCostBreakdown:
 
         assert response.status_code == 200
         data = response.json()
+        # Verify response structure
         assert "meter_breakdown" in data
+        assert "service_breakdown" in data
+        assert "volume_breakdown" in data
+        # Verify meter breakdown structure
+        meter = data["meter_breakdown"]
+        assert "cpu_cost" in meter
+        assert "memory_cost" in meter
+        assert "total_cost" in meter
         # Clean up overrides
         app.dependency_overrides.clear()
+
+    async def test_get_cost_breakdown_not_found(self, client: AsyncClient):
+        """Non-existent deployment returns 404."""
+        response = await client.get(
+            "/v1/deployments/00000000-0000-0000-0000-000000000000/usage/breakdown"
+        )
+        assert response.status_code == 404

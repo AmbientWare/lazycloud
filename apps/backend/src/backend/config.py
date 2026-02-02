@@ -143,6 +143,11 @@ class AppConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_required_env_vars(self: "AppConfig") -> "AppConfig":
+        # Skip validation if SKIP_ENV_VALIDATION is set (useful for migrations, tests)
+        if os.getenv("SKIP_ENV_VALIDATION", "").lower() == "true":
+            logger.info("Skipping environment variable validation")
+            return self
+
         logger.info("Validating required environment variables")
         missing_vars = []
         for var in self.all_environment_variables:

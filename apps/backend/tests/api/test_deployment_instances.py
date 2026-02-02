@@ -2,9 +2,10 @@
 
 import pytest
 from backend.database import Database
-from backend.database.models import User, WorkspaceRole
+from backend.database.models import UserInDb, WorkspaceRole
 from httpx import AsyncClient
 from models.helm import HelmValues, ImageConfig, ServiceValues
+from models.k8s import WorkloadType
 
 from tests.fixtures.database import (
     make_deployment,
@@ -23,7 +24,7 @@ class TestDeleteInstance:
         self,
         client: AsyncClient,
         api_db: Database,
-        api_user: User,
+        api_user: UserInDb,
         mock_saq_tasks,
     ):
         """Deleting an instance triggers SAQ job."""
@@ -44,6 +45,7 @@ class TestDeleteInstance:
                     ),
                     resourceName="web",
                     replicas=1,
+                    workloadType=WorkloadType.DEPLOYMENT,
                 )
             ]
         )
@@ -61,3 +63,25 @@ class TestDeleteInstance:
         call_kwargs = mock_saq_tasks["delete_instance"].call_args.kwargs
         assert call_kwargs["deployment_id"] == str(deployment.id)
         assert call_kwargs["pod_name"] == "web-123"
+
+    async def test_delete_instance_requires_admin(
+        self,
+        client: AsyncClient,
+        api_db: Database,
+        api_user: UserInDb,
+    ):
+        """Only admins and owners can delete instances."""
+        workspace = await api_db.workspaces.create(make_workspace())
+        await api_db.user_workspaces.create(
+            make_user_workspace(api_user.id, workspace.id, WorkspaceRole.MEMBER)
+        )
+
+        deployment = await api_db.compose_deployments.create(
+            make_deployment(workspace.id, name="test-deploy")
+        )
+
+        response = await client.delete(
+            f"/v1/deployments/{deployment.id}/instances/web-123"
+        )
+
+        assert response.status_code == 403

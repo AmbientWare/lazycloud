@@ -13,6 +13,7 @@ from models.billing import (
 )
 from models.deployments import DeploymentStates
 from models.metrics import StorageUsage
+from models.usage import BreakdownType, DailyUsageStatus
 from tenacity import (
     RetryError,
     retry,
@@ -22,10 +23,8 @@ from tenacity import (
 
 from backend.database import get_db_context
 from backend.database.models import (
-    BreakdownType,
     ComposeDeploymentInDb,
     DailyUsageRecordInDb,
-    DailyUsageStatus,
 )
 from backend.services import (
     get_depot_service,

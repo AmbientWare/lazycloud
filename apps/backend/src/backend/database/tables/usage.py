@@ -1,6 +1,7 @@
 import uuid
 from datetime import date, datetime
 
+from models.usage import DailyUsageStatus
 from sqlalchemy import (
     UUID,
     Date,
@@ -14,9 +15,6 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from backend.database.models import (
-    DailyUsageStatus,
-)
 from backend.database.tables.base import (
     BaseTable,
 )

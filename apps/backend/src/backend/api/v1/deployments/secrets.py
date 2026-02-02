@@ -1,6 +1,6 @@
 from api_requests.secrets import SecretsRequest
 from fastapi import APIRouter, Depends, HTTPException, Query
-from models.secrets import SecretNoDeploymentId, SecretState
+from models.secrets import BasicSecret, SecretState
 from responses.secrets import SecretsResponse, SecretsStoredResponse
 
 from backend.api.dependencies import get_deployment_with_admin_access
@@ -51,7 +51,7 @@ async def get_secrets(
     secrets = await db.secrets.get_secrets(deployment.id)
 
     response_secrets = [
-        SecretNoDeploymentId(
+        BasicSecret(
             key=secret.key,
             value=secret.value if show_values else "● ● ● ● ● ● ● ●",
             source=secret.source,

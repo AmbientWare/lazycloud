@@ -4,12 +4,12 @@ from datetime import datetime, timezone
 
 from backend.database import Database
 from backend.database.models import (
-    DailyUsageStatus,
     UserWorkspaceStatus,
     WorkspaceRole,
     WorkspaceStatus,
 )
 from models.deployments import DeploymentStates
+from models.usage import DailyUsageStatus
 
 from tests.fixtures.database import (
     make_api_key,

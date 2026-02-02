@@ -5,8 +5,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from backend.database import Database
-from backend.database.models import User, WorkspaceRole
+from backend.database.models import UserInDb, WorkspaceRole
 from httpx import AsyncClient
+from models.helm import HelmValues, ImageConfig, ServiceValues
 from models.k8s import WorkloadType
 from models.statuses import ServiceStatus, StatusPhase
 
@@ -24,7 +25,7 @@ class TestListServices:
     """Tests for GET /v1/deployments/{id}/services."""
 
     async def test_list_services(
-        self, client: AsyncClient, api_db: Database, api_user: User
+        self, client: AsyncClient, api_db: Database, api_user: UserInDb
     ):
         """List services for a deployment."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -32,9 +33,20 @@ class TestListServices:
             make_user_workspace(api_user.id, workspace.id, WorkspaceRole.OWNER)
         )
 
-        deployment = await api_db.compose_deployments.create(
-            make_deployment(workspace.id, name="test-deploy")
+        deployment_data = make_deployment(workspace.id, name="test-deploy")
+        deployment_data.helm_values = HelmValues(
+            services=[
+                ServiceValues(
+                    name="web",
+                    image=ImageConfig(
+                        repository="nginx", tag="latest", pullPolicy="IfNotPresent"
+                    ),
+                    resourceName="web",
+                    workloadType=WorkloadType.DEPLOYMENT,
+                )
+            ]
         )
+        deployment = await api_db.compose_deployments.create(deployment_data)
 
         mock_status = ServiceStatus(
             name="web",
@@ -73,7 +85,7 @@ class TestRestartAllServices:
         self,
         client: AsyncClient,
         api_db: Database,
-        api_user: User,
+        api_user: UserInDb,
         mock_saq_tasks,
     ):
         """Restarting all services triggers SAQ job."""
@@ -106,7 +118,7 @@ class TestRestartService:
         self,
         client: AsyncClient,
         api_db: Database,
-        api_user: User,
+        api_user: UserInDb,
         mock_saq_tasks,
     ):
         """Restarting a service triggers SAQ job."""

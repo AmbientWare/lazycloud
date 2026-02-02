@@ -1,24 +1,12 @@
 from datetime import date, datetime
-from enum import StrEnum
 
+from models.usage import DailyUsageStatus
 from pydantic import BaseModel
 
 from backend.database.models.base import (
     BaseDbModel,
     UUIDStr,
 )
-
-
-class DailyUsageStatus(StrEnum):
-    COLLECTING = "collecting"
-    BILLED = "billed"
-
-
-class BreakdownType(StrEnum):
-    COMPUTE = "compute"
-    STORAGE = "storage"
-    NETWORK = "network"
-    BUILD = "build"
 
 
 class DailyUsageRecord(BaseModel):

@@ -21,12 +21,10 @@ from backend.database.models.secrets import Secret, SecretInDb
 
 # Usage
 from backend.database.models.usage import (
-    BreakdownType,
     CollectedInterval,
     CollectedIntervalInDb,
     DailyUsageRecord,
     DailyUsageRecordInDb,
-    DailyUsageStatus,
     UsageBreakdownEvent,
     UsageBreakdownEventInDb,
 )
@@ -72,12 +70,10 @@ __all__ = [
     "Secret",
     "SecretInDb",
     # Usage
-    "BreakdownType",
     "CollectedInterval",
     "CollectedIntervalInDb",
     "DailyUsageRecord",
     "DailyUsageRecordInDb",
-    "DailyUsageStatus",
     "UsageBreakdownEvent",
     "UsageBreakdownEventInDb",
     # Users

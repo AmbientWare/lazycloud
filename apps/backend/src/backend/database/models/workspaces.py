@@ -1,17 +1,9 @@
 from datetime import datetime
-from enum import StrEnum
 
+from models.workspaces import WorkspaceStatus
 from pydantic import BaseModel
 
 from backend.database.models.base import BaseDbModel
-
-
-class WorkspaceStatus(StrEnum):
-    """Status of a workspace"""
-
-    ACTIVE = "active"
-    INACTIVE = "inactive"
-    DELETED = "deleted"
 
 
 class Workspace(BaseModel):

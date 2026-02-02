@@ -26,8 +26,7 @@ class ApiKeyService(DatabaseService[ApiKeyTable, ApiKeyInDb]):
         query = select(ApiKeyTable).where(ApiKeyTable.value == value)
         result = await self._session.execute(query)
         api_key = result.scalar_one_or_none()
+        if api_key is None:
+            return None
         api_key_pydantic = self._to_pydantic(api_key)
-        if api_key_pydantic is not None:
-            return api_key_pydantic.user_id
-
-        return None
+        return api_key_pydantic.user_id

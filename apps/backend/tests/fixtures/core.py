@@ -5,15 +5,15 @@ from datetime import UTC, datetime
 
 import pytest
 from backend.database.models import (
-    ComposeDeployment,
-    Secret,
+    ComposeDeploymentInDb,
+    SecretInDb,
     SubscriptionState,
-    User,
+    UserInDb,
     UserRole,
     UserStatus,
-    UserWorkspace,
+    UserWorkspaceInDb,
     UserWorkspaceStatus,
-    Workspace,
+    WorkspaceInDb,
     WorkspaceRole,
     WorkspaceStatus,
 )
@@ -26,9 +26,9 @@ TEST_DEPLOYMENT_ID = str(uuid.uuid4())
 
 
 @pytest.fixture
-def test_user() -> User:
+def test_user() -> UserInDb:
     """Create a test user."""
-    return User(
+    return UserInDb(
         id=TEST_USER_ID,
         name="Test User",
         email="test@example.com",
@@ -42,9 +42,9 @@ def test_user() -> User:
 
 
 @pytest.fixture
-def admin_user() -> User:
+def admin_user() -> UserInDb:
     """Create an admin test user."""
-    return User(
+    return UserInDb(
         id=str(uuid.uuid4() or ""),
         name="Admin User",
         email="admin@example.com",
@@ -58,9 +58,9 @@ def admin_user() -> User:
 
 
 @pytest.fixture
-def member_user() -> User:
+def member_user() -> UserInDb:
     """Create a regular member user."""
-    return User(
+    return UserInDb(
         id=str(uuid.uuid4() or ""),
         name="Member User",
         email="member@example.com",
@@ -74,9 +74,9 @@ def member_user() -> User:
 
 
 @pytest.fixture
-def inactive_user() -> User:
+def inactive_user() -> UserInDb:
     """Create an inactive user."""
-    return User(
+    return UserInDb(
         id=str(uuid.uuid4() or ""),
         name="Inactive User",
         email="inactive@example.com",
@@ -90,9 +90,9 @@ def inactive_user() -> User:
 
 
 @pytest.fixture
-def test_workspace() -> Workspace:
+def test_workspace() -> WorkspaceInDb:
     """Create a test workspace."""
-    return Workspace(
+    return WorkspaceInDb(
         id=TEST_WORKSPACE_ID,
         name="test-workspace",
         is_personal=False,
@@ -103,9 +103,11 @@ def test_workspace() -> Workspace:
 
 
 @pytest.fixture
-def test_membership(test_user: User, test_workspace: Workspace) -> UserWorkspace:
+def test_membership(
+    test_user: UserInDb, test_workspace: WorkspaceInDb
+) -> UserWorkspaceInDb:
     """Create a test workspace membership with owner role."""
-    return UserWorkspace(
+    return UserWorkspaceInDb(
         id=str(uuid.uuid4() or ""),
         user_id=str(test_user.id),
         workspace_id=str(test_workspace.id),
@@ -117,9 +119,11 @@ def test_membership(test_user: User, test_workspace: Workspace) -> UserWorkspace
 
 
 @pytest.fixture
-def admin_membership(admin_user: User, test_workspace: Workspace) -> UserWorkspace:
+def admin_membership(
+    admin_user: UserInDb, test_workspace: WorkspaceInDb
+) -> UserWorkspaceInDb:
     """Create an admin workspace membership."""
-    return UserWorkspace(
+    return UserWorkspaceInDb(
         id=str(uuid.uuid4() or ""),
         user_id=str(admin_user.id),
         workspace_id=str(test_workspace.id),
@@ -131,9 +135,11 @@ def admin_membership(admin_user: User, test_workspace: Workspace) -> UserWorkspa
 
 
 @pytest.fixture
-def member_membership(member_user: User, test_workspace: Workspace) -> UserWorkspace:
+def member_membership(
+    member_user: UserInDb, test_workspace: WorkspaceInDb
+) -> UserWorkspaceInDb:
     """Create a member workspace membership."""
-    return UserWorkspace(
+    return UserWorkspaceInDb(
         id=str(uuid.uuid4() or ""),
         user_id=str(member_user.id),
         workspace_id=str(test_workspace.id),
@@ -145,9 +151,9 @@ def member_membership(member_user: User, test_workspace: Workspace) -> UserWorks
 
 
 @pytest.fixture
-def test_deployment(test_workspace: Workspace) -> ComposeDeployment:
+def test_deployment(test_workspace: WorkspaceInDb) -> ComposeDeploymentInDb:
     """Create a test deployment."""
-    return ComposeDeployment(
+    return ComposeDeploymentInDb(
         id=TEST_DEPLOYMENT_ID,
         name="test-deployment",
         workspace_id=str(test_workspace.id),
@@ -164,9 +170,9 @@ def test_deployment(test_workspace: Workspace) -> ComposeDeployment:
 
 
 @pytest.fixture
-def test_secret(test_deployment: ComposeDeployment) -> Secret:
+def test_secret(test_deployment: ComposeDeploymentInDb) -> SecretInDb:
     """Create a test secret."""
-    return Secret(
+    return SecretInDb(
         id=str(uuid.uuid4() or ""),
         deployment_id=str(test_deployment.id),
         key="TEST_SECRET",

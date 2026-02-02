@@ -1,20 +1,13 @@
 from datetime import datetime
-from enum import StrEnum
 
+from models.invitations import InvitationType
+from models.user_workspaces import WorkspaceRole
 from pydantic import BaseModel
 
 from backend.database.models.base import (
     BaseDbModel,
     UUIDStr,
 )
-from backend.database.models.user_workspaces import WorkspaceRole
-
-
-class InvitationType(StrEnum):
-    """Type of workspace invitation"""
-
-    MEMBER = "member"
-    OWNERSHIP_TRANSFER = "ownership_transfer"
 
 
 class WorkspaceInvitation(BaseModel):

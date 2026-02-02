@@ -3,16 +3,13 @@ from datetime import date, datetime, timezone
 
 from models.billing import UsageCollectionConfig
 from models.storage import STORAGE_CLASS_STANDARD
+from models.usage import BreakdownType, DailyUsageStatus
 from sqlalchemy import exists as sql_exists
 from sqlalchemy import func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
-from backend.database.models import (
-    BreakdownType,
-    DailyUsageRecordInDb,
-    DailyUsageStatus,
-)
+from backend.database.models import DailyUsageRecordInDb
 from backend.database.services.base import DatabaseService
 from backend.database.tables import (
     CollectedIntervalTable,

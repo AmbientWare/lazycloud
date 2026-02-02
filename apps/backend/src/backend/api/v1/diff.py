@@ -6,6 +6,7 @@ import yaml
 from api_requests.deployments import DiffRequest, DiffType
 from fastapi import APIRouter, Body, Depends, HTTPException
 from loguru import logger
+from models.clusters import get_cluster_registry
 from models.deployments import DeploymentStates
 from models.diffs import EnvVarChanges, StorageTypeChange
 from models.secrets import SecretSource
@@ -63,7 +64,8 @@ async def get_deployment_diff(
 ) -> DiffResponse:
     """Compare current deployment with proposed changes."""
 
-    if deployment is None:
+    # For existing deployments, verify deployment was found
+    if request.diff_type == DiffType.EXISTING and deployment is None:
         raise HTTPException(
             status_code=404,
             detail="Deployment not found",
@@ -86,7 +88,7 @@ async def get_deployment_diff(
 
     # Handle environment variable diff
     env_var_changes = None
-    if request.diff_type == DiffType.EXISTING:
+    if request.diff_type == DiffType.EXISTING and deployment:
         # Existing deployment - compare with current secrets
         existing_secrets = await db.secrets.get_secrets(deployment.id)
 
@@ -136,6 +138,10 @@ async def get_deployment_diff(
         # Determine cluster_id: use existing deployment's cluster or get from placement
         if deployment:
             cluster_id = deployment.cluster_id
+        else:
+            registry = get_cluster_registry()
+            cluster = registry.get_cluster_for_placement()
+            cluster_id = cluster.name if cluster else "ash-1"
 
         # Create temporary deployment for full validation
         temp_deployment = ComposeDeploymentInDb(

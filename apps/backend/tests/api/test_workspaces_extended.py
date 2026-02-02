@@ -62,6 +62,12 @@ class TestGetAggregatedUsage:
         assert "usage" in data
         assert "start" in data["period"]
         assert "end" in data["period"]
+        # Verify usage structure has expected metrics
+        usage = data["usage"]
+        assert "cpu_core_hours" in usage
+        assert "memory_gb_hours" in usage
+        assert isinstance(usage["cpu_core_hours"], (int, float))
+        assert isinstance(usage["memory_gb_hours"], (int, float))
 
 
 class TestGetDailyUsage:

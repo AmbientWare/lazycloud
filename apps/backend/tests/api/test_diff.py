@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pytest
 from backend.database import Database
-from backend.database.models import User, WorkspaceRole
+from backend.database.models import UserInDb, WorkspaceRole
 from httpx import AsyncClient
 
 from tests.fixtures.database import (
@@ -28,7 +28,7 @@ class TestGetDeploymentDiff:
     """Tests for POST /v1/diff."""
 
     async def test_diff_new_deployment(
-        self, client: AsyncClient, api_db: Database, api_user: User
+        self, client: AsyncClient, api_db: Database, api_user: UserInDb
     ):
         """Get diff for new deployment."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -54,7 +54,7 @@ class TestGetDeploymentDiff:
         assert "diff" in data
 
     async def test_diff_existing_deployment(
-        self, client: AsyncClient, api_db: Database, api_user: User
+        self, client: AsyncClient, api_db: Database, api_user: UserInDb
     ):
         """Get diff for existing deployment."""
         workspace = await api_db.workspaces.create(make_workspace())

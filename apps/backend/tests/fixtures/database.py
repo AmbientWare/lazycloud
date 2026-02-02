@@ -1,36 +1,64 @@
 """Database fixtures for integration tests using dependency injection container."""
 
+import os
 import socket
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import AsyncGenerator
+from urllib.parse import urlparse
 
 import pytest
 from backend.billing.product_details.features import BaseFeatures
 from backend.database import Database, _create_database
 from backend.database.models import (
     ApiKey,
+    ApiKeyInDb,
     ComposeDeployment,
+    ComposeDeploymentInDb,
     DailyUsageRecord,
     InvitationType,
     Secret,
+    SecretInDb,
+    SubscriptionState,
     User,
+    UserInDb,
+    UserRole,
+    UserStatus,
     UserWorkspace,
     UserWorkspaceStatus,
     Workspace,
+    WorkspaceInDb,
     WorkspaceInvitation,
+    WorkspaceInvitationInDb,
     WorkspaceRole,
+    WorkspaceStatus,
 )
 from backend.database.session import session_manager
 from models.deployments import DeploymentStates
-from models.helm import ImageConfig, ServiceValues
+from models.helm import HelmValues, ImageConfig, ServiceValues
+from models.k8s import WorkloadType
 from models.secrets import SecretSource, SecretState
+from models.usage import DailyUsageStatus
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
+def get_db_host_port() -> tuple[str, int]:
+    """Parse DATABASE_URL to get host and port for connection check."""
+    database_url = os.environ.get(
+        "DATABASE_URL", "postgresql+asyncpg://lc_dev:lc_dev@localhost:5432/lazycloud"
+    )
+    # Remove the driver prefix for urlparse (postgresql+asyncpg:// -> postgresql://)
+    if "+asyncpg" in database_url:
+        database_url = database_url.replace("+asyncpg", "")
+    parsed = urlparse(database_url)
+    return parsed.hostname or "localhost", parsed.port or 5432
+
+
 def is_db_available() -> bool:
-    """Check if the test database is available."""
+    """Check if the test database is available based on DATABASE_URL."""
+    host, port = get_db_host_port()
     try:
-        sock = socket.create_connection(("localhost", 6432), timeout=1)
+        sock = socket.create_connection((host, port), timeout=1)
         sock.close()
         return True
     except (socket.timeout, ConnectionRefusedError, OSError):
@@ -39,12 +67,12 @@ def is_db_available() -> bool:
 
 requires_db = pytest.mark.skipif(
     not is_db_available(),
-    reason="Database not available (run: docker compose up -d postgres)",
+    reason="Database not available (run: docker compose --profile db up -d)",
 )
 
 
 @pytest.fixture
-async def db_session() -> AsyncSession:
+async def db_session() -> AsyncGenerator[AsyncSession, None]:
     """Provide a transactional session that rolls back after each test."""
     # Reset session_manager to get a fresh engine for this event loop
     await session_manager.reset()
@@ -138,9 +166,34 @@ def make_deployment(
     workspace_id: str,
     name: str | None = None,
     state: DeploymentStates = DeploymentStates.DEPLOYED,
+    with_helm_values: bool = False,
 ) -> ComposeDeployment:
-    """Create a ComposeDeployment model (not persisted)."""
+    """Create a ComposeDeployment model (not persisted).
+
+    Args:
+        workspace_id: The workspace ID for the deployment.
+        name: Optional name for the deployment.
+        state: The deployment state.
+        with_helm_values: If True, include default helm_values and deployed_at for status tests.
+    """
+
     unique_id = str(uuid.uuid4())[:8]
+    helm_values = None
+    deployed_at = None
+    if with_helm_values:
+        helm_values = HelmValues(
+            services=[
+                ServiceValues(
+                    name="web",
+                    image=ImageConfig(
+                        repository="nginx", tag="latest", pullPolicy="IfNotPresent"
+                    ),
+                    resourceName="web",
+                    workloadType=WorkloadType.DEPLOYMENT,
+                )
+            ]
+        )
+        deployed_at = datetime.now(timezone.utc)
     return ComposeDeployment(
         name=name or f"test-deployment-{unique_id}",
         namespace=f"lc-test-{unique_id}",
@@ -148,6 +201,8 @@ def make_deployment(
         compose_yaml="version: '3.8'\nservices:\n  web:\n    image: nginx",
         state=state,
         cluster_id="ash-1",
+        helm_values=helm_values,
+        deployed_at=deployed_at,
     )
 
 
@@ -254,6 +309,7 @@ def make_service(name: str) -> ServiceValues:
         enabled=True,
         resourceName=name,
         image=ImageConfig(repository="nginx", tag="latest", pullPolicy="IfNotPresent"),
+        workloadType=WorkloadType.DEPLOYMENT,
     )
 
 
@@ -273,7 +329,7 @@ async def db_admin_user(db: Database) -> User:
 
 
 @pytest.fixture
-async def db_workspace(db: Database, db_user: User) -> Workspace:
+async def db_workspace(db: Database, db_user: UserInDb) -> WorkspaceInDb:
     """Create a test workspace linked to the test user."""
     workspace = await db.workspaces.create(make_workspace())
     await db.user_workspaces.create(make_user_workspace(db_user.id, workspace.id))
@@ -292,7 +348,7 @@ async def db_user_with_workspace(
 
 
 @pytest.fixture
-async def db_personal_workspace(db: Database, db_user: User) -> Workspace:
+async def db_personal_workspace(db: Database, db_user: UserInDb) -> WorkspaceInDb:
     """Create a personal workspace for the test user."""
     workspace = await db.workspaces.create(
         make_workspace(name="Personal", is_personal=True)
@@ -302,33 +358,37 @@ async def db_personal_workspace(db: Database, db_user: User) -> Workspace:
 
 
 @pytest.fixture
-async def db_deployment(db: Database, db_workspace: Workspace) -> ComposeDeployment:
+async def db_deployment(
+    db: Database, db_workspace: WorkspaceInDb
+) -> ComposeDeploymentInDb:
     """Create a test deployment in the database."""
     return await db.compose_deployments.create(make_deployment(db_workspace.id))
 
 
 @pytest.fixture
-async def db_api_key(db: Database, db_user: User) -> ApiKey:
+async def db_api_key(db: Database, db_user: UserInDb) -> ApiKeyInDb:
     """Create a test API key in the database."""
     return await db.api_keys.create(make_api_key(db_user.id))
 
 
 @pytest.fixture
-async def db_secret(db: Database, db_deployment: ComposeDeployment) -> Secret:
+async def db_secret(db: Database, db_deployment: ComposeDeploymentInDb) -> SecretInDb:
     """Create a test secret in the database."""
     return await db.secrets.create(make_secret(db_deployment.id))
 
 
 @pytest.fixture
 async def db_invitation(
-    db: Database, db_workspace: Workspace, db_user: User
-) -> WorkspaceInvitation:
+    db: Database, db_workspace: WorkspaceInDb, db_user: UserInDb
+) -> WorkspaceInvitationInDb:
     """Create a test invitation in the database."""
     return await db.invitations.create(make_invitation(db_workspace.id, db_user.id))
 
 
 @pytest.fixture
-async def db_multiple_workspaces(db: Database, db_user: User) -> list[Workspace]:
+async def db_multiple_workspaces(
+    db: Database, db_user: UserInDb
+) -> list[WorkspaceInDb]:
     """Create multiple workspaces for limit testing."""
     workspaces = []
     for i in range(3):
@@ -340,7 +400,7 @@ async def db_multiple_workspaces(db: Database, db_user: User) -> list[Workspace]
 
 @pytest.fixture
 async def db_multiple_deployments(
-    db: Database, db_workspace: Workspace
+    db: Database, db_workspace: WorkspaceInDb
 ) -> list[ComposeDeployment]:
     """Create multiple deployments for limit testing."""
     deployments = []

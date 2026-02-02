@@ -1,11 +1,12 @@
-"""Tests for API keys API routes (admin only)."""
+"""Tests for API keys API routes."""
 
 import pytest
 from backend.database import Database
+from backend.database.models import UserInDb
 from httpx import AsyncClient
 from models.api_keys import ApiKeyExpirationDays
 
-from tests.fixtures.database import make_api_key, make_user, requires_db
+from tests.fixtures.database import make_api_key, requires_db
 
 pytestmark = [pytest.mark.asyncio, requires_db]
 
@@ -13,47 +14,36 @@ pytestmark = [pytest.mark.asyncio, requires_db]
 class TestListAPIKeys:
     """Tests for GET /v1/api-keys."""
 
-    async def test_list_api_keys_admin(
-        self, admin_client: AsyncClient, api_db: Database
+    async def test_list_api_keys_returns_user_keys(
+        self, client: AsyncClient, api_db: Database, api_user: UserInDb
     ):
-        """Admin can list all API keys."""
-        other_user = await api_db.users.create(make_user("other"))
-        await api_db.api_keys.create(make_api_key(str(other_user.id), name="other-key"))
+        """User can list their own API keys."""
+        await api_db.api_keys.create(make_api_key(str(api_user.id), name="my-key"))
 
-        response = await admin_client.get("/v1/api-keys")
-
-        assert response.status_code == 200
-        keys = response.json()
-        assert len(keys) >= 1
-
-    async def test_list_api_keys_filter_by_user(
-        self, admin_client: AsyncClient, api_db: Database
-    ):
-        """Admin can filter API keys by user."""
-        user = await api_db.users.create(make_user("test"))
-        await api_db.api_keys.create(make_api_key(str(user.id), name="user-key"))
-
-        response = await admin_client.get(f"/v1/api-keys?user_id={user.workos_id}")
+        response = await client.get("/v1/api-keys")
 
         assert response.status_code == 200
         keys = response.json()
         assert len(keys) == 1
-        assert keys[0]["name"] == "user-key"
+        assert keys[0]["name"] == "my-key"
+
+    async def test_list_api_keys_empty(self, client: AsyncClient):
+        """User with no API keys gets empty list."""
+        response = await client.get("/v1/api-keys")
+
+        assert response.status_code == 200
+        keys = response.json()
+        assert len(keys) == 0
 
 
 class TestCreateAPIKey:
     """Tests for POST /v1/api-keys."""
 
-    async def test_create_api_key_success(
-        self, admin_client: AsyncClient, api_db: Database
-    ):
-        """Admin can create API key."""
-        user = await api_db.users.create(make_user("test"))
-
-        response = await admin_client.post(
+    async def test_create_api_key_success(self, client: AsyncClient, api_db: Database):
+        """User can create API key."""
+        response = await client.post(
             "/v1/api-keys",
             json={
-                "workos_id": user.workos_id,
                 "name": "test-key",
                 "expires_at": ApiKeyExpirationDays.THIRTY_DAYS.value,
             },
@@ -66,16 +56,14 @@ class TestCreateAPIKey:
         assert data["value"].startswith("sk_")
 
     async def test_create_api_key_duplicate_name_fails(
-        self, admin_client: AsyncClient, api_db: Database
+        self, client: AsyncClient, api_db: Database, api_user: UserInDb
     ):
         """Creating API key with duplicate name fails."""
-        user = await api_db.users.create(make_user("test"))
-        await api_db.api_keys.create(make_api_key(str(user.id), name="existing"))
+        await api_db.api_keys.create(make_api_key(str(api_user.id), name="existing"))
 
-        response = await admin_client.post(
+        response = await client.post(
             "/v1/api-keys",
             json={
-                "workos_id": user.workos_id,
                 "name": "existing",
                 "expires_at": ApiKeyExpirationDays.THIRTY_DAYS.value,
             },
@@ -88,18 +76,17 @@ class TestUpdateAPIKey:
     """Tests for PUT /v1/api-keys/{id}."""
 
     async def test_update_api_key_success(
-        self, admin_client: AsyncClient, api_db: Database
+        self, client: AsyncClient, api_db: Database, api_user: UserInDb
     ):
-        """Admin can update API key."""
-        user = await api_db.users.create(make_user("test"))
+        """User can update their own API key."""
         api_key = await api_db.api_keys.create(
-            make_api_key(str(user.id), name="old-name")
+            make_api_key(str(api_user.id), name="old-name")
         )
+        old_value = api_key.value
 
-        response = await admin_client.put(
+        response = await client.put(
             f"/v1/api-keys/{api_key.id}",
             json={
-                "workos_id": user.workos_id,
                 "expires_at": ApiKeyExpirationDays.THIRTY_DAYS.value,
             },
         )
@@ -107,24 +94,41 @@ class TestUpdateAPIKey:
         assert response.status_code == 200
         data = response.json()
         assert "value" in data
-        assert data["value"] != api_key.value
+        assert data["value"] != old_value
 
-
-class TestDeleteAPIKeys:
-    """Tests for DELETE /v1/api-keys."""
-
-    async def test_delete_api_key_by_id(
-        self, admin_client: AsyncClient, api_db: Database
-    ):
-        """Admin can delete API key by ID."""
-        user = await api_db.users.create(make_user("test"))
-        api_key = await api_db.api_keys.create(
-            make_api_key(str(user.id), name="to-delete")
+    async def test_update_nonexistent_api_key_fails(self, client: AsyncClient):
+        """Updating non-existent API key returns 404."""
+        response = await client.put(
+            "/v1/api-keys/00000000-0000-0000-0000-000000000000",
+            json={
+                "expires_at": ApiKeyExpirationDays.THIRTY_DAYS.value,
+            },
         )
 
-        response = await admin_client.delete(f"/v1/api-keys?api_key_id={api_key.id}")
+        assert response.status_code == 404
+
+
+class TestDeleteAPIKey:
+    """Tests for DELETE /v1/api-keys/{id}."""
+
+    async def test_delete_api_key_success(
+        self, client: AsyncClient, api_db: Database, api_user: UserInDb
+    ):
+        """User can delete their own API key."""
+        api_key = await api_db.api_keys.create(
+            make_api_key(str(api_user.id), name="to-delete")
+        )
+
+        response = await client.delete(f"/v1/api-keys/{api_key.id}")
 
         assert response.status_code == 200
-        deleted = response.json()
-        assert len(deleted) == 1
-        assert deleted[0]["id"] == str(api_key.id)
+        data = response.json()
+        assert data["id"] == str(api_key.id)
+
+    async def test_delete_nonexistent_api_key_fails(self, client: AsyncClient):
+        """Deleting non-existent API key returns 404."""
+        response = await client.delete(
+            "/v1/api-keys/00000000-0000-0000-0000-000000000000"
+        )
+
+        assert response.status_code == 404

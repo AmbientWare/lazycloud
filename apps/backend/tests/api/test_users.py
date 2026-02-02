@@ -27,7 +27,7 @@ class TestCurrentUser:
         assert data["id"] == str(api_user.id)
 
     async def test_response_structure(self, client: AsyncClient):
-        """CurrentUserResponse only includes id field."""
+        """CurrentUserResponse includes id field."""
         response = await client.get("/v1/users/current")
 
         assert response.status_code == 200
