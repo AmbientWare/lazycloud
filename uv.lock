@@ -998,7 +998,7 @@ wheels = [
 
 [[package]]
 name = "lazycloud"
-version = "0.1.21"
+version = "0.1.22"
 source = { editable = "apps/cli" }
 dependencies = [
     { name = "api-requests" },

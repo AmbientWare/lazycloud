@@ -6,6 +6,7 @@ from typing import Any
 import yaml
 from loguru import logger
 from models.deployments import DeploymentStates
+from saq.types import Context
 
 from backend.database import get_db_context
 from backend.services import get_depot_service
@@ -16,7 +17,7 @@ from backend.tasks.core import unregister_custom_domains, update_deployment_stat
 
 
 async def destroy_compose_job(
-    ctx: dict[str, Any],
+    ctx: Context,
     deployment_id: str,
 ) -> dict[str, Any]:
     """Destroy a Docker Compose deployment from Kubernetes.
