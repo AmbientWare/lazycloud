@@ -46,6 +46,7 @@ class DeployProgressMonitor(BaseMonitor[DeployProgressStatus]):
             helm_values=helm_values,
             cluster_id=cluster_id,
             deployment_name=deployment_name,
+            deployed_at=None,
         )
 
     async def _task(self) -> DeployProgressStatus:
@@ -107,22 +108,20 @@ class DeployProgressMonitor(BaseMonitor[DeployProgressStatus]):
         if svc.status == StatusPhase.EXITED:
             phase = StatusPhase.EXITED
             message = "Completed"
-            counts = ContainerCounts(desired=1, running=0, starting=0, stopping=0)
+            counts = ContainerCounts(desired=1, running=0, stopping=0)
         elif svc.status == StatusPhase.ERROR:
             phase = StatusPhase.ERROR
             error_msg, _ = svc.get_error_info()
             message = error_msg or "Failed"
-            counts = ContainerCounts(
-                desired=1, running=0, starting=0, stopping=0, error=1
-            )
+            counts = ContainerCounts(desired=1, running=0, stopping=0, error=1)
         elif svc.status == StatusPhase.RUNNING:
             phase = StatusPhase.RUNNING
             message = "Running"
-            counts = ContainerCounts(desired=1, running=1, starting=0, stopping=0)
+            counts = ContainerCounts(desired=1, running=1, stopping=0)
         else:
             phase = StatusPhase.PENDING
             message = "Waiting to start"
-            counts = ContainerCounts(desired=1, running=0, starting=0, stopping=0)
+            counts = ContainerCounts(desired=1, running=0, stopping=0)
 
         return DeployServiceStatus(
             name=svc.name,

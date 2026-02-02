@@ -117,7 +117,7 @@ class ServiceDetailsContainer(Widget):
         self._create_section(f"{Icons.RESTART} Auto-scaling", autoscaling_content)
 
         self._pods_table = self._create_pods_table(self.deployment_id, service.name)
-        if service.pods:
+        if self._pods_table and service.pods:
             self._pods_table.update_pods(service.pods)
 
     def _update_from_stream(self, service: ServiceStatus) -> None:
@@ -293,10 +293,10 @@ class ServiceDetailsContainer(Widget):
 
         if hpa.metrics:
             content.append(
-                f"Target CPU:   {hpa.metrics[0].resource.target.averageUtilization}%"
+                f"Target CPU:   {hpa.metrics[0].resource['target']['averageUtilization']}%"
             )
             content.append(
-                f"Target Mem:   {hpa.metrics[1].resource.target.averageUtilization}%"
+                f"Target Mem:   {hpa.metrics[1].resource['target']['averageUtilization']}%"
             )
 
         return content
@@ -310,10 +310,13 @@ class ServiceDetailsContainer(Widget):
         section = SectionContainer(title, widget)
         self._scroll.mount(section)
 
-    def _create_pods_table(self, deployment_id: str, service_name: str) -> PodTable:
+    def _create_pods_table(
+        self, deployment_id: str, service_name: str
+    ) -> PodTable | None:
         """Create a data table for instances."""
         if not self._scroll:
             return None
+
         table = PodTable(
             deployment_id=deployment_id,
             service_name=service_name,
@@ -340,9 +343,10 @@ class ServiceDetailsContainer(Widget):
                 await api.status.stream_service_status(
                     deployment_id=self.deployment_id,
                     service_name=self.service_name,
-                    on_update=lambda data: self.app.call_later(
-                        self._update_from_stream, data
-                    ),
+                    on_update=lambda data: (
+                        self.app.call_later(self._update_from_stream, data),
+                        None,
+                    )[-1],
                     on_error=lambda e: logger.warning(
                         f"SSE stream error for {self.service_name}: {e}"
                     ),

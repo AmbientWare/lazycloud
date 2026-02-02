@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta, timezone
 
 from backend.database import Database
-from models.workspaces import WorkspaceRole
+from backend.database.models import WorkspaceRole
 
 from tests.fixtures.database import (
     make_invitation,

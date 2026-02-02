@@ -5,11 +5,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 from backend.database import Database
-from backend.database.users import UserPydantic
+from backend.database.models import User, WorkspaceRole
 from backend.services import get_depot_service
 from httpx import AsyncClient
 from models.depot import DepotBuildCredentials
-from models.workspaces import WorkspaceRole
 
 from tests.api.conftest import get_test_app
 from tests.fixtures.database import (
@@ -26,7 +25,7 @@ class TestGetDepotToken:
     """Tests for POST /v1/workspaces/{id}/builds/token."""
 
     async def test_get_depot_token(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Get Depot build token."""
         workspace = await api_db.workspaces.create(make_workspace())

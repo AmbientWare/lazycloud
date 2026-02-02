@@ -13,18 +13,18 @@ jobs:
     runs-on: depot-ubuntu-24.04
     services:
       postgres:
-        image: postgres:16
+        image: postgres:17
         env:
           POSTGRES_USER: lc_dev
-          POSTGRES_PASSWORD: password
-          POSTGRES_DB: postgres
+          POSTGRES_PASSWORD: lc_dev
+          POSTGRES_DB: lazycloud
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
         ports:
-          - 6432:6432
+          - 5432:5432
       redis:
         image: redis:latest
         options: >-
@@ -35,7 +35,7 @@ jobs:
         ports:
           - 6379:6379
     env:
-      DATABASE_URL: postgresql+asyncpg://lc_dev:password@localhost:6432/postgres
+      DATABASE_URL: postgresql+asyncpg://lc_dev:lc_dev@localhost:5432/lazycloud
       REDIS_URL: redis://localhost:6379
       # these are not used in the tests, but are required by the app
       ADMIN_API_KEY: test-admin-key
@@ -67,6 +67,8 @@ jobs:
       - name: Run database migrations
         working-directory: apps/backend
         run: uv run alembic upgrade head
+        env:
+          SKIP_ENV_VALIDATION: "true" # no need to validate environment variables for tests
 
       - name: Run backend tests
         working-directory: apps/backend

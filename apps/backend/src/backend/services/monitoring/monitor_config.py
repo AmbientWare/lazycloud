@@ -1,7 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
-from uuid import UUID
 
 from models.helm import HelmValues
 
@@ -73,7 +72,7 @@ class ServiceMonitorConfig(MonitorConfigBase):
 class TaskMonitorConfig(MonitorConfigBase):
     """Configuration for a task monitor."""
 
-    task_id: UUID
+    task_id: str
 
     def get_key(self) -> str:
         """Generate unique key for this monitor."""

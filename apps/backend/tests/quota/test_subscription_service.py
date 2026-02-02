@@ -3,14 +3,12 @@
 import pytest
 import yaml
 from backend.database import Database
-from backend.database.users import UserPydantic
-from backend.database.workspaces import WorkspacePydantic
+from backend.database.models import WorkspaceRole
 from backend.services.compose.parser import ComposeParser
 from backend.services.subscription_service import (
     SubscriptionLimitError,
     SubscriptionService,
 )
-from models.workspaces import WorkspaceRole
 
 from tests.fixtures.database import (
     make_deployment,

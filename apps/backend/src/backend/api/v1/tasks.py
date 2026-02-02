@@ -1,19 +1,17 @@
-from uuid import UUID
-
 from fastapi import APIRouter, HTTPException
 from models.monitoring import StreamEventType
 from responses.tasks import TaskStatusResponse
 from sse_starlette.sse import EventSourceResponse
 
 from backend.api.utils import create_sse_stream_with_subscription
-from backend.tasks import get_task_result
 from backend.services.monitoring.monitor_config import TaskMonitorConfig
+from backend.tasks import get_task_result
 
 tasks_router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 
 @tasks_router.get("/{task_id}")
-async def get_task_status(task_id: UUID) -> TaskStatusResponse:
+async def get_task_status(task_id: str) -> TaskStatusResponse:
     """Get the status of a task"""
     try:
         status, message = await get_task_result(task_id)
@@ -29,7 +27,7 @@ async def get_task_status(task_id: UUID) -> TaskStatusResponse:
 
 
 @tasks_router.get("/{task_id}/stream")
-async def stream_task_status(task_id: UUID):
+async def stream_task_status(task_id: str):
     """Stream real-time task status updates."""
     config = TaskMonitorConfig(task_id=task_id)
 

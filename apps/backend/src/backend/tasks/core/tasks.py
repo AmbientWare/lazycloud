@@ -6,7 +6,7 @@ They are called by SAQ jobs and can be composed together.
 
 import asyncio
 from datetime import UTC, datetime
-from uuid import UUID
+from typing import Sequence
 
 import yaml
 from kubernetes_asyncio.client.exceptions import ApiException
@@ -23,8 +23,7 @@ from models.statuses import TaskStatus
 
 from backend.config import app_config
 from backend.database import get_db_context
-from backend.database.compose import ComposeDeploymentPydantic
-from backend.database.secrets import SecretPydantic
+from backend.database.models import ComposeDeployment, SecretInDb
 from backend.services import get_cloudflare_service, get_subscription_service
 from backend.services.compose.parser import ComposeParser
 from backend.services.k8s import get_chart_paths
@@ -78,9 +77,7 @@ async def check_deployment_idempotency(
         if deployment.current_task_run_id:
             try:
                 # Check if previous task is still running
-                task_status, _ = await get_task_result(
-                    UUID(deployment.current_task_run_id)
-                )
+                task_status, _ = await get_task_result(deployment.current_task_run_id)
 
                 if task_status in (TaskStatus.COMPLETED, TaskStatus.ERROR):
                     # Task finished but state wasn't updated - need to reset
@@ -242,7 +239,7 @@ async def prepare_deployment(
 
 
 async def prepare_namespace_config(
-    deployment: ComposeDeploymentPydantic,
+    deployment: ComposeDeployment,
 ) -> HelmDeploymentConfig:
     """Prepare namespace configuration with quota."""
     async with get_db_context() as db:
@@ -474,7 +471,7 @@ async def sync_deployment_to_db(
     deployment_id: str,
     helm_values: HelmValues,
     helm_revision: int | None,
-    secrets: list[SecretPydantic],
+    secrets: Sequence[SecretInDb],
 ) -> None:
     """Sync deployment state to database after successful Helm deployment."""
     async with get_db_context() as db:

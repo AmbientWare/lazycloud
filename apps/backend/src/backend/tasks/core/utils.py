@@ -25,7 +25,7 @@ async def delete_job_with_timeout(
     # Initiate deletion
     try:
         await asyncio.wait_for(
-            batch_v1.delete_namespaced_job(
+            batch_v1.delete_namespaced_job(  # type: ignore
                 name=job_name,
                 namespace=namespace,
                 propagation_policy="Foreground",
@@ -52,7 +52,7 @@ async def delete_job_with_timeout(
     poll_interval = 0.5
     while time.time() - start_time < timeout_seconds:
         try:
-            await batch_v1.read_namespaced_job(name=job_name, namespace=namespace)
+            await batch_v1.read_namespaced_job(name=job_name, namespace=namespace)  # type: ignore
             # Job still exists, wait and retry
             await asyncio.sleep(poll_interval)
 

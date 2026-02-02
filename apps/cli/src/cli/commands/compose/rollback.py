@@ -73,13 +73,13 @@ def rollback(
             raise typer.Exit(0)
 
         if not yes:
-            confirmed = view.confirm_rollback(deployment_name, selected_relative)
+            confirmed = view.confirm_rollback(deployment_name, selected_relative or 0)
             if not confirmed:
                 view.show_cancelled()
                 raise typer.Exit(0)
 
         try:
-            with view.show_rollback_progress(deployment_name, selected_relative):
+            with view.show_rollback_progress(deployment_name, selected_relative or 0):
                 final_response = asyncio.run(
                     api.deployments.rollback_deployment(
                         str(deployment.id), selected_revision
@@ -89,7 +89,7 @@ def rollback(
             if final_response.status == TaskStatus.COMPLETED:
                 view.show_success(
                     deployment_name,
-                    selected_relative,
+                    selected_relative or 0,
                 )
             else:
                 error_msg = final_response.message or "Rollback failed"

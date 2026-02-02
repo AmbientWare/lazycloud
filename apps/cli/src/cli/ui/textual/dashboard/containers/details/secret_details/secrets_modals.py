@@ -1,4 +1,5 @@
-from models.secrets import Secret, SecretSource
+from models.secrets import BasicSecret, SecretSource
+from textual.widgets import Input, Static
 
 from cli.api import api
 from cli.ui.textual.components import ConfirmModal, ErrorModal, InputModal
@@ -36,7 +37,7 @@ class AddSecretModal(InputModal):
             self._value_entered = True
 
             # Update the modal to ask for the value
-            message_widget = self.query_one("#input-message")
+            message_widget = self.query_one("#input-message", Static)
             message_widget.update(
                 f"Add a new environment variable:\n\n"
                 f"[bold]{self._variable_name}[/bold]\n\n"
@@ -44,7 +45,7 @@ class AddSecretModal(InputModal):
             )
 
             # Clear the input for the value
-            input_field = self.query_one("#input-field")
+            input_field = self.query_one("#input-field", Input)
             input_field.value = ""
             input_field.placeholder = "Enter value..."
 
@@ -55,7 +56,7 @@ class AddSecretModal(InputModal):
 
         try:
             # Create a SecretCollection with the new secret
-            secret = Secret(
+            secret = BasicSecret(
                 key=self._variable_name,
                 value=variable_value,
                 source=SecretSource.USER,
@@ -121,7 +122,7 @@ class EditSecretModal(InputModal):
 
         try:
             # Create secret with the updated value
-            secret = Secret(
+            secret = BasicSecret(
                 key=self.secret_key,
                 value=new_value,
                 source=self.source,
@@ -181,7 +182,7 @@ class DeleteSecretModal(ConfirmModal):
         """Handle the delete action."""
         try:
             # Create secret to remove
-            secret_to_remove = Secret(
+            secret_to_remove = BasicSecret(
                 key=self.secret_key,
                 value="",
                 source=self.source,

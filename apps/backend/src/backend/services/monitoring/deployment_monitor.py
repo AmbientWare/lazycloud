@@ -21,7 +21,7 @@ class DeploymentMonitor(BaseMonitor[DeploymentStatus]):
         helm_values: HelmValues,
         deployed_at: datetime,
         cluster_id: str,
-        callback: Callable[[DeploymentStatus], None],
+        callback: Callable[[DeploymentStatus], None] | None = None,
     ):
         super().__init__("Deployment Monitor", deployment_id, callback)
         self.deployment_id = deployment_id

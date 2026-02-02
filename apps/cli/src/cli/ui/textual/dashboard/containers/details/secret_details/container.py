@@ -1,4 +1,4 @@
-from models.secrets import Secret, SecretState
+from models.secrets import BasicSecret, SecretState
 from textual.message import Message
 from textual.widgets import DataTable
 
@@ -49,7 +49,7 @@ class SecretsTable(DataTable):
                 self.selected_secret_key = self._secret_keys[row_index]
 
     def update_secrets(
-        self, secrets: list[Secret], preserve_cursor: bool = False
+        self, secrets: list[BasicSecret], preserve_cursor: bool = False
     ) -> None:
         """Update the table with new secrets data."""
         # Store secrets and build lookup structures

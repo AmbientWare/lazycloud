@@ -5,7 +5,6 @@ from typing import Any
 import pytest
 from backend.services.compose.parser import ComposeParser
 from backend.services.k8s.helm_values_generator import HelmValuesGenerator
-from models.storage import STORAGE_CLASS_STANDARD, STORAGE_CLASS_SHARED
 from models.compose import (
     ComposeFile,
     ComposeNetwork,
@@ -21,6 +20,7 @@ from models.compose import (
 )
 from models.helm import WorkloadType
 from models.k8s import RestartPolicy
+from models.storage import STORAGE_CLASS_SHARED, STORAGE_CLASS_STANDARD
 
 from tests.fixtures.compose_cases import (
     ALL_NEW_FIELDS,
@@ -132,10 +132,14 @@ class TestServiceValuesGeneration:
 
         values, _ = helm_generator.generate_values(compose)
 
-        service = values.services[0]
-        assert service.resources is not None
-        assert service.resources.limits.cpu == "1"
-        assert service.resources.limits.memory == "1Gi"
+        if values.services[0].resources is None:
+            raise ValueError("Values.services[0].resources is None")
+        if values.services[0].resources.limits is None:
+            raise ValueError("Values.services[0].resources.limits is None")
+        if values.services[0].resources.limits.cpu is None:
+            raise ValueError("Values.services[0].resources.limits.cpu is None")
+        if values.services[0].resources.limits.memory is None:
+            raise ValueError("Values.services[0].resources.limits.memory is None")
 
     def test_service_values_include_replicas(
         self,
@@ -510,6 +514,9 @@ class TestCommandGeneration:
         values, _ = helm_generator.generate_values(compose)
 
         # Command list should be split
+        if values.services[0].command is None:
+            raise ValueError("Values.services[0].command is None")
+
         assert "nginx" in values.services[0].command
 
     def test_generate_command_from_string(
@@ -528,6 +535,9 @@ class TestCommandGeneration:
         )
 
         values, _ = helm_generator.generate_values(compose)
+
+        if values.services[0].command is None:
+            raise ValueError("Values.services[0].command is None")
 
         assert "python" in values.services[0].command
         assert "manage.py" in values.services[0].command

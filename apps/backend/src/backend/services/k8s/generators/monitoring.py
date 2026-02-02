@@ -11,7 +11,7 @@ from models.helm import (
 )
 
 
-def generate_metrics_values(ports: ComposePort) -> MetricsValues | None:
+def generate_metrics_values(ports: list[ComposePort] | None) -> MetricsValues | None:
     """Generate metrics/monitoring annotations from service labels."""
 
     metrics_port = "8080"
@@ -21,15 +21,7 @@ def generate_metrics_values(ports: ComposePort) -> MetricsValues | None:
     if ports:
         port_numbers = []
         for port in ports:
-            if isinstance(port, str):
-                if ":" in port:
-                    port_numbers.append(port.split(":")[1].split("/")[0])
-
-                else:
-                    port_numbers.append(port.split("/")[0])
-
-            elif port.get("target"):
-                port_numbers.append(str(port["target"]))
+            port_numbers.append(str(port.target))
 
         if metrics_port not in port_numbers:
             # Add warning or use first available port

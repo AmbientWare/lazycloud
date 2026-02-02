@@ -1,13 +1,11 @@
-import uuid
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
 
-from sqlalchemy import UUID, Index, String
-from sqlalchemy.dialects.postgresql import JSON
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Mapped, mapped_column
 
-from backend.database.base import BaseDbPydanticModel, BaseTable, UUIDStr
+from backend.database.models import BillingAuditLogInDb
+from backend.database.tables import BillingAuditLogTable
 
 
 class BillingEventType(StrEnum):
@@ -22,32 +20,6 @@ class BillingEventType(StrEnum):
     BILLING_RETRY = "billing_retry"
 
 
-class BillingAuditLogTable(BaseTable):
-    """Immutable audit trail for billing operations."""
-
-    __tablename__ = "billing_audit_log"
-
-    event_type: Mapped[str] = mapped_column(String, index=True)
-    workspace_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
-    record_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), nullable=True, index=True
-    )
-    actor: Mapped[str | None] = mapped_column(String, nullable=True)
-    details: Mapped[dict] = mapped_column(JSON, default=dict)
-
-    __table_args__ = (
-        Index("ix_billing_audit_workspace_date", "workspace_id", "created_at"),
-    )
-
-
-class BillingAuditLogPydantic(BaseDbPydanticModel):
-    event_type: str
-    workspace_id: UUIDStr
-    record_id: UUIDStr | None = None
-    actor: str | None = None
-    details: dict = {}
-
-
 class BillingAuditService:
     """Service for creating billing audit log entries."""
 
@@ -60,8 +32,8 @@ class BillingAuditService:
         workspace_id: str,
         record_id: str | None = None,
         actor: str | None = None,
-        details: dict | None = None,
-    ) -> BillingAuditLogPydantic:
+        details: dict[str, Any] | None = None,
+    ) -> BillingAuditLogInDb:
         """Create an audit log entry."""
         audit_entry = BillingAuditLogTable(
             event_type=event_type.value,
@@ -73,7 +45,7 @@ class BillingAuditService:
         self._session.add(audit_entry)
         await self._session.flush()
         await self._session.refresh(audit_entry)
-        return audit_entry.to_pydantic(BillingAuditLogPydantic)
+        return audit_entry.to_pydantic(BillingAuditLogInDb)
 
     async def log_collection_completed(
         self,
@@ -82,7 +54,7 @@ class BillingAuditService:
         interval_start: datetime,
         cpu_seconds: float,
         memory_seconds: float,
-    ) -> BillingAuditLogPydantic:
+    ) -> BillingAuditLogInDb:
         """Log successful interval collection."""
         return await self.log_event(
             event_type=BillingEventType.COLLECTION_COMPLETED,
@@ -101,7 +73,7 @@ class BillingAuditService:
         record_id: str,
         usage_date: str,
         attempt: int,
-    ) -> BillingAuditLogPydantic:
+    ) -> BillingAuditLogInDb:
         """Log billing attempt started."""
         return await self.log_event(
             event_type=BillingEventType.BILLING_STARTED,
@@ -119,7 +91,7 @@ class BillingAuditService:
         record_id: str,
         billing_id: str,
         usage_date: str,
-    ) -> BillingAuditLogPydantic:
+    ) -> BillingAuditLogInDb:
         """Log successful billing."""
         return await self.log_event(
             event_type=BillingEventType.BILLING_COMPLETED,
@@ -138,7 +110,7 @@ class BillingAuditService:
         error: str,
         attempt: int,
         usage_date: str,
-    ) -> BillingAuditLogPydantic:
+    ) -> BillingAuditLogInDb:
         """Log failed billing attempt."""
         return await self.log_event(
             event_type=BillingEventType.BILLING_FAILED,
@@ -157,7 +129,7 @@ class BillingAuditService:
         record_id: str,
         reason: str,
         usage_date: str,
-    ) -> BillingAuditLogPydantic:
+    ) -> BillingAuditLogInDb:
         """Log skipped billing (e.g., incomplete intervals or max attempts exceeded)."""
         return await self.log_event(
             event_type=BillingEventType.BILLING_SKIPPED,

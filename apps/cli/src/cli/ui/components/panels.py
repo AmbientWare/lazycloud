@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Any
 
+from models.statuses import TaskStatus
 from rich import box
 from rich.console import Console, Group
 from rich.panel import Panel
@@ -53,7 +54,7 @@ class DeploymentInfoPanel:
         content = []
 
         # Status badge
-        status_badge = DeploymentStatusBadge(self.deployment.state)
+        status_badge = DeploymentStatusBadge(TaskStatus(self.deployment.state))
 
         # Basic info table
         info_table = Table(show_header=False, box=None)

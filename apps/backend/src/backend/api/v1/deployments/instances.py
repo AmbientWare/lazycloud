@@ -12,9 +12,9 @@ from backend.api.dependencies import (
     get_deployment_with_admin_access,
 )
 from backend.api.utils import create_sse_stream_with_subscription
-from backend.database.compose import ComposeDeploymentPydantic
-from backend.tasks.client import run_delete_instance
+from backend.database.models import ComposeDeploymentInDb
 from backend.services.monitoring.monitor_config import LogMonitorConfig
+from backend.tasks.client import run_delete_instance
 
 instances_router = APIRouter(prefix="/{deployment_id}/instances")
 
@@ -42,7 +42,7 @@ async def delete_instance(
     force: bool = Query(
         False, description="Force delete the pod (bypasses graceful shutdown)"
     ),
-    deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_admin_access),
+    deployment: ComposeDeploymentInDb = Depends(get_deployment_with_admin_access),
 ) -> InstanceTaskStatusResponse:
     """Delete a specific instance in a deployment."""
     try:
@@ -104,7 +104,7 @@ async def delete_instance(
 async def stream_service_logs(
     pod_name: str,
     tail: int = Query(100),
-    deployment: ComposeDeploymentPydantic = Depends(get_deployment_with_access),
+    deployment: ComposeDeploymentInDb = Depends(get_deployment_with_access),
 ):
     """Stream real-time service logs."""
     # Check for helm_values

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from models.diffs import EnvVarChanges
-from models.secrets import Secret, SecretCollection
+from models.secrets import BasicSecret, SecretCollection
 from rich.console import Console, Group
 from rich.text import Text
 
@@ -69,7 +69,9 @@ def parse_env_file(file_path: Path) -> dict[str, str | None]:
     return env_vars
 
 
-def filter_secrets_with_values(secrets_dict: dict[str, Secret]) -> list[Secret]:
+def filter_secrets_with_values(
+    secrets_dict: dict[str, BasicSecret],
+) -> list[BasicSecret]:
     """Filter secrets to only include those with actual values."""
     return [
         secret
@@ -79,7 +81,7 @@ def filter_secrets_with_values(secrets_dict: dict[str, Secret]) -> list[Secret]:
 
 
 def get_remaining_vars(
-    secrets_dict: dict[str, Secret], loaded_keys: set[str]
+    secrets_dict: dict[str, BasicSecret], loaded_keys: set[str]
 ) -> dict[str, str]:
     """Get variables that were not loaded from source."""
     return {
@@ -229,7 +231,7 @@ def create_env_vars_detected_card(
     )
 
 
-def load_from_shell_env(secrets_dict: dict[str, Secret]) -> set[str]:
+def load_from_shell_env(secrets_dict: dict[str, BasicSecret]) -> set[str]:
     """Load environment variables from shell environment."""
     loaded_keys = set()
     for key in list(secrets_dict.keys()):
@@ -240,20 +242,22 @@ def load_from_shell_env(secrets_dict: dict[str, Secret]) -> set[str]:
     return loaded_keys
 
 
-def load_from_env_file(secrets_dict: dict[str, Secret], file_path: Path) -> set[str]:
+def load_from_env_file(
+    secrets_dict: dict[str, BasicSecret], file_path: Path
+) -> set[str]:
     """Load environment variables from .env file."""
     loaded_keys = set()
     file_vars = parse_env_file(file_path)
 
     for key in list(secrets_dict.keys()):
         if key in file_vars and file_vars[key] is not None:
-            secrets_dict[key].value = file_vars[key]
+            secrets_dict[key].value = file_vars[key] or ""
             loaded_keys.add(key)
 
     return loaded_keys
 
 
-def mark_secrets_as_empty(secrets_dict: dict[str, Secret], keys: set[str]) -> None:
+def mark_secrets_as_empty(secrets_dict: dict[str, BasicSecret], keys: set[str]) -> None:
     """Mark specified secrets as empty (user chose to skip them)."""
     for key in keys:
         secrets_dict[key].value = ""
@@ -261,7 +265,11 @@ def mark_secrets_as_empty(secrets_dict: dict[str, Secret], keys: set[str]) -> No
 
 def count_collected_secrets(secrets: SecretCollection) -> int:
     """Count how many secrets have actual values."""
-    return len([s for s in secrets.added if s.value and s.value.strip()])
+    return (
+        len([s for s in secrets.added if s.value and s.value.strip()])
+        if secrets.added
+        else 0
+    )
 
 
 def update_diff_with_collected_secrets(
@@ -283,10 +291,18 @@ def update_diff_with_collected_secrets(
         return
 
     # Filter to only show vars that have values (were actually collected)
-    collected_keys = {
-        secret.key for secret in secrets.added if secret.value and secret.value.strip()
-    }
-    removed_keys = {secret.key for secret in secrets.removed}
+    collected_keys = (
+        {
+            secret.key
+            for secret in secrets.added
+            if secret.value and secret.value.strip()
+        }
+        if secrets.added
+        else set()
+    )
+    removed_keys = (
+        {secret.key for secret in secrets.removed} if secrets.removed else set()
+    )
 
     diff_response.env_var_changes = EnvVarChanges(
         added=list(collected_keys),

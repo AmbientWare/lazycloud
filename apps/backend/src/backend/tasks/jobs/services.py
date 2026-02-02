@@ -101,5 +101,5 @@ async def restart_all_services_job(
     return {
         "status": "success",
         "total_services": result.total_services,
-        "restarted": result.restarted,
+        "restarted": result.successful,
     }

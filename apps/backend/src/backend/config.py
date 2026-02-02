@@ -42,7 +42,7 @@ class AppConfig(BaseModel):
     AWS_ACCESS_KEY_ID: str = os.getenv("AWS_ACCESS_KEY_ID", "")
     AWS_SECRET_ACCESS_KEY: str = os.getenv("AWS_SECRET_ACCESS_KEY", "")
     AWS_REGION: str = os.getenv("AWS_REGION", "")
-    AWS_ENDPOINT_URL: str = os.getenv("AWS_ENDPOINT_URL", None)
+    AWS_ENDPOINT_URL: str | None = os.getenv("AWS_ENDPOINT_URL", None)
 
     # Cloudflare Configuration
     CLOUDFLARE_API_KEY: str = os.getenv("CLOUDFLARE_API_KEY", "")
@@ -143,6 +143,11 @@ class AppConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_required_env_vars(self: "AppConfig") -> "AppConfig":
+        # Skip validation if SKIP_ENV_VALIDATION is set (useful for migrations, tests)
+        if os.getenv("SKIP_ENV_VALIDATION", "").lower() == "true":
+            logger.info("Skipping environment variable validation")
+            return self
+
         logger.info("Validating required environment variables")
         missing_vars = []
         for var in self.all_environment_variables:

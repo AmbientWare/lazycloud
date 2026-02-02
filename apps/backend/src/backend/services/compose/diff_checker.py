@@ -163,7 +163,7 @@ class ComposeDiffChecker:
         current: BaseModel | None,
         new: BaseModel | None,
         include_defaults: bool = False,
-    ) -> ModificationDict | None:
+    ) -> ModificationDict | FieldChange | None:
         """Generic comparison for Pydantic models.
 
         Args:

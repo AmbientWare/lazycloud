@@ -49,7 +49,7 @@ class LogStreamer:
             core_v1 = await get_async_core_v1_api(self.cluster_id)
 
             pod = await asyncio.wait_for(
-                core_v1.read_namespaced_pod(
+                core_v1.read_namespaced_pod(  # type: ignore[arg-type]
                     name=self.pod_name,
                     namespace=self.namespace,
                 ),

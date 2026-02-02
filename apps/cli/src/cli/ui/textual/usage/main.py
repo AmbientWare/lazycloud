@@ -71,7 +71,7 @@ class UsageDashboard(App):
     def action_refresh(self) -> None:
         """Refresh usage data"""
         try:
-            overview = self.query_one(UsageOverviewSection, UsageOverviewSection)
+            overview = self.query_one(UsageOverviewSection)
             overview.refresh_usage()
         except NoMatches:
             self.log.warning("UsageOverviewSection not found in layout")

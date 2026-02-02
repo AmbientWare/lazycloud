@@ -6,7 +6,7 @@ from uuid import uuid4
 from loguru import logger
 from models.monitoring import MonitorStats, SubscriptionManagerStats
 
-from backend.services.monitoring.base import BaseMonitor
+from backend.services.monitoring.base import BaseGenerativeMonitor, BaseMonitor
 from backend.services.monitoring.deploy_progress_monitor import (
     DeployProgressMonitor,
 )
@@ -34,7 +34,7 @@ class SubscriptionManager:
 
     def __init__(self):
         """Initialize the subscription manager."""
-        self._monitors: dict[str, BaseMonitor] = {}
+        self._monitors: dict[str, BaseMonitor | BaseGenerativeMonitor] = {}
         self._subscriptions: dict[
             str, dict[str, Callable]
         ] = {}  # monitor_key -> {sub_id -> callback}
@@ -97,7 +97,9 @@ class SubscriptionManager:
 
         return monitor_key, subscription_id
 
-    def _create_monitor(self, config: MonitorConfig) -> BaseMonitor:
+    def _create_monitor(
+        self, config: MonitorConfig
+    ) -> BaseMonitor | BaseGenerativeMonitor:
         """Create a new monitor instance based on configuration."""
         if isinstance(config, DeploymentMonitorConfig):
             return DeploymentMonitor(
@@ -193,7 +195,7 @@ class SubscriptionManager:
                 )
 
     async def _stop_monitor_background(
-        self, monitor: BaseMonitor, monitor_key: str
+        self, monitor: BaseMonitor | BaseGenerativeMonitor, monitor_key: str
     ) -> None:
         """Stop a monitor in the background without blocking."""
         try:

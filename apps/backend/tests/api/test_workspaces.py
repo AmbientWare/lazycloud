@@ -2,9 +2,8 @@
 
 import pytest
 from backend.database import Database
-from backend.database.users import UserPydantic
+from backend.database.models import User, WorkspaceRole
 from httpx import AsyncClient
-from models.workspaces import WorkspaceRole
 
 from tests.fixtures.database import (
     make_user,
@@ -27,7 +26,7 @@ class TestListWorkspaces:
         assert response.json() == []
 
     async def test_list_workspaces_returns_user_workspaces(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """User sees only their workspaces."""
         workspace = await api_db.workspaces.create(make_workspace(name="My Workspace"))
@@ -44,7 +43,7 @@ class TestListWorkspaces:
         assert data[0]["role"] == WorkspaceRole.OWNER.value
 
     async def test_list_workspaces_multiple(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """User with multiple workspaces sees all of them."""
         ws1 = await api_db.workspaces.create(make_workspace(name="Workspace 1"))
@@ -84,7 +83,7 @@ class TestCreateWorkspace:
     """Tests for POST /v1/workspaces."""
 
     async def test_create_workspace_success(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Successfully create a new workspace."""
         response = await client.post("/v1/workspaces", json={"name": "New Workspace"})
@@ -115,7 +114,7 @@ class TestWorkspaceResponse:
     """Tests for workspace response structure."""
 
     async def test_workspace_response_has_required_fields(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Workspace response includes all required fields."""
         workspace = await api_db.workspaces.create(make_workspace())
@@ -133,7 +132,7 @@ class TestWorkspaceResponse:
         assert "role" in ws
 
     async def test_personal_workspace_flag(
-        self, client: AsyncClient, api_db: Database, api_user: UserPydantic
+        self, client: AsyncClient, api_db: Database, api_user: User
     ):
         """Personal workspace is correctly flagged."""
         personal = await api_db.workspaces.create(

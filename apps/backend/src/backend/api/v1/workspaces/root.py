@@ -28,14 +28,15 @@ from backend.api.security import (
 )
 from backend.api.utils import normalize_usage_date_range
 from backend.database import Database, get_db
-from backend.database.user_workspaces import (
-    UserWorkspacePydantic,
+from backend.database.models import (
+    UserInDb,
+    UserWorkspace,
     UserWorkspaceStatus,
+    Workspace,
     WorkspaceRole,
+    WorkspaceStatus,
 )
-from backend.database.users import UserPydantic
 from backend.database.utils import validate_workspace_name
-from backend.database.workspaces import WorkspacePydantic, WorkspaceStatus
 from backend.services import (
     UsageService,
     get_usage_service,
@@ -47,7 +48,7 @@ workspaces_router = APIRouter(prefix="/workspaces", tags=["workspaces"])
 
 @workspaces_router.get("")
 async def get_workspaces(
-    current_user: UserPydantic = Depends(get_current_active_user),
+    current_user: UserInDb = Depends(get_current_active_user),
     start_date: datetime | None = Query(
         None,
         description="Optional start date for usage context (includes deleted workspaces active during range)",
@@ -164,7 +165,7 @@ async def get_workspace_with_deployments(
 @workspaces_router.post("")
 async def create_workspace(
     request: CreateWorkspaceRequest,
-    current_user: UserPydantic = Depends(get_current_active_user_with_sub),
+    current_user: UserInDb = Depends(get_current_active_user_with_sub),
     db: Database = Depends(get_db),
 ) -> WorkspaceResponse:
     """Create a new workspace"""
@@ -175,14 +176,14 @@ async def create_workspace(
 
     try:
         # Create workspace and membership in a single transaction
-        workspace = WorkspacePydantic(
+        workspace = Workspace(
             name=validated_name,
             is_personal=False,
         )
         workspace = await db.workspaces.create(workspace)
 
         # Add current user as owner
-        membership = UserWorkspacePydantic(
+        membership = UserWorkspace(
             user_id=current_user.id,
             workspace_id=workspace.id,
             role=WorkspaceRole.OWNER,
@@ -235,7 +236,7 @@ async def delete_workspace(
                 deployment.id,
                 with_lock=True,
             )
-            if deployment:
+            if deployment is not None:
                 deployment.state = DeploymentStates.DELETING
                 deployment.current_task_run_id = job_key
                 await db.compose_deployments.update(deployment)
@@ -243,7 +244,7 @@ async def delete_workspace(
         except Exception as e:
             # Deployment stays in previous state - cleanup cron will retry
             logger.warning(
-                f"Failed to trigger destroy task for deployment {deployment.id}: {e}"
+                f"Failed to trigger destroy task for deployment {deployment.id if deployment else 'unknown'}: {e}"
             )
 
     return WorkspaceSuccessResponse(success=True)
@@ -251,7 +252,7 @@ async def delete_workspace(
 
 @workspaces_router.get("/usage/all")
 async def get_aggregated_usage(
-    current_user: UserPydantic = Depends(get_current_active_user),
+    current_user: UserInDb = Depends(get_current_active_user),
     start_date: datetime | None = Query(
         None, description="Start date (defaults to start of current month)"
     ),
@@ -277,7 +278,7 @@ async def get_aggregated_usage(
 
 @workspaces_router.get("/usage/all/daily")
 async def get_aggregated_daily_usage(
-    current_user: UserPydantic = Depends(get_current_active_user),
+    current_user: UserInDb = Depends(get_current_active_user),
     start_date: datetime | None = Query(
         None, description="Start date (defaults to start of current month)"
     ),

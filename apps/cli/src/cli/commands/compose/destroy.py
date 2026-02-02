@@ -32,7 +32,6 @@ def destroy(
         if not name:
             view.show_error(
                 "No deployment specified and no lazycloud.yaml found in current directory",
-                suggestion="Specify a deployment name or run from a directory with lazycloud.yaml",
             )
             raise typer.Exit(1)
 

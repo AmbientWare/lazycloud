@@ -101,7 +101,7 @@ class PodTable(DataTable):
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Handle row selection and open log modal."""
-        if event.row_key:
+        if event.row_key and event.row_key.value:
             pod_name = event.row_key.value
             self.user_has_interacted = True
             modal = LogViewerModal(

@@ -17,7 +17,7 @@ class ComposeFileCard(Card):
         """Initialize compose file card."""
         table = Table(show_header=False, box=None)
         table.add_column("Index", style=Colors.Ansi.primary, width=6)
-        table.add_column("File", style=Colors.Ansi.text_primary)
+        table.add_column("File", style=Colors.Ansi.text)
 
         for i, file in enumerate(compose_files, 1):
             table.add_row(f"{i}.", file)

@@ -1,6 +1,6 @@
 from loguru import logger
 from polar_sdk import Polar
-from polar_sdk.models import Customer, CustomerCreate
+from polar_sdk.models import Customer, CustomerCreate, CustomerCreateMetadata
 
 
 class PolarCustomersModule:
@@ -16,7 +16,7 @@ class PolarCustomersModule:
         email: str,
         external_id: str,
         name: str | None = None,
-        metadata: dict[str, str] | None = None,
+        metadata: dict[str, CustomerCreateMetadata] | None = None,
     ) -> Customer | None:
         """Create a new customer in Polar"""
         if not self.enabled:

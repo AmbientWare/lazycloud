@@ -47,8 +47,9 @@ class LogViewerModal(ContentModal):
         container.border_title = f"{Icons.FILE} Instance Logs: {self.display_name}"
         container.border_subtitle = "↑↓/jk/scroll Navigate • Esc: Close"
 
-        self._logs_widget.styles.height = "1fr"
-        self._logs_widget.write("[dim]Connecting to log stream...[/dim]")
+        if self._logs_widget:
+            self._logs_widget.styles.height = "1fr"
+            self._logs_widget.write("[dim]Connecting to log stream...[/dim]")
         self._start_stream()
 
     async def on_unmount(self) -> None:

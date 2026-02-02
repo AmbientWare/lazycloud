@@ -1,15 +1,13 @@
-from uuid import UUID
-
 from models.statuses import TaskStatus
 
-from backend.tasks import get_task_result
 from backend.services.monitoring.base import BaseMonitor
+from backend.tasks import get_task_result
 
 
 class TaskMonitor(BaseMonitor[tuple[TaskStatus, str]]):
     """Monitors SAQ task status."""
 
-    def __init__(self, task_id: UUID, callback=None):
+    def __init__(self, task_id: str, callback=None):
         super().__init__("Task Monitor", str(task_id), callback)
         self.task_id = task_id
 

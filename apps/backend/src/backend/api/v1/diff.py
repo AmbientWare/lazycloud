@@ -1,4 +1,6 @@
 import asyncio
+from datetime import datetime, timezone
+from uuid import uuid4
 
 import yaml
 from api_requests.deployments import DiffRequest, DiffType
@@ -13,8 +15,7 @@ from responses.deployments import DiffResponse
 from backend.api.dependencies import require_workspace_admin
 from backend.api.security import get_current_active_user
 from backend.database import Database, get_db
-from backend.database.compose import ComposeDeploymentPydantic
-from backend.database.users import UserPydantic
+from backend.database.models import ComposeDeploymentInDb, UserInDb
 from backend.services.compose.diff_checker import (
     ComposeDiffChecker,
     detect_storage_type_changes,
@@ -30,7 +31,7 @@ diff_router = APIRouter(prefix="/diff")
 
 async def _get_deployment_or_verify_workspace(
     request: DiffRequest,
-    current_user: UserPydantic = Depends(get_current_active_user),
+    current_user: UserInDb = Depends(get_current_active_user),
     db: Database = Depends(get_db),
 ):
     """Get deployment by name for existing, verify workspace access for new."""
@@ -56,12 +57,19 @@ async def _get_deployment_or_verify_workspace(
 @diff_router.post("", response_model=DiffResponse)
 async def get_deployment_diff(
     request: DiffRequest = Body(...),
-    deployment: ComposeDeploymentPydantic | None = Depends(
+    deployment: ComposeDeploymentInDb | None = Depends(
         _get_deployment_or_verify_workspace
     ),
     db: Database = Depends(get_db),
 ) -> DiffResponse:
     """Compare current deployment with proposed changes."""
+
+    # For existing deployments, verify deployment was found
+    if request.diff_type == DiffType.EXISTING and deployment is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Deployment not found",
+        )
 
     # Parse new compose file
     compose_data = yaml.safe_load(request.compose_yaml)
@@ -80,7 +88,7 @@ async def get_deployment_diff(
 
     # Handle environment variable diff
     env_var_changes = None
-    if request.diff_type == DiffType.EXISTING:
+    if request.diff_type == DiffType.EXISTING and deployment:
         # Existing deployment - compare with current secrets
         existing_secrets = await db.secrets.get_secrets(deployment.id)
 
@@ -133,10 +141,13 @@ async def get_deployment_diff(
         else:
             registry = get_cluster_registry()
             cluster = registry.get_cluster_for_placement()
-            cluster_id = cluster.name if cluster else "default"
+            cluster_id = cluster.name if cluster else "ash-1"
 
         # Create temporary deployment for full validation
-        temp_deployment = ComposeDeploymentPydantic(
+        temp_deployment = ComposeDeploymentInDb(
+            id=str(uuid4()),
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
             workspace_id=workspace_id,
             name=request.deployment_name or "",
             namespace=namespace,
@@ -145,15 +156,11 @@ async def get_deployment_diff(
             cluster_id=cluster_id,
         )
 
-        if deployment:
-            # Ensure id is string (direct assignment bypasses Pydantic validators)
-            temp_deployment.id = str(deployment.id)
-        else:
-            # For new deployments, don't set id to avoid unnecessary DB secret lookup
-            temp_deployment.id = None
-
         # Run full validation (includes compose validation via HelmValuesGenerator)
-        _, warnings = await validate_deployment_request(temp_deployment, deployment)
+        _, warnings = await validate_deployment_request(
+            new_deployment=temp_deployment,
+            existing_deployment=deployment,
+        )
 
     except ValueError as e:
         # User-friendly validation errors

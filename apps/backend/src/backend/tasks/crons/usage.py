@@ -3,7 +3,7 @@
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Sequence
 
 import yaml
 from loguru import logger
@@ -13,6 +13,7 @@ from models.billing import (
 )
 from models.deployments import DeploymentStates
 from models.metrics import StorageUsage
+from models.usage import BreakdownType, DailyUsageStatus
 from tenacity import (
     RetryError,
     retry,
@@ -21,11 +22,9 @@ from tenacity import (
 )
 
 from backend.database import get_db_context
-from backend.database.compose import ComposeDeploymentPydantic
-from backend.database.usage import (
-    BreakdownType,
-    DailyUsageRecordPydantic,
-    DailyUsageStatus,
+from backend.database.models import (
+    ComposeDeploymentInDb,
+    DailyUsageRecordInDb,
 )
 from backend.services import (
     get_depot_service,
@@ -94,7 +93,7 @@ class ServiceEndpoint:
 
 @dataclass
 class WorkspaceDeploymentContext:
-    deployments: list[ComposeDeploymentPydantic]
+    deployments: Sequence[ComposeDeploymentInDb]
     deployment_map: dict[str, str]
     pvc_map: dict[str, str]
     active_endpoints: list[ServiceEndpoint]
@@ -210,7 +209,7 @@ async def collect_workspace_interval(
         storage_gb_months = UsageUnits.gb_hours_to_gb_months(total_storage_gb_hours)
 
         # Atomic increment of daily record totals (all metered resources)
-        await db.usage.atomic_increment_usage(
+        await db.usage.increment_usage(
             record_id=daily_record.id,
             cpu_core_seconds=breakdown.totals.cpu_core_seconds,
             memory_gb_seconds=breakdown.totals.memory_gb_seconds,
@@ -376,7 +375,7 @@ async def spawn_usage_collection_job(ctx: dict[str, Any]) -> dict[str, Any]:
 )
 async def _send_to_polar_with_retry(
     polar_service: PolarService,
-    record: DailyUsageRecordPydantic,
+    record: DailyUsageRecordInDb,
     external_customer_id: str,
     idempotency_key: str,
 ) -> bool:

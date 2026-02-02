@@ -52,7 +52,7 @@ def create_services_card(services: ResourceSection) -> Card | None:
 
     # Add added services
     for svc in services.added:
-        name = svc.get("name", "unknown") if isinstance(svc, dict) else "unknown"
+        name = str(svc.get("name", "unknown")) if isinstance(svc, dict) else "unknown"
         details = format_resource_details(svc, "service")
         table.add_row(name, Text("Added", style=Colors.Ansi.success), details)
 
@@ -63,8 +63,8 @@ def create_services_card(services: ResourceSection) -> Card | None:
 
     # Add removed services
     for svc in services.removed:
-        name = svc.get("name", "unknown") if isinstance(svc, dict) else "unknown"
-        image = svc.get("image", "") if isinstance(svc, dict) else ""
+        name = str(svc.get("name", "unknown")) if isinstance(svc, dict) else "unknown"
+        image = str(svc.get("image", "")) if isinstance(svc, dict) else ""
         table.add_row(name, Text("Removed", style=Colors.Ansi.error), image)
 
     count = len(services.added) + len(services.modified) + len(services.removed)
@@ -87,7 +87,7 @@ def create_volumes_card(volumes: ResourceSection) -> Card | None:
 
     # Add added volumes
     for vol in volumes.added:
-        name = vol.get("name", "unknown") if isinstance(vol, dict) else "unknown"
+        name = str(vol.get("name", "unknown")) if isinstance(vol, dict) else "unknown"
         table.add_row(name, Text("Added", style=Colors.Ansi.success), "")
 
     # Add modified volumes
@@ -97,7 +97,7 @@ def create_volumes_card(volumes: ResourceSection) -> Card | None:
 
     # Add removed volumes
     for vol in volumes.removed:
-        name = vol.get("name", "unknown") if isinstance(vol, dict) else "unknown"
+        name = str(vol.get("name", "unknown")) if isinstance(vol, dict) else "unknown"
         table.add_row(name, Text("Removed", style=Colors.Ansi.error), "")
 
     count = len(volumes.added) + len(volumes.modified) + len(volumes.removed)
@@ -155,7 +155,7 @@ def create_networks_card(networks: ResourceSection) -> Card | None:
 
     # Add added networks
     for net in networks.added:
-        name = net.get("name", "unknown") if isinstance(net, dict) else "unknown"
+        name = str(net.get("name", "unknown")) if isinstance(net, dict) else "unknown"
         external = net.get("external", False) if isinstance(net, dict) else False
         net_type = "External" if external else "Internal"
         table.add_row(name, Text("Added", style=Colors.Ansi.success), net_type)
@@ -166,7 +166,7 @@ def create_networks_card(networks: ResourceSection) -> Card | None:
 
     # Add removed networks
     for net in networks.removed:
-        name = net.get("name", "unknown") if isinstance(net, dict) else "unknown"
+        name = str(net.get("name", "unknown")) if isinstance(net, dict) else "unknown"
         table.add_row(name, Text("Removed", style=Colors.Ansi.error), "")
 
     count = len(networks.added) + len(networks.modified) + len(networks.removed)

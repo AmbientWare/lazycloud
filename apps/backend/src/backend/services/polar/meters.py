@@ -5,6 +5,7 @@ from polar_sdk.models import (
     Meter,
     MeterCreate,
     MeterCreateAggregation,
+    MeterCreateMetadata,
     MeterUpdate,
 )
 
@@ -23,7 +24,7 @@ class PolarMetersModule:
         name: str,
         filter_: Filter,
         aggregation: MeterCreateAggregation,
-        metadata: dict[str, str] | None = None,
+        metadata: dict[str, MeterCreateMetadata] | None = None,
     ) -> Meter | None:
         """Create a new meter in Polar"""
         if not self.enabled:
@@ -91,6 +92,10 @@ class PolarMetersModule:
 
             # List meters with filters
             meter_list_response = await self.client.meters.list_async(**kwargs)
+
+            if not meter_list_response:
+                logger.info(f"No Polar meters found for org {organization_id}")
+                return []
 
             meters = meter_list_response.result.items
             logger.info(f"Retrieved {len(meters)} Polar meters")

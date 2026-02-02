@@ -1,4 +1,4 @@
-from models.statuses import DeploymentStatus, NetworkStatus
+from models.statuses import DeploymentStatus, NetworkStatusSummary
 from textual.widgets import DataTable
 
 from cli.ui.textual.dashboard.containers.details.utils import (
@@ -17,7 +17,7 @@ class NetworksTable(DataTable):
         self._column_keys: list = []
         self._column_keys = self.add_columns("Name", "Status")
 
-    def _build_row_data(self, network: NetworkStatus) -> tuple[str, str]:
+    def _build_row_data(self, network: NetworkStatusSummary) -> tuple[str, str]:
         """Build the display values for a network row."""
         color = get_status_color_from_string(network.status)
         status_text = f"[{color}]{network.status.upper()}[/{color}]"

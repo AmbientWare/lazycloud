@@ -5,7 +5,7 @@ from typing import Any
 from loguru import logger
 
 from backend.database import get_db_context
-from backend.database.users import SubscriptionState, UserStatus
+from backend.database.models import SubscriptionState, UserStatus
 from backend.services import get_subscription_service
 from backend.services.exceptions import NoActiveSubscriptionError
 

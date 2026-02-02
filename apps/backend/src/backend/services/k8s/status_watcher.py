@@ -48,8 +48,8 @@ class StatusWatcher:
         namespace: str,
         helm_values: HelmValues,
         cluster_id: str,
-        deployment_name: str | None = None,
-        deployed_at: datetime | None = None,
+        deployment_name: str,
+        deployed_at: datetime | None,
     ):
         """Initialize the status watcher."""
         self.deployment_id = deployment_id
@@ -154,7 +154,7 @@ class StatusWatcher:
                     )
                 )
             else:
-                services_list.append(result)
+                services_list.append(result)  # type: ignore[arg-type]
 
         return services_list
 
@@ -279,7 +279,7 @@ class StatusWatcher:
                 api_client = await get_async_api_client(self.cluster_id)
 
                 k8s_job = await asyncio.wait_for(
-                    batch_v1.read_namespaced_job(
+                    batch_v1.read_namespaced_job(  # type: ignore[misc]
                         name=service.resourceName,
                         namespace=self.namespace,
                     ),
@@ -289,7 +289,7 @@ class StatusWatcher:
                 replicas = 1
 
                 # Extract resources from job spec
-                spec = k8s_job_dict.get("spec", {})
+                spec = k8s_job_dict.get("spec", {})  # type: ignore[union-attr]
                 if spec:
                     template = spec.get("template", {})
                     if template:
@@ -302,7 +302,7 @@ class StatusWatcher:
                                     break
 
                 # Determine job status from conditions or counts
-                status_obj = k8s_job_dict.get("status", {})
+                status_obj = k8s_job_dict.get("status", {})  # type: ignore[union-attr]
                 conditions = status_obj.get("conditions", [])
                 succeeded = status_obj.get("succeeded", 0) or 0
                 failed = status_obj.get("failed", 0) or 0
@@ -336,7 +336,7 @@ class StatusWatcher:
 
                 if service.workloadType == WorkloadType.DEPLOYMENT:
                     k8s_resource_raw = await asyncio.wait_for(
-                        apps_v1.read_namespaced_deployment(
+                        apps_v1.read_namespaced_deployment(  # type: ignore[misc]
                             name=service.resourceName,
                             namespace=self.namespace,
                         ),
@@ -345,7 +345,7 @@ class StatusWatcher:
                     resource_dict = api_client.sanitize_for_serialization(
                         k8s_resource_raw
                     )
-                    k8s_resource = Deployment(**resource_dict)
+                    k8s_resource = Deployment(**resource_dict)  # type: ignore[arg-type]
                     if k8s_resource.status:
                         updated_replicas = k8s_resource.status.updated_replicas
                 else:
@@ -422,7 +422,7 @@ class StatusWatcher:
 
         # Format ports and volumes
         formatted_ports = [
-            f"{p.port}:{p.target_port or p.port}/{getattr(p, 'protocol', 'TCP').upper()}"
+            f"{p.port}:{p.targetPort or p.port}/{getattr(p, 'protocol', 'TCP').upper()}"
             for p in (service.ports or [])
         ]
 
@@ -443,7 +443,7 @@ class StatusWatcher:
             endpoint = service.ingress.hostname
 
             # Check if this is a custom domain and fetch its status
-            if self._is_custom_domain(endpoint):
+            if endpoint and self._is_custom_domain(endpoint):
                 custom_domain = endpoint
                 domain_status, cname_target = await self._get_domain_status(endpoint)
 
@@ -488,7 +488,7 @@ class StatusWatcher:
             )
             # Convert to our model
             pods_dict = api_client.sanitize_for_serialization(v1_pods)
-            pod_list = PodList(**pods_dict)
+            pod_list = PodList(**pods_dict)  # type: ignore[arg-type]
 
             if pod_list is None:
                 logger.debug(
@@ -503,19 +503,22 @@ class StatusWatcher:
                 return []
 
             # Start all metrics tasks in parallel (skip if not needed)
-            metrics_tasks = {}
+            metrics_tasks: dict[str, asyncio.Task[dict[str, str] | None]] = {}
             if not skip_metrics:
                 metrics_tasks = {
                     pod.metadata.name: asyncio.create_task(
                         self._get_pod_metrics(pod.metadata.name)
                     )
                     for pod in pod_list.items
+                    if pod.metadata.name
                 }
 
             pods = []
             for pod in pod_list.items:
                 # Step 1: Extract container statuses and initialize tracking variables
-                container_statuses = pod.status.container_statuses if pod.status else []
+                container_statuses = (
+                    (pod.status.container_statuses or []) if pod.status else []
+                )
                 ready_containers = 0
                 total_containers = len(container_statuses)
                 restart_count = 0
@@ -640,7 +643,7 @@ class StatusWatcher:
                     pod_metrics = await metrics_tasks[pod.metadata.name]
 
                 pod_info = PodStatus(
-                    name=pod.metadata.name,
+                    name=pod.metadata.name or "unknown",
                     phase=phase,
                     ready_containers=ready_containers,
                     total_containers=total_containers,

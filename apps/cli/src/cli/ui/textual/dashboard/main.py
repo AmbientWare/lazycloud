@@ -13,8 +13,8 @@ from cli.ui.textual.dashboard.containers.details.service_details import (
 )
 from cli.ui.textual.messages import (
     DeploymentSelected,
-    DeploymentStatusUpdated,
     DeploymentsLoaded,
+    DeploymentStatusUpdated,
     SecretSelected,
     ServiceSelected,
     ServiceStatusUpdated,
@@ -72,9 +72,9 @@ class DashboardApp(App):
         """Handle the restart service action."""
         content_container = self.query_one(ContentContainer)
         if (
-            content_container.display_mode == DisplayMode.SERVICE
-            and not content_container.service
-            and not content_container.deployment
+            content_container.display_mode != DisplayMode.SERVICE
+            or not content_container.service
+            or not content_container.deployment
         ):
             return
 
@@ -83,7 +83,7 @@ class DashboardApp(App):
             service_name=content_container.service.name,
             deployment_id=content_container.deployment.id,
         )
-        self.app.push_screen(modal)
+        self.push_screen(modal)
 
     def action_switch_to_deployments(self) -> None:
         """Switch to deployments section."""

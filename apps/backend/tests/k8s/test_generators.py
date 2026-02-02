@@ -23,6 +23,7 @@ from models.compose import (
     ComposePort,
     ComposeService,
     ComposeVolume,
+    HealthCheck,
     ResourceConfig,
     ResourcesConfig,
     ServiceVolume,
@@ -87,15 +88,18 @@ class TestPortsValuesGeneration:
     """Tests for ports values generation."""
 
     def test_generate_ports_from_strings(self):
-        """Test generating ports from string formats."""
-        ports = ["80", "8080:80"]
+        """Test generating ports from ComposePort objects."""
+        ports = [
+            ComposePort(published=80, target=80, protocol="tcp"),
+            ComposePort(published=8080, target=80, protocol="tcp"),
+        ]
 
         result = generate_ports_values(ports)
 
         assert len(result) == 2
         assert result[0].port == 80
-        assert result[1].port == 8080
-        assert result[1].target_port == 80
+        assert result[1].port == 80
+        assert result[1].targetPort == 80
 
     def test_generate_ports_from_compose_port(self):
         """Test generating ports from ComposePort objects."""
@@ -105,11 +109,11 @@ class TestPortsValuesGeneration:
 
         assert len(result) == 1
         assert result[0].port == 80
-        assert result[0].target_port == 80
+        assert result[0].targetPort == 80
 
     def test_generate_ports_with_udp(self):
         """Test generating ports with UDP protocol."""
-        ports = ["53/udp"]
+        ports = [ComposePort(published=53, target=53, protocol="udp")]
 
         result = generate_ports_values(ports)
 
@@ -193,6 +197,13 @@ class TestResourcesGeneration:
 
         result = generate_resources_values(resources_config)
 
+        if result is None:
+            raise ValueError("Result is None")
+        if result.requests is None:
+            raise ValueError("Result.requests is None")
+        if result.limits is None:
+            raise ValueError("Result.limits is None")
+
         # Requests come from reservations (0.5 CPU, 512Mi)
         assert result.requests.cpu == "500m"  # 0.5 cores = 500m
         assert result.requests.memory == "512Mi"
@@ -212,6 +223,13 @@ class TestResourcesGeneration:
 
         result = generate_resources_values(resources_config)
 
+        if result is None:
+            raise ValueError("Result is None")
+        if result.requests is None:
+            raise ValueError("Result.requests is None")
+        if result.limits is None:
+            raise ValueError("Result.limits is None")
+
         # Requests use the limits as base
         assert result.requests.cpu == "2000m"  # 2 cores = 2000m
         assert result.requests.memory == "2Gi"
@@ -229,6 +247,13 @@ class TestResourcesGeneration:
         resources_config = ResourcesConfig()
 
         result = generate_resources_values(resources_config)
+
+        if result is None:
+            raise ValueError("Result is None")
+        if result.requests is None:
+            raise ValueError("Result.requests is None")
+        if result.limits is None:
+            raise ValueError("Result.limits is None")
 
         # Defaults are applied (0.25 CPU, 0.5 GB minimum)
         assert result.requests.cpu == "250m"  # 0.25 cores = 250m
@@ -270,12 +295,12 @@ class TestHealthcheckGeneration:
 
     def test_generate_curl_healthcheck(self):
         """Test generating healthcheck from curl command."""
-        healthcheck = {
-            "test": ["CMD", "curl", "-f", "http://localhost:8080/health"],
-            "interval": "30s",
-            "timeout": "10s",
-            "retries": 3,
-        }
+        healthcheck = HealthCheck(
+            test=["CMD", "curl", "-f", "http://localhost:8080/health"],
+            interval="30s",
+            timeout="10s",
+            retries=3,
+        )
 
         result = generate_healthcheck_values(healthcheck, "api")
 
@@ -287,37 +312,60 @@ class TestHealthcheckGeneration:
 
     def test_generate_wget_healthcheck(self):
         """Test generating healthcheck from wget command."""
-        healthcheck = {
-            "test": ["CMD", "wget", "--spider", "http://localhost:3000/status"],
-        }
+        healthcheck = HealthCheck(
+            test=["CMD", "wget", "--spider", "http://localhost:3000/status"],
+        )
 
         result = generate_healthcheck_values(healthcheck, "web")
+
+        if result is None:
+            raise ValueError("Result is None")
+        if result.livenessProbe is None:
+            raise ValueError("Result.livenessProbe is None")
+        if result.livenessProbe.http_get is None:
+            raise ValueError("Result.livenessProbe.http_get is None")
 
         assert result.livenessProbe.http_get.path == "/status"
         assert result.livenessProbe.http_get.port == 3000
 
     def test_generate_exec_healthcheck(self):
         """Test generating exec healthcheck."""
-        healthcheck = {
-            "test": ["CMD", "/bin/health-check", "--verbose"],
-        }
+        healthcheck = HealthCheck(
+            test=["CMD", "/bin/health-check", "--verbose"],
+        )
 
         result = generate_healthcheck_values(healthcheck, "api")
+
+        if result is None:
+            raise ValueError("Result is None")
+        if result.livenessProbe is None:
+            raise ValueError("Result.livenessProbe is None")
+        if result.livenessProbe.exec is None:
+            raise ValueError("Result.livenessProbe.exec is None")
 
         assert result.livenessProbe.exec is not None
         assert "/bin/health-check" in result.livenessProbe.exec.command
 
     def test_healthcheck_timing_values(self):
         """Test healthcheck timing values are set correctly."""
-        healthcheck = {
-            "test": ["CMD", "curl", "-f", "http://localhost/health"],
-            "interval": "60s",
-            "timeout": "5s",
-            "retries": 5,
-            "start_period": "30s",
-        }
+        healthcheck = HealthCheck(
+            test=["CMD", "curl", "-f", "http://localhost/health"],
+            interval="60s",
+            timeout="5s",
+            retries=5,
+            start_period="30s",
+        )
 
         result = generate_healthcheck_values(healthcheck, "api")
+
+        if result is None:
+            raise ValueError("Result is None")
+        if result.livenessProbe is None:
+            raise ValueError("Result.livenessProbe is None")
+        if result.livenessProbe.period_seconds is None:
+            raise ValueError("Result.livenessProbe.period_seconds is None")
+        if result.livenessProbe.timeout_seconds is None:
+            raise ValueError("Result.livenessProbe.timeout_seconds is None")
 
         assert result.livenessProbe.period_seconds == 60
         assert result.livenessProbe.timeout_seconds == 5
@@ -326,11 +374,18 @@ class TestHealthcheckGeneration:
 
     def test_healthcheck_converts_service_name_to_localhost(self):
         """Test healthcheck converts service name URL to localhost."""
-        healthcheck = {
-            "test": ["CMD", "curl", "-f", "http://api:8080/health"],
-        }
+        healthcheck = HealthCheck(
+            test=["CMD", "curl", "-f", "http://api:8080/health"],
+        )
 
         result = generate_healthcheck_values(healthcheck, "api")
+
+        if result is None:
+            raise ValueError("Result is None")
+        if result.livenessProbe is None:
+            raise ValueError("Result.livenessProbe is None")
+        if result.livenessProbe.http_get is None:
+            raise ValueError("Result.livenessProbe.http_get is None")
 
         # Service name should be converted to localhost
         assert result.livenessProbe.http_get.port == 8080
@@ -397,8 +452,10 @@ class TestVolumesMountGeneration:
         assert len(result) == 0
 
     def test_parse_string_volume(self):
-        """Test parsing string volume format."""
-        volumes = ["data:/app/data"]
+        """Test parsing ServiceVolume objects."""
+        volumes = [
+            ServiceVolume(type="volume", source="data", target="/app/data"),
+        ]
         compose = ComposeFile(
             services=[],
             volumes=[ComposeVolume(name="data")],
@@ -475,6 +532,9 @@ class TestIngressGeneration:
         cluster_id = "fra-1"
 
         result = generate_ingress_values(service, deployment_id, cluster_id)
+
+        if result is None:
+            raise ValueError("Result is None")
 
         assert result.protocol == "http"
         assert result.hostname == "myservice-deplo.fra-1.lazycloud.dev"

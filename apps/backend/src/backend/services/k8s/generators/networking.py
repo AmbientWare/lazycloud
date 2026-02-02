@@ -15,6 +15,7 @@ from models.helm import (
     ParsedPort,
     PortConfig,
 )
+from models.k8s import Protocol
 from responses.deployments import ServiceEndpoints
 
 from backend.config import app_config
@@ -152,30 +153,18 @@ def parse_port_string(port_str: str) -> ParsedPort:
         raise ValueError(f"Invalid port format: {port_str}")
 
 
-def generate_ports_values(ports: list[str | int | ComposePort]) -> list[PortConfig]:
+def generate_ports_values(ports: list[ComposePort]) -> list[PortConfig]:
     """Generate Helm values for ports."""
     ports_values = []
     for port in ports:
-        if isinstance(port, (int, str)):
-            port_config = parse_port_string(str(port))
-            ports_values.append(
-                PortConfig(
-                    name=f"port-{port_config.target}",
-                    port=port_config.published or port_config.target,
-                    targetPort=port_config.target,
-                    protocol=port_config.protocol.upper(),
-                )
+        ports_values.append(
+            PortConfig(
+                name=f"port-{port.target}",
+                port=port.target,
+                targetPort=port.target,
+                protocol=Protocol(port.protocol.upper()),
             )
-
-        elif isinstance(port, ComposePort):
-            ports_values.append(
-                PortConfig(
-                    name=f"port-{port.target}",
-                    port=port.target,
-                    targetPort=port.target,
-                    protocol=port.protocol.upper(),
-                )
-            )
+        )
     return ports_values
 
 

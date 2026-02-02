@@ -1,5 +1,6 @@
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 import typer
 from models.build_args import BuildArg, BuildArgsCollection, ServiceBuildArgs
@@ -145,7 +146,7 @@ class DeployView:
         message: str | None = None,
     ) -> None:
         """Show deployment summary."""
-        status_badge = DeploymentStatusBadge(status)
+        status_badge = DeploymentStatusBadge(TaskStatus(status))
 
         table = Table(show_header=False, box=None)
         table.add_column("Property", style=Colors.Ansi.primary)
@@ -267,7 +268,7 @@ class DeployView:
 
         return True
 
-    def show_no_changes(self) -> bool:
+    def show_no_changes(self) -> None:
         """Show no changes detected message."""
         dialog = Card(
             content=Text(
@@ -347,7 +348,7 @@ class DeployView:
             env_file = find_env_file(project_dir)
 
         # Determine source: use provided or ask user
-        import_method: ImportMethod
+        import_method: ImportMethod | Literal["manual"]
         env_file_path: Path | None = None
 
         if env_source:
@@ -719,7 +720,7 @@ class BuildProgress:
 
             status_display = Text(
                 status.replace("_", " ").title(),
-                style=status_styles.get(status, Colors.Ansi.text_muted),
+                style=status_styles.get(TaskStatus(status), Colors.Ansi.text_muted),
             )
 
             table.add_row(

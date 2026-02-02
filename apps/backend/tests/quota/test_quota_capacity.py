@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 from backend.database import Database
+from backend.database.models import WorkspaceRole
 from backend.tasks.core.utils import verify_quota_capacity
-from models.workspaces import WorkspaceRole
 
 from tests.fixtures.database import (
     make_deployment,

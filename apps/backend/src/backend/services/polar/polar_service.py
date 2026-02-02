@@ -45,6 +45,9 @@ class PolarService:
                 "Polar billing service disabled: POLAR_ACCESS_TOKEN not configured"
             )
 
+        if self.client is None:
+            raise RuntimeError("Polar client is not initialized")
+
         self.customers = PolarCustomersModule(client=self.client, enabled=self.enabled)
         self.meters = PolarMetersModule(client=self.client, enabled=self.enabled)
         self.products = PolarProductsModule(client=self.client, enabled=self.enabled)

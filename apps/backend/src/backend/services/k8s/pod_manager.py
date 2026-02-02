@@ -27,14 +27,14 @@ class KubernetesPodManager:
 
         try:
             core_v1 = await get_async_core_v1_api(self.cluster_id)
-            v1_pod = await core_v1.read_namespaced_pod(
+            v1_pod = await core_v1.read_namespaced_pod(  # type: ignore[misc]
                 name=pod_name, namespace=namespace
             )
 
             # Convert Kubernetes client object to dict, then to our Pod model
             api_client = await get_async_api_client(self.cluster_id)
             pod_dict = api_client.sanitize_for_serialization(v1_pod)
-            pod = Pod(**pod_dict)
+            pod = Pod(**pod_dict)  # type: ignore[arg-type]
 
             return PodOperationResult(
                 success=True,
@@ -86,7 +86,7 @@ class KubernetesPodManager:
                 delete_options["propagation_policy"] = "Background"
 
             # Delete the pod
-            await core_v1.delete_namespaced_pod(
+            await core_v1.delete_namespaced_pod(  # type: ignore[misc]
                 name=pod_name,
                 namespace=namespace,
                 **delete_options,

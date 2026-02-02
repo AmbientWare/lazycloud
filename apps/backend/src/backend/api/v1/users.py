@@ -10,7 +10,7 @@ from backend.api.dependencies import get_user_product_features
 from backend.api.security import get_current_active_user, require_admin
 from backend.billing.product_details.features import BaseFeatures
 from backend.database import Database, get_db
-from backend.database.users import UserPydantic
+from backend.database.models import UserInDb
 from backend.services import get_user_onboarding_service
 from backend.services.user_onboarding import UserOnboardingService
 
@@ -19,15 +19,15 @@ users_router = APIRouter(prefix="/users", tags=["users"])
 
 @users_router.get("/current")
 async def current_user(
-    current_user: UserPydantic = Depends(get_current_active_user),
+    current_user: UserInDb = Depends(get_current_active_user),
 ) -> CurrentUserResponse:
     """Used to return the current user's id. This is typically used when user requests with an api key"""
-    return current_user
+    return CurrentUserResponse(id=current_user.id, workos_id=current_user.workos_id)
 
 
 @users_router.get("/features")
 async def get_user_features(
-    current_user: UserPydantic = Depends(get_current_active_user),
+    current_user: UserInDb = Depends(get_current_active_user),
     features: BaseFeatures = Depends(get_user_product_features),
     db: Database = Depends(get_db),
 ) -> UserFeaturesResponse:
@@ -54,7 +54,7 @@ async def get_user_features(
 async def onboard_user(
     request: OnboardingRequest,
     onboarding_service: UserOnboardingService = Depends(get_user_onboarding_service),
-    _: UserPydantic = Depends(require_admin),
+    _: UserInDb = Depends(require_admin),
 ) -> OnboardingResponse:
     """Onboard a new user with proper transaction handling."""
     try:

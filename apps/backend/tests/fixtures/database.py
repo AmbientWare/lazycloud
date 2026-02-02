@@ -1,37 +1,64 @@
 """Database fixtures for integration tests using dependency injection container."""
 
+import os
 import socket
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import AsyncGenerator
+from urllib.parse import urlparse
 
 import pytest
 from backend.billing.product_details.features import BaseFeatures
 from backend.database import Database, _create_database
-from backend.database.api_keys import ApiKeyPydantic
-from backend.database.compose import ComposeDeploymentPydantic
-from backend.database.invitations import WorkspaceInvitationPydantic
-from backend.database.secrets import SecretPydantic
-from backend.database.session import session_manager
-from backend.database.usage import DailyUsageRecordPydantic, DailyUsageStatus
-from backend.database.user_workspaces import UserWorkspacePydantic
-from backend.database.users import (
+from backend.database.models import (
+    ApiKey,
+    ApiKeyInDb,
+    ComposeDeployment,
+    ComposeDeploymentInDb,
+    DailyUsageRecord,
+    InvitationType,
+    Secret,
+    SecretInDb,
     SubscriptionState,
-    UserPydantic,
+    User,
+    UserInDb,
     UserRole,
     UserStatus,
+    UserWorkspace,
+    UserWorkspaceStatus,
+    Workspace,
+    WorkspaceInDb,
+    WorkspaceInvitation,
+    WorkspaceInvitationInDb,
+    WorkspaceRole,
+    WorkspaceStatus,
 )
-from backend.database.workspaces import WorkspacePydantic, WorkspaceStatus
+from backend.database.session import session_manager
 from models.deployments import DeploymentStates
-from models.helm import ImageConfig, ServiceValues
+from models.helm import HelmValues, ImageConfig, ServiceValues
+from models.k8s import WorkloadType
 from models.secrets import SecretSource, SecretState
-from models.workspaces import InvitationType, UserWorkspaceStatus, WorkspaceRole
+from models.usage import DailyUsageStatus
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
+def get_db_host_port() -> tuple[str, int]:
+    """Parse DATABASE_URL to get host and port for connection check."""
+    database_url = os.environ.get(
+        "DATABASE_URL", "postgresql+asyncpg://lc_dev:lc_dev@localhost:5432/lazycloud"
+    )
+    # Remove the driver prefix for urlparse (postgresql+asyncpg:// -> postgresql://)
+    if "+asyncpg" in database_url:
+        database_url = database_url.replace("+asyncpg", "")
+    parsed = urlparse(database_url)
+    return parsed.hostname or "localhost", parsed.port or 5432
+
+
 def is_db_available() -> bool:
-    """Check if the test database is available."""
+    """Check if the test database is available based on DATABASE_URL."""
+    host, port = get_db_host_port()
     try:
-        sock = socket.create_connection(("localhost", 6432), timeout=1)
+        sock = socket.create_connection((host, port), timeout=1)
         sock.close()
         return True
     except (socket.timeout, ConnectionRefusedError, OSError):
@@ -40,12 +67,12 @@ def is_db_available() -> bool:
 
 requires_db = pytest.mark.skipif(
     not is_db_available(),
-    reason="Database not available (run: docker compose up -d postgres)",
+    reason="Database not available (run: docker compose --profile db up -d)",
 )
 
 
 @pytest.fixture
-async def db_session() -> AsyncSession:
+async def db_session() -> AsyncGenerator[AsyncSession, None]:
     """Provide a transactional session that rolls back after each test."""
     # Reset session_manager to get a fresh engine for this event loop
     await session_manager.reset()
@@ -85,10 +112,10 @@ def db(db_session: AsyncSession) -> Database:
 # Helper functions to create test data models (not persisted)
 
 
-def make_user(unique_id: str | None = None) -> UserPydantic:
-    """Create a UserPydantic model (not persisted)."""
+def make_user(unique_id: str | None = None) -> User:
+    """Create a User model (not persisted)."""
     unique_id = unique_id or str(uuid.uuid4())[:8]
-    return UserPydantic(
+    return User(
         name=f"Test User {unique_id}",
         email=f"test_{unique_id}@example.com",
         workos_id=f"workos_test_{unique_id}",
@@ -98,10 +125,10 @@ def make_user(unique_id: str | None = None) -> UserPydantic:
     )
 
 
-def make_admin_user(unique_id: str | None = None) -> UserPydantic:
-    """Create an admin UserPydantic model (not persisted)."""
+def make_admin_user(unique_id: str | None = None) -> User:
+    """Create an admin User model (not persisted)."""
     unique_id = unique_id or str(uuid.uuid4())[:8]
-    return UserPydantic(
+    return User(
         name=f"Admin User {unique_id}",
         email=f"admin_{unique_id}@example.com",
         workos_id=f"workos_admin_{unique_id}",
@@ -111,12 +138,10 @@ def make_admin_user(unique_id: str | None = None) -> UserPydantic:
     )
 
 
-def make_workspace(
-    name: str | None = None, is_personal: bool = False
-) -> WorkspacePydantic:
-    """Create a WorkspacePydantic model (not persisted)."""
+def make_workspace(name: str | None = None, is_personal: bool = False) -> Workspace:
+    """Create a Workspace model (not persisted)."""
     unique_id = str(uuid.uuid4())[:8]
-    return WorkspacePydantic(
+    return Workspace(
         name=name or f"Test Workspace {unique_id}",
         is_personal=is_personal,
         status=WorkspaceStatus.ACTIVE,
@@ -127,9 +152,9 @@ def make_user_workspace(
     user_id: str,
     workspace_id: str,
     role: WorkspaceRole = WorkspaceRole.OWNER,
-) -> UserWorkspacePydantic:
-    """Create a UserWorkspacePydantic model (not persisted)."""
-    return UserWorkspacePydantic(
+) -> UserWorkspace:
+    """Create a UserWorkspace model (not persisted)."""
+    return UserWorkspace(
         user_id=user_id,
         workspace_id=workspace_id,
         role=role,
@@ -141,16 +166,43 @@ def make_deployment(
     workspace_id: str,
     name: str | None = None,
     state: DeploymentStates = DeploymentStates.DEPLOYED,
-) -> ComposeDeploymentPydantic:
-    """Create a ComposeDeploymentPydantic model (not persisted)."""
+    with_helm_values: bool = False,
+) -> ComposeDeployment:
+    """Create a ComposeDeployment model (not persisted).
+
+    Args:
+        workspace_id: The workspace ID for the deployment.
+        name: Optional name for the deployment.
+        state: The deployment state.
+        with_helm_values: If True, include default helm_values and deployed_at for status tests.
+    """
+
     unique_id = str(uuid.uuid4())[:8]
-    return ComposeDeploymentPydantic(
+    helm_values = None
+    deployed_at = None
+    if with_helm_values:
+        helm_values = HelmValues(
+            services=[
+                ServiceValues(
+                    name="web",
+                    image=ImageConfig(
+                        repository="nginx", tag="latest", pullPolicy="IfNotPresent"
+                    ),
+                    resourceName="web",
+                    workloadType=WorkloadType.DEPLOYMENT,
+                )
+            ]
+        )
+        deployed_at = datetime.now(timezone.utc)
+    return ComposeDeployment(
         name=name or f"test-deployment-{unique_id}",
         namespace=f"lc-test-{unique_id}",
         workspace_id=workspace_id,
         compose_yaml="version: '3.8'\nservices:\n  web:\n    image: nginx",
         state=state,
         cluster_id="ash-1",
+        helm_values=helm_values,
+        deployed_at=deployed_at,
     )
 
 
@@ -158,10 +210,10 @@ def make_api_key(
     user_id: str,
     name: str | None = None,
     expires_in_days: int = 30,
-) -> ApiKeyPydantic:
-    """Create an ApiKeyPydantic model (not persisted)."""
+) -> ApiKey:
+    """Create an ApiKey model (not persisted)."""
     unique_id = str(uuid.uuid4())[:8]
-    return ApiKeyPydantic(
+    return ApiKey(
         name=name or f"test-key-{unique_id}",
         user_id=user_id,
         value=f"lzy_test_{unique_id}_{uuid.uuid4().hex[:16]}",
@@ -175,10 +227,10 @@ def make_secret(
     value: str = "secret_value",
     source: SecretSource = SecretSource.USER,
     state: SecretState = SecretState.DEPLOYED,
-) -> SecretPydantic:
-    """Create a SecretPydantic model (not persisted)."""
+) -> Secret:
+    """Create a Secret model (not persisted)."""
     unique_id = str(uuid.uuid4())[:8]
-    return SecretPydantic(
+    return Secret(
         deployment_id=deployment_id,
         key=key or f"SECRET_{unique_id}",
         value=value,
@@ -193,10 +245,10 @@ def make_invitation(
     email: str | None = None,
     role: WorkspaceRole = WorkspaceRole.MEMBER,
     expires_in_days: int = 7,
-) -> WorkspaceInvitationPydantic:
-    """Create a WorkspaceInvitationPydantic model (not persisted)."""
+) -> WorkspaceInvitation:
+    """Create a WorkspaceInvitation model (not persisted)."""
     unique_id = str(uuid.uuid4())[:8]
-    return WorkspaceInvitationPydantic(
+    return WorkspaceInvitation(
         workspace_id=workspace_id,
         email=email or f"invite_{unique_id}@example.com",
         role=role,
@@ -215,9 +267,9 @@ def make_daily_usage_record(
     storage_gb_months: float = 0.0,
     build_minutes: float = 0.0,
     public_endpoint_hours: float = 0.0,
-) -> DailyUsageRecordPydantic:
-    """Create a DailyUsageRecordPydantic model (not persisted)."""
-    return DailyUsageRecordPydantic(
+) -> DailyUsageRecord:
+    """Create a DailyUsageRecord model (not persisted)."""
+    return DailyUsageRecord(
         workspace_id=workspace_id,
         usage_date=(usage_date or datetime.now(timezone.utc)).date(),
         status=DailyUsageStatus.COLLECTING,
@@ -257,6 +309,7 @@ def make_service(name: str) -> ServiceValues:
         enabled=True,
         resourceName=name,
         image=ImageConfig(repository="nginx", tag="latest", pullPolicy="IfNotPresent"),
+        workloadType=WorkloadType.DEPLOYMENT,
     )
 
 
@@ -264,19 +317,19 @@ def make_service(name: str) -> ServiceValues:
 
 
 @pytest.fixture
-async def db_user(db: Database) -> UserPydantic:
+async def db_user(db: Database) -> User:
     """Create a test user in the database (rolled back after test)."""
     return await db.users.create(make_user())
 
 
 @pytest.fixture
-async def db_admin_user(db: Database) -> UserPydantic:
+async def db_admin_user(db: Database) -> User:
     """Create an admin test user in the database."""
     return await db.users.create(make_admin_user())
 
 
 @pytest.fixture
-async def db_workspace(db: Database, db_user: UserPydantic) -> WorkspacePydantic:
+async def db_workspace(db: Database, db_user: UserInDb) -> WorkspaceInDb:
     """Create a test workspace linked to the test user."""
     workspace = await db.workspaces.create(make_workspace())
     await db.user_workspaces.create(make_user_workspace(db_user.id, workspace.id))
@@ -286,7 +339,7 @@ async def db_workspace(db: Database, db_user: UserPydantic) -> WorkspacePydantic
 @pytest.fixture
 async def db_user_with_workspace(
     db: Database,
-) -> tuple[UserPydantic, WorkspacePydantic]:
+) -> tuple[User, Workspace]:
     """Create user with an owned workspace."""
     user = await db.users.create(make_user())
     workspace = await db.workspaces.create(make_workspace())
@@ -295,9 +348,7 @@ async def db_user_with_workspace(
 
 
 @pytest.fixture
-async def db_personal_workspace(
-    db: Database, db_user: UserPydantic
-) -> WorkspacePydantic:
+async def db_personal_workspace(db: Database, db_user: UserInDb) -> WorkspaceInDb:
     """Create a personal workspace for the test user."""
     workspace = await db.workspaces.create(
         make_workspace(name="Personal", is_personal=True)
@@ -308,38 +359,36 @@ async def db_personal_workspace(
 
 @pytest.fixture
 async def db_deployment(
-    db: Database, db_workspace: WorkspacePydantic
-) -> ComposeDeploymentPydantic:
+    db: Database, db_workspace: WorkspaceInDb
+) -> ComposeDeploymentInDb:
     """Create a test deployment in the database."""
     return await db.compose_deployments.create(make_deployment(db_workspace.id))
 
 
 @pytest.fixture
-async def db_api_key(db: Database, db_user: UserPydantic) -> ApiKeyPydantic:
+async def db_api_key(db: Database, db_user: UserInDb) -> ApiKeyInDb:
     """Create a test API key in the database."""
     return await db.api_keys.create(make_api_key(db_user.id))
 
 
 @pytest.fixture
-async def db_secret(
-    db: Database, db_deployment: ComposeDeploymentPydantic
-) -> SecretPydantic:
+async def db_secret(db: Database, db_deployment: ComposeDeploymentInDb) -> SecretInDb:
     """Create a test secret in the database."""
     return await db.secrets.create(make_secret(db_deployment.id))
 
 
 @pytest.fixture
 async def db_invitation(
-    db: Database, db_workspace: WorkspacePydantic, db_user: UserPydantic
-) -> WorkspaceInvitationPydantic:
+    db: Database, db_workspace: WorkspaceInDb, db_user: UserInDb
+) -> WorkspaceInvitationInDb:
     """Create a test invitation in the database."""
     return await db.invitations.create(make_invitation(db_workspace.id, db_user.id))
 
 
 @pytest.fixture
 async def db_multiple_workspaces(
-    db: Database, db_user: UserPydantic
-) -> list[WorkspacePydantic]:
+    db: Database, db_user: UserInDb
+) -> list[WorkspaceInDb]:
     """Create multiple workspaces for limit testing."""
     workspaces = []
     for i in range(3):
@@ -351,8 +400,8 @@ async def db_multiple_workspaces(
 
 @pytest.fixture
 async def db_multiple_deployments(
-    db: Database, db_workspace: WorkspacePydantic
-) -> list[ComposeDeploymentPydantic]:
+    db: Database, db_workspace: WorkspaceInDb
+) -> list[ComposeDeployment]:
     """Create multiple deployments for limit testing."""
     deployments = []
     for i in range(3):

@@ -3,7 +3,7 @@ from loguru import logger
 from models.feedback import FeedbackRequest, FeedbackResponse
 
 from backend.api.security import get_current_active_user
-from backend.database.users import UserPydantic
+from backend.database.models import UserInDb
 from backend.rate_limit import limiter
 from backend.services.email import email_service
 
@@ -13,9 +13,9 @@ feedback_router = APIRouter(prefix="/feedback", tags=["feedback"])
 @feedback_router.post("")
 @limiter.limit("5/minute")
 async def submit_feedback(
-    request: Request,
+    request: Request,  # NOTE: needed for rate limiting
     feedback: FeedbackRequest,
-    current_user: UserPydantic = Depends(get_current_active_user),
+    current_user: UserInDb = Depends(get_current_active_user),
 ) -> FeedbackResponse:
     """Submit user feedback (bug report, feature request, or other)."""
     try:

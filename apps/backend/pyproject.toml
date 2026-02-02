@@ -65,8 +65,20 @@ markers = [
     "billing: billing flow tests",
 ]
 env = [
-    "DATABASE_URL=postgresql+asyncpg://lc_dev:password@localhost:6432/postgres",
+    "DATABASE_URL=postgresql+asyncpg://lc_dev:lc_dev@localhost:5432/lazycloud",
     "REDIS_URL=redis://localhost:6379",
+    "CLOUDFLARE_API_KEY=test",
+    "CLOUDFLARE_ZONE_ID=test",
+    "CLOUDFLARE_ACCOUNT_ID=test",
+    "ADMIN_API_KEY=test",
+    "DB_SECRET_KEY=HLyDC_qPILR7OJvEEJrPWCYkNIJqOQVJKPJvKq_9F_E=",
+    "RESEND_API_KEY=test",
+    "POLAR_ACCESS_TOKEN=test",
+    "POLAR_ORGANIZATION_ID=test",
+    "IS_POLAR_SANDBOX=true",
+    "DEPOT_API_TOKEN=test",
+    "DEPOT_ORG_ID=test",
+    "PROMETHEUS_URL=http://localhost:9090",
 ]
 
 [tool.pyright]

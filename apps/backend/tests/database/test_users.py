@@ -1,7 +1,7 @@
 """Tests for UserService database operations."""
 
 from backend.database import Database
-from backend.database.users import (
+from backend.database.models import (
     SubscriptionState,
     UserRole,
     UserStatus,

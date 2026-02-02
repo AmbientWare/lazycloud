@@ -8,9 +8,9 @@ from models.deployments import DeploymentStates
 
 from backend.config import app_config
 from backend.database import get_db_context
-from backend.tasks.client import run_destroy_compose
 from backend.services.k8s import create_release_name
 from backend.services.k8s.helm_manager import HelmManager
+from backend.tasks.client import run_destroy_compose
 
 
 async def reconcile_rollback_states_job(

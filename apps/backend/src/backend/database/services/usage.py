@@ -1,204 +1,44 @@
-import uuid
+import asyncio
 from datetime import date, datetime, timezone
-from enum import StrEnum
 
 from models.billing import UsageCollectionConfig
 from models.storage import STORAGE_CLASS_STANDARD
-from sqlalchemy import (
-    UUID,
-    Date,
-    DateTime,
-    Float,
-    ForeignKey,
-    Index,
-    Integer,
-    String,
-    UniqueConstraint,
-    func,
-    select,
-    update,
-)
+from models.usage import BreakdownType, DailyUsageStatus
+from sqlalchemy import exists as sql_exists
+from sqlalchemy import func, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.future import select
 
-from backend.database.base import (
-    BaseDbPydanticModel,
-    BaseTable,
-    DatabaseService,
-    UUIDStr,
+from backend.database.models import DailyUsageRecordInDb
+from backend.database.services.base import DatabaseService
+from backend.database.tables import (
+    CollectedIntervalTable,
+    DailyUsageRecordTable,
+    UsageBreakdownEventTable,
 )
 
 
-class DailyUsageStatus(StrEnum):
-    COLLECTING = "collecting"
-    BILLED = "billed"
+class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecordInDb]):
+    """Service layer for usage tracking and billing operations."""
 
-
-class BreakdownType(StrEnum):
-    COMPUTE = "compute"
-    STORAGE = "storage"
-    NETWORK = "network"
-    BUILD = "build"
-
-
-class DailyUsageRecordTable(BaseTable):
-    """One record per workspace per day - totals updated via atomic increment."""
-
-    __tablename__ = "daily_usage_records"
-
-    workspace_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="RESTRICT"), index=True
-    )
-    usage_date: Mapped[date] = mapped_column(Date, index=True)
-    status: Mapped[str] = mapped_column(
-        String, default=DailyUsageStatus.COLLECTING.value
-    )
-
-    # Totals - updated atomically via SQL increment
-    cpu_core_seconds: Mapped[float] = mapped_column(Float, default=0.0)
-    memory_gb_seconds: Mapped[float] = mapped_column(Float, default=0.0)
-    storage_gb_months: Mapped[float] = mapped_column(Float, default=0.0)
-    build_minutes: Mapped[float] = mapped_column(Float, default=0.0)
-    public_endpoint_hours: Mapped[float] = mapped_column(Float, default=0.0)
-
-    # Tracking
-    intervals_collected: Mapped[int] = mapped_column(Integer, default=0)
-    expected_intervals: Mapped[int] = mapped_column(Integer, default=96)
-
-    # Billing
-    billing_id: Mapped[str | None] = mapped_column(String, nullable=True)
-    billed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-
-    # Billing attempts tracking
-    billing_attempts: Mapped[int] = mapped_column(Integer, default=0)
-    last_billing_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    last_billing_attempt_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-
-    __table_args__ = (
-        UniqueConstraint(
-            "workspace_id", "usage_date", name="uq_daily_usage_workspace_date"
-        ),
-        Index("ix_daily_usage_status_date", "status", "usage_date"),
-    )
-
-
-class CollectedIntervalTable(BaseTable):
-    """Tracks which intervals have been collected - enables idempotency."""
-
-    __tablename__ = "collected_intervals"
-
-    workspace_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
-    interval_start: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), index=True
-    )
-
-    __table_args__ = (
-        UniqueConstraint(
-            "workspace_id", "interval_start", name="uq_collected_interval"
-        ),
-    )
-
-
-class UsageBreakdownEventTable(BaseTable):
-    """Append-only breakdown events for dashboard queries. Never updated."""
-
-    __tablename__ = "usage_breakdown_events"
-
-    workspace_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
-    deployment_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), nullable=True, index=True
-    )
-    interval_start: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), index=True
-    )
-    interval_end: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-
-    breakdown_type: Mapped[str] = mapped_column(String, index=True)
-    resource_name: Mapped[str] = mapped_column(String, index=True)
-    service_name: Mapped[str | None] = mapped_column(String, nullable=True)
-    storage_class: Mapped[str | None] = mapped_column(String, nullable=True)
-
-    cpu_core_seconds: Mapped[float] = mapped_column(Float, default=0.0)
-    memory_gb_seconds: Mapped[float] = mapped_column(Float, default=0.0)
-    gb_hours: Mapped[float] = mapped_column(Float, default=0.0)
-    endpoint_hours: Mapped[float] = mapped_column(Float, default=0.0)
-    build_minutes: Mapped[float] = mapped_column(Float, default=0.0)
-
-    __table_args__ = (
-        Index(
-            "ix_breakdown_events_query",
-            "workspace_id",
-            "interval_start",
-            "breakdown_type",
-        ),
-        Index("ix_breakdown_events_deployment", "deployment_id", "interval_start"),
-    )
-
-
-# Pydantic Models
-
-
-class DailyUsageRecordPydantic(BaseDbPydanticModel):
-    workspace_id: UUIDStr
-    usage_date: date
-    status: DailyUsageStatus
-    cpu_core_seconds: float
-    memory_gb_seconds: float
-    storage_gb_months: float
-    build_minutes: float
-    public_endpoint_hours: float
-    intervals_collected: int
-    expected_intervals: int
-    billing_id: str | None = None
-    billed_at: datetime | None = None
-    billing_attempts: int = 0
-    last_billing_error: str | None = None
-    last_billing_attempt_at: datetime | None = None
-
-
-class CollectedIntervalPydantic(BaseDbPydanticModel):
-    workspace_id: UUIDStr
-    interval_start: datetime
-
-
-class UsageBreakdownEventPydantic(BaseDbPydanticModel):
-    workspace_id: UUIDStr
-    deployment_id: UUIDStr | None = None
-    interval_start: datetime
-    interval_end: datetime
-    breakdown_type: str
-    resource_name: str
-    service_name: str | None = None
-    storage_class: str | None = None
-    cpu_core_seconds: float = 0.0
-    memory_gb_seconds: float = 0.0
-    gb_hours: float = 0.0
-    endpoint_hours: float = 0.0
-    build_minutes: float = 0.0
-
-
-class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecordPydantic]):
     def __init__(self, session: AsyncSession):
-        super().__init__(DailyUsageRecordTable, DailyUsageRecordPydantic, session)
+        super().__init__(DailyUsageRecordTable, DailyUsageRecordInDb, session)
 
     async def is_interval_collected(
         self, workspace_id: str, interval_start: datetime
     ) -> bool:
         """Check if an interval has already been collected."""
-        result = await self._session.execute(
-            select(CollectedIntervalTable)
+        query = select(
+            sql_exists()
             .where(CollectedIntervalTable.workspace_id == workspace_id)
             .where(CollectedIntervalTable.interval_start == interval_start)
         )
-        return result.scalar_one_or_none() is not None
+        result = await self._session.execute(query)
+        return result.scalar() or False
 
     async def get_or_create_daily_record(
         self, workspace_id: str, usage_date: date, expected_intervals: int = 96
-    ) -> DailyUsageRecordPydantic:
+    ) -> DailyUsageRecordInDb:
         """Get existing daily record or create a new one."""
         result = await self._session.execute(
             select(DailyUsageRecordTable)
@@ -208,7 +48,7 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecordPydant
         record = result.scalar_one_or_none()
 
         if record:
-            return record.to_pydantic(DailyUsageRecordPydantic)
+            return self._to_pydantic(record)
 
         new_record = DailyUsageRecordTable(
             workspace_id=workspace_id,
@@ -219,9 +59,9 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecordPydant
         self._session.add(new_record)
         await self._session.flush()
         await self._session.refresh(new_record)
-        return new_record.to_pydantic(DailyUsageRecordPydantic)
+        return self._to_pydantic(new_record)
 
-    async def atomic_increment_usage(
+    async def increment_usage(
         self,
         record_id: str,
         cpu_core_seconds: float,
@@ -242,7 +82,7 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecordPydant
                 storage_gb_months=DailyUsageRecordTable.storage_gb_months
                 + storage_gb_months,
                 intervals_collected=DailyUsageRecordTable.intervals_collected + 1,
-                updated_at=func.now(),
+                updated_at=datetime.now(timezone.utc),
             )
         )
 
@@ -293,7 +133,7 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecordPydant
 
     async def get_unbilled_for_date(
         self, usage_date: date
-    ) -> list[DailyUsageRecordPydantic]:
+    ) -> list[DailyUsageRecordInDb]:
         """Get all daily records that are collecting and ready to bill."""
         result = await self._session.execute(
             select(DailyUsageRecordTable)
@@ -301,8 +141,7 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecordPydant
             .where(DailyUsageRecordTable.usage_date == usage_date)
             .order_by(DailyUsageRecordTable.workspace_id)
         )
-        records = result.scalars().all()
-        return [r.to_pydantic(DailyUsageRecordPydantic) for r in records]
+        return [self._to_pydantic(r) for r in result.scalars().all()]
 
     async def mark_as_billed(self, record_id: str, billing_id: str) -> None:
         """Mark a daily record as billed."""
@@ -313,7 +152,7 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecordPydant
                 status=DailyUsageStatus.BILLED.value,
                 billing_id=billing_id,
                 billed_at=datetime.now(timezone.utc),
-                updated_at=func.now(),
+                updated_at=datetime.now(timezone.utc),
             )
         )
 
@@ -321,10 +160,10 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecordPydant
         self, record_id: str, error: str | None = None
     ) -> None:
         """Increment billing attempt counter and optionally record error."""
-        values = {
+        values: dict = {
             "billing_attempts": DailyUsageRecordTable.billing_attempts + 1,
             "last_billing_attempt_at": datetime.now(timezone.utc),
-            "updated_at": func.now(),
+            "updated_at": datetime.now(timezone.utc),
         }
         if error:
             values["last_billing_error"] = error[:500]
@@ -334,9 +173,7 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecordPydant
             .values(**values)
         )
 
-    async def get_stuck_records(
-        self, before_date: date
-    ) -> list[DailyUsageRecordPydantic]:
+    async def get_stuck_records(self, before_date: date) -> list[DailyUsageRecordInDb]:
         """Get records stuck in collecting status from before the given date."""
         result = await self._session.execute(
             select(DailyUsageRecordTable)
@@ -344,15 +181,14 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecordPydant
             .where(DailyUsageRecordTable.usage_date < before_date)
             .order_by(DailyUsageRecordTable.usage_date)
         )
-        records = result.scalars().all()
-        return [r.to_pydantic(DailyUsageRecordPydantic) for r in records]
+        return [self._to_pydantic(r) for r in result.scalars().all()]
 
     async def get_workspace_daily_usage(
         self,
         workspace_id: str,
         start_date: date,
         end_date: date,
-    ) -> list[DailyUsageRecordPydantic]:
+    ) -> list[DailyUsageRecordInDb]:
         """Get daily usage records for a workspace in a date range."""
         result = await self._session.execute(
             select(DailyUsageRecordTable)
@@ -361,8 +197,7 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecordPydant
             .where(DailyUsageRecordTable.usage_date <= end_date)
             .order_by(DailyUsageRecordTable.usage_date)
         )
-        records = result.scalars().all()
-        return [r.to_pydantic(DailyUsageRecordPydantic) for r in records]
+        return [self._to_pydantic(r) for r in result.scalars().all()]
 
     async def get_service_breakdown(
         self,
@@ -449,9 +284,7 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecordPydant
         )
 
         storage_query = (
-            select(
-                func.sum(UsageBreakdownEventTable.gb_hours).label("gb_hours"),
-            )
+            select(func.sum(UsageBreakdownEventTable.gb_hours).label("gb_hours"))
             .where(UsageBreakdownEventTable.deployment_id == deployment_id)
             .where(
                 UsageBreakdownEventTable.breakdown_type == BreakdownType.STORAGE.value
@@ -484,27 +317,27 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecordPydant
             .where(UsageBreakdownEventTable.interval_start < end_date)
         )
 
-        compute_result = await self._session.execute(compute_query)
-        storage_result = await self._session.execute(storage_query)
-        network_result = await self._session.execute(network_query)
-        build_result = await self._session.execute(build_query)
+        # Run all queries in parallel
+        (
+            compute_result,
+            storage_result,
+            network_result,
+            build_result,
+        ) = await asyncio.gather(
+            self._session.execute(compute_query),
+            self._session.execute(storage_query),
+            self._session.execute(network_query),
+            self._session.execute(build_query),
+        )
 
         compute_row = compute_result.one()
         cpu = compute_row[0] or 0.0
         memory = compute_row[1] or 0.0
-
         storage_gb_hours = storage_result.scalar() or 0.0
-
         endpoint_hours = network_result.scalar() or 0.0
         build_minutes = build_result.scalar() or 0.0
 
-        return (
-            cpu,
-            memory,
-            storage_gb_hours,
-            endpoint_hours,
-            build_minutes,
-        )
+        return (cpu, memory, storage_gb_hours, endpoint_hours, build_minutes)
 
     async def get_latest_storage_sizes(
         self,
@@ -517,7 +350,6 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecordPydant
         For EBS: this is the provisioned size.
         For EFS: this is the actual used size from CloudWatch.
         """
-        # Get the most recent interval for this deployment
         latest_interval_query = (
             select(func.max(UsageBreakdownEventTable.interval_start))
             .where(UsageBreakdownEventTable.deployment_id == deployment_id)
@@ -530,7 +362,6 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecordPydant
         if not latest_interval:
             return {}
 
-        # Get all storage events from that interval
         query = (
             select(
                 UsageBreakdownEventTable.resource_name,
@@ -547,7 +378,6 @@ class UsageService(DatabaseService[DailyUsageRecordTable, DailyUsageRecordPydant
         result = await self._session.execute(query)
 
         # Convert gb_hours back to size_gb
-        # gb_hours = size_gb * interval_hours, so size_gb = gb_hours / interval_hours
         interval_hours = UsageCollectionConfig.COLLECTION_INTERVAL.value / 60.0
 
         storage_sizes: dict[str, tuple[str, float]] = {}

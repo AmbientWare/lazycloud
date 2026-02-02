@@ -1,15 +1,14 @@
 """SAQ utility functions for job status tracking."""
 
 from typing import Any
-from uuid import UUID
 
 from loguru import logger
-from saq import Status
-
-from backend.tasks.queue import get_background_queue
 
 # Import TaskStatus from models
 from models.statuses import TaskStatus
+from saq import Status
+
+from backend.tasks.queue import get_background_queue
 
 # Map SAQ Status to TaskStatus
 SAQ_STATUS_MAP: dict[Status, TaskStatus] = {
@@ -47,7 +46,7 @@ def _transform_error_message(error: str | None) -> str:
     return error
 
 
-async def get_task_result(task_run_id: UUID | str) -> tuple[TaskStatus, Any]:
+async def get_task_result(task_run_id: str) -> tuple[TaskStatus, Any]:
     """Get SAQ job result/status.
 
     Args:
@@ -56,15 +55,14 @@ async def get_task_result(task_run_id: UUID | str) -> tuple[TaskStatus, Any]:
     Returns:
         A tuple of (TaskStatus, message)
     """
-    job_key = str(task_run_id)
     queue = get_background_queue()
 
     try:
-        job = await queue.job(job_key)
+        job = await queue.job(task_run_id)
 
         if job is None:
             # Job not found - might be expired or never existed
-            logger.warning(f"Job {job_key} not found in queue")
+            logger.warning(f"Job {task_run_id} not found in queue")
             return TaskStatus.ERROR, "Job not found"
 
         status = SAQ_STATUS_MAP.get(job.status, TaskStatus.PENDING)
@@ -93,5 +91,5 @@ async def get_task_result(task_run_id: UUID | str) -> tuple[TaskStatus, Any]:
         return status, None
 
     except Exception as e:
-        logger.error(f"Error checking job status for {job_key}: {e}")
+        logger.error(f"Error checking job status for {task_run_id}: {e}")
         return TaskStatus.ERROR, "Failed to check job status"

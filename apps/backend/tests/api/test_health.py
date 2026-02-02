@@ -40,3 +40,7 @@ class TestCLIVersion:
         # Basic version format check (x.y.z)
         parts = version.split(".")
         assert len(parts) >= 2  # At least major.minor
+        # Verify parts are numeric (or numeric with suffix like "0-dev")
+        assert parts[0].isdigit(), f"Major version '{parts[0]}' should be numeric"
+        minor_base = parts[1].split("-")[0]
+        assert minor_base.isdigit(), f"Minor version '{parts[1]}' should start with a number"

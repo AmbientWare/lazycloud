@@ -1,12 +1,15 @@
 """Tests for billing audit log service."""
 
+import uuid
 from datetime import datetime, timezone
 
 import pytest
 from backend.database import Database
-from backend.database.billing_audit import BillingEventType
+from backend.database.services import BillingEventType
 
 from tests.fixtures.database import requires_db
+
+TEST_RECORD_ID = str(uuid.uuid4())
 
 pytestmark = [
     pytest.mark.asyncio,
@@ -29,14 +32,14 @@ class TestBillingAuditService:
         entry = await billing_db.billing_audit.log_event(
             event_type=BillingEventType.BILLING_STARTED,
             workspace_id=workspace_id,
-            record_id="test-record-id",
+            record_id=TEST_RECORD_ID,
             actor="test-actor",
             details={"test_key": "test_value"},
         )
 
         assert entry.event_type == BillingEventType.BILLING_STARTED.value
         assert entry.workspace_id == workspace_id
-        assert entry.record_id == "test-record-id"
+        assert entry.record_id == TEST_RECORD_ID
         assert entry.actor == "test-actor"
         assert entry.details["test_key"] == "test_value"
         assert entry.id is not None
@@ -53,7 +56,7 @@ class TestBillingAuditService:
 
         entry = await billing_db.billing_audit.log_collection_completed(
             workspace_id=workspace_id,
-            record_id="test-record-id",
+            record_id=TEST_RECORD_ID,
             interval_start=interval_start,
             cpu_seconds=100.5,
             memory_seconds=200.5,
@@ -74,7 +77,7 @@ class TestBillingAuditService:
 
         entry = await billing_db.billing_audit.log_billing_started(
             workspace_id=workspace_id,
-            record_id="test-record-id",
+            record_id=TEST_RECORD_ID,
             usage_date="2025-11-29",
             attempt=2,
         )
@@ -93,7 +96,7 @@ class TestBillingAuditService:
 
         entry = await billing_db.billing_audit.log_billing_completed(
             workspace_id=workspace_id,
-            record_id="test-record-id",
+            record_id=TEST_RECORD_ID,
             billing_id="polar-billing-123",
             usage_date="2025-11-29",
         )
@@ -112,7 +115,7 @@ class TestBillingAuditService:
 
         entry = await billing_db.billing_audit.log_billing_failed(
             workspace_id=workspace_id,
-            record_id="test-record-id",
+            record_id=TEST_RECORD_ID,
             error="Connection timeout to Polar API",
             attempt=3,
             usage_date="2025-11-29",
@@ -134,7 +137,7 @@ class TestBillingAuditService:
 
         entry = await billing_db.billing_audit.log_billing_failed(
             workspace_id=workspace_id,
-            record_id="test-record-id",
+            record_id=TEST_RECORD_ID,
             error=long_error,
             attempt=1,
             usage_date="2025-11-29",
@@ -152,7 +155,7 @@ class TestBillingAuditService:
 
         entry = await billing_db.billing_audit.log_billing_skipped(
             workspace_id=workspace_id,
-            record_id="test-record-id",
+            record_id=TEST_RECORD_ID,
             reason="Incomplete intervals: 50/96",
             usage_date="2025-11-29",
         )

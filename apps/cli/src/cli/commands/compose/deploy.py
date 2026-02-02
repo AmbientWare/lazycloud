@@ -18,7 +18,7 @@ import yaml
 from api_requests.deployments import DiffType
 from models.build_args import BuildArg, BuildArgsCollection, ServiceBuildArgs
 from models.diffs import ComposeDiff, EnvVarChanges, ResourceSection
-from models.secrets import Secret, SecretCollection, SecretSource
+from models.secrets import BasicSecret, SecretCollection, SecretSource
 from models.statuses import TaskStatus
 from responses.builds import DepotTokenResponse
 from responses.deployments import DiffResponse
@@ -257,7 +257,7 @@ def deploy(
     # Collect secrets from user (unless --env none)
     has_secrets = bool(secrets.added or secrets.removed)
     if has_secrets:
-        total_to_collect = len(secrets.added)
+        total_to_collect = len(secrets.added) if secrets.added else 0
 
         secrets = view.collect_secrets(
             secrets,
@@ -317,8 +317,7 @@ def deploy(
                 suggested_cmd = f"lazycloud deploy -s {' -s '.join(suggested_services)}"
 
                 view.show_warning(
-                    f"Changes to service(s) '{', '.join(target_services)}' would affect other services.",
-                    suggestion=f"Affected services: {', '.join(missing_services)}\n"
+                    f"Changes to service(s) '{', '.join(target_services)}' would affect other services. "
                     f"Suggested command: {suggested_cmd}\n"
                     f"Proceeding with current selection...",
                 )
@@ -638,7 +637,7 @@ def _prepare_secrets_for_collection(
     if diff_response and diff_response.env_var_changes:
         # Update deployment - collect only changed variables
         added_secrets = [
-            Secret(
+            BasicSecret(
                 key=key,
                 value=all_env_vars[key] or "",
                 source=SecretSource.COMPOSE,
@@ -648,7 +647,7 @@ def _prepare_secrets_for_collection(
         ]
 
         removed_secrets = [
-            Secret(
+            BasicSecret(
                 key=key,
                 value="",  # Empty value for removal
                 source=SecretSource.COMPOSE,
@@ -660,7 +659,7 @@ def _prepare_secrets_for_collection(
     else:
         # New deployment - collect all variables
         added_secrets = [
-            Secret(
+            BasicSecret(
                 key=key,
                 value=value or "",
                 source=SecretSource.COMPOSE,
@@ -1424,7 +1423,11 @@ def _run_depot_bake(
             if returncode is not None:
                 break
 
-            line = process.stdout.readline()
+            stdout = process.stdout
+            if stdout is None:
+                continue
+
+            line = stdout.readline()
             if line:
                 line = line.rstrip()
                 if not line:
@@ -1473,7 +1476,7 @@ def _run_depot_bake(
                 time.sleep(0.1)
 
         # Read any remaining output
-        remaining = process.stdout.read()
+        remaining = process.stdout.read() if process.stdout else None
         if remaining:
             for line in remaining.splitlines():
                 line = line.rstrip()
@@ -1536,7 +1539,7 @@ def _handle_builds_with_depot(
     services_to_build: list[dict],
     depot_token: DepotTokenResponse,
     build_args: BuildArgsCollection | None = None,
-) -> str:
+) -> tuple[str, int]:
     """Handle builds using Depot remote builder with parallel execution."""
     view = DeployView(console)
 
@@ -1544,7 +1547,7 @@ def _handle_builds_with_depot(
     builds_needed = [(i, build_info) for i, build_info in enumerate(services_to_build)]
 
     if not builds_needed:
-        return yaml.dump(compose_data, default_flow_style=False)
+        return yaml.dump(compose_data, default_flow_style=False), 0
 
     # Shared state for all builds (thread-safe dict)
     build_state = {}
@@ -1832,6 +1835,15 @@ def _handle_builds(
             message="Remote builds are not available.",
             title="🔨 Build Error",
             suggestion=f"Could not get build token: {e}\nPlease contact support if this issue persists.",
+        )
+        console.print(error_card)
+        raise typer.Exit(code=1)
+
+    if not depot_token:
+        error_card = ErrorCard(
+            message="Remote builds are not available.",
+            title="🔨 Build Error",
+            suggestion="Please contact support if this issue persists.",
         )
         console.print(error_card)
         raise typer.Exit(code=1)

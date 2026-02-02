@@ -1,4 +1,5 @@
 from enum import StrEnum
+from typing import Literal
 
 
 class StorageType(StrEnum):
@@ -11,6 +12,7 @@ class StorageType(StrEnum):
 # Kubernetes storage class names (provider-agnostic)
 STORAGE_CLASS_STANDARD = "juicefs-standard"
 STORAGE_CLASS_SHARED = "juicefs-shared"
+StorageClassLiteral = Literal["juicefs-standard", "juicefs-shared"]
 
 # Mapping from k8s storage class to user-facing type
 STORAGE_CLASS_TO_TYPE: dict[str, StorageType] = {

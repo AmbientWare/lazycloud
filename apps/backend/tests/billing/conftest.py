@@ -1,12 +1,14 @@
 """Billing test fixtures and configuration."""
 
 from datetime import date, datetime
+from typing import AsyncGenerator
 
 import pytest
 from backend.database import Database, _create_database
+from backend.database.models import DailyUsageRecordInDb
 from backend.database.session import session_manager
-from backend.database.usage import BreakdownType, DailyUsageRecordPydantic
 from models.storage import STORAGE_CLASS_STANDARD
+from models.usage import BreakdownType
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tests.fixtures.database import (
@@ -18,7 +20,7 @@ from tests.fixtures.database import (
 
 
 @pytest.fixture
-async def billing_db_session() -> AsyncSession:
+async def billing_db_session() -> AsyncGenerator[AsyncSession, None]:
     """Provide a transactional session that rolls back after each test."""
     await session_manager.reset()
 
@@ -73,9 +75,9 @@ async def create_daily_record(
     memory_gb_seconds: float = 3600.0,
     storage_gb_months: float = 0.0,
     build_minutes: float = 0.0,
-    intervals_collected: int = 1,
+    intervals_collected: int = 96,  # 96 = complete record, ready for billing
     billing_attempts: int = 0,
-) -> DailyUsageRecordPydantic:
+) -> DailyUsageRecordInDb:
     """Create a daily usage record for testing with specified values."""
     record = await db.usage.get_or_create_daily_record(
         workspace_id=workspace_id,
@@ -84,7 +86,7 @@ async def create_daily_record(
     )
 
     # Increment usage - this adds 1 to intervals_collected
-    await db.usage.atomic_increment_usage(
+    await db.usage.increment_usage(
         record_id=record.id,
         cpu_core_seconds=cpu_core_seconds,
         memory_gb_seconds=memory_gb_seconds,
@@ -94,7 +96,7 @@ async def create_daily_record(
 
     # If caller wants more intervals, add zero-value increments
     for _ in range(intervals_collected - 1):
-        await db.usage.atomic_increment_usage(
+        await db.usage.increment_usage(
             record_id=record.id,
             cpu_core_seconds=0.0,
             memory_gb_seconds=0.0,

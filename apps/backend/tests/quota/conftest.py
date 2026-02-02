@@ -1,13 +1,12 @@
 """Quota test fixtures - mocks get_db_context for both subscription_service and deployment utils."""
 
 from contextlib import asynccontextmanager
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
-import backend.tasks.core.utils as task_utils_module
 import backend.services.subscription_service as subscription_module
+import backend.tasks.core.utils as task_utils_module
 import pytest
 from backend.database import Database
-from backend.services.polar import PolarService
 from backend.services.subscription_service import SubscriptionService
 
 from tests.fixtures.database import make_features
@@ -41,9 +40,13 @@ def mock_db_context(db_session, db: Database):
 
 @pytest.fixture
 def subscription_service() -> SubscriptionService:
-    """Create SubscriptionService instance with disabled Polar."""
-    polar_service = PolarService(access_token="", is_sandbox=True)
-    return SubscriptionService(polar_service=polar_service)
+    """Create SubscriptionService instance with mocked Polar."""
+    # Mock PolarService since it requires real credentials
+    mock_polar_service = MagicMock()
+    mock_polar_service.enabled = False
+    mock_polar_service.subscriptions = MagicMock()
+    mock_polar_service.subscriptions.list_for_external_id = AsyncMock(return_value=[])
+    return SubscriptionService(polar_service=mock_polar_service)
 
 
 @pytest.fixture

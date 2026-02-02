@@ -46,7 +46,16 @@ def get_status_color_from_string(status: str) -> str:
     status_lower = status.lower()
     if status_lower in ("running", "ready", "active"):
         return Colors.Hex.success
-    elif status_lower in ("pending", "waiting", "terminating", "updating", "creating", "health_check", "stopping", "restarting"):
+    elif status_lower in (
+        "pending",
+        "waiting",
+        "terminating",
+        "updating",
+        "creating",
+        "health_check",
+        "stopping",
+        "restarting",
+    ):
         return Colors.Hex.warning
     elif status_lower in ("error", "failed"):
         return Colors.Hex.error

@@ -175,9 +175,10 @@ class DeploymentDetailsContainer(Widget):
             try:
                 await api.status.stream_deployment_status(
                     deployment_id=self.deployment_id,
-                    on_update=lambda data: self.app.call_later(
-                        self._update_from_stream, data
-                    ),
+                    on_update=lambda data: (
+                        self.app.call_later(self._update_from_stream, data),
+                        None,
+                    )[-1],
                     on_error=lambda e: logger.warning(
                         f"SSE stream error for deployment {self.deployment_id}: {e}"
                     ),

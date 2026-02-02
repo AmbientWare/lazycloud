@@ -1,8 +1,9 @@
 import re
-from typing import Any
+from collections.abc import Sequence
 
 from models.compose import (
     ComposeFile,
+    HealthCheck,
     ServiceVolume,
 )
 from models.helm import (
@@ -16,56 +17,37 @@ from backend.services.k8s.generators.converters import parse_duration
 
 
 def generate_service_volumes_values(
-    volumes: list[str | ServiceVolume], compose: ComposeFile
+    volumes: Sequence[ServiceVolume], compose: ComposeFile
 ) -> list[VolumeMount]:
     """Generate Helm values for service volume mounts, only for defined volumes."""
-    volumes_values = []
+    volumes_values: list[VolumeMount] = []
     defined_volumes = {v.name: v for v in (compose.volumes or [])}
 
     for volume in volumes:
-        volume_name = None
-        mount_path = None
-        read_only = False
+        # Only process named volumes (not bind mounts)
+        if volume.type != "volume" or not volume.source or not volume.target:
+            continue
 
-        if isinstance(volume, str):
-            # Parse volume string (volume_name:mount_path)
-            if ":" in volume:
-                parts = volume.split(":")
-                if len(parts) >= 2 and not parts[0].startswith("/"):
-                    # Named volume
-                    volume_name = parts[0]
-                    mount_path = parts[1]
-                # Skip bind mounts (start with / or .). Local volumes are not supported.
-        elif (
-            isinstance(volume, ServiceVolume)
-            and volume.type == "volume"
-            and volume.source
+        # Only add volume mount if the volume is defined and not external
+        if (
+            volume.source in defined_volumes
+            and not defined_volumes[volume.source].external
         ):
-            volume_name = volume.source
-            mount_path = volume.target
-            read_only = volume.read_only
-
-        # Only add volume mount if the volume is defined in the volumes section
-        if volume_name and mount_path:
-            if (
-                volume_name in defined_volumes
-                and not defined_volumes[volume_name].external
-            ):
-                volumes_values.append(
-                    VolumeMount(
-                        name=volume_name,
-                        mountPath=mount_path,
-                        readOnly=read_only,
-                        # default size required but ignored when we use EFS volumes
-                        size="1Gi",
-                    )
+            volumes_values.append(
+                VolumeMount(
+                    name=volume.source,
+                    mountPath=volume.target,
+                    subPath=None,
+                    readOnly=volume.read_only,
+                    size="1Gi",
                 )
+            )
 
     return volumes_values
 
 
 def generate_healthcheck_values(
-    healthcheck: dict[str, Any] | Any, service_name: str | None = None
+    healthcheck: HealthCheck, service_name: str | None = None
 ) -> HealthCheckValues:
     """Generate Helm values for health checks.
 
@@ -75,14 +57,10 @@ def generate_healthcheck_values(
     """
     healthcheck_values = HealthCheckValues(enabled=True)
 
-    # Convert Pydantic model to dict if needed
-    if hasattr(healthcheck, "model_dump"):
-        healthcheck = healthcheck.model_dump()
-
     if not healthcheck:
         return healthcheck_values
 
-    test_cmd = healthcheck.get("test")
+    test_cmd = healthcheck.test
     if test_cmd and isinstance(test_cmd, list) and test_cmd[0] == "CMD":
         command = test_cmd[1:]
 
@@ -90,16 +68,16 @@ def generate_healthcheck_values(
         probe = _parse_healthcheck_command(command, service_name)
 
         # Add timing configurations
-        if healthcheck.get("interval"):
-            probe.period_seconds = parse_duration(healthcheck["interval"])
+        if healthcheck.interval:
+            probe.period_seconds = parse_duration(healthcheck.interval)
 
-        if healthcheck.get("timeout"):
-            probe.timeout_seconds = parse_duration(healthcheck["timeout"])
+        if healthcheck.timeout:
+            probe.timeout_seconds = parse_duration(healthcheck.timeout)
 
-        if healthcheck.get("start_period"):
-            probe.initial_delay_seconds = parse_duration(healthcheck["start_period"])
-        if healthcheck.get("retries"):
-            probe.failure_threshold = healthcheck["retries"]
+        if healthcheck.start_period:
+            probe.initial_delay_seconds = parse_duration(healthcheck.start_period)
+        if healthcheck.retries:
+            probe.failure_threshold = healthcheck.retries
 
         healthcheck_values.livenessProbe = probe
         healthcheck_values.readinessProbe = probe.model_copy()
@@ -147,13 +125,6 @@ def _parse_healthcheck_command(
                     port=int(port) if port else (443 if scheme == "https" else 80),
                 )
 
-                if scheme == "https":
-                    httpGet.scheme = "HTTPS"
-
-                # Only add host header if it's not localhost
-                if host != "localhost":
-                    httpGet.httpHeaders = [{"name": "Host", "value": host}]
-
                 return ProbeConfig(httpGet=httpGet)
 
     # Check for wget commands
@@ -183,7 +154,7 @@ def _parse_healthcheck_command(
                         httpGet.scheme = "HTTPS"
 
                     if host != "localhost":
-                        httpGet.httpHeaders = [{"name": "Host", "value": host}]
+                        httpGet.http_headers = [{"name": "Host", "value": host}]
 
                     return ProbeConfig(httpGet=httpGet)
 

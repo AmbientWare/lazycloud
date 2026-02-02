@@ -70,10 +70,10 @@ async def rollback_compose_job(
     revision_numbers = [
         item.get("revision") for item in history if item.get("revision")
     ]
-    if revision not in revision_numbers:
+    if revision not in [r for r in revision_numbers if r is not None]:
         raise ValueError(
             f"Revision {revision} does not exist in Helm history. "
-            f"Available revisions: {sorted(revision_numbers)}"
+            f"Available revisions: {sorted([r for r in revision_numbers if r is not None])}"
         )
 
     if current_db_revision and revision >= current_db_revision:
@@ -153,7 +153,7 @@ async def rollback_compose_job(
                 "Only revisions deployed after this feature was added will have compose_yaml available."
             )
             if available_revisions:
-                error_msg += f" Available revisions: {sorted(available_revisions)}"
+                error_msg += f" Available revisions: {sorted([r for r in available_revisions if r is not None])}"
 
             logger.error(f"Rollback failed for deployment {deployment_id}: {error_msg}")
             raise ValueError(error_msg)
@@ -284,7 +284,7 @@ async def rollback_compose_job(
             logger.warning(
                 f"Helm revision mismatch detected for deployment {deployment_id}: "
                 f"rollback reported revision {new_revision}, but actual Helm revision is {actual_helm_revision}. "
-                f"Available revisions in history: {sorted(history_revisions)}. "
+                f"Available revisions in history: {sorted([r for r in history_revisions if r is not None])}."
                 "Helm may have been modified externally between rollback and verification."
             )
 

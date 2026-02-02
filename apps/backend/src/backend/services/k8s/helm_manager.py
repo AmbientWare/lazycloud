@@ -72,7 +72,7 @@ class HelmManager:
         """Check if a namespace exists."""
         try:
             core_v1 = await get_async_core_v1_api(self.cluster_id)
-            await core_v1.read_namespace(name=namespace)
+            await core_v1.read_namespace(name=namespace)  # type: ignore[misc]
             return True
 
         except ApiException as e:
@@ -444,7 +444,7 @@ class HelmManager:
                         ]
                     ):
                         try:
-                            await core_v1.delete_namespaced_secret(
+                            await core_v1.delete_namespaced_secret(  # type: ignore[misc]
                                 name=secret_name,
                                 namespace=namespace,
                             )
@@ -497,13 +497,13 @@ class HelmManager:
                         if deployment.status
                         else {}
                     )
-                    ready = self._is_resource_ready("deployment", status)
+                    ready = self._is_resource_ready("deployment", status)  # type: ignore[arg-type]
                     items.append(
                         {
                             "name": deployment.metadata.name,
                             "ready": ready,
                             "status": self._get_resource_status_summary(
-                                "deployment", status
+                                "deployment", status  # type: ignore[arg-type]
                             ),
                         }
                     )
@@ -526,12 +526,12 @@ class HelmManager:
                         if pod.status
                         else {}
                     )
-                    ready = self._is_resource_ready("pod", status)
+                    ready = self._is_resource_ready("pod", status)  # type: ignore[arg-type]
                     items.append(
                         {
                             "name": pod.metadata.name,
                             "ready": ready,
-                            "status": self._get_resource_status_summary("pod", status),
+                            "status": self._get_resource_status_summary("pod", status),  # type: ignore[arg-type]
                         }
                     )
 
@@ -555,13 +555,13 @@ class HelmManager:
                         if service.status
                         else {}
                     )
-                    ready = self._is_resource_ready("service", status)
+                    ready = self._is_resource_ready("service", status)  # type: ignore[arg-type]
                     items.append(
                         {
                             "name": service.metadata.name,
                             "ready": ready,
                             "status": self._get_resource_status_summary(
-                                "service", status
+                                "service", status  # type: ignore[arg-type]
                             ),
                         }
                     )
