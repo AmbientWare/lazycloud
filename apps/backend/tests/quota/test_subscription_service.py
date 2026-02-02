@@ -9,6 +9,7 @@ from backend.services.subscription_service import (
     SubscriptionLimitError,
     SubscriptionService,
 )
+from polar_sdk.models import ProductMetadata
 
 from tests.fixtures.database import (
     make_deployment,
@@ -324,3 +325,62 @@ class TestValidateWorkspaceForOwner:
         await subscription_service.validate_workspace_for_owner(
             workspace.id, new_owner_features, new_owner.id
         )
+
+
+class TestParseFeatures:
+    """Tests for _parse_features_from_metadata."""
+
+    def test_parse_valid_features_from_metadata(
+        self, subscription_service: SubscriptionService
+    ):
+        """Valid metadata with features key is parsed correctly."""
+        metadata: dict[str, ProductMetadata] = {
+            "features": '{"deployment_limit": 3, "max_team_members": 1, "max_cpu_per_service": 2.0, "max_memory_per_service": 8, "max_replicas_per_service": 5, "custom_domains_enabled": true}'
+        }
+        features = subscription_service._parse_features_from_metadata(metadata)
+        assert features is not None
+        assert features.deployment_limit == 3
+        assert features.max_team_members == 1
+        assert features.max_cpu_per_service == 2.0
+        assert features.max_memory_per_service == 8
+        assert features.max_replicas_per_service == 5
+        assert features.custom_domains_enabled is True
+
+    def test_parse_returns_none_for_empty_metadata(
+        self, subscription_service: SubscriptionService
+    ):
+        """Empty metadata returns None."""
+        empty: dict[str, ProductMetadata] = {}
+        assert subscription_service._parse_features_from_metadata(empty) is None
+        assert subscription_service._parse_features_from_metadata(None) is None
+
+    def test_parse_returns_none_for_missing_features_key(
+        self, subscription_service: SubscriptionService
+    ):
+        """Metadata without 'features' key returns None."""
+        metadata: dict[str, ProductMetadata] = {"tier": "pro", "other_key": "value"}
+        assert subscription_service._parse_features_from_metadata(metadata) is None
+
+    def test_parse_returns_none_for_wrong_key_name(
+        self, subscription_service: SubscriptionService
+    ):
+        """Metadata with 'features_json' instead of 'features' returns None."""
+        metadata: dict[str, ProductMetadata] = {
+            "features_json": '{"deployment_limit": 3}'
+        }
+        assert subscription_service._parse_features_from_metadata(metadata) is None
+
+    def test_parse_returns_none_for_invalid_json(
+        self, subscription_service: SubscriptionService
+    ):
+        """Invalid JSON string returns None."""
+        metadata: dict[str, ProductMetadata] = {"features": "not valid json"}
+        assert subscription_service._parse_features_from_metadata(metadata) is None
+
+    def test_parse_returns_none_for_non_string_value(
+        self, subscription_service: SubscriptionService
+    ):
+        """Non-string features value returns None."""
+        # type: ignore because we're intentionally testing wrong type
+        metadata: dict[str, ProductMetadata] = {"features": 123}  # type: ignore[dict-item]
+        assert subscription_service._parse_features_from_metadata(metadata) is None
