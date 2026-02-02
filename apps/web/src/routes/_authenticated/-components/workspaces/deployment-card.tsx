@@ -16,7 +16,6 @@ import {
   AlertTriangle,
   Copy,
   Check,
-  Info,
 } from 'lucide-react'
 import { Spinner } from '@/components/shared/spinner'
 import { useState } from 'react'
@@ -280,9 +279,10 @@ export function DeploymentCard({
               ) : (
                 <div className="space-y-2">
                   {services.map((service) => (
-                    <div
+                    <button
                       key={service.name}
-                      className="rounded-md border border-border/50 bg-muted/50 p-3 shadow-sm transition-colors"
+                      onClick={() => openServiceDetails(service)}
+                      className="w-full cursor-pointer rounded-md border border-border/50 bg-muted/50 p-3 text-left shadow-sm transition-all duration-300 hover:-translate-y-0.5 hover:border-lazycloud/30 hover:shadow-md"
                     >
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div className="flex min-w-0 flex-1 items-center gap-2">
@@ -305,14 +305,6 @@ export function DeploymentCard({
                               · {service.restarts} restarts
                             </span>
                           )}
-                          <button
-                            onClick={() => openServiceDetails(service)}
-                            className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                            title="View details"
-                            aria-label="View service details"
-                          >
-                            <Info className="size-4" />
-                          </button>
                         </div>
                       </div>
                       {service.endpoint && (
@@ -320,6 +312,7 @@ export function DeploymentCard({
                           href={`https://${service.endpoint}`}
                           target="_blank"
                           rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
                           className="mt-2 flex items-center gap-1.5 text-xs text-cyan-500 transition-colors hover:text-cyan-400"
                         >
                           <ExternalLink className="size-3" />
@@ -329,13 +322,15 @@ export function DeploymentCard({
                       {service.custom_domain &&
                         service.domain_status !== 'active' &&
                         service.cname_target && (
-                          <DomainSetupNotice
-                            customDomain={service.custom_domain}
-                            cnameTarget={service.cname_target}
-                            domainStatus={service.domain_status}
-                          />
+                          <div onClick={(e) => e.stopPropagation()}>
+                            <DomainSetupNotice
+                              customDomain={service.custom_domain}
+                              cnameTarget={service.cname_target}
+                              domainStatus={service.domain_status}
+                            />
+                          </div>
                         )}
-                    </div>
+                    </button>
                   ))}
                 </div>
               )}

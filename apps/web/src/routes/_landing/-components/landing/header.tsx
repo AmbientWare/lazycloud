@@ -7,6 +7,7 @@ import HeaderBar from '@/components/shared/header-bar'
 import { LANDING_ROUTES, USER_HOME } from '@/lib/constants'
 import { Button } from '@/components/ui/button'
 import { useRouteUser } from '@/hooks/useRouteUser'
+import { useIsMobile } from '@/hooks/use-mobile'
 import {
   Sheet,
   SheetContent,
@@ -14,7 +15,30 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 
-function AuthButtons() {
+function AuthButtons({ isMobile }: { isMobile: boolean }) {
+  if (isMobile) {
+    return (
+      <div className="flex flex-col gap-2">
+        <Link
+          to="/login"
+          className="flex items-center justify-center rounded-full border border-border/50 bg-background/50 px-4 py-2 text-sm font-medium text-muted-foreground backdrop-blur-sm transition-colors hover:text-foreground"
+        >
+          Log In
+        </Link>
+        <Link
+          to="/signup"
+          className="group/signup relative flex items-center justify-center gap-1.5 overflow-hidden rounded-full border border-lazycloud/30 bg-background/50 py-2 pl-4 pr-3 text-sm font-medium text-lazycloud backdrop-blur-sm transition-colors duration-300 hover:text-black"
+        >
+          <div className="absolute inset-0 origin-right scale-x-0 bg-lazycloud transition-transform duration-300 ease-out group-hover/signup:scale-x-100" />
+          <span className="relative z-10">Sign Up</span>
+          <span className="relative z-10 flex size-5 items-center justify-center rounded-full bg-lazycloud transition-colors duration-300 group-hover/signup:bg-black">
+            <ArrowUpRight className="size-3 text-black transition-colors duration-300 group-hover/signup:text-lazycloud" />
+          </span>
+        </Link>
+      </div>
+    )
+  }
+
   return (
     <div className="flex items-center rounded-full border border-border/50 bg-background/50 backdrop-blur-sm">
       {/* Log In link */}
@@ -50,6 +74,7 @@ export default function Header() {
   const location = useLocation()
   const isLandingRoute = LANDING_ROUTES.includes(location.pathname)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const isMobile = useIsMobile()
 
   const signedInAndNotLandingRoute = isSignedIn && !isLandingRoute
 
@@ -66,7 +91,7 @@ export default function Header() {
       ]
 
   const ctaButtons = !isSignedIn ? (
-    <AuthButtons />
+    <AuthButtons isMobile={isMobile} />
   ) : (
     <Link to={USER_HOME}>
       <StyledButton variant="primary">
