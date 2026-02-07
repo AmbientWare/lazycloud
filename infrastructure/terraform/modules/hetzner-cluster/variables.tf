@@ -40,16 +40,28 @@ variable "control_plane_type" {
   default     = "cpx31" # 4 vCPU, 8 GB RAM
 }
 
-variable "worker_count" {
-  description = "Initial number of worker nodes (Cluster Autoscaler manages scaling)"
+variable "platform_count" {
+  description = "Number of platform nodes (fixed, not autoscaled — runs LazyCloud infra)"
   type        = number
-  default     = 4
+  default     = 2
+}
+
+variable "platform_type" {
+  description = "Server type for platform nodes (shared vCPU, runs platform services)"
+  type        = string
+  default     = "cpx31" # 4 vCPU, 8 GB RAM (shared)
+}
+
+variable "worker_count" {
+  description = "Initial number of sandbox worker nodes (Cluster Autoscaler manages scaling)"
+  type        = number
+  default     = 2
 }
 
 variable "worker_type" {
-  description = "Server type for worker nodes"
+  description = "Server type for sandbox worker nodes (dedicated vCPU, runs customer workloads)"
   type        = string
-  default     = "cpx41" # 8 vCPU, 16 GB RAM
+  default     = "ccx33" # 8 dedicated vCPU, 32 GB RAM
 }
 
 # -----------------------------------------------------------------------------

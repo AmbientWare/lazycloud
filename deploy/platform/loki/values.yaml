@@ -4,6 +4,8 @@
 loki-stack:
   # Grafana datasource config - don't set as default (prometheus is default)
   loki:
+    nodeSelector:
+      instance-class: platform
     persistence:
       enabled: false
     resources:

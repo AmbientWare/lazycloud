@@ -135,8 +135,8 @@ locals {
     }
   })]
 
-  # Worker machine config patch
-  worker_patches = [for i in range(var.worker_count) : yamlencode({
+  # Platform machine config patch (no gVisor, label: instance-class=platform)
+  platform_patches = [for i in range(var.platform_count) : yamlencode({
     machine = {
       install = {
         image = local.talos_install_image
@@ -150,6 +150,72 @@ locals {
         nodeIP = {
           validSubnets = [var.node_ipv4_cidr]
         }
+      }
+      nodeLabels = {
+        "instance-class" = "platform"
+      }
+      network = {
+        nameservers = ["1.1.1.1", "8.8.8.8"]
+        interfaces = [
+          { interface = "eth0", dhcp = true },
+          { interface = "eth1", dhcp = true },
+        ]
+        kubespan = { enabled = false }
+      }
+      kernel = {
+        modules = [{ name = "nbd" }]
+      }
+      sysctls = {
+        "net.core.somaxconn"          = "65535"
+        "net.core.netdev_max_backlog" = "4096"
+        "user.max_user_namespaces"    = "11255"
+      }
+      features = {
+        hostDNS = {
+          enabled              = true
+          forwardKubeDNSToHost = false
+          resolveMemberNames   = true
+        }
+      }
+      time = {
+        servers = [
+          "ntp1.hetzner.de",
+          "ntp2.hetzner.com",
+          "ntp3.hetzner.net",
+          "time.cloudflare.com",
+        ]
+      }
+    }
+    cluster = {
+      network = {
+        dnsDomain      = "cluster.local"
+        podSubnets     = [var.pod_ipv4_cidr]
+        serviceSubnets = [var.service_ipv4_cidr]
+        cni            = { name = "none" }
+      }
+    }
+  })]
+
+  # Sandbox worker machine config patch (gVisor, label: instance-class=sandbox, tainted)
+  worker_patches = [for i in range(var.worker_count) : yamlencode({
+    machine = {
+      install = {
+        image = local.talos_install_image
+      }
+      certSANs = local.cert_sans
+      kubelet = {
+        extraArgs = {
+          "cloud-provider"             = "external"
+          "rotate-server-certificates" = true
+          "register-with-taints"       = "instance-class=sandbox:NoSchedule"
+        }
+        nodeIP = {
+          validSubnets = [var.node_ipv4_cidr]
+        }
+      }
+      nodeLabels = {
+        "instance-class" = "sandbox"
+        "runtime"        = "gvisor"
       }
       network = {
         nameservers = ["1.1.1.1", "8.8.8.8"]
@@ -207,6 +273,19 @@ data "talos_machine_configuration" "control_plane" {
   machine_type       = "controlplane"
   machine_secrets    = talos_machine_secrets.this.machine_secrets
   config_patches     = [local.controlplane_patches[count.index]]
+  docs               = false
+  examples           = false
+}
+
+data "talos_machine_configuration" "platform" {
+  count              = var.platform_count
+  talos_version      = var.talos_version
+  cluster_name       = var.cluster_name
+  cluster_endpoint   = local.cluster_endpoint
+  kubernetes_version = var.kubernetes_version
+  machine_type       = "worker"
+  machine_secrets    = talos_machine_secrets.this.machine_secrets
+  config_patches     = [local.platform_patches[count.index]]
   docs               = false
   examples           = false
 }

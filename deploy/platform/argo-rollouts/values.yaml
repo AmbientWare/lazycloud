@@ -1,5 +1,7 @@
 argo-rollouts:
   controller:
+    nodeSelector:
+      instance-class: platform
     resources:
       limits:
         cpu: 200m

@@ -19,8 +19,8 @@
 locals {
   deploy_dir = "${path.module}/../../../../deploy"
 
-  # Dynamic autoscaler node config key based on worker type and location
-  autoscaler_node_config_key = "${var.worker_type}-worker-${var.location}"
+  # Dynamic autoscaler node config key — must match cluster-autoscaler ASG name
+  autoscaler_node_config_key = "${var.worker_type}-sandbox-${var.location}"
 
   # Bootstrap control - set to 0 to remove all K8s resources before destroy
   bootstrap_count = var.skip_bootstrap ? 0 : 1
@@ -195,9 +195,14 @@ resource "kubernetes_secret" "cluster_autoscaler_config" {
         (local.autoscaler_node_config_key) = {
           cloudInit = data.talos_machine_configuration.worker[0].machine_configuration
           labels = {
-            "runtime"  = "gvisor"
-            "workload" = "sandbox"
+            "instance-class" = "sandbox"
+            "runtime"        = "gvisor"
           }
+          taints = [{
+            key    = "instance-class"
+            value  = "sandbox"
+            effect = "NoSchedule"
+          }]
         }
       }
     }))

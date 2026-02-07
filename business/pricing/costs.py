@@ -1,6 +1,6 @@
 """Hetzner Cloud cost modeling for LazyCloud.
 
-Infrastructure: Hetzner CPX shared instances for compute.
+Infrastructure: Hetzner CCX dedicated instances for compute.
 Storage: JuiceFS Cloud (managed metadata) + Hetzner Object Storage (data).
 Storage is metered separately from compute.
 """
@@ -28,7 +28,7 @@ SUBSCRIPTION_PRICES: dict[Tier, int] = {
 
 @dataclass(frozen=True)
 class HetznerInstance:
-    """Hetzner CPX shared instance specification."""
+    """Hetzner Cloud instance specification."""
 
     name: str
     vcpu: int
@@ -58,8 +58,15 @@ CPX: dict[str, HetznerInstance] = {
     "cpx51": HetznerInstance("CPX51", 16, 32, 360, 67.59),
 }
 
-# Worker node type — single pool, all tiers packed together
-WORKER_INSTANCE = CPX["cpx41"]
+# Hetzner CCX dedicated vCPU instances (Ashburn, VA)
+CCX: dict[str, HetznerInstance] = {
+    "ccx13": HetznerInstance("CCX13", 2, 8, 80, 13.49),
+    "ccx23": HetznerInstance("CCX23", 4, 16, 160, 26.49),
+    "ccx33": HetznerInstance("CCX33", 8, 32, 240, 53.49),
+}
+
+# Worker node type — single pool, dedicated vCPU for customer workloads
+WORKER_INSTANCE = CCX["ccx33"]
 
 # Per-service minimums (enforced by platform)
 MIN_CPU_PER_SERVICE = 0.25
@@ -158,7 +165,7 @@ def calculate_cost(
 ) -> float:
     """Calculate infrastructure cost.
 
-    Compute: CPX41 shared instances (single pool).
+    Compute: CCX33 dedicated instances (single pool).
     Storage: JuiceFS Cloud + Hetzner Object Storage (decoupled from compute).
     """
     oh = overhead or OVERHEAD

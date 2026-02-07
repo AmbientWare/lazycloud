@@ -123,6 +123,7 @@ class GlobalValues(BaseModel):
     managedBy: str = "lazycloud"
     createdBy: str = "lazycloud-api"
     runtimeClassName: str = "gvisor"
+    instanceClass: str | None = None
     labels: dict[str, str | None] = {}
     annotations: dict[str, str | None] = {}
 

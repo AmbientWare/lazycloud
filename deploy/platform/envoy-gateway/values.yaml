@@ -13,6 +13,8 @@ envoy-gateway:
   # Controller deployment resources
   deployment:
     envoyGateway:
+      nodeSelector:
+        instance-class: platform
       resources:
         limits:
           cpu: 500m

@@ -16,6 +16,8 @@ spec:
         app: {{ .Chart.Name }}-background-workers
         component: worker
     spec:
+      nodeSelector:
+        instance-class: platform
       affinity:
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:

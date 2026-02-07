@@ -1,5 +1,6 @@
-# Talos worker node patch for LazyCloud on Hetzner Cloud
-# All workers run gVisor — single node pool, no burstable/dedicated split
+# Talos sandbox worker node patch for LazyCloud on Hetzner Cloud
+# Sandbox pool: runs customer gVisor workloads on dedicated vCPU (CCX33)
+# Platform pool uses a separate Talos config (no gVisor, instance-class=platform)
 # Storage: JuiceFS CSI (runs as pods, needs FUSE — built into Talos kernel)
 
 machine:
@@ -11,13 +12,14 @@ machine:
   kubelet:
     extraArgs:
       cloud-provider: external
+      register-with-taints: "instance-class=sandbox:NoSchedule"
     nodeIP:
       validSubnets:
         - 10.0.1.0/24
   # Node labels for workload scheduling
   nodeLabels:
+    instance-class: sandbox
     runtime: gvisor
-    workload: sandbox
   # Network configuration
   network:
     hostname: ""  # Set by Terraform

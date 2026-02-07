@@ -18,6 +18,7 @@ locals {
   # All node IPs for intra-cluster communication
   all_node_ips = concat(
     [for ip in local.cp_public_ipv4 : "${ip}/32"],
+    [for ip in local.platform_public_ipv4 : "${ip}/32"],
     [for ip in local.worker_public_ipv4 : "${ip}/32"],
   )
 

@@ -22,6 +22,8 @@ spec:
         app: {{ .Chart.Name }}-api
         component: api
     spec:
+      nodeSelector:
+        instance-class: platform
       affinity:
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:

@@ -14,11 +14,14 @@ cluster-autoscaler:
       key: cluster-config
 
   autoscalingGroups:
-    - name: cpx41-worker-ash
+    - name: ccx33-sandbox-ash
       minSize: 2
       maxSize: 20
-      instanceType: CPX41
+      instanceType: CCX33
       region: ASH
+
+  nodeSelector:
+    instance-class: platform
 
   extraArgs:
     scale-down-delay-after-add: "5m"

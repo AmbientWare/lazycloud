@@ -42,16 +42,28 @@ variable "control_plane_type" {
   default     = "cpx31"
 }
 
-variable "worker_count" {
-  description = "Initial number of worker nodes (Cluster Autoscaler manages scaling)"
+variable "platform_count" {
+  description = "Number of platform nodes (fixed, not autoscaled)"
   type        = number
-  default     = 4
+  default     = 2
+}
+
+variable "platform_type" {
+  description = "Server type for platform nodes"
+  type        = string
+  default     = "cpx31"
+}
+
+variable "worker_count" {
+  description = "Initial number of sandbox worker nodes (Cluster Autoscaler manages scaling)"
+  type        = number
+  default     = 2
 }
 
 variable "worker_type" {
-  description = "Server type for worker nodes"
+  description = "Server type for sandbox worker nodes"
   type        = string
-  default     = "cpx41"
+  default     = "ccx33"
 }
 
 # -----------------------------------------------------------------------------

@@ -4,6 +4,8 @@
 kube-prometheus-stack:
   prometheus:
     prometheusSpec:
+      nodeSelector:
+        instance-class: platform
       retention: 7d
       resources:
         limits:
@@ -23,6 +25,8 @@ kube-prometheus-stack:
   alertmanager:
     enabled: true
     alertmanagerSpec:
+      nodeSelector:
+        instance-class: platform
       resources:
         limits:
           cpu: 100m
@@ -34,6 +38,8 @@ kube-prometheus-stack:
   grafana:
     enabled: true
     adminPassword: "admin"  # Change in production via External Secret
+    nodeSelector:
+      instance-class: platform
     resources:
       limits:
         cpu: 200m
@@ -52,6 +58,8 @@ kube-prometheus-stack:
     enabled: true
 
   kube-state-metrics:
+    nodeSelector:
+      instance-class: platform
     # Expose custom LazyCloud labels for usage attribution
     metricLabelsAllowlist:
       - pods=[lazycloud.dev/service,lazycloud.dev/deployment-id,lazycloud.dev/workspace-id,app.kubernetes.io/instance]
