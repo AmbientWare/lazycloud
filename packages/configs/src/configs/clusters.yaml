@@ -19,7 +19,9 @@ clusters:
 
     # Capacity (Hetzner network limit = 100)
     max_nodes: 100
-    node_type: cpx41       # 8 vCPU, 16GB RAM
+    node_types:
+      platform: cpx31     # 4 vCPU, 8GB RAM (shared — LazyCloud infra)
+      sandbox: ccx33       # 8 dedicated vCPU, 32GB RAM (customer workloads)
 
     # Networking
     network_cidr: "10.0.0.0/16"
@@ -48,7 +50,9 @@ clusters:
 #   location: ash
 #   region: us-east
 #   max_nodes: 100
-#   node_type: cpx41
+#   node_types:
+#     platform: cpx31
+#     sandbox: ccx33
 #   network_cidr: "10.1.0.0/16"  # Different CIDR per cluster
 #   pod_cidr: "10.245.0.0/16"
 #   service_cidr: "10.112.0.0/12"

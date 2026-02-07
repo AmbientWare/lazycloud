@@ -18,6 +18,8 @@ spec:
         app.kubernetes.io/name: cloudflare-tunnel
         app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
+      nodeSelector:
+        instance-class: platform
       containers:
         - name: cloudflared
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"

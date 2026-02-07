@@ -4,6 +4,8 @@
 reloader:
   reloader:
     watchGlobally: true
+    nodeSelector:
+      instance-class: platform
     resources:
       limits:
         cpu: 100m

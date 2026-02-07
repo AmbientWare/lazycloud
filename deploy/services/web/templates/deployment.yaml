@@ -22,6 +22,8 @@ spec:
         app: {{ .Chart.Name }}
         component: frontend
     spec:
+      nodeSelector:
+        instance-class: platform
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}

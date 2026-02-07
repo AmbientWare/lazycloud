@@ -28,6 +28,12 @@ spec:
       priorityClassName: gvisor-placeholder
       runtimeClassName: gvisor
       terminationGracePeriodSeconds: 0
+      nodeSelector:
+        instance-class: sandbox
+      tolerations:
+        - key: instance-class
+          value: sandbox
+          effect: NoSchedule
       containers:
         - name: pause
           image: registry.k8s.io/pause:3.9

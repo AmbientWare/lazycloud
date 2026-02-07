@@ -16,6 +16,8 @@ spec:
         app: {{ .Chart.Name }}-crons
         component: cron
     spec:
+      nodeSelector:
+        instance-class: platform
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}

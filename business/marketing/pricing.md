@@ -32,27 +32,25 @@ We charge for four resource types, all billed by usage:
 
 ### Hetzner Cloud Compute (Ashburn, VA)
 
-**Shared vCPU Instances (CPX series, single pool):**
+**Dedicated vCPU Instances (CCX series, single pool):**
 
 | Instance | vCPU | Memory | Disk | Monthly Price |
 |----------|------|--------|------|---------------|
-| CPX11 | 2 | 2 GB | 40 GB | $5.59 |
-| CPX21 | 3 | 4 GB | 80 GB | $10.59 |
-| CPX31 | 4 | 8 GB | 160 GB | $18.59 |
-| CPX41 | 8 | 16 GB | 240 GB | $34.09 |
-| CPX51 | 16 | 32 GB | 360 GB | $67.59 |
+| CCX13 | 2 | 8 GB | 80 GB | $13.49 |
+| CCX23 | 4 | 16 GB | 160 GB | $26.49 |
+| CCX33 | 8 | 32 GB | 240 GB | $53.49 |
 
 *Source: [Hetzner Cloud Pricing](https://www.hetzner.com/cloud)*
 
-**Worker node: CPX41** ($34.09/mo, 8 vCPU, 16GB RAM, 240GB disk). All tiers packed onto a single node pool. Local disk used for OS, container images, and ephemeral storage only — no persistent storage on nodes.
+**Worker node: CCX33** ($53.49/mo, 8 dedicated vCPU, 32GB RAM, 240GB disk). All tiers packed onto a single node pool. Dedicated vCPU ensures consistent performance for customer workloads. Local disk used for OS, container images, and ephemeral storage only — no persistent storage on nodes.
 
-**Our compute markup (Hetzner CPX41):**
-- Hetzner effective CPU: ~$0.006/vCPU-hour ($34.09 / 730h / 8 vCPU)
-- LazyCloud CPU: $0.040/core-hour → **~570% markup**
-- Hetzner effective memory: ~$0.003/GB-hour ($34.09 / 730h / 16GB)
-- LazyCloud memory: $0.007/GB-hour → **~130% markup**
+**Our compute markup (Hetzner CCX33):**
+- Hetzner effective CPU: ~$0.009/vCPU-hour ($53.49 / 730h / 8 vCPU)
+- LazyCloud CPU: $0.040/core-hour → **~340% markup**
+- Hetzner effective memory: ~$0.002/GB-hour ($53.49 / 730h / 32GB)
+- LazyCloud memory: $0.007/GB-hour → **~250% markup**
 
-Note: High compute margins provide buffer for platform overhead (system pods, scheduling fragmentation, ~25% node utilization overhead).
+Note: Dedicated vCPU eliminates noisy-neighbor performance variance. Compute margins provide buffer for platform overhead (system pods, scheduling fragmentation, ~25% node utilization overhead).
 
 ### Hetzner Storage (JuiceFS Cloud + Hetzner Object Storage)
 
@@ -208,12 +206,12 @@ LazyCloud is priced **between Modal and Fly.io**, offering a balance of simplici
 ### Why This Price Point?
 
 **CPU at $0.040/core-hour:**
-- ~570% over Hetzner CPX41 (~$0.006/vCPU-hr) — high margin covers platform overhead and node utilization losses (~25%)
+- ~340% over Hetzner CCX33 (~$0.009/vCPU-hr) — healthy margin covers platform overhead and node utilization losses (~25%)
 - 15% below Modal ($0.047)
-- Higher than Railway ($0.028) — we offer simpler compose workflow
+- Higher than Railway ($0.028) — we offer simpler compose workflow + dedicated vCPU
 
 **Memory at $0.007/GB-hour:**
-- ~130% over Hetzner CPX41 (~$0.003/GB-hr) — healthy margin
+- ~250% over Hetzner CCX33 (~$0.002/GB-hr) — strong margin (dedicated instances have 2:1 RAM:CPU ratio)
 - 12% below Modal ($0.008)
 - 50% below Railway ($0.014) — major differentiator
 
@@ -240,8 +238,8 @@ LazyCloud is priced **between Modal and Fly.io**, offering a balance of simplici
 
 | Component | Our Cost | LazyCloud Price | Gross Margin |
 |-----------|----------|-----------------|--------------|
-| 1 core-hour CPU | ~$0.006 (CPX41) | $0.040 | ~85% |
-| 1 GB-hour memory | ~$0.003 (CPX41) | $0.007 | ~57% |
+| 1 core-hour CPU | ~$0.009 (CCX33) | $0.040 | ~77% |
+| 1 GB-hour memory | ~$0.002 (CCX33) | $0.007 | ~67% |
 | 1 GB-month storage | ~$0.026 (JuiceFS+ObjStore) | $0.10 | ~74% |
 | 1 build minute | $0.04 (Depot) | $0.04 | 0% |
 | Endpoints | ~$0.10/mo (Cloudflare) | Included | N/A (absorbed) |
@@ -285,7 +283,11 @@ Usage (CPU, memory, storage, builds) is billed on top of the subscription fee. E
 
 ### Compute Architecture
 
-All tiers share a single node pool of CPX41 instances (8 vCPU, 16GB RAM, $34.09/mo). Workloads from all tiers are packed together for efficient utilization. The cluster autoscaler adds/removes nodes based on demand.
+Two node pools:
+- **Platform pool**: CPX31 shared instances (4 vCPU, 8GB RAM, $18.59/mo) — fixed nodes running LazyCloud infrastructure (API, monitoring, ingress)
+- **Sandbox pool**: CCX33 dedicated instances (8 vCPU, 32GB RAM, $53.49/mo) — autoscaled nodes running customer workloads with gVisor isolation
+
+Customer workloads from all tiers are packed onto sandbox nodes for efficient utilization. Dedicated vCPU ensures consistent performance. The cluster autoscaler scales sandbox nodes (2-20) based on demand. Platform nodes are fixed and not billed to customers.
 
 ### Storage Architecture
 
@@ -362,7 +364,7 @@ All persistent volumes use JuiceFS Cloud (POSIX filesystem) backed by Hetzner Ob
 3. **Volume Discounts**: Tiered pricing for high-usage customers
 4. **Regional Pricing**: Adjust for non-US regions based on underlying costs
 5. **Build Caching**: Potential separate pricing for persistent build cache
-6. **Dedicated Instances**: Upgrade to CCX dedicated vCPU instances for customers requiring consistent performance
+6. **Burstable Tier**: Offer cheaper CPX shared instances for cost-sensitive workloads that don't need guaranteed CPU
 
 ---
 

@@ -40,6 +40,20 @@ resource "hcloud_primary_ip" "control_plane" {
   }
 }
 
+resource "hcloud_primary_ip" "platform" {
+  count         = var.platform_count
+  name          = "${var.cluster_name}-platform-${count.index + 1}-ipv4"
+  type          = "ipv4"
+  assignee_type = "server"
+  auto_delete   = false
+  location      = var.location
+  labels = {
+    cluster    = var.cluster_name
+    cluster_id = var.cluster_id
+    role       = "platform"
+  }
+}
+
 resource "hcloud_primary_ip" "worker" {
   count         = var.worker_count
   name          = "${var.cluster_name}-worker-${count.index + 1}-ipv4"
@@ -83,6 +97,9 @@ locals {
   cp_vip_ipv4     = hcloud_floating_ip.control_plane_vip.ip_address
   cp_public_ipv4  = [for ip in hcloud_primary_ip.control_plane : ip.ip_address]
   cp_private_ipv4 = [for i in range(var.control_plane_count) : cidrhost(var.node_ipv4_cidr, i + 101)]
+
+  platform_public_ipv4  = [for ip in hcloud_primary_ip.platform : ip.ip_address]
+  platform_private_ipv4 = [for i in range(var.platform_count) : cidrhost(var.node_ipv4_cidr, i + 151)]
 
   worker_public_ipv4  = [for ip in hcloud_primary_ip.worker : ip.ip_address]
   worker_private_ipv4 = [for i in range(var.worker_count) : cidrhost(var.node_ipv4_cidr, i + 201)]

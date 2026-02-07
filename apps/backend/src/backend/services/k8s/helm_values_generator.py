@@ -85,6 +85,7 @@ class HelmValuesGenerator:
             managedBy="lazycloud",
             createdBy="lazycloud-api",
             runtimeClassName="gvisor",
+            instanceClass="sandbox",
             labels={
                 "lazycloud.dev/deployment-id": self.deployment.id,
                 "lazycloud.dev/workspace-id": self.deployment.workspace_id,

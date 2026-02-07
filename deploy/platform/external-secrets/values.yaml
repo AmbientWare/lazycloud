@@ -47,6 +47,8 @@ external-secrets:
   serviceAccount:
     create: true
     name: external-secrets
+  nodeSelector:
+    instance-class: platform
   resources:
     limits:
       cpu: 200m

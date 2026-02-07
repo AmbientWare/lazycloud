@@ -27,7 +27,7 @@ class Cluster:
     location: str
     region: str
     max_nodes: int
-    node_type: str
+    node_types: dict[str, str]  # pool name → server type (e.g. {"platform": "cpx31", "sandbox": "ccx33"})
     network_cidr: str
     pod_cidr: str
     service_cidr: str
@@ -78,7 +78,7 @@ class ClusterRegistry:
                 location=cfg["location"],
                 region=cfg["region"],
                 max_nodes=cfg["max_nodes"],
-                node_type=cfg["node_type"],
+                node_types=cfg["node_types"],
                 network_cidr=cfg["network_cidr"],
                 pod_cidr=cfg["pod_cidr"],
                 service_cidr=cfg["service_cidr"],
