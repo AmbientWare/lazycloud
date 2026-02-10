@@ -2,6 +2,10 @@
 
 cluster-autoscaler:
   cloudProvider: hetzner
+  image:
+    # Keep autoscaler minor aligned with Kubernetes cluster minor (1.32.x).
+    # This avoids provider-specific regressions seen with older versions.
+    tag: v1.32.0
   autoDiscovery:
     clusterName: lazycloud-prod
 
