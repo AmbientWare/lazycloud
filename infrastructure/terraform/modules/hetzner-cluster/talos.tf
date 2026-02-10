@@ -196,8 +196,8 @@ locals {
     }
   })]
 
-  # Sandbox worker machine config patch (gVisor, label: instance-class=sandbox, tainted)
-  worker_patches = [for i in range(var.worker_count) : yamlencode({
+  # Sandbox worker machine config patch (shared by static workers + autoscaler template)
+  sandbox_patch = yamlencode({
     machine = {
       install = {
         image = local.talos_install_image
@@ -257,7 +257,8 @@ locals {
         cni            = { name = "none" }
       }
     }
-  })]
+  })
+
 }
 
 # -----------------------------------------------------------------------------
@@ -290,15 +291,15 @@ data "talos_machine_configuration" "platform" {
   examples           = false
 }
 
-data "talos_machine_configuration" "worker" {
-  count              = var.worker_count
+# Sandbox template for cluster autoscaler
+data "talos_machine_configuration" "sandbox_autoscaler" {
   talos_version      = var.talos_version
   cluster_name       = var.cluster_name
   cluster_endpoint   = local.cluster_endpoint
   kubernetes_version = var.kubernetes_version
   machine_type       = "worker"
   machine_secrets    = talos_machine_secrets.this.machine_secrets
-  config_patches     = [local.worker_patches[count.index]]
+  config_patches     = [local.sandbox_patch]
   docs               = false
   examples           = false
 }

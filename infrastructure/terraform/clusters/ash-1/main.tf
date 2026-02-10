@@ -100,8 +100,7 @@ module "cluster" {
   control_plane_type  = var.control_plane_type
   platform_count      = var.platform_count
   platform_type       = var.platform_type
-  worker_count        = var.worker_count
-  worker_type         = var.worker_type
+  sandbox_type        = var.sandbox_type
 
   # Kubernetes/Talos versions
   kubernetes_version = var.kubernetes_version

@@ -20,7 +20,7 @@ locals {
   deploy_dir = "${path.module}/../../../../deploy"
 
   # Dynamic autoscaler node config key — must match cluster-autoscaler ASG name
-  autoscaler_node_config_key = "${var.worker_type}-sandbox-${var.location}"
+  autoscaler_node_config_key = "${var.sandbox_type}-sandbox-${var.location}"
 
   # Bootstrap control - set to 0 to remove all K8s resources before destroy
   bootstrap_count = var.skip_bootstrap ? 0 : 1
@@ -65,8 +65,9 @@ resource "helm_release" "kubelet_csr_approver" {
   version    = "1.2.2"
 
   values = [yamlencode({
-    # Only approve CSRs for nodes in our cluster
-    providerRegex = "^${var.cluster_name}-.*$"
+    # Approve CSRs for Terraform-managed nodes (lazycloud-prod-*) and
+    # autoscaler-created sandbox nodes (ccx33-sandbox-ash-*)
+    providerRegex = "^(${var.cluster_name}-|${var.sandbox_type}-sandbox-${var.location}-).*$"
     # Maximum expiration time for certificates (365 days)
     maxExpirationSeconds = 31536000
     # Allow bypass for DNS SANs (Talos nodes may request with hostname)
@@ -193,7 +194,7 @@ resource "kubernetes_secret" "cluster_autoscaler_config" {
       }
       nodeConfigs = {
         (local.autoscaler_node_config_key) = {
-          cloudInit = data.talos_machine_configuration.worker[0].machine_configuration
+          cloudInit = data.talos_machine_configuration.sandbox_autoscaler.machine_configuration
           labels = {
             "instance-class" = "sandbox"
             "runtime"        = "gvisor"
@@ -206,6 +207,10 @@ resource "kubernetes_secret" "cluster_autoscaler_config" {
         }
       }
     }))
+    # These are passed as separate env vars (HCLOUD_NETWORK, HCLOUD_SSH_KEY, HCLOUD_FIREWALL)
+    network  = hcloud_network.this.name
+    ssh-key  = hcloud_ssh_key.this.name
+    firewall = hcloud_firewall.this.name
   }
 
   depends_on = [helm_release.cilium]

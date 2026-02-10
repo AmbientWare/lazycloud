@@ -54,20 +54,6 @@ resource "hcloud_primary_ip" "platform" {
   }
 }
 
-resource "hcloud_primary_ip" "worker" {
-  count         = var.worker_count
-  name          = "${var.cluster_name}-worker-${count.index + 1}-ipv4"
-  type          = "ipv4"
-  assignee_type = "server"
-  auto_delete   = false
-  location      = var.location
-  labels = {
-    cluster    = var.cluster_name
-    cluster_id = var.cluster_id
-    role       = "worker"
-  }
-}
-
 # -----------------------------------------------------------------------------
 # Floating IP (stable VIP for control plane, survives node failover)
 # -----------------------------------------------------------------------------
@@ -100,7 +86,4 @@ locals {
 
   platform_public_ipv4  = [for ip in hcloud_primary_ip.platform : ip.ip_address]
   platform_private_ipv4 = [for i in range(var.platform_count) : cidrhost(var.node_ipv4_cidr, i + 151)]
-
-  worker_public_ipv4  = [for ip in hcloud_primary_ip.worker : ip.ip_address]
-  worker_private_ipv4 = [for i in range(var.worker_count) : cidrhost(var.node_ipv4_cidr, i + 201)]
 }

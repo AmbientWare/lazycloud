@@ -30,14 +30,6 @@ resource "hcloud_placement_group" "platform" {
   }
 }
 
-resource "hcloud_placement_group" "worker" {
-  name = "${var.cluster_name}-worker"
-  type = "spread"
-  labels = {
-    cluster    = var.cluster_name
-    cluster_id = var.cluster_id
-  }
-}
 
 # -----------------------------------------------------------------------------
 # SSH key (required by Hetzner even though Talos doesn't use it)
@@ -137,43 +129,3 @@ resource "hcloud_server" "platform" {
   }
 }
 
-# -----------------------------------------------------------------------------
-# Sandbox worker servers (autoscaled — runs customer gVisor workloads)
-# -----------------------------------------------------------------------------
-
-resource "hcloud_server" "worker" {
-  count              = var.worker_count
-  name               = "${var.cluster_name}-worker-${count.index + 1}"
-  location           = var.location
-  image              = data.hcloud_image.talos.id
-  server_type        = var.worker_type
-  user_data          = data.talos_machine_configuration.worker[count.index].machine_configuration
-  ssh_keys           = [hcloud_ssh_key.this.id]
-  placement_group_id = hcloud_placement_group.worker.id
-  firewall_ids       = [hcloud_firewall.this.id]
-
-  labels = {
-    cluster     = var.cluster_name
-    cluster_id  = var.cluster_id
-    role        = "worker"
-    server_type = var.worker_type
-  }
-
-  public_net {
-    ipv4_enabled = true
-    ipv4         = hcloud_primary_ip.worker[count.index].id
-    ipv6_enabled = false
-  }
-
-  network {
-    network_id = hcloud_network.this.id
-    ip         = local.worker_private_ipv4[count.index]
-    alias_ips  = []
-  }
-
-  depends_on = [hcloud_network_subnet.nodes]
-
-  lifecycle {
-    ignore_changes = [user_data, image]
-  }
-}
