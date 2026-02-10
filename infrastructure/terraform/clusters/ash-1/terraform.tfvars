@@ -13,10 +13,9 @@ cluster_name = "lazycloud-prod"
 location            = "ash"
 control_plane_count = 1
 control_plane_type  = "cpx31"
-platform_count      = 2
+platform_count      = 3
 platform_type       = "cpx31"
-worker_count        = 2
-worker_type         = "ccx33"
+sandbox_type        = "ccx33"
 
 # Kubernetes/Talos versions
 kubernetes_version = "1.32.0"

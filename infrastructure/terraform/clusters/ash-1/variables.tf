@@ -54,14 +54,8 @@ variable "platform_type" {
   default     = "cpx31"
 }
 
-variable "worker_count" {
-  description = "Initial number of sandbox worker nodes (Cluster Autoscaler manages scaling)"
-  type        = number
-  default     = 2
-}
-
-variable "worker_type" {
-  description = "Server type for sandbox worker nodes"
+variable "sandbox_type" {
+  description = "Server type for sandbox nodes (Cluster Autoscaler manages scaling)"
   type        = string
   default     = "ccx33"
 }

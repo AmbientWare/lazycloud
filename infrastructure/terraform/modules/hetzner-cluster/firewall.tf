@@ -19,40 +19,30 @@ locals {
   all_node_ips = concat(
     [for ip in local.cp_public_ipv4 : "${ip}/32"],
     [for ip in local.platform_public_ipv4 : "${ip}/32"],
-    [for ip in local.worker_public_ipv4 : "${ip}/32"],
   )
-
-  # Worker IPs for ingress rules
-  worker_ips = [for ip in local.worker_public_ipv4 : "${ip}/32"]
 }
 
 resource "hcloud_firewall" "this" {
   name = var.cluster_name
 
-  # External access rules (from management IPs)
+  # Kube API — open to all IPs so autoscaler-created sandbox nodes (dynamic IPs)
+  # can join the cluster. The API server uses mutual TLS (client certificates)
+  # for authentication, so exposing the port is safe.
   rule {
-    description = "Allow Kube API from management IPs"
+    description = "Allow Kube API from anywhere"
     direction   = "in"
     protocol    = "tcp"
     port        = "6443"
-    source_ips  = local.management_cidrs
+    source_ips  = ["0.0.0.0/0", "::/0"]
   }
 
+  # Talos API — restricted to management IPs
   rule {
     description = "Allow Talos API from management IPs"
     direction   = "in"
     protocol    = "tcp"
     port        = "50000"
     source_ips  = local.management_cidrs
-  }
-
-  # Intra-cluster communication rules
-  rule {
-    description = "Allow Kube API from cluster nodes"
-    direction   = "in"
-    protocol    = "tcp"
-    port        = "6443"
-    source_ips  = local.all_node_ips
   }
 
   rule {

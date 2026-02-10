@@ -52,14 +52,8 @@ variable "platform_type" {
   default     = "cpx31" # 4 vCPU, 8 GB RAM (shared)
 }
 
-variable "worker_count" {
-  description = "Initial number of sandbox worker nodes (Cluster Autoscaler manages scaling)"
-  type        = number
-  default     = 2
-}
-
-variable "worker_type" {
-  description = "Server type for sandbox worker nodes (dedicated vCPU, runs customer workloads)"
+variable "sandbox_type" {
+  description = "Server type for sandbox nodes (dedicated vCPU, runs customer workloads via Cluster Autoscaler)"
   type        = string
   default     = "ccx33" # 8 dedicated vCPU, 32 GB RAM
 }
@@ -210,7 +204,7 @@ variable "management_cidrs" {
 }
 
 variable "enable_public_ingress" {
-  description = "Open ports 80/443 on worker nodes for ingress traffic. Not needed if using Cloudflare Tunnel."
+  description = "Open ports 80/443 for ingress traffic. Not needed if using Cloudflare Tunnel."
   type        = bool
   default     = false
 }

@@ -16,10 +16,19 @@ cluster-autoscaler:
     HCLOUD_CLUSTER_CONFIG:
       name: cluster-autoscaler-config
       key: cluster-config
+    HCLOUD_NETWORK:
+      name: cluster-autoscaler-config
+      key: network
+    HCLOUD_SSH_KEY:
+      name: cluster-autoscaler-config
+      key: ssh-key
+    HCLOUD_FIREWALL:
+      name: cluster-autoscaler-config
+      key: firewall
 
   autoscalingGroups:
     - name: ccx33-sandbox-ash
-      minSize: 2
+      minSize: 1
       maxSize: 20
       instanceType: CCX33
       region: ASH
