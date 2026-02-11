@@ -279,10 +279,18 @@ export function DeploymentCard({
               ) : (
                 <div className="space-y-2">
                   {services.map((service) => (
-                    <button
+                    <div
                       key={service.name}
+                      role="button"
+                      tabIndex={0}
                       onClick={() => openServiceDetails(service)}
-                      className="w-full cursor-pointer rounded-md border border-border/50 bg-muted/50 p-3 text-left shadow-sm transition-all duration-300 hover:-translate-y-0.5 hover:border-lazycloud/30 hover:shadow-md"
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault()
+                          openServiceDetails(service)
+                        }
+                      }}
+                      className="w-full cursor-pointer rounded-md border border-border/50 bg-muted/50 p-3 text-left shadow-sm transition-all duration-300 hover:-translate-y-0.5 hover:border-lazycloud/30 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lazycloud/40 focus-visible:ring-offset-2"
                     >
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div className="flex min-w-0 flex-1 items-center gap-2">
@@ -313,7 +321,7 @@ export function DeploymentCard({
                           target="_blank"
                           rel="noopener noreferrer"
                           onClick={(e) => e.stopPropagation()}
-                          className="mt-2 flex items-center gap-1.5 text-xs text-cyan-500 transition-colors hover:text-cyan-400"
+                          className="mt-2 inline-flex max-w-full items-center gap-1.5 text-xs text-cyan-500 transition-colors hover:text-cyan-400"
                         >
                           <ExternalLink className="size-3" />
                           <span className="truncate">{service.endpoint}</span>
@@ -330,7 +338,7 @@ export function DeploymentCard({
                             />
                           </div>
                         )}
-                    </button>
+                    </div>
                   ))}
                 </div>
               )}
