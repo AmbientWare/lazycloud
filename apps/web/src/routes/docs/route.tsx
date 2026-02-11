@@ -37,6 +37,7 @@ const titleMap: Record<string, string> = {
   volume: 'Volume Labels',
   examples: 'Examples',
   fastapi: 'FastAPI',
+  reliability: 'Reliability',
 }
 
 function DocsHeader() {

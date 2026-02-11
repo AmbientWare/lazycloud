@@ -1,0 +1,79 @@
+---
+title: Reliability
+description: How LazyCloud handles service availability and restarts. Design your apps for resilience.
+---
+
+# Reliability
+
+LazyCloud runs two types of workloads, each with different reliability guarantees:
+
+- **Services** (default) — Long-running processes like web servers, APIs, and background workers. These may be restarted occasionally as LazyCloud manages infrastructure. Design them to handle restarts gracefully.
+- **One-time tasks** (`restart: "no"`) — Jobs like data processing, migrations, and batch work. These are **protected** and will always run to completion without interruption.
+
+## Services
+
+LazyCloud automatically manages the infrastructure your services run on. As demand changes, services may occasionally be restarted. When this happens:
+
+1. Your service receives a `SIGTERM` signal
+2. It has up to 30 seconds to shut down cleanly
+3. If it doesn't exit in time, it receives a `SIGKILL`
+4. LazyCloud restarts the service automatically
+
+### Designing for Restarts
+
+- **Stateless requests** — Don't store session state in memory. Use a database or external cache.
+- **Graceful shutdown** — Handle `SIGTERM` to finish in-flight requests before exiting.
+- **Health checks** — Define a health check so traffic only routes to healthy instances.
+- **Multiple replicas** — Run at least 2 replicas so traffic continues flowing during a restart.
+
+```yaml
+services:
+  api:
+    build: .
+    ports:
+      - '8000:8000'
+    deploy:
+      replicas: 2
+      resources:
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+    labels:
+      lazycloud.healthcheck.path: '/health'
+      lazycloud.healthcheck.port: '8000'
+```
+
+<Note>
+  Services with a single replica will have a brief window of unavailability during a restart. Use 2+ replicas for zero-downtime.
+</Note>
+
+## One-Time Tasks
+
+Services with `restart: "no"` are automatically protected and will never be interrupted by LazyCloud. Your task runs to completion — no checkpointing or resume logic needed.
+
+```yaml
+services:
+  migrate:
+    build: .
+    command: python manage.py migrate
+    restart: 'no'
+
+  process-data:
+    build: .
+    command: python etl.py
+    restart: 'no'
+```
+
+Task logs and status are kept for 7 days after completion.
+
+## Summary
+
+| Type | Restart Behavior | Recommendation |
+|------|------------------|----------------|
+| Web services / APIs | May restart | Run 2+ replicas, handle SIGTERM |
+| Background workers | May restart | Design for idempotent processing |
+| One-time tasks (`restart: "no"`) | Never interrupted | Runs to completion |
+
+<Tip>
+  Most web frameworks handle SIGTERM gracefully by default (Express, FastAPI, Rails, etc.). If your app responds to health checks and doesn't store state in memory, you're already covered.
+</Tip>

@@ -68,6 +68,10 @@ const data = {
           title: 'Security',
           url: '/docs/architecture/security',
         },
+        {
+          title: 'Reliability',
+          url: '/docs/architecture/reliability',
+        },
       ],
     },
     {
