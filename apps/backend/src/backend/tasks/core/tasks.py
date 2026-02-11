@@ -16,6 +16,7 @@ from models.deployments import (
     DeploymentResult,
     DeploymentStates,
 )
+from models.compose import ComposeFile
 from models.helm import HelmNamespaceValues, HelmValues, NamespaceConfig
 from models.k8s import WorkloadType
 from models.secrets import SecretState
@@ -404,6 +405,140 @@ async def deploy_application(
     return DeploymentResult(revision=app_result.revision)
 
 
+def _normalize_domain(domain: str) -> str | None:
+    """Normalize domain for consistent comparison and Cloudflare operations."""
+    normalized = domain.strip().rstrip(".").lower()
+    return normalized or None
+
+
+def _normalize_domains(domains: list[str] | set[str]) -> list[str]:
+    """Normalize, deduplicate, and sort domain collections."""
+    normalized_domains = {_normalize_domain(domain) for domain in domains}
+    return sorted(domain for domain in normalized_domains if domain)
+
+
+def _extract_custom_domains_from_compose_file(compose_file: ComposeFile | None) -> set[str]:
+    """Extract normalized custom domains from a parsed Compose file."""
+    if not compose_file:
+        return set()
+
+    domains: set[str] = set()
+    for service in compose_file.services:
+        if not service.domain:
+            continue
+
+        normalized = _normalize_domain(service.domain)
+        if normalized:
+            domains.add(normalized)
+
+    return domains
+
+
+def _extract_custom_domains_from_compose_yaml(
+    compose_yaml: str | None,
+) -> tuple[set[str], bool]:
+    """Extract normalized custom domains from compose YAML.
+
+    Returns:
+        Tuple of (domains, parse_success).
+    """
+    if not compose_yaml:
+        return set(), True
+
+    try:
+        compose_data = yaml.safe_load(compose_yaml)
+        if not isinstance(compose_data, dict):
+            logger.warning("Skipping custom domain extraction: compose YAML root is invalid")
+            return set(), False
+
+        compose_file = ComposeParser.parse_dict(compose_data)
+        return _extract_custom_domains_from_compose_file(compose_file), True
+
+    except Exception as e:
+        logger.warning(f"Failed to extract custom domains from compose YAML: {e}")
+        return set(), False
+
+
+async def _find_referenced_custom_domains(
+    domains: set[str],
+    exclude_deployment_id: str | None = None,
+) -> set[str]:
+    """Find domains still referenced by other active deployments.
+
+    Checks both compose_yaml and pending_compose_yaml to avoid deleting domains that
+    are in flight for another deployment update.
+    """
+    if not domains:
+        return set()
+
+    async with get_db_context() as db:
+        active_deployments = await db.compose_deployments.find({})
+
+    referenced_domains: set[str] = set()
+    for deployment in active_deployments:
+        if exclude_deployment_id and deployment.id == exclude_deployment_id:
+            continue
+
+        deployment_domains, compose_ok = _extract_custom_domains_from_compose_yaml(
+            deployment.compose_yaml
+        )
+        pending_domains, pending_ok = _extract_custom_domains_from_compose_yaml(
+            deployment.pending_compose_yaml
+        )
+        if not compose_ok or not pending_ok:
+            logger.warning(
+                f"Skipping stale domain cleanup: unable to parse compose config for deployment {deployment.id}"
+            )
+            return domains
+
+        deployment_domains.update(pending_domains)
+
+        overlap = domains & deployment_domains
+        if overlap:
+            referenced_domains.update(overlap)
+            if referenced_domains == domains:
+                return referenced_domains
+
+    return referenced_domains
+
+
+async def reconcile_custom_domains_for_deployment(
+    deployment_id: str,
+    previous_compose_yaml: str | None,
+    current_compose_file: ComposeFile | None,
+) -> tuple[list[str], list[str]]:
+    """Remove stale domains no longer used by this deployment.
+
+    Returns:
+        Tuple of (removed_domains, skipped_domains_still_referenced_elsewhere).
+    """
+    previous_domains, _ = _extract_custom_domains_from_compose_yaml(
+        previous_compose_yaml
+    )
+    current_domains = _extract_custom_domains_from_compose_file(current_compose_file)
+    domains_to_remove = previous_domains - current_domains
+    if not domains_to_remove:
+        return [], []
+
+    referenced_domains = await _find_referenced_custom_domains(
+        domains_to_remove,
+        exclude_deployment_id=deployment_id,
+    )
+    safe_to_remove = sorted(domains_to_remove - referenced_domains)
+    skipped_domains = sorted(referenced_domains)
+
+    if skipped_domains:
+        logger.info(
+            f"Skipping cleanup for referenced domains on deployment {deployment_id}: "
+            f"{', '.join(skipped_domains)}"
+        )
+
+    if safe_to_remove:
+        await unregister_custom_domains(safe_to_remove)
+
+    return safe_to_remove, skipped_domains
+
+
 async def register_custom_domains(
     domains: list[str],
 ) -> None:
@@ -412,7 +547,8 @@ async def register_custom_domains(
     Only runs in production when Cloudflare is configured.
     Skipped in local development.
     """
-    if not domains:
+    normalized_domains = _normalize_domains(domains)
+    if not normalized_domains:
         return
 
     # Skip if Cloudflare is not configured (local dev)
@@ -422,7 +558,7 @@ async def register_custom_domains(
 
     cloudflare = get_cloudflare_service()
     async with cloudflare:
-        for domain in domains:
+        for domain in normalized_domains:
             try:
                 # Check if domain already exists
                 try:
@@ -450,7 +586,8 @@ async def unregister_custom_domains(
 
     Only runs in production when Cloudflare is configured.
     """
-    if not domains:
+    normalized_domains = _normalize_domains(domains)
+    if not normalized_domains:
         return
 
     if not app_config.CLOUDFLARE_API_KEY:
@@ -459,7 +596,7 @@ async def unregister_custom_domains(
 
     cloudflare = get_cloudflare_service()
     async with cloudflare:
-        for domain in domains:
+        for domain in normalized_domains:
             try:
                 await cloudflare.delete_saas_domain(domain)
                 logger.info(f"Removed custom domain {domain} from Cloudflare")

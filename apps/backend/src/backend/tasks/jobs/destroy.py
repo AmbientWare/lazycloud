@@ -3,17 +3,18 @@
 from datetime import UTC, datetime
 from typing import Any
 
-import yaml
 from loguru import logger
 from models.deployments import DeploymentStates
 from saq.types import Context
 
 from backend.database import get_db_context
 from backend.services import get_depot_service
-from backend.services.compose.parser import ComposeParser
 from backend.services.k8s import create_release_name
 from backend.services.k8s.helm_manager import HelmManager
-from backend.tasks.core import unregister_custom_domains, update_deployment_state
+from backend.tasks.core import (
+    reconcile_custom_domains_for_deployment,
+    update_deployment_state,
+)
 
 
 async def destroy_compose_job(
@@ -49,13 +50,23 @@ async def destroy_compose_job(
     compose_yaml = deployment.compose_yaml or deployment.pending_compose_yaml
     if compose_yaml:
         try:
-            compose_data = yaml.safe_load(compose_yaml)
-            compose_file = ComposeParser.parse_dict(compose_data)
-            custom_domains = [
-                service.domain for service in compose_file.services if service.domain
-            ]
-            if custom_domains:
-                await unregister_custom_domains(custom_domains)
+            removed_domains, skipped_domains = (
+                await reconcile_custom_domains_for_deployment(
+                    deployment_id=deployment_id,
+                    previous_compose_yaml=compose_yaml,
+                    current_compose_file=None,
+                )
+            )
+            if removed_domains:
+                logger.info(
+                    f"Removed custom domains during destroy for deployment {deployment_id}: "
+                    f"{', '.join(removed_domains)}"
+                )
+            if skipped_domains:
+                logger.info(
+                    f"Skipped custom domain removal during destroy for deployment {deployment_id} "
+                    f"(still referenced): {', '.join(skipped_domains)}"
+                )
 
         except Exception as cf_error:
             logger.warning(f"Cloudflare domain cleanup failed (continuing): {cf_error}")

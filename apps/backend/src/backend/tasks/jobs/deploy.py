@@ -17,6 +17,7 @@ from backend.tasks.core import (
     deploy_namespace_resources,
     prepare_deployment,
     prepare_namespace_config,
+    reconcile_custom_domains_for_deployment,
     register_custom_domains,
     sync_deployment_to_db,
     update_deployment_state,
@@ -60,6 +61,13 @@ async def deploy_compose_job(
         deployment = validation_result.deployment
         helm_values = validation_result.helm_values
         secrets = validation_result.secrets
+        current_custom_domains = []
+        if validation_result.compose_file:
+            current_custom_domains = [
+                service.domain
+                for service in (validation_result.compose_file.services or [])
+                if service.domain
+            ]
 
         # Step 3: Prepare namespace config
         namespace_config_result = await prepare_namespace_config(deployment)
@@ -93,17 +101,8 @@ async def deploy_compose_job(
         )
 
         # Step 7: Register custom domains with Cloudflare (non-blocking)
-        custom_domains = (
-            [
-                service.domain
-                for service in validation_result.compose_file.services
-                if service.domain
-            ]
-            if validation_result.compose_file
-            else []
-        )
-        if custom_domains:
-            await register_custom_domains(custom_domains)
+        if current_custom_domains:
+            await register_custom_domains(current_custom_domains)
 
         # Step 8: Sync to database
         try:
@@ -162,6 +161,31 @@ async def deploy_compose_job(
             raise ValueError(
                 f"Helm deployment succeeded but database update failed: {db_error}"
             ) from db_error
+
+        # Step 9: Remove stale custom domains no longer referenced by this deployment
+        try:
+            removed_domains, skipped_domains = (
+                await reconcile_custom_domains_for_deployment(
+                    deployment_id=deployment_id,
+                    previous_compose_yaml=deployment.compose_yaml,
+                    current_compose_file=validation_result.compose_file,
+                )
+            )
+            if removed_domains:
+                logger.info(
+                    f"Removed stale custom domains for deployment {deployment_id}: "
+                    f"{', '.join(removed_domains)}"
+                )
+            if skipped_domains:
+                logger.info(
+                    f"Skipped stale custom domain cleanup for deployment {deployment_id} "
+                    f"(still referenced): {', '.join(skipped_domains)}"
+                )
+        except Exception as cleanup_error:
+            logger.warning(
+                f"Custom domain reconciliation failed for deployment {deployment_id} "
+                f"(continuing): {cleanup_error}"
+            )
 
         logger.info(f"Successfully completed deployment job for {deployment_id}")
         return {"status": "success", "deployment_id": deployment_id}
