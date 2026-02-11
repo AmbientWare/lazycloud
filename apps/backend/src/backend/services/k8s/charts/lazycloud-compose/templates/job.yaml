@@ -42,6 +42,7 @@ spec:
         {{- toYaml $service.labels | nindent 8 }}
         {{- end }}
       annotations:
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
         {{- include "lazycloud-compose.annotations" $ | nindent 8 }}
         {{- if $service.annotations }}
         {{- toYaml $service.annotations | nindent 8 }}
