@@ -53,8 +53,11 @@ resource "cloudflare_zero_trust_tunnel_cloudflared_config" "cluster_tunnel_confi
           service  = "http://lazycloud-gateway.envoy-gateway-system.svc.cluster.local:80"
         },
         {
-          # Catch-all rule (required by Cloudflare)
-          service = "http_status:404"
+          # Catch-all rule — routes custom domain (Cloudflare for SaaS) traffic to gateway
+          # Custom hostnames arrive with their original Host header (e.g., www.upnext.run)
+          # which won't match any specific tunnel ingress rule. The gateway handles
+          # hostname-based routing via HTTPRoutes and returns 404 for unregistered domains.
+          service = "http://lazycloud-gateway.envoy-gateway-system.svc.cluster.local:80"
         }
       ]
     )
