@@ -7,6 +7,8 @@ from kubernetes_asyncio.client.exceptions import ApiException
 from loguru import logger
 from models.deployments import DeploymentStates
 
+from models.users import UserRole
+
 from backend.config import app_config
 from backend.database import get_db_context
 from backend.services import get_subscription_service
@@ -126,6 +128,9 @@ async def verify_quota_capacity(
 
     if not owner_user:
         logger.warning(f"Workspace {workspace_id} has no owner, skipping quota check")
+        return
+
+    if owner_user.role == UserRole.ADMIN:
         return
 
     subscription_service = get_subscription_service()
