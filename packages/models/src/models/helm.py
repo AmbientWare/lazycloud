@@ -234,7 +234,7 @@ class HelmValues(BaseModel):
 
     global_values: GlobalValues = Field(
         default_factory=lambda: GlobalValues(deploymentId="", workspaceId=""),
-        serialization_alias="global",
+        alias="global",
     )
     services: list[ServiceValues] = []
     networks: list[NetworkValues] = []
