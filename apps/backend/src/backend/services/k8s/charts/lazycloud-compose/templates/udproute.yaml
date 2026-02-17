@@ -3,8 +3,9 @@ Create UDPRoute for each service that has UDP ingress enabled
 Used for DNS, gaming servers, streaming, and other UDP-based services
 */}}
 {{- range $service := .Values.services }}
+{{- if and $service.enabled $service.ingress $service.ingress.enabled $service.ports }}
 {{- $protocol := $service.ingress.protocol | default "http" }}
-{{- if and $service.enabled $service.ingress $service.ingress.enabled $service.ports (eq $protocol "udp") }}
+{{- if eq $protocol "udp" }}
 ---
 apiVersion: gateway.networking.k8s.io/v1alpha2
 kind: UDPRoute
@@ -40,5 +41,6 @@ spec:
         {{- $firstPort := index $service.ports 0 }}
         - name: {{ $service.name }}
           port: {{ $firstPort.port }}
+{{- end }}
 {{- end }}
 {{- end }}

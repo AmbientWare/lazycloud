@@ -86,12 +86,25 @@ async def destroy_compose_job(
         if not app_result.success:
             logger.warning(f"Failed to destroy application: {app_result.error}")
 
-        # Step 2: Destroy namespace resources (only if not default namespace)
-        logger.info(f"Destroying namespace resources for {namespace}")
-        namespace_result = await helm_manager.destroy(namespace, "default")
-        if not namespace_result.success:
-            logger.warning(
-                f"Failed to destroy namespace resources: {namespace_result.error}"
+        # Step 2: Destroy namespace resources only if no other active deployments remain
+        async with get_db_context() as db:
+            remaining = await db.compose_deployments.get_active_deployments_for_workspace(
+                str(deployment.workspace_id)
+            )
+            # Exclude the current deployment being destroyed
+            remaining.pop(deployment.name, None)
+
+        if not remaining:
+            logger.info(f"Last deployment in workspace, destroying namespace resources for {namespace}")
+            namespace_result = await helm_manager.destroy(namespace, "default")
+            if not namespace_result.success:
+                logger.warning(
+                    f"Failed to destroy namespace resources: {namespace_result.error}"
+                )
+        else:
+            logger.info(
+                f"Skipping namespace destruction for {namespace}, "
+                f"{len(remaining)} other deployment(s) still active: {list(remaining.keys())}"
             )
 
         # Step 3: Clean up Depot project (non-fatal)
