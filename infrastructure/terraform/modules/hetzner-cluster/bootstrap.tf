@@ -97,6 +97,16 @@ resource "helm_release" "juicefs_csi" {
     # Talos Linux has a read-only /etc — this skips the hostPath
     # /etc/updatedb.conf volume that mount pods create by default
     immutable = true
+    # CSI node DaemonSet must run on sandbox nodes so customer volumes can mount
+    node = {
+      tolerations = [
+        {
+          key      = "instance-class"
+          value    = "sandbox"
+          effect   = "NoSchedule"
+        }
+      ]
+    }
   })]
 
   wait    = true
