@@ -3,8 +3,9 @@ Create HTTPRoute for each service that has HTTP ingress enabled
 Only creates routes for HTTP protocol (default) - TCP/UDP handled separately
 */}}
 {{- range $service := .Values.services }}
+{{- if and $service.enabled $service.ingress $service.ingress.enabled $service.ports }}
 {{- $protocol := $service.ingress.protocol | default "http" }}
-{{- if and $service.enabled $service.ingress $service.ingress.enabled $service.ports (eq $protocol "http") }}
+{{- if eq $protocol "http" }}
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
@@ -45,5 +46,6 @@ spec:
         {{- $firstPort := index $service.ports 0 }}
         - name: {{ $service.name }}
           port: {{ $firstPort.port }}
+{{- end }}
 {{- end }}
 {{- end }}

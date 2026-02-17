@@ -56,9 +56,6 @@ spec:
         {{- if $service.annotations }}
         {{- toYaml $service.annotations | nindent 8 }}
         {{- end }}
-        {{- with $.Values.commonLabels }}
-        {{- toYaml . | nindent 8 }}
-        {{- end }}
     spec:
       {{- if $.Values.global.runtimeClassName }}
       runtimeClassName: {{ $.Values.global.runtimeClassName }}
@@ -120,12 +117,18 @@ spec:
               protocol: {{ .protocol | default "TCP" }}
             {{- end }}
           {{- end }}
+          {{- $envSecrets := list }}
           {{- range $secret := $.Values.secrets }}
           {{- if and (hasPrefix "env-" $secret.name) $secret.enabled }}
-          envFrom:
-            - secretRef:
-                name: {{ $secret.name }}
+          {{- $envSecrets = append $envSecrets $secret }}
           {{- end }}
+          {{- end }}
+          {{- if $envSecrets }}
+          envFrom:
+            {{- range $envSecrets }}
+            - secretRef:
+                name: {{ .name }}
+            {{- end }}
           {{- end }}
           {{- if or $service.volumes $service.secrets }}
           volumeMounts:

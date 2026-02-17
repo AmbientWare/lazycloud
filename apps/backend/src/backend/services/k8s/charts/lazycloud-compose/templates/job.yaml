@@ -100,12 +100,18 @@ spec:
           {{- if $service.workingDir }}
           workingDir: {{ $service.workingDir }}
           {{- end }}
+          {{- $envSecrets := list }}
           {{- range $secret := $.Values.secrets }}
           {{- if and (hasPrefix "env-" $secret.name) $secret.enabled }}
-          envFrom:
-            - secretRef:
-                name: {{ $secret.name }}
+          {{- $envSecrets = append $envSecrets $secret }}
           {{- end }}
+          {{- end }}
+          {{- if $envSecrets }}
+          envFrom:
+            {{- range $envSecrets }}
+            - secretRef:
+                name: {{ .name }}
+            {{- end }}
           {{- end }}
           {{- if or $service.volumes $service.secrets }}
           volumeMounts:
