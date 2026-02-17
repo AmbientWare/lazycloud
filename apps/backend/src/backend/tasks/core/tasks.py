@@ -17,7 +17,7 @@ from models.deployments import (
     DeploymentStates,
 )
 from models.compose import ComposeFile
-from models.helm import HelmNamespaceValues, HelmValues, NamespaceConfig
+from models.helm import HelmNamespaceValues, HelmValues, NamespaceConfig, SecretValues
 from models.k8s import WorkloadType
 from models.secrets import SecretState
 from models.statuses import TaskStatus
@@ -33,6 +33,7 @@ from backend.services.k8s.helm_manager import (
     HelmDeploymentConfig,
     HelmManager,
 )
+from backend.services.k8s.generators.networking import transform_environment_urls
 from backend.services.k8s.helm_values_generator import HelmValuesGenerator
 from backend.tasks.core.schemas import DeploymentPreparationResult
 from backend.tasks.core.utils import (
@@ -230,6 +231,39 @@ async def prepare_deployment(
 
         async with get_db_context() as db:
             secrets = await db.secrets.get_secrets(deployment_id)
+
+        # Merge fresh secrets into stored helm_values — secrets may have been
+        # added after helm_values were generated (e.g. wait_for_secrets flow,
+        # or validation used a temp deployment ID that couldn't find secrets)
+        if secrets:
+            secret_data = {s.key: s.value for s in secrets}
+
+            # Apply .public URL transforms (same as HelmValuesGenerator does)
+            if compose_file:
+                service_names = {svc.name for svc in compose_file.services}
+                secret_data = (
+                    transform_environment_urls(
+                        secret_data,
+                        service_names,
+                        deployment_id,
+                        deployment.cluster_id,
+                    )
+                    or {}
+                )
+
+            secret_name = f"env-{deployment_id[:8]}"
+            # Remove any stale env secrets, then add fresh one
+            helm_values.secrets = [
+                s for s in helm_values.secrets if not s.name.startswith("env-")
+            ]
+            helm_values.secrets.append(
+                SecretValues(
+                    name=secret_name,
+                    enabled=True,
+                    type="Opaque",
+                    data=secret_data,
+                )
+            )
 
     return DeploymentPreparationResult(
         deployment=deployment,

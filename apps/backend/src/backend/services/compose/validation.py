@@ -60,11 +60,15 @@ async def validate_deployment_request(
             f"Maximum size is {app_config.COMPOSE_YAML_MAX_SIZE_BYTES} bytes."
         )
 
-    # Get secrets (only if deployment exists)
+    # Get secrets — use existing deployment ID (new_deployment may be a temp object
+    # with a throwaway UUID that has no secrets linked to it)
     secrets = []
-    if new_deployment.id:
+    secret_lookup_id = (
+        existing_deployment.id if existing_deployment else new_deployment.id
+    )
+    if secret_lookup_id:
         async with get_db_context() as db:
-            secrets = await db.secrets.get_secrets(new_deployment.id)
+            secrets = await db.secrets.get_secrets(secret_lookup_id)
 
     # Generate Helm values (this validates compose file)
     try:
