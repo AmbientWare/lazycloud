@@ -157,12 +157,19 @@ class DashboardApp(App):
         """Handle deployment selection - coordinate updates between components."""
         # Update content container
         content = self.query_one(ContentContainer)
+        deployment_changed = (
+            not content.deployment or content.deployment.id != message.deployment.id
+        )
+        if deployment_changed:
+            # Clear stale service details while the new deployment's service state loads.
+            content.service = None
         content.deployment = message.deployment
         content.deployment_status = message.status
 
         # Update services container
         services = self.query_one(ServicesContainer)
         services.deployment_id = message.deployment.id
+        services.deployment_status = message.status
 
         # Update secrets container
         secrets = self.query_one(SecretsContainer)
@@ -184,6 +191,8 @@ class DashboardApp(App):
         # Only update if this is for the currently selected deployment
         if content.deployment and content.deployment.id == message.deployment_id:
             content.deployment_status = message.status
+            services = self.query_one(ServicesContainer)
+            services.deployment_status = message.status
 
     def on_service_status_updated(self, message: ServiceStatusUpdated) -> None:
         """Handle service status SSE update - update cached state."""

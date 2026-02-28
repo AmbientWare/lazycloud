@@ -28,6 +28,7 @@ class DeploymentsContainer(Container):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._list_view = None
+        self._status_cache: dict[str, DeploymentStatus] = {}
         self.border_title = f"{Icons.ROCKET} [1] Deployments"
         self.workspace_id = config.active_workspace_id
 
@@ -66,16 +67,7 @@ class DeploymentsContainer(Container):
                 if isinstance(item, ListItem):
                     # Only fetch and update if it's a different deployment
                     if self.selected_deployment != item.item_data.data:
-                        self.selected_deployment = item.item_data.data
-                        # get status associated with the deployment
-                        try:
-                            status = await api.deployments.get_deployment_status(
-                                item.item_data.id
-                            )
-                            self.deployment_status = status.status
-                        except Exception as e:
-                            self.log.error(f"Failed to get deployment status: {e}")
-                            # Skip status update but don't crash
+                        self._schedule_set_selected_deployment(item.item_data)
 
     def on_blur(self) -> None:
         """Handle blur event."""
@@ -88,11 +80,28 @@ class DeploymentsContainer(Container):
     async def watch_selected_deployment(self, old_value, new_value) -> None:
         """React when deployment is selected - post message for other components"""
         if new_value:
+            status = self.deployment_status
+            if status and status.deployment_id != new_value.id:
+                status = None
             # Post message instead of directly updating other containers
             self.post_message(
                 DeploymentSelected(
                     deployment=new_value,
-                    status=self.deployment_status,
+                    status=status,
+                )
+            )
+
+    async def watch_deployment_status(self, _old_value, new_value) -> None:
+        """Emit an update when selected deployment status has been fetched/refreshed."""
+        if (
+            new_value
+            and self.selected_deployment
+            and new_value.deployment_id == self.selected_deployment.id
+        ):
+            self.post_message(
+                DeploymentSelected(
+                    deployment=self.selected_deployment,
+                    status=new_value,
                 )
             )
 
@@ -178,15 +187,7 @@ class DeploymentsContainer(Container):
 
     async def _handle_selection(self, item_data: ListItemData) -> None:
         """Handle deployment selection (Enter key pressed)."""
-        # Update our own reactive state
-        self.selected_deployment = item_data.data
-        # get status associated with the deployment
-        try:
-            status = await api.deployments.get_deployment_status(item_data.id)
-            self.deployment_status = status.status
-        except Exception as e:
-            self.log.error(f"Failed to get deployment status: {e}")
-            # Skip status update but don't crash
+        self._schedule_set_selected_deployment(item_data)
 
     def _handle_highlight(self, item_data: ListItemData) -> None:
         """Handle deployment highlight with api request debouncing."""
@@ -203,14 +204,41 @@ class DeploymentsContainer(Container):
 
         # Only update content if the highlight actually changed to a different item
         if self.selected_deployment != item_data.data:
-            self.selected_deployment = item_data.data
-            # get status associated with the deployment
-            try:
-                status = await api.deployments.get_deployment_status(item_data.id)
-                self.deployment_status = status.status
-            except Exception as e:
-                self.log.error(f"Failed to get deployment status: {e}")
-                # Skip status update but don't crash
+            self._schedule_set_selected_deployment(item_data)
+
+    def _schedule_set_selected_deployment(self, item_data: ListItemData) -> None:
+        """Schedule deployment selection without blocking navigation handlers."""
+        self.run_worker(
+            self._set_selected_deployment(item_data),
+            exclusive=False,
+        )
+
+    async def _set_selected_deployment(self, item_data: ListItemData) -> None:
+        """Set selected deployment and fetch status with stale-response guard."""
+        deployment = item_data.data
+        deployment_id = item_data.id
+        self.selected_deployment = deployment
+        status = await self._get_status(deployment_id)
+
+        if (
+            self.selected_deployment
+            and self.selected_deployment.id == deployment_id
+        ):
+            self.deployment_status = status
+
+    async def _get_status(self, deployment_id: str) -> DeploymentStatus | None:
+        """Get deployment status from cache or API."""
+        cached = self._status_cache.get(deployment_id)
+        if cached is not None:
+            return cached
+
+        try:
+            status = await api.deployments.get_deployment_status(deployment_id)
+            self._status_cache[deployment_id] = status.status
+            return status.status
+        except Exception as e:
+            self.log.error(f"Failed to get deployment status: {e}")
+            return None
 
     def action_cursor_up(self) -> None:
         """Move cursor up in the list."""

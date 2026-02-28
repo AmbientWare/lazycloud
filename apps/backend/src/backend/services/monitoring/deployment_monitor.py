@@ -39,7 +39,11 @@ class DeploymentMonitor(BaseMonitor[DeploymentStatus]):
         )
 
     async def _task(self) -> DeploymentStatus:
-        status = await self.status_watcher.get_deployment_status()
+        status = await self.status_watcher.get_deployment_status(
+            skip_metrics=True,
+            include_domain_status=False,
+            skip_pods=True,
+        )
 
         # Enrich volume summaries with storage sizes from billing data (cached)
         if status.volumes:

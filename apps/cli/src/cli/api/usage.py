@@ -19,6 +19,7 @@ class UsageAPI(BaseAPI):
         self,
         start_date: datetime | None = None,
         end_date: datetime | None = None,
+        workspace_id: str | None = None,
     ) -> AggregatedUsageResponse:
         """Get aggregated usage across all user's workspaces with workspace summaries."""
         params = {}
@@ -33,6 +34,9 @@ class UsageAPI(BaseAPI):
             if iso_str.endswith("+00:00"):
                 iso_str = iso_str.replace("+00:00", "Z")
             params["end_date"] = iso_str
+
+        if workspace_id:
+            params["workspace_id"] = workspace_id
 
         response = await self._get_async("/usage/all", params=params)
         return AggregatedUsageResponse.model_validate(response)

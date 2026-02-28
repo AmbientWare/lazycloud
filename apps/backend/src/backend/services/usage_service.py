@@ -138,6 +138,7 @@ class UsageService:
         start_date: datetime,
         end_date: datetime,
         external_customer_id: str,
+        workspace_id: str | None = None,
     ) -> AggregatedUsageResponse:
         """Get aggregated usage across all user's workspaces with workspace summaries."""
         async with get_db_context() as db:
@@ -148,6 +149,13 @@ class UsageService:
                     end_date=end_date,
                 )
             )
+
+        if workspace_id:
+            all_user_workspaces = [
+                (workspace, membership)
+                for workspace, membership in all_user_workspaces
+                if workspace.id == workspace_id
+            ]
 
         results = await asyncio.gather(
             *[
@@ -286,23 +294,52 @@ class UsageService:
         if not deployments:
             return []
 
+        valid_deployments = [
+            deployment
+            for deployment in deployments
+            if deployment.id is not None and deployment.name is not None
+        ]
+
+        if not valid_deployments:
+            return []
+
+        semaphore = asyncio.Semaphore(8)
+
+        async def _fetch_metrics(deployment_id: str) -> UsageMetrics:
+            async with semaphore:
+                metrics, _, _ = await self.get_deployment_breakdown(
+                    workspace_id=workspace_id,
+                    deployment_id=deployment_id,
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+                return metrics
+
+        metric_results = await asyncio.gather(
+            *[_fetch_metrics(deployment.id) for deployment in valid_deployments],
+            return_exceptions=True,
+        )
+
         deployment_metrics_map: dict[str, UsageMetrics] = {}
-        valid_deployments = []
+        deployment_metrics_list: list[UsageMetrics] = []
+        for deployment, result in zip(valid_deployments, metric_results):
+            if isinstance(result, BaseException):
+                logger.warning(
+                    f"Failed to fetch deployment usage for {deployment.id}: {result}",
+                    exc_info=True,
+                )
+                metrics = UsageMetrics(
+                    cpu_core_hours=0.0,
+                    memory_gb_hours=0.0,
+                    build_minutes=0.0,
+                    storage_gb_months=0.0,
+                )
+            else:
+                metrics = result
 
-        for deployment in deployments:
-            if not deployment.id or not deployment.name:
-                continue
-
-            valid_deployments.append(deployment)
-            metrics, _, _ = await self.get_deployment_breakdown(
-                workspace_id=workspace_id,
-                deployment_id=deployment.id,
-                start_date=start_date,
-                end_date=end_date,
-            )
             deployment_metrics_map[deployment.id] = metrics
+            deployment_metrics_list.append(metrics)
 
-        deployment_metrics_list = list(deployment_metrics_map.values())
         cost_results = await self.cost_service.calculate_costs_batch(
             usages=deployment_metrics_list,
             external_customer_id=external_customer_id,

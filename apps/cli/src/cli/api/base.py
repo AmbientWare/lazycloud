@@ -16,6 +16,9 @@ class APIError(Exception):
 
 
 class BaseAPI:
+    _shared_client: httpx.Client | None = None
+    _shared_async_client: httpx.AsyncClient | None = None
+
     def __init__(self, url_path: str, use_version: bool = True):
         if use_version:
             self._base_url = f"{config.api_base_url}/{config.api_version}/{url_path}"
@@ -33,12 +36,16 @@ class BaseAPI:
         return headers
 
     def _get_client(self) -> httpx.Client:
-        """Get a synchronous HTTP client with authentication"""
-        return httpx.Client(timeout=self.timeout, headers=self._get_headers())
+        """Get a shared synchronous HTTP client."""
+        if BaseAPI._shared_client is None:
+            BaseAPI._shared_client = httpx.Client(timeout=self.timeout)
+        return BaseAPI._shared_client
 
     def _get_async_client(self) -> httpx.AsyncClient:
-        """Get an async HTTP client with authentication"""
-        return httpx.AsyncClient(timeout=self.timeout, headers=self._get_headers())
+        """Get a shared async HTTP client."""
+        if BaseAPI._shared_async_client is None:
+            BaseAPI._shared_async_client = httpx.AsyncClient(timeout=self.timeout)
+        return BaseAPI._shared_async_client
 
     def _make_request(
         self,
@@ -51,7 +58,13 @@ class BaseAPI:
         """Make a request to the API with automatic token refresh on 401."""
         client = self._get_client()
         try:
-            response = client.request(method, url, json=json, params=params)
+            response = client.request(
+                method,
+                url,
+                json=json,
+                params=params,
+                headers=self._get_headers(),
+            )
             response.raise_for_status()
             return response.json()
 
@@ -97,46 +110,52 @@ class BaseAPI:
         _retry_after_refresh: bool = True,
     ) -> Any:
         """Make an async request to the API with automatic token refresh on 401."""
-        async with self._get_async_client() as client:
-            try:
-                response = await client.request(method, url, json=json, params=params)
-                response.raise_for_status()
-                return response.json()
+        client = self._get_async_client()
+        try:
+            response = await client.request(
+                method,
+                url,
+                json=json,
+                params=params,
+                headers=self._get_headers(),
+            )
+            response.raise_for_status()
+            return response.json()
 
-            except httpx.HTTPStatusError as e:
-                # On 401, attempt token refresh and retry once
-                if e.response.status_code == 401 and _retry_after_refresh:
-                    if attempt_token_refresh():
-                        # Retry with new token (but don't retry again if it fails)
-                        return await self._make_request_async(
-                            method, url, json, params, _retry_after_refresh=False
-                        )
-
-                # Try to get error message from response JSON
-                try:
-                    error_data = e.response.json()
-                    if isinstance(error_data, dict):
-                        if "detail" in error_data:
-                            error_message = error_data["detail"]
-                        else:
-                            error_message = (
-                                error_data.get("message")
-                                or error_data.get("error")
-                                or str(error_data)
-                            )
-                    else:
-                        error_message = str(error_data)
-
-                except Exception:
-                    # If can't parse JSON, use status code and reason
-                    error_message = (
-                        f"HTTP {e.response.status_code}: {e.response.reason_phrase}"
+        except httpx.HTTPStatusError as e:
+            # On 401, attempt token refresh and retry once
+            if e.response.status_code == 401 and _retry_after_refresh:
+                if attempt_token_refresh():
+                    # Retry with new token (but don't retry again if it fails)
+                    return await self._make_request_async(
+                        method, url, json, params, _retry_after_refresh=False
                     )
 
-                raise APIError(error_message, status_code=e.response.status_code) from e
+            # Try to get error message from response JSON
+            try:
+                error_data = e.response.json()
+                if isinstance(error_data, dict):
+                    if "detail" in error_data:
+                        error_message = error_data["detail"]
+                    else:
+                        error_message = (
+                            error_data.get("message")
+                            or error_data.get("error")
+                            or str(error_data)
+                        )
+                else:
+                    error_message = str(error_data)
 
-            except Exception as e:
-                raise APIError(str(e)) from e
+            except Exception:
+                # If can't parse JSON, use status code and reason
+                error_message = (
+                    f"HTTP {e.response.status_code}: {e.response.reason_phrase}"
+                )
+
+            raise APIError(error_message, status_code=e.response.status_code) from e
+
+        except Exception as e:
+            raise APIError(str(e)) from e
 
     def _get(
         self,

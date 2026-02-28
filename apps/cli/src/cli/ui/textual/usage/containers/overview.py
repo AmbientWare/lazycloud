@@ -52,6 +52,7 @@ class UsageOverviewSection(Container):
 
     def on_mount(self) -> None:
         """Fetch billing cycle then usage data when mounted"""
+        self.loading = True
         self.run_worker(self._fetch_with_billing_cycle(), exclusive=True)
 
     async def _fetch_with_billing_cycle(self) -> None:
@@ -82,6 +83,7 @@ class UsageOverviewSection(Container):
             aggregated = await self._usage_api.get_aggregated_usage(
                 start_date=start_date,
                 end_date=end_date,
+                workspace_id=config.active_workspace_id,
             )
             self.usage_period = aggregated.period
 
@@ -109,6 +111,8 @@ class UsageOverviewSection(Container):
                     "-",
                     key="error",
                 )
+        finally:
+            self.loading = False
 
     def watch_usage_data(self, usage: WorkspaceUsageSummary | None) -> None:
         """Update display when usage data changes"""
@@ -186,4 +190,5 @@ class UsageOverviewSection(Container):
         self, start_date: datetime | None = None, end_date: datetime | None = None
     ) -> None:
         """Manually refresh usage data"""
+        self.loading = True
         self.run_worker(self._fetch_usage_async(start_date, end_date), exclusive=True)

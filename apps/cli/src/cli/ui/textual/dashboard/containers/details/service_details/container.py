@@ -133,12 +133,21 @@ class ServiceDetailsContainer(Widget):
             )
         )
 
+        self.apply_service_status(service)
+
+    def apply_service_status(self, service: ServiceStatus) -> None:
+        """Apply a service status update without remounting the view."""
+        self.service_status = service
+
         if self._overview_widget:
             overview_content = self._build_overview_content(service)
             self._overview_widget.update("\n".join(overview_content).strip())
 
-        if self._pods_table and service.pods:
-            self._pods_table.update_pods(service.pods)
+        if self._resources_table and service.resources:
+            self._resources_table.update_resources(service.resources)
+
+        if self._pods_table:
+            self._pods_table.update_pods(service.pods or [])
 
     def action_focus_instances(self) -> None:
         """Focus the instances table."""
