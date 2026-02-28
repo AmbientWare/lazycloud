@@ -107,12 +107,19 @@ class ContentContainer(Container):
             pass
 
     async def watch_service(self, old_value, new_value) -> None:
-        """Auto-refresh when a different service is selected (not on status updates)"""
-        if new_value and self.display_mode == DisplayMode.SERVICE:
-            # Only refresh if selecting a different service, not on status updates
-            old_name = old_value.name if old_value else None
-            if new_value.name != old_name:
-                await self.refresh_service_content()
+        """Refresh service view on selection changes and apply same-service updates."""
+        if self.display_mode != DisplayMode.SERVICE:
+            return
+
+        if not new_value:
+            await self.clear_service_content()
+            return
+
+        old_name = old_value.name if old_value else None
+        if new_value.name != old_name:
+            await self.refresh_service_content()
+        elif self._service_view:
+            self._service_view.apply_service_status(new_value)
 
     async def watch_secret_key(self, _old_value, new_value) -> None:
         """Auto-refresh when secret key changes"""
@@ -129,6 +136,8 @@ class ContentContainer(Container):
             await self.refresh_deployment_content()
         elif new_value == DisplayMode.SERVICE and self.service:
             await self.refresh_service_content()
+        elif new_value == DisplayMode.SERVICE:
+            await self.clear_service_content()
         elif new_value == DisplayMode.SECRET and self.deployment:
             await self.refresh_secret_content()
 
@@ -233,6 +242,22 @@ class ContentContainer(Container):
         self._service_view = None
 
         scroll.mount(EmptyStateWidget())
+
+    async def clear_service_content(self) -> None:
+        """Clear service details content to prevent stale panels."""
+        self.border_title = self._get_border_title("📋 [4] Service Details")
+        self._update_border_subtitle()
+
+        scroll = self.query_one(VerticalScroll)
+        scroll.remove_children()
+        self._service_view = None
+
+        message = (
+            "[yellow]Loading service details...[/yellow]"
+            if self.loading
+            else "[dim]Select a service to view details[/dim]"
+        )
+        scroll.mount(Static(message))
 
     def get_focusable_widget(self):
         """Return the current focusable widget based on display mode.

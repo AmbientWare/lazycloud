@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
 from models.monitoring import StreamEventType
 from models.statuses import TaskStatus
@@ -42,7 +42,11 @@ async def list_services(
         cluster_id=deployment.cluster_id,
     )
 
-    service_statuses = await watcher.get_service_statuses_for_deployment()
+    service_statuses = await watcher.get_service_statuses_for_deployment(
+        skip_metrics=True,
+        include_domain_status=False,
+        skip_pods=True,
+    )
 
     return [
         ServiceStatusResponse(
@@ -61,6 +65,10 @@ async def list_services(
 )
 async def get_service_status(
     service_name: str,
+    fast: bool = Query(
+        False,
+        description="Return a faster status payload by skipping metrics and domain checks",
+    ),
     deployment: ComposeDeploymentInDb = Depends(get_deployment_with_access),
 ) -> ServiceStatusResponse:
     """Get the status of a specific service within a deployment."""
@@ -77,7 +85,11 @@ async def get_service_status(
         cluster_id=deployment.cluster_id,
     )
 
-    service_status = await watcher.get_service_status(service_name)
+    service_status = await watcher.get_service_status(
+        service_name,
+        skip_metrics=fast,
+        include_domain_status=not fast,
+    )
 
     if not service_status:
         raise HTTPException(

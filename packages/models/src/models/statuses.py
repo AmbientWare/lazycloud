@@ -205,6 +205,7 @@ class ServiceStatusSummary(BaseModel):
     ports: list[str] | None = None
     restarts: int = 0
     endpoint: str | None = None
+    workload_type: WorkloadType | None = None
 
     # Custom domain fields
     custom_domain: str | None = None  # The custom domain if configured

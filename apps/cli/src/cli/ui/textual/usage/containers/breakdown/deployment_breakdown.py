@@ -26,6 +26,8 @@ from cli.ui.textual.usage.containers.breakdown.tables import (
 class DeploymentBreakdownSection(Container):
     """Section showing deployment breakdown with services and volumes"""
 
+    PREFETCH_LIMIT = 6
+
     usage_data: reactive[WorkspaceUsageSummary | None] = reactive(None)
     usage_period: reactive[UsagePeriodInfo | None] = reactive(None)
     selected_deployment_id: reactive[str | None] = reactive(None)
@@ -83,9 +85,6 @@ class DeploymentBreakdownSection(Container):
         if self._fetch_worker and not self._fetch_worker.is_finished:
             self._fetch_worker.cancel()
             self._fetch_worker = None
-
-        # Clear loading state for previous deployment
-        self._loading_breakdowns.clear()
 
         if not deployment_id:
             self._update_display()
@@ -225,13 +224,23 @@ class DeploymentBreakdownSection(Container):
         if not self.usage_data or not self.usage_period:
             return
 
-        deployment_ids = [d.deployment_id for d in self.usage_data.deployments]
+        deployment_ids = [
+            d.deployment_id for d in self.usage_data.deployments[: self.PREFETCH_LIMIT]
+        ]
 
-        # Fetch all breakdowns in parallel
-        tasks = []
-        for deployment_id in deployment_ids:
-            if deployment_id not in self._loaded_breakdowns:
-                tasks.append(self._fetch_breakdown_async(deployment_id))
+        semaphore = asyncio.Semaphore(4)
+
+        async def _prefetch_one(deployment_id: str) -> None:
+            async with semaphore:
+                await self._fetch_breakdown_async(
+                    deployment_id, only_if_selected=False
+                )
+
+        tasks = [
+            _prefetch_one(deployment_id)
+            for deployment_id in deployment_ids
+            if deployment_id not in self._loaded_breakdowns
+        ]
 
         if tasks:
             # Gather all results, ignoring failures
@@ -246,7 +255,9 @@ class DeploymentBreakdownSection(Container):
                 self._fetch_breakdown_async(deployment_id), exclusive=False
             )
 
-    async def _fetch_breakdown_async(self, deployment_id: str) -> None:
+    async def _fetch_breakdown_async(
+        self, deployment_id: str, only_if_selected: bool = True
+    ) -> None:
         """Fetch deployment cost breakdown asynchronously"""
         if not self.usage_data:
             return
@@ -262,8 +273,8 @@ class DeploymentBreakdownSection(Container):
         self._loading_breakdowns.add(deployment_id)
 
         try:
-            # Check if still selected before fetching (may have changed during debounce)
-            if self.selected_deployment_id != deployment_id:
+            # During user-driven selection fetches, skip stale requests.
+            if only_if_selected and self.selected_deployment_id != deployment_id:
                 return
 
             # Get date range from usage_period
@@ -279,9 +290,7 @@ class DeploymentBreakdownSection(Container):
                 end_date=end_date,
             )
 
-            # Only store and update if this deployment is still selected
-            if self.selected_deployment_id == deployment_id:
-                self._loaded_breakdowns[deployment_id] = breakdown
+            self._loaded_breakdowns[deployment_id] = breakdown
 
         except asyncio.CancelledError:
             raise

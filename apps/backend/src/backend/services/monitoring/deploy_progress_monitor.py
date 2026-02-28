@@ -61,7 +61,8 @@ class DeployProgressMonitor(BaseMonitor[DeployProgressStatus]):
             )
 
         statuses = await self.status_watcher.get_service_statuses_for_deployment(
-            skip_metrics=True
+            skip_metrics=True,
+            include_domain_status=False,
         )
 
         services: list[DeployServiceStatus] = []

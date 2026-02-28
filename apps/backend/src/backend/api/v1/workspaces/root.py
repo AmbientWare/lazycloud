@@ -257,6 +257,10 @@ async def get_aggregated_usage(
         None, description="Start date (defaults to start of current month)"
     ),
     end_date: datetime | None = Query(None, description="End date (defaults to now)"),
+    workspace_id: str | None = Query(
+        None,
+        description="Optional workspace ID to scope usage results to a single workspace",
+    ),
     usage_service: UsageService = Depends(get_usage_service),
 ) -> AggregatedUsageResponse:
     """Get aggregated usage across all user's workspaces with workspace summaries"""
@@ -267,6 +271,7 @@ async def get_aggregated_usage(
             start_date=start_date,
             end_date=end_date,
             external_customer_id=current_user.workos_id,
+            workspace_id=workspace_id,
         )
     except Exception as e:
         logger.error(f"Error getting aggregated usage: {e}", exc_info=True)

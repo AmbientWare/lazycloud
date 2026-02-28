@@ -1,5 +1,6 @@
 import asyncio
 from datetime import UTC, datetime
+from time import monotonic
 
 from kubernetes_asyncio.client.exceptions import ApiException
 from loguru import logger
@@ -42,6 +43,11 @@ from backend.services.k8s.client import (
 class StatusWatcher:
     """Watches Kubernetes resources and provides real-time status updates."""
 
+    DOMAIN_STATUS_TTL_SECONDS = 30.0
+    POD_METRICS_TTL_SECONDS = 15.0
+    _domain_status_cache: dict[str, tuple[float, tuple[str | None, str | None]]] = {}
+    _pod_metrics_cache: dict[str, tuple[float, dict[str, str] | None]] = {}
+
     def __init__(
         self,
         deployment_id: str,
@@ -77,6 +83,10 @@ class StatusWatcher:
         if not app_config.CLOUDFLARE_API_KEY:
             return None, None
 
+        cached = self._domain_status_cache.get(hostname)
+        if cached and (monotonic() - cached[0]) < self.DOMAIN_STATUS_TTL_SECONDS:
+            return cached[1]
+
         try:
             from backend.services import get_cloudflare_service
 
@@ -89,7 +99,9 @@ class StatusWatcher:
 
             # Only show CNAME target if domain is not active
             cname_target = app_config.BASE_DOMAIN if ssl_status != "active" else None
-            return ssl_status, cname_target
+            status_tuple = (ssl_status, cname_target)
+            self._domain_status_cache[hostname] = (monotonic(), status_tuple)
+            return status_tuple
 
         except asyncio.TimeoutError:
             logger.debug(f"Timeout getting Cloudflare status for {hostname}")
@@ -99,14 +111,22 @@ class StatusWatcher:
             return None, None
 
     async def get_service_statuses_for_deployment(
-        self, skip_metrics: bool = False
+        self,
+        skip_metrics: bool = False,
+        include_domain_status: bool = True,
+        skip_pods: bool = False,
     ) -> list[ServiceStatus]:
         """Get the status of all services in a deployment."""
         if not self.helm_values or not self.helm_values.services:
             return []
 
         tasks = [
-            self._get_service_status(service_config, skip_metrics=skip_metrics)
+            self._get_service_status(
+                service_config,
+                skip_metrics=skip_metrics,
+                include_domain_status=include_domain_status,
+                skip_pods=skip_pods,
+            )
             for service_config in self.helm_values.services
         ]
         # Overall timeout: max 3 seconds per service, but cap total at 10 seconds
@@ -158,7 +178,13 @@ class StatusWatcher:
 
         return services_list
 
-    async def get_service_status(self, service_name: str) -> ServiceStatus | None:
+    async def get_service_status(
+        self,
+        service_name: str,
+        skip_metrics: bool = False,
+        include_domain_status: bool = True,
+        skip_pods: bool = False,
+    ) -> ServiceStatus | None:
         """Get the status of a specific service with pod details."""
         if not self.helm_values or not self.helm_values.services:
             return None
@@ -170,11 +196,25 @@ class StatusWatcher:
         else:
             return None
 
-        return await self._get_service_status(service)
+        return await self._get_service_status(
+            service,
+            skip_metrics=skip_metrics,
+            include_domain_status=include_domain_status,
+            skip_pods=skip_pods,
+        )
 
-    async def get_deployment_status(self) -> DeploymentStatus:
+    async def get_deployment_status(
+        self,
+        skip_metrics: bool = False,
+        include_domain_status: bool = True,
+        skip_pods: bool = False,
+    ) -> DeploymentStatus:
         """Get the current deployment status with all services."""
-        services_list = await self.get_service_statuses_for_deployment()
+        services_list = await self.get_service_statuses_for_deployment(
+            skip_metrics=skip_metrics,
+            include_domain_status=include_domain_status,
+            skip_pods=skip_pods,
+        )
 
         # Create service summaries
         services_summary = []
@@ -188,16 +228,19 @@ class StatusWatcher:
             if service.ready_replicas == service.replicas:
                 ready_services += 1
 
+            service_phase = service.get_deploy_phase() if service.pods else service.status
+
             services_summary.append(
                 ServiceStatusSummary(
                     name=service.name,
-                    status=service.get_deploy_phase(),
+                    status=service_phase,
                     ready_replicas=service.ready_replicas,
                     total_replicas=service.replicas,
                     image=service.image,
                     ports=service.ports,
                     restarts=service.total_restarts,
                     endpoint=service.endpoint,
+                    workload_type=service.workload_type,
                     custom_domain=service.custom_domain,
                     domain_status=service.domain_status,
                     cname_target=service.cname_target,
@@ -261,15 +304,21 @@ class StatusWatcher:
         )
 
     async def _get_service_status(
-        self, service: ServiceValues, skip_metrics: bool = False
+        self,
+        service: ServiceValues,
+        skip_metrics: bool = False,
+        include_domain_status: bool = True,
+        skip_pods: bool = False,
     ) -> ServiceStatus:
         """Get status for a specific service."""
         replicas = service.replicas or 1
         updated_replicas: int | None = None
+        resource_ready_replicas = 0
         k8s_healthcheck = None
         resources = None
         job_status = None
         resource_not_found = False
+        k8s_resource: Deployment | None = None
 
         is_job = service.workloadType == WorkloadType.JOB
 
@@ -348,6 +397,11 @@ class StatusWatcher:
                     k8s_resource = Deployment(**resource_dict)  # type: ignore[arg-type]
                     if k8s_resource.status:
                         updated_replicas = k8s_resource.status.updated_replicas
+                        resource_ready_replicas = (
+                            k8s_resource.status.ready_replicas
+                            or k8s_resource.status.available_replicas
+                            or 0
+                        )
                 else:
                     raise ValueError(
                         f"Unsupported resource type: {service.workloadType}"
@@ -398,22 +452,36 @@ class StatusWatcher:
         except Exception as e:
             logger.error(f"Error getting status for {service.name}: {e}")
 
-        # Get pods and calculate average resource usage
-        pods = await self._get_service_pods(service, skip_metrics=skip_metrics)
-        if pods is None:
-            pods = []
-        current_usage = (
-            self._calculate_average_usage(pods) if pods and not skip_metrics else None
-        )
+        pods: list[PodStatus] = []
+        current_usage = None
+        if not skip_pods:
+            pods = await self._get_service_pods(service, skip_metrics=skip_metrics)
+            if pods is None:
+                pods = []
+            current_usage = (
+                self._calculate_average_usage(pods) if pods and not skip_metrics else None
+            )
 
         # Determine status: use job status for Jobs, otherwise use pod status
         if is_job and job_status is not None:
             status_enum = job_status
             ready_replicas = 1 if job_status == StatusPhase.EXITED else 0
-        elif resource_not_found and not pods:
+        elif resource_not_found and (skip_pods or not pods):
             # Resource doesn't exist in K8s and no pods - likely deleted or never created
             status_enum = StatusPhase.UNKNOWN
             ready_replicas = 0
+        elif skip_pods:
+            ready_replicas = resource_ready_replicas
+            if replicas <= 0:
+                status_enum = StatusPhase.EXITED
+            elif updated_replicas is not None and updated_replicas < replicas:
+                status_enum = StatusPhase.UPDATING
+            elif ready_replicas >= replicas:
+                status_enum = StatusPhase.RUNNING
+            elif ready_replicas > 0:
+                status_enum = StatusPhase.HEALTH_CHECK
+            else:
+                status_enum = StatusPhase.PENDING
         else:
             ready_replicas = (
                 len([p for p in pods if p.phase == StatusPhase.RUNNING]) if pods else 0
@@ -443,7 +511,7 @@ class StatusWatcher:
             endpoint = service.ingress.hostname
 
             # Check if this is a custom domain and fetch its status
-            if endpoint and self._is_custom_domain(endpoint):
+            if include_domain_status and endpoint and self._is_custom_domain(endpoint):
                 custom_domain = endpoint
                 domain_status, cname_target = await self._get_domain_status(endpoint)
 
@@ -842,6 +910,11 @@ class StatusWatcher:
 
     async def _get_pod_metrics(self, pod_name: str) -> dict[str, str] | None:
         """Get resource metrics for a pod."""
+        cache_key = f"{self.cluster_id}:{self.namespace}:{pod_name}"
+        cached = self._pod_metrics_cache.get(cache_key)
+        if cached and (monotonic() - cached[0]) < self.POD_METRICS_TTL_SECONDS:
+            return cached[1]
+
         try:
             # Note: kubectl top uses the metrics.k8s.io API which may not be available
             # We use kubectl top instead of CustomObjectsApi because:
@@ -872,15 +945,20 @@ class StatusWatcher:
                 if output:
                     parts = output.split()
                     if len(parts) >= 3:
-                        return {
+                        metrics = {
                             "cpu": parts[1],
                             "memory": parts[2],
                         }
+                        self._pod_metrics_cache[cache_key] = (monotonic(), metrics)
+                        return metrics
+            self._pod_metrics_cache[cache_key] = (monotonic(), None)
             return None
 
         except asyncio.TimeoutError:
             logger.debug(f"Timeout getting metrics for pod {pod_name}")
+            self._pod_metrics_cache[cache_key] = (monotonic(), None)
             return None
         except Exception as e:
             logger.debug(f"Error getting metrics for pod {pod_name}: {e}")
+            self._pod_metrics_cache[cache_key] = (monotonic(), None)
             return None

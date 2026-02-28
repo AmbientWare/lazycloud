@@ -26,11 +26,13 @@ class ServicesAPI(BaseAPI):
         return statuses
 
     async def get_service_status(
-        self, deployment_id: str, service_name: str
+        self, deployment_id: str, service_name: str, fast: bool = False
     ) -> ServiceStatusResponse:
         """Get the status of a specific service in a deployment."""
+        params = {"fast": fast} if fast else None
         response_data = await self._get_async(
-            f"/{deployment_id}/services/{service_name}/status"
+            f"/{deployment_id}/services/{service_name}/status",
+            params=params,
         )
         status = ServiceStatusResponse(**response_data)
         status.service.last_checked = status.service.last_checked.replace(
