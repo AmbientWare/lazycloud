@@ -113,10 +113,9 @@ class ListView(TextualListView):
         self.clear()
         self.append(TextualListItem(TextualLabel(self._empty_message)))
 
-    def show_loading(self, message: str = "Loading...") -> None:
+    def show_loading(self, _message: str = "Loading...") -> None:
         """Show a loading message."""
         self.clear()
-        self.append(TextualListItem(TextualLabel(message)))
         self.loading = True
 
     def hide_loading(self) -> None:

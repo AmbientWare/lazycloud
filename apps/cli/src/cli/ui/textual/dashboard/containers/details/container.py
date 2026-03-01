@@ -106,6 +106,22 @@ class ContentContainer(Container):
             # Keep loading state
             pass
 
+    async def watch_deployment_status(self, _old_value, new_value) -> None:
+        """Refresh deployment details when async status arrives."""
+        if (
+            self.display_mode != DisplayMode.DEPLOYMENT
+            or not self.deployment
+            or not new_value
+            or new_value.deployment_id != self.deployment.id
+        ):
+            return
+
+        if self._deployment_view and self._deployment_view.is_mounted:
+            self.loading = False
+            self._deployment_view.apply_deployment_status(new_value)
+        else:
+            await self.refresh_deployment_content()
+
     async def watch_service(self, old_value, new_value) -> None:
         """Refresh service view on selection changes and apply same-service updates."""
         if self.display_mode != DisplayMode.SERVICE:
@@ -145,9 +161,6 @@ class ContentContainer(Container):
         if not self.deployment:
             return
 
-        # Turn off loading state
-        self.loading = False
-
         self.border_title = self._get_border_title(
             f"📋 [4] Deployment Details - {self.deployment.name}"
         )
@@ -156,11 +169,14 @@ class ContentContainer(Container):
         scroll = self.query_one(VerticalScroll)
         scroll.remove_children()
         self._service_view = None
+        self._deployment_view = None
 
         if not self.deployment_status:
-            error_widget = Static("[yellow]Loading deployment status...[/yellow]")
-            scroll.mount(error_widget)
+            self.loading = True
+            scroll.mount(Static())
             return
+
+        self.loading = False
 
         self._deployment_view = DeploymentDetailsContainer(
             deployment_id=self.deployment.id,
@@ -252,12 +268,10 @@ class ContentContainer(Container):
         scroll.remove_children()
         self._service_view = None
 
-        message = (
-            "[yellow]Loading service details...[/yellow]"
-            if self.loading
-            else "[dim]Select a service to view details[/dim]"
-        )
-        scroll.mount(Static(message))
+        if self.loading:
+            scroll.mount(Static())
+        else:
+            scroll.mount(Static("[dim]Select a service to view details[/dim]"))
 
     def get_focusable_widget(self):
         """Return the current focusable widget based on display mode.
