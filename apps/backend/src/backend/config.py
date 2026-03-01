@@ -114,7 +114,7 @@ class AppConfig(BaseModel):
     INVITATION_EXPIRATION_DAYS: int = int(os.getenv("INVITATION_EXPIRATION_DAYS", "14"))
 
     # CLI Version (minimum required version) - updated by cli_release.yml workflow
-    CLI_VERSION: str = "0.1.25"
+    CLI_VERSION: str = "0.1.26"
 
     # Email Configuration
     RESEND_API_KEY: str = os.getenv("RESEND_API_KEY", "")
