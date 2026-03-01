@@ -153,6 +153,12 @@ class DeploymentDetailsContainer(Widget):
             )
         )
 
+        self.apply_deployment_status(deployment)
+
+    def apply_deployment_status(self, deployment: DeploymentStatus) -> None:
+        """Apply deployment status updates without remounting."""
+        self.deployment_status = deployment
+
         if self._overview_widget:
             overview_content = self._build_overview_content(deployment)
             self._overview_widget.update("\n".join(overview_content).strip())
