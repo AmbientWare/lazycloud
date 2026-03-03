@@ -27,6 +27,19 @@ interface MyRouterContext {
   user?: User | null
 }
 
+const socialImagePath = '/lazycloud.png'
+const serverAppUrl = (
+  globalThis as { process?: { env?: { APP_URL?: string } } }
+).process?.env?.APP_URL
+const normalizedServerAppUrl = (serverAppUrl ?? 'https://lazycloud.dev').replace(
+  /\/$/,
+  '',
+)
+const socialImageUrl =
+  typeof window !== 'undefined'
+    ? `${window.location.origin}${socialImagePath}`
+    : `${normalizedServerAppUrl}${socialImagePath}`
+
 export const Route = createRootRouteWithContext<MyRouterContext>()({
   beforeLoad: async () => {
     // Dev bypass: provide a mock user to skip WorkOS auth
@@ -68,10 +81,34 @@ export const Route = createRootRouteWithContext<MyRouterContext>()({
         property: 'og:type',
         content: 'website',
       },
+      {
+        property: 'og:image',
+        content: socialImageUrl,
+      },
+      {
+        property: 'og:image:secure_url',
+        content: socialImageUrl,
+      },
+      {
+        property: 'og:image:type',
+        content: 'image/png',
+      },
+      {
+        property: 'og:image:width',
+        content: '734',
+      },
+      {
+        property: 'og:image:height',
+        content: '734',
+      },
+      {
+        property: 'og:image:alt',
+        content: 'LazyCloud logo',
+      },
       // Twitter
       {
         name: 'twitter:card',
-        content: 'summary_large_image',
+        content: 'summary',
       },
       {
         name: 'twitter:title',
@@ -81,6 +118,14 @@ export const Route = createRootRouteWithContext<MyRouterContext>()({
         name: 'twitter:description',
         content:
           'Deploy your Docker Compose projects to the cloud with a single command. No Kubernetes knowledge required.',
+      },
+      {
+        name: 'twitter:image',
+        content: socialImageUrl,
+      },
+      {
+        name: 'twitter:image:alt',
+        content: 'LazyCloud logo',
       },
     ],
     links: [
