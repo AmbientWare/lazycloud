@@ -770,8 +770,9 @@ class StatusWatcher:
         if not services:
             return StatusPhase.PENDING
 
-        # Count services by their deploy phase (unified status)
-        phases = [s.get_deploy_phase() for s in services]
+        # When pods are skipped for performance, rely on the precomputed service.status
+        # instead of pod-derived deploy phase (which defaults to pending without pods).
+        phases = [s.get_deploy_phase() if s.pods else s.status for s in services]
 
         error_count = sum(
             1 for p in phases if p in (StatusPhase.ERROR, StatusPhase.RESTARTING)
