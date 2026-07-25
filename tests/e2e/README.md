@@ -26,6 +26,24 @@ Run Python scenarios as modules from the repository root:
 uv run python -m tests.e2e.local.function.scenario_invoke --live
 ```
 
+`local/` scenarios that build an image need a Linux host and two things the
+stack does not arrange on its own:
+
+- Build the worker image explicitly. `container-worker` sits behind the
+  `owner-direct-worker` profile, so `docker compose up --build` never builds it,
+  and the only symptom is the agent restart-looping on "Unable to find image":
+
+  ```sh
+  docker compose --profile owner-direct-worker build container-worker
+  ```
+
+- Give the agent state directory (`LAZYCLOUD_COMPOSE_AGENT_STATE_DIR`) at least
+  21 GiB free — an image build reserves `per_build_max_bytes` plus
+  `minimum_free_bytes` before it starts. The agent passes that path to the
+  Docker daemon as the bind source for worker slots, so it must resolve
+  identically for the agent process and the daemon: keep it on daemon-local
+  storage rather than a remote or virtualised mount.
+
 The remaining local, Kubernetes, Tailnet, GPU, and browser scenarios document
 their own additional prerequisites in their modules.
 
