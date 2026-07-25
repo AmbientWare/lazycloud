@@ -181,6 +181,27 @@ deleted, all platform stacks preserved.
 
 ## T-051 — Rebuild connected-compute testing around a fast local loop
 
+Tier 2 accepted (2026-07-25): the data-plane loop passes twice in a row on the Linux ml-machine
+(`tests.e2e.local.function.scenario_invoke --live`), each run reporting `build=complete` and
+`{"capability": "function.invoke", "result": 49}` with no build-container residue; the two
+remaining container rows are terminal `stopped`/`exited` history. The full path is proven without
+AWS: request, scheduler, agent-managed worker slot, source-cache activation, buildah image build,
+archive upload to object storage, Function deploy and invoke, app deletion.
+
+Getting there needed product fixes (transport-error classification, the systemd start limit, one
+owner for the agent unit, the Compose pool-selector default, the unconditional tailnet, and the
+archive-transfer error now naming its cause) and a local configuration that the copied AWS `.env`
+was overriding: object storage pointed at real S3 with a virtual-host-style AWS bucket, both
+gateway URLs pointed at a Funnel whose device no longer exists, and `AWS_CONNECTION_ENABLED=true`
+forced an HTTPS-origin gate that stopped the control plane from starting. Those settings are now
+documented in `.env.example` and `tests/e2e/README.md`; the AWS-shaped values live on the
+ml-machine as `.env.aws-configured-backup` for certification.
+
+Remaining: Tier 3 — the single paid AWS certification, which should run published release
+artifacts on both control plane and worker so managed-package digest skew cannot recur.
+
+### Original scope
+
 Priority: ready; supersedes the T-005 four-stage acceptance and folds in T-037. Blocks the next
 paid AWS run.
 
