@@ -84,10 +84,16 @@ def upload_image_archive(
         except _ImageArchiveHttpError as exc:
             if not exc.retryable or attempt == attempts - 1:
                 raise
-        except _TRANSIENT_TRANSFER_EXCEPTIONS:
+        except _TRANSIENT_TRANSFER_EXCEPTIONS as exc:
             if attempt == attempts - 1:
+                # Name the failure and the destination host. Reporting only that
+                # transient errors were exhausted leaves an operator unable to
+                # tell an unreachable endpoint from a misconfigured one, and the
+                # build fails identically either way. The signed URL still never
+                # appears: only its host and port, which carry no capability.
                 raise ImageArchiveTransferError(
-                    "image archive upload failed after transient transfer errors"
+                    "image archive upload failed after transient transfer errors "
+                    f"to {_transfer_endpoint(url)}: {type(exc).__name__}: {exc}"
                 ) from None
         except ImageArchiveTransferError:
             raise
@@ -128,10 +134,11 @@ def download_image_archive(
             except _ImageArchiveHttpError as exc:
                 if not exc.retryable or attempt == attempts - 1:
                     raise
-            except _TRANSIENT_TRANSFER_EXCEPTIONS:
+            except _TRANSIENT_TRANSFER_EXCEPTIONS as exc:
                 if attempt == attempts - 1:
                     raise ImageArchiveTransferError(
-                        "image archive download failed after transient transfer errors"
+                        "image archive download failed after transient transfer errors "
+                        f"from {_transfer_endpoint(url)}: {type(exc).__name__}: {exc}"
                     ) from None
             except ImageArchiveTransferError:
                 raise
@@ -313,6 +320,12 @@ def _fsync_directory(directory: Path) -> None:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+
+
+def _transfer_endpoint(url: str) -> str:
+    """Host and port of a transfer URL, never its capability path or query."""
+    parsed = urlparse(url)
+    return parsed.netloc or "an unknown host"
 
 
 _TRANSIENT_TRANSFER_EXCEPTIONS = (

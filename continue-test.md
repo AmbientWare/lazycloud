@@ -29,6 +29,12 @@ cd <repo>
 #    sidecar is part of the stack and no longer behind a Compose profile.
 docker compose up -d
 
+# 2b. build the worker image explicitly. The container-worker service is behind the
+#     owner-direct-worker profile, so `up --build` never builds it, but the agent
+#     needs container-worker:local to start worker slots. Skipping this shows up
+#     only as the agent restart-looping with "Unable to find image".
+docker compose --profile owner-direct-worker build container-worker
+
 # 3. wait for health, then log in against the fresh database
 docker compose ps
 uv run lazycloud login --endpoint http://127.0.0.1:8000 --token "$(grep '^LAZYCLOUD_TOKEN=' .env | cut -d= -f2- | tr -d "'\"")"
