@@ -1,0 +1,41 @@
+---
+title: "CLI overview"
+description: "The lazycloud command: global flags, handler references, and command groups."
+---
+
+The `lazycloud` command is installed with the `lazycloud` Python distribution. See
+[Installation](/getting-started/installation).
+
+```text
+lazycloud [--json] [--debug] COMMAND [ARGS]...
+```
+
+| Global flag | Description |
+| --- | --- |
+| `--json` | Print structured JSON output (clean for scripting). |
+| `--debug` | Show full tracebacks for execution errors. |
+| `--install-completion` / `--show-completion` | Shell completion management. |
+| `-h`, `--help` | Help for any command. |
+
+## Handler references
+
+Commands that take a `HANDLER` accept `<file-or-module>:<object>`:
+
+- `quickstart.py:hello` — a Python file path and a decorated object in it.
+- `examples.all_workloads:app` — an importable module path and an object.
+
+The object can be a single decorated resource or an `App` (deploying an app
+deploys everything it registers; use `--resource <name>` or
+`--resource <kind>:<name>` to select one).
+
+## Command groups
+
+| Group | Commands | Reference |
+| --- | --- | --- |
+| Build and run | `deploy`, `run`, `serve`, `shell`, `dev` | [Deploy and run](/cli/deploy-and-run) |
+| Tasks and logs | `task`, `logs` | [Tasks and logs](/cli/tasks-and-logs) |
+| Deployments | `deployment`, `container` | [Deployments and containers](/cli/deployments-and-containers) |
+| Storage | `volume`, `ls`, `cp`, `rm`, `mv`, `secret` | [Storage](/cli/storage) |
+| Compute | `cloud`, `compute`, `machine` | [Compute](/cli/compute) |
+| Auth | `login`, `profile`, `token`, `workspace` | [Auth](/cli/auth) |
+| Scaffolding | `quickstart`, `create-app`, `example` | [Scaffolding](/cli/scaffolding) |

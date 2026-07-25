@@ -1,0 +1,33 @@
+# syntax=docker/dockerfile:1.7
+
+ARG DEBIAN_IMAGE=debian:bookworm-slim
+
+FROM ${DEBIAN_IMAGE} AS juicefs
+ARG TARGETARCH
+ARG JUICEFS_VERSION=1.3.1
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && case "${TARGETARCH}" in \
+        amd64) JUICEFS_SHA256="eb67a7be5d174b420cb3734d441971b3a462ab522b78ad2a6ed993e7deddcd44" ;; \
+        arm64) JUICEFS_SHA256="c29bff8f609366011cee03b9abcc76c11a06308b2c314364b8c340a2bfbc6c48" ;; \
+        *) echo "unsupported architecture: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+    && curl -fsSL \
+        "https://github.com/juicedata/juicefs/releases/download/v${JUICEFS_VERSION}/juicefs-${JUICEFS_VERSION}-linux-${TARGETARCH}.tar.gz" \
+        -o /tmp/juicefs.tar.gz \
+    && echo "${JUICEFS_SHA256}  /tmp/juicefs.tar.gz" | sha256sum -c - \
+    && mkdir -p /out/usr/local/bin \
+    && tar -xzf /tmp/juicefs.tar.gz -C /tmp juicefs \
+    && install /tmp/juicefs /out/usr/local/bin/juicefs \
+    && /out/usr/local/bin/juicefs version \
+    && rm -rf /var/lib/apt/lists/* /tmp/juicefs.tar.gz /tmp/juicefs
+
+FROM ${DEBIAN_IMAGE} AS storage-gateway
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates netcat-openbsd \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=juicefs /out/usr/local/bin/juicefs /usr/local/bin/juicefs
+EXPOSE 9900 9901
+CMD ["juicefs", "version"]

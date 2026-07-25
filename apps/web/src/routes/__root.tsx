@@ -1,190 +1,124 @@
+import type { ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
+  createRootRoute,
   HeadContent,
   Outlet,
   Scripts,
-  createRootRouteWithContext,
-} from '@tanstack/react-router'
-import { TanStackRouterDevtoolsPanel } from '@tanstack/react-router-devtools'
-import { TanStackDevtools } from '@tanstack/react-devtools'
-import { getAuth, type User } from '@workos/authkit-tanstack-react-start'
-import { isDevBypass, DEV_USER } from '@/lib/dev-bypass'
+  type ErrorComponentProps,
+} from "@tanstack/react-router";
+import { AlertTriangle, RotateCcw } from "lucide-react";
+import { Toaster } from "sonner";
 
-import WorkOSProvider from '../integrations/workos/provider'
-import { ThemeProvider } from '../components/theme-provider'
-import { GridBackground } from '../components/backgrounds/GridBackground'
-import { TooltipProvider } from '../components/ui/tooltip'
-import { Toaster } from '../components/ui/sonner'
-import { RootProvider } from 'fumadocs-ui/provider/tanstack'
+import { AuthGate } from "@/components/shared/AuthGate";
+import { ThemeProvider } from "@/components/shared/ThemeProvider";
+import {
+  themeInitScript,
+  useTheme,
+} from "@/components/shared/ThemeProvider/theme";
+import { Button } from "@/components/ui/button";
 
-import TanStackQueryDevtools from '../integrations/tanstack-query/devtools'
+import "../styles.css";
 
-import appCss from '../styles.css?url'
-
-import type { QueryClient } from '@tanstack/react-query'
-
-interface MyRouterContext {
-  queryClient: QueryClient
-  user?: User | null
-}
-
-const socialImagePath = '/lazycloud.png'
-const serverAppUrl = (
-  globalThis as { process?: { env?: { APP_URL?: string } } }
-).process?.env?.APP_URL
-const normalizedServerAppUrl = (serverAppUrl ?? 'https://lazycloud.dev').replace(
-  /\/$/,
-  '',
-)
-const socialImageUrl =
-  typeof window !== 'undefined'
-    ? `${window.location.origin}${socialImagePath}`
-    : `${normalizedServerAppUrl}${socialImagePath}`
-
-export const Route = createRootRouteWithContext<MyRouterContext>()({
-  beforeLoad: async () => {
-    // Dev bypass: provide a mock user to skip WorkOS auth
-    if (isDevBypass) {
-      return { user: DEV_USER as User }
-    }
-
-    const { user } = await getAuth()
-    return { user: user ?? null }
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: 1,
+      staleTime: 15_000,
+    },
   },
+});
+
+export const Route = createRootRoute({
   head: () => ({
     meta: [
+      { charSet: "utf-8" },
       {
-        charSet: 'utf-8',
+        name: "viewport",
+        content: "width=device-width, initial-scale=1, viewport-fit=cover",
       },
-      {
-        name: 'viewport',
-        content: 'width=device-width, initial-scale=1',
-      },
-      {
-        title: 'LazyCloud - Deploy Docker Compose in Seconds',
-      },
-      {
-        name: 'description',
-        content:
-          'Deploy your Docker Compose projects to the cloud with a single command. No Kubernetes knowledge required.',
-      },
-      // Open Graph
-      {
-        property: 'og:title',
-        content: 'LazyCloud - Deploy Docker Compose in Seconds',
-      },
-      {
-        property: 'og:description',
-        content:
-          'Deploy your Docker Compose projects to the cloud with a single command. No Kubernetes knowledge required.',
-      },
-      {
-        property: 'og:type',
-        content: 'website',
-      },
-      {
-        property: 'og:image',
-        content: socialImageUrl,
-      },
-      {
-        property: 'og:image:secure_url',
-        content: socialImageUrl,
-      },
-      {
-        property: 'og:image:type',
-        content: 'image/png',
-      },
-      {
-        property: 'og:image:width',
-        content: '734',
-      },
-      {
-        property: 'og:image:height',
-        content: '734',
-      },
-      {
-        property: 'og:image:alt',
-        content: 'LazyCloud logo',
-      },
-      // Twitter
-      {
-        name: 'twitter:card',
-        content: 'summary',
-      },
-      {
-        name: 'twitter:title',
-        content: 'LazyCloud - Deploy Docker Compose in Seconds',
-      },
-      {
-        name: 'twitter:description',
-        content:
-          'Deploy your Docker Compose projects to the cloud with a single command. No Kubernetes knowledge required.',
-      },
-      {
-        name: 'twitter:image',
-        content: socialImageUrl,
-      },
-      {
-        name: 'twitter:image:alt',
-        content: 'LazyCloud logo',
-      },
+      { title: "LazyCloud" },
     ],
-    links: [
-      {
-        rel: 'stylesheet',
-        href: appCss,
-      },
-      {
-        rel: 'icon',
-        href: '/lazycloud.png',
-      },
-    ],
+    links: [{ rel: "icon", href: "/favicon.ico" }],
+    scripts: [{ children: themeInitScript }],
   }),
-
   component: RootComponent,
-  shellComponent: RootDocument,
-})
+  errorComponent: RootErrorComponent,
+});
 
 function RootComponent() {
-  return <Outlet />
+  return (
+    <RootDocument>
+      <ThemeProvider>
+        <QueryClientProvider client={queryClient}>
+          <AuthGate>
+            <Outlet />
+          </AuthGate>
+          <ThemedToaster />
+        </QueryClientProvider>
+      </ThemeProvider>
+    </RootDocument>
+  );
 }
 
-function RootDocument({ children }: { children: React.ReactNode }) {
+function ThemedToaster() {
+  const { theme } = useTheme();
+  return <Toaster richColors theme={theme} />;
+}
+
+/**
+ * Last-resort boundary for an uncaught render error anywhere in the tree. It
+ * owns its own document shell because it replaces the entire root component,
+ * and it must not depend on providers the failed tree may not have mounted.
+ */
+function RootErrorComponent({ error, reset }: ErrorComponentProps) {
   return (
-    <html lang="en" className="dark">
+    <RootDocument>
+      <main className="flex h-dvh items-center justify-center overflow-auto bg-background p-4 text-foreground">
+        <section role="alert" className="panel w-full max-w-md rounded-md p-5">
+          <div className="flex items-center gap-2.5">
+            <img src="/lazycloud.png" alt="" className="size-7" />
+            <span className="text-lg font-bold text-brand">LazyCloud</span>
+          </div>
+          <div className="mt-4 flex items-start gap-2.5">
+            <AlertTriangle
+              className="mt-0.5 size-4 shrink-0 text-warning"
+              aria-hidden="true"
+            />
+            <div className="min-w-0">
+              <h1 className="text-base font-semibold">Something went wrong</h1>
+              <p className="mt-1 break-words text-sm text-muted-foreground">
+                {error instanceof Error && error.message
+                  ? error.message
+                  : "The dashboard hit an unexpected error."}
+              </p>
+            </div>
+          </div>
+          <div className="mt-4 flex items-center gap-2">
+            <Button size="sm" onClick={() => window.location.reload()}>
+              Reload dashboard
+            </Button>
+            <Button variant="outline" size="sm" onClick={reset}>
+              <RotateCcw />
+              Try again
+            </Button>
+          </div>
+        </section>
+      </main>
+    </RootDocument>
+  );
+}
+
+function RootDocument({ children }: Readonly<{ children: ReactNode }>) {
+  return (
+    <html lang="en" suppressHydrationWarning>
       <head>
         <HeadContent />
       </head>
-      <body className="bg-background text-foreground antialiased">
-        <ThemeProvider defaultTheme="dark">
-          <RootProvider theme={{ enabled: false }}>
-            <WorkOSProvider>
-              <TooltipProvider>
-                <GridBackground>
-                  <div className="flex min-h-screen flex-col bg-transparent text-foreground">
-                    {children}
-                  </div>
-                </GridBackground>
-                <Toaster />
-              </TooltipProvider>
-              {import.meta.env.DEV && (
-                <TanStackDevtools
-                  config={{
-                    position: 'bottom-right',
-                  }}
-                  plugins={[
-                    {
-                      name: 'Tanstack Router',
-                      render: <TanStackRouterDevtoolsPanel />,
-                    },
-                    TanStackQueryDevtools,
-                  ]}
-                />
-              )}
-            </WorkOSProvider>
-          </RootProvider>
-        </ThemeProvider>
+      <body>
+        {children}
         <Scripts />
       </body>
     </html>
-  )
+  );
 }

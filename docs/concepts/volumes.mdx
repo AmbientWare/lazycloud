@@ -1,0 +1,118 @@
+---
+title: "Volumes and cloud buckets"
+description: "Durable shared filesystems mounted into workloads, plus S3-compatible bucket mounts."
+---
+
+## Volumes
+
+A `Volume` is a durable, workspace-scoped filesystem that mounts into any
+workload at a path you choose. Use volumes for model weights, datasets, and
+anything that should outlive a container.
+
+```python
+from lazycloud import App, Volume
+
+app = App("training")
+models = Volume("models", "/models")
+
+
+@app.function(volumes=[models])
+def load(name: str) -> int:
+    return len((__import__("pathlib").Path("/models") / name).read_bytes())
+```
+
+Create volumes from the CLI or SDK:
+
+```bash
+lazycloud volume create models
+lazycloud volume list
+lazycloud volume delete models
+```
+
+```python
+models.get_or_create()   # idempotent; .create() and .delete() also exist
+```
+
+## Working with files
+
+From inside a mounted container, a volume is just a directory. From outside,
+the `Volume` object reads and writes through the control plane:
+
+```python
+models.put("weights.pt", "llama/weights.pt")     # upload
+models.get("llama/weights.pt", "weights.pt")     # download
+models.list("llama")                              # names under a prefix
+models.list_path("llama")                         # entries with size metadata
+models.stat("llama/weights.pt")
+models.move("llama/weights.pt", "archive/weights.pt")
+models.remove("archive/weights.pt")
+
+models.write_text("notes.txt", "hello")
+print(models.read_text("notes.txt"))
+models.write_bytes("blob.bin", b"\x00")
+models.read_bytes("blob.bin")
+```
+
+The CLI mirrors these with `lazycloud://<volume>/<path>` remote paths (the
+scheme is optional except for the source of a download, where it marks the
+path as remote):
+
+```bash
+lazycloud ls models/llama
+lazycloud cp weights.pt lazycloud://models/llama/weights.pt
+lazycloud cp lazycloud://models/llama/weights.pt ./weights.pt
+lazycloud mv models/llama/weights.pt models/archive/weights.pt
+lazycloud rm models/archive/weights.pt
+```
+
+### Large files
+
+For multi-gigabyte uploads, volumes support presigned URLs and multipart
+uploads: `presigned_url(...)`, `create_multipart_upload(...)`,
+`complete_multipart_upload(...)`, and `abort_multipart_upload(...)`.
+
+## Cloud buckets
+
+`CloudBucket` mounts an S3-compatible bucket you own directly into workloads.
+The mount reads and writes the bucket in place — nothing is copied into
+platform storage.
+
+```python
+from lazycloud import App, CloudBucket, CloudBucketConfig
+
+app = App("etl")
+
+bucket = CloudBucket(
+    "my-data-bucket",
+    "/data",
+    CloudBucketConfig(
+        access_key="MY_BUCKET_ACCESS_KEY",
+        secret_key="MY_BUCKET_SECRET_KEY",
+        region="us-east-1",
+    ),
+)
+
+
+@app.function(volumes=[bucket])
+def process(key: str) -> str:
+    return (__import__("pathlib").Path("/data") / key).read_text()
+```
+
+`access_key` and `secret_key` are the **names of workspace
+[secrets](/concepts/secrets)** holding your credentials — never the credential
+values themselves. Set both or neither; with neither, the mount uses the
+compute environment's ambient credentials (for example an AWS instance role on
+[connected-cloud compute](/platform/compute)).
+
+`CloudBucketConfig` options:
+
+| Field | Description |
+| --- | --- |
+| `provider` | Bucket provider; `"s3"` (S3-compatible) is supported. |
+| `bucket` | Bucket name when it differs from the `CloudBucket` name. |
+| `prefix` | Mount only a key prefix of the bucket. |
+| `region` | Bucket region. |
+| `endpoint` | Custom endpoint URL for S3-compatible stores. |
+| `read_only` | Mount read-only. |
+| `force_path_style` | Use path-style addressing (required by many S3-compatible stores). |
+| `access_key` / `secret_key` | Workspace secret names holding the credentials. |

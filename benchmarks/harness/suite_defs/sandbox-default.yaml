@@ -1,0 +1,43 @@
+name: sandbox-default
+kind: sandbox
+runner: sandbox
+description: Parallel sandbox create/start/readiness operational benchmark. Live execution is deferred until explicitly invoked with control-plane credentials.
+defaults:
+  count: 10
+  parallelism: 4
+  warmup: 1
+  prewarm_count: 0
+  prewarm_parallelism: 0
+  image: python:3.12-slim
+  exec: sh -lc 'printf "%s\n" "$BENCHMARK_EXPECTED_OUTPUT"'
+  expected_output: sandbox-ready-{index}
+  output_tail_bytes: 4096
+  wait_running: true
+  wait_exec_complete: true
+  prepare_sandbox: true
+  run_live: false
+scenarios:
+  - name: parallel-sandbox-create
+    operation: read
+    args:
+      check: create
+      metric: accepted_ms
+      live_execution: deferred
+    probes:
+      - startup_events
+  - name: parallel-sandbox-start
+    operation: read
+    args:
+      check: start
+      metric: running_observed_ms
+      live_execution: deferred
+    probes:
+      - startup_events
+  - name: parallel-sandbox-readiness
+    operation: read
+    args:
+      check: exec_readiness
+      metric: exec_complete_ms
+      live_execution: deferred
+    probes:
+      - startup_events

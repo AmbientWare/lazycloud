@@ -1,0 +1,29 @@
+name: filesystem-default
+kind: filesystem
+runner: cache
+description: Filesystem read comparison using volume and workspace paths.
+defaults:
+  verify_reads: true
+  require_remote_read: false
+  require_read_path_proof: true
+scenarios:
+  - name: volume-filesystem-sequential-32
+    access: volume_mount
+    operation: read
+    pattern: sequential
+    size_mib: 32
+    cache_state: strict_disk
+    probes:
+      - sandbox_read
+      - worker_direct_read
+      - cache_path
+  - name: workspace-filesystem-sequential-32
+    access: workspace_fuse
+    operation: read
+    pattern: sequential
+    size_mib: 32
+    cache_state: strict_disk
+    probes:
+      - sandbox_read
+      - worker_direct_read
+      - cache_path

@@ -1,0 +1,137 @@
+name: Docker Images
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  control-plane:
+    name: Build control-plane image family
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to GHCR
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build control-plane images
+        uses: docker/bake-action@v7
+        with:
+          source: .
+          files: docker/bake.hcl
+          targets: control-plane
+          push: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') }}
+          set: |
+            *.cache-from=type=gha,scope=docker-images-control-plane
+            *.cache-to=type=gha,mode=max,scope=docker-images-control-plane
+            api.tags=ghcr.io/${{ github.repository }}-api:${{ github.sha }}
+            scheduler.tags=ghcr.io/${{ github.repository }}-scheduler:${{ github.sha }}
+            cache-server.tags=ghcr.io/${{ github.repository }}-cache-server:${{ github.sha }}
+            worker-bootstrap.tags=ghcr.io/${{ github.repository }}-worker-bootstrap:${{ github.sha }}
+            cli.tags=ghcr.io/${{ github.repository }}-cli:${{ github.sha }}
+            database-bootstrap.tags=ghcr.io/${{ github.repository }}-database-bootstrap:${{ github.sha }}
+
+  agent:
+    name: Build agent image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to GHCR
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build agent image
+        uses: docker/bake-action@v7
+        with:
+          source: .
+          files: docker/bake.hcl
+          targets: agent
+          push: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') }}
+          set: |
+            agent.cache-from=type=gha,scope=docker-images-agent
+            agent.cache-to=type=gha,mode=max,scope=docker-images-agent
+            agent.tags=ghcr.io/${{ github.repository }}-agent:${{ github.sha }}
+
+  worker:
+    name: Build container-worker image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to GHCR
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build container-worker image
+        uses: docker/bake-action@v7
+        with:
+          source: .
+          files: docker/bake.hcl
+          targets: container-worker
+          push: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') }}
+          set: |
+            container-worker.cache-from=type=gha,scope=docker-images-worker
+            container-worker.cache-to=type=gha,mode=max,scope=docker-images-worker
+            container-worker.tags=ghcr.io/${{ github.repository }}-container-worker:${{ github.sha }}
+
+  storage-gateway:
+    name: Build storage-gateway image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to GHCR
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build storage-gateway image
+        uses: docker/bake-action@v7
+        with:
+          source: .
+          files: docker/bake.hcl
+          targets: storage-gateway
+          push: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') }}
+          set: |
+            storage-gateway.cache-from=type=gha,scope=docker-images-storage-gateway
+            storage-gateway.cache-to=type=gha,mode=max,scope=docker-images-storage-gateway
+            storage-gateway.tags=ghcr.io/${{ github.repository }}-storage-gateway:${{ github.sha }}

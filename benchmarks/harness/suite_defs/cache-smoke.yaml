@@ -1,0 +1,34 @@
+name: cache-smoke
+kind: cache
+runner: cache
+description: Small local cache correctness benchmark with deterministic payload proof.
+defaults:
+  verify_reads: true
+  require_remote_read: false
+  require_read_path_proof: true
+  direct_cache_disk_probe: false
+  cleanup_cache_before_run: true
+  cleanup_cache_after_run: true
+scenarios:
+  - name: volume-smoke-sequential-4
+    access: volume_mount
+    operation: read
+    pattern: sequential
+    size_mib: 4
+    cache_state: strict_disk
+    probes:
+      - sandbox_read
+      - worker_direct_read
+      - sandbox_direct_read
+      - cache_path
+  - name: workspace-smoke-sequential-4
+    access: workspace_fuse
+    operation: read
+    pattern: sequential
+    size_mib: 4
+    cache_state: strict_disk
+    probes:
+      - sandbox_read
+      - worker_direct_read
+      - sandbox_direct_read
+      - cache_path

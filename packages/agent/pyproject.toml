@@ -1,0 +1,23 @@
+[project]
+name = "agent"
+version = "0.1.0"
+description = "Private agent domain planning, persistence service, and service management."
+requires-python = ">=3.12"
+dependencies = [
+    "compute",
+    "lazycloud-shared==0.1.0",
+    "database",
+    "foundation",
+    "networking",
+    "pydantic>=2.8,<3",
+    "pydantic-settings>=2.4,<3",
+    "storage-client",
+    "worker",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

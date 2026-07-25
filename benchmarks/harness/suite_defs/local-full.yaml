@@ -1,0 +1,10 @@
+name: local-full
+kind: full
+runner: composite
+description: Local full proof suite for cache, filesystem, image execution, and startup paths.
+includes:
+  - cache-default
+  - filesystem-default
+  - image-execution
+  - startup-default
+  - sandbox-default

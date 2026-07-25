@@ -1,0 +1,20 @@
+[project]
+name = "storage-client"
+version = "0.1.0"
+description = "Boundary-safe object clients and mounted storage primitives for LazyCloud."
+requires-python = ">=3.12"
+dependencies = [
+    "boto3>=1.41,<2",
+    "foundation",
+    "lazycloud-shared==0.1.0",
+    "pydantic>=2.8,<3",
+    "pydantic-settings>=2.4,<3",
+    "typing-extensions>=4.12",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

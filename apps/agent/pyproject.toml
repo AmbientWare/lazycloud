@@ -1,0 +1,25 @@
+[project]
+name = "agent-app"
+version = "0.1.0"
+description = "Private-pool agent process app for LazyCloud."
+requires-python = ">=3.12"
+dependencies = [
+    "agent",
+    "compute",
+    "lazycloud-shared==0.1.0",
+    "gateway",
+    "networking",
+    "provider-clients",
+    "provider-aws",
+    "worker",
+]
+
+[project.scripts]
+lazycloud-agent = "agent_app.main:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,303 @@
+from __future__ import annotations
+
+from enum import StrEnum
+
+from pydantic import Field, JsonValue
+from shared.contracts import ContractModel
+
+CONTAINER_STATE_TTL_SECONDS = 120
+CONTAINER_STATE_TTL_WHILE_PENDING_SECONDS = 600
+DEFAULT_WORKER_SPINDOWN_SECONDS = 300.0
+DEFAULT_WORKER_STOP_GRACE_SECONDS = 30
+SHUTDOWN_DRAIN_MAX_SECONDS = 5.0
+SHUTDOWN_FORCE_WAIT_SECONDS = 5.0
+SHUTDOWN_CLEANUP_RESERVE_SECONDS = 5.0
+WORKER_ORPHAN_STATE_MISSING_EVENT_ID = "worker.orphan_state_missing"
+WORKER_PENDING_RECONCILED_EVENT_ID = "worker.pending_reconciled_running"
+WORKER_STOPPING_GRACE_KILL_EVENT_ID = "worker.stopping_grace_kill"
+
+
+class WorkerContainerStatus(StrEnum):
+    Pending = "pending"
+    Running = "running"
+    Stopping = "stopping"
+    Stopped = "stopped"
+    Unknown = "unknown"
+
+
+class WorkerStopReason(StrEnum):
+    Ttl = "TTL"
+    User = "USER"
+    Scheduler = "SCHEDULER"
+    Preempted = "PREEMPTED"
+    Admin = "ADMIN"
+    Unknown = "UNKNOWN"
+
+
+class WorkerStatusHeartbeatAction(StrEnum):
+    StopHeartbeat = "stop-heartbeat"
+    UpdateStatus = "update-status"
+    StopOrphan = "stop-orphan"
+    Error = "error"
+
+
+class WorkerCancelledRequestAction(StrEnum):
+    Continue = "continue"
+    DropMissingState = "drop-missing-state"
+    DropStoppingState = "drop-stopping-state"
+
+
+class WorkerSpindownAction(StrEnum):
+    Continue = "continue"
+    Shutdown = "shutdown"
+
+
+class WorkerStatusHeartbeatPlan(ContractModel):
+    action: WorkerStatusHeartbeatAction
+    done: bool = False
+    next_status: WorkerContainerStatus = WorkerContainerStatus.Unknown
+    update_status: bool = False
+    expiry_seconds: int = CONTAINER_STATE_TTL_SECONDS
+    stop_container: bool = False
+    kill: bool = False
+    schedule_grace_kill: bool = False
+    grace_seconds: int = DEFAULT_WORKER_STOP_GRACE_SECONDS
+    stop_reason: WorkerStopReason = WorkerStopReason.Unknown
+    event_id: str = ""
+    event_attrs: dict[str, JsonValue] = Field(default_factory=dict)
+    error_message: str = ""
+    reason: str = ""
+
+
+class WorkerCancelledRequestPlan(ContractModel):
+    action: WorkerCancelledRequestAction
+    drop: bool
+    delete_state: bool = False
+    release_capacity: bool = False
+    reason: str = ""
+
+
+class WorkerSpindownPlan(ContractModel):
+    action: WorkerSpindownAction
+    should_shutdown: bool
+    cleanup_workspace_storage: bool = False
+    cancel_worker_context: bool = False
+    reason: str = ""
+
+
+class WorkerShutdownBudgetPlan(ContractModel):
+    configured_seconds: int
+    budget_seconds: float
+    drain_timeout_seconds: float
+    stop_grace_seconds: float
+    force_wait_seconds: float = SHUTDOWN_FORCE_WAIT_SECONDS
+    cleanup_reserve_seconds: float = SHUTDOWN_CLEANUP_RESERVE_SECONDS
+
+
+def normalize_worker_container_status(
+    status: WorkerContainerStatus | str | None,
+) -> WorkerContainerStatus:
+    if isinstance(status, WorkerContainerStatus):
+        return status
+    normalized = (status or "").strip().lower()
+    for item in WorkerContainerStatus:
+        if normalized == item.value:
+            return item
+    return WorkerContainerStatus.Unknown
+
+
+def plan_worker_status_heartbeat(
+    *,
+    instance_exists: bool = True,
+    exit_code: int = -1,
+    state_status: WorkerContainerStatus | str | None = WorkerContainerStatus.Running,
+    state_missing: bool = False,
+    runtime_started: bool = False,
+    runtime_pid: int = 0,
+    stop_reason: WorkerStopReason | str = WorkerStopReason.Unknown,
+    termination_grace_seconds: int = DEFAULT_WORKER_STOP_GRACE_SECONDS,
+) -> WorkerStatusHeartbeatPlan:
+    if not instance_exists:
+        return WorkerStatusHeartbeatPlan(
+            action=WorkerStatusHeartbeatAction.StopHeartbeat,
+            done=True,
+            reason="container instance is no longer tracked",
+        )
+    if exit_code >= 0:
+        return WorkerStatusHeartbeatPlan(
+            action=WorkerStatusHeartbeatAction.StopHeartbeat,
+            done=True,
+            reason="container already exited",
+        )
+    if state_missing:
+        return WorkerStatusHeartbeatPlan(
+            action=WorkerStatusHeartbeatAction.StopOrphan,
+            done=True,
+            stop_container=True,
+            kill=True,
+            stop_reason=WorkerStopReason.Unknown,
+            event_id=WORKER_ORPHAN_STATE_MISSING_EVENT_ID,
+            reason="container state is missing",
+        )
+    if state_status is None:
+        return WorkerStatusHeartbeatPlan(
+            action=WorkerStatusHeartbeatAction.Error,
+            error_message="container state response missing state",
+            reason="missing state",
+        )
+
+    status = normalize_worker_container_status(state_status)
+    next_status = status
+    expiry = CONTAINER_STATE_TTL_SECONDS
+    event_id = ""
+    event_attrs: dict[str, JsonValue] = {}
+    reason = "container status refreshed"
+    if status is WorkerContainerStatus.Pending:
+        if runtime_started:
+            next_status = WorkerContainerStatus.Running
+            event_id = WORKER_PENDING_RECONCILED_EVENT_ID
+            event_attrs = {"runtime_pid": runtime_pid}
+            reason = "pending container reconciled to running"
+        else:
+            expiry = CONTAINER_STATE_TTL_WHILE_PENDING_SECONDS
+            reason = "pending container heartbeat"
+
+    schedule_grace_kill = status is WorkerContainerStatus.Stopping
+    if schedule_grace_kill:
+        reason = "stopping container heartbeat"
+
+    return WorkerStatusHeartbeatPlan(
+        action=WorkerStatusHeartbeatAction.UpdateStatus,
+        next_status=next_status,
+        update_status=True,
+        expiry_seconds=expiry,
+        schedule_grace_kill=schedule_grace_kill,
+        grace_seconds=_positive_or_default(
+            termination_grace_seconds,
+            DEFAULT_WORKER_STOP_GRACE_SECONDS,
+        ),
+        kill=schedule_grace_kill,
+        stop_reason=_normalize_stop_reason(stop_reason),
+        event_id=event_id or (WORKER_STOPPING_GRACE_KILL_EVENT_ID if schedule_grace_kill else ""),
+        event_attrs=event_attrs,
+        reason=reason,
+    )
+
+
+def plan_worker_cancelled_request(
+    *,
+    state_status: WorkerContainerStatus | str | None = None,
+    state_missing: bool = False,
+) -> WorkerCancelledRequestPlan:
+    if state_missing:
+        return WorkerCancelledRequestPlan(
+            action=WorkerCancelledRequestAction.DropMissingState,
+            drop=True,
+            release_capacity=True,
+            reason="container state is missing",
+        )
+    status = normalize_worker_container_status(state_status)
+    if status is WorkerContainerStatus.Stopping:
+        return WorkerCancelledRequestPlan(
+            action=WorkerCancelledRequestAction.DropStoppingState,
+            drop=True,
+            delete_state=True,
+            release_capacity=True,
+            reason="container state is already stopping",
+        )
+    return WorkerCancelledRequestPlan(
+        action=WorkerCancelledRequestAction.Continue,
+        drop=False,
+        reason="container request should run",
+    )
+
+
+def plan_mark_container_stopping() -> WorkerStatusHeartbeatPlan:
+    return WorkerStatusHeartbeatPlan(
+        action=WorkerStatusHeartbeatAction.UpdateStatus,
+        next_status=WorkerContainerStatus.Stopping,
+        update_status=True,
+        expiry_seconds=CONTAINER_STATE_TTL_WHILE_PENDING_SECONDS,
+        reason="mark container stopping",
+    )
+
+
+def plan_worker_spindown(
+    *,
+    context_cancelled: bool = False,
+    persistent: bool = False,
+    seconds_since_last_request: float = 0,
+    active_container_count: int = 0,
+    spindown_seconds: float = DEFAULT_WORKER_SPINDOWN_SECONDS,
+) -> WorkerSpindownPlan:
+    if context_cancelled:
+        return WorkerSpindownPlan(
+            action=WorkerSpindownAction.Shutdown,
+            should_shutdown=True,
+            reason="worker context cancelled",
+        )
+    if persistent:
+        return WorkerSpindownPlan(
+            action=WorkerSpindownAction.Continue,
+            should_shutdown=False,
+            reason="persistent worker stays available",
+        )
+    if seconds_since_last_request > spindown_seconds and active_container_count == 0:
+        return WorkerSpindownPlan(
+            action=WorkerSpindownAction.Shutdown,
+            should_shutdown=True,
+            cleanup_workspace_storage=True,
+            cancel_worker_context=True,
+            reason="worker idle past spindown threshold",
+        )
+    return WorkerSpindownPlan(
+        action=WorkerSpindownAction.Continue,
+        should_shutdown=False,
+        reason="worker still active",
+    )
+
+
+def worker_shutdown_drain_timeout(configured_seconds: int) -> float:
+    budget = _worker_shutdown_budget(configured_seconds)
+    if budget <= 10:
+        return 0.0
+    return min(budget / 6, SHUTDOWN_DRAIN_MAX_SECONDS)
+
+
+def worker_container_stop_grace(configured_seconds: int) -> float:
+    budget = _worker_shutdown_budget(configured_seconds)
+    grace = (
+        budget
+        - worker_shutdown_drain_timeout(configured_seconds)
+        - SHUTDOWN_FORCE_WAIT_SECONDS
+        - SHUTDOWN_CLEANUP_RESERVE_SECONDS
+    )
+    return budget if grace <= 0 else grace
+
+
+def plan_worker_shutdown_budget(configured_seconds: int) -> WorkerShutdownBudgetPlan:
+    budget = _worker_shutdown_budget(configured_seconds)
+    return WorkerShutdownBudgetPlan(
+        configured_seconds=configured_seconds,
+        budget_seconds=budget,
+        drain_timeout_seconds=worker_shutdown_drain_timeout(configured_seconds),
+        stop_grace_seconds=worker_container_stop_grace(configured_seconds),
+    )
+
+
+def _worker_shutdown_budget(configured_seconds: int) -> float:
+    return float(_positive_or_default(configured_seconds, DEFAULT_WORKER_STOP_GRACE_SECONDS))
+
+
+def _positive_or_default(value: int, default: int) -> int:
+    return value if value > 0 else default
+
+
+def _normalize_stop_reason(value: WorkerStopReason | str) -> WorkerStopReason:
+    if isinstance(value, WorkerStopReason):
+        return value
+    normalized = value.strip().upper()
+    for reason in WorkerStopReason:
+        if normalized == reason.value:
+            return reason
+    return WorkerStopReason.Unknown

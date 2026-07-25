@@ -1,0 +1,48 @@
+name: Compose definition
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/compose.yml"
+      - ".dockerignore"
+      - "docker/**"
+      - "compose.yaml"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/compose.yml"
+      - ".dockerignore"
+      - "docker/**"
+      - "compose.yaml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Render Compose
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Validate current definition
+        run: docker compose config --quiet
+
+      - name: Validate canonical image build owners
+        run: >-
+          docker compose build --check
+          database-bootstrap
+          juicefs-format
+          control-plane
+          scheduler
+          container-worker
+          worker-token
+          cache-server
+
+      - name: Validate canonical Bake graph
+        run: docker buildx bake -f docker/bake.hcl --check

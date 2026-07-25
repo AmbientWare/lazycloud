@@ -1,0 +1,327 @@
+{{- $tailnetLoginServer := default "https://controlplane.tailscale.com" .Values.tailnet.controlUrl -}}
+{{- $tailnetExtraArgs := printf "--accept-dns=%t --accept-routes=%t --login-server=%s %s" .Values.tailnet.acceptDns .Values.tailnet.acceptRoutes $tailnetLoginServer .Values.tailnet.extraArgs | trim -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "lazycloud.fullname" . }}-control-plane
+  labels:
+    {{- include "lazycloud.labels" . | nindent 4 }}
+    app.kubernetes.io/component: control-plane
+spec:
+  {{- if not .Values.controlPlane.autoscaling.enabled }}
+  replicas: {{ .Values.controlPlane.replicas }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "lazycloud.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: control-plane
+  template:
+    metadata:
+      labels:
+        {{- include "lazycloud.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: control-plane
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        {{- include "lazycloud.secretRolloutAnnotations" . | nindent 8 }}
+        prometheus.io/scrape: "true"
+        prometheus.io/path: /metrics
+        prometheus.io/port: "9000"
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "lazycloud.providerServiceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.providerServiceAccount.automountToken }}
+      terminationGracePeriodSeconds: {{ .Values.controlPlane.terminationGracePeriodSeconds }}
+      {{- if .Values.controlPlane.priorityClassName }}
+      priorityClassName: {{ .Values.controlPlane.priorityClassName | quote }}
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controlPlane.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controlPlane.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controlPlane.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controlPlane.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        {{- include "lazycloud.databaseWaitInitContainer" . | nindent 8 }}
+        {{- if and .Values.agentArtifact.version .Values.agentArtifact.url }}
+        - name: stage-agent-artifact
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: "{{ .Values.image.pullPolicy }}"
+          command: ["python", "-c"]
+          args:
+            - |
+              import hashlib
+              import pathlib
+              import sys
+              import urllib.request
+
+              url, expected, destination = sys.argv[1:]
+              with urllib.request.urlopen(url, timeout=120) as response:
+                  payload = response.read()
+              if hashlib.sha256(payload).hexdigest() != expected:
+                  raise SystemExit("agent artifact digest mismatch")
+              target = pathlib.Path(destination)
+              target.parent.mkdir(parents=True, exist_ok=True)
+              temporary = target.with_suffix(".tmp")
+              temporary.write_bytes(payload)
+              temporary.chmod(0o755)
+              temporary.replace(target)
+            - {{ .Values.agentArtifact.url | quote }}
+            - {{ .Values.agentArtifact.sha256ByArch.amd64 | quote }}
+            - {{ printf "%s/%s/lazycloud-agent-linux-amd64" .Values.agentArtifact.volume.mountPath .Values.agentArtifact.version | quote }}
+          volumeMounts:
+            - name: agent-artifacts
+              mountPath: {{ .Values.agentArtifact.volume.mountPath | quote }}
+        {{- end }}
+      containers:
+        - name: control-plane
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: "{{ .Values.image.pullPolicy }}"
+          args: ["lazycloud-api", "--host", "0.0.0.0", "--port", "{{ .Values.service.port }}"]
+          env:
+            - name: LAZYCLOUD_HOME
+              value: "{{ .Values.state.home }}"
+            {{- include "lazycloud.databaseEnv" . | nindent 12 }}
+            {{- include "lazycloud.redisEnv" . | nindent 12 }}
+            {{- include "lazycloud.objectStoreEnv" . | nindent 12 }}
+            {{- include "lazycloud.juicefsGatewayEnv" . | nindent 12 }}
+            {{- include "lazycloud.apiEnv" . | nindent 12 }}
+            {{- include "lazycloud.apiSecretEnv" . | nindent 12 }}
+            {{- if .Values.tcpIngress.enabled }}
+            - name: LAZYCLOUD_TCP_INGRESS_ENABLED
+              value: "true"
+            - name: LAZYCLOUD_TCP_INGRESS_HOST
+              value: "0.0.0.0"
+            - name: LAZYCLOUD_TCP_INGRESS_PORT
+              value: {{ .Values.tcpIngress.port | quote }}
+            - name: LAZYCLOUD_TCP_INGRESS_EXTERNAL_HOST
+              value: {{ required "tcpIngress.externalHost is required when TCP ingress is enabled" .Values.tcpIngress.externalHost | quote }}
+            - name: LAZYCLOUD_TCP_INGRESS_ROUTE_CACHE_TTL_SECONDS
+              value: {{ .Values.tcpIngress.routeCacheTtlSeconds | quote }}
+            - name: LAZYCLOUD_TCP_INGRESS_MAX_CONNECTIONS
+              value: {{ .Values.tcpIngress.maxConnections | quote }}
+            - name: LAZYCLOUD_TCP_INGRESS_TLS_HANDSHAKE_TIMEOUT_SECONDS
+              value: {{ .Values.tcpIngress.tlsHandshakeTimeoutSeconds | quote }}
+            - name: LAZYCLOUD_TCP_INGRESS_CERTIFICATE_FILE
+              value: /var/run/lazycloud/tcp-ingress/tls.crt
+            - name: LAZYCLOUD_TCP_INGRESS_KEY_FILE
+              value: /var/run/lazycloud/tcp-ingress/tls.key
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+            {{- if .Values.tcpIngress.enabled }}
+            - name: tcp-ingress
+              containerPort: {{ .Values.tcpIngress.port }}
+              protocol: TCP
+            {{- end }}
+          readinessProbe:
+            {{- toYaml .Values.controlPlane.readinessProbe | nindent 12 }}
+          livenessProbe:
+            {{- toYaml .Values.controlPlane.livenessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.controlPlane.resources | nindent 12 }}
+          volumeMounts:
+            - name: lazycloud-home
+              mountPath: {{ .Values.state.home }}
+            {{- if .Values.agentArtifact.version }}
+            - name: agent-artifacts
+              mountPath: {{ .Values.agentArtifact.volume.mountPath | quote }}
+              readOnly: true
+            {{- end }}
+            {{- if .Values.tcpIngress.enabled }}
+            - name: tcp-ingress-tls
+              mountPath: /var/run/lazycloud/tcp-ingress
+              readOnly: true
+            {{- end }}
+            {{- if .Values.tailnet.enabled }}
+            - name: tailnet-socket
+              mountPath: /var/run/tailscale
+            {{- end }}
+        {{- if .Values.tailnet.enabled }}
+        - name: tailscaled
+          image: "{{ .Values.tailnet.image.repository }}:{{ .Values.tailnet.image.tag }}"
+          imagePullPolicy: "{{ .Values.tailnet.image.pullPolicy }}"
+          env:
+            - name: TS_AUTHKEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (include "lazycloud.configSecretName" .) .Values.tailnet.authKeySecretRef.name }}
+                  key: {{ .Values.tailnet.authKeySecretRef.key }}
+            - name: TS_HOSTNAME
+              value: {{ .Values.tailnet.hostname | quote }}
+            - name: TS_STATE_DIR
+              value: /var/lib/tailscale
+            - name: TS_SOCKET
+              value: {{ .Values.tailnet.socketPath | quote }}
+            - name: TS_USERSPACE
+              value: {{ .Values.tailnet.userspaceNetworking | quote }}
+            - name: TS_KUBE_SECRET
+              value: ""
+            - name: TS_EXTRA_ARGS
+              value: {{ $tailnetExtraArgs | quote }}
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - tailscale --socket={{ .Values.tailnet.socketPath }} logout || true
+          securityContext:
+            capabilities:
+              add:
+                - NET_ADMIN
+                - NET_RAW
+          volumeMounts:
+            - name: tailnet-state
+              mountPath: /var/lib/tailscale
+            - name: tailnet-socket
+              mountPath: /var/run/tailscale
+            - name: tailnet-tun
+              mountPath: /dev/net/tun
+        {{- end }}
+      volumes:
+        - name: lazycloud-home
+          emptyDir: {}
+        {{- if .Values.agentArtifact.version }}
+        - name: agent-artifacts
+          {{- if .Values.agentArtifact.volume.existingClaim }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.agentArtifact.volume.existingClaim | quote }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- end }}
+        {{- if .Values.tcpIngress.enabled }}
+        - name: tcp-ingress-tls
+          secret:
+            secretName: {{ required "tcpIngress.tls.existingSecret is required when TCP ingress is enabled" .Values.tcpIngress.tls.existingSecret }}
+            items:
+              - key: {{ .Values.tcpIngress.tls.certificateKey }}
+                path: tls.crt
+              - key: {{ .Values.tcpIngress.tls.privateKeyKey }}
+                path: tls.key
+        {{- end }}
+        {{- if .Values.tailnet.enabled }}
+        - name: tailnet-state
+          emptyDir: {}
+        - name: tailnet-socket
+          emptyDir: {}
+        - name: tailnet-tun
+          hostPath:
+            path: /dev/net/tun
+            type: CharDevice
+        {{- end }}
+---
+{{- if .Values.scheduler.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "lazycloud.fullname" . }}-scheduler
+  labels:
+    {{- include "lazycloud.labels" . | nindent 4 }}
+    app.kubernetes.io/component: scheduler
+spec:
+  {{- if not .Values.scheduler.autoscaling.enabled }}
+  replicas: {{ .Values.scheduler.replicas }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "lazycloud.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: scheduler
+  template:
+    metadata:
+      labels:
+        {{- include "lazycloud.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: scheduler
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        {{- include "lazycloud.secretRolloutAnnotations" . | nindent 8 }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "lazycloud.providerServiceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.providerServiceAccount.automountToken }}
+      terminationGracePeriodSeconds: {{ .Values.scheduler.terminationGracePeriodSeconds }}
+      {{- if .Values.scheduler.priorityClassName }}
+      priorityClassName: {{ .Values.scheduler.priorityClassName | quote }}
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.scheduler.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.scheduler.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.scheduler.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.scheduler.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        {{- include "lazycloud.databaseWaitInitContainer" . | nindent 8 }}
+        {{- include "lazycloud.administratorWaitInitContainer" . | nindent 8 }}
+      containers:
+        - name: scheduler
+          image: "{{ .Values.scheduler.image.repository }}:{{ .Values.scheduler.image.tag }}"
+          imagePullPolicy: "{{ .Values.scheduler.image.pullPolicy }}"
+          args:
+            - lazycloud-scheduler
+            - --interval-seconds
+            - "{{ .Values.scheduler.intervalSeconds }}"
+            - --container-limit
+            - "{{ .Values.scheduler.containerLimit }}"
+          env:
+            - name: LAZYCLOUD_HOME
+              value: "{{ .Values.state.home }}"
+            {{- include "lazycloud.databaseEnv" . | nindent 12 }}
+            {{- include "lazycloud.redisEnv" . | nindent 12 }}
+            {{- include "lazycloud.objectStoreEnv" . | nindent 12 }}
+            {{- include "lazycloud.juicefsGatewayEnv" . | nindent 12 }}
+            {{- include "lazycloud.schedulerEnv" . | nindent 12 }}
+            {{- include "lazycloud.integrationSecretEnv" . | nindent 12 }}
+            {{- include "lazycloud.routeSecretEnv" . | nindent 12 }}
+            {{- include "lazycloud.imageArchiveSecretEnv" . | nindent 12 }}
+            {{- include "lazycloud.containerServiceSecretEnv" . | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.scheduler.readinessProbe | nindent 12 }}
+          livenessProbe:
+            {{- toYaml .Values.scheduler.livenessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.scheduler.resources | nindent 12 }}
+          volumeMounts:
+            - name: lazycloud-home
+              mountPath: {{ .Values.state.home }}
+      volumes:
+        - name: lazycloud-home
+          emptyDir: {}
+{{- end }}
+---

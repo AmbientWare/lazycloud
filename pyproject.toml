@@ -1,36 +1,157 @@
 [project]
-name = "lazycloud-workspace"
-version = "0.0.1"
-description = "LazyCloud monorepo workspace (not published)"
-readme = "README.md"
-requires-python = ">=3.13"
-dependencies = []
+name = "workspace"
+version = "0.1.0"
+description = "Workspace for the LazyCloud apps, packages, and provider modules."
+requires-python = ">=3.12"
 
-[project.scripts]
-lazycloud = "cli.commands:main_cli"
-update-billing = "backend.billing.update_billing:main"
-cli-console = "scripts.dev_tools:textual_console"
-cli-dashboard = "scripts.dev_tools:cli_dashboard"
-mk-help = "scripts.minikube_dev:help"
-mk-up = "scripts.minikube_dev:main"
-mk-down = "scripts.minikube_dev:main_down"
-mk-dash = "scripts.minikube_dev:main_dashboard"
-mk-status = "scripts.minikube_dev:main_status"
+[dependency-groups]
+workspace = [
+    "agent",
+    "cache",
+    "coordination",
+    "compute",
+    "control",
+    "lazycloud-shared==0.1.0",
+    "database",
+    "execution",
+    "foundation",
+    "gateway",
+    "identity",
+    "images",
+    "networking",
+    "observability",
+    "operations",
+    "provider-clients",
+    "scheduler",
+    "runner",
+    "lazycloud==0.1.0",
+    "storage",
+    "storage-client",
+    "worker",
+    "worker-repository",
+    "api",
+    "agent-app",
+    "cache-server-app",
+    "cli",
+    "container-worker-app",
+    "scheduler-app",
+    "worker-bootstrap-app",
+    "provider-aws",
+    "provider-fake",
+    "provider-kubernetes",
+]
+dev = [
+    { include-group = "workspace" },
+    "basedpyright>=1.39.9",
+    "boto3-stubs[autoscaling,cloudformation,ec2,s3,sts]>=1.40,<2",
+    "httpx2>=2.4.0",
+    "pytest>=8,<9",
+    "ruff>=0.6",
+]
+
+[tool.uv]
+package = false
+default-groups = []
 
 [tool.uv.workspace]
 members = [
-    "apps/backend",
+    "packages/agent",
+    "packages/cache",
+    "packages/shared",
+    "packages/coordination",
+    "packages/compute",
+    "packages/control",
+    "packages/database",
+    "packages/execution",
+    "packages/foundation",
+    "packages/gateway",
+    "packages/identity",
+    "packages/images",
+    "packages/networking",
+    "packages/observability",
+    "packages/operations",
+    "packages/provider-clients",
+    "packages/scheduler",
+    "packages/runner",
+    "packages/lazycloud",
+    "packages/storage",
+    "packages/storage-client",
+    "packages/worker",
+    "packages/worker-repository",
+    "apps/api",
+    "apps/agent",
+    "apps/cache-server",
     "apps/cli",
-    "packages/models",
-    "packages/api_requests",
-    "packages/responses",
-    "business",
-    "packages/configs",
+    "apps/container-worker",
+    "apps/scheduler",
+    "apps/worker-bootstrap",
+    "packages/providers/aws",
+    "packages/providers/fake",
+    "packages/providers/kubernetes",
 ]
 
-[tool.hatch.build.targets.wheel]
-packages = ["scripts", "minikube"]
+[tool.uv.sources]
+agent = { workspace = true }
+api = { workspace = true }
+agent-app = { workspace = true }
+cache = { workspace = true }
+cache-server-app = { workspace = true }
+cli = { workspace = true }
+coordination = { workspace = true }
+compute = { workspace = true }
+container-worker-app = { workspace = true }
+control = { workspace = true }
+lazycloud-shared = { workspace = true }
+database = { workspace = true }
+execution = { workspace = true }
+foundation = { workspace = true }
+gateway = { workspace = true }
+identity = { workspace = true }
+images = { workspace = true }
+networking = { workspace = true }
+observability = { workspace = true }
+operations = { workspace = true }
+provider-clients = { workspace = true }
+scheduler-app = { workspace = true }
+scheduler = { workspace = true }
+runner = { workspace = true }
+lazycloud = { workspace = true }
+storage = { workspace = true }
+storage-client = { workspace = true }
+worker = { workspace = true }
+worker-repository = { workspace = true }
+worker-bootstrap-app = { workspace = true }
+provider-aws = { workspace = true }
+provider-fake = { workspace = true }
+provider-kubernetes = { workspace = true }
 
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+[tool.pytest.ini_options]
+pythonpath = [
+    ".",
+]
+testpaths = [
+    "apps",
+    "packages",
+    "tests",
+]
+norecursedirs = [
+    "tests/e2e",
+]
+addopts = "--import-mode=importlib"
+
+[tool.ruff]
+line-length = 100
+src = ["apps", "packages", "tests", "benchmarks"]
+target-version = "py312"
+
+[tool.ruff.per-file-target-version]
+"deploy/managed-runtime/build.py" = "py310"
+"packages/foundation/**/*.py" = "py310"
+"packages/runner/**/*.py" = "py310"
+"packages/lazycloud/**/*.py" = "py310"
+"packages/shared/**/*.py" = "py310"
+"**/test_*_python_compatibility.py" = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["B008"]

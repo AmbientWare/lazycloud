@@ -1,30 +1,49 @@
-@import 'tailwindcss';
-@import 'fumadocs-ui/css/shadcn.css';
-@import 'fumadocs-ui/css/preset.css';
+@import "tailwindcss";
+@import "tw-animate-css";
 
-@import 'tw-animate-css';
+@import "@fontsource-variable/instrument-sans";
 
-@plugin 'tailwindcss-animate';
-@plugin '@tailwindcss/typography';
+@font-face {
+  font-family: "JetBrains Mono Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 800;
+  src: url("@fontsource-variable/jetbrains-mono/files/jetbrains-mono-latin-ext-wght-normal.woff2")
+    format("woff2-variations");
+  unicode-range:
+    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304,
+    U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB,
+    U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: "JetBrains Mono Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 800;
+  src: url("@fontsource-variable/jetbrains-mono/files/jetbrains-mono-latin-wght-normal.woff2")
+    format("woff2-variations");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212,
+    U+2215, U+FEFF, U+FFFD;
+}
 
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-  --font-sans:
-    var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif,
-    'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
-
-  --radius-lg: var(--radius);
-  --radius-md: calc(var(--radius) - 2px);
+  --font-sans: "Instrument Sans Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
+  /* Display serif; its @font-face ships with the marketing route chunk. */
+  --font-serif: "Instrument Serif", "Iowan Old Style", Georgia, serif;
+  --radius-xs: calc(var(--radius) - 6px);
   --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
-
-  /* Brand colors */
-  --color-lazycloud: #66cbff;
-  --color-lazycloud-light: #8cd7ff;
-  --color-lazycloud-dark: #4dbce8;
-
-  /* Semantic colors */
+  --color-lazycloud: var(--lazycloud);
+  --color-lazycloud-light: var(--lazycloud-light);
+  --color-lazycloud-dark: var(--lazycloud-dark);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -44,23 +63,19 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
-
-  /* Status colors */
-  --color-success: var(--success);
-  --color-success-foreground: var(--success-foreground);
-  --color-warning: var(--warning);
-  --color-warning-foreground: var(--warning-foreground);
-  --color-info: var(--info);
-  --color-info-foreground: var(--info-foreground);
-
-  /* Chart colors */
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);
   --color-chart-4: var(--chart-4);
   --color-chart-5: var(--chart-5);
-
-  /* Sidebar colors */
+  --color-brand: var(--brand);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-positive: var(--positive);
+  --color-positive-foreground: var(--positive-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
   --color-sidebar: var(--sidebar);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar-primary: var(--sidebar-primary);
@@ -71,189 +86,340 @@
   --color-sidebar-ring: var(--sidebar-ring);
 }
 
-/*
-  The default border color has changed to `currentcolor` in Tailwind CSS v4,
-  so we've added these compatibility styles to make sure everything still
-  looks the same as it did with Tailwind CSS v3.
-*/
-@layer base {
-  *,
-  ::after,
-  ::before,
-  ::backdrop,
-  ::file-selector-button {
-    border-color: var(--color-gray-200, currentcolor);
-  }
-}
-
-body {
-  font-family:
-    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu',
-    'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
-
-code {
-  font-family:
-    source-code-pro, Menlo, Monaco, Consolas, 'Courier New', monospace;
-}
-
-:root {
+/* Field Manual skin: drafting paper and ink carry every surface — marketing and
+   workspace read the same tokens, so the theme lives in one place.
+   `.light` pins a subtree to paper regardless of the root theme, which is how
+   the public marketing routes stay light for dark-theme visitors. */
+:root,
+.light {
+  color-scheme: light;
   --radius: 0.625rem;
-
-  /* Core colors (OKLCH) */
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.141 0.005 285.823);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.141 0.005 285.823);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.141 0.005 285.823);
-  --primary: oklch(0.21 0.006 285.885);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.967 0.001 286.375);
-  --secondary-foreground: oklch(0.21 0.006 285.885);
-  --muted: oklch(0.967 0.001 286.375);
-  --muted-foreground: oklch(0.552 0.016 285.938);
-  --accent: oklch(0.967 0.001 286.375);
-  --accent-foreground: oklch(0.21 0.006 285.885);
-  --destructive: oklch(0.577 0.245 27.325);
+  /* LazyCloud brand trio. */
+  --lazycloud: #66cbff;
+  --lazycloud-light: #8cd7ff;
+  --lazycloud-dark: #4dbce8;
+  --background: #f2eee3;
+  --foreground: #191811;
+  --card: #f7f4ec;
+  --card-foreground: #191811;
+  --popover: #f7f4ec;
+  --popover-foreground: #191811;
+  /* Brand cyan ink: the #66cbff hue deepened so links, active markers, and
+     filled brand surfaces hold WCAG AA contrast on light canvases. */
+  --brand: oklch(0.5 0.11 237);
+  --brand-foreground: oklch(0.985 0 0);
+  --primary: #191811;
+  --primary-foreground: #f2eee3;
+  /* Signal olive reserved for healthy status, live dots, and activity bars;
+     deep enough that status text holds AA on paper. */
+  --positive: #46551a;
+  --positive-foreground: #f7f4ec;
+  --secondary: #e6e1d1;
+  --secondary-foreground: #191811;
+  --muted: #e6e1d1;
+  /* Ink at reduced weight: holds AA for 12px metadata on paper and on the
+     tinted rows such as stderr (destructive/8) log lines. */
+  --muted-foreground: #4f4c3a;
+  --accent: #e6e1d1;
+  --accent-foreground: #191811;
+  --destructive: oklch(0.52 0.22 27.325);
   --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(0.92 0.004 286.32);
-  --input: oklch(0.92 0.004 286.32);
-  --ring: oklch(0.705 0.015 286.067);
-
-  /* Status colors */
-  --success: hsl(142 60% 45%);
-  --success-foreground: hsl(0 0% 98%);
-  --warning: hsl(43 90% 55%);
-  --warning-foreground: hsl(0 0% 9%);
+  /* Amber ink for pending/queued/building status text on light surfaces. */
+  --warning: hsl(43 80% 28%);
+  --warning-foreground: hsl(0 0% 98%);
   --info: hsl(197 90% 65%);
   --info-foreground: hsl(0 0% 9%);
-
-  /* Chart colors */
+  --border: rgb(25 24 17 / 16%);
+  --input: rgb(25 24 17 / 22%);
+  --ring: var(--brand);
   --chart-1: oklch(0.646 0.222 41.116);
   --chart-2: oklch(0.6 0.118 184.704);
   --chart-3: oklch(0.398 0.07 227.392);
   --chart-4: oklch(0.828 0.189 84.429);
   --chart-5: oklch(0.769 0.188 70.08);
-
-  /* Sidebar */
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.141 0.005 285.823);
-  --sidebar-primary: oklch(0.21 0.006 285.885);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.967 0.001 286.375);
-  --sidebar-accent-foreground: oklch(0.21 0.006 285.885);
-  --sidebar-border: oklch(0.92 0.004 286.32);
-  --sidebar-ring: oklch(0.705 0.015 286.067);
-
-  /* Syntax highlighting */
-  --syntax-keyword: hsl(197 80% 45%);
-  --syntax-string: hsl(43 85% 50%);
-  --syntax-function: hsl(262 60% 55%);
-  --syntax-variable: hsl(142 55% 45%);
-  --syntax-comment: hsl(0 0% 55%);
-  --syntax-property: hsl(262 60% 55%);
+  --sidebar: #eae5d6;
+  --sidebar-foreground: #191811;
+  --sidebar-primary: #191811;
+  --sidebar-primary-foreground: #f2eee3;
+  --sidebar-accent: #ded8c4;
+  --sidebar-accent-foreground: #191811;
+  --sidebar-border: rgb(25 24 17 / 16%);
+  --sidebar-ring: var(--brand);
 }
 
+/* Dark sheet: the same skin printed on the proof surfaces — the workspace dark
+   theme and every dark marketing section share it. Cooled toward the brand
+   blue so dark surfaces read as ink, never as olive. */
 .dark {
-  /* Core colors (OKLCH) */
-  --background: oklch(0.141 0.005 285.823);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.21 0.006 285.885);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.21 0.006 285.885);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.92 0.004 286.32);
-  --primary-foreground: oklch(0.21 0.006 285.885);
-  --secondary: oklch(0.274 0.006 286.033);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.274 0.006 286.033);
-  --muted-foreground: oklch(0.705 0.015 286.067);
-  --accent: oklch(0.274 0.006 286.033);
-  --accent-foreground: oklch(0.985 0 0);
+  color-scheme: dark;
+  --background: #0e1217;
+  --foreground: #e7edf4;
+  --card: #151b23;
+  --card-foreground: #e7edf4;
+  --popover: #151b23;
+  --popover-foreground: #e7edf4;
+  /* The brand cyan itself carries dark ink for AA on filled brand surfaces. */
+  --brand: var(--lazycloud);
+  --brand-foreground: oklch(0.2 0.03 240);
+  --primary: #e7edf4;
+  --primary-foreground: #0e1217;
+  --positive: #7fd0a4;
+  --positive-foreground: #0e1217;
+  --secondary: #1d2530;
+  --secondary-foreground: #e7edf4;
+  --muted: #1d2530;
+  --muted-foreground: #96a6ba;
+  --accent: #1d2530;
+  --accent-foreground: #e7edf4;
   --destructive: oklch(0.704 0.191 22.216);
-  --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.552 0.016 285.938);
-
-  /* Status colors */
-  --success: hsl(142 55% 50%);
-  --success-foreground: hsl(0 0% 98%);
+  --destructive-foreground: hsl(0 0% 9%);
   --warning: hsl(43 90% 60%);
   --warning-foreground: hsl(0 0% 9%);
   --info: hsl(197 90% 65%);
   --info-foreground: hsl(0 0% 9%);
-
-  /* Chart colors */
+  --border: rgb(231 237 244 / 15%);
+  --input: rgb(231 237 244 / 22%);
+  --ring: var(--brand);
   --chart-1: oklch(0.488 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);
   --chart-3: oklch(0.769 0.188 70.08);
   --chart-4: oklch(0.627 0.265 303.9);
   --chart-5: oklch(0.645 0.246 16.439);
-
-  /* Sidebar */
-  --sidebar: oklch(0.21 0.006 285.885);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.274 0.006 286.033);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.552 0.016 285.938);
-
-  /* Syntax highlighting for dark mode */
-  --syntax-keyword: hsl(197 80% 60%);
-  --syntax-string: hsl(43 85% 65%);
-  --syntax-function: hsl(262 60% 65%);
-  --syntax-variable: hsl(142 55% 55%);
-  --syntax-comment: hsl(0 0% 50%);
-  --syntax-property: hsl(262 60% 65%);
+  --sidebar: #151b23;
+  --sidebar-foreground: #e7edf4;
+  --sidebar-primary: #e7edf4;
+  --sidebar-primary-foreground: #0e1217;
+  --sidebar-accent: #1d2530;
+  --sidebar-accent-foreground: #e7edf4;
+  --sidebar-border: rgb(231 237 244 / 15%);
+  --sidebar-ring: var(--brand);
 }
 
 @layer base {
   * {
     @apply border-border outline-ring/50;
   }
+
+  html,
   body {
-    @apply bg-background text-foreground;
+    @apply h-full bg-background text-foreground antialiased;
+    overflow: hidden;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.45;
+    font-feature-settings:
+      "rlig" 1,
+      "calt" 1;
+    font-variant-numeric: tabular-nums;
+    margin: 0;
+  }
+
+  button,
+  a,
+  [role="button"] {
+    cursor: pointer;
+  }
+
+  code,
+  .mono {
+    font-family: var(--font-mono);
   }
 }
 
-/* Stacking cards scroll-driven animation */
-.stacking-cards {
-  --card-margin: 20px;
+/* Functional workspace surface: visible depth without decorative card chrome. */
+.panel {
+  background: var(--card);
+  border: 1px solid var(--input);
+  box-shadow: 0 1px 2px oklch(0 0 0 / 6%);
 }
 
-.stacking-cards__item {
-  padding-block-end: var(--card-margin);
-  transform-origin: center top;
+.dark .panel {
+  box-shadow:
+    inset 0 1px 0 oklch(1 0 0 / 3%),
+    0 10px 28px oklch(0 0 0 / 12%);
 }
 
-.stacking-cards__content {
-  box-shadow: 0 10px 40px -10px rgba(0, 0, 0, 0.3);
+/* Clickable panels keep their geometry stable while making hover intent explicit. */
+.interactive-panel {
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease;
 }
 
-/* Native CSS scroll-driven animation (Chrome 115+, Firefox 110+ with flag) */
-@supports (animation-timeline: scroll()) {
-  .stacking-cards {
-    view-timeline-name: --stacking-cards-timeline;
+.interactive-panel:hover,
+.interactive-panel:focus-visible {
+  background: color-mix(in oklab, var(--card) 92%, var(--brand) 8%);
+  border-color: color-mix(in oklab, var(--brand) 42%, transparent);
+  box-shadow: 0 2px 8px oklch(0 0 0 / 10%);
+}
+
+.dark .interactive-panel:hover,
+.dark .interactive-panel:focus-visible {
+  background: color-mix(in oklab, var(--card) 90%, var(--brand) 10%);
+  box-shadow:
+    inset 0 1px 0 oklch(1 0 0 / 4%),
+    0 12px 30px oklch(0 0 0 / 20%);
+}
+
+/* Navigable rows share one stable hover, selected, and keyboard-focus treatment. */
+.interactive-row {
+  outline: none;
+  transition:
+    background-color 150ms ease,
+    color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.interactive-row:hover,
+.interactive-row:focus-within,
+.interactive-row:focus-visible {
+  background: color-mix(in oklab, var(--accent) 58%, transparent);
+}
+
+.interactive-row:focus-visible {
+  box-shadow: inset 0 0 0 2px color-mix(in oklab, var(--ring) 72%, transparent);
+}
+
+.interactive-row[data-selected="true"] {
+  background: color-mix(in oklab, var(--brand) 11%, var(--card));
+  box-shadow: inset 3px 0 0 var(--brand);
+}
+
+.interactive-row:hover .interactive-row-indicator,
+.interactive-row:focus-within .interactive-row-indicator,
+.interactive-row:focus-visible .interactive-row-indicator,
+.interactive-row[data-selected="true"] .interactive-row-indicator {
+  color: var(--brand);
+}
+
+/* Inline navigation keeps a text-level affordance without inventing route colors. */
+.interactive-link {
+  border-radius: calc(var(--radius) - 4px);
+  outline: none;
+  transition: color 150ms ease;
+}
+
+.interactive-link:hover {
+  color: var(--brand);
+}
+
+.interactive-link:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--ring) 72%, transparent);
+}
+
+/* Syntax tokens emitted by CodeBlock; every colour comes from the theme. */
+.tok-comment {
+  color: var(--muted-foreground);
+  font-style: italic;
+}
+
+.tok-string,
+.tok-number {
+  color: var(--positive);
+}
+
+.tok-keyword,
+.tok-constant,
+.tok-prompt {
+  color: var(--brand);
+}
+
+.tok-decorator {
+  color: var(--brand);
+  font-weight: 500;
+}
+
+.tok-builtin {
+  color: var(--lazycloud-light);
+}
+
+.tok-type,
+.tok-call {
+  color: var(--foreground);
+}
+
+.tok-param {
+  color: color-mix(in oklab, var(--foreground) 82%, transparent);
+}
+
+/* Paper code examples use the same semantic syntax palette, with the pale
+   dark-sheet builtin blue deepened to the readable paper signal. */
+.code-block-paper .tok-builtin {
+  color: var(--brand);
+}
+
+/* Offset stamp: drafting-press depth for page-level actions. The quiet variant
+   carries the same geometry for secondary controls. */
+.stamp,
+.stamp-quiet {
+  box-shadow: 3px 3px 0 0 var(--brand);
+  transition:
+    transform 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.stamp-quiet {
+  box-shadow: 3px 3px 0 0 var(--input);
+}
+
+.stamp:hover {
+  box-shadow: 1px 1px 0 0 var(--brand);
+  transform: translate(2px, 2px);
+}
+
+.stamp-quiet:hover {
+  box-shadow: 1px 1px 0 0 var(--input);
+  transform: translate(2px, 2px);
+}
+
+/* Instrument-panel micro label for stat and section headers. */
+.micro-label {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+
+/* Large instrument readouts: totals, stat values, gauge numbers. */
+.readout {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+/* Soft pulse for live status dots. */
+@keyframes pulse-soft {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.pulse-live {
+  animation: pulse-soft 2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pulse-live,
+  .interactive-panel,
+  .interactive-row,
+  .interactive-link,
+  .stamp,
+  .stamp-quiet {
+    animation: none;
+    transition: none;
   }
 
-  .stacking-cards__content {
-    --start: calc((var(--index) - 1) / var(--num-cards) * 100%);
-    --end: calc(var(--index) / var(--num-cards) * 100%);
-
-    animation: stacking-scale-down linear forwards;
-    animation-timeline: --stacking-cards-timeline;
-    animation-range: exit-crossing var(--start) exit-crossing var(--end);
-  }
-
-  @keyframes stacking-scale-down {
-    to {
-      transform: scale(calc(1 - 0.05 * (var(--num-cards) - var(--index))));
-    }
+  .stamp:hover,
+  .stamp-quiet:hover {
+    transform: none;
   }
 }

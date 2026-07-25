@@ -1,0 +1,24 @@
+services:
+  control-plane:
+    environment:
+      AWS_CONFIG_FILE: /run/lazycloud/aws/config
+      AWS_PROFILE: ${AWS_PROFILE:-default}
+      AWS_SDK_LOAD_CONFIG: "1"
+      AWS_SHARED_CREDENTIALS_FILE: /run/lazycloud/aws/credentials
+    volumes:
+      - type: bind
+        source: ${LAZYCLOUD_COMPOSE_AWS_CONFIG_DIR:?set LAZYCLOUD_COMPOSE_AWS_CONFIG_DIR to the platform AWS configuration directory}
+        target: /run/lazycloud/aws
+        read_only: true
+
+  scheduler:
+    environment:
+      AWS_CONFIG_FILE: /run/lazycloud/aws/config
+      AWS_PROFILE: ${AWS_PROFILE:-default}
+      AWS_SDK_LOAD_CONFIG: "1"
+      AWS_SHARED_CREDENTIALS_FILE: /run/lazycloud/aws/credentials
+    volumes:
+      - type: bind
+        source: ${LAZYCLOUD_COMPOSE_AWS_CONFIG_DIR:?set LAZYCLOUD_COMPOSE_AWS_CONFIG_DIR to the platform AWS configuration directory}
+        target: /run/lazycloud/aws
+        read_only: true

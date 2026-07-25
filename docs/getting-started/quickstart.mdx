@@ -1,0 +1,108 @@
+---
+title: "Quickstart"
+description: "Log in, deploy your first function, invoke it, and inspect the result."
+---
+
+## 1. Log in
+
+Sign in to the hosted platform with:
+
+```bash
+lazycloud login
+```
+
+Login starts a device-code flow: the CLI prints a verification URL and a
+confirmation code, you approve it in the web dashboard, and the CLI stores the
+minted workspace token in its profile.
+
+`lazycloud login` targets the hosted LazyCloud platform by default. If you run
+your own stack (self-hosting or local dev), point at it with `--endpoint` or
+the `LAZYCLOUD_ENDPOINT` environment variable; the endpoint is stored in your
+profile for future commands. For non-interactive use, pass a token directly:
+
+```bash
+lazycloud login --token <token>
+```
+
+You can also configure the client entirely through the environment with
+`LAZYCLOUD_ENDPOINT` and `LAZYCLOUD_TOKEN`. See [Authentication](/platform/auth).
+
+## 2. Write a function
+
+Generate the starter app:
+
+```bash
+lazycloud quickstart
+```
+
+This writes `quickstart.py`:
+
+```python
+from __future__ import annotations
+
+from lazycloud import App, Image
+
+app = App("quickstart")
+image = Image(python_version="3.12")
+
+
+@app.function(name="hello", image=image, cpu=1.0, memory="256Mi")
+def hello(name: str = "world") -> str:
+    print(f"quickstart greeting for {name}", flush=True)
+    return f"hello {name}"
+
+
+if __name__ == "__main__":
+    print(hello.local("lazycloud"))
+```
+
+Run it locally first — `.local()` executes the plain Python function in your
+own process:
+
+```bash
+python quickstart.py
+```
+
+## 3. Deploy it
+
+```bash
+lazycloud deploy quickstart.py:hello
+```
+
+The handler reference is `<file-or-module>:<object>` — a path to a Python file
+or an importable module path, then the decorated object (or the `App` to deploy
+everything it registers). The first deploy builds the image, so it takes longer
+than subsequent deploys.
+
+## 4. Invoke it
+
+```bash
+lazycloud run quickstart.py:hello 'LazyCloud'
+```
+
+`lazycloud run` submits the invocation as a task on your deployed compute and
+prints the result.
+
+## 5. Inspect tasks and logs
+
+Every invocation is a durable task:
+
+```bash
+lazycloud task list
+lazycloud task show <task-id>
+lazycloud task result <task-id>
+lazycloud task logs <task-id>
+```
+
+`lazycloud task result` waits for completion by default (`--no-wait` to return
+immediately). Stream logs from the deployment as they arrive:
+
+```bash
+lazycloud logs --task-id <task-id> --follow
+```
+
+## Next steps
+
+- Serve HTTP traffic in [Your first endpoint](/getting-started/first-endpoint)
+- Understand [Apps](/concepts/apps) and [Functions](/concepts/functions)
+- Explore the [CLI reference](/cli/overview)

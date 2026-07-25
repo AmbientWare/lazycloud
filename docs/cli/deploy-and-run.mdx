@@ -1,0 +1,85 @@
+---
+title: "deploy, run, serve, shell, dev"
+description: "Build, deploy, invoke, preview, and iterate on workloads from the CLI."
+---
+
+import WorkspaceFlag from '/snippets/workspace-flag.mdx';
+
+These commands share a set of **workload options** that override or supply the
+resource configuration:
+
+| Option | Description |
+| --- | --- |
+| `--cpu <float>` / `--memory <str>` | Compute per container, for example `--memory 512Mi`. |
+| `--gpu <type>` / `--gpu-count <n>` | GPU type and count. |
+| `--image <ref>` | Registry image reference. |
+| `--dockerfile <path>` / `--context <dir>` | Build from a Dockerfile instead. |
+| `--env KEY=VALUE` | Environment variables (repeatable). |
+| `--secret <name>` | Workspace secrets to inject (repeatable). |
+| `--port <spec>` | Exposed port(s). |
+| `--keep-warm <seconds>` | Idle keep-warm window. |
+| `--tcp` / `--no-tcp` | Raw TCP ingress instead of HTTP. |
+| `--pool <name>` | Target worker pool. |
+| `--placement managed\|aws` | Compute placement target. |
+| `--entrypoint <cmd>` | Container entrypoint override. |
+
+## lazycloud deploy
+
+```bash
+lazycloud deploy HANDLER [options]
+```
+
+Deploys a handler or app object. Additional flags: `--name` (deployment name
+override), `--source-root` (directory packaged as the code root), and
+`--resource <selector>` to deploy one resource from an app (`name` or
+`kind:name`).
+
+```bash
+lazycloud deploy quickstart.py:hello
+lazycloud deploy examples.all_workloads:app --resource endpoint:predict
+```
+
+## lazycloud run
+
+```bash
+lazycloud run [COMMAND]... [options]
+```
+
+Runs a handler locally or remotely. Pass a handler reference and its
+arguments; workload options size the execution container.
+
+```bash
+lazycloud run quickstart.py:hello 'LazyCloud'
+```
+
+## lazycloud serve
+
+```bash
+lazycloud serve HANDLER [--timeout <seconds>] [options]
+```
+
+Serves an endpoint, ASGI app, or task queue on remote compute with a preview
+URL and live logs. `--timeout 0` (default) serves until interrupted.
+`--sync-dir <dir>` syncs a local directory into the serve container;
+`--container-port` maps the container port.
+
+## lazycloud shell
+
+```bash
+lazycloud shell [HANDLER] [--container-id <id>] [options]
+```
+
+Opens an interactive shell in a handler's container image, or attaches a
+shell to a running container with `--container-id`. `--sync-dir` copies a
+local directory in.
+
+## lazycloud dev
+
+```bash
+lazycloud dev [HANDLER] [--sync <dir>] [options]
+```
+
+Runs the local development loop: a remote container with your working
+directory synced (default `--sync ./`), for iterating without deploys.
+
+<WorkspaceFlag />

@@ -1,0 +1,717 @@
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import time
+from collections.abc import Iterator
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
+import shared.tasks
+from lazycloud.clients.gateway.control import GatewayControlClient
+from lazycloud.session import Client
+from lazycloud.session.deployment import DeploymentClient
+from lazycloud.session.task import (
+    FunctionCall,
+    Task,
+    TaskClient,
+    TaskOperationError,
+    TaskSubscription,
+)
+from pydantic import JsonValue
+from shared.app_identity import WORKSPACE_OBJECT_BUCKET
+from shared.deployments import DeploymentKind
+from shared.events import Event
+from shared.function_payloads import FunctionCloudpickleResult
+from shared.http.deployments import DeploymentListResponse, DeploymentResponse
+from shared.http.errors import HttpApiError, HttpResponseDecodeError, HttpTransportError
+from shared.http.gateway import (
+    AttachToContainerResponse,
+    DeployStubRequest,
+    DeployStubResponse,
+    GetOrCreateStubRequest,
+    GetOrCreateStubResponse,
+    GetUrlRequest,
+    GetUrlResponse,
+    ResolveDeploymentTargetRequest,
+    ResolveDeploymentTargetResponse,
+    SyncContainerWorkspaceResponse,
+)
+from shared.http.images import BuildImageRequest, BuildImageResponse
+from shared.http.objects import PutObjectResponse
+from shared.http.observability import (
+    EventHistoryRequest,
+    EventQueryResponse,
+    LogQueryRequest,
+    LogQueryResponse,
+    LogRecord,
+)
+from shared.http.tasks import TaskPageResponse, TaskResponse, TaskStopResponse
+from shared.http.usage import UsageRecordListResponse
+from shared.logs import LogEntry
+from shared.tasks import TaskStatus
+from shared.usage import UsageMetric
+from tests.fakes import http_api_error
+from tests.url_constants import EXAMPLE_URL, HTTP_EXAMPLE_COM_URL
+
+
+@dataclass
+class FakeSessionGateway:
+    stub_requests: list[GetOrCreateStubRequest] = field(default_factory=list)
+    deploy_requests: list[DeployStubRequest] = field(default_factory=list)
+    fail_prepare: bool = False
+    fail_deploy: bool = False
+
+    def get_or_create_stub(self, request: GetOrCreateStubRequest) -> GetOrCreateStubResponse:
+        self.stub_requests.append(request)
+        if self.fail_prepare:
+            raise http_api_error("prepare failed")
+        return GetOrCreateStubResponse(stub_id="stub-session")
+
+    def deploy_stub(self, request: DeployStubRequest) -> DeployStubResponse:
+        self.deploy_requests.append(request)
+        if self.fail_deploy:
+            raise http_api_error("deploy failed")
+        return DeployStubResponse(
+            stub_id=request.stub_id,
+            deployment_id="dep-session",
+            app_id="demo",
+            version=3,
+            invoke_url=f"{request.external_url}/stub/{request.stub_id}",
+        )
+
+    def get_url(self, request: GetUrlRequest) -> GetUrlResponse:
+        return GetUrlResponse(url=f"{request.external_url}/deploy/{request.deployment_id}")
+
+    def resolve_deployment_target(
+        self,
+        request: ResolveDeploymentTargetRequest,
+    ) -> ResolveDeploymentTargetResponse:
+        return ResolveDeploymentTargetResponse(
+            kind=request.kind,
+            stub_id="stub-worker",
+            deployment_id="dep-1",
+            deployment_name=request.name,
+            deployment_version=request.deployment_version or 1,
+            url=f"{request.external_url}/deploy/dep-1",
+        )
+
+
+@dataclass
+class FakeSessionResources:
+    deployment_requests: list[tuple[bool | None, str | None, str | None, bool, int, str | None]] = (
+        field(default_factory=list)
+    )
+    delete_requests: list[str] = field(default_factory=list)
+    task_requests: list[
+        tuple[tuple[str, ...], TaskStatus | None, str | None, str | None, int, str | None]
+    ] = field(default_factory=list)
+    stop_requests: list[tuple[str, ...]] = field(default_factory=list)
+    deployment_stop_requests: list[str] = field(default_factory=list)
+    deployment_start_requests: list[str] = field(default_factory=list)
+    deployment_scale_requests: list[tuple[str, int]] = field(default_factory=list)
+    task_responses: dict[str, TaskResponse] = field(default_factory=dict)
+    fail_deployments: bool = False
+    fail_tasks: bool = False
+
+    @staticmethod
+    def _deployment() -> DeploymentResponse:
+        created_at = datetime(2026, 1, 1, tzinfo=UTC)
+        return DeploymentResponse(
+            id="dep-1",
+            name="worker",
+            kind=DeploymentKind.Function,
+            stub_id="stub-worker",
+            created_at=created_at,
+            updated_at=created_at,
+        )
+
+    def list_deployments(
+        self,
+        *,
+        active: bool | None = None,
+        app_id: str | None = None,
+        name: str | None = None,
+        latest: bool = False,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> DeploymentListResponse:
+        self.deployment_requests.append((active, app_id, name, latest, limit, cursor))
+        if self.fail_deployments:
+            raise http_api_error("deployments failed")
+        deployments = [self._deployment()]
+        if name is not None:
+            deployments = [item for item in deployments if item.name == name]
+        return DeploymentListResponse(data=deployments)
+
+    def deployment(self, deployment_id: str) -> DeploymentResponse:
+        if deployment_id != "dep-1":
+            raise http_api_error("deployment not found", status_code=404)
+        return self._deployment()
+
+    def delete_deployment(self, deployment_id: str) -> None:
+        self.delete_requests.append(deployment_id)
+
+    def stop_deployment(self, deployment_id: str) -> DeploymentResponse:
+        self.deployment_stop_requests.append(deployment_id)
+        return self._deployment()
+
+    def start_deployment(self, deployment_id: str) -> DeploymentResponse:
+        self.deployment_start_requests.append(deployment_id)
+        return self._deployment()
+
+    def scale_deployment(self, deployment_id: str, replicas: int) -> DeploymentResponse:
+        self.deployment_scale_requests.append((deployment_id, replicas))
+        return self._deployment()
+
+    def list_tasks(
+        self,
+        *,
+        stub_ids: tuple[str, ...] = (),
+        status: TaskStatus | None = None,
+        deployment_id: str | None = None,
+        app_id: str | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> TaskPageResponse:
+        self.task_requests.append((stub_ids, status, deployment_id, app_id, limit, cursor))
+        if self.fail_tasks:
+            raise http_api_error("tasks failed")
+        task = TaskResponse(
+            id="task-1",
+            name="worker",
+            status=TaskStatus.Complete,
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        tasks = [task] if status in {None, TaskStatus.Complete} else []
+        return TaskPageResponse(data=tasks)
+
+    def task(self, task_id: str) -> TaskResponse:
+        if task_id in self.task_responses:
+            return self.task_responses[task_id]
+        if task_id != "task-1":
+            raise http_api_error("task not found", status_code=404)
+        return TaskResponse(
+            id="task-1",
+            name="worker",
+            status=TaskStatus.Complete,
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+
+    def stop_tasks(self, task_ids: tuple[str, ...]) -> TaskStopResponse:
+        self.stop_requests.append(task_ids)
+        return TaskStopResponse(stopped=list(task_ids))
+
+
+@dataclass
+class FakeObservabilityClient:
+    log_requests: list[LogQueryRequest] = field(default_factory=list)
+    event_requests: list[EventHistoryRequest] = field(default_factory=list)
+
+    def logs(self, request: LogQueryRequest | None = None) -> LogQueryResponse:
+        selected = request or LogQueryRequest()
+        self.log_requests.append(selected)
+        return LogQueryResponse(
+            data=(
+                LogRecord.from_entry(
+                    LogEntry(
+                        id="log-1",
+                        task_id=selected.task_id or "task-1",
+                        stream="stdout",
+                        message="done",
+                    ),
+                    workspace_id=selected.workspace_id,
+                ),
+            ),
+            count=1,
+        )
+
+    def events(self, request: EventHistoryRequest | None = None) -> EventQueryResponse:
+        selected = request or EventHistoryRequest()
+        self.event_requests.append(selected)
+        return EventQueryResponse(
+            data=(
+                Event(
+                    id="event-1",
+                    action="task.complete",
+                    resource_type="task",
+                    resource_id=selected.task_id or "task-1",
+                    message="complete",
+                ),
+            ),
+            count=1,
+        )
+
+    def usage_records(
+        self,
+        *,
+        metric: UsageMetric | None = None,
+        resource_type: str | None = None,
+        resource_id: str | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> UsageRecordListResponse:
+        _ = metric, resource_type, resource_id, start, end, limit, cursor
+        return UsageRecordListResponse()
+
+    def stream_logs(
+        self,
+        request: LogQueryRequest | None = None,
+        *,
+        max_events: int = 0,
+        cursor: str | None = None,
+        seq_num: int | None = None,
+        wait: int | None = None,
+        wait_seconds: float = 1.0,
+        clamp: bool | None = None,
+    ) -> Iterator[LogRecord]:
+        _ = max_events, cursor, seq_num, wait, wait_seconds, clamp
+        yield from self.logs(request).data
+
+    def stream_events(
+        self,
+        request: EventHistoryRequest | None = None,
+        *,
+        max_events: int = 0,
+        wait_seconds: float = 1.0,
+        cursor: str | None = None,
+        clamp: bool | None = None,
+    ) -> str:
+        _ = request, max_events, wait_seconds, cursor, clamp
+        return ""
+
+
+@dataclass
+class FakeImageBuildClient:
+    requests: list[BuildImageRequest] = field(default_factory=list)
+    image_id: str = "img-session"
+    build_id: str = ""
+    error: str = ""
+
+    def build_image(self, request: BuildImageRequest) -> Iterator[BuildImageResponse]:
+        self.requests.append(request)
+        yield BuildImageResponse(
+            image_id=self.image_id,
+            build_id=self.build_id,
+            done=True,
+            success=not self.error,
+            python_version=request.python_version,
+            error=self.error,
+        )
+
+
+def _recorded_payload(
+    requests: list[tuple[str, dict[str, object] | None]],
+    index: int,
+) -> dict[str, object]:
+    payload = requests[index][1]
+    assert payload is not None
+    return payload
+
+
+@pytest.mark.parametrize("resource", ["deployment", "task"])
+@pytest.mark.parametrize("failure_kind", ["http-401", "http-500", "transport"])
+def test_resource_get_preserves_non_not_found_failures(
+    resource: str,
+    failure_kind: str,
+) -> None:
+    failure = (
+        HttpTransportError("GET", EXAMPLE_URL, "offline")
+        if failure_kind == "transport"
+        else http_api_error(
+            "resource read failed", status_code=int(failure_kind.removeprefix("http-"))
+        )
+    )
+    expected_error = HttpTransportError if failure_kind == "transport" else HttpApiError
+
+    class FailingResources(FakeSessionResources):
+        def deployment(self, deployment_id: str) -> DeploymentResponse:
+            _ = deployment_id
+            raise failure
+
+        def task(self, task_id: str) -> TaskResponse:
+            _ = task_id
+            raise failure
+
+    if resource == "deployment":
+        with pytest.raises(expected_error) as raised:
+            DeploymentClient(resource_client=FailingResources()).get("dep-1")
+        assert raised.value is failure
+    else:
+        client = TaskClient(client=FailingResources())
+        with pytest.raises(expected_error) as raised:
+            client.get("task-1")
+        assert raised.value is failure
+        with pytest.raises(expected_error) as raised_detail:
+            client.detail("task-1")
+        assert raised_detail.value is failure
+
+
+def test_task_subscription_rejects_invalid_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class InvalidSubscriptionChannel:
+        def __init__(self, *, endpoint: str, token: str | None, timeout_seconds: float) -> None:
+            _ = endpoint, token, timeout_seconds
+
+        def get(self, path: str) -> JsonValue:
+            _ = path
+            return []
+
+    monkeypatch.setattr("lazycloud.control_clients.HttpChannel", InvalidSubscriptionChannel)
+
+    client = TaskClient(workspace="team", endpoint=EXAMPLE_URL, token="token")
+    with pytest.raises(HttpResponseDecodeError, match="invalid response"):
+        client.subscribe("task-1")
+
+
+def test_client_upload_bytes_uses_authenticated_raw_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    uploads: list[dict[str, object]] = []
+    progress: list[int] = []
+
+    def fake_stream_object_bytes(**kwargs: object) -> PutObjectResponse:
+        uploads.append(dict(kwargs))
+        callback = kwargs.get("progress")
+        assert callable(callback)
+        callback(len(b"payload"))
+        return PutObjectResponse(object_id="obj-1")
+
+    monkeypatch.setattr("lazycloud.session.stream_object_bytes", fake_stream_object_bytes)
+
+    uploaded = (
+        Client()
+        ._bind_control(endpoint=HTTP_EXAMPLE_COM_URL, token="token")
+        .upload_bytes(
+            b"payload",
+            name="payload.txt",
+            bucket=WORKSPACE_OBJECT_BUCKET,
+            content_type="text/plain",
+            metadata={"purpose": "source"},
+            progress=progress.append,
+        )
+    )
+
+    assert uploaded.object_id == "obj-1"
+    assert uploaded.name == "payload.txt"
+    assert uploaded.bucket == WORKSPACE_OBJECT_BUCKET
+    assert len(uploads) == 1
+    assert uploads[0]["endpoint"] == HTTP_EXAMPLE_COM_URL
+    assert uploads[0]["token"] == "token"
+    assert uploads[0]["data"] == b"payload"
+    assert uploads[0]["name"] == "payload.txt"
+    assert uploads[0]["bucket"] == WORKSPACE_OBJECT_BUCKET
+    assert uploads[0]["content_type"] == "text/plain"
+    assert uploads[0]["metadata"] == {"purpose": "source"}
+    assert progress == [len(b"payload")]
+
+
+def test_client_upload_file_streams_path_and_reports_progress(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "payload.txt"
+    source.write_bytes(b"file payload")
+    uploads: list[dict[str, object]] = []
+    progress: list[int] = []
+
+    def fake_stream_object_file(**kwargs: object) -> PutObjectResponse:
+        uploads.append(dict(kwargs))
+        callback = kwargs.get("progress")
+        assert callable(callback)
+        callback(len(b"file payload"))
+        return PutObjectResponse(object_id="obj-file")
+
+    monkeypatch.setattr("lazycloud.session.stream_object_file", fake_stream_object_file)
+
+    uploaded = (
+        Client()
+        ._bind_control(endpoint=HTTP_EXAMPLE_COM_URL, token="token")
+        .upload_file(source, progress=progress.append)
+    )
+
+    assert uploaded.object_id == "obj-file"
+    assert uploaded.size == len(b"file payload")
+    assert uploaded.sha256 == hashlib.sha256(b"file payload").hexdigest()
+    assert uploads[0]["source"] == source
+    assert uploads[0]["size"] == len(b"file payload")
+    assert progress == [len(b"file payload")]
+
+
+def test_gateway_control_client_streams_attach_events() -> None:
+    class FakeChannel:
+        paths: list[str]
+
+        def __init__(self) -> None:
+            self.paths = []
+
+        def stream_get(self, path: str) -> Iterator[str]:
+            self.paths.append(path)
+            yield ": connected\n"
+            yield "\n"
+            yield "id: ctr-1\n"
+            yield "event: output\n"
+            yield 'data: {"output": "ready\\n", "done": false}\n'
+            yield "\n"
+            yield "id: ctr-1\n"
+            yield "event: done\n"
+            yield 'data: {"output": "", "done": true, "exit_code": 0}\n'
+            yield "\n"
+
+        def get(self, path: str) -> object:
+            raise AssertionError(path)
+
+        def post(self, path: str, payload: dict[str, object] | None = None) -> object:
+            raise AssertionError(path)
+
+    channel = FakeChannel()
+
+    events = list(
+        GatewayControlClient(channel).attach_to_container_events(
+            "ctr-1",
+            poll_interval_seconds=0.5,
+        )
+    )
+
+    assert events == [
+        AttachToContainerResponse(output="ready\n", done=False),
+        AttachToContainerResponse(output="", done=True, exit_code=0),
+    ]
+    assert channel.paths == [
+        "/gateway/containers/attach/stream?container_id=ctr-1&poll_interval_seconds=0.5"
+    ]
+
+
+def test_task_result_validation_does_not_echo_response_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class InvalidTaskHttpChannel:
+        def __init__(self, *, endpoint: str, token: str | None, timeout_seconds: float) -> None:
+            _ = endpoint, token, timeout_seconds
+
+        def get(self, path: str) -> object:
+            _ = path
+            return {"kwargs": {"api_key": "must-not-appear"}}
+
+    monkeypatch.setattr(
+        "lazycloud.clients.resource.control.HttpChannel",
+        InvalidTaskHttpChannel,
+    )
+    client = TaskClient(workspace="team", endpoint=EXAMPLE_URL, token="token")
+
+    with pytest.raises(HttpResponseDecodeError, match="invalid response") as exc:
+        client.get_result_task("task-2")
+
+    assert "must-not-appear" not in str(exc.value)
+
+
+def test_completed_function_call_rejects_malformed_result() -> None:
+    call = FunctionCall[int](
+        task_id="task-invalid-result",
+        client=TaskClient(workspace="team", endpoint=EXAMPLE_URL, token="token"),
+        result_payload=FunctionCloudpickleResult.from_bytes(b"not-a-pickle"),
+        complete=True,
+    )
+
+    with pytest.raises(TaskOperationError, match="task-invalid-result has an invalid result"):
+        call.get()
+
+
+def test_task_async_wait_returns_task_result() -> None:
+    client = SequencedTaskClient(
+        {
+            "task-1": [
+                shared.tasks.Task(
+                    id="task-1",
+                    name="worker",
+                    status=TaskStatus.Complete,
+                )
+            ]
+        }
+    )
+
+    result = asyncio.run(Task("task-1", client).async_wait())
+
+    assert result.id == "task-1"
+    assert result.status is TaskStatus.Complete
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [TimeoutError("timed out"), ConnectionResetError("connection reset by peer")],
+)
+def test_task_wait_retries_transient_read_failures(failure: Exception) -> None:
+    client = TransientReadTaskClient(
+        [
+            shared.tasks.Task(id="task-1", name="worker", status=TaskStatus.Running),
+            failure,
+            shared.tasks.Task(id="task-1", name="worker", status=TaskStatus.Complete),
+        ]
+    )
+
+    result = Task("task-1", client).wait(poll_interval_seconds=0.01)
+
+    assert result.id == "task-1"
+    assert result.status is TaskStatus.Complete
+    assert client.calls == 3
+
+
+def test_task_wait_propagates_http_error_responses_immediately() -> None:
+    client = TransientReadTaskClient(
+        [HttpApiError("task not found", status_code=404)],
+    )
+
+    with pytest.raises(HttpApiError):
+        Task("task-1", client).wait(poll_interval_seconds=0.01)
+
+    assert client.calls == 1
+
+
+def test_function_call_gather_preserves_order_and_wait_options() -> None:
+    calls = [
+        RecordingFunctionCall("first"),
+        RecordingFunctionCall("second"),
+        RecordingFunctionCall("third"),
+    ]
+
+    results = FunctionCall.gather(
+        *calls,
+        timeout_seconds=12.5,
+        poll_interval_seconds=0.25,
+    )
+
+    assert results == ["first", "second", "third"]
+    assert [call.options for call in calls] == [[(12.5, 0.25)], [(12.5, 0.25)], [(12.5, 0.25)]]
+
+
+def test_function_call_gather_can_return_exceptions_in_result_slots() -> None:
+    failure = TaskOperationError("task failed")
+    calls = [
+        RecordingFunctionCall("first"),
+        RecordingFunctionCall(failure),
+        RecordingFunctionCall("third"),
+    ]
+
+    with pytest.raises(TaskOperationError, match="task failed"):
+        FunctionCall.gather(*calls)
+
+    results = FunctionCall.gather(*calls, return_exceptions=True)
+
+    assert results == ["first", failure, "third"]
+
+
+@dataclass
+class FakeRouteChannel:
+    posts: list[tuple[str, dict[str, object] | None]] = field(default_factory=list)
+    gets: list[str] = field(default_factory=list)
+
+    def post(self, path: str, payload: dict[str, object] | None = None) -> dict[str, object]:
+        self.posts.append((path, payload))
+        if path == "/gateway/containers/sync-workspace":
+            assert payload is not None
+            return SyncContainerWorkspaceResponse(path=str(payload["path"])).model_dump(mode="json")
+        return {
+            "output": "",
+            "done": False,
+            "exit_code": 0,
+            "error_msg": "",
+            "input_supported": False,
+            "attach_contract": "sse-output-only",
+        }
+
+    def get(self, path: str) -> JsonValue:
+        self.gets.append(path)
+        if path.startswith("/api/v1/usage/records?"):
+            return {"data": [], "next": "cursor-2"}
+        return ""
+
+    def stream_get(self, path: str) -> Iterator[str]:
+        self.gets.append(path)
+        yield "event: done\n"
+        yield 'data: {"output": "ready\\n", "done": true, "exit_code": 0}\n'
+        yield "\n"
+
+
+class _UnsupportedTaskHandleOperations:
+    def get(self, task_id: str) -> TaskResponse:
+        raise AssertionError(f"unexpected task view read for {task_id}")
+
+    def logs(
+        self,
+        task_id: str,
+        *,
+        workspace: str | None = None,
+        limit: int = 100,
+        page: int = 0,
+    ) -> list[LogRecord]:
+        _ = workspace, limit, page
+        raise AssertionError(f"unexpected task log read for {task_id}")
+
+    def subscribe(self, task_id: str) -> TaskSubscription:
+        raise AssertionError(f"unexpected task subscription for {task_id}")
+
+    def cancel(self, task_id: str) -> TaskStopResponse:
+        raise AssertionError(f"unexpected task cancellation for {task_id}")
+
+
+@dataclass
+class SequencedTaskClient(_UnsupportedTaskHandleOperations):
+    tasks: dict[str, list[shared.tasks.Task]]
+
+    def __post_init__(self) -> None:
+        self.calls: dict[str, int] = {task_id: 0 for task_id in self.tasks}
+
+    def get_result_task(self, task_id: str) -> shared.tasks.Task:
+        sequence = self.tasks[task_id]
+        index = min(self.calls[task_id], len(sequence) - 1)
+        self.calls[task_id] += 1
+        return sequence[index]
+
+
+@dataclass
+class TransientReadTaskClient(_UnsupportedTaskHandleOperations):
+    sequence: list[shared.tasks.Task | BaseException]
+    calls: int = 0
+
+    def get_result_task(self, task_id: str) -> shared.tasks.Task:
+        _ = task_id
+        index = min(self.calls, len(self.sequence) - 1)
+        self.calls += 1
+        value = self.sequence[index]
+        if isinstance(value, BaseException):
+            raise value
+        return value
+
+
+@dataclass
+class RecordingFunctionCall:
+    value: object
+    options: list[tuple[float | None, float]] = field(default_factory=list)
+
+    def get(
+        self,
+        *,
+        timeout_seconds: float | None = None,
+        poll_interval_seconds: float = 1.0,
+    ) -> object:
+        self.options.append((timeout_seconds, poll_interval_seconds))
+        if isinstance(self.value, BaseException):
+            raise self.value
+        return self.value
+
+
+@dataclass
+class BlockingTaskClient(_UnsupportedTaskHandleOperations):
+    tasks: dict[str, shared.tasks.Task]
+    delays: dict[str, float] = field(default_factory=dict)
+
+    def get_result_task(self, task_id: str) -> shared.tasks.Task:
+        delay = self.delays.get(task_id)
+        if delay:
+            time.sleep(delay)
+        return self.tasks[task_id]

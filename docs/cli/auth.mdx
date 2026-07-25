@@ -1,0 +1,47 @@
+---
+title: "login, profile, token, workspace"
+description: "Authenticate the CLI and manage profiles, tokens, and the active workspace."
+---
+
+## lazycloud login
+
+```bash
+lazycloud login [--endpoint <url>] [--token <token>] [--workspace <name>]
+             [--profile <name>] [--tls/--no-tls] [--activate/--no-activate]
+```
+
+- Plain `lazycloud login` targets the hosted platform. The endpoint resolves in
+  order: `--endpoint` flag, `LAZYCLOUD_ENDPOINT` env, stored profile, then the
+  packaged hosted default. Self-hosters and local dev pass `--endpoint`.
+- Without `--token`, a device-code flow prints a verification URL and code to
+  approve in the dashboard; the minted token is stored in the profile.
+- `--activate` (default) makes the profile the active one.
+
+## lazycloud profile
+
+| Command | Description |
+| --- | --- |
+| `lazycloud profile list` | List profiles. |
+| `lazycloud profile current` | Name of the active profile. |
+| `lazycloud profile show [--profile <name>]` | Profile settings (token masked). |
+| `lazycloud profile set [--profile <name>] [--endpoint <url>] [--workspace <name>] [--token <token>] [--tls/--no-tls] [--activate/--no-activate]` | Create or update a profile. |
+| `lazycloud profile activate NAME` | Switch the active profile. |
+| `lazycloud profile delete NAME` | Delete a profile. |
+
+## lazycloud token
+
+| Command | Description |
+| --- | --- |
+| `lazycloud token show [--profile <name>]` | Show the stored token. |
+| `lazycloud token set VALUE [--profile <name>]` | Store a token in the profile. |
+
+## lazycloud workspace
+
+| Command | Description |
+| --- | --- |
+| `lazycloud workspace show` | The active workspace's details. |
+| `lazycloud workspace rename NAME` | Rename the workspace. |
+| `lazycloud workspace audit [--limit <n>] [--cursor <c>]` | Recent audit events (limit 1–100, default 50). |
+
+See [Authentication and workspaces](/platform/auth) for concepts and
+environment-variable configuration.

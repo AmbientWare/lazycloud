@@ -1,0 +1,91 @@
+---
+title: "Authentication and workspaces"
+description: "Endpoints, workspaces, tokens, profiles, and environment configuration."
+---
+
+## Workspaces
+
+A **workspace** is the isolation boundary: apps, deployments, tasks, secrets,
+volumes, machines, and compute policy all belong to a workspace, and a token
+is scoped to one. Cross-workspace access is denied by construction; only admin
+tokens may target another workspace with the `--workspace` override.
+
+```bash
+lazycloud workspace show
+lazycloud workspace rename <name>
+lazycloud workspace audit          # recent audit events, --limit/--cursor
+```
+
+## Logging in
+
+Plain `lazycloud login` signs in to the hosted LazyCloud platform. The control
+plane **endpoint** resolves in this order:
+
+1. `--endpoint <url>` flag
+2. `LAZYCLOUD_ENDPOINT` environment variable
+3. The endpoint stored in the selected profile
+4. The packaged hosted default
+
+Self-hosters and local dev override the default with `--endpoint` or
+`LAZYCLOUD_ENDPOINT`; hosted customers need neither.
+
+Without `--token`, login runs a device-code flow: the CLI prints a
+verification URL and confirmation code, you approve it in the web dashboard,
+and the minted workspace token is stored in the profile. With `--token`, the
+token is stored directly — use this for CI and scripts.
+
+```bash
+lazycloud login
+lazycloud login --endpoint https://your-control-plane.example.com
+lazycloud login --token <token>
+```
+
+`--tls/--no-tls` controls TLS for the stored endpoint, `--workspace` selects
+the workspace name, and `--profile`/`--activate` control profile placement.
+
+## Profiles
+
+Profiles hold endpoint, workspace, token, and TLS settings, stored in
+`~/.lazycloud/config.yaml` (relocate with `LAZYCLOUD_HOME`). Multiple profiles make
+it easy to switch between installations or workspaces:
+
+```bash
+lazycloud profile list
+lazycloud profile current
+lazycloud profile show --profile staging
+lazycloud profile set --profile staging --endpoint https://staging.example.com
+lazycloud profile activate staging
+lazycloud profile delete staging
+```
+
+## Tokens
+
+```bash
+lazycloud token show     # the active profile's token
+lazycloud token set <value>
+```
+
+Tokens are bearer credentials: send them as `Authorization: Bearer <token>`
+when calling authorized endpoints directly. Treat them like passwords. Revoked
+or disabled tokens stop working immediately across the platform.
+
+## Environment variables
+
+Every profile setting has an environment override, which takes precedence and
+suits CI:
+
+| Variable | Purpose |
+| --- | --- |
+| `LAZYCLOUD_ENDPOINT` | Control plane endpoint URL. |
+| `LAZYCLOUD_TOKEN` | Workspace token. |
+| `LAZYCLOUD_WORKSPACE` | Workspace name. |
+| `LAZYCLOUD_PROFILE` | Profile to use instead of the active one. |
+| `LAZYCLOUD_TLS` | Force TLS on or off. |
+| `LAZYCLOUD_HOME` | Local state directory (default `~/.lazycloud`). |
+| `LAZYCLOUD_CONFIG` | Explicit path to the profile file. |
+
+## Workload authorization
+
+HTTP workloads default to `authorized=True`: requests must carry a workspace
+bearer token. Set `authorized=False` on an endpoint, ASGI app, or pod to make
+it publicly reachable at its invoke URL.

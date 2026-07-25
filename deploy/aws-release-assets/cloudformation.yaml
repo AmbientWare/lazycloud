@@ -1,0 +1,162 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Immutable public release assets used by connected AWS capacity.
+
+Parameters:
+  GitHubOrganization:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^[A-Za-z0-9_.-]+$"
+  GitHubRepository:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^[A-Za-z0-9_.-]+$"
+  GitHubOidcProviderArn:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^arn:aws:iam::[0-9]{12}:oidc-provider/token.actions.githubusercontent.com$"
+  ContainerWorkerRepositoryName:
+    Type: String
+    Default: lazycloud/container-worker
+    AllowedPattern: "^(?=.{2,256}$)((?:[a-z0-9]+(?:[._-][a-z0-9]+)*/)*[a-z0-9]+(?:[._-][a-z0-9]+)*)$"
+
+Rules:
+  CompleteGitHubPublisherIdentity:
+    Assertions:
+      - Assert:
+          Fn::Or:
+            - Fn::And:
+                - Fn::Not: [{Fn::Equals: [{Ref: GitHubOrganization}, ""]}]
+                - Fn::Not: [{Fn::Equals: [{Ref: GitHubRepository}, ""]}]
+                - Fn::Not: [{Fn::Equals: [{Ref: GitHubOidcProviderArn}, ""]}]
+            - Fn::And:
+                - Fn::Equals: [{Ref: GitHubOrganization}, ""]
+                - Fn::Equals: [{Ref: GitHubRepository}, ""]
+                - Fn::Equals: [{Ref: GitHubOidcProviderArn}, ""]
+        AssertDescription: Configure all GitHub publisher parameters together or leave all empty.
+
+Conditions:
+  GitHubPublisherConfigured: !Not [!Equals [!Ref GitHubOidcProviderArn, ""]]
+
+Resources:
+  ReleaseBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: false
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: false
+      VersioningConfiguration:
+        Status: Enabled
+
+  ReleaseBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ReleaseBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ReadImmutableConnectedAwsAssets
+            Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub "${ReleaseBucket.Arn}/connected-aws/*"
+          - Sid: RequireTls
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt ReleaseBucket.Arn
+              - !Sub "${ReleaseBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  ContainerWorkerRepository:
+    Type: AWS::ECR::PublicRepository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: !Ref ContainerWorkerRepositoryName
+      RepositoryCatalogData:
+        Architectures:
+          - x86-64
+        OperatingSystems:
+          - Linux
+        RepositoryDescription: Container worker for connected AWS capacity.
+
+  GitHubReleaseRole:
+    Type: AWS::IAM::Role
+    Condition: GitHubPublisherConfigured
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Ref GitHubOidcProviderArn
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub >-
+                  repo:${GitHubOrganization}/${GitHubRepository}:environment:release
+      Policies:
+        - PolicyName: publish-connected-aws-release
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: PublishReleaseObjects
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: !Sub "${ReleaseBucket.Arn}/connected-aws/*"
+              - Sid: InspectReleaseBucket
+                Effect: Allow
+                Action:
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
+                Resource: !GetAtt ReleaseBucket.Arn
+                Condition:
+                  StringLike:
+                    s3:prefix: connected-aws/*
+              - Sid: AuthenticatePublicRegistry
+                Effect: Allow
+                Action:
+                  - ecr-public:GetAuthorizationToken
+                  - ecr-public:DescribeRegistries
+                  - sts:GetServiceBearerToken
+                Resource: "*"
+              - Sid: PublishContainerWorker
+                Effect: Allow
+                Action:
+                  - ecr-public:BatchCheckLayerAvailability
+                  - ecr-public:CompleteLayerUpload
+                  - ecr-public:DescribeImages
+                  - ecr-public:DescribeRepositories
+                  - ecr-public:GetRepositoryCatalogData
+                  - ecr-public:InitiateLayerUpload
+                  - ecr-public:PutImage
+                  - ecr-public:UploadLayerPart
+                Resource: !GetAtt ContainerWorkerRepository.Arn
+
+Outputs:
+  AssetBucket:
+    Value: !Ref ReleaseBucket
+  AssetRegion:
+    Value: !Ref AWS::Region
+  ContainerWorkerRepositoryName:
+    Value: !Ref ContainerWorkerRepository
+  ReleaseRoleArn:
+    Condition: GitHubPublisherConfigured
+    Value: !GetAtt GitHubReleaseRole.Arn

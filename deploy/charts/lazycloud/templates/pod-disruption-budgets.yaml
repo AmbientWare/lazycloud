@@ -1,0 +1,83 @@
+{{- if .Values.controlPlane.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "lazycloud.fullname" . }}-control-plane
+  labels:
+    {{- include "lazycloud.labels" . | nindent 4 }}
+    app.kubernetes.io/component: control-plane
+spec:
+  {{- include "lazycloud.pdbAvailability" .Values.controlPlane.podDisruptionBudget | nindent 2 }}
+  selector:
+    matchLabels:
+      {{- include "lazycloud.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: control-plane
+{{- end }}
+{{- if and .Values.scheduler.enabled .Values.scheduler.podDisruptionBudget.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "lazycloud.fullname" . }}-scheduler
+  labels:
+    {{- include "lazycloud.labels" . | nindent 4 }}
+    app.kubernetes.io/component: scheduler
+spec:
+  {{- include "lazycloud.pdbAvailability" .Values.scheduler.podDisruptionBudget | nindent 2 }}
+  selector:
+    matchLabels:
+      {{- include "lazycloud.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: scheduler
+{{- end }}
+{{- if and .Values.cache.enabled .Values.cache.podDisruptionBudget.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "lazycloud.fullname" . }}-cache
+  labels:
+    {{- include "lazycloud.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cache
+spec:
+  {{- include "lazycloud.pdbAvailability" .Values.cache.podDisruptionBudget | nindent 2 }}
+  selector:
+    matchLabels:
+      {{- include "lazycloud.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: cache
+{{- end }}
+{{- if and .Values.monitoring.enabled .Values.monitoring.metrics.podDisruptionBudget.enabled }}
+---
+{{- $monitoringMetricsNamespace := default .Release.Namespace .Values.monitoring.namespace }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "lazycloud.fullname" . }}-metrics
+  namespace: {{ $monitoringMetricsNamespace | quote }}
+  labels:
+    {{- include "lazycloud.labels" . | nindent 4 }}
+    app.kubernetes.io/component: metrics
+spec:
+  {{- include "lazycloud.pdbAvailability" .Values.monitoring.metrics.podDisruptionBudget | nindent 2 }}
+  selector:
+    matchLabels:
+      {{- include "lazycloud.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: metrics
+{{- end }}
+{{- if and .Values.monitoring.enabled .Values.monitoring.agent.podDisruptionBudget.enabled }}
+---
+{{- $monitoringAgentNamespace := default .Release.Namespace .Values.monitoring.namespace }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "lazycloud.fullname" . }}-metrics-agent
+  namespace: {{ $monitoringAgentNamespace | quote }}
+  labels:
+    {{- include "lazycloud.labels" . | nindent 4 }}
+    app.kubernetes.io/component: metrics-agent
+spec:
+  {{- include "lazycloud.pdbAvailability" .Values.monitoring.agent.podDisruptionBudget | nindent 2 }}
+  selector:
+    matchLabels:
+      {{- include "lazycloud.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: metrics-agent
+{{- end }}

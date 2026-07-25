@@ -1,0 +1,90 @@
+variable "TAG" {
+  default = "local"
+}
+
+group "default" {
+  targets = [
+    "api",
+    "scheduler",
+    "cache-server",
+    "worker-bootstrap",
+    "cli",
+    "database-bootstrap",
+    "agent",
+    "container-worker",
+    "storage-gateway",
+  ]
+}
+
+group "control-plane" {
+  targets = [
+    "api",
+    "scheduler",
+    "cache-server",
+    "worker-bootstrap",
+    "cli",
+    "database-bootstrap",
+  ]
+}
+
+target "_control-plane" {
+  context    = "."
+  dockerfile = "docker/Dockerfile.control-plane"
+}
+
+target "api" {
+  inherits = ["_control-plane"]
+  target   = "api"
+  tags     = ["api:${TAG}"]
+}
+
+target "scheduler" {
+  inherits = ["_control-plane"]
+  target   = "scheduler"
+  tags     = ["scheduler:${TAG}"]
+}
+
+target "cache-server" {
+  inherits = ["_control-plane"]
+  target   = "cache-server"
+  tags     = ["cache-server:${TAG}"]
+}
+
+target "worker-bootstrap" {
+  inherits = ["_control-plane"]
+  target   = "worker-bootstrap"
+  tags     = ["worker-bootstrap:${TAG}"]
+}
+
+target "cli" {
+  inherits = ["_control-plane"]
+  target   = "cli"
+  tags     = ["cli:${TAG}"]
+}
+
+target "database-bootstrap" {
+  inherits = ["_control-plane"]
+  target   = "database-bootstrap"
+  tags     = ["database-bootstrap:${TAG}"]
+}
+
+target "agent" {
+  context    = "."
+  dockerfile = "docker/Dockerfile.agent"
+  target     = "agent"
+  tags       = ["agent:${TAG}"]
+}
+
+target "container-worker" {
+  context    = "."
+  dockerfile = "docker/Dockerfile.worker"
+  target     = "container-worker"
+  tags       = ["container-worker:${TAG}"]
+}
+
+target "storage-gateway" {
+  context    = "."
+  dockerfile = "docker/Dockerfile.storage-gateway"
+  target     = "storage-gateway"
+  tags       = ["storage-gateway:${TAG}"]
+}

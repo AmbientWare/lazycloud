@@ -1,24 +1,21 @@
-import { createRouter } from '@tanstack/react-router'
-import { setupRouterSsrQueryIntegration } from '@tanstack/react-router-ssr-query'
-import * as TanstackQuery from './integrations/tanstack-query/root-provider'
+import { createRouter } from "@tanstack/react-router";
 
-// Import the generated route tree
-import { routeTree } from './routeTree.gen'
+import { RouteErrorFallback } from "@/components/shared/ErrorBoundary";
 
-// Create a new router instance
-export const getRouter = () => {
-  const rqContext = TanstackQuery.getContext()
+import { routeTree } from "./routeTree.gen";
 
-  const router = createRouter({
+export function getRouter() {
+  return createRouter({
     routeTree,
-    context: {
-      ...rqContext,
-    },
-    defaultPreload: 'intent',
     scrollRestoration: true,
-  })
+    // Any route without an explicit boundary still degrades in place instead
+    // of bubbling a render error to the document-level root boundary.
+    defaultErrorComponent: RouteErrorFallback,
+  });
+}
 
-  setupRouterSsrQueryIntegration({ router, queryClient: rqContext.queryClient })
-
-  return router
+declare module "@tanstack/react-router" {
+  interface Register {
+    router: ReturnType<typeof getRouter>;
+  }
 }

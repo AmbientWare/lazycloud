@@ -1,0 +1,50 @@
+---
+title: "Outputs"
+description: "Save file artifacts from tasks and share them with expiring public URLs."
+---
+
+`Output` saves file artifacts produced by a task — images, archives, reports —
+into workspace storage, associated with the producing task and retrievable
+after the container is gone.
+
+## Saving an output
+
+Inside a running task, the task id is picked up automatically:
+
+```python
+from lazycloud import App, Output
+
+app = App("renders")
+
+
+@app.function()
+def render(frame: int) -> str:
+    path = f"/tmp/frame-{frame}.png"
+    ...  # write the file
+    output = Output.file(path)
+    saved = output.save()
+    return output.public_url(expires=3600)
+```
+
+Constructors:
+
+| Constructor | Use |
+| --- | --- |
+| `Output.file(path, content_type=None, task_id=None)` | Wrap an existing file on disk. |
+| `Output.from_file(file_handle, suffix="")` | Persist an open binary file handle to a temp file first. |
+| `Output.from_pil_image(image, format="png")` | Persist a PIL image. |
+| `Output(path=..., content_type=..., task_id=...)` | Full-control form. |
+
+`output.zip_dir(dir_path)` zips a directory so a whole folder can be saved as
+one artifact.
+
+## Retrieving outputs
+
+- `output.public_url(expires=3600)` returns an expiring URL that serves the
+  artifact without authentication — hand it to browsers or webhooks.
+- `output.exists()` and `output.stat()` check and describe the saved artifact.
+- Saved outputs are listed on the task detail views in the
+  [dashboard](/platform/dashboard).
+
+Outputs belong to a task; pass `task_id=...` explicitly when saving from
+outside the producing container.

@@ -1,0 +1,207 @@
+from __future__ import annotations
+
+import re
+from datetime import datetime
+
+from pydantic import Field, JsonValue, model_validator
+
+from shared.capacity import CapacityOwnerIdentity, CapacityOwnerKind
+from shared.contracts import ContractModel
+from shared.enums import StringEnum
+
+_UUID_PATTERN = r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+_AWS_REGION_PATTERN = r"^(us-gov|us|af|ap|ca|cn|eu|il|me|mx|sa)-[a-z0-9-]+-[0-9]+$"
+
+
+class ComputePlacementTarget(StringEnum):
+    Managed = "managed"
+    Aws = "aws"
+
+
+class ComputePlacementSource(StringEnum):
+    WorkspaceDefault = "workspace_default"
+    WorkloadOverride = "workload_override"
+    AttachedPool = "attached_pool"
+
+
+class ComputeCapacityMode(StringEnum):
+    Direct = "direct"
+    Pooled = "pooled"
+
+
+class ComputePoolVisibility(StringEnum):
+    Public = "public"
+    Internal = "internal"
+
+
+class ComputePoolPhase(StringEnum):
+    Provisioning = "provisioning"
+    Ready = "ready"
+    Updating = "updating"
+    Degraded = "degraded"
+    Deleting = "deleting"
+    Deleted = "deleted"
+    Failed = "failed"
+
+
+class ComputeResourceRequirements(ContractModel):
+    cpu_millicores: int = Field(default=0, ge=0)
+    memory_mb: int = Field(default=0, ge=0)
+    gpu: str | None = Field(default=None, max_length=160)
+    gpu_count: int = Field(default=0, ge=0)
+    architecture: str = Field(default="", max_length=64)
+    runtime: str = Field(default="runc", min_length=1, max_length=64)
+
+    @model_validator(mode="after")
+    def validate_gpu(self) -> ComputeResourceRequirements:
+        if (self.gpu is None) != (self.gpu_count == 0):
+            raise ValueError("GPU type and count must be requested together")
+        return self
+
+
+class ComputePlacement(ContractModel):
+    target: ComputePlacementTarget
+    source: ComputePlacementSource = ComputePlacementSource.WorkloadOverride
+    provider: str = Field(default="", max_length=80)
+    region: str = Field(default="", max_length=64)
+    pool_name: str = Field(default="", max_length=240)
+    provider_ref: str = Field(default="", max_length=160)
+
+    @model_validator(mode="after")
+    def validate_target(self) -> ComputePlacement:
+        if self.target is ComputePlacementTarget.Managed:
+            if self.region:
+                raise ValueError("managed placement cannot select a customer AWS region")
+        elif self.target is ComputePlacementTarget.Aws:
+            if self.region and not _matches_aws_region(self.region):
+                raise ValueError("AWS placement region is invalid")
+            if self.provider and self.provider != ComputePlacementTarget.Aws.value:
+                raise ValueError("AWS placement provider must be aws")
+        return self
+
+
+class AwsWorkspaceComputePolicy(ContractModel):
+    default_region: str = Field(default="us-east-1", pattern=_AWS_REGION_PATTERN)
+    default_instance_type: str = Field(default="i4i.xlarge", min_length=1, max_length=64)
+    initial_cpu_workers: int = Field(default=1, ge=0, le=100)
+    min_cpu_workers: int = Field(default=1, ge=0, le=100)
+    max_cpu_instances: int = Field(default=10, ge=0, le=100)
+    max_gpu_instances: int = Field(default=2, ge=0, le=100)
+    min_free_cpu_millicores: int = Field(default=1_000, ge=0)
+    min_free_memory_mib: int = Field(default=1_024, ge=0)
+    allowed_regions: tuple[str, ...] = ("us-east-1",)
+    allowed_instance_types: tuple[str, ...] = ()
+    idle_timeout_seconds: int = Field(default=300, ge=60, le=86_400)
+    root_volume_gib: int = Field(default=200, ge=50, le=2048)
+
+    @model_validator(mode="after")
+    def validate_limits(self) -> AwsWorkspaceComputePolicy:
+        if not self.allowed_regions:
+            raise ValueError("AWS compute policy requires at least one allowed region")
+        if len(set(self.allowed_regions)) != len(self.allowed_regions):
+            raise ValueError("AWS compute policy allowed regions must be unique")
+        if any(not _matches_aws_region(region) for region in self.allowed_regions):
+            raise ValueError("AWS compute policy contains an invalid region")
+        if self.default_region not in self.allowed_regions:
+            raise ValueError("AWS default region must be allowed")
+        if not self.min_cpu_workers <= self.initial_cpu_workers <= self.max_cpu_instances:
+            raise ValueError("AWS CPU worker capacity must satisfy min <= initial <= max")
+        if not self.default_instance_type.strip():
+            raise ValueError("AWS default instance type cannot be empty")
+        if len(set(self.allowed_instance_types)) != len(self.allowed_instance_types):
+            raise ValueError("AWS allowed instance types must be unique")
+        if any(not instance_type.strip() for instance_type in self.allowed_instance_types):
+            raise ValueError("AWS allowed instance types cannot contain empty values")
+        if (
+            self.allowed_instance_types
+            and self.default_instance_type not in self.allowed_instance_types
+        ):
+            raise ValueError("AWS default instance type must be allowed")
+        return self
+
+
+class WorkspaceComputePolicy(ContractModel):
+    id: str = Field(pattern=_UUID_PATTERN)
+    workspace_id: str = Field(pattern=_UUID_PATTERN)
+    revision: int = Field(default=1, ge=1)
+    default_placement: ComputePlacementTarget = ComputePlacementTarget.Managed
+    aws: AwsWorkspaceComputePolicy = Field(default_factory=AwsWorkspaceComputePolicy)
+    created_at: datetime
+    updated_at: datetime
+
+
+class ComputePoolProviderState(ContractModel):
+    resource_id: str = Field(default="", max_length=2048)
+    attributes: dict[str, JsonValue] = Field(default_factory=dict)
+    degraded_reason: str | None = Field(default=None, min_length=1, max_length=512)
+    """Durable reason the control plane stopped restoring pool capacity.
+
+    Set when bootstrap relaunch attempts are exhausted; cleared by an explicit
+    capacity mutation (public scale or workspace policy update).
+    """
+
+
+class ComputePoolRecord(CapacityOwnerIdentity):
+    id: str = Field(pattern=_UUID_PATTERN)
+    workspace_id: str = Field(pattern=_UUID_PATTERN)
+    name: str = Field(min_length=1, max_length=240)
+    selector: str = Field(default="", max_length=255)
+    status: str = Field(default=ComputePoolPhase.Ready.value, max_length=80)
+    source: str = Field(default="autosolver", max_length=80)
+    config: dict[str, JsonValue] = Field(default_factory=dict)
+    expires_at: datetime | None = None
+    provider_ref: str = Field(default="", max_length=160)
+    provider_connection_id: str | None = Field(default=None, pattern=_UUID_PATTERN)
+    capacity_mode: ComputeCapacityMode = ComputeCapacityMode.Direct
+    visibility: ComputePoolVisibility = ComputePoolVisibility.Public
+    region: str = Field(default="", max_length=64)
+    offer_id: str = Field(default="", max_length=255)
+    capability_key: str = Field(default="", max_length=255)
+    desired_machines: int = Field(default=0, ge=0)
+    min_machines: int = Field(default=0, ge=0)
+    max_machines: int = Field(default=0, ge=0)
+    observed_machines: int = Field(default=0, ge=0)
+    generation: int = Field(default=1, ge=1)
+    phase: ComputePoolPhase = ComputePoolPhase.Ready
+    provider_state: ComputePoolProviderState = Field(default_factory=ComputePoolProviderState)
+
+    @model_validator(mode="after")
+    def validate_capacity(self) -> ComputePoolRecord:
+        if not self.min_machines <= self.desired_machines <= self.max_machines:
+            raise ValueError("compute pool capacity must satisfy min <= desired <= max")
+        internal = self.visibility is ComputePoolVisibility.Internal
+        if internal and (
+            not self.provider_ref
+            or self.provider_connection_id is None
+            or not self.region
+            or not self.offer_id
+            or not self.capability_key
+            or self.capacity_mode is not ComputeCapacityMode.Pooled
+        ):
+            raise ValueError("internal provider pools require complete placement identity")
+        if internal and self.capacity_owner_kind is not CapacityOwnerKind.PooledProvider:
+            raise ValueError("internal provider pools require pooled-provider capacity ownership")
+        if internal and self.capacity_owner_id != self.id:
+            raise ValueError("internal provider pool ID must own its capacity")
+        if not internal and self.provider_connection_id is not None:
+            raise ValueError("public pools cannot own a provider connection")
+        return self
+
+
+def _matches_aws_region(region: str) -> bool:
+    return re.fullmatch(_AWS_REGION_PATTERN, region) is not None
+
+
+__all__ = [
+    "AwsWorkspaceComputePolicy",
+    "ComputeCapacityMode",
+    "ComputePlacement",
+    "ComputePlacementSource",
+    "ComputePlacementTarget",
+    "ComputePoolPhase",
+    "ComputePoolProviderState",
+    "ComputePoolRecord",
+    "ComputePoolVisibility",
+    "ComputeResourceRequirements",
+    "WorkspaceComputePolicy",
+]

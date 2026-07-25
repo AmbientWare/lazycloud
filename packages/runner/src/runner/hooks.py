@@ -1,0 +1,87 @@
+from __future__ import annotations
+
+import contextlib
+from typing import Protocol
+
+from foundation.handler_loading import load_callable
+from shared.lifecycle import (
+    LifecycleHookName,
+    LifecycleHooks,
+    LifecycleStartupContext,
+    LifecycleTaskContext,
+)
+
+from runner.invocation import invoke_handler
+
+
+class HookLogger(Protocol):
+    def __call__(self, stream: str, message: str) -> None: ...
+
+
+LifecycleContext = LifecycleStartupContext | LifecycleTaskContext
+
+
+def lifecycle_hooks_from_env(raw: str | None) -> LifecycleHooks:
+    if not raw:
+        return LifecycleHooks()
+    return LifecycleHooks.model_validate_json(raw)
+
+
+def run_lifecycle_hooks(
+    hooks: LifecycleHooks,
+    hook: LifecycleHookName,
+    context: LifecycleContext,
+    *,
+    log: HookLogger,
+    capture_output: bool = True,
+) -> None:
+    for reference in hooks.refs(hook):
+        try:
+            callback = load_callable(reference)
+            if not capture_output:
+                invoke_handler(callback, context)
+                continue
+            stdout = _HookLogStream("stdout", log)
+            stderr = _HookLogStream("stderr", log)
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                invoke_handler(callback, context)
+            stdout.flush()
+            stderr.flush()
+        except BaseException as exc:
+            log("stderr", _hook_error(reference, exc))
+
+
+class _HookLogStream:
+    def __init__(self, stream: str, log: HookLogger) -> None:
+        self.stream = stream
+        self.log = log
+        self._buffer = ""
+
+    def write(self, value: str) -> int:
+        if not value:
+            return 0
+        self._buffer += value
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
+            self.log(self.stream, f"{line}\n")
+        return len(value)
+
+    def flush(self) -> None:
+        if self._buffer:
+            self.log(self.stream, self._buffer)
+            self._buffer = ""
+
+    def isatty(self) -> bool:
+        return False
+
+
+def _hook_error(reference: str, exc: BaseException) -> str:
+    return f"lifecycle hook failed: {reference}: {type(exc).__name__}: {exc}\n"
+
+
+__all__ = [
+    "HookLogger",
+    "LifecycleContext",
+    "lifecycle_hooks_from_env",
+    "run_lifecycle_hooks",
+]

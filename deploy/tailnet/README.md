@@ -1,0 +1,95 @@
+# Tailnet Deployment
+
+This Terraform configuration owns the complete policy and runtime credentials
+for one LazyCloud-managed Tailnet. It is appropriate only when the reviewed
+plan proves that whole-policy ownership is intended.
+
+For live testing, whichever Tailnet the user selects or supplies is approved,
+regardless of whether its account name appears personal or shared. A provided
+Tailnet must be treated as shared external state: inspect it before mutation,
+preserve all unrelated users, devices, tags, grants, ACL rules, DNS and route
+configuration, OAuth clients, and keys, and create or remove only exact
+LazyCloud-owned test resources. Do not apply this whole-policy Terraform module
+to such a Tailnet unless the user explicitly assigns the entire policy to this
+module and a reviewed plan proves unrelated state is preserved.
+
+It creates a deny-by-default policy, a scoped agent OAuth client, and an
+ephemeral gateway enrollment key. The hosted Tailnet already must exist.
+
+## Backend and credentials
+
+Terraform state contains secrets. Supply a standard remote backend owned by the
+deployment operator; this repository deliberately does not create or delete its
+bucket. The checked-in `backend "s3" {}` declaration accepts normal
+`terraform init -backend-config=...` values or a reviewed backend config file.
+Keep backend coordinates and credentials outside the repository.
+
+Authenticate AWS and Tailscale with short-lived operator credentials. Do not
+put credentials in `*.tfvars`:
+
+```sh
+export AWS_PROFILE=platform-operations
+export TAILSCALE_TAILNET=your-dedicated-tailnet-id
+export TAILSCALE_API_KEY=temporary-admin-api-key
+
+terraform -chdir=deploy/tailnet init \
+  -backend-config="bucket=$TAILNET_STATE_BUCKET" \
+  -backend-config="key=$TAILNET_STATE_KEY" \
+  -backend-config="region=$TAILNET_STATE_REGION" \
+  -backend-config="encrypt=true" \
+  -backend-config="use_lockfile=true"
+```
+
+The operator owns backend creation, encryption, versioning, access policy,
+retention, and final deletion through the organization-standard infrastructure
+workflow.
+
+## Plan and apply
+
+Copy `terraform.tfvars.example` into a secure operator directory and review the
+whole-policy ownership confirmations. Then run independent reviewed actions:
+
+```sh
+terraform -chdir=deploy/tailnet fmt -check
+terraform -chdir=deploy/tailnet validate
+terraform -chdir=deploy/tailnet plan -out=tailnet.tfplan
+terraform -chdir=deploy/tailnet apply tailnet.tfplan
+```
+
+Do not publish a saved plan. Move sensitive outputs directly from encrypted
+state into the deployment secret manager:
+
+| Terraform output | Deployment setting |
+| --- | --- |
+| `agent_oauth_client_id` | `LAZYCLOUD_TAILNET_OAUTH_CLIENT_ID` |
+| `agent_oauth_client_secret` | `LAZYCLOUD_TAILNET_OAUTH_CLIENT_SECRET` |
+| `gateway_auth_key` | `LAZYCLOUD_TAILNET_AUTH_KEY` |
+
+Generate `LAZYCLOUD_BACKEND_ROUTE_AUTH_KEY` separately in the application
+secret manager.
+
+## Teardown
+
+Destroy Tailnet resources with a saved, reviewed plan:
+
+```sh
+terraform -chdir=deploy/tailnet plan -destroy -out=tailnet-destroy.tfplan
+terraform -chdir=deploy/tailnet apply tailnet-destroy.tfplan
+terraform -chdir=deploy/tailnet state list
+```
+
+An empty state proves this module no longer owns Tailnet resources. Backend
+retention or deletion is a separate operator-owned action.
+
+## Acceptance handoff
+
+Acceptance consumes this already-applied deployment. The operator exports the
+public LazyCloud endpoint and tokens, the exact prepared Tailscale socket, and
+the guarded node/pool/worker/machine identities. Run only the matching exact
+scenario under `tests/e2e/external/tailnet/`.
+
+Scenarios never run Terraform, build or restart Compose, mint Tailnet
+credentials, create or delete devices/pools, or discard agent state. Agent
+restart is a separate deliberate operator action; `restart_continuity.py`
+verifies the resulting stable public identities and route. Destructive
+Terraform teardown remains the reviewed action above.

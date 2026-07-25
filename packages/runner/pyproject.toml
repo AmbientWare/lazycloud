@@ -1,0 +1,24 @@
+[project]
+name = "runner"
+version = "0.1.0"
+description = "In-container Python runner entrypoints."
+requires-python = ">=3.10"
+dependencies = [
+    "cloudpickle>=3,<4",
+    "lazycloud-shared==0.1.0",
+    "foundation",
+    "pydantic>=2.8,<3",
+    "uvicorn>=0.30,<1",
+    "websockets>=15,<16",
+    "packaging>=24,<27",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+runner = ["py.typed"]

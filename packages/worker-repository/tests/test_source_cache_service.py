@@ -1,0 +1,76 @@
+from __future__ import annotations
+
+from uuid import uuid4
+
+import pytest
+from api.server.services import ApiServices
+from control.service import ControlPlaneService
+from database.repositories.source_cache import SourceCacheCleanupRepository
+from shared.errors import ConflictError
+from shared.identity import TokenKind
+from shared.source_cache_cleanup import SourceCacheCleanupStatus
+from shared.timestamps import utc_now
+from worker.repository_payloads import WorkerRepositoryPrincipal
+from worker_repository.source_cache import WorkerSourceCacheService
+
+
+def test_private_worker_cannot_resolve_another_workspace_cache_claim(
+    isolated_services: ApiServices,
+) -> None:
+    control = ControlPlaneService(isolated_services.context)
+    owner_workspace = control.upsert_workspace("source-cache-owner")
+    other_workspace = control.upsert_workspace("source-cache-other")
+    worker_id = "private-worker"
+    owner = WorkerRepositoryPrincipal(
+        workspace_id=owner_workspace.id,
+        worker_id=worker_id,
+        token_kind=TokenKind.WorkerPrivate,
+    )
+    other = owner.model_copy(update={"workspace_id": other_workspace.id})
+    service = WorkerSourceCacheService(isolated_services.context)
+    generation = service.register(
+        principal=owner,
+        worker_id=worker_id,
+        generation_id=str(uuid4()),
+        storage_id="private-cache-storage",
+    )
+    source_object_id = str(uuid4())
+    with isolated_services.context.database.session() as session:
+        SourceCacheCleanupRepository(session).add_targets(
+            workspace_id=owner_workspace.id,
+            source_object_ids=[source_object_id],
+            now=utc_now(),
+        )
+    [target] = service.claim(
+        principal=owner,
+        worker_id=worker_id,
+        generation_id=generation.id,
+        session_fence=generation.session_fence,
+        limit=1,
+    ).targets
+    assert target.claim_token is not None
+
+    with pytest.raises(ConflictError, match="session is no longer current"):
+        service.complete(
+            principal=other,
+            worker_id=worker_id,
+            generation_id=generation.id,
+            session_fence=generation.session_fence,
+            target_id=target.id,
+            claim_token=target.claim_token,
+        )
+    with pytest.raises(ConflictError, match="session is no longer current"):
+        service.fail(
+            principal=other,
+            worker_id=worker_id,
+            generation_id=generation.id,
+            session_fence=generation.session_fence,
+            target_id=target.id,
+            claim_token=target.claim_token,
+        )
+
+    with isolated_services.context.database.session() as session:
+        [current] = SourceCacheCleanupRepository(session).list_targets(
+            generation_ids=[generation.id]
+        )
+    assert current.status is SourceCacheCleanupStatus.Claimed

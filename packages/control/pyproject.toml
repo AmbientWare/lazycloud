@@ -1,0 +1,19 @@
+[project]
+name = "control"
+version = "0.1.0"
+description = "Control-plane resource services for LazyCloud."
+requires-python = ">=3.12"
+dependencies = [
+    "lazycloud-shared==0.1.0",
+    "database",
+    "foundation",
+    "identity",
+    "pydantic>=2,<3",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

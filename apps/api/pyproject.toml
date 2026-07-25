@@ -1,0 +1,48 @@
+[project]
+name = "api"
+version = "0.1.0"
+description = "FastAPI control-plane server for LazyCloud."
+requires-python = ">=3.12"
+dependencies = [
+    "agent",
+    "cache",
+    "cloudpickle>=3,<4",
+    "compute",
+    "coordination",
+    "control",
+    "lazycloud-shared==0.1.0",
+    "database",
+    "execution",
+    "fastapi>=0.115,<1",
+    "foundation",
+    "gateway",
+    "identity",
+    "images",
+    "networking",
+    "observability",
+    "operations",
+    "provider-clients",
+    "pydantic-settings>=2,<3",
+    "scheduler",
+    "storage",
+    "storage-client",
+    "worker",
+    "worker-repository",
+    "uvicorn>=0.30,<1",
+    "websockets>=15,<16",
+    "cryptography>=49,<50",
+]
+
+[project.scripts]
+lazycloud-api = "api.main:main"
+lazycloud-tcp-certificate = "api.tcp_certificate:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+api = ["web_static/*", "web_static/**/*"]

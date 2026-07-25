@@ -1,0 +1,19 @@
+[project]
+name = "storage"
+version = "0.1.0"
+description = "Object, cache, and mounted storage services for LazyCloud."
+requires-python = ">=3.12"
+dependencies = [
+    "lazycloud-shared==0.1.0",
+    "database",
+    "pydantic>=2.8,<3",
+    "pydantic-settings>=2.4,<3",
+    "storage-client",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

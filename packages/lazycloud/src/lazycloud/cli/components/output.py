@@ -1,0 +1,175 @@
+"""Single output owner for the ``lazycloud`` and ``lazycloud-admin`` commands.
+
+Decorative output (tables, tips, progress lines) goes through ``console`` and
+``error_console``. Machine-readable payloads go through ``print_payload``,
+which in ``--json`` mode writes plain ``json.dumps`` to stdout. While JSON
+output is active every decorative console write is routed to stderr, so stdout
+stays a pure payload stream without per-command discipline.
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+from collections.abc import Sequence
+from contextvars import ContextVar
+from dataclasses import dataclass, fields, is_dataclass
+from typing import IO, Any, Protocol, runtime_checkable
+
+import typer
+from pydantic import JsonValue
+from rich.console import Console
+from rich.table import Table
+from shared.events import Event
+from shared.serialization import to_json_value
+
+from lazycloud.json_contracts import parse_json_value
+
+_json_output_active = ContextVar("lazycloud_cli_json_output_active", default=False)
+
+
+@dataclass(frozen=True, slots=True)
+class CliContextState:
+    json: bool = False
+    debug: bool = False
+
+
+def set_json_output(enabled: bool) -> None:
+    """Declare whether stdout is reserved for JSON payloads this invocation.
+
+    Called by the root command callback; while enabled, ``CliConsole`` routes
+    decorative output to stderr.
+    """
+    _json_output_active.set(enabled)
+
+
+def json_output_active() -> bool:
+    return _json_output_active.get()
+
+
+class CliConsole(Console):
+    """Console for decorative CLI output.
+
+    Resolves its target stream per write: stdout for human output, stderr for
+    error output, and stderr for everything while JSON output is active so
+    stray decorative prints can never corrupt a machine-readable payload.
+    Rich drops styling automatically when the resolved stream is not a TTY.
+    """
+
+    @property
+    def file(self) -> IO[str]:
+        if self._file is not None:
+            return self._file
+        if self.stderr or json_output_active():
+            return sys.stderr
+        return sys.stdout
+
+    @file.setter
+    def file(self, new_file: IO[str]) -> None:
+        self._file = new_file
+
+
+console = CliConsole()
+error_console = CliConsole(stderr=True)
+
+
+@runtime_checkable
+class ModelDumpable(Protocol):
+    def model_dump(self, *, mode: str) -> object: ...
+
+
+def json_default(value: object) -> JsonValue:
+    return to_json_value(value)
+
+
+def parse_json_argument(raw: str) -> object:
+    try:
+        return parse_json_value(raw)
+    except ValueError:
+        return raw
+
+
+def command_from_args(args: Sequence[str]) -> list[str]:
+    if not args:
+        msg = "command is required"
+        raise typer.BadParameter(msg)
+    return list(args)
+
+
+def json_output_enabled(ctx: typer.Context) -> bool:
+    return isinstance(ctx.obj, CliContextState) and ctx.obj.json
+
+
+def print_json_line(payload: Any, *, file: IO[str]) -> None:
+    """Write one plain JSON document: sorted keys, trailing newline, no Rich."""
+    file.write(json.dumps(json_default(payload), sort_keys=True) + "\n")
+    file.flush()
+
+
+def print_payload(ctx: typer.Context, payload: Any) -> None:
+    if json_output_enabled(ctx):
+        print_json_line(payload, file=sys.stdout)
+        return
+    console.print(payload)
+
+
+def payload_data(value: object) -> object:
+    if isinstance(value, ModelDumpable):
+        return value.model_dump(mode="json")
+    if is_dataclass(value) and not isinstance(value, type):
+        return {
+            field.name: getattr(value, field.name)
+            for field in fields(value)
+            if not field.name.startswith("_")
+        }
+    return value
+
+
+def table(title: str, columns: list[str], rows: list[list[Any]]) -> Table:
+    output = Table(title=title)
+    for column in columns:
+        output.add_column(column)
+    for row in rows:
+        output.add_row(*(str(item) for item in row))
+    return output
+
+
+def event_table(title: str, events: Sequence[Event]) -> Table:
+    rows = [
+        [
+            item.created_at.isoformat(),
+            item.level.value,
+            item.action,
+            item.resource_type,
+            item.resource_id,
+            item.message,
+        ]
+        for item in events
+    ]
+    return table(title, ["time", "level", "action", "type", "resource", "message"], rows)
+
+
+def print_events_table(title: str, events: Sequence[Event]) -> None:
+    if not events:
+        console.print("No events found.")
+        return
+    console.print(event_table(title, events))
+
+
+__all__ = [
+    "CliConsole",
+    "command_from_args",
+    "console",
+    "error_console",
+    "event_table",
+    "json_default",
+    "json_output_active",
+    "json_output_enabled",
+    "parse_json_argument",
+    "payload_data",
+    "print_events_table",
+    "print_json_line",
+    "print_payload",
+    "set_json_output",
+    "table",
+]

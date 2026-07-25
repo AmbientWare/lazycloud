@@ -1,0 +1,171 @@
+name: Release Artifacts
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      bake_ami:
+        description: Bake the per-region connected AWS node AMI
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  build:
+    name: Build uv workspace packages
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+          version: "0.11.21"
+
+      - name: Build packages
+        run: uv build --all-packages -o dist
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: lazycloud-python-packages
+          path: dist/*
+          archive: false
+          if-no-files-found: error
+
+  connected-aws-assets:
+    name: Publish connected AWS assets
+    runs-on: ubuntu-latest
+    environment: release
+    env:
+      AWS_RELEASE_REGION: ${{ vars.AWS_RELEASE_REGION || 'us-east-1' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Configure release AWS identity
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_RELEASE_ROLE_ARN }}
+          aws-region: ${{ env.AWS_RELEASE_REGION }}
+
+      - name: Login to Amazon ECR Public
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registry-type: public
+
+      - name: Resolve public container worker repository
+        id: repository
+        shell: bash
+        run: |
+          repository="$(aws ecr-public describe-repositories \
+            --repository-names '${{ vars.AWS_RELEASE_CONTAINER_WORKER_REPOSITORY_NAME }}' \
+            --region us-east-1 \
+            --query 'repositories[0].repositoryUri' \
+            --output text)"
+          test -n "${repository}"
+          test "${repository}" != "None"
+          echo "uri=${repository}" >> "${GITHUB_OUTPUT}"
+
+      - name: Resolve immutable version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="${GITHUB_SHA}"
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build and stage Linux agent executables
+        run: >-
+          uv run --no-project python deploy/agent-artifact/build.py build
+          --version "${{ steps.version.outputs.version }}"
+          --output dist/agent-artifacts
+          --arch amd64
+
+      - name: Build and publish container worker
+        id: container-worker
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile.worker
+          target: container-worker
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.repository.outputs.uri }}:${{ steps.version.outputs.version }}
+          cache-from: type=gha,scope=connected-aws-container-worker
+          cache-to: type=gha,mode=max,scope=connected-aws-container-worker
+
+      - name: Bake connected AWS node image
+        id: bake
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.bake_ami }}
+        shell: bash
+        run: |
+          cpu_ami_ids="$(uv run --group workspace python deploy/ami/bake.py \
+            --release-version "${{ steps.version.outputs.version }}" \
+            --agent-version-dir "dist/agent-artifacts/${{ steps.version.outputs.version }}" \
+            --worker-image \
+            "${{ steps.repository.outputs.uri }}@${{ steps.container-worker.outputs.digest }}" \
+            --bucket "${{ vars.AWS_RELEASE_ASSET_BUCKET }}" \
+            --bucket-region "${AWS_RELEASE_REGION}" \
+            --regions us-east-1)"
+          test -n "${cpu_ami_ids}"
+          echo "cpu_ami_ids=${cpu_ami_ids}" >> "${GITHUB_OUTPUT}"
+
+      - name: Stage immutable connected AWS release bundle
+        run: >-
+          uv run --group workspace python deploy/aws-release-assets/release.py stage
+          --version "${{ steps.version.outputs.version }}"
+          --agent-version-dir
+          "dist/agent-artifacts/${{ steps.version.outputs.version }}"
+          --worker-image
+          "${{ steps.repository.outputs.uri }}@${{ steps.container-worker.outputs.digest }}"
+          --bucket "${{ vars.AWS_RELEASE_ASSET_BUCKET }}"
+          --region "${AWS_RELEASE_REGION}"
+          --cpu-ami-ids '${{ steps.bake.outputs.cpu_ami_ids || '{}' }}'
+          --output dist/connected-aws
+
+      - name: Publish and anonymously verify connected AWS release bundle
+        run: >-
+          uv run --group workspace python deploy/aws-release-assets/release.py publish
+          --manifest
+          "dist/connected-aws/${{ steps.version.outputs.version }}/manifest.json"
+
+      - name: Verify published assets without AWS or registry credentials
+        run: >-
+          uv run --group workspace python deploy/aws-release-assets/release.py verify
+          --manifest
+          "dist/connected-aws/${{ steps.version.outputs.version }}/manifest.json"
+
+      - name: Upload connected AWS release evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: lazycloud-connected-aws-${{ steps.version.outputs.version }}
+          path: dist/connected-aws/${{ steps.version.outputs.version }}/
+          archive: false
+          if-no-files-found: error

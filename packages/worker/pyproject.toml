@@ -1,0 +1,21 @@
+[project]
+name = "worker"
+version = "0.1.0"
+description = "Worker runtime planning, container execution, lifecycle, networking, metrics, and supervision primitives."
+requires-python = ">=3.12"
+dependencies = [
+    "cache",
+    "lazycloud-shared==0.1.0",
+    "foundation",
+    "storage-client",
+    "pydantic>=2.8,<3",
+    "pydantic-settings>=2.4,<3",
+    "pyyaml>=6,<7",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

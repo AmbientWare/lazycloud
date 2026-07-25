@@ -1,0 +1,193 @@
+{{- define "lazycloud.objectStoreBucketJobSpec" -}}
+backoffLimit: 6
+ttlSecondsAfterFinished: 600
+template:
+  metadata:
+    labels:
+      {{- include "lazycloud.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: object-store-init
+  spec:
+    restartPolicy: OnFailure
+    containers:
+      - name: bucket
+        image: {{ .Values.objectStore.bucketInitImage | quote }}
+        env:
+          - name: AWS_ACCESS_KEY_ID
+            valueFrom:
+              secretKeyRef:
+                name: {{ include "lazycloud.objectStoreName" . }}
+                key: GARAGE_DEFAULT_ACCESS_KEY
+          - name: AWS_SECRET_ACCESS_KEY
+            valueFrom:
+              secretKeyRef:
+                name: {{ include "lazycloud.objectStoreName" . }}
+                key: GARAGE_DEFAULT_SECRET_KEY
+          - name: AWS_DEFAULT_REGION
+            value: {{ .Values.objectStore.regionName | quote }}
+          - name: AWS_EC2_METADATA_DISABLED
+            value: "true"
+          - name: GARAGE_ENDPOINT_URL
+            value: {{ include "lazycloud.objectStoreEndpoint" . | quote }}
+        command:
+          - /bin/sh
+          - -ec
+          - |
+            for bucket in {{ .Values.objectStore.bucket }} {{ .Values.objectStore.defaultBucket }} {{ .Values.objectStore.dataBucket }} {{ .Values.objectStore.sourcePackageBucket }}; do
+              [ -n "$bucket" ] || continue
+              if aws --endpoint-url "$GARAGE_ENDPOINT_URL" s3api head-bucket --bucket "$bucket" >/dev/null 2>&1; then
+                continue
+              fi
+              aws --endpoint-url "$GARAGE_ENDPOINT_URL" s3api create-bucket --bucket "$bucket" \
+                || aws --endpoint-url "$GARAGE_ENDPOINT_URL" s3api head-bucket --bucket "$bucket" >/dev/null
+            done
+{{- end -}}
+{{- if .Values.objectStore.enabled }}
+{{- $name := include "lazycloud.objectStoreName" . }}
+{{- $accessKey := required "objectStore.accessKeyId is required when bundled object storage is enabled" .Values.objectStore.accessKeyId }}
+{{- $secretKey := required "objectStore.secretAccessKey is required when bundled object storage is enabled" .Values.objectStore.secretAccessKey }}
+{{- $rpcSecret := required "objectStore.rpcSecret is required when bundled object storage is enabled" .Values.objectStore.rpcSecret }}
+{{- $bucketJobSpec := include "lazycloud.objectStoreBucketJobSpec" . }}
+{{- $bucketJobHash := $bucketJobSpec | sha256sum | trunc 12 }}
+{{- $bucketJobPrefix := printf "%s-bucket" $name | trunc 50 | trimSuffix "-" }}
+{{- $bucketJobName := printf "%s-%s" $bucketJobPrefix $bucketJobHash }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "lazycloud.labels" . | nindent 4 }}
+    app.kubernetes.io/component: object-store
+type: Opaque
+stringData:
+  GARAGE_DEFAULT_BUCKET: {{ .Values.objectStore.bucket | quote }}
+  GARAGE_DEFAULT_ACCESS_KEY: {{ $accessKey | quote }}
+  GARAGE_DEFAULT_SECRET_KEY: {{ $secretKey | quote }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}-config
+  labels:
+    {{- include "lazycloud.labels" . | nindent 4 }}
+    app.kubernetes.io/component: object-store
+type: Opaque
+stringData:
+  garage.toml: |
+    metadata_dir = "/var/lib/garage/meta"
+    data_dir = "/var/lib/garage/data"
+    db_engine = "sqlite"
+    replication_factor = 1
+    rpc_bind_addr = "[::]:3901"
+    rpc_public_addr = "127.0.0.1:3901"
+    rpc_secret = {{ $rpcSecret | quote }}
+
+    [s3_api]
+    s3_region = {{ .Values.objectStore.regionName | quote }}
+    api_bind_addr = "[::]:9000"
+    root_domain = ".s3.localhost"
+
+    [admin]
+    api_bind_addr = "[::]:{{ .Values.objectStore.adminPort }}"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}-data
+  labels:
+    {{- include "lazycloud.labels" . | nindent 4 }}
+    app.kubernetes.io/component: object-store
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.objectStore.storageClassName }}
+  storageClassName: {{ .Values.objectStore.storageClassName | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.objectStore.storage | quote }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "lazycloud.labels" . | nindent 4 }}
+    app.kubernetes.io/component: object-store
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "lazycloud.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: object-store
+  template:
+    metadata:
+      labels:
+        {{- include "lazycloud.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: object-store
+    spec:
+      containers:
+        - name: object-store
+          image: {{ .Values.objectStore.image | quote }}
+          command: ["/garage"]
+          args: ["server", "--single-node", "--default-bucket"]
+          envFrom:
+            - secretRef:
+                name: {{ $name }}
+          ports:
+            - name: api
+              containerPort: 9000
+            - name: admin
+              containerPort: {{ .Values.objectStore.adminPort }}
+          readinessProbe:
+            tcpSocket:
+              port: api
+          livenessProbe:
+            tcpSocket:
+              port: api
+          resources:
+            {{- toYaml .Values.objectStore.resources | nindent 12 }}
+          volumeMounts:
+            - name: object-data
+              mountPath: /var/lib/garage
+            - name: object-store-config
+              mountPath: /etc/garage.toml
+              subPath: garage.toml
+              readOnly: true
+      volumes:
+        - name: object-data
+          persistentVolumeClaim:
+            claimName: {{ $name }}-data
+        - name: object-store-config
+          secret:
+            secretName: {{ $name }}-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "lazycloud.labels" . | nindent 4 }}
+    app.kubernetes.io/component: object-store
+spec:
+  selector:
+    {{- include "lazycloud.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: object-store
+  ports:
+    - name: api
+      port: 9000
+      targetPort: api
+    - name: admin
+      port: {{ .Values.objectStore.adminPort }}
+      targetPort: admin
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $bucketJobName }}
+  labels:
+    {{- include "lazycloud.labels" . | nindent 4 }}
+    app.kubernetes.io/component: object-store-init
+    lazycloud.io/job-spec-hash: {{ $bucketJobHash | quote }}
+spec:
+{{ $bucketJobSpec | nindent 2 }}
+{{- end }}

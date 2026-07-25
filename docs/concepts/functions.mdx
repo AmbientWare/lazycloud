@@ -1,0 +1,124 @@
+---
+title: "Functions"
+description: "Run plain Python callables on remote compute with retries, timeouts, secrets, volumes, and lifecycle hooks."
+---
+
+import WorkloadOptions from '/snippets/workload-options.mdx';
+
+Use `@app.function` for Python work that should run remotely but does not need
+an HTTP route or a queue. The decorated object preserves the callable's
+argument and return typing.
+
+```python
+from lazycloud import App, Image
+
+app = App("reports")
+image = Image(python_version="3.12").add_python_packages(["pandas"])
+
+
+@app.function(image=image, cpu=2.0, memory="1Gi", timeout_seconds=600, retries=2)
+def build_report(month: str) -> dict[str, str]:
+    return {"month": month, "status": "built"}
+```
+
+## Invoking a function
+
+| Call | Behavior |
+| --- | --- |
+| `build_report.local("2026-06")` | Runs the plain Python function in your own process. |
+| `build_report.remote("2026-06")` | Runs on the deployed compute and blocks for the result. |
+| `build_report("2026-06")` | Same as `.remote(...)`. |
+| `build_report.spawn("2026-06")` | Submits without blocking and returns a `FunctionCall` task handle. |
+| `build_report.map(["2026-05", "2026-06"])` | Runs one invocation per input and yields results in order. |
+| `build_report.spawn_map([...])` | Submits one task per input and returns the list of handles. |
+
+`async_remote` and `async_spawn` are the awaitable equivalents for async
+callers. A `FunctionCall` handle carries the task id; retrieve outcomes with
+the [task workflow](/concepts/tasks-and-logs).
+
+Deploy a single function with `lazycloud deploy module.py:build_report` or
+programmatically with `build_report.deploy()`. `build_report.shell()` opens an
+interactive shell in the function's container image for debugging (also
+available as `lazycloud shell module.py:build_report`).
+
+## Sizing, timeouts, and retries
+
+Functions default to `cpu=0.125`, `memory="128Mi"`, `timeout_seconds=3600`,
+and `retries=3`.
+
+- `timeout_seconds` caps one invocation's runtime; a run that exceeds it is
+  marked timed out.
+- `retries` is the number of retry attempts after a failure, with
+  `retry_delay_seconds` between attempts.
+- `retry_policy` gives full control as a `RetryPolicy` (or plain mapping):
+  `max_attempts`, `delay_seconds`, `backoff` (`"fixed"` or `"exponential"`),
+  `max_delay_seconds`, and `retry_for` exception references.
+
+```python
+from lazycloud import RetryPolicy, RetryBackoff
+
+
+@app.function(
+    retry_policy=RetryPolicy(
+        max_attempts=4,
+        delay_seconds=2.0,
+        backoff=RetryBackoff.Exponential,
+        max_delay_seconds=30.0,
+    ),
+)
+def flaky_ingest(url: str) -> int: ...
+```
+
+<Note>
+  Functions intentionally have no `workers`, `keep_warm`, or `autoscaler`
+  options — each invocation is scheduled as an independent task. Warm worker
+  pools and queue-depth autoscaling belong to
+  [endpoints](/concepts/endpoints) and [task queues](/concepts/task-queues).
+</Note>
+
+## Secrets and environment
+
+`env` injects plain environment variables; `secrets` injects
+[workspace secrets](/concepts/secrets) by name as environment variables:
+
+```python
+@app.function(env={"REGION": "us-east-1"}, secrets=["OPENAI_API_KEY"])
+def summarize(text: str) -> str: ...
+```
+
+## Volumes
+
+Mount durable [volumes and cloud buckets](/concepts/volumes) into the
+container filesystem:
+
+```python
+from lazycloud import Volume
+
+
+@app.function(volumes=[Volume("models", "/models")])
+def load_model(name: str) -> str: ...
+```
+
+## Lifecycle hooks
+
+Functions (and task queues and cron jobs) accept hooks that the workload
+runner invokes at each stage of a task's life: `on_start`, `on_running`,
+`on_success`, `on_error`, `on_retry`, `on_failure`, `on_cancelled`,
+`on_timeout`, and `on_finish`. A hook is a callable, a decorated SDK object,
+or a dotted import reference string; each option also accepts a list of hooks.
+
+```python
+def notify_failure() -> None:
+    print("report build failed", flush=True)
+
+
+@app.function(retries=1, on_failure=notify_failure)
+def build_daily() -> None: ...
+```
+
+`on_start` runs once when a container boots, which makes it the place to load
+models or warm caches before the first invocation.
+
+## Shared options
+
+<WorkloadOptions />

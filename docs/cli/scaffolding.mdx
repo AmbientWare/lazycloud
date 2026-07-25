@@ -1,0 +1,35 @@
+---
+title: "quickstart, create-app, example"
+description: "Generate starter apps and download examples."
+---
+
+## lazycloud quickstart
+
+```bash
+lazycloud quickstart [-o <path>] [--force]
+```
+
+Writes the minimal starter function app (default `quickstart.py`; `--force`
+overwrites). Walk through it in the [Quickstart](/getting-started/quickstart).
+
+## lazycloud create-app
+
+```bash
+lazycloud create-app NAME [-o <path>] [--force]
+```
+
+Creates a new app scaffold named `NAME`.
+
+## lazycloud example
+
+```bash
+lazycloud example list
+lazycloud example download NAME [-o <path>] [--force]
+```
+
+Lists and downloads example app templates. Available templates:
+
+| Template | Description |
+| --- | --- |
+| `quickstart` | Minimal function app. |
+| `task-queue` | Task queue app. |

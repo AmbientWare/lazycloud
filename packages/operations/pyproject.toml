@@ -1,0 +1,24 @@
+[project]
+name = "operations"
+version = "0.1.0"
+description = "Operational management workflows for deployments, tasks, containers, logs, events, and metrics."
+requires-python = ">=3.12"
+dependencies = [
+    "lazycloud-shared==0.1.0",
+    "control",
+    "coordination",
+    "database",
+    "execution",
+    "foundation",
+    "observability",
+    "pydantic>=2.8,<3",
+    "scheduler",
+    "storage",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

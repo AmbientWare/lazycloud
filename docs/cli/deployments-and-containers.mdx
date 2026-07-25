@@ -1,0 +1,34 @@
+---
+title: "deployment and container"
+description: "Manage deployment lifecycle and running containers."
+---
+
+import WorkspaceFlag from '/snippets/workspace-flag.mdx';
+
+## lazycloud deployment
+
+Deployments accept an id or a deployment name.
+
+| Command | Description |
+| --- | --- |
+| `lazycloud deployment list [--app <slug>] [--limit <n>]` | List deployments, optionally for one app. |
+| `lazycloud deployment stop IDS_OR_NAMES...` | Stop one or more deployments (workers scale to zero; the record stays). |
+| `lazycloud deployment start ID_OR_NAME` | Start a stopped deployment. |
+| `lazycloud deployment scale ID_OR_NAME --containers <n>` | Set the container count. |
+| `lazycloud deployment delete ID_OR_NAME` | Delete the deployment. |
+
+```bash
+lazycloud deployment list --app api_demo
+lazycloud deployment scale predict --containers 3
+```
+
+## lazycloud container
+
+| Command | Description |
+| --- | --- |
+| `lazycloud container list [--limit <n>]` | Running containers in the workspace (limit 1–1000, default 100). |
+| `lazycloud container attach CONTAINER_ID` | Attach to a container's output. |
+| `lazycloud container checkpoint CONTAINER_ID [--checkpoint-id <id>]` | Checkpoint a checkpoint-enabled container. |
+| `lazycloud container stop CONTAINER_IDS...` | Stop one or more containers. |
+
+<WorkspaceFlag />

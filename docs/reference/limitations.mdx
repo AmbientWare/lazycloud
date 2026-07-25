@@ -1,0 +1,49 @@
+---
+title: "Known limitations"
+description: "Current, honest limitations of the beta."
+---
+
+This page tracks real limitations of the current release so you can plan
+around them. Each item is removed when the gap closes.
+
+## Secrets encryption
+
+Workspace secrets are encrypted at rest with AES-GCM, but the workspace
+encryption keys are stored in the platform database rather than a cloud KMS.
+KMS envelope encryption is planned and deferred until it can be built against
+live cloud KMS infrastructure. Practical impact: a compromise of a full
+database backup could expose secret values; database access controls are the
+current boundary. Treat workspace secrets accordingly.
+
+## Compute provider verification status
+
+| Provider | Status |
+| --- | --- |
+| AWS | Production implementation available; exact release lifecycle acceptance is infrastructure-blocked. |
+| Self-hosted machines | Supported through durable `lazycloud machine join` enrollment, not provider launch configuration. |
+| Hetzner, OCI, Lambda Labs, Vast.ai, Crusoe, Hydra, Shadeform | Not implemented or registered as production providers. |
+| Generic provider configuration | Removed; it did not provision external capacity. |
+
+An adapter is not production-supported until a disposable provider account has
+proved external creation, agent registration, public workload readiness,
+deletion, and both provider-side and platform-side leak cleanup. Mock HTTP tests
+and credential health checks are contract evidence only and do not satisfy that
+gate. Unsupported provider records fail explicitly instead of silently exposing
+speculative capacity.
+
+## Connected AWS live acceptance
+
+The [connected AWS cloud](/platform/compute#connected-cloud-aws) workflow —
+authorization, validation, instance launch, draining, and revocation — is
+implemented end to end, but the final live acceptance pass on a production
+AWS account (including exact teardown verification) is still pending on
+release infrastructure. Validate the flow in a non-critical account first.
+
+## Package distribution
+
+The `lazycloud` distribution is not yet published to PyPI. Until the beta
+release is published, install the client from a checkout of the LazyCloud
+repository as described in
+[Self-hosting with Docker Compose](/self-hosting/compose). This affects only
+where the client comes from, not how you log in: `lazycloud login` still
+targets the hosted default unless you override the endpoint.

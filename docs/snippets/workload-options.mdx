@@ -1,0 +1,22 @@
+Every workload decorator on `App` shares this base set of options:
+
+| Option | Type | Description |
+| --- | --- | --- |
+| `image` | `Image` | Container image definition built or selected for the workload. Defaults to the managed base image. |
+| `name` | `str` | Deployment resource name. Defaults to the decorated callable's name. |
+| `cpu` | `float` | CPU cores requested per container. |
+| `memory` | `str` | Memory requested per container, for example `"512Mi"` or `"2Gi"`. |
+| `gpu` | `str` | GPU type: `"t4"`, `"l4"`, `"a10g"`, `"a100"`, `"h100"`, or `"any"`. |
+| `gpu_count` | `int` | Number of GPUs per container. Defaults to `0`. |
+| `env` | `dict[str, str]` | Plain environment variables injected into containers. |
+| `secrets` | `list[str]` | Workspace secret names injected as environment variables. |
+| `volumes` | `list` | `Volume` or `CloudBucket` objects mounted into containers. |
+| `authorized` | `bool` | Whether invocations require an authenticated client. |
+| `callback_url` | `str` | Webhook called with execution events. |
+| `task_policy` | `TaskPolicy` | Scheduling policy overrides for invocations. |
+| `inputs` / `outputs` | schema | Optional schema metadata for clients and validation. |
+| `docker_enabled` | `bool` | Give the container an isolated Docker daemon. |
+| `pool` | `str \| Pool` | Target a specific worker pool. |
+| `placement` | `"managed" \| "aws"` | Compute placement target. See [Compute and placement](/platform/compute). |
+| `provider` | `str` | Pin a specific compute provider. |
+| `metadata` | `dict` | Custom metadata stored with the deployment. |

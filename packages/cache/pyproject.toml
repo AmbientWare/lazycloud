@@ -1,0 +1,16 @@
+[project]
+name = "cache"
+version = "0.1.0"
+description = "Authenticated node-local whole-object cache service and HTTP client."
+requires-python = ">=3.12"
+dependencies = [
+    "lazycloud-shared==0.1.0",
+    "pydantic>=2.8,<3",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

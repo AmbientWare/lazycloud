@@ -1,0 +1,131 @@
+---
+title: "Endpoints, ASGI, and realtime"
+description: "Serve HTTP traffic from typed Python callables, ASGI applications, or realtime WebSocket-style handlers."
+---
+
+import WorkloadOptions from '/snippets/workload-options.mdx';
+
+## Endpoints
+
+`@app.endpoint` turns a typed Python callable into an HTTP route. Arguments
+map from the request body; the return value is serialized to the response.
+
+```python
+from lazycloud import App, Image
+
+app = App("api_demo")
+image = Image(python_version="3.12")
+
+
+@app.endpoint(name="predict", route="/predict", methods=["POST"], image=image)
+def predict(value: int = 7) -> dict[str, int]:
+    return {"input": value, "prediction": value + 1}
+```
+
+Endpoints default to `cpu=1.0`, `memory="128Mi"`, `timeout_seconds=180`,
+`retries=0`, `workers=1`, `concurrency=1`, `keep_warm=180`,
+`max_pending_tasks=100`, and `authorized=True`.
+
+### Scaling options
+
+| Option | Description |
+| --- | --- |
+| `workers` | Number of containers serving the endpoint. |
+| `concurrency` | Concurrent requests handled per worker. |
+| `keep_warm` | Seconds an idle worker stays available before scaling to zero. |
+| `max_pending_tasks` | Backpressure limit on queued requests. |
+| `autoscaler` | Queue-depth autoscaling; see below. |
+| `checkpoint_enabled` | Snapshot a warmed worker so replacements restore instead of cold-starting. |
+
+Queue-depth autoscaling scales workers with request backlog:
+
+```python
+from lazycloud import QueueDepthAutoscaler
+
+
+@app.endpoint(
+    name="infer",
+    autoscaler=QueueDepthAutoscaler(
+        queue="infer",
+        min_containers=0,
+        max_containers=8,
+        tasks_per_container=2,
+    ),
+)
+def infer(prompt: str) -> str: ...
+```
+
+### Calling endpoints
+
+Deployed endpoints get a stable invoke URL (printed by `lazycloud deploy`).
+Requests require a workspace bearer token unless `authorized=False`.
+
+The decorated object is also a typed client:
+
+```python
+response = predict.request(41)          # auto-targets served or deployed
+response = predict.target("deployed").request(41)
+print(response.status_code, response.json())
+```
+
+`target(...)` accepts `"auto"`, `"served"`, or `"deployed"`, plus
+`deployment_name`/`deployment_version` to pin a specific deployment.
+`.local(...)` calls the plain Python function in-process, and `.serve()` /
+`lazycloud serve` previews the endpoint with live logs.
+
+## ASGI applications
+
+`@app.asgi` deploys any ASGI callable — FastAPI, Starlette, or a raw
+`scope/receive/send` app — as an HTTP resource:
+
+```python
+@app.asgi(name="service", route="/service")
+async def service(scope, receive, send) -> None:
+    await send({"type": "http.response.start", "status": 200, "headers": []})
+    await send({"type": "http.response.body", "body": b"ok"})
+```
+
+A framework application object such as a FastAPI or Starlette instance is
+itself an ASGI callable, so register it by applying the decorator directly:
+
+```python
+from fastapi import FastAPI
+
+api = FastAPI()
+service = app.asgi(name="service")(api)
+```
+
+ASGI options mirror endpoints with `concurrent_requests` and
+`keep_warm_seconds` naming, and the resource name defaults to `"asgi"`.
+
+Call a deployed ASGI app with the full request shape:
+
+```python
+response = service.request(method="GET", path="/service", target="deployed")
+```
+
+`request(...)` accepts `method`, `path`, `json`, `data`, `headers`, `params`,
+and the same targeting options as endpoints.
+
+## Realtime handlers
+
+`@app.realtime` registers a WebSocket-style message handler wrapped as an ASGI
+resource. Each incoming message invokes the handler; the return value (or each
+item of an iterable return) is sent back on the socket.
+
+```python
+@app.realtime(name="echo")
+def echo(message: str) -> str:
+    return message
+```
+
+Realtime resources share the ASGI option set and deploy, serve, and scale the
+same way.
+
+## Shared options
+
+Endpoints, ASGI apps, and realtime handlers also accept `env`, `secrets`,
+`volumes`, an `on_start` hook (run once per worker boot), `task_policy`, and
+the placement options below.
+
+<WorkloadOptions />
