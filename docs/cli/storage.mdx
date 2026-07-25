@@ -1,0 +1,52 @@
+---
+title: "volume, file commands, and secret"
+description: "Manage volumes, move files, and manage workspace secrets from the CLI."
+---
+
+import WorkspaceFlag from '/snippets/workspace-flag.mdx';
+
+## lazycloud volume
+
+| Command | Description |
+| --- | --- |
+| `lazycloud volume list` | List the workspace's volumes. |
+| `lazycloud volume create NAME` | Create a volume. |
+| `lazycloud volume delete NAME [-y]` | Delete a volume; `-y`/`--yes` skips confirmation. |
+
+## File commands
+
+Volume paths use `lazycloud://<volume>/<path>`; the scheme is optional except
+for the source of a download, where it marks the path as remote.
+
+| Command | Description |
+| --- | --- |
+| `lazycloud ls REMOTE_PATH` | List files under a volume path. |
+| `lazycloud cp SOURCE DESTINATION` | Copy to or from a volume. |
+| `lazycloud rm REMOTE_PATH` | Remove files from a volume. |
+| `lazycloud mv ORIGINAL_PATH NEW_PATH` | Move or rename within a volume. |
+
+```bash
+lazycloud ls models/checkpoints
+lazycloud cp model.safetensors lazycloud://models/checkpoints/model.safetensors
+lazycloud cp lazycloud://models/checkpoints/model.safetensors ./model.safetensors
+lazycloud mv models/checkpoints/model.safetensors models/archive/model.safetensors
+lazycloud rm models/archive/model.safetensors
+```
+
+## lazycloud secret
+
+| Command | Description |
+| --- | --- |
+| `lazycloud secret list` | List secret names and metadata. |
+| `lazycloud secret create NAME VALUE` | Create a secret. |
+| `lazycloud secret modify NAME VALUE` | Replace a secret's value. |
+| `lazycloud secret show NAME [--reveal]` | Show metadata; `--reveal` prints the value. |
+| `lazycloud secret delete NAME` | Delete a secret. |
+
+<Warning>
+  Passing secret values as command arguments can leave them in shell history.
+  Prefer reading from a variable or file, for example
+  `lazycloud secret create OPENAI_API_KEY "$OPENAI_API_KEY"`.
+</Warning>
+
+<WorkspaceFlag />

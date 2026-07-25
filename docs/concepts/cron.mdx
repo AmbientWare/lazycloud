@@ -1,0 +1,59 @@
+---
+title: "Cron jobs"
+description: "Run functions on a schedule with cron expressions, aliases, or interval shorthand."
+---
+
+`@app.cron` registers a scheduled function. The decorated callable keeps its
+normal Python signature for local execution, and deploy registers the schedule.
+
+```python
+from lazycloud import App, Image
+
+app = App("maintenance")
+image = Image(python_version="3.12")
+
+
+@app.cron("0 3 * * *", name="nightly-cleanup", image=image)
+def cleanup() -> dict[str, str]:
+    return {"status": "clean"}
+```
+
+Deploy it like any other resource:
+
+```bash
+lazycloud deploy maintenance.py:cleanup
+```
+
+## Schedule syntax
+
+Three forms are accepted:
+
+| Form | Examples |
+| --- | --- |
+| Five-field cron expression | `"*/15 * * * *"`, `"0 3 * * 1"` |
+| Cron alias | `"@hourly"`, `"@daily"`, `"@midnight"`, `"@weekly"`, `"@monthly"`, `"@yearly"`, `"@annually"` |
+| Interval shorthand | `"every 5m"` (max 59m), `"every 2h"` (max 23h), `"every 3d"` (max 31d) |
+
+Schedules are evaluated in UTC. Invalid expressions are rejected when the
+schedule is registered with the control plane at deploy time.
+
+## Options and behavior
+
+Cron jobs accept the full [function option set](/concepts/functions) —
+resources, image, timeouts, `retries`/`retry_policy`, `env`/`secrets`/
+`volumes`, lifecycle hooks, and placement. Each scheduled run is a durable
+task: a failing run is retried per the retry configuration, and terminal
+failures are visible in [task history](/concepts/tasks-and-logs) and the
+dashboard.
+
+A cron job is also still a function. `.local(...)` runs it in-process, and
+`.remote(...)`/`.spawn(...)` trigger out-of-schedule runs on the deployed
+compute.
+
+Pause or remove the schedule through its deployment:
+
+```bash
+lazycloud deployment list --app maintenance
+lazycloud deployment stop <deployment-id-or-name>
+lazycloud deployment delete <deployment-id-or-name>
+```

@@ -1,0 +1,534 @@
+{{- if .Values.containerWorkers.enabled }}
+{{- range $pool := .Values.containerWorkers.pools }}
+{{- $poolName := required "containerWorkers.pools[].name is required" $pool.name }}
+{{- include "lazycloud.validateContainerWorkerPools" $ }}
+{{- $poolKey := $poolName | lower | replace "_" "-" }}
+{{- $poolResourceName := include "lazycloud.containerWorkerName" (dict "root" $ "poolName" $poolName) }}
+{{- $capacityOwnerId := required "containerWorkers.pools[].capacityOwnerId is required" $pool.capacityOwnerId }}
+{{- $initialWorkers := int $pool.initialWorkers }}
+{{- $minWorkers := int $pool.minWorkers }}
+{{- $maxWorkers := int $pool.maxWorkers }}
+{{- $desiredWorkers := $initialWorkers }}
+{{- $existingDeployment := lookup "apps/v1" "Deployment" $.Release.Namespace $poolResourceName }}
+{{- if $existingDeployment }}
+{{- $desiredWorkers = int (dig "spec" "replicas" $initialWorkers $existingDeployment) }}
+{{- end }}
+{{- if lt $desiredWorkers $minWorkers }}
+{{- $desiredWorkers = $minWorkers }}
+{{- else if gt $desiredWorkers $maxWorkers }}
+{{- $desiredWorkers = $maxWorkers }}
+{{- end }}
+{{- $imageRepository := dig "image" "repository" $.Values.containerWorkers.image.repository $pool }}
+{{- $imageTag := dig "image" "tag" $.Values.containerWorkers.image.tag $pool }}
+{{- $imagePullPolicy := dig "image" "pullPolicy" $.Values.containerWorkers.image.pullPolicy $pool }}
+{{- $runtime := $pool.runtime }}
+{{- $runtimes := $pool.runtimes }}
+{{- $runtimeClassName := dig "runtimeClassName" $.Values.containerWorkers.runtimeClassName $pool }}
+{{- $routeTransport := dig "routeTransport" $.Values.containerWorkers.routeTransport $pool }}
+{{- $poolMode := dig "poolMode" $.Values.containerWorkers.poolMode $pool }}
+{{- $requiresPoolSelector := dig "requiresPoolSelector" $.Values.containerWorkers.requiresPoolSelector $pool }}
+{{- $preemptible := $pool.preemptible }}
+{{- $repositoryUrl := dig "repositoryUrl" $.Values.containerWorkers.repositoryUrl $pool | default ($.Values.controlPlane.runtimeHttpUrl | default (printf "http://%s:%v" (include "lazycloud.fullname" $) $.Values.service.port)) }}
+{{- $repositoryTimeoutSeconds := dig "repositoryTimeoutSeconds" $.Values.containerWorkers.repositoryTimeoutSeconds $pool }}
+{{- $intervalSeconds := dig "intervalSeconds" $.Values.containerWorkers.intervalSeconds $pool }}
+{{- $keepaliveIntervalSeconds := dig "keepaliveIntervalSeconds" $.Values.containerWorkers.keepaliveIntervalSeconds $pool }}
+{{- $spindownSeconds := dig "spindownSeconds" $.Values.containerWorkers.spindownSeconds $pool }}
+{{- $workerTokenSecretName := dig "workerTokenSecretName" $.Values.containerWorkers.workerTokenSecretName $pool | default (printf "%s-worker-token" (include "lazycloud.fullname" $)) }}
+{{- $workerTokenSecretKey := dig "workerTokenSecretKey" $.Values.containerWorkers.workerTokenSecretKey $pool }}
+{{- $containerServicePort := dig "containerServicePort" $.Values.containerWorkers.containerServicePort $pool }}
+{{- $cpuMillicores := int $pool.capacity.cpuMillicores }}
+{{- $memoryMib := int $pool.capacity.memoryMib }}
+{{- $networkPrefix := dig "networkPrefix" (printf "%s-%s-$(WORKER_MACHINE)" (include "lazycloud.fullname" $) $poolKey) $pool }}
+{{- $routeTarget := dig "routeTarget" $.Values.containerWorkers.routeTarget $pool }}
+{{- $hostPortBindAddress := dig "hostPortBindAddress" $.Values.containerWorkers.hostPortBindAddress $pool }}
+{{- $buildRoot := dig "buildRoot" $.Values.containerWorkers.buildRoot $pool }}
+{{- $imageCachePath := dig "imageCachePath" $.Values.containerWorkers.imageCachePath $pool }}
+{{- $imageMountRoot := dig "imageMountRoot" $.Values.containerWorkers.imageMountRoot $pool }}
+{{- $checkpointRoot := dig "checkpointRoot" $.Values.containerWorkers.checkpointRoot $pool }}
+{{- $registryPath := dig "registryPath" $.Values.containerWorkers.registryPath $pool }}
+{{- $bundleRoot := dig "bundleRoot" $.Values.containerWorkers.bundleRoot $pool }}
+{{- $dataStorageMode := dig "dataStorage" "mode" $.Values.containerWorkers.dataStorage.mode $pool }}
+{{- $dataStoragePath := dig "dataStorage" "path" $.Values.containerWorkers.dataStorage.path $pool }}
+{{- $dataStorageBucket := dig "dataStorage" "bucket" $.Values.containerWorkers.dataStorage.bucket $pool }}
+{{- $dataStorageJuicefsRedisUrl := dig "dataStorage" "juicefsRedisUrl" $.Values.containerWorkers.dataStorage.juicefsRedisUrl $pool }}
+{{- $dataStorageJuicefsFilesystemName := dig "dataStorage" "juicefsFilesystemName" $.Values.containerWorkers.dataStorage.juicefsFilesystemName $pool }}
+{{- $dataStorageJuicefsCacheSize := dig "dataStorage" "juicefsCacheSize" $.Values.containerWorkers.dataStorage.juicefsCacheSize $pool }}
+{{- $dataStorageJuicefsBlockSize := dig "dataStorage" "juicefsBlockSize" $.Values.containerWorkers.dataStorage.juicefsBlockSize $pool }}
+{{- $dataStorageJuicefsPrefetch := dig "dataStorage" "juicefsPrefetch" $.Values.containerWorkers.dataStorage.juicefsPrefetch $pool }}
+{{- $dataStorageJuicefsBufferSize := dig "dataStorage" "juicefsBufferSize" $.Values.containerWorkers.dataStorage.juicefsBufferSize $pool }}
+{{- $workspaceStorageAvailable := dig "workspaceStorage" "available" $.Values.containerWorkers.workspaceStorage.available $pool }}
+{{- $workspaceStorageMountsEnabled := dig "workspaceStorage" "mountsEnabled" $.Values.containerWorkers.workspaceStorage.mountsEnabled $pool }}
+{{- $workspaceStorageMode := dig "workspaceStorage" "mode" $.Values.containerWorkers.workspaceStorage.mode $pool }}
+{{- $workspaceStorageBaseMountPath := dig "workspaceStorage" "baseMountPath" $.Values.containerWorkers.workspaceStorage.baseMountPath $pool }}
+{{- $workspaceStorageMountpointBinary := dig "workspaceStorage" "mountpointBinary" $.Values.containerWorkers.workspaceStorage.mountpointBinary $pool }}
+{{- $artifactRetentionEnabled := dig "artifactRetention" "enabled" $.Values.containerWorkers.artifactRetention.enabled $pool }}
+{{- $artifactRetentionIntervalSeconds := dig "artifactRetention" "intervalSeconds" $.Values.containerWorkers.artifactRetention.intervalSeconds $pool }}
+{{- $imageCacheMaxBytes := dig "artifactRetention" "imageCacheMaxBytes" $.Values.containerWorkers.artifactRetention.imageCacheMaxBytes $pool }}
+{{- $imageMaterializationMaxBytes := dig "artifactRetention" "imageMaterializationMaxBytes" $.Values.containerWorkers.artifactRetention.imageMaterializationMaxBytes $pool }}
+{{- $checkpointCacheMaxBytes := dig "artifactRetention" "checkpointCacheMaxBytes" $.Values.containerWorkers.artifactRetention.checkpointCacheMaxBytes $pool }}
+{{- $artifactRetentionLowWatermarkPct := dig "artifactRetention" "lowWatermarkPct" $.Values.containerWorkers.artifactRetention.lowWatermarkPct $pool }}
+{{- $artifactRetentionRecentGuardSeconds := dig "artifactRetention" "recentGuardSeconds" $.Values.containerWorkers.artifactRetention.recentGuardSeconds $pool }}
+{{- $imageMaterializationRetentionSeconds := dig "artifactRetention" "imageMaterializationSeconds" $.Values.containerWorkers.artifactRetention.imageMaterializationSeconds $pool }}
+{{- $checkpointRetentionSeconds := dig "artifactRetention" "checkpointSeconds" $.Values.containerWorkers.artifactRetention.checkpointSeconds $pool }}
+{{- $sourceCacheMaxBytes := dig "sourceCache" "maxBytes" $.Values.containerWorkers.sourceCache.maxBytes $pool }}
+{{- $sourceCacheMaxEntries := dig "sourceCache" "maxEntries" $.Values.containerWorkers.sourceCache.maxEntries $pool }}
+{{- $sourceCacheRoot := dig "sourceCache" "root" $.Values.containerWorkers.sourceCache.root $pool }}
+{{- $imageBuildScratchMaxBytes := dig "imageBuild" "scratchMaxBytes" $.Values.containerWorkers.imageBuild.scratchMaxBytes $pool }}
+{{- $imageBuildPerBuildMaxBytes := dig "imageBuild" "perBuildMaxBytes" $.Values.containerWorkers.imageBuild.perBuildMaxBytes $pool }}
+{{- $imageBuildMinimumFreeBytes := dig "imageBuild" "minimumFreeBytes" $.Values.containerWorkers.imageBuild.minimumFreeBytes $pool }}
+{{- $imageBuildStaleSeconds := dig "imageBuild" "staleSeconds" $.Values.containerWorkers.imageBuild.staleSeconds $pool }}
+{{- $metricsEnabled := dig "metrics" "enabled" $.Values.containerWorkers.metrics.enabled $pool }}
+{{- $metricsIntervalSeconds := dig "metrics" "intervalSeconds" $.Values.containerWorkers.metrics.intervalSeconds $pool }}
+{{- $costHookEndpoint := dig "costHook" "endpoint" $.Values.containerWorkers.costHook.endpoint $pool }}
+{{- $costHookTimeoutSeconds := dig "costHook" "timeoutSeconds" $.Values.containerWorkers.costHook.timeoutSeconds $pool }}
+{{- $nvidiaCdiEnabled := dig "nvidiaCdiEnabled" $.Values.containerWorkers.nvidiaCdiEnabled $pool }}
+{{- $runRoot := dig "runRoot" $.Values.containerWorkers.runRoot $pool }}
+{{- $gvisorRoot := dig "gvisorRoot" $.Values.containerWorkers.gvisorRoot $pool }}
+{{- $registryAuthSecretName := dig "registryAuthSecretName" $.Values.containerWorkers.registryAuthSecretName $pool }}
+{{- $gpuEnabled := $pool.gpu.enabled }}
+{{- $gpuType := $pool.gpu.type }}
+{{- $gpuResourceName := $pool.gpu.resourceName }}
+{{- $gpuCount := int $pool.gpu.count }}
+{{- $configResourceName := printf "%s-config" $poolResourceName | trunc 63 | trimSuffix "-" }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $configResourceName }}
+  labels:
+    {{- include "lazycloud.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: container-worker
+    lazycloud.io/worker-pool: {{ $poolName | quote }}
+data:
+  worker.yaml: |
+    configuration:
+      execution:
+        runtime: {{ $runtime | quote }}
+        runtimes:
+          {{- toYaml $runtimes | nindent 10 }}
+        capacity:
+          cpu_millicores: {{ $cpuMillicores }}
+          memory_mib: {{ $memoryMib }}
+          gpu_type: {{ ternary $gpuType "" $gpuEnabled | quote }}
+          gpu_count: {{ ternary $gpuCount 0 $gpuEnabled }}
+        pool_mode: {{ $poolMode | quote }}
+        requires_pool_selector: {{ $requiresPoolSelector }}
+        preemptible: {{ $preemptible }}
+        persistent: true
+        agent_worker: true
+      network:
+        route_transport: {{ $routeTransport | quote }}
+        agent_bridge_network: true
+      paths:
+        bundle_root: {{ $bundleRoot | quote }}
+        image_cache_path: {{ $imageCachePath | quote }}
+        image_mount_root: {{ $imageMountRoot | quote }}
+        image_build_root: {{ $buildRoot | quote }}
+        source_cache_root: {{ $sourceCacheRoot | quote }}
+        checkpoint_root: {{ $checkpointRoot | quote }}
+      data_storage:
+        mode: {{ $dataStorageMode | quote }}
+        path: {{ $dataStoragePath | quote }}
+      monitoring:
+        metrics_enabled: {{ $metricsEnabled }}
+        metrics_interval_seconds: {{ $metricsIntervalSeconds }}
+      source_cache:
+        max_bytes: {{ $sourceCacheMaxBytes }}
+        max_entries: {{ $sourceCacheMaxEntries }}
+      image_build:
+        scratch_max_bytes: {{ $imageBuildScratchMaxBytes }}
+        per_build_max_bytes: {{ $imageBuildPerBuildMaxBytes }}
+        minimum_free_bytes: {{ $imageBuildMinimumFreeBytes }}
+        stale_seconds: {{ $imageBuildStaleSeconds }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $poolResourceName }}
+  labels:
+    {{- include "lazycloud.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: container-worker
+    lazycloud.io/worker-pool: {{ $poolName | quote }}
+  annotations:
+    lazycloud.io/scaling-owner: "scheduler-worker-pool-controller"
+    lazycloud.io/capacity-owner-id: {{ $capacityOwnerId | quote }}
+spec:
+  replicas: {{ $desiredWorkers }}
+  selector:
+    matchLabels:
+      {{- include "lazycloud.selectorLabels" $ | nindent 6 }}
+      app.kubernetes.io/component: container-worker
+      lazycloud.io/worker-pool: {{ $poolName | quote }}
+  template:
+    metadata:
+      labels:
+        {{- include "lazycloud.selectorLabels" $ | nindent 8 }}
+        app.kubernetes.io/component: container-worker
+        lazycloud.io/worker-pool: {{ $poolName | quote }}
+        {{- with $.Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        {{- include "lazycloud.secretRolloutAnnotations" $ | nindent 8 }}
+        checksum/worker-configuration: {{ dict "defaults" $.Values.containerWorkers "pool" $pool | toJson | sha256sum | quote }}
+        lazycloud.io/scaling-owner: "scheduler-worker-pool-controller"
+        lazycloud.io/capacity-owner-id: {{ $capacityOwnerId | quote }}
+        prometheus.io/scrape: "true"
+        prometheus.io/path: /metrics
+        prometheus.io/port: "9100"
+        {{- with $.Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "lazycloud.serviceAccountName" $ }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ dig "terminationGracePeriodSeconds" 90 $pool }}
+      {{- if dig "hostNetwork" $.Values.containerWorkers.hostNetwork $pool }}
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      {{- end }}
+      {{- if $runtimeClassName }}
+      runtimeClassName: {{ $runtimeClassName | quote }}
+      {{- end }}
+      {{- with $.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with (dig "nodeSelector" $.Values.containerWorkers.nodeSelector $pool) }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with (dig "affinity" $.Values.containerWorkers.affinity $pool) }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with (dig "tolerations" $.Values.containerWorkers.tolerations $pool) }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        {{- include "lazycloud.databaseWaitInitContainer" $ | nindent 8 }}
+        {{- include "lazycloud.workerTokenWaitInitContainer" (dict "root" $ "workerTokenSecretName" $workerTokenSecretName "workerTokenSecretKey" $workerTokenSecretKey) | nindent 8 }}
+      containers:
+        - name: container-worker
+          image: "{{ $imageRepository }}:{{ $imageTag }}"
+          imagePullPolicy: {{ $imagePullPolicy }}
+          command:
+            - tini
+            - --
+          args:
+            - lazycloud-container-worker
+            - --pool
+            - {{ $poolName | quote }}
+            - --container-service-port
+            - {{ $containerServicePort | quote }}
+            - --worker-repository-timeout-seconds
+            - {{ $repositoryTimeoutSeconds | quote }}
+            - --interval-seconds
+            - {{ $intervalSeconds | quote }}
+            - --keepalive-interval-seconds
+            - {{ $keepaliveIntervalSeconds | quote }}
+            - --worker-spindown-seconds
+            - {{ $spindownSeconds | quote }}
+            {{- if $routeTarget }}
+            - --route-target
+            - {{ $routeTarget | quote }}
+            {{- end }}
+            - --checkpoint-bucket
+            - {{ $.Values.objectStore.bucket | quote }}
+            - --data-storage-bucket
+            - {{ $dataStorageBucket | quote }}
+            {{- if $workspaceStorageMountsEnabled }}
+            - --workspace-storage-mounts
+            {{- else }}
+            - --no-workspace-storage-mounts
+            {{- end }}
+            - --workspace-storage-mode
+            - {{ $workspaceStorageMode | quote }}
+            - --workspace-storage-base-mount-path
+            - {{ $workspaceStorageBaseMountPath | quote }}
+            - --workspace-storage-mountpoint-binary
+            - {{ $workspaceStorageMountpointBinary | quote }}
+          env:
+            - name: LAZYCLOUD_HOME
+              value: "{{ $.Values.state.home }}"
+            - name: WORKER_CONFIG_PATH
+              value: /etc/lazycloud/worker/worker.yaml
+            - name: WORKER_REPOSITORY_URL
+              value: {{ $repositoryUrl | quote }}
+            - name: WORKER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $workerTokenSecretName | quote }}
+                  key: {{ $workerTokenSecretKey | quote }}
+                  optional: false
+            - name: WORKER_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: WORKER_MACHINE
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: WORKER_POD_ADDRESS
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: WORKER_CONTAINER_SERVICE_PORT
+              value: {{ $containerServicePort | quote }}
+            - name: WORKER_CONTAINER_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (include "lazycloud.configSecretName" $) $.Values.containerService.tokenSecretRef.name | quote }}
+                  key: {{ $.Values.containerService.tokenSecretRef.key | quote }}
+                  optional: true
+            - name: WORKER_SOURCE_CACHE_STORAGE_ID
+              value: "node:$(WORKER_MACHINE)"
+            - name: WORKER_POOL
+              value: {{ $poolName | quote }}
+            - name: WORKER_CAPACITY_OWNER_ID
+              value: {{ $capacityOwnerId | quote }}
+            - name: WORKER_NETWORK_PREFIX
+              value: {{ $networkPrefix | quote }}
+            {{- if $routeTarget }}
+            - name: WORKER_ROUTE_TARGET
+              value: {{ $routeTarget | quote }}
+            {{- end }}
+            {{- if $hostPortBindAddress }}
+            - name: WORKER_HOST_PORT_BIND_ADDRESS
+              value: {{ $hostPortBindAddress | quote }}
+            {{- end }}
+            - name: WORKER_CHECKPOINT_BUCKET
+              value: {{ $.Values.objectStore.bucket | quote }}
+            - name: WORKER_CHECKPOINT_CACHE_NAMESPACE
+              value: {{ dig "checkpointCacheNamespace" $.Values.containerWorkers.checkpointCacheNamespace $pool | quote }}
+            - name: DATA_STORAGE_BUCKET
+              value: {{ $dataStorageBucket | quote }}
+            - name: DATA_STORAGE_ENDPOINT_URL
+              value: {{ dig "dataStorage" "endpointUrl" (include "lazycloud.objectStoreEndpoint" $) $pool | quote }}
+            - name: DATA_STORAGE_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (include "lazycloud.objectStoreCredentialsSecretName" $) $.Values.containerWorkers.dataStorage.credentialsSecretRef.name | quote }}
+                  key: {{ $.Values.containerWorkers.dataStorage.credentialsSecretRef.accessKeyIdKey | quote }}
+                  optional: true
+            - name: DATA_STORAGE_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (include "lazycloud.objectStoreCredentialsSecretName" $) $.Values.containerWorkers.dataStorage.credentialsSecretRef.name | quote }}
+                  key: {{ $.Values.containerWorkers.dataStorage.credentialsSecretRef.secretAccessKeyKey | quote }}
+                  optional: true
+            - name: DATA_STORAGE_REGION_NAME
+              value: {{ dig "dataStorage" "regionName" $.Values.containerWorkers.dataStorage.regionName $pool | quote }}
+            - name: DATA_STORAGE_FORCE_PATH_STYLE
+              value: {{ dig "dataStorage" "forcePathStyle" $.Values.containerWorkers.dataStorage.forcePathStyle $pool | quote }}
+            {{- if $dataStorageJuicefsRedisUrl }}
+            - name: DATA_STORAGE_JUICEFS_REDIS_URL
+              value: {{ $dataStorageJuicefsRedisUrl | quote }}
+            {{- else }}
+            - name: DATA_STORAGE_JUICEFS_REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "lazycloud.juicefsMetadataSecretName" $ | quote }}
+                  key: {{ $.Values.juicefs.metadataSecretRef.key | quote }}
+                  optional: false
+            {{- end }}
+            - name: DATA_STORAGE_JUICEFS_FILESYSTEM_NAME
+              value: {{ $dataStorageJuicefsFilesystemName | quote }}
+            - name: DATA_STORAGE_JUICEFS_CACHE_SIZE
+              value: {{ $dataStorageJuicefsCacheSize | quote }}
+            - name: DATA_STORAGE_JUICEFS_BLOCK_SIZE
+              value: {{ $dataStorageJuicefsBlockSize | quote }}
+            - name: DATA_STORAGE_JUICEFS_PREFETCH
+              value: {{ $dataStorageJuicefsPrefetch | quote }}
+            - name: DATA_STORAGE_JUICEFS_BUFFER_SIZE
+              value: {{ $dataStorageJuicefsBufferSize | quote }}
+            - name: WORKER_WORKSPACE_STORAGE_MOUNTS_ENABLED
+              value: {{ $workspaceStorageMountsEnabled | quote }}
+            - name: WORKER_WORKSPACE_STORAGE_MODE
+              value: {{ $workspaceStorageMode | quote }}
+            - name: WORKER_WORKSPACE_STORAGE_BASE_MOUNT_PATH
+              value: {{ $workspaceStorageBaseMountPath | quote }}
+            - name: WORKER_WORKSPACE_STORAGE_AVAILABLE
+              value: {{ $workspaceStorageAvailable | quote }}
+            - name: WORKER_WORKSPACE_STORAGE_MOUNTPOINT_BINARY
+              value: {{ $workspaceStorageMountpointBinary | quote }}
+            - name: WORKER_ARTIFACT_RETENTION_ENABLED
+              value: {{ $artifactRetentionEnabled | quote }}
+            - name: WORKER_ARTIFACT_RETENTION_INTERVAL_SECONDS
+              value: {{ $artifactRetentionIntervalSeconds | quote }}
+            - name: WORKER_IMAGE_CACHE_MAX_BYTES
+              value: {{ $imageCacheMaxBytes | quote }}
+            - name: WORKER_IMAGE_MATERIALIZATION_MAX_BYTES
+              value: {{ $imageMaterializationMaxBytes | quote }}
+            - name: WORKER_CHECKPOINT_CACHE_MAX_BYTES
+              value: {{ $checkpointCacheMaxBytes | quote }}
+            - name: WORKER_ARTIFACT_RETENTION_LOW_WATERMARK_PCT
+              value: {{ $artifactRetentionLowWatermarkPct | quote }}
+            - name: WORKER_ARTIFACT_RETENTION_RECENT_GUARD_SECONDS
+              value: {{ $artifactRetentionRecentGuardSeconds | quote }}
+            - name: WORKER_IMAGE_MATERIALIZATION_RETENTION_SECONDS
+              value: {{ $imageMaterializationRetentionSeconds | quote }}
+            - name: WORKER_CHECKPOINT_RETENTION_SECONDS
+              value: {{ $checkpointRetentionSeconds | quote }}
+            {{- if $costHookEndpoint }}
+            - name: WORKER_CONTAINER_COST_HOOK_ENDPOINT
+              value: {{ $costHookEndpoint | quote }}
+            {{- end }}
+            - name: WORKER_CONTAINER_COST_HOOK_TIMEOUT_SECONDS
+              value: {{ $costHookTimeoutSeconds | quote }}
+            - name: WORKER_CONTAINER_COST_HOOK_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (include "lazycloud.configSecretName" $) $.Values.containerWorkers.costHook.tokenSecretRef.name | quote }}
+                  key: {{ $.Values.containerWorkers.costHook.tokenSecretRef.key | quote }}
+                  optional: true
+            {{- if $.Values.cache.enabled }}
+            - name: CACHE_NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            - name: WORKER_CACHE_ENDPOINT
+              value: {{ printf "http://$(CACHE_NODE_IP):%v" $.Values.cache.port | quote }}
+            - name: LAZYCLOUD_CACHE_SERVICE_TOKEN_FILE
+              value: /var/run/secrets/lazycloud-cache/token
+            {{- end }}
+            - name: BUILDAH_RUNTIME
+              value: /usr/sbin/runc
+            - name: BUILDAH_ISOLATION
+              value: chroot
+            - name: BUILDAH_LAYERS
+              value: "true"
+            - name: REGISTRY_AUTH_FILE
+              value: {{ printf "%s/auth.json" $registryPath | quote }}
+            {{- if $gpuEnabled }}
+            - name: NVIDIA_VISIBLE_DEVICES
+              value: "all"
+            - name: NVIDIA_DRIVER_CAPABILITIES
+              value: compute,utility,graphics,ngx,video
+            - name: WORKER_GPU_DEVICES
+              value: "all"
+            {{- end }}
+            - name: WORKER_NVIDIA_CDI_ENABLED
+              value: {{ $nvidiaCdiEnabled | quote }}
+          livenessProbe:
+            {{- toYaml $.Values.containerWorkers.healthcheck | nindent 12 }}
+          readinessProbe:
+            {{- toYaml $.Values.containerWorkers.healthcheck | nindent 12 }}
+          {{- with (dig "securityContext" $.Values.containerWorkers.securityContext $pool) }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            requests:
+              cpu: {{ printf "%dm" $cpuMillicores | quote }}
+              memory: {{ printf "%dMi" $memoryMib | quote }}
+              {{- if and $gpuEnabled $gpuCount }}
+              {{ $gpuResourceName }}: {{ $gpuCount | quote }}
+              {{- end }}
+            limits:
+              cpu: {{ printf "%dm" $cpuMillicores | quote }}
+              memory: {{ printf "%dMi" $memoryMib | quote }}
+              {{- if and $gpuEnabled $gpuCount }}
+              {{ $gpuResourceName }}: {{ $gpuCount | quote }}
+              {{- end }}
+          volumeMounts:
+            - name: worker-configuration
+              mountPath: /etc/lazycloud/worker/worker.yaml
+              subPath: worker.yaml
+              readOnly: true
+            {{- if $.Values.cache.enabled }}
+            - name: cache-service-token
+              mountPath: /var/run/secrets/lazycloud-cache
+              readOnly: true
+            {{- end }}
+            - name: lazycloud-builds
+              mountPath: {{ $buildRoot }}
+            - name: lazycloud-images
+              mountPath: {{ $imageCachePath }}
+            - name: lazycloud-checkpoints
+              mountPath: {{ $checkpointRoot }}
+            - name: lazycloud-source-cache
+              mountPath: {{ $sourceCacheRoot }}
+            - name: lazycloud-registry
+              mountPath: {{ $registryPath }}
+            - name: lazycloud-run
+              mountPath: {{ $runRoot }}
+            - name: gvisor-run
+              mountPath: {{ $gvisorRoot }}
+            - name: dshm
+              mountPath: /dev/shm
+            - name: dev-fuse
+              mountPath: /dev/fuse
+            - name: cgroup
+              mountPath: /sys/fs/cgroup
+            - name: netns
+              mountPath: /var/run/netns
+            - name: kubelet-device-plugins
+              mountPath: /var/lib/kubelet/device-plugins
+              readOnly: true
+      volumes:
+        - name: worker-configuration
+          configMap:
+            name: {{ $configResourceName }}
+            items:
+              - key: worker.yaml
+                path: worker.yaml
+        {{- if $.Values.cache.enabled }}
+        - name: cache-service-token
+          secret:
+            secretName: {{ include "lazycloud.cacheServiceSecretName" $ }}
+            items:
+              - key: token
+                path: token
+                mode: 0400
+        {{- end }}
+        - name: lazycloud-builds
+          hostPath:
+            path: {{ dig "buildHostPath" $.Values.containerWorkers.buildHostPath $pool | quote }}
+            type: DirectoryOrCreate
+        - name: lazycloud-images
+          hostPath:
+            path: {{ dig "imageHostPath" $.Values.containerWorkers.imageHostPath $pool | quote }}
+            type: DirectoryOrCreate
+        - name: lazycloud-checkpoints
+          hostPath:
+            path: {{ dig "checkpointHostPath" $.Values.containerWorkers.checkpointHostPath $pool | quote }}
+            type: DirectoryOrCreate
+        - name: lazycloud-source-cache
+          hostPath:
+            path: {{ $sourceCacheRoot | quote }}
+            type: DirectoryOrCreate
+        - name: lazycloud-registry
+          {{- if $registryAuthSecretName }}
+          secret:
+            secretName: {{ $registryAuthSecretName }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: lazycloud-run
+          emptyDir: {}
+        - name: gvisor-run
+          emptyDir: {}
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ dig "sharedMemorySize" "1Gi" $pool | quote }}
+        - name: dev-fuse
+          hostPath:
+            path: /dev/fuse
+            type: CharDevice
+        - name: cgroup
+          hostPath:
+            path: /sys/fs/cgroup
+            type: Directory
+        - name: netns
+          hostPath:
+            path: /var/run/netns
+            type: DirectoryOrCreate
+        - name: kubelet-device-plugins
+          hostPath:
+            path: /var/lib/kubelet/device-plugins
+            type: DirectoryOrCreate
+{{- end }}
+{{- end }}

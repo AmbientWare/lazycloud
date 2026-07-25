@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if ! command -v aws >/dev/null 2>&1; then
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update
+    apt-get install -y awscli
+  elif command -v yum >/dev/null 2>&1; then
+    yum install -y awscli
+  fi
+fi
+
+until TOKEN="$(aws ssm get-parameter --name "${node_token_parameter}" --with-decryption --query Parameter.Value --output text 2>/dev/null)"; do
+  sleep 5
+done
+curl -sfL https://get.k3s.io | K3S_URL="${server_url}" K3S_TOKEN="$TOKEN" sh -

@@ -1,0 +1,478 @@
+from __future__ import annotations
+
+from collections.abc import Iterable
+from datetime import datetime, timedelta
+from enum import StrEnum
+
+from pydantic import Field, JsonValue, model_validator
+from shared.contracts import ContractModel
+from shared.timestamps import utc_now
+
+
+class BacklogStatus(StrEnum):
+    Queued = "queued"
+    Reserved = "reserved"
+    Dispatched = "dispatched"
+
+
+class PoolHealthStatus(StrEnum):
+    Healthy = "healthy"
+    Degraded = "degraded"
+    Unavailable = "unavailable"
+
+
+class SchedulingDecision(StrEnum):
+    Dispatch = "dispatch"
+    WaitForWorker = "wait-for-worker"
+    ProvisionWorker = "provision-worker"
+    RetryLater = "retry-later"
+    Failed = "failed"
+
+
+class BacklogEntry(ContractModel):
+    id: str
+    queue: str
+    payload: JsonValue = None
+    priority: int = 100
+    status: BacklogStatus = BacklogStatus.Queued
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class SchedulerBacklogRequest(BacklogEntry):
+    ready_at: datetime = Field(default_factory=utc_now)
+    retry_count: int = 0
+
+
+class BatchPlan(ContractModel):
+    entries: list[BacklogEntry]
+    max_batch_size: int
+
+    @property
+    def selected(self) -> list[BacklogEntry]:
+        return sorted(self.entries, key=lambda item: (item.priority, item.created_at))[
+            : self.max_batch_size
+        ]
+
+
+class Reservation(ContractModel):
+    id: str
+    pool: str
+    task_id: str
+    worker_id: str | None = None
+    expires_at: datetime
+    created_at: datetime = Field(default_factory=utc_now)
+
+    @property
+    def expired(self) -> bool:
+        return self.expires_at <= utc_now()
+
+
+class PoolHealth(ContractModel):
+    pool: str
+    status: PoolHealthStatus
+    ready_workers: int = 0
+    desired_workers: int = 0
+    reason: str = ""
+
+
+class SchedulerCredential(ContractModel):
+    name: str
+    token_prefix: str
+    expires_at: datetime | None = None
+
+    @property
+    def expired(self) -> bool:
+        return self.expires_at is not None and self.expires_at <= utc_now()
+
+
+class WorkerPoolCapacity(ContractModel):
+    free_cpu: float = 0
+    pending_cpu: float = 0
+    free_memory_mib: int = 0
+    pending_memory_mib: int = 0
+    free_gpu: int = 0
+    pending_gpu: int = 0
+
+    @property
+    def available_cpu(self) -> float:
+        return self.free_cpu + self.pending_cpu
+
+    @property
+    def available_memory_mib(self) -> int:
+        return self.free_memory_mib + self.pending_memory_mib
+
+    @property
+    def available_gpu(self) -> int:
+        return self.free_gpu + self.pending_gpu
+
+
+class SchedulingRequest(ContractModel):
+    id: str
+    capacity_owner_id: str = ""
+    queue: str = "tasks"
+    payload: JsonValue = None
+    cpu: float = 1
+    memory_mib: int = 512
+    gpu_type: str = ""
+    gpu_request: list[str] = Field(default_factory=list)
+    gpu_count: int = 0
+    priority: int = 100
+    pool_selector: str = ""
+    runtime_class: str = ""
+    docker_enabled: bool = False
+    preemptible: bool = False
+    provisionable: bool = True
+    retry_count: int = 0
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class WorkerCapacity(ContractModel):
+    worker_id: str
+    pool: str = "default"
+    capacity_owner_id: str = ""
+    gpu_type: str = ""
+    runtime_class: str = ""
+    runtime_classes: list[str] = Field(default_factory=list)
+    requires_pool_selector: bool = False
+    preemptible: bool = False
+    free_cpu: float = Field(default=0, ge=0)
+    free_memory_mib: int = Field(default=0, ge=0)
+    free_gpu: int = Field(default=0, ge=0)
+    total_cpu: float = Field(ge=0)
+    total_memory_mib: int = Field(ge=0)
+    total_gpu: int = Field(ge=0)
+    pending: bool = False
+
+    @model_validator(mode="after")
+    def free_capacity_cannot_exceed_total_capacity(self) -> WorkerCapacity:
+        if self.free_cpu > self.total_cpu:
+            raise ValueError("free CPU cannot exceed total CPU")
+        if self.free_memory_mib > self.total_memory_mib:
+            raise ValueError("free memory cannot exceed total memory")
+        if self.free_gpu > self.total_gpu:
+            raise ValueError("free GPU count cannot exceed total GPU count")
+        return self
+
+    def fit_rejection(self, request: SchedulingRequest) -> str:
+        """Name the first reason this worker cannot take the request, else "".
+
+        can_fit answers yes or no, so an unplaceable request produced a bare
+        retry-limit with nothing describing the mismatch. Keep the checks in the
+        same order as can_fit so the reported reason is the deciding one.
+        """
+        if request.capacity_owner_id and request.capacity_owner_id != self.capacity_owner_id:
+            return f"capacity owner {request.capacity_owner_id} != {self.capacity_owner_id}"
+        if request.pool_selector and request.pool_selector != self.pool:
+            return f"pool selector {request.pool_selector!r} != pool {self.pool!r}"
+        if not request.pool_selector and self.requires_pool_selector:
+            return "worker requires an explicit pool selector"
+        if request.runtime_class and request.runtime_class not in self.runtime_classes:
+            return f"runtime {request.runtime_class!r} not in {self.runtime_classes}"
+        if not request.preemptible and self.preemptible:
+            return "worker is preemptible but request is not"
+        if request.gpu_count > 0 and not self.total_gpu:
+            return "request needs a GPU worker"
+        if request.gpu_count == 0 and self.gpu_type:
+            return "worker is GPU-only"
+        if self.free_cpu < request.cpu:
+            return f"free cpu {self.free_cpu} < {request.cpu}"
+        if self.free_memory_mib < request.memory_mib:
+            return f"free memory {self.free_memory_mib}MiB < {request.memory_mib}MiB"
+        if self.free_gpu < request.gpu_count:
+            return f"free gpu {self.free_gpu} < {request.gpu_count}"
+        return ""
+
+    def can_fit(self, request: SchedulingRequest) -> bool:
+        if request.capacity_owner_id and request.capacity_owner_id != self.capacity_owner_id:
+            return False
+        if request.pool_selector and request.pool_selector != self.pool:
+            return False
+        if not request.pool_selector and self.requires_pool_selector:
+            return False
+        if request.runtime_class and request.runtime_class not in self.runtime_classes:
+            return False
+        if request.docker_enabled:
+            if request.runtime_class:
+                if request.runtime_class not in _DOCKER_ENABLED_RUNTIME_CLASSES:
+                    return False
+            elif not (set(self.runtime_classes) & _DOCKER_ENABLED_RUNTIME_CLASSES):
+                return False
+        if not request.preemptible and self.preemptible:
+            return False
+        if request.gpu_count > 0:
+            if _requires_specific_gpu_type(request) and (
+                not self.gpu_type or not _gpu_type_matches_request(self.gpu_type, request)
+            ):
+                return False
+        elif self.gpu_type:
+            return False
+        return (
+            self.free_cpu >= request.cpu
+            and self.free_memory_mib >= request.memory_mib
+            and self.free_gpu >= request.gpu_count
+        )
+
+    def reserve(self, request: SchedulingRequest) -> WorkerCapacity:
+        return self.model_copy(
+            update={
+                "free_cpu": self.free_cpu - request.cpu,
+                "free_memory_mib": self.free_memory_mib - request.memory_mib,
+                "free_gpu": self.free_gpu - request.gpu_count,
+            }
+        )
+
+
+class PlannedDispatch(ContractModel):
+    worker_id: str
+    request_id: str
+    pool: str
+
+
+class WorkerCapacityReservation(ContractModel):
+    worker_id: str
+    request_id: str
+    cpu: float
+    memory_mib: int
+    gpu_count: int = 0
+
+
+class SchedulingOutcome(ContractModel):
+    request_id: str
+    decision: SchedulingDecision
+    worker_id: str | None = None
+    reason: str = ""
+    requeue_delay_seconds: float = 0
+
+
+class SchedulingBatchPlan(ContractModel):
+    dispatches: list[PlannedDispatch] = Field(default_factory=list)
+    reservations: list[WorkerCapacityReservation] = Field(default_factory=list)
+    outcomes: list[SchedulingOutcome] = Field(default_factory=list)
+
+    def dispatches_by_worker(self) -> dict[str, list[PlannedDispatch]]:
+        grouped: dict[str, list[PlannedDispatch]] = {}
+        for dispatch in self.dispatches:
+            grouped.setdefault(dispatch.worker_id, []).append(dispatch)
+        return grouped
+
+
+_DOCKER_ENABLED_RUNTIME_CLASSES = frozenset({"runsc", "gvisor", "sandboxed-oci"})
+
+
+def _gpu_type_matches_request(worker_gpu_type: str, request: SchedulingRequest) -> bool:
+    requested = {item for item in request.gpu_request if item and item.lower() != "none"}
+    if request.gpu_type:
+        requested.add(request.gpu_type)
+    if not requested:
+        return True
+    return "any" in {item.lower() for item in requested} or worker_gpu_type in requested
+
+
+def _requires_specific_gpu_type(request: SchedulingRequest) -> bool:
+    requested = {item.lower() for item in request.gpu_request if item and item.lower() != "none"}
+    if request.gpu_type:
+        requested.add(request.gpu_type.lower())
+    return bool(requested - {"any"})
+
+
+class RequestBacklog:
+    def __init__(self, entries: Iterable[SchedulerBacklogRequest] | None = None) -> None:
+        self._entries = list(entries or [])
+
+    def push(
+        self,
+        entry: BacklogEntry | SchedulerBacklogRequest,
+        *,
+        now: datetime | None = None,
+    ) -> SchedulerBacklogRequest:
+        return self.push_after(entry, delay=timedelta(), now=now)
+
+    def push_after(
+        self,
+        entry: BacklogEntry | SchedulerBacklogRequest,
+        *,
+        delay: timedelta = timedelta(),
+        now: datetime | None = None,
+    ) -> SchedulerBacklogRequest:
+        current = now or utc_now()
+        record = SchedulerBacklogRequest.model_validate(entry)
+        if delay:
+            record.ready_at = current + delay
+        elif not isinstance(entry, SchedulerBacklogRequest):
+            record.ready_at = current
+        self._entries.append(record)
+        return record
+
+    def pop_ready(
+        self,
+        *,
+        count: int = 1,
+        now: datetime | None = None,
+    ) -> list[SchedulerBacklogRequest]:
+        current = now or utc_now()
+        ready = [entry for entry in self._entries if entry.ready_at <= current]
+        ready.sort(key=lambda item: (item.ready_at, item.priority, item.created_at, item.id))
+        selected = ready[:count]
+        selected_ids = {entry.id for entry in selected}
+        self._entries = [entry for entry in self._entries if entry.id not in selected_ids]
+        return selected
+
+    def peek_ready(self, *, now: datetime | None = None) -> list[SchedulerBacklogRequest]:
+        current = now or utc_now()
+        return sorted(
+            [entry for entry in self._entries if entry.ready_at <= current],
+            key=lambda item: (item.ready_at, item.priority, item.created_at, item.id),
+        )
+
+    def entries(self) -> list[SchedulerBacklogRequest]:
+        return list(self._entries)
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+
+def plan_batch(entries: list[BacklogEntry], *, max_batch_size: int) -> BatchPlan:
+    return BatchPlan(entries=entries, max_batch_size=max_batch_size)
+
+
+def evaluate_pool_health(pool: str, *, ready_workers: int, desired_workers: int) -> PoolHealth:
+    if ready_workers <= 0 and desired_workers > 0:
+        status = PoolHealthStatus.Unavailable
+        reason = "no ready workers"
+    elif ready_workers < desired_workers:
+        status = PoolHealthStatus.Degraded
+        reason = "ready workers below desired count"
+    else:
+        status = PoolHealthStatus.Healthy
+        reason = "ready workers meet desired count"
+    return PoolHealth(
+        pool=pool,
+        status=status,
+        ready_workers=ready_workers,
+        desired_workers=desired_workers,
+        reason=reason,
+    )
+
+
+def select_worker_for_request(
+    request: SchedulingRequest,
+    workers: Iterable[WorkerCapacity],
+    *,
+    include_pending: bool = False,
+) -> WorkerCapacity | None:
+    candidates = [
+        worker
+        for worker in workers
+        if (include_pending or not worker.pending) and worker.can_fit(request)
+    ]
+    if not candidates:
+        return None
+    return min(
+        candidates,
+        key=lambda item: (
+            item.pending,
+            *(-value for value in _post_placement_headroom(item, request)),
+            item.worker_id,
+        ),
+    )
+
+
+def _post_placement_headroom(
+    worker: WorkerCapacity,
+    request: SchedulingRequest,
+) -> tuple[float, ...]:
+    headroom = [
+        (worker.free_cpu - request.cpu) / worker.total_cpu if worker.total_cpu > 0 else 0.0,
+        (worker.free_memory_mib - request.memory_mib) / worker.total_memory_mib
+        if worker.total_memory_mib > 0
+        else 0.0,
+    ]
+    if request.gpu_count > 0:
+        headroom.append(
+            (worker.free_gpu - request.gpu_count) / worker.total_gpu
+            if worker.total_gpu > 0
+            else 0.0
+        )
+    return tuple(sorted(headroom))
+
+
+def plan_scheduling_batch(
+    requests: Iterable[SchedulingRequest],
+    workers: Iterable[WorkerCapacity],
+    *,
+    allow_provisioning: bool = True,
+    worker_wait_delay: timedelta = timedelta(seconds=1),
+) -> SchedulingBatchPlan:
+    remaining = {worker.worker_id: worker.model_copy() for worker in workers}
+    plan = SchedulingBatchPlan()
+    ordered_requests = sorted(requests, key=lambda item: (item.priority, item.created_at, item.id))
+    for request in ordered_requests:
+        worker = select_worker_for_request(request, remaining.values())
+        if worker is not None:
+            remaining[worker.worker_id] = worker.reserve(request)
+            plan.dispatches.append(
+                PlannedDispatch(
+                    worker_id=worker.worker_id,
+                    request_id=request.id,
+                    pool=worker.pool,
+                )
+            )
+            plan.reservations.append(
+                WorkerCapacityReservation(
+                    worker_id=worker.worker_id,
+                    request_id=request.id,
+                    cpu=request.cpu,
+                    memory_mib=request.memory_mib,
+                    gpu_count=request.gpu_count,
+                )
+            )
+            plan.outcomes.append(
+                SchedulingOutcome(
+                    request_id=request.id,
+                    decision=SchedulingDecision.Dispatch,
+                    worker_id=worker.worker_id,
+                    reason="reserved existing worker capacity",
+                )
+            )
+            continue
+
+        pending_worker = select_worker_for_request(
+            request,
+            remaining.values(),
+            include_pending=True,
+        )
+        if pending_worker is not None:
+            remaining[pending_worker.worker_id] = pending_worker.reserve(request)
+            plan.reservations.append(
+                WorkerCapacityReservation(
+                    worker_id=pending_worker.worker_id,
+                    request_id=request.id,
+                    cpu=request.cpu,
+                    memory_mib=request.memory_mib,
+                    gpu_count=request.gpu_count,
+                )
+            )
+            plan.outcomes.append(
+                SchedulingOutcome(
+                    request_id=request.id,
+                    decision=SchedulingDecision.WaitForWorker,
+                    worker_id=pending_worker.worker_id,
+                    reason="matching pending worker capacity exists",
+                    requeue_delay_seconds=worker_wait_delay.total_seconds(),
+                )
+            )
+            continue
+
+        can_provision = allow_provisioning and request.provisionable
+        decision = (
+            SchedulingDecision.ProvisionWorker if can_provision else SchedulingDecision.Failed
+        )
+        plan.outcomes.append(
+            SchedulingOutcome(
+                request_id=request.id,
+                decision=decision,
+                reason="no worker capacity available",
+                requeue_delay_seconds=worker_wait_delay.total_seconds() if can_provision else 0,
+            )
+        )
+    return plan

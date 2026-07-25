@@ -1,0 +1,288 @@
+from __future__ import annotations
+
+from contextlib import suppress
+from dataclasses import dataclass
+
+from compute.agent_control import ComputePrincipal, plan_join_token_creation
+from compute.provider_nodes import ProviderNodeIdentityProof, ProviderNodeIdentityVerifier
+from compute.service import ComputeService
+from database.repositories.compute import (
+    AwsAccountConnectionRepository,
+    ComputeJoinCredentialRepository,
+    ComputePoolRepository,
+    ComputeProviderInstanceRepository,
+)
+from pydantic import SecretStr
+from redis.exceptions import RedisError
+from shared.aws_connections import (
+    AwsAccountAuthorizationPhase,
+    AwsAccountConnection,
+)
+from shared.compute_enrollment import MachineBootstrapPhase
+from shared.compute_policy import (
+    ComputeCapacityMode,
+    ComputePoolPhase,
+    ComputePoolRecord,
+    ComputePoolVisibility,
+)
+from shared.errors import ConflictError, InvalidInputError, UpstreamUnavailableError
+from shared.http.provider_nodes import (
+    ProviderNodeBootstrapFailureRequest,
+    ProviderNodeBootstrapFailureResponse,
+    ProviderNodeBootstrapPhaseRequest,
+    ProviderNodeEnrollmentRequest,
+)
+from shared.provider_config import ProviderKind
+from shared.timestamps import utc_now
+
+from gateway.http import JoinAgentRequest, JoinAgentResponse, LeaveAgentRequest
+from gateway.service import GatewayControlService
+
+# A degraded pool still enrolls and still accepts bootstrap reports. Refusing a
+# healthy machine because earlier machines failed is self-reinforcing: the
+# refusal is itself recorded as another bootstrap failure, so the pool can never
+# recover without an operator, and the reports that would explain the original
+# failure are discarded exactly when they matter most.
+_ENROLLABLE_POOL_PHASES = {
+    ComputePoolPhase.Provisioning,
+    ComputePoolPhase.Ready,
+    ComputePoolPhase.Updating,
+    ComputePoolPhase.Degraded,
+}
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderNodeEnrollmentService:
+    gateway: GatewayControlService
+    compute: ComputeService
+    identity_verifier: ProviderNodeIdentityVerifier
+
+    def enroll(self, request: ProviderNodeEnrollmentRequest) -> JoinAgentResponse:
+        pool, connection = self._enrollment_target(request)
+        self._verify_active_node(
+            pool=pool,
+            connection=connection,
+            provider=request.provider,
+            region=request.region,
+            provider_instance_id=request.provider_instance_id,
+            identity_proof_url=request.identity_proof_url,
+        )
+        join_token = self._issue_join_token(pool.id, pool.workspace_id, pool.name)
+        joined = self.gateway.join_agent(
+            JoinAgentRequest(
+                join_token=join_token.get_secret_value(),
+                machine_fingerprint=request.machine_fingerprint,
+                hostname=request.hostname,
+                os=request.os,
+                arch=request.arch,
+                cpu_count=request.capacity.cpu_count,
+                cpu_millicores=request.capacity.cpu_millicores,
+                memory_mb=request.capacity.memory_mb,
+                gpu=request.capacity.gpu,
+                gpu_ids=request.capacity.gpu_ids,
+                gpu_count=request.capacity.gpu_count,
+                preflight=request.preflight,
+                schedulable=request.requested_schedulable,
+                executor=request.executor,
+            )
+        )
+        try:
+            if joined.workspace_id != pool.workspace_id or joined.pool_name != pool.name:
+                raise ConflictError("provider node joined a different compute pool")
+            with self.gateway.services.context.database.session() as session:
+                bound = ComputeProviderInstanceRepository(session).bind_machine(
+                    pool.id,
+                    request.provider_instance_id,
+                    joined.machine_id,
+                )
+            if bound is None:
+                raise ConflictError("provider node is no longer available for enrollment")
+            self.compute.record_provider_bootstrap_status(
+                pool_id=pool.id,
+                provider_instance_id=request.provider_instance_id,
+                phase=MachineBootstrapPhase.Joining,
+                failure_reason=None,
+            )
+        except Exception:
+            with suppress(Exception):
+                self.gateway.leave_agent(LeaveAgentRequest(agent_token=joined.agent_token))
+            raise
+        return joined
+
+    def report_failure(
+        self,
+        request: ProviderNodeBootstrapFailureRequest,
+    ) -> ProviderNodeBootstrapFailureResponse:
+        pool, connection = self._enrollment_target(request)
+        self._verify_active_node(
+            pool=pool,
+            connection=connection,
+            provider=request.provider,
+            region=request.region,
+            provider_instance_id=request.provider_instance_id,
+            identity_proof_url=request.identity_proof_url,
+        )
+        observed = self.compute.record_provider_bootstrap_status(
+            pool_id=pool.id,
+            provider_instance_id=request.provider_instance_id,
+            phase=MachineBootstrapPhase.Failed,
+            failure_reason=request.failure_reason,
+        )
+        return ProviderNodeBootstrapFailureResponse(
+            provider_instance_id=request.provider_instance_id,
+            phase=observed.bootstrap_phase,
+            failure_reason=observed.bootstrap_failure_reason,
+            observed_at=observed.bootstrap_observed_at,
+        )
+
+    def record_phase(
+        self,
+        request: ProviderNodeBootstrapPhaseRequest,
+    ) -> ProviderNodeBootstrapFailureResponse:
+        pool, connection = self._enrollment_target(request)
+        self._verify_active_node(
+            pool=pool,
+            connection=connection,
+            provider=request.provider,
+            region=request.region,
+            provider_instance_id=request.provider_instance_id,
+            identity_proof_url=request.identity_proof_url,
+        )
+        observed = self.compute.record_provider_bootstrap_status(
+            pool_id=pool.id,
+            provider_instance_id=request.provider_instance_id,
+            phase=request.phase,
+            failure_reason=None,
+        )
+        return ProviderNodeBootstrapFailureResponse(
+            provider_instance_id=request.provider_instance_id,
+            phase=observed.bootstrap_phase,
+            failure_reason=observed.bootstrap_failure_reason,
+            observed_at=observed.bootstrap_observed_at,
+        )
+
+    def _verify_active_node(
+        self,
+        *,
+        pool: ComputePoolRecord,
+        connection: AwsAccountConnection,
+        provider: ProviderKind,
+        region: str,
+        provider_instance_id: str,
+        identity_proof_url: str,
+    ) -> None:
+        expected_provider_resource_id = pool.provider_state.resource_id
+        current_pool, snapshot = self.compute.describe_internal_pool(
+            pool.workspace_id,
+            pool.name,
+        )
+        if (
+            not expected_provider_resource_id
+            or current_pool.id != pool.id
+            or snapshot.resource_id != expected_provider_resource_id
+        ):
+            raise UpstreamUnavailableError("provider pool identity changed during enrollment")
+        self.identity_verifier.verify(
+            ProviderNodeIdentityProof(
+                provider=provider,
+                region=region,
+                provider_instance_id=provider_instance_id,
+                proof_url=SecretStr(identity_proof_url),
+            ),
+            pool=current_pool,
+            connection=connection,
+            provider_instance_ids=tuple(item.provider_instance_id for item in snapshot.instances),
+        )
+
+    def _enrollment_target(
+        self,
+        request: (
+            ProviderNodeEnrollmentRequest
+            | ProviderNodeBootstrapFailureRequest
+            | ProviderNodeBootstrapPhaseRequest
+        ),
+    ) -> tuple[ComputePoolRecord, AwsAccountConnection]:
+        if request.provider is not ProviderKind.Aws:
+            raise InvalidInputError(f"unsupported provider node: {request.provider.value}")
+        with self.gateway.services.context.database.session() as session:
+            pool = ComputePoolRepository(session).get(request.enrollment_request_id)
+            if pool is None:
+                raise InvalidInputError("provider node enrollment request was not found")
+            if (
+                pool.visibility is not ComputePoolVisibility.Internal
+                or pool.capacity_mode is not ComputeCapacityMode.Pooled
+                or pool.phase not in _ENROLLABLE_POOL_PHASES
+                or not pool.provider_ref.startswith("aws:")
+                or pool.provider_connection_id is None
+                or pool.region != request.region
+            ):
+                raise InvalidInputError("provider node enrollment request is not active")
+            connection = AwsAccountConnectionRepository(session).get(pool.provider_connection_id)
+        if (
+            connection is None
+            or connection.id != pool.provider_ref.removeprefix("aws:")
+            or connection.workspace_id != pool.workspace_id
+            or not connection.accepts_placement
+            or connection.active_authorization is None
+            or connection.active_authorization.phase is not AwsAccountAuthorizationPhase.Ready
+        ):
+            raise InvalidInputError("provider node connection is not active")
+        return pool, connection
+
+    def _issue_join_token(
+        self,
+        pool_id: str,
+        workspace_id: str,
+        pool_name: str,
+    ) -> SecretStr:
+        plan = plan_join_token_creation(
+            ComputePrincipal(
+                workspace_id=workspace_id,
+                owner_token_id=pool_id,
+            ),
+            pool_name,
+            ttl="2m",
+            max_uses=1,
+        )
+        with self.gateway.services.context.database.session() as session:
+            pool = ComputePoolRepository(session).get(pool_id, for_update=True)
+            if (
+                pool is None
+                or pool.workspace_id != workspace_id
+                or pool.name != pool_name
+                or pool.phase not in _ENROLLABLE_POOL_PHASES
+            ):
+                raise ConflictError("provider node enrollment request changed")
+            credentials = ComputeJoinCredentialRepository(session)
+            durable = credentials.create(
+                token_hash=plan.token_hash,
+                workspace_id=workspace_id,
+                pool_name=pool_name,
+                created_by_token_id=None,
+                max_uses=1,
+                expires_at=plan.expires_at,
+            )
+        state = plan.state.model_copy(
+            update={
+                "credential_id": durable.id,
+                "created_by_token_id": "provider-node",
+            }
+        )
+        try:
+            self.gateway.compute_states.save_join_token_state(
+                state,
+                ttl_seconds=plan.ttl_seconds,
+            )
+        except RedisError as exc:
+            with self.gateway.services.context.database.session() as session:
+                credentials = ComputeJoinCredentialRepository(session)
+                current = credentials.get(durable.id, for_update=True)
+                if current is not None:
+                    credentials.save(current.revoke(now=utc_now()))
+            raise UpstreamUnavailableError(
+                "provider node enrollment coordination is unavailable"
+            ) from exc
+        return SecretStr(plan.token)
+
+
+__all__ = ["ProviderNodeEnrollmentService"]

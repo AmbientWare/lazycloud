@@ -1,0 +1,65 @@
+---
+title: "Examples"
+description: "Complete LazyCloud applications for GPU inference, model training, ASGI services, coding agents, and parallel data processing."
+---
+
+Each example is a complete application built with the public LazyCloud Python SDK. Start with the
+guide for the workflow you want, then use the matching directory under `examples/` as the runnable
+source of truth.
+
+<CardGroup cols={2}>
+  <Card
+    title="OpenAI-compatible LLM service"
+    icon="messages"
+    href="/examples/openai-compatible-llm"
+  >
+    Serve a public language model behind an authenticated OpenAI-compatible API on GPU compute.
+  </Card>
+  <Card
+    title="Train a YOLO object detector"
+    icon="camera"
+    href="/examples/train-yolo-object-detector"
+  >
+    Train on a GPU, persist the checkpoint, and run prediction from a separate Function.
+  </Card>
+  <Card
+    title="Document processing with FastAPI"
+    icon="file-magnifying-glass"
+    href="/examples/document-processing-asgi"
+  >
+    Build a complete ASGI application with uploads, background OCR, durable Tasks, and polling.
+  </Card>
+  <Card
+    title="Sandboxed coding agent"
+    icon="terminal"
+    href="/examples/sandboxed-coding-agent"
+  >
+    Keep model credentials in a trusted Function while generated code runs in an isolated Sandbox.
+  </Card>
+  <Card
+    title="Parallel Parquet processing on S3"
+    icon="table"
+    href="/examples/parallel-parquet-s3"
+  >
+    Fan out partition work through a Task Queue and write the aggregate result back to your bucket.
+  </Card>
+</CardGroup>
+
+## Before you begin
+
+Install and authenticate the CLI, then select the workspace used by each guide:
+
+```bash
+lazycloud login
+lazycloud workspace show
+```
+
+The GPU examples require available NVIDIA capacity and incur compute and model-download costs. The
+storage examples create durable files that remain until you run their cleanup steps. Every guide
+calls out its external credentials, licenses, retained resources, and teardown commands before the
+first deployment.
+
+<Note>
+  These examples use current LazyCloud APIs and their real production backends. They do not include
+  local-only substitutes for Tasks, Sandboxes, Volumes, object storage, or model execution.
+</Note>

@@ -1,0 +1,20 @@
+[project]
+name = "lazycloud-shared"
+version = "0.1.0"
+description = "Boundary-safe shared primitives and HTTP payloads for the compute platform."
+requires-python = ">=3.10"
+dependencies = [
+    "certifi>=2025.1.31",
+    "croniter>=6.2.4",
+    "pydantic>=2.8,<3",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+shared = ["py.typed"]

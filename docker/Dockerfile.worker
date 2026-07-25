@@ -1,0 +1,378 @@
+# syntax=docker/dockerfile:1.7
+
+ARG PYTHON_IMAGE=python:3.12-slim
+ARG PYTHON310_IMAGE=python:3.10-slim
+ARG PYTHON311_IMAGE=python:3.11-slim
+ARG PYTHON312_IMAGE=python:3.12-slim
+ARG TAILSCALE_IMAGE=tailscale/tailscale:v1.98.8
+ARG GO_IMAGE=golang:1.24.4-bookworm
+
+FROM debian:bookworm-slim AS runsc
+ARG TARGETARCH
+ARG GVISOR_VERSION=20250407.0
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && case "${TARGETARCH}" in \
+        amd64) GVISOR_ARCH="x86_64" ;; \
+        arm64) GVISOR_ARCH="aarch64" ;; \
+        *) echo "unsupported architecture: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+    && curl -fsSL "https://storage.googleapis.com/gvisor/releases/release/${GVISOR_VERSION}/${GVISOR_ARCH}/runsc" -o /usr/local/bin/runsc \
+    && curl -fsSL "https://storage.googleapis.com/gvisor/releases/release/${GVISOR_VERSION}/${GVISOR_ARCH}/runsc.sha512" -o /tmp/runsc.sha512 \
+    && cd /usr/local/bin \
+    && sha512sum -c /tmp/runsc.sha512 \
+    && chmod +x /usr/local/bin/runsc \
+    && /usr/local/bin/runsc --version \
+    && rm -rf /var/lib/apt/lists/* /tmp/runsc.sha512
+
+FROM debian:bookworm-slim AS runc
+ARG TARGETARCH
+ARG RUNC_VERSION=1.5.0
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && case "${TARGETARCH}" in \
+        amd64) RUNC_SHA256="0363e69bebd3a027d1239364ab9b4f4873f6bc4e7a7878e94b4ea59f08551297" ;; \
+        arm64) RUNC_SHA256="1f6d8c553add066a6aaf838d3172d4c5ed3c6b065b6f7eed2f4a4aa4af261e59" ;; \
+        *) echo "unsupported architecture: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+    && curl -fsSL \
+        "https://github.com/opencontainers/runc/releases/download/v${RUNC_VERSION}/runc.${TARGETARCH}" \
+        -o /usr/local/sbin/runc \
+    && echo "${RUNC_SHA256}  /usr/local/sbin/runc" | sha256sum -c - \
+    && chmod 0755 /usr/local/sbin/runc \
+    && /usr/local/sbin/runc --version \
+    && rm -rf /var/lib/apt/lists/*
+
+FROM debian:bookworm-slim AS qemu-binfmt
+ARG TARGETARCH
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends qemu-user-static \
+    && case "${TARGETARCH}" in \
+        amd64) QEMU_ARCH="aarch64" ;; \
+        arm64) QEMU_ARCH="x86_64" ;; \
+        *) echo "unsupported architecture: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+    && BUNDLE_ROOT="/out/opt/lazycloud/binfmt" \
+    && mkdir -p "${BUNDLE_ROOT}" \
+    && install -m 0755 \
+        "/usr/bin/qemu-${QEMU_ARCH}-static" \
+        "${BUNDLE_ROOT}/qemu-${QEMU_ARCH}-static" \
+    && sed \
+        "s#/usr/libexec/qemu-binfmt/${QEMU_ARCH}-binfmt-P#/opt/lazycloud/binfmt/qemu-${QEMU_ARCH}-static#" \
+        "/usr/lib/binfmt.d/qemu-${QEMU_ARCH}.conf" \
+        > "${BUNDLE_ROOT}/qemu-${QEMU_ARCH}.conf" \
+    && grep -F ":qemu-${QEMU_ARCH}:" "${BUNDLE_ROOT}/qemu-${QEMU_ARCH}.conf" \
+    && grep -F ":/opt/lazycloud/binfmt/qemu-${QEMU_ARCH}-static:" \
+        "${BUNDLE_ROOT}/qemu-${QEMU_ARCH}.conf" \
+    && grep -E ':[A-Z]*F[A-Z]*$' "${BUNDLE_ROOT}/qemu-${QEMU_ARCH}.conf" \
+    && rm -rf /var/lib/apt/lists/*
+
+FROM debian:bookworm-slim AS criu
+ARG CRIU_VERSION=4.2
+ARG CRIU_COMMIT=3c7d4fa013297b431da48eff821db7f2e8b90c27
+ARG CRIU_SHA256=8fc66487f2e6c255f2ff262bb5f3ac4678197d90de7d455dbc8416cd0adc4937
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        curl \
+        git \
+        gnutls-dev \
+        libbsd-dev \
+        libcap-dev \
+        libdrm-dev \
+        libnet1-dev \
+        libnftables-dev \
+        libnl-3-dev \
+        libnl-route-3-dev \
+        libprotobuf-c-dev \
+        libprotobuf-dev \
+        pkg-config \
+        protobuf-c-compiler \
+        protobuf-compiler \
+        python3-protobuf \
+        uuid-dev \
+    && curl -fsSL \
+        "https://github.com/checkpoint-restore/criu/archive/${CRIU_COMMIT}.tar.gz" \
+        -o /tmp/criu.tar.gz \
+    && echo "${CRIU_SHA256}  /tmp/criu.tar.gz" | sha256sum -c - \
+    && mkdir /src \
+    && tar -xzf /tmp/criu.tar.gz -C /src --strip-components=1 \
+    && make -C /src -j"$(nproc)" \
+        install-lib install-criu install-compel \
+        DESTDIR=/out PREFIX=/usr SKIP_PIP_INSTALL=1 \
+    && /out/usr/sbin/criu --version | grep -Fx "Version: ${CRIU_VERSION}" \
+    && rm -rf /var/lib/apt/lists/* /tmp/criu.tar.gz /src
+
+FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS sandbox-supervisor
+ARG TARGETARCH
+
+WORKDIR /src
+COPY apps/sandbox-supervisor/ ./
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
+    go build -trimpath -ldflags="-s -w" -o /out/lazycloud-sandbox-supervisor .
+
+FROM ${TAILSCALE_IMAGE} AS tailscale
+
+FROM ${PYTHON_IMAGE} AS python-manifests
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    UV_COMPILE_BYTECODE=1 \
+    UV_HTTP_TIMEOUT=120 \
+    UV_LINK_MODE=copy \
+    PATH="/app/.venv/bin:${PATH}"
+
+WORKDIR /app
+
+COPY --from=ghcr.io/astral-sh/uv:0.11.29@sha256:eb2843a1e56fd9e30c7276ce1a52cba86e64c7b385f5e3279a0e08e02dd058fc /uv /uvx /bin/
+COPY pyproject.toml uv.lock README.md alembic.ini ./
+COPY packages/agent/pyproject.toml ./packages/agent/pyproject.toml
+COPY packages/cache/pyproject.toml ./packages/cache/pyproject.toml
+COPY packages/compute/pyproject.toml ./packages/compute/pyproject.toml
+COPY packages/control/pyproject.toml ./packages/control/pyproject.toml
+COPY packages/coordination/pyproject.toml ./packages/coordination/pyproject.toml
+COPY packages/database/pyproject.toml ./packages/database/pyproject.toml
+COPY packages/execution/pyproject.toml ./packages/execution/pyproject.toml
+COPY packages/foundation/pyproject.toml ./packages/foundation/pyproject.toml
+COPY packages/gateway/pyproject.toml ./packages/gateway/pyproject.toml
+COPY packages/identity/pyproject.toml ./packages/identity/pyproject.toml
+COPY packages/images/pyproject.toml ./packages/images/pyproject.toml
+COPY packages/networking/pyproject.toml ./packages/networking/pyproject.toml
+COPY packages/observability/pyproject.toml ./packages/observability/pyproject.toml
+COPY packages/operations/pyproject.toml ./packages/operations/pyproject.toml
+COPY packages/provider-clients/pyproject.toml ./packages/provider-clients/pyproject.toml
+COPY packages/runner/pyproject.toml ./packages/runner/pyproject.toml
+COPY packages/scheduler/pyproject.toml ./packages/scheduler/pyproject.toml
+COPY packages/lazycloud/pyproject.toml ./packages/lazycloud/pyproject.toml
+COPY packages/shared/pyproject.toml ./packages/shared/pyproject.toml
+COPY packages/storage/pyproject.toml ./packages/storage/pyproject.toml
+COPY packages/storage-client/pyproject.toml ./packages/storage-client/pyproject.toml
+COPY packages/worker/pyproject.toml ./packages/worker/pyproject.toml
+COPY packages/worker-repository/pyproject.toml ./packages/worker-repository/pyproject.toml
+COPY packages/providers/aws/pyproject.toml ./packages/providers/aws/pyproject.toml
+COPY packages/providers/kubernetes/pyproject.toml ./packages/providers/kubernetes/pyproject.toml
+COPY apps/agent/pyproject.toml ./apps/agent/pyproject.toml
+COPY apps/api/pyproject.toml ./apps/api/pyproject.toml
+COPY apps/cache-server/pyproject.toml ./apps/cache-server/pyproject.toml
+COPY apps/cli/pyproject.toml ./apps/cli/pyproject.toml
+COPY apps/container-worker/pyproject.toml ./apps/container-worker/pyproject.toml
+COPY apps/scheduler/pyproject.toml ./apps/scheduler/pyproject.toml
+COPY apps/worker-bootstrap/pyproject.toml ./apps/worker-bootstrap/pyproject.toml
+
+FROM scratch AS workspace-source
+COPY packages /packages
+COPY apps/container-worker /apps/container-worker
+
+FROM scratch AS managed-package-source
+COPY packages/shared/pyproject.toml /packages/shared/pyproject.toml
+COPY packages/shared/src /packages/shared/src
+COPY packages/foundation/pyproject.toml /packages/foundation/pyproject.toml
+COPY packages/foundation/src /packages/foundation/src
+COPY packages/lazycloud/pyproject.toml /packages/lazycloud/pyproject.toml
+COPY packages/lazycloud/src /packages/lazycloud/src
+COPY packages/runner/pyproject.toml /packages/runner/pyproject.toml
+COPY packages/runner/src /packages/runner/src
+
+FROM python-manifests AS container-worker-dependencies
+RUN --mount=type=cache,id=lazycloud-uv-cache-v2,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --package container-worker-app --no-install-workspace
+
+FROM container-worker-dependencies AS container-worker-install
+COPY --from=workspace-source /packages ./packages
+COPY --from=workspace-source /apps ./apps
+RUN --mount=type=cache,id=lazycloud-uv-cache-v2,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --package container-worker-app --no-editable
+
+FROM ${PYTHON310_IMAGE} AS managed-runtime-python310
+ENV UV_LINK_MODE=copy
+WORKDIR /app
+COPY --from=ghcr.io/astral-sh/uv:0.11.29@sha256:eb2843a1e56fd9e30c7276ce1a52cba86e64c7b385f5e3279a0e08e02dd058fc /uv /uvx /bin/
+COPY --from=managed-package-source /packages ./packages
+COPY deploy/managed-runtime ./deploy/managed-runtime
+COPY deploy/managed-runtime/build.py deploy/managed-runtime/build-version.sh ./deploy/managed-runtime/
+COPY deploy/managed-runtime/locks.py ./deploy/managed-runtime/locks.py
+RUN --mount=type=cache,id=lazycloud-managed-runtime-uv-cache-v2,target=/root/.cache/uv \
+    bash deploy/managed-runtime/build-version.sh /out/amd64 amd64 \
+    && bash deploy/managed-runtime/build-version.sh /out/arm64 arm64
+
+FROM ${PYTHON311_IMAGE} AS managed-runtime-python311
+ENV UV_LINK_MODE=copy
+WORKDIR /app
+COPY --from=ghcr.io/astral-sh/uv:0.11.29@sha256:eb2843a1e56fd9e30c7276ce1a52cba86e64c7b385f5e3279a0e08e02dd058fc /uv /uvx /bin/
+COPY --from=managed-package-source /packages ./packages
+COPY deploy/managed-runtime ./deploy/managed-runtime
+COPY deploy/managed-runtime/build.py deploy/managed-runtime/build-version.sh ./deploy/managed-runtime/
+COPY deploy/managed-runtime/locks.py ./deploy/managed-runtime/locks.py
+RUN --mount=type=cache,id=lazycloud-managed-runtime-uv-cache-v2,target=/root/.cache/uv \
+    bash deploy/managed-runtime/build-version.sh /out/amd64 amd64 \
+    && bash deploy/managed-runtime/build-version.sh /out/arm64 arm64
+
+FROM ${PYTHON312_IMAGE} AS managed-runtime-python312
+ENV UV_LINK_MODE=copy
+WORKDIR /app
+COPY --from=ghcr.io/astral-sh/uv:0.11.29@sha256:eb2843a1e56fd9e30c7276ce1a52cba86e64c7b385f5e3279a0e08e02dd058fc /uv /uvx /bin/
+COPY --from=managed-package-source /packages ./packages
+COPY deploy/managed-runtime ./deploy/managed-runtime
+COPY deploy/managed-runtime/build.py deploy/managed-runtime/build-version.sh ./deploy/managed-runtime/
+COPY deploy/managed-runtime/locks.py ./deploy/managed-runtime/locks.py
+RUN --mount=type=cache,id=lazycloud-managed-runtime-uv-cache-v2,target=/root/.cache/uv \
+    bash deploy/managed-runtime/build-version.sh /out/amd64 amd64 \
+    && bash deploy/managed-runtime/build-version.sh /out/arm64 arm64
+
+FROM python-manifests AS managed-runtime
+COPY --from=managed-runtime-python310 /out/ /tmp/managed-runtime-python310/
+COPY --from=managed-runtime-python311 /out/ /tmp/managed-runtime-python311/
+COPY --from=managed-runtime-python312 /out/ /tmp/managed-runtime-python312/
+COPY deploy/managed-runtime/build.py ./deploy/managed-runtime/build.py
+COPY packages/shared/src/shared/__init__.py \
+    packages/shared/src/shared/managed_runtime_integrity.py \
+    ./packages/shared/src/shared/
+COPY packages/runner/src/runner/managed_runtime_launcher.py \
+    ./packages/runner/src/runner/managed_runtime_launcher.py
+RUN PYTHONPATH="/app/packages/shared/src" \
+      python deploy/managed-runtime/build.py assemble \
+      --version-root /tmp/managed-runtime-python310/amd64 \
+      --version-root /tmp/managed-runtime-python310/arm64 \
+      --version-root /tmp/managed-runtime-python311/amd64 \
+      --version-root /tmp/managed-runtime-python311/arm64 \
+      --version-root /tmp/managed-runtime-python312/amd64 \
+      --version-root /tmp/managed-runtime-python312/arm64 \
+      --launcher packages/runner/src/runner/managed_runtime_launcher.py \
+      --output-root /out \
+    && rm -rf /tmp/managed-runtime-python310 /tmp/managed-runtime-python311 \
+      /tmp/managed-runtime-python312
+
+FROM debian:bookworm-slim AS container-worker-tools
+ARG TARGETARCH
+ARG JUICEFS_VERSION=1.3.1
+ARG MOUNT_S3_VERSION=1.8.0
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl gpg \
+    && mkdir -p \
+        /out/etc/apt/sources.list.d \
+        /out/usr/local/bin \
+        /out/usr/share/keyrings \
+    && curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+        | gpg --dearmor -o /out/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg \
+    && curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
+        | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
+        > /out/etc/apt/sources.list.d/nvidia-container-toolkit.list \
+    && case "$TARGETARCH" in \
+        amd64) \
+            JUICEFS_SHA256="eb67a7be5d174b420cb3734d441971b3a462ab522b78ad2a6ed993e7deddcd44"; \
+            MOUNT_S3_ARCH="x86_64"; \
+            MOUNT_S3_SHA256="1d39dcff33839ad3ae65299176cb127da1a1e785ee01e303a025eec2457c2700" \
+            ;; \
+        arm64) \
+            JUICEFS_SHA256="c29bff8f609366011cee03b9abcc76c11a06308b2c314364b8c340a2bfbc6c48"; \
+            MOUNT_S3_ARCH="arm64"; \
+            MOUNT_S3_SHA256="807f3a244d6f6c60086ea03b2e4d788fd1cebaf26baa332c7514a029ce00bdec" \
+            ;; \
+        *) echo "unsupported architecture: $TARGETARCH" >&2; exit 1 ;; \
+    esac \
+    && curl -fsSL \
+        "https://github.com/juicedata/juicefs/releases/download/v${JUICEFS_VERSION}/juicefs-${JUICEFS_VERSION}-linux-${TARGETARCH}.tar.gz" \
+        -o /tmp/juicefs.tar.gz \
+    && echo "${JUICEFS_SHA256}  /tmp/juicefs.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/juicefs.tar.gz -C /tmp juicefs \
+    && install /tmp/juicefs /out/usr/local/bin/juicefs \
+    && curl -fsSL \
+        "https://s3.amazonaws.com/mountpoint-s3-release/${MOUNT_S3_VERSION}/${MOUNT_S3_ARCH}/mount-s3-${MOUNT_S3_VERSION}-${MOUNT_S3_ARCH}.tar.gz" \
+        -o /tmp/mount-s3.tar.gz \
+    && echo "${MOUNT_S3_SHA256}  /tmp/mount-s3.tar.gz" | sha256sum -c - \
+    && mkdir -p /tmp/mount-s3 \
+    && tar -xzf /tmp/mount-s3.tar.gz -C /tmp/mount-s3 \
+    && install /tmp/mount-s3/bin/mount-s3 /out/usr/local/bin/mount-s3 \
+    && rm -rf /var/lib/apt/lists/* /tmp/juicefs.tar.gz /tmp/juicefs \
+        /tmp/mount-s3 /tmp/mount-s3.tar.gz
+
+FROM ${PYTHON_IMAGE} AS container-worker-system
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    LAZYCLOUD_HOME=/var/lib/lazycloud \
+    PATH="/app/.venv/bin:${PATH}" \
+    DEBIAN_FRONTEND=noninteractive \
+    BUILDAH_RUNTIME=/usr/local/sbin/runc \
+    BUILDAH_ISOLATION=chroot \
+    BUILDAH_LAYERS=true \
+    _BUILDAH_STARTED_IN_USERNS="" \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics,ngx,video
+
+WORKDIR /app
+
+COPY --from=container-worker-tools /out/usr/share/keyrings/ /usr/share/keyrings/
+COPY --from=container-worker-tools /out/etc/apt/sources.list.d/ /etc/apt/sources.list.d/
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        aardvark-dns \
+        buildah \
+        ca-certificates \
+        docker-cli \
+        fuse-overlayfs \
+        fuse3 \
+        gpg \
+        iproute2 \
+        iptables \
+        libbsd0 \
+        libcap2 \
+        libdrm2 \
+        libfuse2 \
+        libfuse3-4 \
+        libgnutls30 \
+        libgpgme11 \
+        libnet1 \
+        libnftables1 \
+        libnl-3-200 \
+        libnl-route-3-200 \
+        libprotobuf-c1 \
+        libseccomp2 \
+        netavark \
+        nftables \
+        nvidia-container-toolkit-base \
+        nvidia-container-toolkit \
+        procps \
+        psmisc \
+        runc \
+        skopeo \
+        slirp4netns \
+        tini \
+        uidmap \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=container-worker-tools /out/usr/local/bin/juicefs /usr/local/bin/juicefs
+COPY --from=container-worker-tools /out/usr/local/bin/mount-s3 /usr/local/bin/mount-s3
+RUN mkdir -p /etc/containers /etc/containers/registries.conf.d /etc/criu \
+        /etc/lazycloud /run/gvisor \
+        /var/lib/lazycloud/cache /var/lib/lazycloud/images /var/lib/lazycloud/checkpoints \
+    && ln -s /usr/local/bin/mount-s3 /usr/local/bin/ms3 \
+    && printf 'unqualified-search-registries = ["docker.io"]\n' > /etc/containers/registries.conf \
+    && printf '[engine]\nimage_parallel_copies = 8\n' > /etc/containers/containers.conf \
+    && printf 'verbosity 4\ndisplay-stats\ntimeout 60\n' > /etc/criu/default.conf \
+    && printf 'nameserver 8.8.8.8\n' > /etc/lazycloud/worker-resolv.conf \
+    && rm -rf /var/log/*
+
+FROM container-worker-system AS container-worker
+COPY --from=container-worker-install /app/.venv /app/.venv
+COPY --from=runsc /usr/local/bin/runsc /usr/local/bin/runsc
+COPY --from=runc /usr/local/sbin/runc /usr/local/sbin/runc
+COPY --from=qemu-binfmt /out/opt/lazycloud/binfmt/ /opt/lazycloud/binfmt/
+COPY --from=criu /out/usr/ /usr/
+COPY --from=sandbox-supervisor /out/lazycloud-sandbox-supervisor /usr/local/bin/lazycloud-sandbox-supervisor
+COPY --from=managed-runtime /out/ /opt/lazycloud/managed-runtime-artifacts/
+COPY --from=tailscale /usr/local/bin/tailscale /usr/local/bin/tailscale
+COPY --from=tailscale /usr/local/bin/tailscaled /usr/local/bin/tailscaled
+COPY --from=managed-package-source /packages /app/packages
+RUN criu --version | grep -Fx 'Version: 4.2'
+
+VOLUME ["/var/lib/lazycloud"]
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+    CMD python -c "import shutil; from pathlib import Path; import container_worker_app.main; required=('tini','runc','buildah','skopeo','docker','ip','iptables','juicefs','mount-s3','lazycloud-sandbox-supervisor'); missing=[name for name in required if shutil.which(name) is None]; missing.extend(path for path in ('/usr/lib/podman/netavark','/usr/lib/podman/aardvark-dns') if not Path(path).exists()); raise SystemExit(1 if missing else 0)"
+ENTRYPOINT ["tini", "--"]
+CMD ["lazycloud-container-worker", "--persistent"]

@@ -1,0 +1,80 @@
+# syntax=docker/dockerfile:1.7
+
+ARG PYTHON_IMAGE=python:3.12-slim
+ARG TAILSCALE_IMAGE=tailscale/tailscale:v1.98.8
+
+FROM ${TAILSCALE_IMAGE} AS tailscale
+
+FROM ${PYTHON_IMAGE} AS python-manifests
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    UV_COMPILE_BYTECODE=1 \
+    UV_HTTP_TIMEOUT=120 \
+    UV_LINK_MODE=copy \
+    PATH="/app/.venv/bin:${PATH}"
+
+WORKDIR /app
+
+COPY --from=ghcr.io/astral-sh/uv:0.11.29@sha256:eb2843a1e56fd9e30c7276ce1a52cba86e64c7b385f5e3279a0e08e02dd058fc /uv /uvx /bin/
+COPY pyproject.toml uv.lock README.md alembic.ini ./
+COPY packages/agent/pyproject.toml ./packages/agent/pyproject.toml
+COPY packages/cache/pyproject.toml ./packages/cache/pyproject.toml
+COPY packages/compute/pyproject.toml ./packages/compute/pyproject.toml
+COPY packages/control/pyproject.toml ./packages/control/pyproject.toml
+COPY packages/coordination/pyproject.toml ./packages/coordination/pyproject.toml
+COPY packages/database/pyproject.toml ./packages/database/pyproject.toml
+COPY packages/execution/pyproject.toml ./packages/execution/pyproject.toml
+COPY packages/foundation/pyproject.toml ./packages/foundation/pyproject.toml
+COPY packages/gateway/pyproject.toml ./packages/gateway/pyproject.toml
+COPY packages/identity/pyproject.toml ./packages/identity/pyproject.toml
+COPY packages/images/pyproject.toml ./packages/images/pyproject.toml
+COPY packages/networking/pyproject.toml ./packages/networking/pyproject.toml
+COPY packages/observability/pyproject.toml ./packages/observability/pyproject.toml
+COPY packages/operations/pyproject.toml ./packages/operations/pyproject.toml
+COPY packages/provider-clients/pyproject.toml ./packages/provider-clients/pyproject.toml
+COPY packages/runner/pyproject.toml ./packages/runner/pyproject.toml
+COPY packages/scheduler/pyproject.toml ./packages/scheduler/pyproject.toml
+COPY packages/lazycloud/pyproject.toml ./packages/lazycloud/pyproject.toml
+COPY packages/shared/pyproject.toml ./packages/shared/pyproject.toml
+COPY packages/storage/pyproject.toml ./packages/storage/pyproject.toml
+COPY packages/storage-client/pyproject.toml ./packages/storage-client/pyproject.toml
+COPY packages/worker/pyproject.toml ./packages/worker/pyproject.toml
+COPY packages/worker-repository/pyproject.toml ./packages/worker-repository/pyproject.toml
+COPY packages/providers/aws/pyproject.toml ./packages/providers/aws/pyproject.toml
+COPY packages/providers/kubernetes/pyproject.toml ./packages/providers/kubernetes/pyproject.toml
+COPY apps/agent/pyproject.toml ./apps/agent/pyproject.toml
+COPY apps/api/pyproject.toml ./apps/api/pyproject.toml
+COPY apps/cache-server/pyproject.toml ./apps/cache-server/pyproject.toml
+COPY apps/cli/pyproject.toml ./apps/cli/pyproject.toml
+COPY apps/container-worker/pyproject.toml ./apps/container-worker/pyproject.toml
+COPY apps/scheduler/pyproject.toml ./apps/scheduler/pyproject.toml
+COPY apps/worker-bootstrap/pyproject.toml ./apps/worker-bootstrap/pyproject.toml
+
+FROM python-manifests AS agent-dependencies
+RUN --mount=type=cache,id=lazycloud-uv-cache-v2,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --package agent-app --no-install-workspace
+
+FROM agent-dependencies AS agent-install
+COPY packages ./packages
+COPY apps/agent ./apps/agent
+RUN --mount=type=cache,id=lazycloud-uv-cache-v2,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --package agent-app --no-editable
+
+FROM ${PYTHON_IMAGE} AS agent
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    LAZYCLOUD_HOME=/var/lib/lazycloud \
+    PATH="/app/.venv/bin:${PATH}"
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates docker-cli iproute2 iptables \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=agent-install /app/.venv /app/.venv
+COPY --from=tailscale /usr/local/bin/tailscale /usr/local/bin/tailscale
+COPY --from=tailscale /usr/local/bin/tailscaled /usr/local/bin/tailscaled
+VOLUME ["/var/lib/lazycloud"]
+CMD ["lazycloud-agent", "join"]

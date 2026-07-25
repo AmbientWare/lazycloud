@@ -1,0 +1,62 @@
+---
+title: "cloud, compute, and machine"
+description: "Connect a cloud account, inspect placement and capacity, and manage self-hosted machines."
+---
+
+import WorkspaceFlag from '/snippets/workspace-flag.mdx';
+
+## lazycloud cloud
+
+| Command | Description |
+| --- | --- |
+| `lazycloud cloud connect aws --account-id <id> [--role-arn <arn>] [--open]` | Connect an AWS account to the workspace. |
+| `lazycloud cloud status [--watch] [--until <phase>] [--interval <s>] [--timeout <s>]` | Show or wait on the connection phase. |
+| `lazycloud cloud validate` | Validate the pending or active authorization. |
+| `lazycloud cloud reconnect [--role-arn <arn>] [--open]` | Start a replacement authorization. |
+| `lazycloud cloud cancel-reconnect` | Cancel a pending replacement authorization. |
+| `lazycloud cloud retry` | Retry the connection's current pending action. |
+| `lazycloud cloud disconnect [--wait] [--open] [--interval <s>] [--timeout <s>]` | Disconnect the account and remove its managed compute. |
+
+Connection phases for `--until`: `awaiting_authorization`, `validating`,
+`ready`, `degraded`, `reconnect_pending`, `retiring_authorization`,
+`disconnect_draining`, `revoking`, `verifying_revocation`, `action_required`.
+
+## lazycloud compute
+
+| Command | Description |
+| --- | --- |
+| `lazycloud compute status` | Placement summary and capacity for the workspace. |
+| `lazycloud compute instances` | Running compute instances. |
+| `lazycloud compute workloads` | Workloads and their placement. |
+| `lazycloud compute policy show` | Current compute guardrails. |
+| `lazycloud compute policy update [options]` | Update guardrails. |
+
+`compute policy update` options: `--default-placement managed|aws`,
+`--default-region`, `--max-cpu` (0–100), `--max-gpu` (0–100),
+`--allowed-region` (repeatable), `--allowed-instance-type` (repeatable),
+`--idle-timeout` (60–86400 seconds), `--root-volume-gib` (50–2048).
+
+## lazycloud machine
+
+| Command | Description |
+| --- | --- |
+| `lazycloud machine list` | List the workspace's self-hosted machines. |
+| `lazycloud machine join [options]` | Join the current machine to the workspace. |
+| `lazycloud machine remove MACHINE_ID` | Remove a machine. |
+
+`machine join` options:
+
+| Option | Description |
+| --- | --- |
+| `--ttl <duration>` | Join token lifetime. |
+| `--gpu <type>` | GPU type this machine contributes. |
+| `--max-cpu` / `--max-memory` / `--max-gpus` | Capacity to advertise (for example `--max-memory 32Gi`). |
+| `--gpu-ids <ids>` | Comma-separated GPU device ids to expose. |
+| `--background` / `--foreground` | Install the agent as a background service (default) or run it in the foreground. |
+| `--service-manager` / `--service-name` / `--state-dir` | Background service installation details. |
+| `--print-only` | Print the generated join command instead of running it (for another host). |
+
+See [Compute and placement](/platform/compute) for the concepts behind these
+commands.
+
+<WorkspaceFlag />

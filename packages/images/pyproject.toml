@@ -1,0 +1,22 @@
+[project]
+name = "images"
+version = "0.1.0"
+description = "Image build planning, lifecycle, execution, publication, and control services."
+requires-python = ">=3.12"
+dependencies = [
+    "lazycloud-shared==0.1.0",
+    "coordination",
+    "database",
+    "foundation",
+    "observability",
+    "scheduler",
+    "pydantic>=2.8,<3",
+    "pydantic-settings>=2.4,<3",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

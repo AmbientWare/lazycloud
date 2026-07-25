@@ -1,0 +1,72 @@
+---
+title: "Your first endpoint"
+description: "Deploy a typed Python callable as an HTTP endpoint."
+---
+
+Endpoints turn a typed Python callable into an HTTP route with warm workers,
+request queueing, and optional autoscaling.
+
+## Write the endpoint
+
+```python
+from lazycloud import App, Image
+
+app = App("api_demo")
+image = Image(python_version="3.12")
+
+
+@app.endpoint(name="predict", route="/predict", methods=["POST"], image=image)
+def predict(value: int = 7) -> dict[str, int]:
+    return {"input": value, "prediction": value + 1}
+```
+
+Save this as `api_demo.py`.
+
+## Preview it with serve
+
+`lazycloud serve` runs the endpoint on remote compute with a temporary URL and
+streams logs to your terminal. It keeps your working directory synced into the
+serve container as you edit, which makes it the fastest iteration loop:
+
+```bash
+lazycloud serve api_demo.py:predict
+```
+
+## Deploy it
+
+```bash
+lazycloud deploy api_demo.py:predict
+```
+
+The deploy output includes the public invoke URL for the endpoint. Requests
+require your workspace token by default (`authorized=True`); pass it as a
+bearer token:
+
+```bash
+curl -X POST "<invoke-url>" \
+  -H "Authorization: Bearer $LAZYCLOUD_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"value": 41}'
+```
+
+## Call it from Python
+
+The decorated object doubles as a typed client. `.request(...)` calls the
+served or deployed endpoint and returns a response with `status_code` and
+`json()`:
+
+```python
+response = predict.target("deployed").request(41)
+print(response.status_code, response.json())
+```
+
+## Manage the deployment
+
+```bash
+lazycloud deployment list --app api_demo
+lazycloud deployment scale <deployment-id-or-name> --containers 2
+lazycloud deployment stop <deployment-id-or-name>
+```
+
+See [Endpoints](/concepts/endpoints) for workers, concurrency, keep-warm,
+autoscaling, ASGI apps, and realtime handlers.

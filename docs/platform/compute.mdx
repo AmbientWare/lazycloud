@@ -1,0 +1,108 @@
+---
+title: "Compute and placement"
+description: "Managed compute, your connected AWS account, self-hosted machines, and workload placement."
+---
+
+Workspaces schedule workloads onto three kinds of compute:
+
+1. **Managed compute** — capacity operated by the platform. The default.
+2. **Connected cloud** — instances launched in your own AWS account under
+   your workspace's control.
+3. **Self-hosted machines** — servers you own, joined to the workspace with
+   an agent.
+
+## Placement
+
+Every workload accepts `placement="managed"` or `placement="aws"`; the CLI
+equivalents are `--placement managed|aws` on `deploy`, `run`, `serve`,
+`shell`, and `dev`. Omit it to use the workspace's default placement.
+
+```python
+@app.function(gpu="a10g", gpu_count=1, placement="aws")
+def train(step: int) -> float: ...
+```
+
+Inspect what the workspace is doing:
+
+```bash
+lazycloud compute status       # placement summary and capacity
+lazycloud compute instances    # running instances
+lazycloud compute workloads    # workloads and where they are placed
+```
+
+## Connected cloud (AWS)
+
+Connect your AWS account so GPU and CPU instances launch inside it — data and
+compute stay in your account, and you pay AWS directly:
+
+```bash
+lazycloud cloud connect aws --account-id 123456789012
+```
+
+The command starts a cross-account authorization: it prints an AWS
+authorization link (add `--open` to launch a browser), or accepts an existing
+management role with `--role-arn`. Then:
+
+```bash
+lazycloud cloud status --watch --until ready
+lazycloud cloud validate
+```
+
+Connection lifecycle commands:
+
+| Command | Purpose |
+| --- | --- |
+| `lazycloud cloud status` | Show the connection phase; `--watch --until <phase>` waits for it. |
+| `lazycloud cloud validate` | Validate the pending or active authorization. |
+| `lazycloud cloud reconnect` | Start a replacement authorization (for example after rotating roles). |
+| `lazycloud cloud cancel-reconnect` | Cancel a pending replacement authorization. |
+| `lazycloud cloud retry` | Retry the connection's current pending action. |
+| `lazycloud cloud disconnect` | Disconnect the account and remove its managed compute; `--wait` blocks until removal completes. |
+
+<Note>
+  The AWS connected-cloud path is implemented end to end; the final live
+  acceptance pass on a production AWS account is still pending. See
+  [Known limitations](/reference/limitations).
+</Note>
+
+## Compute policy
+
+Workspace guardrails cap what connected-cloud placement may launch:
+
+```bash
+lazycloud compute policy show
+lazycloud compute policy update \
+  --default-placement aws \
+  --default-region us-east-1 \
+  --max-cpu 64 --max-gpu 8 \
+  --allowed-region us-east-1 --allowed-region us-west-2 \
+  --allowed-instance-type g5.xlarge \
+  --idle-timeout 900 \
+  --root-volume-gib 100
+```
+
+Idle instances are reclaimed after `--idle-timeout` seconds (60–86400).
+
+## Self-hosted machines
+
+Join any Linux server — an on-prem GPU box, a bare-metal host, a VM — to the
+workspace as schedulable capacity:
+
+```bash
+lazycloud machine join --gpu a100 --max-gpus 4 --max-cpu 32 --max-memory 128Gi
+```
+
+`machine join` generates a single-use join token (lifetime `--ttl`) and
+installs the agent on the current machine — as a background service by
+default (`--service-manager`, `--service-name`, `--state-dir` to customize)
+or in the foreground with `--foreground`. Use `--print-only` to print the
+generated join command for running on another host. `--gpu-ids` limits which
+GPU devices are exposed.
+
+```bash
+lazycloud machine list
+lazycloud machine remove <machine-id>
+```
+
+Machines also appear in the dashboard under workspace settings, alongside the
+AWS connection and compute policy.

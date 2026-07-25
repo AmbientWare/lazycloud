@@ -1,0 +1,125 @@
+from __future__ import annotations
+
+from typing import Annotated
+
+import typer
+from lazycloud.cli.components.output import (
+    console,
+    json_output_enabled,
+    print_payload,
+    table,
+)
+from lazycloud.cli.identity import profile_payload
+from lazycloud.config import (
+    DEFAULT_WORKSPACE,
+    get_profile,
+)
+from lazycloud.json_contracts import validate_json_object
+from pydantic import JsonValue
+from shared.http.system import TokenCreateRequest
+from shared.http_transport import HttpChannel
+from shared.identity import TokenKind
+
+from cli.api_client import AdminApiClient, admin_api_client
+
+
+def profile_export(
+    ctx: typer.Context,
+    profile: Annotated[str | None, typer.Option("--profile")] = None,
+    include_token: Annotated[bool, typer.Option("--include-token")] = False,
+) -> None:
+    selected = get_profile(profile, apply_env=False)
+    export = AdminApiClient(
+        channel=HttpChannel(
+            endpoint=selected.resolved_endpoint(),
+            token=selected.token or None,
+            timeout_seconds=10.0,
+        ),
+        workspace=selected.workspace,
+    ).export_workspace()
+    exported_profile = validate_json_object(
+        selected.model_dump(mode="json", exclude={"name", "token"})
+    )
+    if include_token:
+        exported_profile["token"] = selected.token
+    payload: dict[str, JsonValue] = {
+        **validate_json_object(export.model_dump(mode="json")),
+        "active_profile": selected.name,
+        "api_url": selected.endpoint,
+        "token": selected.token if include_token else ("set" if selected.token else ""),
+        "profile": validate_json_object(profile_payload(selected, include_token=include_token)),
+        "config": {
+            "active_profile": selected.name,
+            "profiles": {
+                selected.name: exported_profile,
+            },
+        },
+    }
+    print_payload(ctx, payload)
+
+
+def token_create(
+    ctx: typer.Context,
+    name: str,
+    scopes: Annotated[list[str] | None, typer.Option("--scope")] = None,
+    expires_in: Annotated[int | None, typer.Option("--expires-in")] = None,
+    kind: Annotated[TokenKind, typer.Option("--kind")] = TokenKind.Workspace,
+    workspace_id: Annotated[str, typer.Option("--workspace")] = DEFAULT_WORKSPACE,
+    reusable: Annotated[bool, typer.Option("--reusable/--single-use")] = True,
+) -> None:
+    response = admin_api_client(workspace_id).create_token(
+        TokenCreateRequest(
+            name=name,
+            scopes=scopes or ["*"],
+            expires_in_seconds=expires_in,
+            kind=kind,
+            workspace_id=workspace_id,
+            reusable=reusable,
+        )
+    )
+    print_payload(ctx, response.model_dump(mode="json"))
+
+
+def token_list(ctx: typer.Context) -> None:
+    tokens = admin_api_client().list_tokens().tokens
+    payload: list[dict[str, str | bool | list[str] | None]] = [
+        {
+            "id": item.id,
+            "name": item.name,
+            "prefix": item.prefix,
+            "kind": item.kind.value,
+            "workspace_id": item.workspace_id,
+            "status": item.status.value,
+            "scopes": item.scopes,
+            "reusable": item.reusable,
+            "created_at": item.created_at.isoformat(),
+            "expires_at": item.expires_at.isoformat() if item.expires_at else None,
+        }
+        for item in tokens
+    ]
+    if json_output_enabled(ctx):
+        print_payload(ctx, payload)
+    else:
+        rows = [
+            [
+                item.id,
+                item.name,
+                item.kind.value,
+                item.workspace_id,
+                item.status.value,
+                ",".join(item.scopes),
+            ]
+            for item in tokens
+        ]
+        console.print(
+            table("Tokens", ["id", "name", "kind", "workspace", "status", "scopes"], rows)
+        )
+
+
+def token_revoke(
+    ctx: typer.Context,
+    token_id_or_name: str,
+    workspace_id: Annotated[str, typer.Option("--workspace")] = DEFAULT_WORKSPACE,
+) -> None:
+    record = admin_api_client(workspace_id).revoke_token(token_id_or_name)
+    print_payload(ctx, record.model_dump(mode="json"))

@@ -1,0 +1,13 @@
+name: startup-default
+kind: startup
+runner: startup
+description: Local process startup latency smoke benchmark.
+defaults:
+  iterations: 5
+  warmup: 1
+  external_services: false
+scenarios:
+  - name: python-process-ready
+    operation: read
+    probes:
+      - startup_events

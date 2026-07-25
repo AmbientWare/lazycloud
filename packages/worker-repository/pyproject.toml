@@ -1,0 +1,26 @@
+[project]
+name = "worker-repository"
+version = "0.1.0"
+description = "Authenticated server-side worker repository services and adapters."
+requires-python = ">=3.12"
+dependencies = [
+    "coordination",
+    "control",
+    "lazycloud-shared==0.1.0",
+    "database",
+    "execution",
+    "foundation",
+    "identity",
+    "images",
+    "pydantic>=2.8,<3",
+    "pydantic-settings>=2.4,<3",
+    "storage-client",
+    "worker",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

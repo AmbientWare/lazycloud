@@ -1,0 +1,830 @@
+image:
+  repository: api
+  tag: latest
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+  labels: {}
+  automountToken: true
+
+# Used only by the control plane and scheduler. Attach AWS workload identity
+# annotations here so platform provider credentials never reach worker pods.
+providerServiceAccount:
+  create: true
+  name: ""
+  annotations: {}
+  labels: {}
+  automountToken: true
+
+rbac:
+  create: true
+
+podLabels: {}
+podAnnotations: {}
+
+state:
+  home: /var/lib/lazycloud
+
+platform:
+  logLevel: INFO
+  telemetry:
+    enabled: false
+    endpoint: http://127.0.0.1:4318
+    meterIntervalSeconds: 60
+    traceIntervalSeconds: 5
+    traceSampleRatio: 1.0
+    exportTimeoutSeconds: 10
+    exportTraces: true
+    exportMetrics: true
+    exportLogs: true
+
+imageBuild:
+  executor: build-container
+  dockerBinary: docker
+  registryPushEnabled: false
+  registryTargetRef: ""
+  registryDockerBinary: ""
+  registryInspectBinary: skopeo
+  registryInspectTimeoutSeconds: 30
+  registryInspectTlsVerify: true
+  archive:
+    # Empty values inherit the primary object store. Configure backend only
+    # when image archives live on a genuinely separate S3-compatible service.
+    bucket: ""
+    prefix: ""
+    presignSeconds: 900
+    presignedEndpointUrl: ""
+    backend:
+      enabled: false
+      bucket: ""
+      endpointUrl: ""
+      presignedEndpointUrl: ""
+      regionName: us-east-1
+      forcePathStyle: false
+      transferMultipartThresholdBytes: "67108864"
+      transferMultipartChunkSizeBytes: "67108864"
+      transferMaxConcurrency: 2
+      credentialsSecretRef:
+        name: ""
+        accessKeyIdKey: LAZYCLOUD_IMAGE_ARCHIVE_BACKEND__ACCESS_KEY_ID
+        secretAccessKeyKey: LAZYCLOUD_IMAGE_ARCHIVE_BACKEND__SECRET_ACCESS_KEY
+  container:
+    poolSelector: default
+    cpuMillicores: 1000
+    memoryMib: 1024
+    addressWaitTimeoutSeconds: 180
+    addressPollIntervalSeconds: 0.1
+  originRegistry:
+    host: ""
+    credentialsResourceName: ""
+    credentialsSecretRef:
+      name: ""
+      key: LAZYCLOUD_BUILD_REGISTRY_CREDENTIALS
+
+containerService:
+  tokenSecretRef:
+    name: ""
+    key: LAZYCLOUD_CONTAINER_SERVICE_TOKEN
+
+config:
+  # Production installs should provision this Secret through their secret
+  # manager. Set create=true only in explicit local/test values.
+  create: false
+  existingSecret: ""
+  # Bump this opaque value when any externally managed Secret consumed by the
+  # release rotates. It is copied to pod templates to trigger a rollout.
+  externalSecretRevision: ""
+
+events:
+  workspaceChangeStreamMaxLength: 10000
+
+agentArtifact:
+  version: ""
+  # Immutable public object URL emitted by deploy/aws-release-assets/release.py. The
+  # control-plane pod stages and verifies it before serving /install/agent.
+  url: ""
+  sha256ByArch:
+    amd64: ""
+    arm64: ""
+  volume:
+    # Use an existing claim only when the release artifact is mirrored into
+    # cluster storage by the operator. It is mutually exclusive with url.
+    existingClaim: ""
+    mountPath: /var/lib/lazycloud/agent-artifacts
+
+awsCapacity:
+  enabled: false
+  connectionTemplateUrl: ""
+  workerImageDigest: ""
+  # Immutable public agent object URL emitted by deploy/aws-release-assets/release.py.
+  # Managed AWS machines download and SHA-256-verify the agent binary from it at boot.
+  agentArtifactUrl: ""
+  cpuAmiIds: {}
+  gpuAmiIds: {}
+  controlPrincipalArn: ""
+  instanceHourlyMicros: {}
+  externalIdBytes: 48
+  lifecycle:
+    draftTtlSeconds: 86400
+    cleanupTombstoneTtlSeconds: 604800
+    cleanupTimeoutSeconds: 7200
+  reconciliation:
+    intervalSeconds: 30
+    limit: 25
+
+usage:
+  billingCurrency: USD
+  priceCatalog: ""
+  volumeMeteringIntervalSeconds: 60
+  metrics:
+    collector: none
+    source: lazycloud
+    prometheusPort: 9090
+    openmeterUrl: ""
+    openmeterApiKeySecretRef:
+      name: ""
+      key: LAZYCLOUD_USAGE_METRICS_OPENMETER_API_KEY
+  managedBilling:
+    mode: noop
+    endpoint: ""
+    timeoutSeconds: 10
+    minimumCreditCents: 0
+    required: false
+    authTokenSecretRef:
+      name: ""
+      key: LAZYCLOUD_MANAGED_BILLING_AUTH_TOKEN
+    headersSecretRef:
+      name: ""
+      key: LAZYCLOUD_MANAGED_BILLING_HEADERS
+
+database:
+  # External installs put the full SQLAlchemy URL in this Secret key. Bundled
+  # PostgreSQL derives it from the release-qualified StatefulSet name.
+  secretRef:
+    name: ""
+    key: LAZYCLOUD_DATABASE_URL
+  echo: false
+  poolSize: 5
+  maxOverflow: 10
+  connectTimeoutSeconds: 10
+  statementTimeoutMs: 30000
+
+databaseBootstrap:
+  enabled: true
+  image:
+    repository: database-bootstrap
+    tag: latest
+    pullPolicy: IfNotPresent
+  activeDeadlineSeconds: 600
+  backoffLimit: 3
+  ttlSecondsAfterFinished:
+  readiness:
+    timeoutSeconds: 600
+    pollIntervalSeconds: 1
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+      limits:
+        cpu: 250m
+        memory: 256Mi
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+administratorBootstrap:
+  enabled: true
+  credentialSecretName: ""
+  credentialSecretKey: token
+  administratorName: first-admin
+  workspace: default
+  image:
+    repository: worker-bootstrap
+    tag: latest
+    pullPolicy: IfNotPresent
+  activeDeadlineSeconds: 600
+  backoffLimit: 3
+  ttlSecondsAfterFinished:
+  readiness:
+    timeoutSeconds: 600
+    pollIntervalSeconds: 1
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+      limits:
+        cpu: 250m
+        memory: 256Mi
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+redis:
+  # External installs put the URL in this Secret key. Bundled Redis derives
+  # it from the release-qualified StatefulSet name.
+  secretRef:
+    name: ""
+    key: LAZYCLOUD_REDIS_URL
+  keyPrefix: lazycloud
+  clientName: ""
+  socketTimeoutSeconds: 5
+  healthCheckIntervalSeconds: 30
+
+service:
+  type: ClusterIP
+  port: 9000
+  annotations: {}
+  labels:
+    lazycloud.io/metrics: enabled
+
+tcpIngress:
+  enabled: false
+  port: 1995
+  externalHost: ""
+  routeCacheTtlSeconds: 300
+  maxConnections: 1024
+  tlsHandshakeTimeoutSeconds: 10
+  service:
+    type: LoadBalancer
+    annotations: {}
+    labels: {}
+  tls:
+    existingSecret: ""
+    certificateKey: tls.crt
+    privateKeyKey: tls.key
+
+controlPlane:
+  # Externally reachable origin used in SDK URLs and remote-agent bootstrap.
+  # Set this explicitly for every installation; runtimeHttpUrl remains internal.
+  publicHttpUrl: ""
+  runtimeHttpUrl: ""
+  agentRouteReconciliationIntervalSeconds: 60
+  replicas: 1
+  terminationGracePeriodSeconds: 60
+  priorityClassName: ""
+  nodeSelector: {}
+  affinity: {}
+  tolerations: []
+  topologySpreadConstraints: []
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage:
+    behavior: {}
+  podDisruptionBudget:
+    enabled: false
+    minAvailable: 1
+    maxUnavailable:
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+  readinessProbe:
+    httpGet:
+      path: /health
+      port: http
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 6
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: http
+    initialDelaySeconds: 20
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 6
+
+tailnet:
+  # Gateway replicas require a dedicated reusable, ephemeral, tag-scoped auth
+  # key because preStop logout cannot run after every abrupt pod or node loss.
+  # Customer compute nodes receive separate durable identities through OAuth.
+  enabled: false
+  image:
+    repository: tailscale/tailscale
+    tag: v1.98.8
+    pullPolicy: IfNotPresent
+  authKeySecretRef:
+    name: ""
+    key: LAZYCLOUD_TAILNET_AUTH_KEY
+  oauthClientId: ""
+  oauthClientSecretRef:
+    name: ""
+    key: LAZYCLOUD_TAILNET_OAUTH_CLIENT_SECRET
+  agentTag: tag:lazycloud-agent
+  controlPlaneTag: tag:lazycloud-control-plane
+  routeAuthKeySecretRef:
+    name: ""
+    key: LAZYCLOUD_BACKEND_ROUTE_AUTH_KEY
+  apiUrl: https://api.tailscale.com
+  authKeyTtlSeconds: 300
+  controlUrl: ""
+  hostname: lazycloud-control-plane
+  stateDir: /var/lib/lazycloud/tailnet
+  socketPath: /var/run/tailscale/tailscaled.sock
+  acceptDns: false
+  acceptRoutes: false
+  userspaceNetworking: false
+  loginTimeoutSeconds: 30
+  statusTimeoutSeconds: 5
+  waitPollSeconds: 0.5
+  extraArgs: ""
+
+scheduler:
+  enabled: true
+  replicas: 1
+  intervalSeconds: 1
+  containerLimit: 100
+  artifactRetention:
+    enabled: true
+    intervalSeconds: 3600
+    retryInitialSeconds: 30
+    retryMaxSeconds: 900
+    recentStubTtlSeconds: 604800
+    sourceGraceSeconds: 86400
+    checkpointSeconds: 604800
+    buildSeconds: 604800
+    imageSeconds: 604800
+    maxItemsPerCycle: 100
+  image:
+    repository: scheduler
+    tag: latest
+    pullPolicy: IfNotPresent
+  terminationGracePeriodSeconds: 60
+  priorityClassName: ""
+  nodeSelector: {}
+  affinity: {}
+  tolerations: []
+  topologySpreadConstraints: []
+  # Reclaim windows for managed provider machines: continuous-stale grace
+  # before an orphaned provider machine is terminated, per bootstrap-phase
+  # deadlines for a launched machine to progress before it is reclaimed, and
+  # the bound on consecutive relaunch attempts before pooled capacity is
+  # marked degraded. The provider* maps override the defaults per configured
+  # provider name.
+  computeReclaim:
+    staleGraceSeconds: 900
+    bootstrapPhaseDeadlineSeconds:
+      requested: 300
+      provisioning: 300
+      booting: 300
+      joining: 300
+    maxLaunchAttempts: 3
+    providerStaleGraceSeconds: {}
+    providerBootstrapPhaseDeadlineSeconds: {}
+    providerMaxLaunchAttempts: {}
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 3
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage:
+    behavior: {}
+  podDisruptionBudget:
+    enabled: false
+    minAvailable: 1
+    maxUnavailable:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  # Loop-progress liveness: the scheduler touches its heartbeat file once per
+  # control-loop iteration (~1s tick; failure backoff sleeps cap at 30s), so a
+  # stale heartbeat means the loop is wedged, not merely failing passes.
+  livenessProbe:
+    exec:
+      command:
+        - python
+        - -m
+        - shared.process_liveness
+        - /tmp/lazycloud-scheduler.heartbeat
+        - --max-age-seconds
+        - "120"
+    initialDelaySeconds: 30
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readinessProbe:
+    exec:
+      command:
+        - python
+        - -m
+        - shared.process_liveness
+        - /tmp/lazycloud-scheduler.heartbeat
+        - --max-age-seconds
+        - "120"
+    initialDelaySeconds: 10
+    periodSeconds: 15
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+containerWorkers:
+  enabled: true
+  image:
+    repository: container-worker
+    tag: latest
+    pullPolicy: IfNotPresent
+  registryAuthSecretName: ""
+  hostNetwork: false
+  runtimeClassName: ""
+  routeTransport: direct
+  routeTarget: ""
+  hostPortBindAddress: ""
+  poolMode: public
+  requiresPoolSelector: false
+  repositoryUrl: ""
+  repositoryTimeoutSeconds: 30
+  intervalSeconds: 0.1
+  keepaliveIntervalSeconds: 15
+  spindownSeconds: 300
+  workerTokenSecretName: ""
+  workerTokenSecretKey: token
+  containerServicePort: 8910
+  workerTokenBootstrap:
+    enabled: true
+    name: ""
+    image:
+      repository: worker-bootstrap
+      tag: latest
+      pullPolicy: IfNotPresent
+    tokenNamePrefix: kubernetes-container-worker
+    activeDeadlineSeconds: 300
+    backoffLimit: 6
+    ttlSecondsAfterFinished:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+  buildRoot: /var/lib/lazycloud/builds
+  buildHostPath: /var/lib/lazycloud/builds
+  imageCachePath: /var/lib/lazycloud/images
+  imageHostPath: /var/lib/lazycloud/images
+  imageMountRoot: /var/lib/lazycloud/image-mounts
+  checkpointRoot: /var/lib/lazycloud/checkpoints
+  checkpointCacheNamespace: checkpoints
+  checkpointHostPath: /var/lib/lazycloud/checkpoints
+  registryPath: /var/lib/lazycloud/registry
+  bundleRoot: /var/lib/lazycloud/bundles
+  dataStorage:
+    mode: juicefs
+    path: /data
+    bucket: lazycloud-data
+    endpointUrl: ""
+    credentialsSecretRef:
+      name: ""
+      accessKeyIdKey: LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID
+      secretAccessKeyKey: LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY
+    regionName: us-east-1
+    forcePathStyle: true
+    juicefsRedisUrl: ""
+    juicefsFilesystemName: lazycloud
+    juicefsCacheSize: 0
+    juicefsBlockSize: 4096
+    juicefsPrefetch: 1
+    juicefsBufferSize: 300
+  workspaceStorage:
+    available: false
+    mountsEnabled: false
+    mode: juicefs
+    baseMountPath: /workspace
+    mountpointBinary: ms3
+  artifactRetention:
+    enabled: true
+    intervalSeconds: 300
+    imageCacheMaxBytes: "21474836480"
+    imageMaterializationMaxBytes: "42949672960"
+    checkpointCacheMaxBytes: "10737418240"
+    lowWatermarkPct: 0.75
+    recentGuardSeconds: 3600
+    imageMaterializationSeconds: 86400
+    checkpointSeconds: 604800
+  sourceCache:
+    root: /var/lib/lazycloud/source-cache
+    maxBytes: "1073741824"
+    maxEntries: 32
+  imageBuild:
+    scratchMaxBytes: "34359738368"
+    perBuildMaxBytes: "17179869184"
+    minimumFreeBytes: "5368709120"
+    staleSeconds: 1800
+  metrics:
+    enabled: true
+    intervalSeconds: 5
+  costHook:
+    endpoint: ""
+    timeoutSeconds: 10
+    tokenSecretRef:
+      name: ""
+      key: WORKER_CONTAINER_COST_HOOK_TOKEN
+  nvidiaCdiEnabled: true
+  runRoot: /run/lazycloud-worker
+  gvisorRoot: /run/gvisor
+  healthcheck:
+    exec:
+      command:
+        - python
+        - -m
+        - shared.process_liveness
+        - /tmp/lazycloud-container-worker.heartbeat
+        - --max-age-seconds
+        - "45"
+    initialDelaySeconds: 30
+    periodSeconds: 15
+    timeoutSeconds: 5
+    failureThreshold: 2
+  securityContext:
+    privileged: true
+    allowPrivilegeEscalation: true
+    capabilities:
+      add:
+        - NET_ADMIN
+        - SYS_ADMIN
+        - SYS_PTRACE
+        - MKNOD
+  nodeSelector: {}
+  affinity: {}
+  tolerations: []
+  pools:
+    - name: default
+      capacityOwnerId: 6fb19db5-ddd0-478d-8f4a-cdf422ad438c
+      initialWorkers: 1
+      minWorkers: 1
+      maxWorkers: 4
+      scalingEnabled: true
+      defaultEligible: true
+      priority: 100
+      minFreeCpuMillicores: 1000
+      minFreeMemoryMib: 1024
+      minFreeGpuCount: 0
+      idleDrainTimeoutSeconds: 300
+      scaleUpCooldownSeconds: 5
+      scaleDownCooldownSeconds: 60
+      registrationTimeoutSeconds: 600
+      runtime: runc
+      runtimes:
+        - runc
+        - runsc
+      preemptible: false
+      capacity:
+        cpuMillicores: 4000
+        memoryMib: 8192
+      gpu:
+        enabled: false
+        type: nvidia
+        resourceName: nvidia.com/gpu
+        count: 0
+
+cache:
+  enabled: true
+  createSecret: false
+  existingSecret: ""
+  serviceToken: ""
+  previousServiceToken: ""
+  maxContentBytes: "21474836480"
+  maxObjectBytes: "8589934592"
+  maxMetadataEntries: "100000"
+  maxPathBytes: "4096"
+  diskMaxUsagePct: 0.90
+  diskEvictWatermarkPct: 0.85
+  port: 7900
+  root: /var/cache/lazycloud
+  hostPath: /var/lib/lazycloud/cache
+  hostNetwork: false
+  priorityClassName: ""
+  nodeSelector: {}
+  affinity: {}
+  tolerations: []
+  topologySpreadConstraints: []
+  podDisruptionBudget:
+    enabled: false
+    minAvailable: 1
+    maxUnavailable:
+  image:
+    repository: cache-server
+    tag: latest
+    pullPolicy: IfNotPresent
+  securityContext: {}
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  readinessProbe:
+    tcpSocket:
+      port: cache
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 6
+  livenessProbe:
+    tcpSocket:
+      port: cache
+    initialDelaySeconds: 10
+    periodSeconds: 20
+    timeoutSeconds: 3
+    failureThreshold: 6
+
+objectStore:
+  enabled: false
+  name: ""
+  image: dxflrs/garage:v2.3.0
+  bucketInitImage: amazon/aws-cli:2.28.3
+  endpointUrl: https://s3.amazonaws.com
+  bucket: lazycloud-objects
+  defaultBucket: default
+  dataBucket: lazycloud-data
+  sourcePackageBucket: lazycloud-source-packages
+  accessKeyId: ""
+  secretAccessKey: ""
+  regionName: us-east-1
+  forcePathStyle: false
+  presignedEndpointUrl: ""
+  transferMultipartThresholdBytes: "67108864"
+  transferMultipartChunkSizeBytes: "67108864"
+  transferMaxConcurrency: 2
+  credentialsSecretRef:
+    name: ""
+    accessKeyIdKey: LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID
+    secretAccessKeyKey: LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY
+  rpcSecret: ""
+  storage: 20Gi
+  storageClassName: ""
+  adminPort: 3903
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+juicefs:
+  filesystemName: lazycloud
+  metadataUrl: ""
+  metadataSecretRef:
+    name: ""
+    key: LAZYCLOUD_JUICEFS_METADATA_URL
+  gateway:
+    enabled: true
+    endpointUrl: ""
+    webdavEndpointUrl: ""
+    presignedEndpointUrl: ""
+    port: 9900
+    webdavPort: 9901
+    accessKeyId: ""
+    secretAccessKey: ""
+    credentialsSecretRef:
+      name: ""
+      accessKeyIdKey: LAZYCLOUD_JUICEFS_GATEWAY_ACCESS_KEY_ID
+      secretAccessKeyKey: LAZYCLOUD_JUICEFS_GATEWAY_SECRET_ACCESS_KEY
+    image:
+      repository: storage-gateway
+      tag: latest
+      pullPolicy: IfNotPresent
+    blockSize: 4096
+    cacheSize: 0
+    prefetch: -1
+    bufferSize: 300
+    transferMultipartThresholdBytes: "67108864"
+    transferMultipartChunkSizeBytes: "67108864"
+    transferMaxConcurrency: 2
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+
+postgresql:
+  enabled: false
+  name: ""
+  image: postgres:18-alpine
+  database: lazycloud
+  username: lazycloud
+  password: ""
+  storage: 20Gi
+  storageClassName: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+redisStateful:
+  enabled: false
+  name: ""
+  image: redis:8-alpine
+  storage: 5Gi
+  storageClassName: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: lazycloud.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+monitoring:
+  enabled: false
+  namespace: ""
+  scrapeInterval: 15s
+  scrapeAuth:
+    bearerTokenSecretName: ""
+    bearerTokenMountPath: /etc/vmagent/secrets/lazycloud-metrics-token
+    bearerTokenFile: /etc/vmagent/secrets/lazycloud-metrics-token/token
+  agent:
+    image: victoriametrics/vmagent:v1.103.0
+    replicas: 1
+    autoscaling:
+      enabled: false
+      minReplicas: 1
+      maxReplicas: 3
+      targetCPUUtilizationPercentage: 70
+      targetMemoryUtilizationPercentage:
+      behavior: {}
+    podDisruptionBudget:
+      enabled: false
+      minAvailable: 1
+      maxUnavailable:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+  metrics:
+    image: victoriametrics/victoria-metrics:v1.103.0
+    replicas: 1
+    retentionPeriod: 7d
+    autoscaling:
+      enabled: false
+      minReplicas: 1
+      maxReplicas: 3
+      targetCPUUtilizationPercentage: 70
+      targetMemoryUtilizationPercentage:
+      behavior: {}
+    podDisruptionBudget:
+      enabled: false
+      minAvailable: 1
+      maxUnavailable:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+  logs:
+    image: fluent/fluent-bit:3.1.9
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi

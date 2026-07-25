@@ -1,0 +1,328 @@
+from __future__ import annotations
+
+from dataclasses import replace
+from datetime import datetime
+from uuid import uuid4
+
+import pytest
+from api.server.services import ApiServices
+from coordination.event_bus import (
+    EventBusEvent,
+    EventBusSendResult,
+    EventBusSendStatus,
+    event_channel_key,
+    event_id_for_event,
+    event_key,
+)
+from database.repositories.identity import WorkspaceRepository
+from database.repositories.orchestration import (
+    ContainerRepository,
+    MachineRepository,
+    WorkerRepository,
+)
+from execution.containers.planning import ContainerSchedulingOptions
+from execution.containers.scheduling import ContainerSchedulingPersistenceService
+from scheduler.containers import (
+    SchedulerContainerCancellationResult,
+    SchedulerContainerSubmitResult,
+    SchedulerContainerSubmitStatus,
+)
+from scheduler.state import SchedulerWorkerRequest
+from shared.compute_fleet import Machine, Worker
+from shared.container_requests import WorkerStartupKind
+from shared.containers import ContainerRecord
+from shared.errors import ConflictError, InvalidInputError
+from shared.tasks import TaskStatus
+
+
+class _Scheduler:
+    def __init__(self) -> None:
+        self.requests: list[SchedulerWorkerRequest] = []
+
+    def submit(
+        self,
+        request: SchedulerWorkerRequest,
+        *,
+        ready_at: datetime | None = None,
+    ) -> SchedulerContainerSubmitResult:
+        del ready_at
+        self.requests.append(request)
+        return SchedulerContainerSubmitResult(
+            status=SchedulerContainerSubmitStatus.Queued,
+            container_id=request.container_id,
+        )
+
+
+class _Cancellation:
+    def __init__(self, result: SchedulerContainerCancellationResult) -> None:
+        self.result = result
+        self.container_ids: list[str] = []
+
+    def cancel(self, container_id: str) -> SchedulerContainerCancellationResult:
+        self.container_ids.append(container_id)
+        return self.result.model_copy(update={"container_id": container_id})
+
+
+class _FailingCancellation:
+    def cancel(self, container_id: str) -> SchedulerContainerCancellationResult:
+        del container_id
+        raise RuntimeError("scheduler cancellation failed")
+
+
+class _EventBus:
+    def __init__(self) -> None:
+        self.events: list[EventBusEvent] = []
+
+    def send(self, event: EventBusEvent) -> EventBusSendResult:
+        self.events.append(event)
+        event_id = event_id_for_event(event)
+        return EventBusSendResult(
+            status=EventBusSendStatus.Sent,
+            event_id=event_id,
+            event_key=event_key(event_id),
+            channel=event_channel_key(event.type),
+            published=1,
+        )
+
+
+class _FailingEventBus:
+    def send(self, event: EventBusEvent) -> EventBusSendResult:
+        del event
+        raise RuntimeError("event delivery failed")
+
+
+def test_runtime_assignment_separates_operational_and_compute_ownership(
+    isolated_services: ApiServices,
+) -> None:
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+        other_workspace = WorkspaceRepository(session).create(name=f"other-{uuid4()}")
+        machine = MachineRepository(session).upsert(
+            Machine(id=str(uuid4())),
+            workspace_id=workspace_id,
+        )
+        worker = WorkerRepository(session).upsert(
+            Worker(id=str(uuid4()), machine_id=machine.id),
+            workspace_id=workspace_id,
+        )
+        foreign_machine = MachineRepository(session).upsert(
+            Machine(id=str(uuid4())),
+            workspace_id=other_workspace.id,
+        )
+        container = ContainerRepository(session).upsert(
+            ContainerRecord(
+                id=str(uuid4()),
+                name="runtime-assignment",
+                image="",
+                command=[],
+                workspace_id=workspace_id,
+            )
+        )
+
+    persistence = ContainerSchedulingPersistenceService(
+        isolated_services.context,
+        isolated_services.events,
+        isolated_services.workspace_changes,
+    )
+    persistence.assign_runtime(
+        container_id=container.id,
+        workspace_id=workspace_id,
+        runtime_worker_id="compose-worker",
+        runtime_machine_id="compose-machine",
+    )
+    managed = isolated_services.containers.get(container.id)
+    assert managed.runtime_worker_id == "compose-worker"
+    assert managed.runtime_machine_id == "compose-machine"
+    assert managed.worker_id is None
+    assert managed.machine_id is None
+
+    persistence.assign_runtime(
+        container_id=container.id,
+        workspace_id=workspace_id,
+        runtime_worker_id=worker.id,
+        runtime_machine_id=machine.id,
+        compute_worker_id=worker.id,
+        compute_machine_id=machine.id,
+    )
+    private = isolated_services.containers.get(container.id)
+    assert private.worker_id == worker.id
+    assert private.machine_id == machine.id
+
+    with pytest.raises(ConflictError, match="assignment workspace"):
+        persistence.assign_runtime(
+            container_id=container.id,
+            workspace_id=workspace_id,
+            runtime_worker_id=worker.id,
+            runtime_machine_id=foreign_machine.id,
+            compute_worker_id=worker.id,
+            compute_machine_id=foreign_machine.id,
+        )
+
+    persistence.clear_runtime_assignment(
+        container_id=container.id,
+        runtime_worker_id=worker.id,
+    )
+    cleared = isolated_services.containers.get(container.id)
+    assert cleared.runtime_worker_id == ""
+    assert cleared.runtime_machine_id == ""
+    assert cleared.worker_id == worker.id
+    assert cleared.machine_id == machine.id
+
+
+def test_checkpoint_gpu_limit_rejects_before_scheduler_submission(
+    isolated_services: ApiServices,
+) -> None:
+    scheduler = _Scheduler()
+    isolated_services = replace(
+        isolated_services,
+        containers=replace(isolated_services.containers, scheduler=scheduler),
+    )
+    container = ContainerRecord(
+        id="checkpoint-pod",
+        name="checkpoint-pod",
+        image="image",
+        command=["python", "-m", "app"],
+        workspace_id="workspace",
+        stub_id="stub",
+    )
+
+    with pytest.raises(
+        InvalidInputError,
+        match="checkpointing does not support more than one GPU",
+    ):
+        isolated_services.containers.submit_scheduler_request(
+            container,
+            ContainerSchedulingOptions(
+                workspace_name="workspace",
+                startup_kind=WorkerStartupKind.Pod,
+                checkpoint_enabled=True,
+                checkpoint_readiness_path="/ready",
+                checkpoint_readiness_port=8080,
+                gpu_count=2,
+            ),
+        )
+
+    assert scheduler.requests == []
+
+
+def test_container_stop_targets_only_assigned_worker(
+    isolated_services: ApiServices,
+) -> None:
+    scheduler = _Scheduler()
+    cancellation = _Cancellation(
+        SchedulerContainerCancellationResult(
+            container_id="placeholder",
+            state_found=True,
+            worker_id="worker-1",
+            worker_stop_required=True,
+        )
+    )
+    events = _EventBus()
+    isolated_services = replace(
+        isolated_services,
+        containers=replace(
+            isolated_services.containers,
+            scheduler=scheduler,
+            scheduler_cancellation=cancellation,
+            event_bus=events,
+        ),
+    )
+    container = isolated_services.containers.run(
+        "assigned-container",
+        "python:3.12",
+        ["python", "-c", "print('ok')"],
+    )
+
+    isolated_services.containers.stop(container.id)
+
+    assert cancellation.container_ids == [container.id]
+    assert len(events.events) == 1
+    assert events.events[0].args == {
+        "container_id": container.id,
+        "force": False,
+        "reason": "USER",
+        "worker_id": "worker-1",
+    }
+
+
+def test_container_stop_does_not_broadcast_for_unassigned_request(
+    isolated_services: ApiServices,
+) -> None:
+    scheduler = _Scheduler()
+    cancellation = _Cancellation(
+        SchedulerContainerCancellationResult(
+            container_id="placeholder",
+            state_found=True,
+            pending_request_removed=True,
+        )
+    )
+    events = _EventBus()
+    isolated_services = replace(
+        isolated_services,
+        containers=replace(
+            isolated_services.containers,
+            scheduler=scheduler,
+            scheduler_cancellation=cancellation,
+            event_bus=events,
+        ),
+    )
+    container = isolated_services.containers.run(
+        "pending-container",
+        "python:3.12",
+        ["python", "-c", "print('ok')"],
+    )
+
+    isolated_services.containers.stop(container.id)
+
+    assert cancellation.container_ids == [container.id]
+    assert events.events == []
+
+
+@pytest.mark.parametrize(
+    ("failure_phase", "expected_error"),
+    [
+        ("cancellation", "scheduler cancellation failed"),
+        ("delivery", "event delivery failed"),
+    ],
+)
+def test_container_stop_failure_never_persists_success(
+    isolated_services: ApiServices,
+    failure_phase: str,
+    expected_error: str,
+) -> None:
+    cancellation: _Cancellation | _FailingCancellation
+    event_bus: _EventBus | _FailingEventBus
+    if failure_phase == "cancellation":
+        cancellation = _FailingCancellation()
+        event_bus = _EventBus()
+    else:
+        cancellation = _Cancellation(
+            SchedulerContainerCancellationResult(
+                container_id="placeholder",
+                state_found=True,
+                worker_id="worker-1",
+                worker_stop_required=True,
+            )
+        )
+        event_bus = _FailingEventBus()
+    isolated_services = replace(
+        isolated_services,
+        containers=replace(
+            isolated_services.containers,
+            scheduler=_Scheduler(),
+            scheduler_cancellation=cancellation,
+            event_bus=event_bus,
+        ),
+    )
+    container = isolated_services.containers.run(
+        f"{failure_phase}-failure",
+        "python:3.12",
+        ["python", "-c", "print('ok')"],
+    )
+
+    with pytest.raises(RuntimeError, match=expected_error):
+        isolated_services.containers.stop(container.id)
+
+    assert isolated_services.containers.get(container.id).status == container.status
+    assert container.task_id is not None
+    assert isolated_services.tasks.get(container.task_id).status is TaskStatus.Pending

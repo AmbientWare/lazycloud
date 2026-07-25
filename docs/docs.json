@@ -1,0 +1,100 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "LazyCloud",
+  "description": "Documentation for LazyCloud, a Python-first serverless compute platform for functions, endpoints, task queues, pods, and sandboxes.",
+  "colors": {
+    "primary": "#006b9a",
+    "light": "#66cbff",
+    "dark": "#4dbce8"
+  },
+  "logo": {
+    "light": "/logo.png",
+    "dark": "/logo.png"
+  },
+  "favicon": "/favicon.png",
+  "navigation": {
+    "groups": [
+      {
+        "group": "Getting Started",
+        "pages": [
+          "index",
+          "getting-started/installation",
+          "getting-started/quickstart",
+          "getting-started/first-endpoint"
+        ]
+      },
+      {
+        "group": "Examples",
+        "pages": [
+          "examples/index",
+          "examples/openai-compatible-llm",
+          "examples/train-yolo-object-detector",
+          "examples/document-processing-asgi",
+          "examples/sandboxed-coding-agent",
+          "examples/parallel-parquet-s3"
+        ]
+      },
+      {
+        "group": "Core Concepts",
+        "pages": [
+          "concepts/apps",
+          "concepts/functions",
+          "concepts/endpoints",
+          "concepts/task-queues",
+          "concepts/cron",
+          "concepts/pods",
+          "concepts/sandboxes",
+          "concepts/images"
+        ]
+      },
+      {
+        "group": "Data and State",
+        "pages": [
+          "concepts/volumes",
+          "concepts/secrets",
+          "concepts/queues-maps-signals",
+          "concepts/outputs",
+          "concepts/tasks-and-logs"
+        ]
+      },
+      {
+        "group": "Platform",
+        "pages": [
+          "platform/auth",
+          "platform/compute",
+          "platform/dashboard"
+        ]
+      },
+      {
+        "group": "CLI Reference",
+        "pages": [
+          "cli/overview",
+          "cli/deploy-and-run",
+          "cli/tasks-and-logs",
+          "cli/deployments-and-containers",
+          "cli/storage",
+          "cli/compute",
+          "cli/auth",
+          "cli/scaffolding"
+        ]
+      },
+      {
+        "group": "Self-Hosting",
+        "pages": [
+          "self-hosting/compose",
+          "self-hosting/helm"
+        ]
+      },
+      {
+        "group": "Reference",
+        "pages": [
+          "reference/limitations"
+        ]
+      }
+    ]
+  },
+  "footer": {
+    "socials": {}
+  }
+}

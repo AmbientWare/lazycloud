@@ -1,0 +1,46 @@
+---
+title: "Installation"
+description: "Install the lazycloud Python SDK and CLI."
+---
+
+The `lazycloud` distribution ships both the Python SDK (`import lazycloud`) and the
+`lazycloud` command-line tool. It supports Python 3.10 or newer.
+
+## Install
+
+Install the client from the package registry with uv:
+
+```bash
+uv tool install lazycloud
+```
+
+or with pip:
+
+```bash
+pip install lazycloud
+```
+
+<Note>
+  The `lazycloud` distribution is not yet published to a package registry. Until
+  the beta release is published, install the client from a checkout of the
+  LazyCloud repository — see
+  [Self-hosting with Docker Compose](/self-hosting/compose).
+</Note>
+
+## Verify the install
+
+```bash
+lazycloud --help
+python -c "from lazycloud import App; print(App)"
+```
+
+## Local state
+
+The CLI and SDK store profiles and working files under `~/.lazycloud` by default.
+Set `LAZYCLOUD_HOME=/path/to/state` to relocate them; the profile file lives at
+`$LAZYCLOUD_HOME/config.yaml`.
+
+## Next steps
+
+Log in and deploy your first function in the
+[Quickstart](/getting-started/quickstart).

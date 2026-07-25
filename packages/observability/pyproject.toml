@@ -1,0 +1,22 @@
+[project]
+name = "observability"
+version = "0.1.0"
+description = "Events, metrics, usage, logs, and telemetry services."
+requires-python = ">=3.12"
+dependencies = [
+    "lazycloud-shared==0.1.0",
+    "coordination",
+    "database",
+    "opentelemetry-api>=1.42.1",
+    "opentelemetry-exporter-otlp-proto-http>=1.42.1",
+    "opentelemetry-sdk>=1.42.1",
+    "pydantic>=2.8,<3",
+    "pydantic-settings>=2.4,<3",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

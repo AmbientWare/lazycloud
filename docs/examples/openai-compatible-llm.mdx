@@ -1,0 +1,174 @@
+---
+title: "OpenAI-compatible LLM service"
+description: "Run a small instruction model behind an authenticated vLLM Pod on one GPU."
+---
+
+This example deploys the official vLLM OpenAI server as a long-running
+LazyCloud Pod. It serves `Qwen/Qwen2.5-1.5B-Instruct` on one NVIDIA L4 and
+stores downloaded model files in a durable Volume, so replacement containers
+can reuse the cache.
+
+The complete runnable source is the
+`examples.openai_compatible_llm.app` module in the LazyCloud repository.
+
+## Prerequisites
+
+- Install the `lazycloud` CLI and log in to a workspace.
+- Make sure the workspace has access to one NVIDIA L4 GPU and permits at least
+  4 CPU cores and 16 GiB of memory for the workload.
+- Export a workspace token when calling the HTTP service directly:
+
+```bash
+export LAZYCLOUD_TOKEN="<workspace-token>"
+```
+
+Do not put the token in source control. The model is public, so this example
+does not need a Hugging Face token.
+
+## Declare the service
+
+The Pod uses the pinned official `vllm/vllm-openai:v0.23.0` image. Heavy ML
+dependencies stay in that image; the local project does not install vLLM,
+PyTorch, CUDA, or Transformers.
+
+```python
+from lazycloud import App, GpuType, Image, Volume
+
+app = App("openai_compatible_llm")
+model_cache = Volume("vllm-model-cache", "/root/.cache/huggingface")
+
+server = app.pod(
+    name="openai-server",
+    image=Image.from_registry("vllm/vllm-openai:v0.23.0"),
+    command=[
+        "vllm", "serve",
+        "--host", "0.0.0.0",
+        "--port", "8000",
+        "--model", "Qwen/Qwen2.5-1.5B-Instruct",
+        "--served-model-name", "qwen-1.5b",
+        "--download-dir", "/root/.cache/huggingface",
+        "--max-model-len", "8192",
+        "--gpu-memory-utilization", "0.90",
+    ],
+    ports={"http": 8000},
+    env={"HF_HOME": "/root/.cache/huggingface"},
+    cpu=4.0,
+    memory="16Gi",
+    gpu=GpuType.L4,
+    gpu_count=1,
+    volumes=[model_cache],
+    authorized=True,
+)
+```
+
+`authorized=True` makes the LazyCloud HTTP gateway require a valid workspace
+bearer token. The example does not configure a second vLLM API key; do not
+expose the container port through another unauthenticated ingress path.
+
+## Create the cache and deploy
+
+Run these commands from the repository root:
+
+```bash
+lazycloud volume create vllm-model-cache
+lazycloud deploy examples.openai_compatible_llm.app:app \
+  --resource pod:openai-server
+```
+
+The first deployment downloads the model and takes longer. Copy the Pod URL
+from the deploy output, without a trailing slash:
+
+```bash
+export VLLM_URL="<pod-url>"
+```
+
+Wait until the health endpoint succeeds before sending inference requests:
+
+```bash
+curl --fail --show-error "$VLLM_URL/health" \
+  -H "Authorization: Bearer $LAZYCLOUD_TOKEN"
+```
+
+A request without that `Authorization` header is rejected by LazyCloud before
+it reaches vLLM.
+
+## List models
+
+```bash
+curl --fail --show-error "$VLLM_URL/v1/models" \
+  -H "Authorization: Bearer $LAZYCLOUD_TOKEN"
+```
+
+## Create a chat completion
+
+```bash
+curl --fail --show-error "$VLLM_URL/v1/chat/completions" \
+  -H "Authorization: Bearer $LAZYCLOUD_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen-1.5b",
+    "messages": [
+      {"role": "user", "content": "Explain durable model caches in one sentence."}
+    ],
+    "max_tokens": 80,
+    "temperature": 0.2
+  }'
+```
+
+The response body follows the OpenAI chat-completions schema. It is generated
+at request time; this guide does not include fabricated sample output.
+
+## Inspect the deployment
+
+```bash
+lazycloud deployment list --app openai_compatible_llm
+lazycloud container list
+lazycloud logs --deployment-id <deployment-id> --follow --show-timestamp
+lazycloud volume list
+```
+
+To prove cache reuse, note the model-load logs, stop the current container,
+allow the deployment to replace it, and inspect the replacement logs:
+
+```bash
+lazycloud container stop <container-id>
+lazycloud logs --deployment-id <deployment-id> --follow --show-timestamp
+```
+
+The replacement must become healthy and serve another real completion while
+using the existing `vllm-model-cache` contents. A running container and a
+passing import test are not substitutes for that live check.
+
+## Cost, model, and image notes
+
+The Pod reserves an L4 GPU while it is running, so it incurs GPU and supporting
+CPU/memory cost until the deployment is stopped or deleted. Check your
+workspace's compute pricing and quotas before deploying. The 1.5B model is
+small enough for one L4, but request concurrency and the configured context
+length still affect GPU memory use.
+
+- vLLM publishes the official OpenAI-server image and its
+  [Docker deployment instructions](https://docs.vllm.ai/en/latest/deployment/docker/).
+- `Qwen/Qwen2.5-1.5B-Instruct` is published on its
+  [Hugging Face model card](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct)
+  under the Apache 2.0 license. Review the model card and license before using
+  the weights in your product.
+
+Live acceptance requires authorized GPU capacity. It must cover an
+authenticated health request, model listing, a real chat completion,
+unauthenticated rejection, replacement-container cache reuse, logs, and exact
+cleanup. Do not report this example as live-accepted until those checks pass.
+
+## Clean up
+
+Delete the deployment first so no running Pod is still using the Volume:
+
+```bash
+lazycloud deployment delete <deployment-id-or-name>
+lazycloud volume delete vllm-model-cache --yes
+unset VLLM_URL
+```
+
+Keep the Volume only if you intentionally want future deployments to reuse the
+download. Retaining it continues to consume storage; deleting it means the
+next deployment downloads the model again.

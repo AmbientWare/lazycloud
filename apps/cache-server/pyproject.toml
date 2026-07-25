@@ -1,0 +1,20 @@
+[project]
+name = "cache-server-app"
+version = "0.1.0"
+description = "Cache server process app for LazyCloud."
+requires-python = ">=3.12"
+dependencies = [
+    "cache",
+    "lazycloud-shared==0.1.0",
+    "pydantic-settings>=2.4,<3",
+]
+
+[project.scripts]
+lazycloud-cache-server = "cache_server_app.main:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

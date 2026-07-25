@@ -1,0 +1,143 @@
+---
+title: "Run a coding agent in a Sandbox"
+description: "Plan a bounded code change with an OpenAI-compatible model, then test it without network access or provider credentials."
+---
+
+This example separates model access from generated-code execution. A trusted
+Function calls your OpenAI-compatible provider and returns one validated file
+replacement. A second, network-blocked Sandbox receives only the seed project
+and that replacement, runs the real unit test, and is terminated in `finally`
+whether the test passes, fails, or raises an error.
+
+The complete implementation and seed project live under
+`examples/sandboxed_coding_agent/`.
+
+## Trust boundary
+
+```python
+from examples.sandboxed_coding_agent.app import plan_patch, sandbox
+
+planner_spec = plan_patch.spec()
+sandbox_spec = sandbox.spec()
+
+assert planner_spec.secrets == [
+    "CODING_AGENT_BASE_URL",
+    "CODING_AGENT_MODEL",
+    "CODING_AGENT_API_KEY",
+]
+assert sandbox_spec.metadata["block_network"] is True
+assert sandbox_spec.secrets == []
+assert sandbox_spec.env == {}
+```
+
+Only the planner container receives provider configuration. The Sandbox has no
+provider secret, outbound network access, exposed port, snapshot, or retained
+filesystem. The local orchestrator validates the remote result again before it
+uploads anything.
+
+The patch contract accepts complete UTF-8 content only for `calculator.py`. It
+rejects absolute and traversal paths, empty segments, unapproved or duplicate
+files, NUL/control payloads, more than three files, and more than 12,000 total
+bytes. The model cannot modify the test.
+
+## Configure an OpenAI-compatible provider
+
+Set a base URL ending at the provider's OpenAI-compatible API root, such as an
+HTTPS `/v1` URL, along with that provider's model identifier and API key. The
+example appends `/chat/completions` itself.
+
+```bash
+export CODING_AGENT_BASE_URL="https://provider.example/v1"
+export CODING_AGENT_MODEL="provider-model-name"
+read -rsp "Provider API key: " CODING_AGENT_API_KEY && echo
+
+uv run lazycloud secret create CODING_AGENT_BASE_URL "$CODING_AGENT_BASE_URL" --workspace default
+uv run lazycloud secret create CODING_AGENT_MODEL "$CODING_AGENT_MODEL" --workspace default
+uv run lazycloud secret create CODING_AGENT_API_KEY "$CODING_AGENT_API_KEY" --workspace default
+unset CODING_AGENT_BASE_URL CODING_AGENT_MODEL CODING_AGENT_API_KEY
+```
+
+Shell history records the variable names shown above, not their expanded
+values. Do not paste a key directly into the example, prompt, URL, logs, or
+source files. Workspace secret values are injected only into the planner
+Function's environment.
+
+<Warning>
+  The planner sends the prompt and seed source files to the provider you
+  configure. Do not use this example with proprietary source until that
+  provider's data handling and retention terms are acceptable to you.
+</Warning>
+
+## Deploy and run
+
+Deploying the App deploys the planner Function. Sandboxes are created on demand,
+so there is no long-running Sandbox deployment.
+
+```bash
+uv run lazycloud deploy examples.sandboxed_coding_agent.app:app --workspace default
+uv run lazycloud deployment list --app sandboxed_coding_agent --workspace default
+uv run lazycloud run examples.sandboxed_coding_agent.app:run_agent --workspace default
+```
+
+The default prompt asks the planner to fix the intentionally incorrect
+`calculator.add` implementation without changing its test. The result includes
+the planner Task ID, terminated Sandbox ID, changed paths, test exit code,
+bounded test output, and `tests_passed`. It never includes provider credentials
+or generated file contents.
+
+Pass a different bounded instruction as the first argument while keeping the
+same approved file scope:
+
+```bash
+uv run lazycloud run examples.sandboxed_coding_agent.app:run_agent "Correct calculator.add and preserve its type hints." --workspace default
+```
+
+## Inspect the workflow
+
+Use the planner Task ID returned by `run_agent` to inspect durable status and
+logs. The provider response body and credentials are never logged by the
+example.
+
+```bash
+uv run lazycloud task show <planner-task-id> --workspace default
+uv run lazycloud task logs <planner-task-id> --workspace default
+uv run lazycloud run examples.sandboxed_coding_agent.app:inspect_sandboxes 20 --workspace default
+```
+
+The final list should show the invocation's Sandbox in a terminal `stopped` or
+`failed` state, never `running` or `stopping`. A failed provider request or
+invalid structured response fails before Sandbox creation.
+A file-upload, process, or test exception terminates the created Sandbox before
+the error propagates. A normal failing test returns `tests_passed: false` and a
+nonzero exit code; it is never reported as success.
+
+## Cost and production hardening
+
+Each invocation incurs your model provider's token charges and LazyCloud compute
+for one short planner Function plus one CPU Sandbox. The default project is tiny,
+but costs grow with source size, model pricing, and repeated attempts.
+
+This example demonstrates a narrow execution boundary, not a complete autonomous
+software-development system. Before adapting it, add your own authorization,
+approval policy, repository checkout controls, prompt-injection defenses,
+language-specific resource limits, audit retention, and human review before
+merging generated changes.
+
+## Cleanup
+
+The orchestrator terminates its Sandbox automatically. Delete the planner
+deployment and its three configuration secrets when finished:
+
+```bash
+uv run lazycloud deployment delete plan-patch --workspace default
+uv run lazycloud secret delete CODING_AGENT_BASE_URL --workspace default
+uv run lazycloud secret delete CODING_AGENT_MODEL --workspace default
+uv run lazycloud secret delete CODING_AGENT_API_KEY --workspace default
+```
+
+<Note>
+  Local tests verify the provider protocol, patch constraints, public workload
+  specifications, bounded results, and cleanup paths. End-to-end acceptance
+  still requires a real provider credential plus a reachable LazyCloud control
+  plane; the example has no deterministic or mocked production success path.
+</Note>

@@ -1,0 +1,25 @@
+[project]
+name = "worker-bootstrap-app"
+version = "0.1.0"
+description = "Worker bootstrap process app for LazyCloud."
+requires-python = ">=3.12"
+dependencies = [
+    "container-worker-app",
+    "lazycloud-shared==0.1.0",
+    "coordination",
+    "database",
+    "identity",
+    "kubernetes>=30,<35",
+    "scheduler",
+    "worker",
+]
+
+[project.scripts]
+lazycloud-worker-bootstrap = "worker_bootstrap_app.main:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

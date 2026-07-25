@@ -1,0 +1,119 @@
+from __future__ import annotations
+
+from contextlib import ExitStack
+from uuid import uuid4
+
+from api.fastapi_app import create_app
+from api.server.services import ApiServices
+from control.service import ControlPlaneService
+from coordination.redis_client import RedisClient
+from database.repositories.orchestration import ContainerRepository
+from fastapi.testclient import TestClient
+from identity.auth import AuthService
+from observability.stream_state import RedisEventStreamRepository
+from shared.containers import ContainerRecord, ContainerStatus
+from shared.deployment_records import DeploymentSpec
+from shared.http.observability import ContainerMetricsTimeseriesResponse
+from shared.identity import TokenKind
+from shared.realtime.contracts import (
+    ContainerMetricsData,
+    ContainerMetricsPayload,
+    EventRecordType,
+)
+
+
+def _seed_container(services: ApiServices) -> ContainerRecord:
+    deployment = services.deployments.deploy(
+        DeploymentSpec(name="metrics-demo", handler="pkg.module:handler")
+    )
+    stub = next(
+        item
+        for item in ControlPlaneService(services.context).list_stubs()
+        if item.deployment_id == deployment.id
+    )
+    container = ContainerRecord(
+        id=str(uuid4()),
+        name="metrics-container",
+        image="img-metrics",
+        command=["python3.12", "-m", "runner.function"],
+        workspace_id=stub.workspace_id,
+        stub_id=stub.id,
+        status=ContainerStatus.Running,
+    )
+    with services.context.database.session() as session:
+        return ContainerRepository(session).upsert(container)
+
+
+def _publish_sample(
+    services: ApiServices,
+    container: ContainerRecord,
+    *,
+    cpu_used: int,
+    rss: int,
+) -> None:
+    payload = ContainerMetricsPayload(
+        worker_id="worker-1",
+        container_id=container.id,
+        workspace_id=container.workspace_id or "",
+        stub_id=container.stub_id or "",
+        cpu=1000,
+        metrics=ContainerMetricsData(
+            sample_interval_ms=3000,
+            cpu_used=cpu_used,
+            cpu_total=1000,
+            cpu_pct=cpu_used / 10,
+            memory_rss_bytes=rss,
+            memory_total_bytes=512 * 1024 * 1024,
+            disk_read_bytes=4096,
+            disk_write_bytes=8192,
+            network_recv_bytes=150_000,
+            network_sent_bytes=25_000,
+        ),
+    )
+    RedisEventStreamRepository(services.redis()).append_event(
+        EventRecordType.ContainerMetrics,
+        payload.model_dump(mode="python"),
+    )
+
+
+def _services_with_redis(
+    isolated_services: ApiServices,
+    redis: RedisClient,
+) -> ApiServices:
+    return ApiServices.create(
+        isolated_services.database,
+        root=isolated_services.root,
+        create_schema=False,
+        volume_filesystem=isolated_services.volume_filesystem,
+        redis_client=redis,
+        binary_redis_client=isolated_services.binary_redis_client,
+        owns_redis_client=False,
+        owns_binary_redis_client=False,
+    )
+
+
+def test_container_metrics_timeseries_empty_and_missing(
+    isolated_services: ApiServices,
+    client_stack: ExitStack,
+) -> None:
+    container = _seed_container(isolated_services)
+
+    raw_token, _ = AuthService(isolated_services.context).create_token(
+        "metrics-reader",
+        kind=TokenKind.Admin,
+    )
+    client = client_stack.enter_context(TestClient(create_app(isolated_services)))
+    headers = {"Authorization": f"Bearer {raw_token}"}
+
+    empty = client.get(
+        f"/api/v1/metrics/containers/{container.id}/timeseries",
+        headers=headers,
+    )
+    assert empty.status_code == 200
+    assert ContainerMetricsTimeseriesResponse.model_validate_json(empty.content).points == ()
+
+    missing = client.get(
+        f"/api/v1/metrics/containers/{uuid4()}/timeseries",
+        headers=headers,
+    )
+    assert missing.status_code == 404

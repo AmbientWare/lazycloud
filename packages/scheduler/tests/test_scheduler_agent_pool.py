@@ -1,0 +1,202 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+
+from compute.agent_control import DEFAULT_PRIVATE_EXECUTOR, agent_machine_worker_id
+from compute.state import ComputeAgentTokenState
+from scheduler.agent_pool import (
+    AgentPoolConfig,
+    AgentPoolWorkerAction,
+    AgentWorkerPoolController,
+)
+from scheduler.fleet import SchedulerWorkerStatus
+from scheduler.state import SchedulerWorkerRecord
+from shared.compute_enrollment import ComputePreflightCheck
+
+
+def test_agent_worker_pool_reconciles_connected_machine_and_capacity() -> None:
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    machine = _agent_machine(
+        machine_id="machine-one",
+        cpu_millicores=4000,
+        memory_mb=8192,
+        gpus=["A4000"],
+        gpu_count=1,
+        last_heartbeat_at=now,
+    )
+    workers = _WorkerRepo()
+    controller = AgentWorkerPoolController(
+        AgentPoolConfig(
+            capacity_owner_id="11111111-1111-4111-8111-111111111111",
+            workspace_id="ws-1",
+            pool_name="gpu",
+            gpu_type="A4000",
+        ),
+        _MachineRepo([machine]),
+        workers,
+    )
+
+    reconciled = controller.reconcile(now=now)
+
+    worker_id = agent_machine_worker_id("machine-one")
+    assert reconciled.ensured_worker_ids == [worker_id]
+    worker = workers.get_worker(worker_id)
+    assert worker is not None
+    assert worker.status is SchedulerWorkerStatus.Pending
+    assert worker.pool_name == "gpu"
+    assert worker.machine_id == "machine-one"
+    assert worker.total_cpu_millicores == 4000
+    assert worker.total_memory_mib == 8192
+    assert worker.total_gpu_count == 1
+    assert worker.gpu_type == "A4000"
+
+
+def test_agent_worker_pool_excludes_machine_with_failed_typed_preflight() -> None:
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    machine = _agent_machine(
+        machine_id="machine-one",
+        cpu_millicores=4000,
+        memory_mb=8192,
+        last_heartbeat_at=now,
+    ).model_copy(
+        update={
+            "preflight_passed": False,
+            "schedulable": False,
+            "preflight": [
+                ComputePreflightCheck(name="container_engine", ok=False, message="unavailable")
+            ],
+        }
+    )
+    workers = _WorkerRepo()
+    controller = AgentWorkerPoolController(
+        AgentPoolConfig(
+            capacity_owner_id="11111111-1111-4111-8111-111111111111",
+            workspace_id="ws-1",
+            pool_name="gpu",
+        ),
+        _MachineRepo([machine]),
+        workers,
+    )
+
+    reconciled = controller.reconcile(now=now)
+
+    assert reconciled.skipped_machine_ids == ["machine-one"]
+    assert workers.get_worker(agent_machine_worker_id("machine-one")) is None
+
+
+def test_agent_worker_pool_disables_stale_machine_worker() -> None:
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    machine = _agent_machine(
+        machine_id="machine-one",
+        cpu_millicores=4000,
+        memory_mb=8192,
+        last_heartbeat_at=now - timedelta(minutes=2),
+    )
+    worker = SchedulerWorkerRecord(
+        capacity_owner_id="11111111-1111-4111-8111-111111111111",
+        worker_id=agent_machine_worker_id("machine-one"),
+        pool_name="gpu",
+        machine_id="machine-one",
+        status=SchedulerWorkerStatus.Available,
+        total_cpu_millicores=4000,
+        total_memory_mib=8192,
+        free_cpu_millicores=4000,
+        free_memory_mib=8192,
+        created_at=now,
+        updated_at=now,
+    )
+    workers = _WorkerRepo([worker])
+    controller = AgentWorkerPoolController(
+        AgentPoolConfig(
+            capacity_owner_id="11111111-1111-4111-8111-111111111111",
+            workspace_id="ws-1",
+            pool_name="gpu",
+        ),
+        _MachineRepo([machine]),
+        workers,
+    )
+
+    disabled = controller.ensure_machine_worker(machine, now=now)
+    unavailable_worker = workers.get_worker(worker.worker_id)
+    assert unavailable_worker is not None
+
+    assert disabled.action is AgentPoolWorkerAction.Disabled
+    assert unavailable_worker.status is SchedulerWorkerStatus.Unavailable
+
+
+class _MachineRepo:
+    def __init__(self, machines: list[ComputeAgentTokenState]) -> None:
+        self.machines = machines
+
+    def list_agent_token_states(
+        self,
+        workspace_id: str,
+        pool_name: str,
+    ) -> list[ComputeAgentTokenState]:
+        return [
+            machine
+            for machine in self.machines
+            if machine.workspace_id == workspace_id and machine.pool_name == pool_name
+        ]
+
+
+class _WorkerRepo:
+    def __init__(self, workers: list[SchedulerWorkerRecord] | None = None) -> None:
+        self.workers = {worker.worker_id: worker for worker in workers or []}
+
+    def get_worker(self, worker_id: str) -> SchedulerWorkerRecord | None:
+        return self.workers.get(worker_id)
+
+    def add_worker(
+        self,
+        worker: SchedulerWorkerRecord,
+        *,
+        ttl_seconds: int = 0,
+        now: datetime | None = None,
+    ) -> SchedulerWorkerRecord:
+        self.workers[worker.worker_id] = worker
+        return worker
+
+    def disable_worker(
+        self,
+        worker_id: str,
+        *,
+        ttl_seconds: int = 0,
+        now: datetime | None = None,
+    ) -> SchedulerWorkerRecord:
+        worker = self.workers[worker_id]
+        updated = worker.model_copy(
+            update={
+                "status": SchedulerWorkerStatus.Unavailable,
+                "updated_at": now or worker.updated_at,
+            }
+        )
+        self.workers[worker_id] = updated
+        return updated
+
+
+def _agent_machine(
+    *,
+    machine_id: str,
+    cpu_millicores: int,
+    memory_mb: int,
+    gpus: list[str] | None = None,
+    gpu_count: int = 0,
+    last_heartbeat_at: datetime,
+) -> ComputeAgentTokenState:
+    return ComputeAgentTokenState(
+        token_hash=f"token-{machine_id}",
+        workspace_id="ws-1",
+        pool_name="gpu",
+        machine_id=machine_id,
+        executor=DEFAULT_PRIVATE_EXECUTOR,
+        cpu_millicores=cpu_millicores,
+        memory_mb=memory_mb,
+        gpus=gpus or [],
+        gpu_count=gpu_count,
+        preflight_passed=True,
+        heartbeat_confirmed=True,
+        schedulable=True,
+        last_join_at=last_heartbeat_at,
+        last_heartbeat_at=last_heartbeat_at,
+    )

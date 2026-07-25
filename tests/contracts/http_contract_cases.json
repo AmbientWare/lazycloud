@@ -1,0 +1,259 @@
+{
+  "cases": [
+    {
+      "accepted": true,
+      "contract": "create_shell_in_existing_container_response",
+      "input": {
+        "password": "session-password",
+        "stub_id": "stub-shell",
+        "username": "runner",
+        "websocket_ticket": "wst_single_use"
+      },
+      "name": "valid_ticketed_session",
+      "normalized": {
+        "password": "session-password",
+        "stub_id": "stub-shell",
+        "username": "runner",
+        "websocket_ticket": "wst_single_use"
+      }
+    },
+    {
+      "accepted": false,
+      "contract": "create_shell_in_existing_container_response",
+      "input": {
+        "password": "session-password",
+        "stub_id": "stub-shell",
+        "username": "runner"
+      },
+      "name": "missing_ticket",
+      "normalized": null
+    },
+    {
+      "accepted": false,
+      "contract": "create_shell_in_existing_container_response",
+      "input": {
+        "password": "session-password",
+        "stub_id": "stub-shell",
+        "username": "runner",
+        "websocket_ticket": ""
+      },
+      "name": "empty_ticket",
+      "normalized": null
+    },
+    {
+      "accepted": false,
+      "contract": "create_shell_in_existing_container_response",
+      "input": {
+        "password": "session-password",
+        "stub_id": "stub-shell",
+        "username": "runner",
+        "websocket_ticket": null
+      },
+      "name": "null_ticket",
+      "normalized": null
+    },
+    {
+      "accepted": false,
+      "contract": "create_shell_in_existing_container_response",
+      "input": {
+        "password": "session-password",
+        "stub_id": "stub-shell",
+        "token": "not-a-contract-field",
+        "username": "runner",
+        "websocket_ticket": "wst_single_use"
+      },
+      "name": "unknown_field",
+      "normalized": null
+    },
+    {
+      "accepted": true,
+      "contract": "error_response",
+      "input": {
+        "detail": "workspace access denied"
+      },
+      "name": "valid_detail",
+      "normalized": {
+        "detail": "workspace access denied"
+      }
+    },
+    {
+      "accepted": false,
+      "contract": "error_response",
+      "input": {},
+      "name": "missing_detail",
+      "normalized": null
+    },
+    {
+      "accepted": false,
+      "contract": "error_response",
+      "input": {
+        "detail": null
+      },
+      "name": "null_detail",
+      "normalized": null
+    },
+    {
+      "accepted": false,
+      "contract": "error_response",
+      "input": {
+        "detail": "workspace access denied",
+        "message": "duplicate owner"
+      },
+      "name": "unknown_field",
+      "normalized": null
+    },
+    {
+      "accepted": true,
+      "contract": "function_invoke_response",
+      "input": {},
+      "name": "omitted_defaults",
+      "normalized": {
+        "done": false,
+        "exit_code": 0,
+        "output": "",
+        "result": null,
+        "task_id": ""
+      }
+    },
+    {
+      "accepted": true,
+      "contract": "function_invoke_response",
+      "input": {
+        "result": null,
+        "task_id": "task-null"
+      },
+      "name": "nullable_result",
+      "normalized": {
+        "done": false,
+        "exit_code": 0,
+        "output": "",
+        "result": null,
+        "task_id": "task-null"
+      }
+    },
+    {
+      "accepted": false,
+      "contract": "function_invoke_response",
+      "input": {
+        "task_id": null
+      },
+      "name": "null_non_nullable_task_id",
+      "normalized": null
+    },
+    {
+      "accepted": false,
+      "contract": "function_invoke_response",
+      "input": {
+        "result": {
+          "value": {
+            "ok": true
+          }
+        },
+        "task_id": "task-missing-tag"
+      },
+      "name": "missing_result_discriminator",
+      "normalized": null
+    },
+    {
+      "accepted": false,
+      "contract": "function_invoke_response",
+      "input": {
+        "result": {
+          "encoding": "yaml"
+        },
+        "task_id": "task-invalid-tag"
+      },
+      "name": "invalid_result_encoding",
+      "normalized": null
+    },
+    {
+      "accepted": false,
+      "contract": "function_invoke_response",
+      "input": {
+        "operation": "invoke",
+        "task_id": "task-extra"
+      },
+      "name": "unknown_top_level_field",
+      "normalized": null
+    },
+    {
+      "accepted": false,
+      "contract": "function_invoke_response",
+      "input": {
+        "result": {
+          "encoding": "json",
+          "schema": "hidden",
+          "value": null
+        },
+        "task_id": "task-extra-result"
+      },
+      "name": "unknown_nested_field",
+      "normalized": null
+    },
+    {
+      "accepted": true,
+      "contract": "function_invoke_response",
+      "input": {
+        "done": true,
+        "exit_code": 0,
+        "output": "complete\n",
+        "result": {
+          "encoding": "json",
+          "value": {
+            "answer": 42,
+            "ready": true
+          },
+          "version": 1
+        },
+        "task_id": "task-json"
+      },
+      "name": "result_encoding_json",
+      "normalized": {
+        "done": true,
+        "exit_code": 0,
+        "output": "complete\n",
+        "result": {
+          "encoding": "json",
+          "value": {
+            "answer": 42,
+            "ready": true
+          },
+          "version": 1
+        },
+        "task_id": "task-json"
+      }
+    },
+    {
+      "accepted": true,
+      "contract": "function_invoke_response",
+      "input": {
+        "done": true,
+        "exit_code": 0,
+        "output": "complete\n",
+        "result": {
+          "encoding": "cloudpickle",
+          "sha256": "2bee21166d3fcc8ca23b9e3a80c18dc6ab281d3e49b920d18bcf2771672a0a69",
+          "size_bytes": 21,
+          "value_base64": "gASVCgAAAAAAAAB9lIwCb2uUiHMu",
+          "version": 1
+        },
+        "task_id": "task-cloudpickle"
+      },
+      "name": "result_encoding_cloudpickle",
+      "normalized": {
+        "done": true,
+        "exit_code": 0,
+        "output": "complete\n",
+        "result": {
+          "encoding": "cloudpickle",
+          "sha256": "2bee21166d3fcc8ca23b9e3a80c18dc6ab281d3e49b920d18bcf2771672a0a69",
+          "size_bytes": 21,
+          "value_base64": "gASVCgAAAAAAAAB9lIwCb2uUiHMu",
+          "version": 1
+        },
+        "task_id": "task-cloudpickle"
+      }
+    }
+  ],
+  "format_version": 1
+}

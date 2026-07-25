@@ -1,0 +1,36 @@
+[project]
+name = "scheduler-app"
+version = "0.1.0"
+description = "Scheduler process app for LazyCloud."
+requires-python = ">=3.12"
+dependencies = [
+    "agent",
+    "cache",
+    "compute",
+    "control",
+    "lazycloud-shared==0.1.0",
+    "coordination",
+    "database",
+    "execution",
+    "gateway",
+    "identity",
+    "images",
+    "networking",
+    "observability",
+    "operations",
+    "provider-clients",
+    "provider-kubernetes",
+    "scheduler",
+    "storage",
+    "storage-client",
+]
+
+[project.scripts]
+lazycloud-scheduler = "scheduler_app.main:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

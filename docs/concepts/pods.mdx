@@ -1,0 +1,80 @@
+---
+title: "Pods"
+description: "Long-running command-style containers created, deployed, and managed under an app."
+---
+
+A pod runs an arbitrary container command — a web server, a worker process, a
+database sidecar — under the same app slug as your other resources. Unlike
+functions and endpoints, a pod is not tied to a Python callable.
+
+```python
+from lazycloud import App, Image
+
+app = App("tools")
+
+web = app.pod(
+    name="web",
+    image=Image(python_version="3.12"),
+    command=["python", "-m", "http.server", "8080"],
+    ports={"http": 8080},
+    cpu=0.5,
+    memory="256Mi",
+)
+```
+
+Pods default to `cpu=1.0`, `memory="128Mi"`, `keep_warm=600`, and
+`authorized=False`.
+
+## Deployed pods vs. on-demand instances
+
+**Deploy** the pod to keep it running under deployment management:
+
+```bash
+lazycloud deploy tools.py:app --resource pod:web
+```
+
+Manage it through its deployment: `web.scale(containers)`, `web.pause()`,
+`web.resume()`, `web.delete()` from Python, or the
+[`lazycloud deployment`](/cli/deployments-and-containers) commands.
+
+**Create** an on-demand instance without a deployment:
+
+```python
+instance = web.create()                      # runs the configured command
+print(instance.container_id, instance.url)
+
+instance = web.run("python", "-m", "http.server", "9090")  # override command
+instance.terminate()
+```
+
+`create` and `run` return a `PodInstance` with `container_id`, `url`,
+`timeout_seconds`, `expires_at`, and `terminate()`.
+
+## Options
+
+| Option | Description |
+| --- | --- |
+| `command` | Container command and arguments. |
+| `ports` | Named ports exposed by the pod, for example `{"http": 8080}`. |
+| `env`, `secrets`, `volumes` | Runtime configuration injected into the container. |
+| `keep_warm` | Seconds an idle pod stays alive. |
+| `authorized` | Whether ingress requires an authenticated client. |
+| `tcp` | Expose raw TCP ingress instead of HTTP. |
+| `block_network` / `allow_list` | Outbound network policy. |
+| `docker_enabled` | Give the pod an isolated Docker daemon. |
+| `checkpoint_enabled` | Checkpoint/restore support; `checkpoint_readiness_path` and `checkpoint_readiness_port` define an HTTP readiness probe checked before checkpointing. |
+| `pool`, `placement`, `provider`, `metadata` | Placement and custom metadata. |
+
+`web.configure(...)` returns the pod with updated settings for reuse, and
+`web.shell()` opens an interactive shell in a pod container.
+
+## Attaching to containers
+
+Attach to a running pod container from the CLI:
+
+```bash
+lazycloud container list
+lazycloud container attach <container-id>
+lazycloud container checkpoint <container-id>
+lazycloud container stop <container-id>
+```

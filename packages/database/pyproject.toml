@@ -1,0 +1,21 @@
+[project]
+name = "database"
+version = "0.1.0"
+description = "Durable SQL persistence for the compute platform."
+requires-python = ">=3.12"
+dependencies = [
+    "alembic>=1.17,<2",
+    "lazycloud-shared==0.1.0",
+    "psycopg[binary]>=3.2,<4",
+    "pydantic>=2.8,<3",
+    "pydantic-settings>=2.4,<3",
+    "sqlalchemy>=2.0,<3",
+    "greenlet>=3,<4",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

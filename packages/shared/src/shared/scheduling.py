@@ -1,0 +1,315 @@
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Protocol, runtime_checkable
+
+from pydantic import Field, JsonValue, field_validator
+
+from shared.capacity import CAPACITY_OWNER_ID_PATTERN
+from shared.compute_policy import ComputePlacementSource, ComputePlacementTarget
+from shared.contracts import ContractModel
+from shared.enums import StringEnum
+from shared.timestamps import utc_now
+
+DEFAULT_CONTAINER_STATE_TTL_SECONDS = 900
+
+
+class SchedulerWorkerStatus(StringEnum):
+    Pending = "pending"
+    Available = "available"
+    Draining = "draining"
+    Unavailable = "disabled"
+
+
+class SchedulerContainerStatus(StringEnum):
+    Pending = "pending"
+    Running = "running"
+    Stopping = "stopping"
+    Complete = "complete"
+    Failed = "failed"
+
+
+class WorkerCapacityChange(StringEnum):
+    Add = "add"
+    Remove = "remove"
+
+
+class NetworkIpMutationAction(StringEnum):
+    Set = "set"
+    Remove = "remove"
+    Move = "move"
+    Noop = "noop"
+    Reject = "reject"
+
+
+class WorkerRepositoryLockKind(StringEnum):
+    Worker = "worker"
+    Container = "container"
+    ImagePull = "image-pull"
+    Network = "network"
+    WorkspaceConcurrency = "workspace-concurrency"
+
+
+class SchedulerContainerSubmitStatus(StringEnum):
+    Queued = "queued"
+    Error = "error"
+
+
+class SchedulerWorkerRequest(ContractModel):
+    workspace_id: str
+    stub_id: str
+    deployment_id: str = ""
+    container_id: str
+    record_runtime_assignment: bool = True
+    cpu_millicores: int = 0
+    memory_mib: int = 0
+    gpu_type: str = ""
+    gpu_request: list[str] = Field(default_factory=list)
+    gpu_count: int = 0
+    pool_selector: str = ""
+    capacity_owner_id: str = ""
+    requested_placement: ComputePlacementTarget | None = None
+    placement_source: ComputePlacementSource | None = None
+    architecture: str = "amd64"
+    provider_runtime: str = "runc"
+    runtime_class: str = ""
+    docker_enabled: bool = False
+    preemptible: bool = False
+    gpu_limit: int = 0
+    cpu_limit_millicores: int = 0
+    retry_count: int = 0
+    timestamp: datetime = Field(default_factory=utc_now)
+    payload: dict[str, JsonValue] = Field(default_factory=dict)
+
+    @field_validator(
+        "cpu_millicores",
+        "memory_mib",
+        "gpu_count",
+        "gpu_limit",
+        "cpu_limit_millicores",
+        "retry_count",
+    )
+    @classmethod
+    def request_numbers_cannot_be_negative(cls, value: int) -> int:
+        if value < 0:
+            msg = "request values cannot be negative"
+            raise ValueError(msg)
+        return value
+
+    def requeued(self, *, now: datetime | None = None) -> SchedulerWorkerRequest:
+        return self.model_copy(
+            update={"retry_count": self.retry_count + 1, "timestamp": now or utc_now()}
+        )
+
+
+class SchedulerWorkerRecord(ContractModel):
+    worker_id: str
+    pool_name: str
+    capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
+    machine_id: str = ""
+    status: SchedulerWorkerStatus = SchedulerWorkerStatus.Pending
+    gpu_type: str = ""
+    runtime_class: str = ""
+    runtime_classes: list[str] = Field(default_factory=list)
+    private_worker: bool = False
+    requires_pool_selector: bool = False
+    preemptible: bool = False
+    free_cpu_millicores: int = 0
+    free_memory_mib: int = 0
+    free_gpu_count: int = 0
+    total_cpu_millicores: int = 0
+    total_memory_mib: int = 0
+    total_gpu_count: int = 0
+    resource_version: int = 0
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+    @field_validator(
+        "free_cpu_millicores",
+        "free_memory_mib",
+        "free_gpu_count",
+        "total_cpu_millicores",
+        "total_memory_mib",
+        "total_gpu_count",
+        "resource_version",
+    )
+    @classmethod
+    def worker_numbers_cannot_be_negative(cls, value: int) -> int:
+        if value < 0:
+            msg = "worker values cannot be negative"
+            raise ValueError(msg)
+        return value
+
+
+class SchedulerContainerState(ContractModel):
+    container_id: str
+    stub_id: str
+    workspace_id: str
+    worker_id: str = ""
+    status: SchedulerContainerStatus = SchedulerContainerStatus.Pending
+    scheduled_at: datetime = Field(default_factory=utc_now)
+    started_at: datetime | None = None
+    gpu_type: str = ""
+    gpu_count: int = 0
+    cpu_millicores: int = 0
+    memory_mib: int = 0
+    image_build_id: str = ""
+    image_id: str = ""
+    image_build_upload_capability: str = ""
+    failure_reason: str = ""
+
+    @field_validator("gpu_count", "cpu_millicores", "memory_mib")
+    @classmethod
+    def container_numbers_cannot_be_negative(cls, value: int) -> int:
+        if value < 0:
+            msg = "container resource values cannot be negative"
+            raise ValueError(msg)
+        return value
+
+
+class SchedulerBackendRoute(ContractModel):
+    route_id: str
+    workspace_id: str = ""
+    pool_name: str = ""
+    machine_id: str = ""
+    worker_id: str = ""
+    container_id: str = ""
+    kind: str = "container"
+    port: int = 0
+    protocol: str = "tcp"
+    transport: str = "tsnet_restricted"
+    local_target: str = ""
+    proxy_target: str = ""
+    state: str = "opening"
+    error: str = ""
+    updated_at: int = 0
+
+    @field_validator("port")
+    @classmethod
+    def route_port_cannot_be_negative(cls, value: int) -> int:
+        if value < 0:
+            msg = "backend route port cannot be negative"
+            raise ValueError(msg)
+        return value
+
+
+class SchedulerContainerAddress(ContractModel):
+    container_id: str
+    address: str = ""
+    route: SchedulerBackendRoute | None = None
+
+
+class SchedulerContainerAddressMap(ContractModel):
+    container_id: str
+    address_map: dict[int, str] = Field(default_factory=dict)
+    routes: list[SchedulerBackendRoute] = Field(default_factory=list)
+
+
+class WorkerCapacityPlan(ContractModel):
+    worker: SchedulerWorkerRecord
+    change: WorkerCapacityChange
+    request: SchedulerWorkerRequest
+    accepted: bool
+    reason: str = ""
+
+
+class WorkerRemovalResult(ContractModel):
+    worker_id: str
+    removed: bool
+    requeued_count: int = 0
+    request_ids: list[str] = Field(default_factory=list)
+
+
+class ContainerStatusUpdatePlan(ContractModel):
+    container_id: str
+    previous_status: SchedulerContainerStatus
+    next_status: SchedulerContainerStatus
+    changed: bool
+    started_at_set: bool = False
+    release_concurrency: bool = False
+    ttl_seconds: int
+
+
+class ContainerIpAssignment(ContractModel):
+    container_id: str
+    ip_address: str
+
+
+class NetworkIpMutationPlan(ContractModel):
+    action: NetworkIpMutationAction
+    container_id: str
+    ip_address: str = ""
+    previous_ip_address: str = ""
+    source_container_id: str = ""
+    target_container_id: str = ""
+    owner_container_id: str = ""
+    changed: bool = False
+    cleanup_previous_owner: bool = False
+    cleanup_current_owner: bool = False
+    reason: str = ""
+
+
+class WorkerRepositoryLockRecord(ContractModel):
+    kind: WorkerRepositoryLockKind
+    key: str
+    token: str = ""
+    owner_id: str = ""
+    resource_id: str = ""
+    ttl_seconds: int
+    retries: int = 0
+    acquired: bool = True
+
+    @field_validator("ttl_seconds", "retries")
+    @classmethod
+    def lock_values_cannot_be_negative(cls, value: int) -> int:
+        if value < 0:
+            msg = "lock values cannot be negative"
+            raise ValueError(msg)
+        return value
+
+
+class WorkerRepositoryLockRelease(ContractModel):
+    kind: WorkerRepositoryLockKind
+    key: str
+    token: str
+    released: bool
+    reason: str = ""
+
+
+class SchedulerContainerSubmitResult(ContractModel):
+    status: SchedulerContainerSubmitStatus
+    container_id: str
+    reason: str = ""
+
+    @property
+    def accepted(self) -> bool:
+        return self.status is SchedulerContainerSubmitStatus.Queued
+
+
+class SchedulerContainerCancellationResult(ContractModel):
+    container_id: str
+    state_found: bool = False
+    worker_id: str = ""
+    pending_request_removed: bool = False
+    worker_stop_required: bool = False
+
+
+@runtime_checkable
+class ContainerSchedulingDirectory(Protocol):
+    def get_container_state(self, container_id: str) -> SchedulerContainerState | None: ...
+
+    def get_worker_address(self, container_id: str) -> SchedulerContainerAddress | None: ...
+
+    def get_container_address_map(self, container_id: str) -> SchedulerContainerAddressMap: ...
+
+
+def gpu_count_for_capacity(
+    gpu_type: str,
+    gpu_request: list[str] | None,
+    gpu_count: int,
+) -> int:
+    if gpu_type == "" and not gpu_request:
+        return 0
+    if gpu_count == 0:
+        return 1
+    return gpu_count

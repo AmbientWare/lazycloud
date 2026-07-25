@@ -1,0 +1,19 @@
+name: image-layer-cache
+kind: image
+runner: image_layer
+description: Image layer byte-read proof profile after worker restart.
+defaults:
+  size_mib: 32
+  restart_workers_between: true
+  timeout_seconds: 300
+scenarios:
+  - name: image-layer-after-worker-restart
+    operation: read
+    cache_state: after_worker_restart
+    probes:
+      - sandbox_read
+      - worker_restart
+      - image_layer_events
+      - embedded_cache_page_proof
+    tags:
+      image_format: oci

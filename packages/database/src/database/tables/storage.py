@@ -1,0 +1,94 @@
+from __future__ import annotations
+
+from datetime import datetime
+
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    UniqueConstraint,
+)
+from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.sql.schema import SchemaItem
+
+from database.tables.base import (
+    DatabaseBase,
+    IdPayloadTable,
+    IdTable,
+    NamedWorkspacePayloadTable,
+    utc_now,
+    uuid_type,
+)
+
+
+class ObjectTable(IdPayloadTable, DatabaseBase):
+    __tablename__ = "objects"
+    __table_args__: tuple[SchemaItem, ...] = (
+        UniqueConstraint("workspace_id", "bucket", "key", name="uq_objects_workspace_bucket_key"),
+        Index("ix_objects_workspace_key", "workspace_id", "key"),
+        Index("ix_objects_workspace_sha256", "workspace_id", "sha256"),
+        Index("ix_objects_write_claimed_at", "write_claimed_at"),
+        Index("ix_objects_cleanup_claimed_at", "cleanup_claimed_at"),
+        CheckConstraint("size >= 0", name="ck_objects_size_nonnegative"),
+    )
+
+    workspace_id: Mapped[str] = mapped_column(
+        uuid_type,
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    bucket: Mapped[str] = mapped_column(String(255), nullable=False)
+    key: Mapped[str] = mapped_column(String(1024), nullable=False)
+    path: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    size: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    sha256: Mapped[str] = mapped_column(String(128), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(255), nullable=False)
+    write_claim_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    write_claimed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    cleanup_kind: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    cleanup_claimed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class VolumeTable(NamedWorkspacePayloadTable, DatabaseBase):
+    __tablename__ = "volumes"
+    __table_args__: tuple[SchemaItem, ...] = (
+        UniqueConstraint("workspace_id", "name", name="uq_volumes_workspace_name"),
+        Index("ix_volumes_workspace", "workspace_id"),
+        Index("ix_volumes_metered_at", "metered_at", "id"),
+        CheckConstraint("size_bytes >= 0", name="ck_volumes_size_bytes_nonnegative"),
+    )
+
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    metered_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+    )
+
+
+class CacheEntryTable(IdTable, DatabaseBase):
+    __tablename__ = "cache_entries"
+    __table_args__: tuple[SchemaItem, ...] = (
+        UniqueConstraint("key", name="uq_cache_entries_key"),
+        CheckConstraint("size >= 0", name="ck_cache_entries_size_nonnegative"),
+        CheckConstraint("hits >= 0", name="ck_cache_entries_hits_nonnegative"),
+        CheckConstraint(
+            "created_at <= updated_at",
+            name="ck_cache_entries_timestamp_order",
+        ),
+    )
+
+    key: Mapped[str] = mapped_column(String(512), nullable=False)
+    path: Mapped[str] = mapped_column(Text, nullable=False)
+    size: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    sha256: Mapped[str] = mapped_column(String(128), nullable=False)
+    hits: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

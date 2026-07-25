@@ -1,0 +1,28 @@
+[project]
+name = "execution"
+version = "0.1.0"
+description = "Execution tasks, resource services, Redis maps/queues/signals, outputs, volumes, and planners."
+requires-python = ">=3.12"
+dependencies = [
+    "cloudpickle>=3,<4",
+    "compute",
+    "lazycloud-shared==0.1.0",
+    "control",
+    "coordination",
+    "cryptography>=49,<50",
+    "database",
+    "foundation",
+    "identity",
+    "observability",
+    "networking",
+    "storage",
+    "storage-client",
+    "pydantic>=2.8,<3",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

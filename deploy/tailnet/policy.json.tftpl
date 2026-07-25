@@ -1,0 +1,26 @@
+{
+  "tagOwners": {
+    "${agent_tag}": ["autogroup:admin"],
+    "${control_plane_tag}": ["autogroup:admin"]
+  },
+  "grants": [
+    {
+      "src": ["${control_plane_tag}"],
+      "dst": ["${agent_tag}"],
+      "ip": ["tcp:${agent_proxy_port}"]
+    }
+  ],
+  "tests": [
+    {
+      "src": "${control_plane_tag}",
+      "proto": "tcp",
+      "accept": ["${agent_tag}:${agent_proxy_port}"],
+      "deny": ["${agent_tag}:22", "${control_plane_tag}:${agent_proxy_port}"]
+    },
+    {
+      "src": "${agent_tag}",
+      "proto": "tcp",
+      "deny": ["${agent_tag}:${agent_proxy_port}", "${control_plane_tag}:${agent_proxy_port}"]
+    }
+  ]
+}

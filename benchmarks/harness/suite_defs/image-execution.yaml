@@ -1,0 +1,18 @@
+name: image-execution
+kind: image
+runner: startup
+description: Image execution latency profile using startup and image cache instrumentation.
+defaults:
+  iterations: 5
+  warmup: 1
+  restart_workers: false
+scenarios:
+  - name: image-execution-hot-load
+    operation: read
+    cache_state: hot
+    probes:
+      - startup_events
+      - image_layer_events
+      - image_cache_events
+    tags:
+      image_format: oci

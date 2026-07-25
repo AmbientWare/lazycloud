@@ -1,0 +1,78 @@
+---
+title: "Queues, maps, and signals"
+description: "Lightweight distributed primitives for coordinating work across containers."
+---
+
+These primitives coordinate state between workloads, local processes, and
+anything else holding a workspace token. They are name-addressed: two objects
+constructed with the same name share the same underlying state.
+
+## Queue
+
+A distributed FIFO queue of JSON-serializable values:
+
+```python
+from lazycloud import Queue
+
+q = Queue("work-items")
+
+q.put({"path": "a.wav"})
+q.empty()      # False
+q.peek()       # read the head without removing it
+item = q.pop()
+q.delete()     # remove the queue and its contents
+```
+
+A common pattern pairs a `Queue` with a
+[`QueueDepthAutoscaler`](/concepts/task-queues#workers-and-autoscaling) so
+consumers scale with backlog.
+
+## Map
+
+A distributed key/value map with the standard `MutableMapping` interface:
+
+```python
+from lazycloud import Map
+
+state = Map("pipeline-state")
+
+state["cursor"] = 42          # dict-style access
+state.get("cursor")
+state.set("cursor", 43, ttl=3600)   # per-key TTL in seconds
+"cursor" in state
+list(state.keys())
+del state["cursor"]
+state.delete()                # remove the whole map
+```
+
+Keys default to a seven-day TTL when set with `set(...)`; use `ttl` to
+override it.
+
+## Signal (experimental)
+
+A named flag one container sets and another reacts to — useful for cache
+invalidation, reload triggers, and cross-workload notifications.
+
+```python
+from lazycloud.abstractions.experimental import Signal
+
+reload_flag = Signal("reload-models")
+
+# Producer
+reload_flag.set(ttl=600)
+
+# Consumer: poll once...
+response = reload_flag.monitor_once()
+
+# ...or run a background listener thread
+signal = Signal("reload-models", handler=lambda: print("reloading"))
+signal.start_monitoring(poll_interval_seconds=1.0)
+signal.stop_monitoring()
+
+reload_flag.clear()
+```
+
+<Note>
+  `Signal` lives under the experimental namespace; its interface may change
+  between releases.
+</Note>

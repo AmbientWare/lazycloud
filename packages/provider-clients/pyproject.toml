@@ -1,0 +1,25 @@
+[project]
+name = "provider-clients"
+version = "0.1.0"
+description = "Configured provider adapter registry for app composition."
+requires-python = ">=3.12"
+dependencies = [
+    "agent",
+    "compute",
+    "networking",
+    "lazycloud-shared==0.1.0",
+    "provider-aws",
+    "images",
+    "pydantic>=2.8,<3",
+    "pydantic-settings>=2.4,<3",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.uv.sources]
+images = { workspace = true }

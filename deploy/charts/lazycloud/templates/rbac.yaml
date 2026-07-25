@@ -1,0 +1,172 @@
+{{- if .Values.serviceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "lazycloud.serviceAccountName" . }}
+  labels:
+    {{- include "lazycloud.labels" . | nindent 4 }}
+    {{- with .Values.serviceAccount.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.serviceAccount.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+automountServiceAccountToken: {{ .Values.serviceAccount.automountToken }}
+---
+{{- end }}
+{{- if .Values.providerServiceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "lazycloud.providerServiceAccountName" . }}
+  labels:
+    {{- include "lazycloud.labels" . | nindent 4 }}
+    app.kubernetes.io/component: provider-control
+    {{- with .Values.providerServiceAccount.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.providerServiceAccount.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+automountServiceAccountToken: {{ .Values.providerServiceAccount.automountToken }}
+---
+{{- end }}
+{{- if and .Values.rbac.create .Values.administratorBootstrap.enabled }}
+{{- $administratorSecretName := include "lazycloud.administratorCredentialSecretName" . }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "lazycloud.administratorBootstrapServiceAccountName" . }}
+  labels:
+    {{- include "lazycloud.labels" . | nindent 4 }}
+    app.kubernetes.io/component: administrator-bootstrap
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "lazycloud.administratorBootstrapServiceAccountName" . }}
+  labels:
+    {{- include "lazycloud.labels" . | nindent 4 }}
+    app.kubernetes.io/component: administrator-bootstrap
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames:
+      - {{ $administratorSecretName | quote }}
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "lazycloud.administratorBootstrapServiceAccountName" . }}
+  labels:
+    {{- include "lazycloud.labels" . | nindent 4 }}
+    app.kubernetes.io/component: administrator-bootstrap
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "lazycloud.administratorBootstrapServiceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: {{ include "lazycloud.administratorBootstrapServiceAccountName" . }}
+  apiGroup: rbac.authorization.k8s.io
+---
+{{- end }}
+{{- if and .Values.rbac.create .Values.containerWorkers.enabled .Values.containerWorkers.workerTokenBootstrap.enabled }}
+{{- $workerTokenSecretName := .Values.containerWorkers.workerTokenSecretName | default (printf "%s-worker-token" (include "lazycloud.fullname" .)) }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "lazycloud.workerTokenServiceAccountName" . }}
+  labels:
+    {{- include "lazycloud.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker-token-bootstrap
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "lazycloud.workerTokenServiceAccountName" . }}
+  labels:
+    {{- include "lazycloud.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker-token-bootstrap
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames:
+      - {{ $workerTokenSecretName | quote }}
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "lazycloud.workerTokenServiceAccountName" . }}
+  labels:
+    {{- include "lazycloud.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker-token-bootstrap
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "lazycloud.workerTokenServiceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: {{ include "lazycloud.workerTokenServiceAccountName" . }}
+  apiGroup: rbac.authorization.k8s.io
+---
+{{- end }}
+{{- $scalingPools := list }}
+{{- if .Values.containerWorkers.enabled }}
+{{- range $pool := .Values.containerWorkers.pools }}
+{{- if $pool.scalingEnabled }}
+{{- $scalingPools = append $scalingPools $pool }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if and .Values.rbac.create .Values.scheduler.enabled (gt (len $scalingPools) 0) }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "lazycloud.providerServiceAccountName" . }}-container-worker-scale
+  labels:
+    {{- include "lazycloud.labels" . | nindent 4 }}
+    app.kubernetes.io/component: provider-control
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames:
+      {{- range $pool := $scalingPools }}
+      {{- $poolName := required "containerWorkers.pools[].name is required" $pool.name }}
+      - {{ include "lazycloud.containerWorkerName" (dict "root" $ "poolName" $poolName) | quote }}
+      {{- end }}
+    verbs: ["get"]
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale"]
+    resourceNames:
+      {{- range $pool := $scalingPools }}
+      {{- $poolName := required "containerWorkers.pools[].name is required" $pool.name }}
+      - {{ include "lazycloud.containerWorkerName" (dict "root" $ "poolName" $poolName) | quote }}
+      {{- end }}
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "lazycloud.providerServiceAccountName" . }}-container-worker-scale
+  labels:
+    {{- include "lazycloud.labels" . | nindent 4 }}
+    app.kubernetes.io/component: provider-control
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "lazycloud.providerServiceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: {{ include "lazycloud.providerServiceAccountName" . }}-container-worker-scale
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}

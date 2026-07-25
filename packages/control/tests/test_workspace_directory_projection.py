@@ -1,0 +1,53 @@
+from __future__ import annotations
+
+from api.server.services import ApiServices
+from control.service import ControlPlaneService
+from database.repositories.identity import WorkspaceRepository
+from shared.identity import WorkspaceStatus
+
+
+def test_workspace_directory_projects_active_deleting_and_deleted_lifecycles(
+    isolated_services: ApiServices,
+) -> None:
+    control = ControlPlaneService(isolated_services.context)
+    active = control.upsert_workspace("projection-active")
+    deleting = control.upsert_workspace("projection-deleting")
+    deleted = control.upsert_workspace("projection-deleted")
+
+    with isolated_services.context.database.session() as session:
+        repository = WorkspaceRepository(session)
+        deleting_record = repository.get(deleting.id)
+        deleted_record = repository.get(deleted.id)
+        assert deleting_record is not None
+        assert deleted_record is not None
+        repository.mark_deleting(deleting_record)
+        repository.tombstone(repository.mark_deleting(deleted_record))
+
+    assert _projection(control) == {
+        active.name: WorkspaceStatus.Active,
+    }
+    assert _projection(control, include_deleting=True) == {
+        active.name: WorkspaceStatus.Active,
+        deleting.name: WorkspaceStatus.Deleting,
+    }
+    assert _projection(control, include_deleted=True) == {
+        active.name: WorkspaceStatus.Active,
+        deleted.name: WorkspaceStatus.Deleted,
+        deleting.name: WorkspaceStatus.Deleting,
+    }
+
+
+def _projection(
+    control: ControlPlaneService,
+    *,
+    include_deleting: bool = False,
+    include_deleted: bool = False,
+) -> dict[str, WorkspaceStatus]:
+    return {
+        workspace.name: workspace.status
+        for workspace in control.list_workspaces(
+            include_deleting=include_deleting,
+            include_deleted=include_deleted,
+        )
+        if workspace.name.startswith("projection-")
+    }
