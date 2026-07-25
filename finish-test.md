@@ -37,41 +37,57 @@ tailscale netcheck -> UDP: false | IPv4: (no addr found) | Nearest DERP: unknown
 DERP is Tailscale's relay fleet; a node that cannot reach any relay never comes
 online. Measured from inside the control-plane namespace:
 
-| check | result |
+| check | from control-plane namespace |
 |---|---|
 | DNS `derp9.tailscale.com` | OK (`207.148.3.137`) |
-| TCP 443 to DERP | OK |
-| **UDP STUN (IPv4) to DERP:3478** | **FAIL — TimeoutError** |
+| TCP 443 to DERP and to controlplane | OK |
+| UDP STUN to DERP:3478 | **FAIL — TimeoutError** |
 
-The host itself reaches DERP fine, but the one host UDP probe that succeeded
-went over **IPv6**, and Docker's default bridge is IPv4-only. So the leading
-hypothesis is: **IPv4 UDP egress is blocked on this network, the host only
-works because it has IPv6, and the container has no IPv6 path at all.**
+Measured on the host, both address families:
 
-Confirm before fixing — this is a hypothesis, not a conclusion:
-
-```sh
-# does the host itself do IPv4 UDP, or only IPv6?
-python3 - <<'PY'
-import socket
-def stun(fam, host):
-    try:
-        s=socket.socket(fam, socket.SOCK_DGRAM); s.settimeout(5)
-        s.sendto(b"\x00\x01\x00\x00"+b"\x21\x12\xa4\x42"+b"0"*12, (host,3478))
-        d,_=s.recvfrom(256); return f"OK ({len(d)} bytes)"
-    except Exception as e: return f"FAIL {type(e).__name__}"
-print("IPv4:", stun(socket.AF_INET, "derp9.tailscale.com"))
-print("IPv6:", stun(socket.AF_INET6, "derp9.tailscale.com"))
-PY
+```
+host IPv4 UDP: FAIL TimeoutError
+host IPv6 UDP: FAIL TimeoutError
 ```
 
-If IPv4 UDP fails on the host too, the options in rough order of preference:
+So **UDP egress to Tailscale is blocked outright on this LAN**, for IPv4 and
+IPv6 alike. DNS is healthy and not intercepted (`192.200.0.10x` is Tailscale's
+real IPv4 control-plane range; the local resolver simply prefers IPv6).
 
-1. Unblock IPv4 UDP egress (router/firewall) — smallest change, matches how
-   production machines will actually run.
-2. Give the Compose network IPv6 so the container can use the path that works.
-3. Force Tailscale to relay over TCP/443 only, accepting the performance cost.
-4. Run the certification control plane on another host with working ingress.
+Tailscale falls back to relaying over TCP 443, and that path does open — but it
+will not stay up. The gateway log flaps on a one-minute cycle:
+
+```
+21:59:44 health(warnable=no-derp-connection): ok
+21:59:54 health(warnable=no-derp-connection): error: could not connect to the 'Denver' relay
+22:00:44 ok
+22:00:54 error
+```
+
+It reaches the relay, then loses it about ten seconds later, forever. The node
+never stabilises, so it stays offline and the Funnel never serves. This is a
+network problem on the ml-machine LAN (wireless `wlo1`), not a repo problem:
+UDP blocked, and long-lived TCP to the relay being torn down.
+
+Two measurement traps to avoid repeating here:
+
+- `nc -zu host 3478` reports success for UDP without waiting for a reply. It
+  gave a false "OK" that sent this investigation the wrong way. Send a real STUN
+  packet and require a response, as above.
+- BusyBox `nc -z` inside the gateway container is not GNU `nc` and reports
+  failure spuriously. The gateway shares the control plane's network namespace
+  (`network_mode: service:control-plane`), so measure from the control-plane
+  container, whose tooling is trustworthy.
+
+Options, in rough order of preference:
+
+1. Put ml-machine on wired ethernet instead of wireless, and retest. Cheapest
+   thing to try, and the flap pattern is consistent with a flaky link or an
+   access point dropping long-lived connections.
+2. Unblock UDP egress to Tailscale at the router/firewall — this is what
+   production machines will rely on, so it is worth knowing either way.
+3. Run the certification control plane on a host with working ingress. Note the
+   laptop is a poor choice: it sleeps, and machines phone home for minutes.
 
 ## What is already prepared
 
