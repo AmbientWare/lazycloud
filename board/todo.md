@@ -179,57 +179,6 @@ already attached to an active build follows it indefinitely if that build's driv
 AWS ended at verified zero: 0 instances, 0 ASGs, 0 volumes, both `compute-connection-*-g1` stacks
 deleted, all platform stacks preserved.
 
-## T-051 — Rebuild connected-compute testing around a fast local loop
-
-Tier 2 accepted (2026-07-25): the data-plane loop passes twice in a row on the Linux ml-machine
-(`tests.e2e.local.function.scenario_invoke --live`), each run reporting `build=complete` and
-`{"capability": "function.invoke", "result": 49}` with no build-container residue; the two
-remaining container rows are terminal `stopped`/`exited` history. The full path is proven without
-AWS: request, scheduler, agent-managed worker slot, source-cache activation, buildah image build,
-archive upload to object storage, Function deploy and invoke, app deletion.
-
-Getting there needed product fixes (transport-error classification, the systemd start limit, one
-owner for the agent unit, the Compose pool-selector default, the unconditional tailnet, and the
-archive-transfer error now naming its cause) and a local configuration that the copied AWS `.env`
-was overriding: object storage pointed at real S3 with a virtual-host-style AWS bucket, both
-gateway URLs pointed at a Funnel whose device no longer exists, and `AWS_CONNECTION_ENABLED=true`
-forced an HTTPS-origin gate that stopped the control plane from starting. Those settings are now
-documented in `.env.example` and `tests/e2e/README.md`; the AWS-shaped values live on the
-ml-machine as `.env.aws-configured-backup` for certification.
-
-Remaining: Tier 3 — the single paid AWS certification, which should run published release
-artifacts on both control plane and worker so managed-package digest skew cannot recur.
-
-### Original scope
-
-Priority: ready; supersedes the T-005 four-stage acceptance and folds in T-037. Blocks the next
-paid AWS run.
-
-Source: proving connected compute has cost far more than building it. Of the defects found across
-two certification sessions, nearly all were provider-neutral — a Compose default, a retry
-classification, a rendered unit, duplicate ownership, placement resolution — yet each was
-discovered on paid AWS machines through Redis/Postgres archaeology and SSM. Live AWS became the
-debugger because there is no data-plane loop: `tests/e2e/local/compute_fake/devloop.py` covers
-machine lifecycle only and composes services in process, so it structurally cannot catch a
-deployment-configuration bug, and container workers cannot run on macOS at all (worker slots use
-`--network host`; Docker Desktop's host namespace has no IPv4 default route).
-
-Outcome: three tiers with explicit ownership. Tier 1 owner tests for pure decisions. Tier 2 — the
-missing centrepiece — a data-plane loop on a Linux host (the ml-machine) against the real Compose
-stack with `provider_fake` registered as the workspace's connected provider, driven through the
-public SDK, proving policy resolves to the provider pool, a build is placed there and executes, a
-Function returns its exact result, and teardown leaves no residue. Running against the real
-deployment is the point: an in-process harness would have missed the Compose bug. Tier 3 — one
-paid AWS run proving only what AWS alone can: CloudFormation template/role acceptance, IMDSv2+STS
-identity, EC2 launch/tag/terminate, egress from the customer VPC, and one minimal Function.
-Certification runs published artifacts on both control plane and worker so managed-package digests
-match by construction and version skew cannot recur.
-
-Acceptance: Tier 2 green twice in a row on the ml-machine (repeatable and self-cleaning); the four
-AWS scenario modules collapsed into one certification module taking release inputs from the
-deployment environment rather than hand-passed arguments; then one AWS certification pass ending at
-verified zero.
-
 ## T-032 — Persist public CLI profiles as secret-bearing state
 
 Priority: after the active connected-AWS acceptance
