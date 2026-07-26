@@ -4,6 +4,52 @@ Completed tasks move here with their title, original purpose, result, and concis
 evidence. This is an outcome ledger, not a command diary; detailed history remains in Git.
 `../findings.md` remains the authoritative checklist until every finding is checked.
 
+## T-051 — Rebuild connected-compute testing around a fast local loop
+
+Completed: 2026-07-26
+
+Description: Replace live-AWS-as-debugger with tiered evidence — owner tests for pure decisions, a
+real-Compose data-plane loop on Linux for the provider-neutral path, and one paid AWS run proving
+only what AWS alone can (CloudFormation acceptance, IMDSv2/STS identity, EC2 lifecycle, customer-VPC
+egress, one Function).
+
+Result: All three tiers accepted. Tier 2 passes repeatedly on the ml-machine
+(`{"capability": "function.invoke", "result": 49}`). Tier 3 certified live on 2026-07-26: account
+connection, one-machine readiness, provider-neutral Function round trip, and cleanup to verified
+zero, all green in order.
+
+The certification earned its cost by finding three deployment-composition defects — none provider
+logic, none reachable from the local loop:
+
+- Connected-AWS composition could not express "resolve object storage through the platform role":
+  `compose.yaml` used `${VAR:-default}`, so an explicitly empty credential fell back to the local
+  garage default and the control plane called real S3 with `lazycloud-local`
+  (`InvalidAccessKeyId`). The same flaw would have presigned against a LAN address. Fixed by using
+  `${VAR-default}` for the presigned endpoint and both object-store credentials, preserving the
+  omitted-versus-empty distinction.
+- EC2 block device mappings hardcoded `/dev/sda1` in both launch paths while the capacity AMIs boot
+  from `/dev/xvda`. EC2 silently attached the requested 200 GiB as a separate unmounted volume and
+  left every machine on a 16 GiB root, so image builds failed needing ~21 GiB — and every machine
+  ever launched was billed for 200 GiB of unused gp3. Fixed by resolving `RootDeviceName` from the
+  AMI, with a documented fallback.
+- A build was marked `complete` and its image row written although the archive never reached object
+  storage, permanently poisoning a content-addressed image so retries inherit the bad record
+  instead of rebuilding. Recorded as open follow-up work; it only triggered because of the first
+  defect.
+
+Two environment faults that had blocked the previous two sessions were also resolved: the
+`tailnet-gateway` sidecar is stranded in a dead network namespace whenever the control plane is
+recreated (it shares that namespace), and the gateway advertised a legacy tag that carried no
+`funnel` grant, so the public name stayed NXDOMAIN while the tailnet-internal path returned 200.
+The tailnet now uses only canonical `lazycloud-*` tags.
+
+Evidence: `{"capability": "function.round_trip", "provider": "aws", "result": 42,
+"marker": "function-round-trip:20260726-04"}` through the public SDK with no placement override;
+machine `i-02dba3a032875e796` verified with a single 200 GiB `/dev/xvda` root; public ingress proven
+from outside the tailnet with `--resolve` against the public IP (`HTTP 200`); cleanup returned
+`instances: 0, hourly_micros: 0` with 0 volumes, 0 ASGs, and 0 `compute-connection-*` stacks, all
+four platform stacks preserved.
+
 ## T-049 — Rebuild opt-in acceptance as scoped tests
 
 Completed: 2026-07-22
