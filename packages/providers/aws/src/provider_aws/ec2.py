@@ -101,6 +101,9 @@ class AwsEc2MachineProvisionPlan(AwsEc2Model):
     user_data_base64: str
     tags: dict[str, str]
     root_volume_gib: int = 200
+    # Must match the AMI's own root device or EC2 silently attaches the sized
+    # volume as an extra disk and leaves the instance on the AMI default size.
+    root_device_name: str = "/dev/xvda"
 
     @property
     def client_token(self) -> str:
@@ -131,7 +134,7 @@ class AwsEc2MachineProvisionPlan(AwsEc2Model):
             ],
             "BlockDeviceMappings": [
                 {
-                    "DeviceName": "/dev/sda1",
+                    "DeviceName": self.root_device_name,
                     "Ebs": {
                         "DeleteOnTermination": True,
                         "Encrypted": True,
