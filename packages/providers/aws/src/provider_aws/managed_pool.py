@@ -58,6 +58,9 @@ _INSTANCE_ID_PATTERN = re.compile(r"^i-[0-9a-f]{8,17}$")
 _REGION_PATTERN = re.compile(r"^(us-gov|us|af|ap|ca|cn|eu|il|me|mx|sa)-[a-z0-9-]+-[0-9]+$")
 _SAFE_VERSION_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 _WORKER_IMAGE_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._:/-]*@sha256:[0-9a-f]{64}$")
+# Fallback only. A block device mapping resizes the root volume only when its
+# device name matches the AMI's own root device, so the AMI is asked first.
+_DEFAULT_ROOT_DEVICE_NAME = "/dev/xvda"
 
 
 class AwsManagedPoolModel(BaseModel):
@@ -266,6 +269,7 @@ class _LaunchTemplateData(TypedDict):
 
 class AwsManagedPoolEc2Client(Protocol):
     def describe_instances(self, *, InstanceIds: list[str]) -> Mapping[str, object]: ...
+    def describe_images(self, *, ImageIds: list[str]) -> Mapping[str, object]: ...
     def describe_volumes(
         self,
         *,
@@ -768,10 +772,41 @@ class AwsManagedPoolProvisioner:
             max_nodes=0,
         )
 
+    def _resolve_root_device_name(self, ami_id: str) -> str:
+        """Return the device name the AMI actually boots from.
+
+        EBS sizing in a block device mapping applies only when the device name
+        matches the AMI's root device. A mismatch is silent: EC2 attaches the
+        sized volume as an extra, unmounted disk and the instance keeps the
+        AMI's default root size.
+        """
+        try:
+            response = self._ec2(
+                "describe capacity image",
+                self._clients.ec2.describe_images,
+                ImageIds=[ami_id],
+            )
+        except AwsProviderControlError:
+            return _DEFAULT_ROOT_DEVICE_NAME
+        images = response.get("Images")
+        if not isinstance(images, list) or not images:
+            return _DEFAULT_ROOT_DEVICE_NAME
+        described = images[0]
+        if not isinstance(described, Mapping):
+            return _DEFAULT_ROOT_DEVICE_NAME
+        root_device_name = described.get("RootDeviceName")
+        if isinstance(root_device_name, str) and root_device_name.strip():
+            return root_device_name.strip()
+        return _DEFAULT_ROOT_DEVICE_NAME
+
     def _ensure_launch_template(
         self, spec: AwsManagedPoolSpec, security_group_id: str
     ) -> tuple[str, int]:
-        data = _launch_template_data(spec, security_group_id)
+        data = _launch_template_data(
+            spec,
+            security_group_id,
+            root_device_name=self._resolve_root_device_name(spec.ami_id),
+        )
         fingerprint = _launch_template_fingerprint(data)
         found = self._describe_launch_template(spec.launch_template_name)
         if found is None:
@@ -1064,7 +1099,12 @@ def _asg_tags(spec: AwsManagedPoolSpec) -> list[Mapping[str, object]]:
     ]
 
 
-def _launch_template_data(spec: AwsManagedPoolSpec, security_group_id: str) -> _LaunchTemplateData:
+def _launch_template_data(
+    spec: AwsManagedPoolSpec,
+    security_group_id: str,
+    *,
+    root_device_name: str,
+) -> _LaunchTemplateData:
     instance_tags: list[_Tag] = [
         *_tags(spec, "instance"),
         {"Key": "cloud-pool:enrollment", "Value": spec.bootstrap.enrollment_request_id},
@@ -1074,7 +1114,7 @@ def _launch_template_data(spec: AwsManagedPoolSpec, security_group_id: str) -> _
         "InstanceType": spec.instance_type,
         "BlockDeviceMappings": [
             {
-                "DeviceName": "/dev/sda1",
+                "DeviceName": root_device_name,
                 "Ebs": {
                     "VolumeSize": spec.root_volume_gib,
                     "VolumeType": "gp3",
