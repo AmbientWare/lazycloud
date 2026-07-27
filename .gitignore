@@ -17,6 +17,7 @@ node_modules/
 .output/
 .nuxt/
 .nitro/
+.source/
 .tanstack/
 test-results/
 playwright-report/
