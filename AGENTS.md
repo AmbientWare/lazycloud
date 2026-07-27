@@ -200,6 +200,14 @@ merge through a pull request that references the ticket and closes it. A ticket
 is done when its acceptance passes and its pull request merges; move it on the
 board rather than restating the outcome in a file.
 
+Tickets live on the `Agent Development` project board and advance through
+`Todo`, `In progress`, `Under review`, `Merged`, in that order. Move the ticket
+yourself as its real state changes—to `In progress` when work starts, to
+`Under review` when its pull request opens, to `Merged` when that pull request
+merges. Never skip a column or move a ticket backwards to make the board agree
+with a mistake; correct the work instead. Board automation is a safety net for
+the states it can observe, not a substitute for moving the ticket.
+
 Parallel work is optional and only for clearly disjoint scopes. The manager
 keeps ownership explicit, reviews returned work, and runs integrated acceptance.
 Agents stay within assigned files, preserve concurrent changes, surface real
