@@ -99,6 +99,16 @@ class WorkspaceStorageConfig(ContractModel):
             return value.lower() in {"1", "true", "yes", "on"}
         return False
 
+    @property
+    def key_prefix(self) -> str:
+        """Normalize `prefix` into a key-joinable form, empty or trailing-slashed.
+
+        The container's mount and the presigned URL both derive their keys from
+        this, so it is the one place the two can be kept in step.
+        """
+        segments = [segment for segment in self.prefix.split("/") if segment and segment != "."]
+        return f"{'/'.join(segments)}/" if segments else ""
+
 
 def _storage_config_text(value: JsonValue) -> str:
     if value is None:

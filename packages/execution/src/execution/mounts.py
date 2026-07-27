@@ -16,6 +16,7 @@ from shared.container_requests import (
     RequestMountPointConfig,
     RequestMountType,
 )
+from shared.errors import UpstreamUnavailableError
 from shared.mounts import MountAuthMode, validate_mount_auth
 from storage.service import ObjectStorage
 
@@ -118,9 +119,13 @@ def container_resource_mounts_require_workspace_storage(
 ) -> bool:
     with context.database.session() as session:
         workspace = context.workspace(session, workspace_id)
-    if not workspace.storage.bucket:
-        return False
-    return any(_mount_requires_workspace_storage(mount) for mount in mounts)
+    required = any(_mount_requires_workspace_storage(mount) for mount in mounts)
+    if required and not workspace.storage.bucket:
+        # There is no fallback tier: without workspace storage the mount would
+        # silently become a local directory that no reader can reach.
+        msg = f"workspace {workspace.name!r} has no storage provisioned"
+        raise UpstreamUnavailableError(msg)
+    return required
 
 
 def configured_volume_mounts(
@@ -178,7 +183,11 @@ def configured_volume_mounts(
 
 
 def _mount_requires_workspace_storage(mount: RequestMount) -> bool:
-    if mount.mount_type in {RequestMountType.MountPoint, RequestMountType.Volume}:
+    # A platform volume lives in the workspace's own storage, so it needs the
+    # mount exactly as outputs do. An external bucket carries its own config.
+    if mount.mount_type is RequestMountType.Volume:
+        return True
+    if mount.mount_type is RequestMountType.MountPoint:
         return False
     mount_path = mount.mount_path.rstrip("/")
     return mount_path == WORKER_USER_OUTPUT_VOLUME or mount_path.startswith(

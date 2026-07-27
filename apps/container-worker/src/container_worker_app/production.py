@@ -28,7 +28,6 @@ from pydantic_settings import (
     YamlConfigSettingsSource,
 )
 from shared.app_identity import (
-    NAME,
     OBJECT_STORE_ACCESS_KEY_ID,
     OBJECT_STORE_BUCKET,
     OBJECT_STORE_SECRET_ACCESS_KEY,
@@ -38,9 +37,6 @@ from shared.checkpoints import CheckpointRecord
 from shared.env import GATEWAY_HTTP_URL_ENV, WORKER_REPOSITORY_URL_ENV
 from shared.routing import BackendRouteTransport
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
-from storage_client.mounts import (
-    StorageMountMode,
-)
 from worker.adapters import (
     WorkerRouteIdentity,
 )
@@ -53,9 +49,7 @@ from worker.artifact_retention import (
 )
 from worker.automatic_checkpoints import WorkerAutomaticCheckpointService
 from worker.cache_assets import (
-    WorkerStorageMode,
-    WorkspaceJuiceFsStorageConfig,
-    WorkspaceMountPointStorageConfig,
+    WorkspaceGeeseFsStorageConfig,
     WorkspaceStorageConfig,
 )
 from worker.checkpoint_activity import CheckpointArtifactLeaseRegistry
@@ -443,14 +437,6 @@ class ProductionWorkerSettings(BaseSettings):
         default=7 * 24 * 60 * 60,
         validation_alias="WORKER_CHECKPOINT_RETENTION_SECONDS",
     )
-    data_storage_mode: StorageMountMode | None = Field(
-        default=None,
-        validation_alias="DATA_STORAGE_MODE",
-    )
-    data_storage_path: str | None = Field(
-        default=None,
-        validation_alias="DATA_STORAGE_PATH",
-    )
     data_storage_bucket: str = Field(
         default=OBJECT_STORE_BUCKET,
         validation_alias=AliasChoices("DATA_STORAGE_BUCKET", "LAZYCLOUD_OBJECT_STORE_BUCKET"),
@@ -490,40 +476,17 @@ class ProductionWorkerSettings(BaseSettings):
             "LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE",
         ),
     )
-    data_storage_juicefs_redis_url: str = Field(
-        default="",
-        validation_alias=AliasChoices(
-            "DATA_STORAGE_JUICEFS_REDIS_URL",
-            "LAZYCLOUD_JUICEFS_REDIS_URL",
-        ),
-    )
-    data_storage_juicefs_filesystem_name: str = Field(
-        default=NAME,
-        validation_alias="DATA_STORAGE_JUICEFS_FILESYSTEM_NAME",
-    )
-    data_storage_juicefs_cache_size: int = Field(
-        default=0,
-        validation_alias="DATA_STORAGE_JUICEFS_CACHE_SIZE",
-    )
-    data_storage_juicefs_block_size: int = Field(
-        default=4096,
-        validation_alias="DATA_STORAGE_JUICEFS_BLOCK_SIZE",
-    )
-    data_storage_juicefs_prefetch: int = Field(
-        default=1,
-        validation_alias="DATA_STORAGE_JUICEFS_PREFETCH",
-    )
-    data_storage_juicefs_buffer_size: int = Field(
-        default=300,
-        validation_alias="DATA_STORAGE_JUICEFS_BUFFER_SIZE",
-    )
-    workspace_storage_mode: WorkerStorageMode = Field(
-        default=WorkerStorageMode.JuiceFs,
-        validation_alias="WORKER_WORKSPACE_STORAGE_MODE",
-    )
     workspace_storage_base_mount_path: str = Field(
         default="/workspace",
         validation_alias="WORKER_WORKSPACE_STORAGE_BASE_MOUNT_PATH",
+    )
+    workspace_storage_geesefs_binary: str = Field(
+        default="geesefs",
+        validation_alias="WORKER_WORKSPACE_STORAGE_GEESEFS_BINARY",
+    )
+    workspace_storage_geesefs_memory_limit_mb: int = Field(
+        default=1024,
+        validation_alias="WORKER_WORKSPACE_STORAGE_GEESEFS_MEMORY_LIMIT_MB",
     )
     workspace_storage_mountpoint_binary: str = Field(
         default="ms3",
@@ -713,14 +676,6 @@ class ProductionWorkerSettings(BaseSettings):
     @property
     def resolved_checkpoint_root(self) -> str:
         return self.checkpoint_root or self.configuration.paths.checkpoint_root
-
-    @property
-    def resolved_data_storage_mode(self) -> StorageMountMode:
-        return self.data_storage_mode or self.configuration.data_storage.mode
-
-    @property
-    def resolved_data_storage_path(self) -> str:
-        return self.data_storage_path or self.configuration.data_storage.path
 
     @property
     def resolved_metrics_enabled(self) -> bool:
@@ -1398,20 +1353,11 @@ def build_production_worker_process_services(
     workspace_storage_mounter = WorkerWorkspaceStorageManager(
         config=WorkspaceStorageConfig(
             base_mount_path=config.workspace_storage_base_mount_path,
-            default_storage_mode=config.workspace_storage_mode,
-            juicefs=WorkspaceJuiceFsStorageConfig(
-                redis_uri=config.data_storage_juicefs_redis_url,
-                cache_size=config.data_storage_juicefs_cache_size,
-                block_size=config.data_storage_juicefs_block_size,
-                prefetch=config.data_storage_juicefs_prefetch,
-                buffer_size=config.data_storage_juicefs_buffer_size,
-                filesystem_name=config.data_storage_juicefs_filesystem_name,
-            ),
-            mountpoint=WorkspaceMountPointStorageConfig(
-                binary=config.workspace_storage_mountpoint_binary,
+            geesefs=WorkspaceGeeseFsStorageConfig(
+                binary=config.workspace_storage_geesefs_binary,
+                memory_limit_mb=config.workspace_storage_geesefs_memory_limit_mb,
             ),
         ),
-        mode=config.workspace_storage_mode,
     )
     image_archiver = TarContainerImageArchiver(
         target_root=Path(config.resolved_image_cache_path),

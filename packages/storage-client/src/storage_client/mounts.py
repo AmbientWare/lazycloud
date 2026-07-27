@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import time
 from collections.abc import Callable, Iterable
@@ -17,8 +18,9 @@ from foundation.process import (
     start_managed_command,
 )
 from pydantic import Field
-from shared.app_identity import NAME
 from shared.contracts import ContractModel
+
+LOGGER = logging.getLogger(__name__)
 
 DEFAULT_MOUNT_TIMEOUT_SECONDS = 30.0
 DEFAULT_FORMAT_TIMEOUT_SECONDS = 60.0
@@ -28,8 +30,7 @@ DEFAULT_CLEANUP_RETRIES = 3
 
 
 class StorageMountMode(StrEnum):
-    Local = "local"
-    JuiceFs = "juicefs"
+    GeeseFs = "geesefs"
     MountPoint = "mountpoint"
 
 
@@ -61,17 +62,34 @@ class StorageMountResult(ContractModel):
         }
 
 
-class JuiceFsMountConfig(ContractModel):
-    redis_uri: str
-    bucket: str
+class GeeseFsMountConfig(ContractModel):
+    """A workspace's own bucket, mounted so files map one-to-one onto S3 keys.
+
+    That mapping is the whole point: the object a container writes through the
+    mount is the same object the control plane presigns for a client read.
+    """
+
+    bucket_name: str
+    prefix: str = ""
+    endpoint_url: str = ""
+    region: str = ""
     access_key: str = ""
     secret_key: str = ""
-    cache_size: int = 0
-    block_size: int = 4096
-    prefetch: int = 1
-    buffer_size: int = 300
-    filesystem_name: str = NAME
-    binary: str = "juicefs"
+    session_token: str = ""
+    credential_process: str = ""
+    force_path_style: bool = True
+    cache_dir: str = ""
+    memory_limit_mb: int = 1024
+    max_flushers: int = 16
+    stat_cache_ttl_seconds: int = 1
+    dir_mode: str = "0777"
+    file_mode: str = "0666"
+    binary: str = "geesefs"
+
+    @property
+    def mount_target(self) -> str:
+        prefix = self.prefix.strip("/")
+        return f"{self.bucket_name}:{prefix}" if prefix else self.bucket_name
 
 
 class MountPointConfig(ContractModel):
@@ -109,6 +127,20 @@ class StorageMountSystem:
     run_command: CommandRunner = lambda timeout, argv: run_command_with_timeout(timeout, argv)
 
 
+def _terminate_managed_mount(command: StorageManagedCommand | None) -> None:
+    if command is None:
+        return
+    try:
+        result = command.terminate(timeout_seconds=DEFAULT_UNMOUNT_TIMEOUT_SECONDS)
+    except ManagedCommandStillRunning:
+        LOGGER.warning("storage mount process did not exit before the unmount timeout")
+        return
+    if result.exit_code not in {0, None}:
+        LOGGER.warning(
+            "storage mount process exited %s: %s", result.exit_code, result.output.strip()
+        )
+
+
 class StorageMountManager:
     mode: StorageMountMode
 
@@ -120,69 +152,32 @@ class StorageMountManager:
 
 
 @dataclass(slots=True)
-class JuiceFsMountManager(StorageMountManager):
-    config: JuiceFsMountConfig
+class GeeseFsMountManager(StorageMountManager):
+    config: GeeseFsMountConfig
     system: StorageMountSystem = field(default_factory=StorageMountSystem)
     mount_cmd: StorageManagedCommand | None = None
-    mode: StorageMountMode = StorageMountMode.JuiceFs
-
-    def format(self) -> StorageMountResult:
-        command = [
-            self.config.binary,
-            "format",
-            "--storage",
-            "s3",
-            "--bucket",
-            self.config.bucket,
-            "--block-size",
-            str(self.config.block_size or 4096),
-            self.config.redis_uri,
-            self.config.filesystem_name,
-            "--no-update",
-        ]
-        env = self._env()
-        if self.config.access_key or self.config.secret_key:
-            command.extend(
-                [
-                    "--access-key",
-                    self.config.access_key,
-                    "--secret-key",
-                    self.config.secret_key,
-                ]
-            )
-        result = self.system.run_command(DEFAULT_FORMAT_TIMEOUT_SECONDS, command)
-        return _process_result(self.mode, "", command, env, result, "juicefs formatted")
+    mode: StorageMountMode = StorageMountMode.GeeseFs
 
     def mount(self, local_path: str) -> StorageMountResult:
         Path(local_path).mkdir(parents=True, exist_ok=True)
         if self.system.mount_checker(local_path):
             return _status_result(self.mode, local_path, StorageMountStatus.AlreadyMounted)
-        command = [
-            self.config.binary,
-            "mount",
-            self.config.redis_uri,
-            local_path,
-            "--bucket",
-            self.config.bucket,
-            "--cache-size",
-            str(max(self.config.cache_size, 0)),
-            "--prefetch",
-            str(self.config.prefetch or 1),
-            "--buffer-size",
-            str(self.config.buffer_size or 300),
-            "--no-usage-report",
-        ]
+        command = geesefs_command(self.config, local_path)
         env = self._env()
         self.mount_cmd = self.system.start_command(command, env or None)
         mounted = _wait_for_mount(
             local_path,
             self.system.mount_checker,
             self.mount_cmd,
+            mode=self.mode,
             timeout_seconds=DEFAULT_MOUNT_TIMEOUT_SECONDS,
         )
         if mounted.ok:
             return _status_result(self.mode, local_path, StorageMountStatus.Mounted, command, env)
         output = mounted.output
+        LOGGER.warning(
+            "geesefs mount failed for %s: %s\n%s", local_path, mounted.reason, output.strip()
+        )
         self._terminate_mount_cmd()
         return StorageMountResult(
             mode=self.mode,
@@ -195,11 +190,7 @@ class JuiceFsMountManager(StorageMountManager):
         )
 
     def unmount(self, local_path: str) -> StorageMountResult:
-        result = retry_force_unmount(
-            local_path,
-            self.system,
-            commands=([self.config.binary, "umount", local_path],),
-        )
+        result = retry_force_unmount(local_path, self.system, mode=self.mode)
         self._terminate_mount_cmd()
         return result.model_copy(update={"mode": self.mode})
 
@@ -209,18 +200,48 @@ class JuiceFsMountManager(StorageMountManager):
             env["AWS_ACCESS_KEY_ID"] = self.config.access_key
         if self.config.secret_key:
             env["AWS_SECRET_ACCESS_KEY"] = self.config.secret_key
-            env["JUICEFS_SECRET_KEY"] = self.config.secret_key
+        if self.config.session_token:
+            env["AWS_SESSION_TOKEN"] = self.config.session_token
         return env
 
     def _terminate_mount_cmd(self) -> None:
-        if self.mount_cmd is None:
-            return
-        try:
-            self.mount_cmd.terminate(timeout_seconds=DEFAULT_UNMOUNT_TIMEOUT_SECONDS)
-        except ManagedCommandStillRunning:
-            pass
-        finally:
-            self.mount_cmd = None
+        _terminate_managed_mount(self.mount_cmd)
+        self.mount_cmd = None
+
+
+def geesefs_command(config: GeeseFsMountConfig, local_path: str) -> list[str]:
+    command = [
+        config.binary,
+        "-f",
+        "-o",
+        "allow_other",
+        # GeeseFS stores no permissions, so a narrower mode would deny every
+        # container that does not happen to run as the mounting uid.
+        f"--dir-mode={config.dir_mode}",
+        f"--file-mode={config.file_mode}",
+        "--uid=0",
+        "--gid=0",
+        # Correctness, not tuning: a container write must be durable before the
+        # client presigns a read of the same object.
+        "--fsync-on-close",
+        # The inverse direction: a client write through the API must be visible
+        # to the mount promptly rather than after the default one-minute TTL.
+        f"--stat-cache-ttl={config.stat_cache_ttl_seconds}s",
+        f"--memory-limit={config.memory_limit_mb}",
+        f"--max-flushers={config.max_flushers}",
+    ]
+    if config.endpoint_url:
+        command.append(f"--endpoint={config.endpoint_url}")
+    if config.region:
+        command.append(f"--region={config.region}")
+    if not config.force_path_style:
+        command.append("--subdomain")
+    if config.cache_dir:
+        command.append(f"--cache={config.cache_dir}")
+    if config.credential_process:
+        command.extend([f"--shared-config={config.credential_process}", "--profile=workspace"])
+    command.extend([config.mount_target, local_path])
+    return command
 
 
 @dataclass(slots=True)
@@ -240,6 +261,7 @@ class MountPointMountManager(StorageMountManager):
             local_path,
             self.system.mount_checker,
             self.mount_cmd,
+            mode=self.mode,
             timeout_seconds=DEFAULT_MOUNT_TIMEOUT_SECONDS,
         )
         if mounted.ok:
@@ -257,21 +279,15 @@ class MountPointMountManager(StorageMountManager):
         )
 
     def unmount(self, local_path: str) -> StorageMountResult:
-        result = retry_force_unmount(local_path, self.system)
+        result = retry_force_unmount(local_path, self.system, mode=self.mode)
         self._terminate_mount_cmd()
         with suppress(OSError):
             Path(local_path).rmdir()
         return result.model_copy(update={"mode": self.mode})
 
     def _terminate_mount_cmd(self) -> None:
-        if self.mount_cmd is None:
-            return
-        try:
-            self.mount_cmd.terminate(timeout_seconds=DEFAULT_UNMOUNT_TIMEOUT_SECONDS)
-        except ManagedCommandStillRunning:
-            pass
-        finally:
-            self.mount_cmd = None
+        _terminate_managed_mount(self.mount_cmd)
+        self.mount_cmd = None
 
 
 def mountpoint_command(config: MountPointConfig, local_path: str) -> list[str]:
@@ -313,12 +329,13 @@ def retry_force_unmount(
     local_path: str,
     system: StorageMountSystem,
     *,
+    mode: StorageMountMode,
     commands: Iterable[list[str]] = (),
     retries: int = DEFAULT_CLEANUP_RETRIES,
 ) -> StorageMountResult:
     if not system.mount_checker(local_path):
         return _status_result(
-            StorageMountMode.Local,
+            mode,
             local_path,
             StorageMountStatus.AlreadyUnmounted,
         )
@@ -335,7 +352,7 @@ def retry_force_unmount(
             output.append(result.stdout or result.stderr)
             if result.ok or not system.mount_checker(local_path):
                 return _status_result(
-                    StorageMountMode.Local,
+                    mode,
                     local_path,
                     StorageMountStatus.Unmounted,
                     command=command,
@@ -343,7 +360,7 @@ def retry_force_unmount(
                 )
         time.sleep(DEFAULT_MOUNT_POLL_SECONDS)
     return _status_result(
-        StorageMountMode.Local,
+        mode,
         local_path,
         StorageMountStatus.Failed,
         reason="\n".join(part for part in output if part).strip()
@@ -374,13 +391,14 @@ def _wait_for_mount(
     mounted: MountChecker,
     command: StorageManagedCommand,
     *,
+    mode: StorageMountMode,
     timeout_seconds: float,
 ) -> StorageMountResult:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         if mounted(local_path):
             return _status_result(
-                StorageMountMode.Local,
+                mode,
                 local_path,
                 StorageMountStatus.Mounted,
                 reason="storage mount is ready",
@@ -388,7 +406,7 @@ def _wait_for_mount(
         result = command.poll()
         if result is not None:
             return _status_result(
-                StorageMountMode.Local,
+                mode,
                 local_path,
                 StorageMountStatus.Failed,
                 command=result.args,
@@ -397,7 +415,7 @@ def _wait_for_mount(
             )
         time.sleep(DEFAULT_MOUNT_POLL_SECONDS)
     return _status_result(
-        StorageMountMode.Local,
+        mode,
         local_path,
         StorageMountStatus.Failed,
         output=command.output(),

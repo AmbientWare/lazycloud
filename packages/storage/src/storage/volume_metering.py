@@ -233,7 +233,7 @@ class PersistentVolumeMeteringService:
                 unit=UsageUnit.ByteSeconds,
                 labels={
                     "volume_name": checkpoint.name,
-                    "storage_backend": "juicefs",
+                    "storage_backend": "geesefs",
                 },
                 metadata=metadata,
             )

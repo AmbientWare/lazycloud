@@ -339,6 +339,7 @@ def workspace_storage_credentials(storage: WorkspaceStorageConfig) -> WorkspaceS
         endpoint_url=storage.endpoint_url,
         region=storage.region,
         bucket_name=storage.bucket or "",
+        prefix=storage.key_prefix,
         access_key=storage.access_key,
         secret_key=storage.secret_key,
         force_path_style=storage.force_path_style,

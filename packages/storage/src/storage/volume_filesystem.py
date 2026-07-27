@@ -213,6 +213,29 @@ class WorkspaceVolumeStore:
 
     client: VolumeObjectClient
     bucket: str
+    prefix: str = ""
+
+    def root_key(self, namespace: VolumeNamespace) -> str:
+        # The bucket already belongs to one workspace, so the key carries no
+        # workspace segment. This is the identity the design rests on: it is
+        # exactly the path the worker's mount exposes, which mounts
+        # `bucket[:prefix]` at the workspace's storage root.
+        _validate_namespace(namespace)
+        return f"{self.prefix}{VOLUME_NAMESPACE_PREFIX}/{namespace.volume_id}"
+
+    def prefix_key(self, namespace: VolumeNamespace) -> str:
+        return f"{self.root_key(namespace)}/"
+
+    def key(
+        self,
+        namespace: VolumeNamespace,
+        relative_path: str,
+        *,
+        require_file: bool = False,
+    ) -> str:
+        root = self.root_key(namespace)
+        relative = _normalize_relative_path(relative_path, require_file=require_file)
+        return root if relative == "." else f"{root}/{relative}"
 
 
 class WorkspaceVolumeStoreResolver(Protocol):
@@ -240,6 +263,7 @@ def workspace_volume_store(
             )
         ),
         bucket=bucket,
+        prefix=storage.key_prefix,
     )
 
 
@@ -283,7 +307,7 @@ class WorkspaceVolumeFilesystem:
 
     def delete_volume(self, namespace: VolumeNamespace) -> None:
         store = self._store(namespace)
-        store.client.delete_prefix(_volume_prefix(namespace), bucket=store.bucket)
+        store.client.delete_prefix(store.prefix_key(namespace), bucket=store.bucket)
 
     def _store(self, namespace: VolumeNamespace) -> WorkspaceVolumeStore:
         _validate_namespace(namespace)
@@ -303,7 +327,7 @@ class WorkspaceVolumeFilesystem:
         chunks: Iterable[bytes],
     ) -> None:
         store = self._store(namespace)
-        key = _volume_key(namespace, relative_path, require_file=True)
+        key = store.key(namespace, relative_path, require_file=True)
         with TemporaryDirectory(prefix="lazycloud-volume-upload-") as temporary_directory:
             staged = Path(temporary_directory) / "payload"
             with staged.open("wb") as handle:
@@ -317,8 +341,8 @@ class WorkspaceVolumeFilesystem:
         relative_path: str,
     ) -> tuple[VolumeFilesystemEntry, ...]:
         store = self._store(namespace)
-        key = _volume_key(namespace, relative_path)
-        root_key = _volume_root_key(namespace)
+        key = store.key(namespace, relative_path)
+        root_key = store.root_key(namespace)
         return tuple(
             _object_entry(item, root_key)
             for item in store.client.list_directory(key, bucket=store.bucket)
@@ -330,8 +354,8 @@ class WorkspaceVolumeFilesystem:
         relative_path: str,
     ) -> VolumeFilesystemEntry:
         store = self._store(namespace)
-        key = _volume_key(namespace, relative_path)
-        root_key = _volume_root_key(namespace)
+        key = store.key(namespace, relative_path)
+        root_key = store.root_key(namespace)
         if store.client.exists(key, bucket=store.bucket):
             return _object_entry(store.client.head(key, bucket=store.bucket), root_key)
         children = store.client.list_directory(key, bucket=store.bucket)
@@ -353,8 +377,8 @@ class WorkspaceVolumeFilesystem:
         relative_path: str,
     ) -> tuple[str, ...]:
         store = self._store(namespace)
-        key = _volume_key(namespace, relative_path, require_file=True)
-        root_key = _volume_root_key(namespace)
+        key = store.key(namespace, relative_path, require_file=True)
+        root_key = store.root_key(namespace)
         deleted: list[str] = []
         if store.client.exists(key, bucket=store.bucket):
             store.client.delete(key, bucket=store.bucket)
@@ -375,8 +399,8 @@ class WorkspaceVolumeFilesystem:
         data. Reads of the destination stay 404 until every copy lands.
         """
         store = self._store(namespace)
-        source_key = _volume_key(namespace, source_path, require_file=True)
-        destination_key = _volume_key(namespace, destination_path, require_file=True)
+        source_key = store.key(namespace, source_path, require_file=True)
+        destination_key = store.key(namespace, destination_path, require_file=True)
         if destination_key.startswith(f"{source_key}/"):
             raise InvalidInputError("a directory cannot be moved inside itself")
         moves: list[tuple[str, str]] = []
@@ -408,7 +432,7 @@ class WorkspaceVolumeFilesystem:
         content_type: str = "application/octet-stream",
     ) -> str:
         store = self._store(namespace)
-        key = _volume_key(namespace, relative_path, require_file=True)
+        key = store.key(namespace, relative_path, require_file=True)
         if method is PresignedUrlMethod.GetObject:
             return store.client.generate_presigned_get_url(
                 key,
@@ -446,7 +470,7 @@ class WorkspaceVolumeFilesystem:
     ) -> str:
         store = self._store(namespace)
         return store.client.create_multipart_upload(
-            _volume_key(namespace, relative_path, require_file=True),
+            store.key(namespace, relative_path, require_file=True),
             bucket=store.bucket,
         )
 
@@ -460,7 +484,7 @@ class WorkspaceVolumeFilesystem:
     ) -> None:
         store = self._store(namespace)
         store.client.complete_multipart_upload(
-            _volume_key(namespace, relative_path, require_file=True),
+            store.key(namespace, relative_path, require_file=True),
             upload_id=upload_id,
             completed_parts=completed_parts,
             bucket=store.bucket,
@@ -475,7 +499,7 @@ class WorkspaceVolumeFilesystem:
     ) -> None:
         store = self._store(namespace)
         store.client.abort_multipart_upload(
-            _volume_key(namespace, relative_path, require_file=True),
+            store.key(namespace, relative_path, require_file=True),
             upload_id=upload_id,
             bucket=store.bucket,
         )
@@ -485,7 +509,7 @@ class WorkspaceVolumeFilesystem:
         return sum(
             item.size or 0
             for item in store.client.list_prefix(
-                _volume_prefix(namespace),
+                store.prefix_key(namespace),
                 bucket=store.bucket,
             )
         )
@@ -670,29 +694,6 @@ def _normalize_relative_path(relative_path: str, *, require_file: bool = False) 
     if require_file and value in {"", "."}:
         raise InvalidInputError("parent directory cannot be modified")
     return value
-
-
-def _volume_root_key(namespace: VolumeNamespace) -> str:
-    # The bucket already belongs to one workspace, so the key carries no
-    # workspace segment. This is the identity the design rests on: it is exactly
-    # the path the worker's mount exposes inside the workspace storage mount.
-    _validate_namespace(namespace)
-    return f"{VOLUME_NAMESPACE_PREFIX}/{namespace.volume_id}"
-
-
-def _volume_prefix(namespace: VolumeNamespace) -> str:
-    return f"{_volume_root_key(namespace)}/"
-
-
-def _volume_key(
-    namespace: VolumeNamespace,
-    relative_path: str,
-    *,
-    require_file: bool = False,
-) -> str:
-    root = _volume_root_key(namespace)
-    relative = _normalize_relative_path(relative_path, require_file=require_file)
-    return root if relative == "." else f"{root}/{relative}"
 
 
 def _relative_key(key: str, root_key: str) -> str:

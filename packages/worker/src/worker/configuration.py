@@ -8,8 +8,6 @@ from pydantic import Field, field_validator, model_validator
 from shared.app_identity import NAME, WORKER_CHECKPOINT_ROOT
 from shared.contracts import ContractModel
 from shared.routing import BackendRouteTransport
-from storage_client.data_mounts import DEFAULT_DATA_STORAGE_PATH
-from storage_client.mounts import StorageMountMode
 
 from worker.events import WorkerPoolMode
 from worker.image_build_scratch import (
@@ -108,11 +106,6 @@ class WorkerPathConfiguration(ContractModel):
         return self
 
 
-class WorkerDataStorageConfiguration(ContractModel):
-    mode: StorageMountMode = StorageMountMode.JuiceFs
-    path: str = DEFAULT_DATA_STORAGE_PATH
-
-
 class WorkerMonitoringConfiguration(ContractModel):
     metrics_enabled: bool = True
     metrics_interval_seconds: float = Field(default=5.0, gt=0)
@@ -140,9 +133,6 @@ class WorkerConfiguration(ContractModel):
     execution: WorkerExecutionConfiguration = Field(default_factory=WorkerExecutionConfiguration)
     network: WorkerNetworkConfiguration = Field(default_factory=WorkerNetworkConfiguration)
     paths: WorkerPathConfiguration = Field(default_factory=WorkerPathConfiguration)
-    data_storage: WorkerDataStorageConfiguration = Field(
-        default_factory=WorkerDataStorageConfiguration
-    )
     monitoring: WorkerMonitoringConfiguration = Field(default_factory=WorkerMonitoringConfiguration)
     source_cache: WorkerSourceCacheConfiguration = Field(
         default_factory=WorkerSourceCacheConfiguration
@@ -165,7 +155,6 @@ __all__ = [
     "WORKER_CONFIG_PATH_ENV",
     "WorkerCapacityConfiguration",
     "WorkerConfiguration",
-    "WorkerDataStorageConfiguration",
     "WorkerExecutionConfiguration",
     "WorkerImageBuildConfiguration",
     "WorkerMonitoringConfiguration",

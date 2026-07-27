@@ -17,8 +17,6 @@ from shared.app_identity import CONTAINER_WORKER_PROCESS_NAME
 from shared.container_requests import StopContainerReason
 from shared.process_liveness import HeartbeatFile, heartbeat_path
 from shared.routing import BackendRouteTransport
-from storage_client.mounts import StorageMountMode
-from worker.cache_assets import WorkerStorageMode
 from worker.events import WorkerPoolMode, WorkerStreamEventKind
 from worker.repository_payloads import StreamWorkerEventsRequest
 from worker.runtime_config import OciRuntimeName
@@ -88,10 +86,7 @@ class ContainerWorkerArguments(argparse.Namespace):
     cache_root: Path | None = None
     checkpoint_root: str | None = None
     checkpoint_bucket: str | None = None
-    data_storage_mode: str | None = None
-    data_storage_path: str | None = None
     data_storage_bucket: str | None = None
-    data_storage_juicefs_redis_url: str | None = None
     workspace_storage_mode: str | None = None
     workspace_storage_base_mount_path: str | None = None
     workspace_storage_mountpoint_binary: str | None = None
@@ -236,14 +231,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cache-root", type=Path)
     parser.add_argument("--checkpoint-root")
     parser.add_argument("--checkpoint-bucket")
-    parser.add_argument("--data-storage-mode", choices=[item.value for item in StorageMountMode])
-    parser.add_argument("--data-storage-path")
     parser.add_argument("--data-storage-bucket")
-    parser.add_argument("--data-storage-juicefs-redis-url")
-    parser.add_argument(
-        "--workspace-storage-mode",
-        choices=[item.value for item in WorkerStorageMode],
-    )
     parser.add_argument("--workspace-storage-base-mount-path")
     parser.add_argument("--workspace-storage-mountpoint-binary")
     return parser
@@ -674,24 +662,7 @@ def _settings_from_args(args: ContainerWorkerArguments) -> ProductionWorkerSetti
             args.checkpoint_root if args.checkpoint_root is not None else base.checkpoint_root
         ),
         checkpoint_bucket=_override(args.checkpoint_bucket, base.checkpoint_bucket),
-        data_storage_mode=(
-            StorageMountMode(args.data_storage_mode)
-            if args.data_storage_mode is not None
-            else base.data_storage_mode
-        ),
-        data_storage_path=(
-            args.data_storage_path if args.data_storage_path is not None else base.data_storage_path
-        ),
         data_storage_bucket=_override(args.data_storage_bucket, base.data_storage_bucket),
-        data_storage_juicefs_redis_url=_override(
-            args.data_storage_juicefs_redis_url,
-            base.data_storage_juicefs_redis_url,
-        ),
-        workspace_storage_mode=(
-            WorkerStorageMode(args.workspace_storage_mode)
-            if args.workspace_storage_mode is not None
-            else base.workspace_storage_mode
-        ),
         workspace_storage_base_mount_path=_override(
             args.workspace_storage_base_mount_path,
             base.workspace_storage_base_mount_path,

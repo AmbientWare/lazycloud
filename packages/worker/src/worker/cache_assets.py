@@ -7,12 +7,6 @@ from pydantic import Field
 from shared.contracts import ContractModel
 
 
-class WorkerStorageMode(StrEnum):
-    JuiceFs = "juicefs"
-    MountPoint = "mountpoint"
-    Local = "local"
-
-
 class WorkspaceStorageMountAction(StrEnum):
     Reuse = "reuse"
     Mount = "mount"
@@ -40,38 +34,29 @@ class WorkspaceStorageCredentials(ContractModel):
         )
 
 
-class WorkspaceJuiceFsStorageConfig(ContractModel):
-    redis_uri: str = ""
-    cache_size: int = 0
-    block_size: int = 4096
-    prefetch: int = 1
-    buffer_size: int = 300
-    filesystem_name: str = "workspace"
-
-
-class WorkspaceMountPointStorageConfig(ContractModel):
-    binary: str = "ms3"
+class WorkspaceGeeseFsStorageConfig(ContractModel):
+    binary: str = "geesefs"
+    cache_root: str = "/var/lib/lazycloud/geesefs-cache"
+    memory_limit_mb: int = 1024
+    max_flushers: int = 16
+    stat_cache_ttl_seconds: int = 1
 
 
 class WorkspaceStorageConfig(ContractModel):
     base_mount_path: str = "/workspace"
-    default_storage_mode: WorkerStorageMode = WorkerStorageMode.JuiceFs
-    juicefs: WorkspaceJuiceFsStorageConfig = Field(default_factory=WorkspaceJuiceFsStorageConfig)
-    mountpoint: WorkspaceMountPointStorageConfig = Field(
-        default_factory=WorkspaceMountPointStorageConfig
+    geesefs: WorkspaceGeeseFsStorageConfig = Field(
+        default_factory=WorkspaceGeeseFsStorageConfig
     )
 
 
 class WorkspaceMountState(ContractModel):
     workspace_name: str
-    mode: WorkerStorageMode
     mount_path: str
     mounted: bool = True
 
 
 class WorkspaceStorageMountPlan(ContractModel):
     workspace_name: str
-    mode: WorkerStorageMode
     mount_path: str
     action: WorkspaceStorageMountAction
     valid: bool
@@ -106,17 +91,9 @@ def workspace_storage_mount_lock_key(workspace_name: str) -> str:
     return f"workspace-storage:{workspace_name}"
 
 
-def resolve_workspace_storage_mode(
-    pool_mode: WorkerStorageMode | None,
-    default_mode: WorkerStorageMode,
-) -> WorkerStorageMode:
-    return pool_mode or default_mode
-
-
 def plan_workspace_storage_mount(
     workspace_name: str,
     *,
-    mode: WorkerStorageMode,
     credentials: WorkspaceStorageCredentials | None,
     config: WorkspaceStorageConfig = WorkspaceStorageConfig(),
     existing: WorkspaceMountState | None = None,
@@ -126,7 +103,6 @@ def plan_workspace_storage_mount(
     if existing is not None and workspace_mount_healthy(existing):
         return WorkspaceStorageMountPlan(
             workspace_name=workspace_name,
-            mode=existing.mode,
             mount_path=existing.mount_path,
             action=WorkspaceStorageMountAction.Reuse,
             valid=True,
@@ -135,19 +111,6 @@ def plan_workspace_storage_mount(
             lock_key=lock_key,
         )
     stale = existing is not None
-    if mode is WorkerStorageMode.Local:
-        return WorkspaceStorageMountPlan(
-            workspace_name=workspace_name,
-            mode=mode,
-            mount_path=mount_path,
-            action=WorkspaceStorageMountAction.Reject,
-            valid=False,
-            reason="local mode is invalid for request-scoped workspace storage",
-            lock_key=lock_key,
-            unmount_existing=stale,
-            remove_mount_path=stale,
-            previous_mount_path=existing.mount_path if existing is not None else "",
-        )
     valid, reason = validate_workspace_storage(credentials)
     action = (
         WorkspaceStorageMountAction.Remount
@@ -156,7 +119,6 @@ def plan_workspace_storage_mount(
     )
     return WorkspaceStorageMountPlan(
         workspace_name=workspace_name,
-        mode=mode,
         mount_path=mount_path,
         action=action if valid else WorkspaceStorageMountAction.Reject,
         valid=valid,
@@ -169,9 +131,7 @@ def plan_workspace_storage_mount(
 
 
 def workspace_mount_healthy(mount: WorkspaceMountState) -> bool:
-    if mount.mode in {WorkerStorageMode.JuiceFs, WorkerStorageMode.MountPoint}:
-        return mount.mounted
-    return True
+    return mount.mounted
 
 
 def plan_workspace_mount_cleanup(
