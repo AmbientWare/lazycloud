@@ -15,9 +15,9 @@ from control.deployments import DeploymentAppResolution, DeploymentRegistration
 from control.service import ControlPlaneService
 from database.records.apps import AppRecord
 from database.repositories.apps import DeploymentRepository
-from database.repositories.artifact_cleanup import (
+from database.repositories.cleanup import (
     OBJECT_CLEANUP_SOURCE,
-    ArtifactCleanupRepository,
+    CleanupRepository,
 )
 from database.repositories.storage import ObjectRepository
 from fastapi.testclient import TestClient
@@ -67,7 +67,7 @@ class _ClaimingAppRegistry:
     ) -> AppRecord:
         if stub_id is not None:
             with self.apps.context.database.session() as session:
-                ArtifactCleanupRepository(session).mark_object_claimed(
+                CleanupRepository(session).mark_object_claimed(
                     self.object_id,
                     claimed_at=utc_now(),
                     cleanup_kind=OBJECT_CLEANUP_SOURCE,

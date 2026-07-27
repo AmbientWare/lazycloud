@@ -55,7 +55,7 @@ def services_with_redis_container_control(
         agent_route_reconciliation_settings=services.agent_route_reconciliation_settings,
         gateway_settings=services.gateway_settings,
         workspace_change_stream_settings=services.workspace_change_stream_settings,
-        agent_artifact_settings=services.agent_artifact_settings,
+        agent_binary_settings=services.agent_binary_settings,
         aws_account_connection_settings=services.aws_account_connection_settings,
         aws_capacity_settings=services.aws_capacity_settings,
         aws_capacity_reconciliation_settings=services.aws_capacity_reconciliation_settings,

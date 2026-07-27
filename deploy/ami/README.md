@@ -34,7 +34,7 @@ images, and S3 head/put on the release bucket):
 ```sh
 uv run --group workspace python deploy/ami/bake.py \
   --release-version "$VERSION" \
-  --agent-version-dir "dist/agent-artifacts/$VERSION" \
+  --agent-version-dir "dist/agent-binarys/$VERSION" \
   --worker-image "public.ecr.aws/ALIAS/lazycloud/container-worker@sha256:DIGEST" \
   --bucket "$AWS_RELEASE_ASSET_BUCKET" \
   --bucket-region us-east-1 \

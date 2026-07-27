@@ -120,13 +120,13 @@ class SchedulerVolumeMeteringService(Protocol):
     ) -> SchedulerVolumeMeteringBatch: ...
 
 
-class SchedulerArtifactRetentionBatch(Protocol):
+class SchedulerRetentionBatch(Protocol):
     @property
     def removed(self) -> int: ...
 
 
-class SchedulerArtifactRetentionService(Protocol):
-    def reconcile(self, *, now: datetime | None = None) -> SchedulerArtifactRetentionBatch: ...
+class SchedulerRetentionService(Protocol):
+    def reconcile(self, *, now: datetime | None = None) -> SchedulerRetentionBatch: ...
 
 
 class SchedulerTailnetCleanupBatch(Protocol):
@@ -239,7 +239,7 @@ class SchedulerCapacityControls:
 @dataclass(frozen=True, slots=True)
 class SchedulerMaintenanceControls:
     volume_metering: SchedulerVolumeMeteringService | None = None
-    artifact_retention: SchedulerArtifactRetentionService | None = None
+    retention: SchedulerRetentionService | None = None
     tailnet_cleanup: SchedulerTailnetCleanupService | None = None
 
 
@@ -256,12 +256,12 @@ class Scheduler:
     last_managed_compute_reconcile_at: datetime | None = field(default=None, init=False)
     token_prune_interval_seconds: float = 3600.0
     last_token_prune_at: datetime | None = field(default=None, init=False)
-    artifact_retention_interval_seconds: float = 3600.0
-    artifact_retention_retry_initial_seconds: float = 30.0
-    artifact_retention_retry_max_seconds: float = 900.0
-    last_artifact_retention_at: datetime | None = field(default=None, init=False)
-    next_artifact_retention_attempt_at: datetime | None = field(default=None, init=False)
-    artifact_retention_consecutive_failures: int = field(default=0, init=False)
+    retention_interval_seconds: float = 3600.0
+    retention_retry_initial_seconds: float = 30.0
+    retention_retry_max_seconds: float = 900.0
+    last_retention_at: datetime | None = field(default=None, init=False)
+    next_retention_attempt_at: datetime | None = field(default=None, init=False)
+    retention_consecutive_failures: int = field(default=0, init=False)
     event_prune_interval_seconds: float = 3600.0
     last_event_prune_at: datetime | None = field(default=None, init=False)
     worker_pool_drain_event_signatures: dict[str, tuple[str, ...]] = field(
@@ -552,7 +552,7 @@ class Scheduler:
             self._best_effort_prune_expired_tokens(now=now) if include_containers else 0
         )
         events_pruned = self._best_effort_prune_events(now=now) if include_containers else 0
-        artifacts_removed, artifact_retention_failure_count = (
+        objects_removed, retention_failure_count = (
             self._best_effort_retain_artifacts(now=now) if include_containers else (0, 0)
         )
         return SchedulerRunResult(
@@ -579,8 +579,8 @@ class Scheduler:
             events_pruned=events_pruned,
             volume_metering_count=volume_metering_count,
             volume_metering_failure_count=volume_metering_failure_count,
-            artifacts_removed=artifacts_removed,
-            artifact_retention_failure_count=artifact_retention_failure_count,
+            objects_removed=objects_removed,
+            retention_failure_count=retention_failure_count,
         )
 
     def _best_effort_reconcile_app_lifecycle(self, *, limit: int) -> list[AppRecord]:
@@ -607,36 +607,36 @@ class Scheduler:
         return result.metered_count, result.failure_count
 
     def _best_effort_retain_artifacts(self, *, now: datetime | None = None) -> tuple[int, int]:
-        artifact_retention = self.maintenance.artifact_retention
-        if artifact_retention is None:
+        retention = self.maintenance.retention
+        if retention is None:
             return (0, 0)
         current = now or utc_now()
         if (
-            self.next_artifact_retention_attempt_at is not None
-            and current < self.next_artifact_retention_attempt_at
+            self.next_retention_attempt_at is not None
+            and current < self.next_retention_attempt_at
         ):
             return (0, 0)
         if (
-            self.last_artifact_retention_at is not None
-            and (current - self.last_artifact_retention_at).total_seconds()
-            < self.artifact_retention_interval_seconds
+            self.last_retention_at is not None
+            and (current - self.last_retention_at).total_seconds()
+            < self.retention_interval_seconds
         ):
             return (0, 0)
         try:
-            result = artifact_retention.reconcile(now=current)
+            result = retention.reconcile(now=current)
         except Exception:
             LOGGER.exception("scheduler artifact retention failed")
-            self.artifact_retention_consecutive_failures += 1
+            self.retention_consecutive_failures += 1
             retry_seconds = min(
-                self.artifact_retention_retry_max_seconds,
-                self.artifact_retention_retry_initial_seconds
-                * (1 << (self.artifact_retention_consecutive_failures - 1)),
+                self.retention_retry_max_seconds,
+                self.retention_retry_initial_seconds
+                * (1 << (self.retention_consecutive_failures - 1)),
             )
-            self.next_artifact_retention_attempt_at = current + timedelta(seconds=retry_seconds)
+            self.next_retention_attempt_at = current + timedelta(seconds=retry_seconds)
             return (0, 1)
-        self.last_artifact_retention_at = current
-        self.next_artifact_retention_attempt_at = None
-        self.artifact_retention_consecutive_failures = 0
+        self.last_retention_at = current
+        self.next_retention_attempt_at = None
+        self.retention_consecutive_failures = 0
         return (result.removed, 0)
 
     def prune_events(self) -> int:
@@ -1146,8 +1146,8 @@ class SchedulerRunResult(ContractModel):
     events_pruned: int = 0
     volume_metering_count: int = 0
     volume_metering_failure_count: int = 0
-    artifacts_removed: int = 0
-    artifact_retention_failure_count: int = 0
+    objects_removed: int = 0
+    retention_failure_count: int = 0
 
 
 def _cron_function_stub_id(cron_job: CronJobRecord, deployment: Deployment) -> str:

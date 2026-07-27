@@ -43,7 +43,7 @@ def main() -> int:
                 [
                     "docker",
                     "cp",
-                    f"{container_id}:/opt/lazycloud/managed-runtime-artifacts/.",
+                    f"{container_id}:/opt/lazycloud/managed-runtime/.",
                     str(root),
                 ],
                 capture=True,

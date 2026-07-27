@@ -228,4 +228,4 @@ class _Services:
     lifecycle: _Lifecycle
     event_source: None = None
     worker_events: None = None
-    artifact_retention: None = None
+    retention: None = None

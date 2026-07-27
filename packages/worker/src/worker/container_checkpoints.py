@@ -16,7 +16,7 @@ from pydantic import Field, JsonValue, TypeAdapter
 from shared.checkpoints import CheckpointRecord
 from shared.contracts import ContractModel
 
-from worker.checkpoint_activity import CheckpointArtifactLeaseRegistry
+from worker.checkpoint_activity import CheckpointLeaseRegistry
 from worker.checkpoints import (
     CheckpointPersistencePlan,
     CheckpointPersistenceRequest,
@@ -191,8 +191,8 @@ class RuntimeCheckpointCreator:
     content_cache_available: bool
     id_factory: Callable[[], str] = field(default_factory=lambda: lambda: str(uuid4()))
     nvidia_driver_major: int | None = None
-    checkpoint_activity: CheckpointArtifactLeaseRegistry = field(
-        default_factory=CheckpointArtifactLeaseRegistry
+    checkpoint_activity: CheckpointLeaseRegistry = field(
+        default_factory=CheckpointLeaseRegistry
     )
 
     def create_checkpoint(

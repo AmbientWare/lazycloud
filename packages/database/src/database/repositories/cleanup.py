@@ -9,11 +9,11 @@ from database.tables.apps import StubTable
 from database.tables.images import CheckpointTable, ImageBuildTable, ImageTable
 from database.tables.storage import ObjectTable
 from pydantic import BaseModel, JsonValue
-from shared.artifacts import artifact_path_digest, normalize_artifact_path
 from shared.checkpoints import CheckpointRecord
 from shared.errors import ConflictError
 from shared.image_building.records import ImageBuildRecord, ImageRecord
 from shared.objects import ObjectRecord
+from shared.runtime_paths import normalize_runtime_path, runtime_path_digest
 from shared.workload_config import StubConfig
 from sqlalchemy import or_, select, text
 from sqlalchemy.orm import Session
@@ -30,7 +30,7 @@ def object_location_lock_key(workspace_id: str, bucket: str, key: str) -> str:
 
 
 @dataclass(slots=True)
-class ArtifactCleanupRepository:
+class CleanupRepository:
     session: Session
 
     def lock_keys(self, keys: set[str]) -> None:
@@ -203,10 +203,10 @@ class ArtifactCleanupRepository:
         cache_publish_key = build.cache_metadata.get("cache_publish_key", "")
         resource_clauses: list[ColumnElement[bool]] = []
         if paths:
-            path_digests = {artifact_path_digest(path) for path in paths}
+            path_digests = {runtime_path_digest(path) for path in paths}
             resource_clauses.append(
                 or_(
-                    (ImageBuildTable.artifact_path_digest.in_(path_digests))
+                    (ImageBuildTable.runtime_path_digest.in_(path_digests))
                     & (ImageBuildTable.artifact_path_value.in_(paths)),
                     (ImageBuildTable.manifest_path_digest.in_(path_digests))
                     & (ImageBuildTable.manifest_path_value.in_(paths)),
@@ -410,7 +410,7 @@ def _build_resource_keys(build: ImageBuildRecord) -> set[str]:
 
 def _build_paths(build: ImageBuildRecord) -> set[str]:
     return {
-        normalize_artifact_path(raw)
+        normalize_runtime_path(raw)
         for raw in (
             build.artifact_path,
             build.manifest_path,
@@ -425,5 +425,5 @@ __all__ = [
     "OBJECT_CLEANUP_CHECKPOINT",
     "OBJECT_CLEANUP_DELETE",
     "OBJECT_CLEANUP_SOURCE",
-    "ArtifactCleanupRepository",
+    "CleanupRepository",
 ]

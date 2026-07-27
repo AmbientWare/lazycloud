@@ -11,7 +11,9 @@ from worker.managed_runtime import (
     MANAGED_RUNTIME_LAUNCHER_PATH,
     plan_managed_runtime,
 )
-from worker.managed_runtime_artifacts import load_managed_runtime_catalog
+from worker.managed_runtime_catalog import (
+    load_managed_runtime_catalog,
+)
 
 
 @pytest.mark.parametrize(

@@ -14,7 +14,7 @@ from shared.managed_runtime_integrity import (
     managed_runtime_artifact_digest,
 )
 
-MANAGED_RUNTIME_ARTIFACT_SCHEMA_VERSION = 3
+MANAGED_RUNTIME_SCHEMA_VERSION = 3
 MANAGED_RUNTIME_PYTHON_VERSIONS = ("3.10", "3.11", "3.12")
 MANAGED_RUNTIME_ARCHITECTURES = (
     LinuxArchitecture.Amd64,
@@ -25,7 +25,7 @@ MANAGED_RUNTIME_CATALOG_FILE = "catalog.json"
 MANAGED_RUNTIME_LAUNCHER_FILE = "launcher.py"
 
 
-class ManagedRuntimeArtifactManifest(ContractModel):
+class ManagedRuntimeManifest(ContractModel):
     python_major_minor: str
     architecture: LinuxArchitecture
     digest: str
@@ -42,7 +42,7 @@ class ManagedRuntimeCatalogManifest(ContractModel):
     digest: str
     source_digest: str
     launcher_digest: str
-    artifacts: dict[str, dict[str, ManagedRuntimeArtifactManifest]] = Field(default_factory=dict)
+    artifacts: dict[str, dict[str, ManagedRuntimeManifest]] = Field(default_factory=dict)
 
 
 class ManagedRuntimeCatalog(ContractModel):
@@ -50,7 +50,7 @@ class ManagedRuntimeCatalog(ContractModel):
     host_path: str
     selected_python: str
     selected_architecture: LinuxArchitecture
-    selected_artifact: ManagedRuntimeArtifactManifest
+    selected_artifact: ManagedRuntimeManifest
 
 
 def load_managed_runtime_catalog(
@@ -68,10 +68,10 @@ def load_managed_runtime_catalog(
         )
     except ValueError as exc:
         raise RuntimeError(f"managed runtime catalog is invalid: {catalog_path}") from exc
-    if manifest.schema_version != MANAGED_RUNTIME_ARTIFACT_SCHEMA_VERSION:
+    if manifest.schema_version != MANAGED_RUNTIME_SCHEMA_VERSION:
         raise RuntimeError(
             "managed runtime catalog schema mismatch: "
-            f"expected {MANAGED_RUNTIME_ARTIFACT_SCHEMA_VERSION}, got {manifest.schema_version}"
+            f"expected {MANAGED_RUNTIME_SCHEMA_VERSION}, got {manifest.schema_version}"
         )
     expected_versions = set(MANAGED_RUNTIME_PYTHON_VERSIONS)
     available_versions = set(manifest.artifacts)
@@ -148,7 +148,7 @@ def _validate_artifact(
     root: Path,
     version: str,
     architecture: LinuxArchitecture,
-    artifact: ManagedRuntimeArtifactManifest,
+    artifact: ManagedRuntimeManifest,
     source_digest: str,
 ) -> None:
     if artifact.python_major_minor != version:
@@ -220,14 +220,14 @@ def _file_digest(path: Path) -> str:
 
 __all__ = [
     "MANAGED_RUNTIME_ARCHITECTURES",
-    "MANAGED_RUNTIME_ARTIFACT_SCHEMA_VERSION",
     "MANAGED_RUNTIME_CATALOG_FILE",
     "MANAGED_RUNTIME_DISTRIBUTIONS",
     "MANAGED_RUNTIME_LAUNCHER_FILE",
     "MANAGED_RUNTIME_PYTHON_VERSIONS",
-    "ManagedRuntimeArtifactManifest",
+    "MANAGED_RUNTIME_SCHEMA_VERSION",
     "ManagedRuntimeCatalog",
     "ManagedRuntimeCatalogManifest",
+    "ManagedRuntimeManifest",
     "load_managed_runtime_catalog",
     "managed_runtime_catalog_digest",
 ]

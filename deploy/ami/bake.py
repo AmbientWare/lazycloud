@@ -148,7 +148,7 @@ def main() -> None:
         "--agent-version-dir",
         type=Path,
         required=True,
-        help="staged agent artifact directory containing manifest.json (deploy/agent-artifact)",
+        help="staged agent artifact directory containing manifest.json (deploy/agent-binary)",
     )
     parser.add_argument("--worker-image", required=True)
     parser.add_argument("--bucket", required=True, help="public release asset bucket")
@@ -617,7 +617,7 @@ exec >/var/log/lazycloud-bake.log 2>&1
 
 TAILSCALE_VERSION=__TAILSCALE_VERSION__
 TAILSCALE_SHA256=__TAILSCALE_SHA256__
-AGENT_ARTIFACT_URL=__AGENT_ARTIFACT_URL__
+AGENT_BINARY_URL=__AGENT_BINARY_URL__
 AGENT_SHA256=__AGENT_SHA256__
 AGENT_BIN=__AGENT_BIN__
 WORKER_IMAGE_DIGEST=__WORKER_IMAGE_DIGEST__
@@ -647,7 +647,7 @@ rm -rf "$archive" "$extracted"
 test "$(tailscale version | sed -n 1p)" = "$TAILSCALE_VERSION"
 
 agent_download=$(mktemp)
-curl -fsSL --retry 5 --retry-delay 2 "$AGENT_ARTIFACT_URL" -o "$agent_download"
+curl -fsSL --retry 5 --retry-delay 2 "$AGENT_BINARY_URL" -o "$agent_download"
 echo "${AGENT_SHA256}  ${agent_download}" | sha256sum -c -
 install -m 0755 "$agent_download" "$AGENT_BIN"
 rm -f "$agent_download"
@@ -666,7 +666,7 @@ def _bake_user_data(request: _BakeRequest) -> str:
     values = {
         "__TAILSCALE_VERSION__": TAILSCALE_INSTALL_VERSION,
         "__TAILSCALE_SHA256__": TAILSCALE_AMD64_SHA256,
-        "__AGENT_ARTIFACT_URL__": request.agent_url,
+        "__AGENT_BINARY_URL__": request.agent_url,
         "__AGENT_SHA256__": request.agent.sha256,
         "__AGENT_BIN__": f"/usr/local/bin/{AGENT_NAME}",
         "__WORKER_IMAGE_DIGEST__": request.worker_image,

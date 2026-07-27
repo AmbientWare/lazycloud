@@ -7,9 +7,9 @@ from pathlib import Path
 from cache.protocol import CacheContentStoreResult, CacheContentStoreStatus
 from pydantic import JsonValue, TypeAdapter
 from shared.checkpoints import CheckpointRecord
-from worker.checkpoint_activity import CheckpointArtifactLeaseRegistry
+from worker.checkpoint_activity import CheckpointLeaseRegistry
 from worker.checkpoints import CheckpointStatePayload, WorkerCheckpointStatus
-from worker.container_artifacts import (
+from worker.container_checkpoints import (
     ContainerFilesystemArchiveCreator,
     ContainerImageArchiveResult,
     FilesystemCheckpointPersister,
@@ -35,7 +35,7 @@ def test_runtime_checkpoint_creator_runs_runtime_persists_archive_and_records_st
     (upper / "outputs").mkdir()
     (upper / "outputs" / "result.txt").write_text("skip", encoding="utf-8")
     (upper / "missing-link").symlink_to("missing-target")
-    checkpoint_activity = CheckpointArtifactLeaseRegistry()
+    checkpoint_activity = CheckpointLeaseRegistry()
     runtime = RuntimeCheckpoint(checkpoint_activity=checkpoint_activity)
     state = CheckpointState()
     uploader = CheckpointUploader()
@@ -189,7 +189,7 @@ def test_container_filesystem_archive_creator_requires_durable_publication(
 class RuntimeCheckpoint:
     error: str = ""
     calls: list[tuple[str, str, str, bool, bool, bool, bool]] = field(default_factory=list)
-    checkpoint_activity: CheckpointArtifactLeaseRegistry | None = None
+    checkpoint_activity: CheckpointLeaseRegistry | None = None
     protected_during_checkpoint: set[str] = field(default_factory=set)
 
     def checkpoint_container(

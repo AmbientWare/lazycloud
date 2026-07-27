@@ -14,11 +14,11 @@ _BINARY_NAME_PATTERN = re.compile(r"[A-Za-z0-9._-]+")
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 
 
-class AgentArtifactSettings(BaseSettings):
+class AgentBinarySettings(BaseSettings):
     binary_dir: Path | None = None
     binary_name: str = AGENT_NAME
     artifact_version: str = ""
-    artifact_sha256_by_arch: dict[str, str] = Field(default_factory=dict)
+    sha256_by_arch: dict[str, str] = Field(default_factory=dict)
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_AGENT_",
@@ -31,20 +31,20 @@ class AgentArtifactSettings(BaseSettings):
         return normalize_agent_binary_name(value)
 
     @model_validator(mode="after")
-    def validate_artifact(self) -> AgentArtifactSettings:
+    def validate_artifact(self) -> AgentBinarySettings:
         version, digests = normalize_agent_artifact_config(
             self.artifact_version,
-            self.artifact_sha256_by_arch,
+            self.sha256_by_arch,
         )
         if version and self.binary_dir is None:
             raise ValueError("agent artifact binary directory is required")
         self.artifact_version = version
-        self.artifact_sha256_by_arch = digests
+        self.sha256_by_arch = digests
         return self
 
     def require_amd64(self) -> tuple[str, str]:
         version = self.artifact_version
-        digest = self.artifact_sha256_by_arch.get("amd64", "")
+        digest = self.sha256_by_arch.get("amd64", "")
         if not version or not digest:
             raise ValueError("AWS capacity requires an amd64 agent artifact")
         return version, digest
@@ -84,4 +84,4 @@ def normalize_agent_artifact_config(
     return normalized_version, digests
 
 
-__all__ = ["AgentArtifactSettings"]
+__all__ = ["AgentBinarySettings"]

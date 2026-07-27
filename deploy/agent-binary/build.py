@@ -66,7 +66,7 @@ def main() -> None:
         action="append",
         dest="architectures",
     )
-    build.add_argument("--dockerfile", type=Path, default=Path("deploy/agent-artifact/Dockerfile"))
+    build.add_argument("--dockerfile", type=Path, default=Path("deploy/agent-binary/Dockerfile"))
     build.add_argument("--context", type=Path, default=Path("."))
 
     stage = subparsers.add_parser("stage")
@@ -115,7 +115,7 @@ def build_artifacts(
     if not context.is_dir():
         raise RuntimeError(f"agent artifact build context does not exist: {context}")
 
-    with tempfile.TemporaryDirectory(prefix="lazycloud-agent-artifacts-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="lazycloud-agent-binarys-") as temporary:
         temporary_root = Path(temporary)
         artifacts: dict[str, Path] = {}
         for architecture in architectures:
@@ -159,7 +159,7 @@ def docker_build_command(
         "--file",
         str(dockerfile),
         "--target",
-        "agent-artifact",
+        "agent-binary",
         "--output",
         f"type=local,dest={export_root}",
         str(context),

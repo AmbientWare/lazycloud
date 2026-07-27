@@ -14,7 +14,7 @@ from database.repositories.apps import (
     DeploymentRepository,
     StubRepository,
 )
-from database.repositories.artifact_cleanup import ArtifactCleanupRepository
+from database.repositories.cleanup import CleanupRepository
 from database.repositories.execution import EventRepository
 from foundation.ids import try_uuid
 from observability.workspace_changes import WorkspaceChangePublisher
@@ -64,14 +64,14 @@ class AppRegistry(AppReader, Protocol):
     ) -> list[AppRecord]: ...
 
 
-class AppArtifactAvailability(Protocol):
+class AppImageAvailability(Protocol):
     def assert_available(self, session: Session, stub_id: str) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
-class DatabaseAppArtifactAvailability:
+class DatabaseAppImageAvailability:
     def assert_available(self, session: Session, stub_id: str) -> None:
-        ArtifactCleanupRepository(session).assert_stub_available(stub_id)
+        CleanupRepository(session).assert_stub_available(stub_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,7 +107,7 @@ class AppService:
     context: ControlContext
     deployment_lifecycle: AppDeploymentLifecycleService
     execution_effects: AppExecutionLifecycleEffects
-    artifact_availability: AppArtifactAvailability
+    artifact_availability: AppImageAvailability
     workspace_changes: WorkspaceChangePublisher | None = None
 
     def create(
@@ -721,11 +721,11 @@ def _claim_specific(session: Session, app: AppRecord, *, revision: int) -> str |
 
 
 __all__ = [
-    "AppArtifactAvailability",
     "AppExecutionLifecycleEffects",
+    "AppImageAvailability",
     "AppReader",
     "AppRegistry",
     "AppService",
-    "DatabaseAppArtifactAvailability",
     "DatabaseAppExecutionAdmission",
+    "DatabaseAppImageAvailability",
 ]

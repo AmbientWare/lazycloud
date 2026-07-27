@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from database.repositories.artifact_cleanup import ArtifactCleanupRepository
+from database.repositories.cleanup import CleanupRepository
 from database.repositories.common import (
     GlobalTableRepository,
     TableRepositoryConfig,
@@ -386,7 +386,7 @@ class ContainerRepository:
         )
 
     def upsert(self, container: ContainerRecord) -> ContainerRecord:
-        cleanup = ArtifactCleanupRepository(self.session)
+        cleanup = CleanupRepository(self.session)
         if container.stub_id is not None:
             cleanup.assert_stub_available(container.stub_id)
         if container.image:

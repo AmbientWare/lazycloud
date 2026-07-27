@@ -483,7 +483,7 @@ def _services_with_object_storage(
         binary_redis_client=isolated_services.binary_redis_client,
         owns_redis_client=False,
         owns_binary_redis_client=False,
-        agent_artifact_settings=isolated_services.agent_artifact_settings,
+        agent_binary_settings=isolated_services.agent_binary_settings,
     )
     request.addfinalizer(services.close)
     return services

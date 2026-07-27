@@ -12,13 +12,13 @@ from pydantic import Field, field_validator, model_validator
 from shared.contracts import ContractModel
 from shared.timestamps import utc_now
 
-from worker.checkpoint_activity import CheckpointArtifactLeaseRegistry
+from worker.checkpoint_activity import CheckpointLeaseRegistry
 from worker.container_service.models import WorkerContainerServiceInstance
 from worker.execution import CHECKPOINT_ARCHIVE_EXTENSION
 from worker.image_build_scratch import ImageBuildScratchManager
 from worker.image_lifecycle import LOCAL_IMAGE_ARCHIVE_EXTENSION
 
-DEFAULT_WORKER_ARTIFACT_RETENTION_INTERVAL_SECONDS = 5 * 60
+DEFAULT_WORKER_RETENTION_INTERVAL_SECONDS = 5 * 60
 DEFAULT_WORKER_IMAGE_CACHE_MAX_BYTES = 20 * 1024 * 1024 * 1024
 DEFAULT_WORKER_IMAGE_MATERIALIZATION_MAX_BYTES = 40 * 1024 * 1024 * 1024
 DEFAULT_WORKER_CHECKPOINT_CACHE_MAX_BYTES = 10 * 1024 * 1024 * 1024
@@ -32,7 +32,7 @@ class WorkerArtifactInstanceSource(Protocol):
     def list_container_instances(self) -> list[WorkerContainerServiceInstance]: ...
 
 
-class WorkerArtifactRetentionConfig(ContractModel):
+class WorkerRetentionConfig(ContractModel):
     image_cache_root: Path
     image_mount_root: Path
     checkpoint_root: Path
@@ -70,7 +70,7 @@ class WorkerArtifactRetentionConfig(ContractModel):
         return value
 
     @model_validator(mode="after")
-    def distinct_roots(self) -> WorkerArtifactRetentionConfig:
+    def distinct_roots(self) -> WorkerRetentionConfig:
         roots = {
             self.image_cache_root.expanduser().resolve(),
             self.image_mount_root.expanduser().resolve(),
@@ -81,7 +81,7 @@ class WorkerArtifactRetentionConfig(ContractModel):
         return self
 
 
-class WorkerArtifactRetentionResult(ContractModel):
+class WorkerRetentionResult(ContractModel):
     active_image_count: int = 0
     image_cache_scanned: int = 0
     image_cache_removed: int = 0
@@ -125,15 +125,15 @@ class _ArtifactCandidate:
 
 
 @dataclass(slots=True)
-class WorkerArtifactRetentionService:
+class WorkerRetentionService:
     instances: WorkerArtifactInstanceSource
-    config: WorkerArtifactRetentionConfig
+    config: WorkerRetentionConfig
     image_build_scratch: ImageBuildScratchManager | None = None
-    checkpoint_activity: CheckpointArtifactLeaseRegistry = field(
-        default_factory=CheckpointArtifactLeaseRegistry
+    checkpoint_activity: CheckpointLeaseRegistry = field(
+        default_factory=CheckpointLeaseRegistry
     )
 
-    def reconcile(self, *, now: datetime | None = None) -> WorkerArtifactRetentionResult:
+    def reconcile(self, *, now: datetime | None = None) -> WorkerRetentionResult:
         current = now or utc_now()
         active_image_ids = {
             instance.image_id
@@ -184,7 +184,7 @@ class WorkerArtifactRetentionService:
             if self.image_build_scratch is not None
             else None
         )
-        return WorkerArtifactRetentionResult(
+        return WorkerRetentionResult(
             active_image_count=len(active_image_ids),
             image_cache_scanned=image_cache.scanned,
             image_cache_removed=image_cache.removed,
@@ -333,11 +333,11 @@ def _stale_temporary_path(path: Path) -> bool:
 
 
 __all__ = [
-    "DEFAULT_WORKER_ARTIFACT_RETENTION_INTERVAL_SECONDS",
     "DEFAULT_WORKER_CHECKPOINT_CACHE_MAX_BYTES",
     "DEFAULT_WORKER_IMAGE_CACHE_MAX_BYTES",
     "DEFAULT_WORKER_IMAGE_MATERIALIZATION_MAX_BYTES",
-    "WorkerArtifactRetentionConfig",
-    "WorkerArtifactRetentionResult",
-    "WorkerArtifactRetentionService",
+    "DEFAULT_WORKER_RETENTION_INTERVAL_SECONDS",
+    "WorkerRetentionConfig",
+    "WorkerRetentionResult",
+    "WorkerRetentionService",
 ]

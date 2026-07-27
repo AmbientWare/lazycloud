@@ -9,12 +9,12 @@ from uuid import uuid4
 import pytest
 from api.server.services import ApiServices
 from control.service import ControlPlaneService
-from database.repositories.artifact_cleanup import ArtifactCleanupRepository
+from database.repositories.cleanup import CleanupRepository
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.images import CheckpointRepository, ImageBuildRepository, ImageRepository
 from database.repositories.source_cache import SourceCacheCleanupRepository
 from database.repositories.storage import (
-    ArtifactReferenceRepository,
+    ObjectReferenceRepository,
     ObjectRepository,
 )
 from shared.app_identity import SOURCE_PACKAGE_BUCKET
@@ -34,7 +34,7 @@ from shared.timestamps import utc_now
 from shared.workload_config import StubConfig, StubImageConfig
 from sqlalchemy import event
 from storage.checkpoint_retention import DurableCheckpointRetentionService
-from storage.retention import ArtifactRetentionConfig, ArtifactRetentionService
+from storage.retention import RetentionConfig, RetentionService
 from storage.service import (
     OBJECT_SHA256_METADATA_KEY,
     CacheStorage,
@@ -43,10 +43,6 @@ from storage.service import (
     ObjectStorage,
 )
 from storage_client.s3 import S3ObjectInfo
-from worker.artifact_retention import (
-    WorkerArtifactRetentionConfig,
-    WorkerArtifactRetentionService,
-)
 from worker.checkpoints import (
     WorkerCheckpointStatus,
     create_checkpoint_state_payload,
@@ -55,6 +51,10 @@ from worker.checkpoints import (
 )
 from worker.container_service.models import WorkerContainerServiceInstance
 from worker.container_service.state import LocalWorkerContainerInstanceStore
+from worker.retention import (
+    WorkerRetentionConfig,
+    WorkerRetentionService,
+)
 from worker_repository.checkpoint_records import CheckpointService
 
 
@@ -201,7 +201,7 @@ class _RetentionBatch:
         self.removed = removed
 
 
-class _RecordingArtifactRetention:
+class _RecordingRetention:
     def __init__(self, removed: int) -> None:
         self.removed = removed
         self.calls: list[datetime | None] = []
@@ -211,7 +211,7 @@ class _RecordingArtifactRetention:
         return _RetentionBatch(self.removed)
 
 
-class _FailingArtifactRetention:
+class _FailingRetention:
     def __init__(self) -> None:
         self.calls: list[datetime | None] = []
 
@@ -220,7 +220,7 @@ class _FailingArtifactRetention:
         raise RuntimeError("retention unavailable")
 
 
-def test_worker_artifact_retention_bounds_caches_and_preserves_active_images(
+def test_worker_retention_bounds_caches_and_preserves_active_images(
     tmp_path: Path,
 ) -> None:
     now = utc_now()
@@ -260,9 +260,9 @@ def test_worker_artifact_retention_bounds_caches_and_preserves_active_images(
             image_id="active",
         )
     )
-    result = WorkerArtifactRetentionService(
+    result = WorkerRetentionService(
         instances=instances,
-        config=WorkerArtifactRetentionConfig(
+        config=WorkerRetentionConfig(
             image_cache_root=image_cache,
             image_mount_root=image_mounts,
             checkpoint_root=checkpoints,
@@ -285,7 +285,7 @@ def test_worker_artifact_retention_bounds_caches_and_preserves_active_images(
     assert result.freed_bytes > 0
 
 
-def test_durable_artifact_retention_prunes_only_unreferenced_production_artifacts(
+def test_durable_retention_prunes_only_unreferenced_production_artifacts(
     isolated_services: ApiServices,
     tmp_path: Path,
 ) -> None:
@@ -408,11 +408,11 @@ def test_durable_artifact_retention_prunes_only_unreferenced_production_artifact
             data=b"data",
         )
 
-    result = ArtifactRetentionService(
+    result = RetentionService(
         context=isolated_services.context,
         object_storage=objects,
         cache_storage=cache,
-        config=ArtifactRetentionConfig(
+        config=RetentionConfig(
             image_archive_bucket="objects",
             checkpoint_bucket="objects",
             source_grace_seconds=1,
@@ -499,14 +499,14 @@ def test_source_retention_preserves_cleanup_target_through_later_workspace_delet
         key="sources/retention-before-workspace-delete.zip",
         data=b"cached source",
     )
-    service = ArtifactRetentionService(
+    service = RetentionService(
         context=isolated_services.context,
         object_storage=objects,
         cache_storage=CacheStorage(
             isolated_services.context,
             cache_client=MountedCacheClient(MountedCacheSettings(root=tmp_path / "cache")),
         ),
-        config=ArtifactRetentionConfig(
+        config=RetentionConfig(
             image_archive_bucket="objects",
             checkpoint_bucket="objects",
         ),
@@ -561,7 +561,7 @@ def test_source_retention_preserves_cleanup_target_through_later_workspace_delet
     assert summary.completed_count == 1
 
 
-def test_artifact_retention_preserves_selected_archive_and_removes_loser(
+def test_retention_preserves_selected_archive_and_removes_loser(
     isolated_services: ApiServices,
     tmp_path: Path,
 ) -> None:
@@ -599,14 +599,14 @@ def test_artifact_retention_preserves_selected_archive_and_removes_loser(
                 archive_sha256=selected_archive.sha256,
             )
         )
-    service = ArtifactRetentionService(
+    service = RetentionService(
         context=isolated_services.context,
         object_storage=objects,
         cache_storage=CacheStorage(
             isolated_services.context,
             cache_client=MountedCacheClient(MountedCacheSettings(root=tmp_path / "cache")),
         ),
-        config=ArtifactRetentionConfig(
+        config=RetentionConfig(
             image_archive_bucket="objects",
             checkpoint_bucket="objects",
             source_grace_seconds=1,
@@ -786,14 +786,14 @@ def test_source_and_image_candidates_recheck_references_before_physical_delete(
         object_client=client,
         default_bucket="objects",
     )
-    service = ArtifactRetentionService(
+    service = RetentionService(
         context=isolated_services.context,
         object_storage=objects,
         cache_storage=CacheStorage(
             isolated_services.context,
             cache_client=MountedCacheClient(MountedCacheSettings(root=tmp_path / "cache")),
         ),
-        config=ArtifactRetentionConfig(
+        config=RetentionConfig(
             image_archive_bucket="objects",
             checkpoint_bucket="objects",
         ),
@@ -865,14 +865,14 @@ def test_cleaned_image_tombstone_blocks_reference_until_republication(
     )
     with isolated_services.context.database.session() as session:
         ImageRepository(session).upsert(image)
-    service = ArtifactRetentionService(
+    service = RetentionService(
         context=isolated_services.context,
         object_storage=objects,
         cache_storage=CacheStorage(
             isolated_services.context,
             cache_client=MountedCacheClient(MountedCacheSettings(root=tmp_path / "cache")),
         ),
-        config=ArtifactRetentionConfig(
+        config=RetentionConfig(
             image_archive_bucket="objects",
             checkpoint_bucket="objects",
         ),
@@ -920,7 +920,7 @@ def test_cleaned_image_tombstone_blocks_reference_until_republication(
     with isolated_services.context.database.session() as session:
         images = ImageRepository(session)
         republished = images.upsert(republished_image)
-        immediately_eligible = ArtifactReferenceRepository(session).list_image_cleanup_candidates(
+        immediately_eligible = ObjectReferenceRepository(session).list_image_cleanup_candidates(
             excluded_image_ids=frozenset(),
             updated_before=republished_after,
             recent_build_after=republished_after,
@@ -979,7 +979,7 @@ def test_duplicate_build_cleanup_preserves_shared_path_and_cache_key(
         builds.upsert(old_build, workspace_id=workspace.id)
         builds.upsert(retained_build, workspace_id=workspace.id)
 
-    result = ArtifactRetentionService(
+    result = RetentionService(
         context=isolated_services.context,
         object_storage=ObjectStorage(
             isolated_services.context,
@@ -987,7 +987,7 @@ def test_duplicate_build_cleanup_preserves_shared_path_and_cache_key(
             default_bucket="objects",
         ),
         cache_storage=cache,
-        config=ArtifactRetentionConfig(
+        config=RetentionConfig(
             image_archive_bucket="objects",
             checkpoint_bucket="objects",
             build_retention_seconds=7 * 24 * 60 * 60,
@@ -1033,7 +1033,7 @@ def test_build_retention_age_starts_when_the_build_finishes(
         builds = ImageBuildRepository(session)
         builds.upsert(old_finished, workspace_id=workspace.id)
         builds.upsert(just_finished, workspace_id=workspace.id)
-        candidates = ArtifactReferenceRepository(session).list_build_cleanup_candidates(
+        candidates = ObjectReferenceRepository(session).list_build_cleanup_candidates(
             excluded_build_ids=frozenset(),
             finished_before=now - timedelta(seconds=1),
             recent_build_after=now - timedelta(seconds=1),
@@ -1071,7 +1071,7 @@ def test_image_cleanup_drains_high_cardinality_builds_in_bounded_batches(
                 ),
                 workspace_id=workspace.id,
             )
-    service = ArtifactRetentionService(
+    service = RetentionService(
         context=isolated_services.context,
         object_storage=ObjectStorage(
             isolated_services.context,
@@ -1082,7 +1082,7 @@ def test_image_cleanup_drains_high_cardinality_builds_in_bounded_batches(
             isolated_services.context,
             cache_client=MountedCacheClient(MountedCacheSettings(root=tmp_path / "cache")),
         ),
-        config=ArtifactRetentionConfig(
+        config=RetentionConfig(
             image_archive_bucket="objects",
             checkpoint_bucket="objects",
             max_items_per_cycle=7,
@@ -1159,7 +1159,7 @@ def test_resumed_image_cleanup_shares_one_build_budget_across_images(
     with isolated_services.context.database.session() as session:
         images = ImageRepository(session)
         builds = ImageBuildRepository(session)
-        claims = ArtifactCleanupRepository(session)
+        claims = CleanupRepository(session)
         for image_id in image_ids:
             images.upsert(ImageRecord(workspace_id=workspace.id, image_id=image_id))
             for index in range(6):
@@ -1180,7 +1180,7 @@ def test_resumed_image_cleanup_shares_one_build_budget_across_images(
                 workspace_id=workspace.id,
                 claimed_at=now,
             )
-    service = ArtifactRetentionService(
+    service = RetentionService(
         context=isolated_services.context,
         object_storage=ObjectStorage(
             isolated_services.context,
@@ -1191,7 +1191,7 @@ def test_resumed_image_cleanup_shares_one_build_budget_across_images(
             isolated_services.context,
             cache_client=MountedCacheClient(MountedCacheSettings(root=tmp_path / "cache")),
         ),
-        config=ArtifactRetentionConfig(
+        config=RetentionConfig(
             image_archive_bucket="objects",
             checkpoint_bucket="objects",
             max_items_per_cycle=7,
@@ -1310,7 +1310,7 @@ def test_artifact_reference_age_starts_when_the_build_finishes(
         builds = ImageBuildRepository(session)
         builds.upsert(build, workspace_id=workspace.id)
         builds.upsert(unfinished_terminal, workspace_id=workspace.id)
-        references = ArtifactReferenceRepository(session)
+        references = ObjectReferenceRepository(session)
         assert references.object_is_referenced(
             context_object_id,
             workspace_id=workspace.id,
@@ -1375,7 +1375,7 @@ def test_build_candidate_rechecks_status_before_deleting_physical_data(
             ),
             workspace_id=workspace.id,
         )
-    service = ArtifactRetentionService(
+    service = RetentionService(
         context=isolated_services.context,
         object_storage=ObjectStorage(
             isolated_services.context,
@@ -1386,7 +1386,7 @@ def test_build_candidate_rechecks_status_before_deleting_physical_data(
             isolated_services.context,
             cache_client=MountedCacheClient(MountedCacheSettings(root=tmp_path / "cache")),
         ),
-        config=ArtifactRetentionConfig(
+        config=RetentionConfig(
             image_archive_bucket="objects",
             checkpoint_bucket="objects",
         ),
@@ -1432,14 +1432,14 @@ def test_source_cleanup_claim_survives_crash_and_rejects_new_reference(
     with isolated_services.context.database.session() as session:
         candidate = ObjectRepository(session).get_owned(source.id)
     assert candidate is not None
-    service = ArtifactRetentionService(
+    service = RetentionService(
         context=isolated_services.context,
         object_storage=objects,
         cache_storage=CacheStorage(
             isolated_services.context,
             cache_client=MountedCacheClient(MountedCacheSettings(root=tmp_path / "cache")),
         ),
-        config=ArtifactRetentionConfig(
+        config=RetentionConfig(
             image_archive_bucket="objects",
             checkpoint_bucket="objects",
             source_grace_seconds=1,
@@ -1502,14 +1502,14 @@ def test_slow_object_delete_does_not_block_unrelated_database_write(
     with isolated_services.context.database.session() as session:
         candidate = ObjectRepository(session).get_owned(source.id)
     assert candidate is not None
-    service = ArtifactRetentionService(
+    service = RetentionService(
         context=isolated_services.context,
         object_storage=objects,
         cache_storage=CacheStorage(
             isolated_services.context,
             cache_client=MountedCacheClient(MountedCacheSettings(root=tmp_path / "cache")),
         ),
-        config=ArtifactRetentionConfig(
+        config=RetentionConfig(
             image_archive_bucket="objects",
             checkpoint_bucket="objects",
         ),

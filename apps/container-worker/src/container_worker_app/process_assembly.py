@@ -22,7 +22,6 @@ from worker.adapters import (
     WorkerRouteIdentity,
     WorkerRuntimeContainerStopper,
 )
-from worker.artifact_retention import WorkerArtifactRetentionService
 from worker.container_client.control import ContainerServiceClient
 from worker.container_execution import (
     ContainerAutomaticCheckpointCoordinator,
@@ -68,6 +67,7 @@ from worker.image_build_runtime_credentials import ImageBuildCredentialLoader
 from worker.monitoring import ContainerRuntimeMonitor
 from worker.repository_payloads import StreamWorkerEventsRequest
 from worker.request_mounts import WorkerRequestMountCleaner
+from worker.retention import WorkerRetentionService
 from worker.scheduler_requests import (
     WorkerSchedulerRequestContainerRepository,
     WorkerSchedulerRequestProcessor,
@@ -177,7 +177,7 @@ class WorkerProcessServices:
     worker_events: WorkerStreamEventHandler
     event_source: WorkerProcessEventSource | None
     processor: WorkerSchedulerRequestProcessor
-    artifact_retention: WorkerArtifactRetentionService | None = None
+    retention: WorkerRetentionService | None = None
 
 
 def build_worker_process_services(
@@ -198,7 +198,7 @@ def build_worker_process_services(
     finalization_dependencies: WorkerProcessFinalizationDependencies | None = None,
     image_build_dependencies: WorkerProcessImageBuildDependencies | None = None,
     source_cache_reconciler: WorkerSourceCacheReconciler | None = None,
-    artifact_retention: WorkerArtifactRetentionService | None = None,
+    retention: WorkerRetentionService | None = None,
 ) -> WorkerProcessServices:
     worker_repository = workers
     container_repository = containers
@@ -356,5 +356,5 @@ def build_worker_process_services(
             lifecycle=lifecycle,
             image_builds=image_builds,
         ),
-        artifact_retention=artifact_retention,
+        retention=retention,
     )

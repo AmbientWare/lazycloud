@@ -6,13 +6,13 @@ from datetime import timedelta
 from pathlib import Path
 
 from shared.timestamps import utc_now
-from worker.artifact_retention import (
-    WorkerArtifactRetentionConfig,
-    WorkerArtifactRetentionService,
-)
-from worker.checkpoint_activity import CheckpointArtifactLease, CheckpointArtifactLeaseRegistry
+from worker.checkpoint_activity import CheckpointArtifactLease, CheckpointLeaseRegistry
 from worker.container_service.models import WorkerContainerServiceInstance
 from worker.image_build_scratch import ImageBuildScratchManager
+from worker.retention import (
+    WorkerRetentionConfig,
+    WorkerRetentionService,
+)
 
 
 class _Instances:
@@ -42,9 +42,9 @@ def test_retention_preserves_active_local_clip_archive(tmp_path: Path) -> None:
     os.utime(active_archive, (old, old))
     os.utime(inactive_archive, (old, old))
 
-    result = WorkerArtifactRetentionService(
+    result = WorkerRetentionService(
         instances=_Instances(),
-        config=WorkerArtifactRetentionConfig(
+        config=WorkerRetentionConfig(
             image_cache_root=image_cache,
             image_mount_root=image_mounts,
             checkpoint_root=checkpoints,
@@ -59,7 +59,7 @@ def test_retention_preserves_active_local_clip_archive(tmp_path: Path) -> None:
     assert result.image_cache_removed == 1
 
 
-def test_retention_preserves_checkpoint_with_active_artifact_lease(tmp_path: Path) -> None:
+def test_retention_preserves_checkpoint_with_active_checkpoint_lease(tmp_path: Path) -> None:
     now = utc_now()
     image_cache = tmp_path / "images"
     image_mounts = tmp_path / "mounts"
@@ -81,11 +81,11 @@ def test_retention_preserves_checkpoint_with_active_artifact_lease(tmp_path: Pat
     for path in (active_checkpoint, active_archive, active_extract):
         os.utime(path, (old, old))
     os.utime(expired_checkpoint, (old, old))
-    activity = CheckpointArtifactLeaseRegistry()
+    activity = CheckpointLeaseRegistry()
     lease = activity.acquire(active_checkpoint.name)
-    retention = WorkerArtifactRetentionService(
+    retention = WorkerRetentionService(
         instances=_Instances(),
-        config=WorkerArtifactRetentionConfig(
+        config=WorkerRetentionConfig(
             image_cache_root=image_cache,
             image_mount_root=image_mounts,
             checkpoint_root=checkpoints,
@@ -115,7 +115,7 @@ def test_retention_preserves_checkpoint_with_active_artifact_lease(tmp_path: Pat
 
 
 def test_retention_guard_serializes_new_checkpoint_lease() -> None:
-    activity = CheckpointArtifactLeaseRegistry()
+    activity = CheckpointLeaseRegistry()
     acquire_started = threading.Event()
     acquire_finished = threading.Event()
     acquired_lease: list[CheckpointArtifactLease] = []
@@ -161,9 +161,9 @@ def test_retention_reclaims_interrupted_image_build_scratch_when_cache_pruning_d
     old = (now - timedelta(minutes=5)).timestamp()
     os.utime(interrupted.root, (old, old))
 
-    result = WorkerArtifactRetentionService(
+    result = WorkerRetentionService(
         instances=_Instances(),
-        config=WorkerArtifactRetentionConfig(
+        config=WorkerRetentionConfig(
             image_cache_root=image_cache,
             image_mount_root=image_mounts,
             checkpoint_root=checkpoints,

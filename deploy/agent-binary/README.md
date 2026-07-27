@@ -7,15 +7,15 @@ without a host Python installation.
 Build and stage both architectures from the repository root:
 
 ```sh
-uv run --no-project python deploy/agent-artifact/build.py build \
+uv run --no-project python deploy/agent-binary/build.py build \
   --version 0.1.0 \
-  --output dist/agent-artifacts
+  --output dist/agent-binarys
 ```
 
 The output is immutable publication input, not an external publication:
 
 ```text
-dist/agent-artifacts/
+dist/agent-binarys/
   0.1.0/
     manifest.json
     lazycloud-agent-linux-amd64
@@ -26,8 +26,8 @@ The Docker build runs `--help` on each target executable in both its build
 environment and Amazon Linux 2023 before export. The stager then computes each
 SHA-256 digest and records it in `manifest.json`.
 Mount the output root read-only at `LAZYCLOUD_AGENT_BINARY_DIR`. Set
-`LAZYCLOUD_AGENT_ARTIFACT_VERSION` to the directory name and
-`LAZYCLOUD_AGENT_ARTIFACT_SHA256_BY_ARCH` to a JSON object containing the
+`LAZYCLOUD_AGENT_BINARY_VERSION` to the directory name and
+`LAZYCLOUD_AGENT_BINARY_SHA256_BY_ARCH` to a JSON object containing the
 manifest's `linux/amd64` and `linux/arm64` digests. Attached hosts select and
 verify the digest for their architecture; AWS node classes consume `amd64`.
 

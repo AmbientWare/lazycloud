@@ -72,7 +72,7 @@ class AwsManagedPoolBootstrap(AwsManagedPoolModel):
     enrollment_request_id: str = Field(pattern=_ENROLLMENT_PATTERN.pattern)
     agent_version: str = Field(pattern=_SAFE_VERSION_PATTERN.pattern)
     agent_sha256: str = Field(pattern=_DIGEST_PATTERN.pattern)
-    agent_artifact_url: str
+    agent_binary_url: str
     worker_image_digest: str = Field(pattern=_WORKER_IMAGE_PATTERN.pattern)
     gpu_count: int = Field(default=0, ge=0, le=8)
 
@@ -92,9 +92,9 @@ class AwsManagedPoolBootstrap(AwsManagedPoolModel):
             raise ValueError("control-plane URL must be an HTTPS origin")
         return url
 
-    @field_validator("agent_artifact_url")
+    @field_validator("agent_binary_url")
     @classmethod
-    def validate_agent_artifact_url(cls, value: str) -> str:
+    def validate_agent_binary_url(cls, value: str) -> str:
         url = value.strip()
         parsed = urlparse(url)
         if (
@@ -108,7 +108,7 @@ class AwsManagedPoolBootstrap(AwsManagedPoolModel):
         return url
 
 
-class AwsManagedPoolArtifacts(AwsManagedPoolModel):
+class AwsManagedPoolBinaries(AwsManagedPoolModel):
     agent_version: str = Field(pattern=_SAFE_VERSION_PATTERN.pattern)
     agent_sha256: str = Field(pattern=_DIGEST_PATTERN.pattern)
     worker_image_digest: str = Field(pattern=_WORKER_IMAGE_PATTERN.pattern)
@@ -1152,7 +1152,7 @@ set -Eeuo pipefail
 CONTROL_PLANE_URL=__CONTROL_PLANE_URL__
 ENROLLMENT_REQUEST_ID=__ENROLLMENT_REQUEST_ID__
 AGENT_SHA256=__AGENT_SHA256__
-AGENT_ARTIFACT_URL=__AGENT_ARTIFACT_URL__
+AGENT_BINARY_URL=__AGENT_BINARY_URL__
 WORKER_IMAGE_DIGEST=__WORKER_IMAGE_DIGEST__
 GPU_COUNT=__GPU_COUNT__
 TAILSCALE_VERSION=__TAILSCALE_VERSION__
@@ -1341,7 +1341,7 @@ ensure_agent() {
     return
   fi
   agent_download=$(mktemp "${AGENT_BIN}.download.XXXXXX")
-  curl -fsSL --retry 5 --retry-delay 2 "$AGENT_ARTIFACT_URL" -o "$agent_download"
+  curl -fsSL --retry 5 --retry-delay 2 "$AGENT_BINARY_URL" -o "$agent_download"
   if [ "$(sha256sum "$agent_download" | awk '{print $1}')" != "$AGENT_SHA256" ]; then
     rm -f "$agent_download"
     bootstrap_error 'agent artifact SHA-256 mismatch'
@@ -1415,7 +1415,7 @@ def aws_managed_pool_bootstrap_script(spec: AwsManagedPoolSpec) -> str:
         "__CONTROL_PLANE_URL__": bootstrap.control_plane_url,
         "__ENROLLMENT_REQUEST_ID__": bootstrap.enrollment_request_id,
         "__AGENT_SHA256__": bootstrap.agent_sha256,
-        "__AGENT_ARTIFACT_URL__": bootstrap.agent_artifact_url,
+        "__AGENT_BINARY_URL__": bootstrap.agent_binary_url,
         "__WORKER_IMAGE_DIGEST__": bootstrap.worker_image_digest,
         "__GPU_COUNT__": str(bootstrap.gpu_count),
         "__TAILSCALE_VERSION__": TAILSCALE_INSTALL_VERSION,

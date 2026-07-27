@@ -295,7 +295,7 @@ def _bootstrap(pool: ComputePoolRecord, offer: ComputeOffer) -> ProviderPoolBoot
         enrollment_request_id=pool.id,
         agent_version="0.1.0",
         agent_sha256="a" * 64,
-        agent_artifact_url=(
+        agent_binary_url=(
             f"https://s3.us-east-1.amazonaws.com/releases/agents/0.1.0/{'a' * 64}/"
             "lazycloud-agent-linux-amd64"
         ),

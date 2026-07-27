@@ -60,7 +60,7 @@ from worker.managed_runtime import (
     managed_runtime_python_version,
     plan_managed_runtime,
 )
-from worker.managed_runtime_artifacts import (
+from worker.managed_runtime_catalog import (
     ManagedRuntimeCatalog,
     load_managed_runtime_catalog,
 )
@@ -245,7 +245,7 @@ class OciRuntimeSpecBuilder:
     sandbox_supervisor_path: str = SANDBOX_SUPERVISOR_CONTAINER_PATH
     sandbox_upload_root: Path = Path(WORKER_CONTAINER_UPLOADS_HOST_PATH)
     sandbox_upload_mount_path: str = WORKER_CONTAINER_UPLOADS_MOUNT_PATH
-    managed_runtime_artifact_root: Path | None = None
+    managed_runtime_root: Path | None = None
     storage_mount_hosts: bool = True
     mount_worker_resolv_conf: bool = True
     _managed_runtime_catalogs: dict[tuple[str, LinuxArchitecture], ManagedRuntimeCatalog] = field(
@@ -336,7 +336,7 @@ class OciRuntimeSpecBuilder:
         python_version: str,
         architecture: LinuxArchitecture,
     ) -> ManagedRuntimeCatalog:
-        root = self.managed_runtime_artifact_root
+        root = self.managed_runtime_root
         if root is None:
             raise RuntimeError("managed runtime artifact catalog is unavailable")
         with self._managed_runtime_catalog_lock:

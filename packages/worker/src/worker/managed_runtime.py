@@ -10,9 +10,9 @@ from shared.contracts import ContractModel
 from shared.image_building.authoring import LinuxArchitecture
 
 from worker.execution import OciMount, OciMountType
-from worker.managed_runtime_artifacts import ManagedRuntimeCatalog
+from worker.managed_runtime_catalog import ManagedRuntimeCatalog
 
-MANAGED_RUNTIME_ARTIFACT_ROOT = Path("/opt/lazycloud/managed-runtime-artifacts")
+MANAGED_RUNTIME_ROOT = Path("/opt/lazycloud/managed-runtime")
 MANAGED_RUNTIME_CONTAINER_ROOT = "/opt/lazycloud/managed-runtime"
 MANAGED_RUNTIME_LAUNCHER_PATH = f"{MANAGED_RUNTIME_CONTAINER_ROOT}/launcher.py"
 MANAGED_RUNTIME_CATALOG_DIGEST_ENV = "LAZYCLOUD_MANAGED_RUNTIME_CATALOG_DIGEST"
@@ -113,12 +113,12 @@ def _managed_runtime_command(command: Sequence[str]) -> list[str]:
 
 
 __all__ = [
-    "MANAGED_RUNTIME_ARTIFACT_ROOT",
     "MANAGED_RUNTIME_CATALOG_DIGEST_ENV",
     "MANAGED_RUNTIME_CONTAINER_ROOT",
     "MANAGED_RUNTIME_DIGEST_ENV",
     "MANAGED_RUNTIME_LAUNCHER_PATH",
     "MANAGED_RUNTIME_MODULES",
+    "MANAGED_RUNTIME_ROOT",
     "MANAGED_RUNTIME_STARTUP_KINDS",
     "ManagedRuntimePlan",
     "managed_runtime_python_version",

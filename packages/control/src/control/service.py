@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from database.records.apps import StubKind, StubRecord
 from database.repositories.apps import AppRepository, DeploymentRepository, StubRepository
-from database.repositories.artifact_cleanup import ArtifactCleanupRepository
+from database.repositories.cleanup import CleanupRepository
 from database.repositories.common import (
     GlobalTableRepository,
     TableRepositoryConfig,
@@ -582,7 +582,7 @@ class ControlPlaneService:
                 else StubConfig.model_validate(dict(config) if config is not None else {})
             )
             if existing is None:
-                ArtifactCleanupRepository(session).assert_stub_config_available(
+                CleanupRepository(session).assert_stub_config_available(
                     config_payload,
                     workspace_id=workspace_record.id,
                     metadata=metadata_payload,
@@ -614,7 +614,7 @@ class ControlPlaneService:
                 existing_config = _stub_config_payload(existing.config)
                 existing_config.update(_stub_config_payload(config_payload))
                 existing.config = StubConfig.model_validate(existing_config)
-                ArtifactCleanupRepository(session).assert_stub_config_available(
+                CleanupRepository(session).assert_stub_config_available(
                     existing.config,
                     workspace_id=workspace_record.id,
                     metadata=existing.metadata,

@@ -118,7 +118,7 @@ agentArtifact:
     # Use an existing claim only when the release artifact is mirrored into
     # cluster storage by the operator. It is mutually exclusive with url.
     existingClaim: ""
-    mountPath: /var/lib/lazycloud/agent-artifacts
+    mountPath: /var/lib/lazycloud/agent-binarys
 
 awsCapacity:
   enabled: false
@@ -357,7 +357,7 @@ scheduler:
   replicas: 1
   intervalSeconds: 1
   containerLimit: 100
-  artifactRetention:
+  retention:
     enabled: true
     intervalSeconds: 3600
     retryInitialSeconds: 30
@@ -514,7 +514,7 @@ containerWorkers:
     mode: juicefs
     baseMountPath: /workspace
     mountpointBinary: ms3
-  artifactRetention:
+  retention:
     enabled: true
     intervalSeconds: 300
     imageCacheMaxBytes: "21474836480"
