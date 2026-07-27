@@ -53,6 +53,10 @@ class _Ec2:
         self.volume_missing = False
         self.volume_results_empty = False
         self.volume_filters: list[_Filter] | None = None
+        self.root_device_name = "/dev/xvda"
+
+    def describe_images(self, *, ImageIds: list[str]) -> Mapping[str, object]:
+        return {"Images": [{"ImageId": ImageIds[0], "RootDeviceName": self.root_device_name}]}
 
     def describe_instances(self, *, InstanceIds: list[str]) -> Mapping[str, object]:
         instances: list[Mapping[str, object]] = [

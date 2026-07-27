@@ -8,7 +8,7 @@ the stack-owned control role through STS, verifies the control CloudFormation
 stack, then applies ``deploy/compose/aws-profile.yaml`` to recreate only the
 credential-consuming services and waits for their health.
 
-Conformance with the accepted repair contract (board/loop.md, 2026-07-23):
+Conformance with the accepted repair contract (2026-07-23):
 
 - The stack-owned non-root control role is validated: STS must report an
   assumed-role identity for the exact role configured on the selected profile,
