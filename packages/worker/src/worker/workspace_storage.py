@@ -152,6 +152,7 @@ class WorkerWorkspaceStorageManager:
                     continue
                 self._mounts.pop(state.workspace_name, None)
                 shutil.rmtree(record.mount_path, ignore_errors=True)
+                self._remove_cache_dir(state.workspace_name)
         return results
 
     def _mount_state(self, workspace_name: str) -> WorkspaceMountState | None:
@@ -200,6 +201,12 @@ class WorkerWorkspaceStorageManager:
             system=self.system,
         )
 
+    def _remove_cache_dir(self, workspace_name: str) -> None:
+        shutil.rmtree(
+            posixpath.join(self.config.geesefs.cache_root, workspace_name),
+            ignore_errors=True,
+        )
+
     def _unmount_existing(self, workspace_name: str) -> None:
         record = self._mounts.pop(workspace_name, None)
         if record is None:
@@ -210,6 +217,7 @@ class WorkerWorkspaceStorageManager:
                 result.output or result.reason or "workspace storage unmount failed"
             )
         shutil.rmtree(record.mount_path, ignore_errors=True)
+        self._remove_cache_dir(workspace_name)
 
     def _lock(self, workspace_name: str) -> threading.Lock:
         with self._locks_lock:

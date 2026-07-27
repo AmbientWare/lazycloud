@@ -162,6 +162,14 @@ class GeeseFsMountManager(StorageMountManager):
         Path(local_path).mkdir(parents=True, exist_ok=True)
         if self.system.mount_checker(local_path):
             return _status_result(self.mode, local_path, StorageMountStatus.AlreadyMounted)
+        # A mount torn down moments earlier can leave a dead FUSE entry behind.
+        # Mounting over one times out, so clear it first; this is a no-op when
+        # the path is genuinely free.
+        retry_force_unmount(local_path, self.system, mode=self.mode)
+        if self.config.cache_dir:
+            # geesefs will not create its own cache directory and stalls
+            # without one, which surfaces only as a mount timeout.
+            Path(self.config.cache_dir).mkdir(parents=True, exist_ok=True)
         command = geesefs_command(self.config, local_path)
         env = self._env()
         self.mount_cmd = self.system.start_command(command, env or None)
@@ -173,10 +181,15 @@ class GeeseFsMountManager(StorageMountManager):
             timeout_seconds=DEFAULT_MOUNT_TIMEOUT_SECONDS,
         )
         if mounted.ok:
+            LOGGER.info("geesefs mounted %s at %s", self.config.mount_target, local_path)
             return _status_result(self.mode, local_path, StorageMountStatus.Mounted, command, env)
         output = mounted.output
         LOGGER.warning(
-            "geesefs mount failed for %s: %s\n%s", local_path, mounted.reason, output.strip()
+            "geesefs mount failed for %s (%s): %s\n%s",
+            local_path,
+            self.config.mount_target,
+            mounted.reason,
+            output.strip() or "<no output from geesefs>",
         )
         self._terminate_mount_cmd()
         return StorageMountResult(
@@ -192,6 +205,8 @@ class GeeseFsMountManager(StorageMountManager):
     def unmount(self, local_path: str) -> StorageMountResult:
         result = retry_force_unmount(local_path, self.system, mode=self.mode)
         self._terminate_mount_cmd()
+        if not result.ok:
+            LOGGER.warning("geesefs unmount of %s failed: %s", local_path, result.reason)
         return result.model_copy(update={"mode": self.mode})
 
     def _env(self) -> dict[str, str]:
