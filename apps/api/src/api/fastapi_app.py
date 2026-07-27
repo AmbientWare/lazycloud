@@ -127,6 +127,7 @@ def _create_app(runtime: ControlPlaneRuntime) -> FastAPI:
                     runtime.stop,
                 )
                 api_services = runtime.start()
+                _provision_workspace_storage(api_services)
                 cleanup.callback(
                     _unpublish_api_services,
                     lifespan_app,
@@ -420,3 +421,15 @@ def main() -> None:
         host="127.0.0.1",
         port=9000,
     )
+
+
+def _provision_workspace_storage(api_services: ApiServices) -> None:
+    """Provision workspace storage here, where the object-store client already lives.
+
+    The bootstrap workspace is created by the identity repository, which owns no
+    storage client. Doing it at control-plane start keeps that credential in one
+    place instead of handing it to the admin CLI.
+    """
+    provisioned = api_services.control_plane_service.provision_missing_workspace_storage()
+    for name in provisioned:
+        logger.info("provisioned workspace storage for %s", name)

@@ -141,74 +141,8 @@ def test_workspace_create_sets_up_default_storage_and_primary_token(
     )
 
 
-def test_connected_workspace_creation_reuses_physical_bucket_without_persisting_session(
-    isolated_services: ApiServices,
-) -> None:
-    bucket_client = BucketClient(
-        settings=S3ObjectStoreSettings(
-            bucket="connected-physical-bucket",
-            endpoint_url="https://s3.us-east-1.amazonaws.com",
-            presigned_endpoint_url="https://s3.us-east-1.amazonaws.com",
-            region_name="us-east-1",
-            access_key_id="temporary-access",
-            secret_access_key="temporary-secret",
-            session_token="temporary-session",
-            workspace_bucket_mode="shared",
-            force_path_style=False,
-        )
-    )
-    service = ControlPlaneService(
-        isolated_services.context,
-        workspace_storage_client=bucket_client,
-    )
-
-    created = service.create_workspace("connected-tenant")
-
-    assert created.workspace.storage.bucket == "connected-physical-bucket"
-    assert created.workspace.storage.prefix == created.workspace_id
-    assert created.workspace.storage.config == {
-        "endpoint_url": "https://s3.us-east-1.amazonaws.com",
-        "force_path_style": False,
-        "region": "us-east-1",
-    }
-    assert bucket_client.created == []
-    assert bucket_client.validated == ["connected-physical-bucket"]
 
 
-def test_connected_workspace_creation_rejects_per_workspace_storage_overrides(
-    isolated_services: ApiServices,
-) -> None:
-    bucket_client = BucketClient(
-        settings=S3ObjectStoreSettings(
-            bucket="connected-physical-bucket",
-            endpoint_url="https://s3.us-east-1.amazonaws.com",
-            presigned_endpoint_url="https://s3.us-east-1.amazonaws.com",
-            region_name="us-east-1",
-            access_key_id="temporary-access",
-            secret_access_key="temporary-secret",
-            session_token="temporary-session",
-            workspace_bucket_mode="shared",
-            force_path_style=False,
-        )
-    )
-    service = ControlPlaneService(
-        isolated_services.context,
-        workspace_storage_client=bucket_client,
-    )
-    workspace = service.upsert_workspace("connected-tenant")
-
-    with pytest.raises(
-        WorkspaceStorageError,
-        match="does not accept per-workspace configuration",
-    ):
-        service.create_workspace_storage(
-            workspace.id,
-            config={"access_key": "must-not-be-persisted"},
-        )
-
-    assert service.get_workspace(workspace.id).storage.bucket is None
-    assert bucket_client.created == []
-    assert bucket_client.validated == []
 
 
 def test_workspace_storage_creation_validates_before_persisting(

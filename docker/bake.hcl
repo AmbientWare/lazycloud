@@ -12,7 +12,6 @@ group "default" {
     "database-bootstrap",
     "agent",
     "container-worker",
-    "storage-gateway",
   ]
 }
 
@@ -82,9 +81,3 @@ target "container-worker" {
   tags       = ["container-worker:${TAG}"]
 }
 
-target "storage-gateway" {
-  context    = "."
-  dockerfile = "docker/Dockerfile.storage-gateway"
-  target     = "storage-gateway"
-  tags       = ["storage-gateway:${TAG}"]
-}

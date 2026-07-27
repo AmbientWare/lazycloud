@@ -45,7 +45,6 @@ class S3ObjectStoreSettings(BaseSettings):
     secret_access_key: str = Field(default=LOCAL_OBJECT_STORE_SECRET_ACCESS_KEY, repr=False)
     session_token: str = Field(default="", repr=False)
     credential_expires_at: datetime | None = None
-    workspace_bucket_mode: Literal["dedicated", "shared"] = "dedicated"
     force_path_style: bool = True
     transfer_multipart_threshold_bytes: int = 64 * 1024 * 1024
     transfer_multipart_chunk_size_bytes: int = 64 * 1024 * 1024
