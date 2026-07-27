@@ -1412,7 +1412,8 @@ def build_production_worker_process_services(
         publish_source_to_cache=cache_server is not None,
     )
     gpu_assigner = _gpu_assigner(config)
-    MountedDataStorageManager(_worker_data_storage_config(config)).ensure_mounted()
+    if _data_storage_configured(config):
+        MountedDataStorageManager(_worker_data_storage_config(config)).ensure_mounted()
     workspace_storage_mounter = (
         WorkerWorkspaceStorageManager(
             config=WorkspaceStorageConfig(
@@ -1580,6 +1581,22 @@ def _container_cost_resolver(
         token=config.container_cost_hook_token,
         timeout_seconds=config.container_cost_hook_timeout_seconds,
     )
+
+
+def _data_storage_configured(config: ProductionWorkerSettings) -> bool:
+    """Whether this worker was given a durable data store to mount.
+
+    A worker without one still runs ordinary work; it simply cannot back
+    platform volumes, and requests that need one are refused rather than served
+    from local disk.
+    """
+    if config.resolved_data_storage_mode is StorageMountMode.Local:
+        return False
+    if not config.data_storage_bucket or not config.data_storage_endpoint_url:
+        return False
+    if config.resolved_data_storage_mode is StorageMountMode.JuiceFs:
+        return bool(config.data_storage_juicefs_redis_url)
+    return True
 
 
 def _volume_store_probe(config: ProductionWorkerSettings) -> Callable[[], bool]:
