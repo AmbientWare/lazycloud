@@ -466,6 +466,7 @@ source = { editable = "apps/cli" }
 dependencies = [
     { name = "agent" },
     { name = "database" },
+    { name = "foundation" },
     { name = "identity" },
     { name = "lazycloud" },
     { name = "lazycloud-shared" },
@@ -478,6 +479,7 @@ dependencies = [
 requires-dist = [
     { name = "agent", editable = "packages/agent" },
     { name = "database", editable = "packages/database" },
+    { name = "foundation", editable = "packages/foundation" },
     { name = "identity", editable = "packages/identity" },
     { name = "lazycloud", editable = "packages/lazycloud" },
     { name = "lazycloud-shared", editable = "packages/shared" },

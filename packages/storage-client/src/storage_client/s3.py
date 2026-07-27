@@ -52,7 +52,6 @@ class S3ObjectStoreSettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_OBJECT_STORE_",
-        env_file=".env",
         extra="ignore",
     )
 
