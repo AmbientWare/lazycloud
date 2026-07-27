@@ -160,6 +160,11 @@ class _MultipartUpload(TypedDict):
     Parts: list[_CompletedPart]
 
 
+class _CopySource(TypedDict):
+    Bucket: str
+    Key: str
+
+
 class _DeleteTarget(TypedDict):
     Key: str
 
@@ -280,6 +285,11 @@ class _DeleteObjectClient(Protocol):
 
 
 @runtime_checkable
+class _CopyObjectClient(Protocol):
+    def copy_object(self, *, Bucket: str, Key: str, CopySource: _CopySource) -> None: ...
+
+
+@runtime_checkable
 class _BucketClient(Protocol):
     def create_bucket(
         self,
@@ -320,6 +330,7 @@ class _FullS3Client(
     _PresignClient,
     _MultipartClient,
     _DeleteObjectClient,
+    _CopyObjectClient,
     _BucketClient,
     _ListObjectsClient,
     _DeleteObjectsClient,
@@ -338,6 +349,7 @@ type S3ClientCapabilities = (
     | _PresignClient
     | _MultipartClient
     | _DeleteObjectClient
+    | _CopyObjectClient
     | _BucketClient
     | _ListObjectsClient
     | _DeleteObjectsClient
@@ -721,6 +733,24 @@ class S3ObjectStoreClient(Generic[S3ClientT]):
         if not isinstance(client, _DeleteObjectClient):
             raise TypeError("configured S3 client does not support object deletion")
         client.delete_object(Bucket=bucket or self.settings.bucket, Key=key)
+
+    def copy(
+        self,
+        source_key: str,
+        destination_key: str,
+        *,
+        bucket: str | None = None,
+        source_bucket: str | None = None,
+    ) -> None:
+        client = self.client
+        if not isinstance(client, _CopyObjectClient):
+            raise TypeError("configured S3 client does not support server-side copies")
+        target_bucket = bucket or self.settings.bucket
+        client.copy_object(
+            Bucket=target_bucket,
+            Key=destination_key,
+            CopySource=_CopySource(Bucket=source_bucket or target_bucket, Key=source_key),
+        )
 
     def create_bucket(self, bucket: str | None = None) -> None:
         target_bucket = bucket or self.settings.bucket

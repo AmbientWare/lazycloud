@@ -12,7 +12,7 @@ from control.service import ControlPlaneService
 from database.types import DatabaseSession
 from execution.mounts import volume_container_mount_paths
 from identity.auth import AuthError, AuthService
-from pydantic import JsonValue, field_validator
+from pydantic import field_validator
 from shared.containers import ContainerRecord
 from shared.contracts import ContractModel
 from shared.env import GATEWAY_TOKEN_ENV
@@ -335,14 +335,13 @@ class WorkerCredentialService:
 
 
 def workspace_storage_credentials(storage: WorkspaceStorageConfig) -> WorkspaceStorageCredentials:
-    config = storage.config
     return WorkspaceStorageCredentials(
-        endpoint_url=_config_text(config, "endpoint_url"),
-        region=_config_text(config, "region"),
+        endpoint_url=storage.endpoint_url,
+        region=storage.region,
         bucket_name=storage.bucket or "",
-        access_key=_config_text(config, "access_key"),
-        secret_key=_config_text(config, "secret_key"),
-        force_path_style=_config_bool(config, "force_path_style"),
+        access_key=storage.access_key,
+        secret_key=storage.secret_key,
+        force_path_style=storage.force_path_style,
     )
 
 
@@ -390,24 +389,3 @@ def _credential_source_mount_paths(mount_path: str) -> tuple[str, ...]:
     if root and root != canonical:
         return (canonical, root)
     return (canonical,)
-
-
-def _config_text(config: dict[str, JsonValue], key: str) -> str:
-    return _raw_text(config.get(key))
-
-
-def _config_bool(config: dict[str, JsonValue], key: str) -> bool:
-    value = config.get(key)
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.lower() in {"1", "true", "yes", "on"}
-    return False
-
-
-def _raw_text(value: JsonValue) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value
-    return str(value)

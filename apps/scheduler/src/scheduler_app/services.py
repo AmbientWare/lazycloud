@@ -91,8 +91,11 @@ from storage.retention import (
 from storage.retention_settings import ArtifactRetentionSettings
 from storage.service import CacheStorage, ObjectStorage
 from storage.volume_filesystem import (
-    JuiceFsGatewaySettings,
-    JuiceFsGatewayVolumeFilesystem,
+    WorkspaceVolumeFilesystem,
+    WorkspaceVolumeStore,
+    WorkspaceVolumeStoreResolver,
+    workspace_presign_endpoint,
+    workspace_volume_store,
 )
 from storage.volume_metering import PersistentVolumeMeteringService
 from storage_client.s3 import S3ObjectStoreClient, S3ObjectStoreSettings
@@ -115,7 +118,6 @@ class SchedulerStorageSettings:
     image_archive: ImageArchiveSettings
     artifact_retention: ArtifactRetentionSettings
     volume_metering: VolumeMeteringSettings
-    juicefs_gateway: JuiceFsGatewaySettings | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,7 +204,12 @@ class SchedulerAppServices:
         )
         volume_metering = PersistentVolumeMeteringService.from_settings(
             context,
-            filesystem=JuiceFsGatewayVolumeFilesystem.from_settings(storage.juicefs_gateway),
+            filesystem=WorkspaceVolumeFilesystem(
+                resolve_store=_workspace_volume_store_resolver(
+                    control_plane,
+                    storage.object_store,
+                )
+            ),
             interval_seconds=storage.volume_metering.interval_seconds,
         )
         object_storage = ObjectStorage.from_settings(context, storage.object_store)
@@ -429,3 +436,21 @@ def scheduler_tailnet_services(
         else UnavailableTailnetCleanupService(cleanup_store)
     )
     return active_control, cleanup
+
+
+def _workspace_volume_store_resolver(
+    control_plane: ControlPlaneService,
+    object_store: S3ObjectStoreSettings,
+) -> WorkspaceVolumeStoreResolver:
+    def resolve(workspace_id: str) -> WorkspaceVolumeStore:
+        storage = control_plane.get_workspace(workspace_id).storage
+        return workspace_volume_store(
+            storage,
+            presigned_endpoint_url=workspace_presign_endpoint(
+                storage,
+                default_endpoint_url=object_store.endpoint_url,
+                default_presigned_endpoint_url=object_store.presigned_endpoint_url,
+            ),
+        )
+
+    return resolve
