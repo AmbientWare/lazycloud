@@ -159,12 +159,14 @@ def test_agent_routes_use_service_owned_join_and_agent_tokens(
     assert rejected_join.status_code == 400
     assert "join token" in _response_string(rejected_join, "detail")
     assert rejected_stream.status_code == 200
-    assert _response_object(rejected_stream) == {
-        "ok": False,
-        "err_msg": "agent token is no longer current",
-        "routes": [],
-        "slots": [],
-    }
+    # A stale token is rejected and carries no work back. The rest of the
+    # payload is defaults, so matching it whole would fail whenever the contract
+    # gains a field without the rejection itself changing.
+    rejected_stream_body = _response_object(rejected_stream)
+    assert rejected_stream_body["ok"] is False
+    assert rejected_stream_body["err_msg"] == "agent token is no longer current"
+    assert rejected_stream_body["routes"] == []
+    assert rejected_stream_body["slots"] == []
     assert rejected_telemetry.status_code == 200
     assert _response_object(rejected_telemetry) == {
         "ok": False,
