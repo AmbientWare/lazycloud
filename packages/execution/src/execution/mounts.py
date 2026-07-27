@@ -6,18 +6,21 @@ from collections.abc import Iterable, Mapping
 from database.repositories.storage import ObjectRepository
 from pydantic import BaseModel, JsonValue, TypeAdapter
 from shared.container_requests import (
+    DEFAULT_DATA_STORAGE_PATH,
     DEFAULT_OBJECTS_PATH,
     DEFAULT_OUTPUTS_PATH,
-    DEFAULT_VOLUMES_PATH,
+    DEFAULT_VOLUMES_PREFIX,
     WORKER_CONTAINER_VOLUME_PATH,
     WORKER_USER_CODE_VOLUME,
     WORKER_USER_OUTPUT_VOLUME,
     RequestMount,
     RequestMountPointConfig,
     RequestMountType,
+    RequestVolumeStoreConfig,
 )
 from shared.mounts import MountAuthMode, validate_mount_auth
 from storage.service import ObjectStorage
+from storage.volume_filesystem import JuiceFsGatewaySettings
 
 from execution.context import ExecutionContext
 from execution.volumes.records import VolumeService
@@ -146,13 +149,15 @@ def configured_volume_mounts(
             fallback_name=name,
         )
         external = _is_external_volume_config(config)
-        if external:
-            local_path = ""
-        else:
+        volume_store: RequestVolumeStoreConfig | None = None
+        if not external:
             record = volume_service.get(name, workspace=workspace_id)
-            local_path = platform_volume_local_path(
-                workspace_id=workspace_id,
-                volume_id=record.id,
+            volume_store = RequestVolumeStoreConfig(
+                filesystem_name=platform_volume_filesystem_name(),
+                relative_path=platform_volume_relative_path(
+                    workspace_id=workspace_id,
+                    volume_id=record.id,
+                ),
             )
         mount = _volume_request_mount(
             name=name,
@@ -162,7 +167,7 @@ def configured_volume_mounts(
             link_path=_volume_link_path(container_id, mount_path),
             read_only=read_only,
             config=config,
-            local_path=local_path,
+            volume_store=volume_store,
         )
         if root_mount_path and root_mount_path != canonical_mount_path:
             mounts.append(
@@ -174,7 +179,7 @@ def configured_volume_mounts(
                     link_path="",
                     read_only=read_only,
                     config=config,
-                    local_path=local_path,
+                    volume_store=volume_store,
                 )
             )
         mounts.append(mount)
@@ -213,7 +218,7 @@ def _volume_request_mount(
     link_path: str,
     read_only: bool,
     config: Mapping[str, JsonValue],
-    local_path: str = "",
+    volume_store: RequestVolumeStoreConfig | None = None,
 ) -> RequestMount:
     if _is_external_volume_config(config):
         auth_mode = _mount_auth_mode(config)
@@ -237,28 +242,49 @@ def _volume_request_mount(
                 force_path_style=_config_bool(config, "force_path_style"),
             ),
         )
+    store = _required_platform_volume_store(volume_store)
     return RequestMount(
-        local_path=_required_platform_volume_path(local_path),
+        local_path=posixpath.join(store.root_path, store.relative_path),
         mount_path=mount_path,
         link_path=link_path,
         read_only=read_only,
         mount_type=RequestMountType.Volume,
+        volume_config=store,
     )
 
 
-def platform_volume_local_path(*, workspace_id: str, volume_id: str) -> str:
+def platform_volume_filesystem_name() -> str:
+    """Name of the JuiceFS filesystem holding platform volumes.
+
+    The gateway serves that filesystem as its bucket, so its configured bucket
+    name is the filesystem name; do not introduce a second source of truth.
+    """
+    return JuiceFsGatewaySettings().bucket
+
+
+def platform_volume_relative_path(*, workspace_id: str, volume_id: str) -> str:
+    """Path of a volume inside the platform store, matching the gateway key space."""
     return posixpath.join(
-        DEFAULT_VOLUMES_PATH,
+        DEFAULT_VOLUMES_PREFIX,
         _namespace_segment(workspace_id, field="workspace_id"),
         _namespace_segment(volume_id, field="volume_id"),
     )
 
 
-def _required_platform_volume_path(local_path: str) -> str:
-    if not local_path:
-        msg = "platform volume local path is required"
+def platform_volume_local_path(*, workspace_id: str, volume_id: str) -> str:
+    return posixpath.join(
+        DEFAULT_DATA_STORAGE_PATH,
+        platform_volume_relative_path(workspace_id=workspace_id, volume_id=volume_id),
+    )
+
+
+def _required_platform_volume_store(
+    volume_store: RequestVolumeStoreConfig | None,
+) -> RequestVolumeStoreConfig:
+    if volume_store is None:
+        msg = "platform volume store configuration is required"
         raise ValueError(msg)
-    return local_path
+    return volume_store
 
 
 def _namespace_segment(value: str, *, field: str) -> str:

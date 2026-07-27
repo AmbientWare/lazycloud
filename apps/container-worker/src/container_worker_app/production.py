@@ -8,6 +8,7 @@ import re
 import shutil
 import socket
 import tarfile
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
@@ -47,6 +48,7 @@ from storage_client.mounts import (
     JuiceFsMountConfig,
     MountPointConfig,
     StorageMountMode,
+    is_mounted,
 )
 from worker.adapters import (
     WorkerRouteIdentity,
@@ -1455,6 +1457,7 @@ def build_production_worker_process_services(
             request_mounts,
             source_materializer,
             workspace_storage_available=config.workspace_storage_available,
+            volume_store_probe=_volume_store_probe(config),
         ),
         spec_builder=OciRuntimeSpecBuilder(
             bundle_root=config.resolved_bundle_root,
@@ -1580,6 +1583,18 @@ def _container_cost_resolver(
     )
 
 
+def _volume_store_probe(config: ProductionWorkerSettings) -> Callable[[], bool]:
+    """Report whether platform volumes are genuinely backed on this worker.
+
+    Local mode is never backed: it is an ordinary directory, which is exactly the
+    state that used to accept writes and lose them.
+    """
+    if config.resolved_data_storage_mode is StorageMountMode.Local:
+        return lambda: False
+    data_storage_path = config.resolved_data_storage_path
+    return lambda: is_mounted(data_storage_path)
+
+
 def _worker_data_storage_config(config: ProductionWorkerSettings) -> MountedDataStorageConfig:
     bucket = config.data_storage_bucket
     endpoint_url = config.data_storage_endpoint_url
@@ -1590,6 +1605,10 @@ def _worker_data_storage_config(config: ProductionWorkerSettings) -> MountedData
     return MountedDataStorageConfig(
         mode=config.resolved_data_storage_mode,
         local_path=config.resolved_data_storage_path,
+        # The platform formats this filesystem once, during deployment. A worker
+        # that formats on boot can silently bind a filesystem pointing at a
+        # different object store than the gateway serves.
+        format_juicefs=False,
         juicefs=(
             JuiceFsMountConfig(
                 redis_uri=config.data_storage_juicefs_redis_url,
