@@ -65,7 +65,6 @@ class ImageArchiveSettings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_IMAGE_ARCHIVE_",
         env_nested_delimiter="__",
-        env_file=".env",
         extra="ignore",
     )
 

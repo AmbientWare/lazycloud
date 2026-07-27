@@ -165,7 +165,6 @@ class ComputeReclaimSettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_COMPUTE_RECLAIM_",
-        env_file=".env",
         extra="ignore",
     )
 

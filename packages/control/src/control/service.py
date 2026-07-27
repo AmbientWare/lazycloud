@@ -6,7 +6,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime, time
 from pathlib import Path
-from typing import Literal, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 from uuid import uuid4
 
 from database.records.apps import StubKind, StubRecord
@@ -95,7 +95,6 @@ class WorkspaceBucketSettings(Protocol):
     access_key_id: str
     secret_access_key: str
     session_token: str
-    workspace_bucket_mode: Literal["dedicated", "shared"]
     force_path_style: bool
 
 
@@ -307,7 +306,7 @@ class ControlPlaneService:
         )
         workspace = self.upsert_workspace(workspace.name, primary_token_id=token_record.id)
         if storage is None:
-            workspace = self.create_workspace_storage(workspace.id)
+            workspace = self.ensure_workspace_storage(workspace.id)
         return WorkspaceCreateResult(
             workspace_id=workspace.id,
             token=raw_token,
@@ -332,6 +331,35 @@ class ControlPlaneService:
                 status=record.status.value,
             )
 
+    def provision_bootstrap_workspace_storage(self, workspace: str = "default") -> str:
+        """Give the bootstrap workspace its storage at control-plane start.
+
+        It is created through the identity repository, which cannot know about
+        object storage, so it is the one workspace that never passes through
+        `create_workspace`. Every other workspace either provisions on creation
+        or is deliberately waiting to attach a bucket of its own, so a broader
+        sweep would hand those a platform bucket they never asked for.
+        """
+        try:
+            record = self.get_workspace(workspace)
+        except (NotFoundError, KeyError):
+            return ""
+        if record.storage.bucket:
+            return ""
+        self.ensure_workspace_storage(record.id)
+        return record.name
+
+    def ensure_workspace_storage(self, workspace: str) -> WorkspaceRecord:
+        """Provision workspace storage once, idempotently.
+
+        Every workspace needs it: volumes and outputs have no fallback tier, so a
+        workspace without storage cannot run ordinary work.
+        """
+        record = self.get_workspace(workspace)
+        if record.storage.bucket:
+            return record
+        return self.create_workspace_storage(record.id)
+
     def create_workspace_storage(
         self,
         workspace: str,
@@ -348,23 +376,18 @@ class ControlPlaneService:
             actor_workspace_id=actor_workspace_id,
         )
         client = self._default_workspace_storage_client()
-        settings = _workspace_bucket_settings(client)
-        shared_bucket = settings.workspace_bucket_mode == "shared"
-        bucket = (
-            settings.bucket
-            if shared_bucket
-            else f"{bucket_prefix}-{workspace_record.id}".replace("_", "-")
-        )
+        bucket = f"{bucket_prefix}-{workspace_record.id}".replace("_", "-")
         storage = self._default_workspace_storage(
             client=client,
             bucket=bucket,
-            prefix=workspace_record.id,
+            # The bucket already belongs to one workspace, so no prefix is
+            # needed. It stays meaningful only for a customer-attached bucket.
+            prefix="",
             backend=backend,
             config=config,
         )
         try:
-            if not shared_bucket:
-                client.create_bucket(bucket)
+            client.create_bucket(bucket)
             client.validate_bucket_access(bucket)
         except Exception as exc:
             msg = f"unable to create workspace storage bucket {bucket!r}: {exc}"
@@ -441,27 +464,17 @@ class ControlPlaneService:
         config: dict[str, JsonValue] | None,
     ) -> WorkspaceStorageConfig:
         settings = _workspace_bucket_settings(client)
-        shared_bucket = settings.workspace_bucket_mode == "shared"
-        if settings.session_token and not shared_bucket:
+        if settings.session_token:
             raise WorkspaceStorageError(
                 "temporary platform credentials cannot own durable workspace storage"
-            )
-        if shared_bucket and config:
-            raise WorkspaceStorageError(
-                "shared platform storage does not accept per-workspace configuration"
             )
         default_config: dict[str, JsonValue] = {
             "endpoint_url": settings.endpoint_url or "",
             "region": settings.region_name,
             "force_path_style": settings.force_path_style,
+            "access_key": settings.access_key_id,
+            "secret_key": settings.secret_access_key,
         }
-        if not shared_bucket:
-            default_config.update(
-                {
-                    "access_key": settings.access_key_id,
-                    "secret_key": settings.secret_access_key,
-                }
-            )
         default_config.update(config or {})
         return WorkspaceStorageConfig(
             backend=backend,

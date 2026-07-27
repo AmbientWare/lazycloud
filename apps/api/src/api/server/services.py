@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import socket
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -133,7 +133,6 @@ from provider_clients.settings import (
     AwsCapacityReconciliationSettings,
     AwsCapacitySettings,
 )
-from pydantic import JsonValue
 from scheduler.autoscaler_operations import AutoscalerOperationsService
 from scheduler.autoscaler_states import AutoscalerStateService
 from scheduler.autoscaling import (
@@ -209,9 +208,12 @@ from storage.image_archive import (
 from storage.retention_settings import ArtifactRetentionSettings
 from storage.service import CacheStorage, ObjectByteClient, ObjectStorage
 from storage.volume_filesystem import (
-    JuiceFsGatewaySettings,
-    JuiceFsGatewayVolumeFilesystem,
     VolumeFilesystem,
+    WorkspaceVolumeFilesystem,
+    WorkspaceVolumeStore,
+    WorkspaceVolumeStoreResolver,
+    workspace_presign_endpoint,
+    workspace_volume_store,
 )
 from storage.volume_metering import PersistentVolumeMeteringService
 from storage_client.s3 import S3ObjectStoreClient, S3ObjectStoreSettings
@@ -563,6 +565,7 @@ class ApiServices(ApiServiceCore):
         object_store_settings: S3ObjectStoreSettings | None = None,
         object_storage: ObjectStorage | None = None,
         object_store_client: ObjectByteClient | None = None,
+        workspace_storage_client: WorkspaceBucketClient | None = None,
         image_archive_settings: ImageArchiveSettings | None = None,
         image_archive_store: ImageBuildArchiveObjectStore | None = None,
         image_archive_presigner: PresignedPutClient | None = None,
@@ -576,7 +579,6 @@ class ApiServices(ApiServiceCore):
         managed_billing_settings: ManagedBillingClientSettings | None = None,
         volume_metering_settings: VolumeMeteringSettings | None = None,
         volume_metering: PersistentVolumeMeteringService | None = None,
-        juicefs_gateway_settings: JuiceFsGatewaySettings | None = None,
         volume_filesystem: VolumeFilesystem | None = None,
         root: Path | None = None,
         create_schema: bool = True,
@@ -643,9 +645,6 @@ class ApiServices(ApiServiceCore):
         usage_pricing_config = usage_pricing_settings or UsagePricingSettings()
         managed_billing_config = managed_billing_settings or ManagedBillingClientSettings()
         volume_metering_config = volume_metering_settings or VolumeMeteringSettings()
-        resolved_volume_filesystem = volume_filesystem or (
-            JuiceFsGatewayVolumeFilesystem.from_settings(juicefs_gateway_settings)
-        )
         redis = redis_client
         stream_events = RedisEventStreamRepository(redis)
         events = EventService(context, stream_events=stream_events)
@@ -715,9 +714,15 @@ class ApiServices(ApiServiceCore):
             owned_runtime_resources.append(created_image_archive_presigner)
         control_plane = ControlPlaneService(
             context,
-            workspace_storage_client=_workspace_bucket_client(object_storage_service.object_client),
+            workspace_storage_client=(
+                workspace_storage_client
+                or _workspace_bucket_client(object_storage_service.object_client)
+            ),
             workspace_storage_client_factory=_workspace_storage_client,
             workspace_changes=workspace_changes,
+        )
+        resolved_volume_filesystem = volume_filesystem or WorkspaceVolumeFilesystem(
+            resolve_store=_workspace_volume_store_resolver(control_plane, object_store_config)
         )
         worker_repository = RedisSchedulerWorkerRepository(redis)
         container_repository = RedisSchedulerContainerRepository(redis)
@@ -1446,6 +1451,10 @@ def _worker_repository_service(
         container_credentials=WorkerCredentialService(
             services=core,
             container_repository=scheduler_containers,
+            platform_storage_endpoint=core.object_store_settings.endpoint_url or "",
+            platform_storage_public_endpoint=(
+                core.object_store_settings.presigned_endpoint_url or ""
+            ),
         ),
         origin_credentials=WorkerCacheOriginCredentialService(
             services=core,
@@ -1475,38 +1484,40 @@ def _worker_repository_service(
 
 
 def _workspace_storage_client(storage: WorkspaceStorageConfig) -> S3ObjectStoreClient:
-    config = storage.config
     return S3ObjectStoreClient.from_settings(
         S3ObjectStoreSettings(
             bucket=storage.bucket or "",
-            endpoint_url=_json_config_text(config, "endpoint_url") or None,
-            region_name=_json_config_text(config, "region") or "us-east-1",
-            access_key_id=_json_config_text(config, "access_key"),
-            secret_access_key=_json_config_text(config, "secret_key"),
-            force_path_style=_json_config_bool(config, "force_path_style", default=True),
+            endpoint_url=storage.endpoint_url or None,
+            region_name=storage.region or "us-east-1",
+            access_key_id=storage.access_key,
+            secret_access_key=storage.secret_key,
+            force_path_style=storage.force_path_style,
         )
     )
+
+
+def _workspace_volume_store_resolver(
+    control_plane: ControlPlaneService,
+    object_store: S3ObjectStoreSettings,
+) -> WorkspaceVolumeStoreResolver:
+    def resolve(workspace_id: str) -> WorkspaceVolumeStore:
+        storage = control_plane.get_workspace(workspace_id).storage
+        return workspace_volume_store(
+            storage,
+            presigned_endpoint_url=workspace_presign_endpoint(
+                storage,
+                default_endpoint_url=object_store.endpoint_url,
+                default_presigned_endpoint_url=object_store.presigned_endpoint_url,
+            ),
+        )
+
+    return resolve
 
 
 def _workspace_bucket_client(client: ObjectByteClient) -> WorkspaceBucketClient | None:
     if isinstance(client, _RuntimeWorkspaceBucketClient):
         return client
     return None
-
-
-def _json_config_text(config: Mapping[str, JsonValue], key: str) -> str:
-    value = config.get(key)
-    return value if isinstance(value, str) else ""
-
-
-def _json_config_bool(
-    config: Mapping[str, JsonValue],
-    key: str,
-    *,
-    default: bool,
-) -> bool:
-    value = config.get(key)
-    return value if isinstance(value, bool) else default
 
 
 def _cache_origin_credential_config(core: ApiServiceCore) -> CacheOriginCredentialConfig:

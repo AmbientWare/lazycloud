@@ -281,6 +281,8 @@ def test_oci_runtime_aborts_inflight_run_when_started_callback_rejects(
                 runc_path="/usr/bin/runc",
             )
         },
+        resolv_conf_source=_resolv_conf(tmp_path),
+        fallback_resolv_conf_source=_resolv_conf(tmp_path),
     )
     spec = builder.build_spec(
         _context(tmp_path).model_copy(update={"runtime": OciRuntimeName.Runc}),
@@ -351,6 +353,8 @@ def test_oci_runtime_bounds_hung_runsc_delete_during_start_abort(tmp_path: Path)
         bundle_root=tmp_path / "bundles",
         image_mount_root=tmp_path / "images",
         runtime_configs={OciRuntimeName.Runsc: runtime_config},
+        resolv_conf_source=_resolv_conf(tmp_path),
+        fallback_resolv_conf_source=_resolv_conf(tmp_path),
     )
     spec = builder.build_spec(
         _context(tmp_path),
@@ -393,3 +397,15 @@ def test_oci_runtime_bounds_hung_runsc_delete_during_start_abort(tmp_path: Path)
     pid = int(pid_path.read_text(encoding="utf-8"))
     with pytest.raises(ProcessLookupError):
         os.kill(pid, 0)
+
+
+def _resolv_conf(tmp_path: Path) -> Path:
+    """A resolver the container can actually use.
+
+    The host's own file points at a systemd-resolved stub on many machines,
+    which the worker rightly refuses, so the test supplies its own rather than
+    depending on how the developer's DNS happens to be configured.
+    """
+    source = tmp_path / "worker-resolv.conf"
+    source.write_text("nameserver 1.1.1.1\n", encoding="utf-8")
+    return source

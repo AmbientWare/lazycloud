@@ -27,7 +27,6 @@ class ImageBuildExecutionSettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_IMAGE_BUILD_",
-        env_file=".env",
         extra="ignore",
         str_strip_whitespace=True,
     )
@@ -52,7 +51,6 @@ class ImageBuildRegistrySettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_IMAGE_BUILD_REGISTRY_",
-        env_file=".env",
         extra="ignore",
         str_strip_whitespace=True,
     )
@@ -101,7 +99,6 @@ class ImageBuildContainerSettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_IMAGE_BUILD_CONTAINER_",
-        env_file=".env",
         extra="ignore",
         str_strip_whitespace=True,
     )

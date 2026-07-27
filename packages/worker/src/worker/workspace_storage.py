@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import posixpath
 import shutil
 import threading
 from dataclasses import dataclass, field
@@ -12,12 +13,9 @@ from shared.container_requests import (
     RequestMountType,
 )
 from shared.contracts import ContractModel
-from storage_client.data_mounts import s3_bucket_url
 from storage_client.mounts import (
-    JuiceFsMountConfig,
-    JuiceFsMountManager,
-    MountPointConfig,
-    MountPointMountManager,
+    GeeseFsMountConfig,
+    GeeseFsMountManager,
     StorageMountManager,
     StorageMountResult,
     StorageMountStatus,
@@ -26,7 +24,6 @@ from storage_client.mounts import (
 
 from worker import cache_assets
 from worker.cache_assets import (
-    WorkerStorageMode,
     WorkspaceMountState,
     WorkspaceStorageConfig,
     WorkspaceStorageMountAction,
@@ -46,7 +43,6 @@ class WorkspaceStorageEnsureStatus(StrEnum):
 
 class WorkspaceStorageEnsureResult(ContractModel):
     workspace_name: str
-    mode: WorkerStorageMode
     mount_path: str = ""
     status: WorkspaceStorageEnsureStatus
     reason: str = ""
@@ -65,7 +61,6 @@ class WorkspaceStorageEnsureResult(ContractModel):
 class _WorkspaceMountRecord:
     workspace_name: str
     mount_path: str
-    mode: WorkerStorageMode
     manager: StorageMountManager
 
 
@@ -76,7 +71,6 @@ class WorkerWorkspaceStorageError(RuntimeError):
 @dataclass(slots=True)
 class WorkerWorkspaceStorageManager:
     config: WorkspaceStorageConfig = field(default_factory=WorkspaceStorageConfig)
-    mode: WorkerStorageMode | None = None
     system: StorageMountSystem = field(default_factory=StorageMountSystem)
     _mounts: dict[str, _WorkspaceMountRecord] = field(default_factory=dict)
     _locks: dict[str, threading.Lock] = field(default_factory=dict)
@@ -87,12 +81,10 @@ class WorkerWorkspaceStorageManager:
         request: ContainerRequestContext,
     ) -> WorkspaceStorageEnsureResult:
         workspace_name = request.workspace_name or request.workspace_id
-        mode = self.mode or self.config.default_storage_mode
         required, reason = request_requires_workspace_storage_mount(request)
         if not required:
             return WorkspaceStorageEnsureResult(
                 workspace_name=workspace_name,
-                mode=mode,
                 status=WorkspaceStorageEnsureStatus.Skipped,
                 reason=reason,
             )
@@ -105,7 +97,6 @@ class WorkerWorkspaceStorageManager:
             credentials = _planned_credentials(request.workspace_storage_credentials)
             plan = plan_workspace_storage_mount(
                 workspace_name,
-                mode=mode,
                 credentials=credentials,
                 config=self.config,
                 existing=existing,
@@ -113,7 +104,6 @@ class WorkerWorkspaceStorageManager:
             if plan.action is WorkspaceStorageMountAction.Reuse:
                 return WorkspaceStorageEnsureResult(
                     workspace_name=workspace_name,
-                    mode=plan.mode,
                     mount_path=plan.mount_path,
                     status=WorkspaceStorageEnsureStatus.Reused,
                     reason=plan.reason,
@@ -122,17 +112,15 @@ class WorkerWorkspaceStorageManager:
                 raise WorkerWorkspaceStorageError(plan.reason or "workspace storage mount rejected")
             if plan.unmount_existing:
                 self._unmount_existing(workspace_name)
-            manager = self._mount_manager(plan.mode, request.workspace_storage_credentials)
+            manager = self._mount_manager(workspace_name, request.workspace_storage_credentials)
             mounted = self._mount(manager, plan.mount_path)
             self._mounts[workspace_name] = _WorkspaceMountRecord(
                 workspace_name=workspace_name,
                 mount_path=plan.mount_path,
-                mode=plan.mode,
                 manager=manager,
             )
             return WorkspaceStorageEnsureResult(
                 workspace_name=workspace_name,
-                mode=plan.mode,
                 mount_path=plan.mount_path,
                 status=(
                     WorkspaceStorageEnsureStatus.Remounted
@@ -164,6 +152,7 @@ class WorkerWorkspaceStorageManager:
                     continue
                 self._mounts.pop(state.workspace_name, None)
                 shutil.rmtree(record.mount_path, ignore_errors=True)
+                self._remove_cache_dir(state.workspace_name)
         return results
 
     def _mount_state(self, workspace_name: str) -> WorkspaceMountState | None:
@@ -175,18 +164,11 @@ class WorkerWorkspaceStorageManager:
     def _state_from_record(self, record: _WorkspaceMountRecord) -> WorkspaceMountState:
         return WorkspaceMountState(
             workspace_name=record.workspace_name,
-            mode=record.mode,
             mount_path=record.mount_path,
             mounted=self.system.mount_checker(record.mount_path),
         )
 
     def _mount(self, manager: StorageMountManager, mount_path: str) -> StorageMountResult:
-        if isinstance(manager, JuiceFsMountManager):
-            formatted = manager.format()
-            if not formatted.ok:
-                raise WorkerWorkspaceStorageError(
-                    formatted.output or formatted.reason or "juicefs format failed"
-                )
         mounted = manager.mount(mount_path)
         if not mounted.ok:
             raise WorkerWorkspaceStorageError(
@@ -196,51 +178,34 @@ class WorkerWorkspaceStorageManager:
 
     def _mount_manager(
         self,
-        mode: WorkerStorageMode,
+        workspace_name: str,
         credentials: WorkspaceStorageCredentials | None,
     ) -> StorageMountManager:
         complete = _require_credentials(credentials)
-        match mode:
-            case WorkerStorageMode.MountPoint:
-                mountpoint = self.config.mountpoint
-                return MountPointMountManager(
-                    MountPointConfig(
-                        bucket_name=complete.bucket_name,
-                        access_key=complete.access_key,
-                        secret_key=complete.secret_key,
-                        endpoint_url=complete.endpoint_url,
-                        region=complete.region,
-                        force_path_style=complete.force_path_style,
-                        binary=mountpoint.binary,
-                    ),
-                    system=self.system,
-                )
-            case WorkerStorageMode.JuiceFs:
-                juicefs = self.config.juicefs
-                if not juicefs.redis_uri:
-                    msg = "juicefs redis uri is required for workspace storage"
-                    raise WorkerWorkspaceStorageError(msg)
-                return JuiceFsMountManager(
-                    JuiceFsMountConfig(
-                        redis_uri=juicefs.redis_uri,
-                        bucket=s3_bucket_url(
-                            endpoint_url=complete.endpoint_url,
-                            bucket_name=complete.bucket_name,
-                            force_path_style=complete.force_path_style,
-                        ),
-                        access_key=complete.access_key,
-                        secret_key=complete.secret_key,
-                        cache_size=juicefs.cache_size,
-                        block_size=juicefs.block_size,
-                        prefetch=juicefs.prefetch,
-                        buffer_size=juicefs.buffer_size,
-                        filesystem_name=juicefs.filesystem_name,
-                    ),
-                    system=self.system,
-                )
-            case WorkerStorageMode.Local:
-                msg = "local mode is invalid for request-scoped workspace storage"
-                raise WorkerWorkspaceStorageError(msg)
+        geesefs = self.config.geesefs
+        return GeeseFsMountManager(
+            GeeseFsMountConfig(
+                bucket_name=complete.bucket_name,
+                prefix=complete.prefix,
+                endpoint_url=complete.endpoint_url,
+                region=complete.region,
+                access_key=complete.access_key,
+                secret_key=complete.secret_key,
+                force_path_style=complete.force_path_style,
+                cache_dir=posixpath.join(geesefs.cache_root, workspace_name),
+                memory_limit_mb=geesefs.memory_limit_mb,
+                max_flushers=geesefs.max_flushers,
+                stat_cache_ttl_seconds=geesefs.stat_cache_ttl_seconds,
+                binary=geesefs.binary,
+            ),
+            system=self.system,
+        )
+
+    def _remove_cache_dir(self, workspace_name: str) -> None:
+        shutil.rmtree(
+            posixpath.join(self.config.geesefs.cache_root, workspace_name),
+            ignore_errors=True,
+        )
 
     def _unmount_existing(self, workspace_name: str) -> None:
         record = self._mounts.pop(workspace_name, None)
@@ -252,6 +217,7 @@ class WorkerWorkspaceStorageManager:
                 result.output or result.reason or "workspace storage unmount failed"
             )
         shutil.rmtree(record.mount_path, ignore_errors=True)
+        self._remove_cache_dir(workspace_name)
 
     def _lock(self, workspace_name: str) -> threading.Lock:
         with self._locks_lock:
@@ -276,7 +242,9 @@ def request_requires_workspace_storage_mount(
 
 
 def _mount_requires_workspace_storage(mount: RequestMount) -> bool:
-    if mount.mount_type in {RequestMountType.MountPoint, RequestMountType.Volume}:
+    if mount.mount_type is RequestMountType.Volume:
+        return True
+    if mount.mount_type is RequestMountType.MountPoint:
         return False
     mount_path = mount.mount_path.rstrip("/")
     local_path = mount.local_path.rstrip("/")

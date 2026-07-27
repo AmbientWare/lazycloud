@@ -36,7 +36,6 @@ class TailnetRuntimeSettings(TailnetRuntimeOptions, BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_TAILNET_",
-        env_file=".env",
         extra="ignore",
     )
 
@@ -76,7 +75,6 @@ class TailnetControlSettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_TAILNET_",
-        env_file=".env",
         extra="ignore",
     )
 
@@ -115,7 +113,6 @@ class BackendRouteSettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_BACKEND_ROUTE_",
-        env_file=".env",
         extra="ignore",
     )
 

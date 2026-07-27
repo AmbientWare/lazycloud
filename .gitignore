@@ -2,7 +2,7 @@
 .env
 .env.*
 !.env.example
-.lazycloud/
+.lazycloud
 __pycache__/
 *.py[cod]
 .pytest_cache/
@@ -14,6 +14,10 @@ build/
 dist/
 lazycloud_clients/
 node_modules/
+.output/
+.nuxt/
+.nitro/
+.source/
 .tanstack/
 test-results/
 playwright-report/
@@ -26,3 +30,9 @@ coverage/
 *.tfbackend
 terraform.tfvars
 *.auto.tfvars
+kubeconfig
+talosconfig
+secrets-backup/
+*.token
+*.pem
+*.key

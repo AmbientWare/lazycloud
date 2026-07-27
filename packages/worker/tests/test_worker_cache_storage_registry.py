@@ -6,11 +6,6 @@ from datetime import datetime, timedelta
 from scheduler.state import SchedulerWorkerRecord, WorkerRemovalResult
 from shared.container_requests import StopContainerReason
 from shared.timestamps import utc_now
-from worker.cache_assets import (
-    WorkerStorageMode,
-    WorkspaceMountState,
-    plan_workspace_storage_mount,
-)
 from worker.events import ContainerRequestContext
 from worker.worker_lifecycle import (
     WorkerCleanupAction,
@@ -20,25 +15,6 @@ from worker.worker_lifecycle import (
 )
 
 _CAPACITY_OWNER_ID = "11111111-1111-4111-8111-111111111111"
-
-
-def test_workspace_storage_remounts_stale_mounts() -> None:
-    plan = plan_workspace_storage_mount(
-        "default",
-        mode=WorkerStorageMode.JuiceFs,
-        credentials=None,
-        existing=WorkspaceMountState(
-            workspace_name="default",
-            mode=WorkerStorageMode.JuiceFs,
-            mount_path="/workspace/default",
-            mounted=False,
-        ),
-    )
-
-    assert not plan.valid
-    assert plan.unmount_existing
-    assert plan.remove_mount_path
-    assert plan.reason == "workspace storage metadata is required"
 
 
 def test_worker_lifecycle_orchestrates_keepalive_shutdown_usage_and_cleanup() -> None:

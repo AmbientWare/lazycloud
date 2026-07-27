@@ -511,8 +511,6 @@ containerWorkers:
     juicefsPrefetch: 1
     juicefsBufferSize: 300
   workspaceStorage:
-    available: false
-    mountsEnabled: false
     mode: juicefs
     baseMountPath: /workspace
     mountpointBinary: ms3

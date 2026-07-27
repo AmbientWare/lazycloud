@@ -16,6 +16,7 @@ class WorkspaceStorageCredentials(ContractModel):
     endpoint_url: str = ""
     region: str = ""
     bucket_name: str = ""
+    prefix: str = ""
     access_key: str = ""
     secret_key: str = ""
     force_path_style: bool = False

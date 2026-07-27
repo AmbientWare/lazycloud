@@ -8,7 +8,6 @@ class ContainerServiceSettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_CONTAINER_SERVICE_",
-        env_file=".env",
         extra="ignore",
     )
 

@@ -12,7 +12,7 @@ from control.service import ControlPlaneService
 from database.types import DatabaseSession
 from execution.mounts import volume_container_mount_paths
 from identity.auth import AuthError, AuthService
-from pydantic import JsonValue, field_validator
+from pydantic import field_validator
 from shared.containers import ContainerRecord
 from shared.contracts import ContractModel
 from shared.env import GATEWAY_TOKEN_ENV
@@ -125,6 +125,8 @@ class WorkerCredentialService:
     container_repository: WorkerCredentialContainerRepository | None = None
     container_lookup: WorkerCredentialContainerLookup | None = None
     gateway_token_ttl_seconds: int = DEFAULT_GATEWAY_TOKEN_TTL_SECONDS
+    platform_storage_endpoint: str = ""
+    platform_storage_public_endpoint: str = ""
     _gateway_token_leases: dict[str, _GatewayTokenLease] = field(
         default_factory=dict, init=False, repr=False
     )
@@ -270,7 +272,23 @@ class WorkerCredentialService:
         if not storage.bucket:
             msg = f"workspace storage is unavailable for {workspace_id!r}"
             raise WorkerCredentialError(msg)
-        return workspace_storage_credentials(storage)
+        credentials = workspace_storage_credentials(storage)
+        return credentials.model_copy(
+            update={"endpoint_url": self._reachable_endpoint(credentials.endpoint_url)}
+        )
+
+    def _reachable_endpoint(self, endpoint_url: str) -> str:
+        """Address the object store by a name the worker can actually resolve.
+
+        The stored endpoint is the one control-plane services use inside the
+        deployment. A worker runs outside that network — on customer hardware it
+        always does — so it reaches platform storage the same way a client does.
+        """
+        if not self.platform_storage_endpoint or not self.platform_storage_public_endpoint:
+            return endpoint_url
+        if endpoint_url.strip().rstrip("/") != self.platform_storage_endpoint.strip().rstrip("/"):
+            return endpoint_url
+        return self.platform_storage_public_endpoint
 
     def _mount_credentials(
         self,
@@ -335,14 +353,14 @@ class WorkerCredentialService:
 
 
 def workspace_storage_credentials(storage: WorkspaceStorageConfig) -> WorkspaceStorageCredentials:
-    config = storage.config
     return WorkspaceStorageCredentials(
-        endpoint_url=_config_text(config, "endpoint_url"),
-        region=_config_text(config, "region"),
+        endpoint_url=storage.endpoint_url,
+        region=storage.region,
         bucket_name=storage.bucket or "",
-        access_key=_config_text(config, "access_key"),
-        secret_key=_config_text(config, "secret_key"),
-        force_path_style=_config_bool(config, "force_path_style"),
+        prefix=storage.key_prefix,
+        access_key=storage.access_key,
+        secret_key=storage.secret_key,
+        force_path_style=storage.force_path_style,
     )
 
 
@@ -390,24 +408,3 @@ def _credential_source_mount_paths(mount_path: str) -> tuple[str, ...]:
     if root and root != canonical:
         return (canonical, root)
     return (canonical,)
-
-
-def _config_text(config: dict[str, JsonValue], key: str) -> str:
-    return _raw_text(config.get(key))
-
-
-def _config_bool(config: dict[str, JsonValue], key: str) -> bool:
-    value = config.get(key)
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.lower() in {"1", "true", "yes", "on"}
-    return False
-
-
-def _raw_text(value: JsonValue) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value
-    return str(value)

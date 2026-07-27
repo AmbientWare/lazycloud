@@ -60,7 +60,6 @@ class ArtifactRetentionSettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_ARTIFACT_RETENTION_",
-        env_file=".env",
         extra="ignore",
     )
 
