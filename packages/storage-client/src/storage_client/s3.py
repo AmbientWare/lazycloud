@@ -45,7 +45,6 @@ class S3ObjectStoreSettings(BaseSettings):
     secret_access_key: str = Field(default=LOCAL_OBJECT_STORE_SECRET_ACCESS_KEY, repr=False)
     session_token: str = Field(default="", repr=False)
     credential_expires_at: datetime | None = None
-    workspace_bucket_mode: Literal["dedicated", "shared"] = "dedicated"
     force_path_style: bool = True
     transfer_multipart_threshold_bytes: int = 64 * 1024 * 1024
     transfer_multipart_chunk_size_bytes: int = 64 * 1024 * 1024
@@ -53,7 +52,6 @@ class S3ObjectStoreSettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_OBJECT_STORE_",
-        env_file=".env",
         extra="ignore",
     )
 
@@ -158,6 +156,11 @@ class _CompletedPart(TypedDict):
 
 class _MultipartUpload(TypedDict):
     Parts: list[_CompletedPart]
+
+
+class _CopySource(TypedDict):
+    Bucket: str
+    Key: str
 
 
 class _DeleteTarget(TypedDict):
@@ -280,6 +283,11 @@ class _DeleteObjectClient(Protocol):
 
 
 @runtime_checkable
+class _CopyObjectClient(Protocol):
+    def copy_object(self, *, Bucket: str, Key: str, CopySource: _CopySource) -> None: ...
+
+
+@runtime_checkable
 class _BucketClient(Protocol):
     def create_bucket(
         self,
@@ -320,6 +328,7 @@ class _FullS3Client(
     _PresignClient,
     _MultipartClient,
     _DeleteObjectClient,
+    _CopyObjectClient,
     _BucketClient,
     _ListObjectsClient,
     _DeleteObjectsClient,
@@ -338,6 +347,7 @@ type S3ClientCapabilities = (
     | _PresignClient
     | _MultipartClient
     | _DeleteObjectClient
+    | _CopyObjectClient
     | _BucketClient
     | _ListObjectsClient
     | _DeleteObjectsClient
@@ -721,6 +731,24 @@ class S3ObjectStoreClient(Generic[S3ClientT]):
         if not isinstance(client, _DeleteObjectClient):
             raise TypeError("configured S3 client does not support object deletion")
         client.delete_object(Bucket=bucket or self.settings.bucket, Key=key)
+
+    def copy(
+        self,
+        source_key: str,
+        destination_key: str,
+        *,
+        bucket: str | None = None,
+        source_bucket: str | None = None,
+    ) -> None:
+        client = self.client
+        if not isinstance(client, _CopyObjectClient):
+            raise TypeError("configured S3 client does not support server-side copies")
+        target_bucket = bucket or self.settings.bucket
+        client.copy_object(
+            Bucket=target_bucket,
+            Key=destination_key,
+            CopySource=_CopySource(Bucket=source_bucket or target_bucket, Key=source_key),
+        )
 
     def create_bucket(self, bucket: str | None = None) -> None:
         target_bucket = bucket or self.settings.bucket

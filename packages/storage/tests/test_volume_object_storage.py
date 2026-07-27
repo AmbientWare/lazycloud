@@ -7,9 +7,9 @@ from pathlib import Path
 import pytest
 from api.server.services import ApiServices
 from control.service import ControlPlaneService
-from database.repositories.observability import UsageRepository
 from database.tables.storage import VolumeTable
 from execution.volumes.control import VolumeControlService
+from shared.errors import InvalidInputError
 from shared.http.volumes import (
     CompletedPart,
     CompleteMultipartUploadRequest,
@@ -23,16 +23,12 @@ from shared.http.volumes import (
     PresignedUrlParams,
     StatPathRequest,
 )
-from shared.usage import (
-    METERING_WINDOW_ENDED_AT_METADATA_KEY,
-    METERING_WINDOW_STARTED_AT_METADATA_KEY,
-    UsageMetric,
-)
 from sqlalchemy import select
 from storage.volume_filesystem import (
-    JuiceFsGatewayVolumeFilesystem,
     LocalVolumeFilesystem,
     VolumeNamespace,
+    WorkspaceVolumeFilesystem,
+    WorkspaceVolumeStore,
 )
 from storage.volume_metering import PersistentVolumeMeteringService
 from storage_client.s3 import S3ObjectInfo
@@ -99,9 +95,11 @@ def test_volume_control_isolates_same_name_by_stable_workspace_and_volume_ids(
     ]
 
 
-def test_juicefs_gateway_uses_one_canonical_namespace_for_files_and_multipart() -> None:
-    client = _FakeGatewayClient()
-    filesystem = _gateway_filesystem(client)
+def test_workspace_volumes_sharing_a_volume_id_stay_in_their_own_buckets() -> None:
+    # The key no longer carries a workspace segment, so the bucket resolved per
+    # workspace is the only thing keeping two tenants apart.
+    client = _FakeObjectClient()
+    filesystem = _workspace_filesystem(client)
     first = VolumeNamespace("workspace-a", "volume-id")
     second = VolumeNamespace("workspace-b", "volume-id")
 
@@ -125,20 +123,21 @@ def test_juicefs_gateway_uses_one_canonical_namespace_for_files_and_multipart() 
     )
 
     assert client.objects[
-        ("lazycloud", "volumes/workspace-a/volume-id/archive/payload.txt")
+        ("workspace-workspace-a", "volumes/volume-id/archive/payload.txt")
     ].data == (b"payload")
+    assert ("workspace-workspace-a", "volumes/volume-id/nested/payload.txt") not in client.objects
     assert client.objects[
-        ("lazycloud", "volumes/workspace-b/volume-id/nested/payload.txt")
+        ("workspace-workspace-b", "volumes/volume-id/nested/payload.txt")
     ].data == (b"other")
     assert filesystem.occupancy_bytes(first) == 7
     assert upload_url == (
-        "https://gateway.invalid/lazycloud/volumes/workspace-a/volume-id/large.bin"
+        "https://storage.invalid/workspace-workspace-a/volumes/volume-id/large.bin"
         "?upload=upload-1&part=1&expires=60"
     )
     assert client.completed == [
         (
-            "lazycloud",
-            "volumes/workspace-a/volume-id/large.bin",
+            "workspace-workspace-a",
+            "volumes/volume-id/large.bin",
             "upload-1",
             ((1, "etag-1"),),
         )
@@ -146,16 +145,30 @@ def test_juicefs_gateway_uses_one_canonical_namespace_for_files_and_multipart() 
 
     filesystem.delete_volume(first)
 
-    assert client.deleted_prefixes == ["volumes/workspace-a/volume-id/"]
-    assert not any(key.startswith("volumes/workspace-a/volume-id") for _, key in client.objects)
-    assert ("lazycloud", "volumes/workspace-b/volume-id/nested/payload.txt") in client.objects
+    assert client.deleted_prefixes == ["volumes/volume-id/"]
+    assert not any(bucket == "workspace-workspace-a" for bucket, _ in client.objects)
+    assert ("workspace-workspace-b", "volumes/volume-id/nested/payload.txt") in client.objects
+
+
+def test_move_path_rejects_an_occupied_destination_without_touching_either_side() -> None:
+    client = _FakeObjectClient()
+    filesystem = _workspace_filesystem(client)
+    namespace = VolumeNamespace("workspace", "volume")
+    filesystem.write_path(namespace, "source.txt", (b"source",))
+    filesystem.write_path(namespace, "target.txt", (b"target",))
+
+    with pytest.raises(InvalidInputError):
+        filesystem.move_path(namespace, "source.txt", "target.txt")
+
+    assert client.objects[("workspace-workspace", "volumes/volume/source.txt")].data == b"source"
+    assert client.objects[("workspace-workspace", "volumes/volume/target.txt")].data == b"target"
 
 
 def test_volume_control_presigned_and_multipart_requests_use_database_identity(
     isolated_services: ApiServices,
 ) -> None:
-    client = _FakeGatewayClient()
-    filesystem = _gateway_filesystem(client)
+    client = _FakeObjectClient()
+    filesystem = _workspace_filesystem(client)
     service = VolumeControlService(isolated_services, filesystem=filesystem)
     created = service.get_or_create_volume(GetOrCreateVolumeRequest(name="data"))
     assert created.volume is not None
@@ -189,9 +202,10 @@ def test_volume_control_presigned_and_multipart_requests_use_database_identity(
         )
     )
 
-    namespace_key = f"volumes/{created.volume.workspace_id}/{created.volume.id}"
+    namespace_key = f"volumes/{created.volume.id}"
+    workspace_bucket = f"workspace-{created.volume.workspace_id}"
     assert presigned.url == (
-        f"https://gateway.invalid/lazycloud/{namespace_key}/payload.txt?put&expires=120"
+        f"https://storage.invalid/{workspace_bucket}/{namespace_key}/payload.txt?put&expires=120"
     )
     assert [(part.number, part.start, part.end) for part in multipart.file_upload_parts] == [
         (1, 0, 5),
@@ -201,7 +215,7 @@ def test_volume_control_presigned_and_multipart_requests_use_database_identity(
     assert all(f"/{namespace_key}/large.bin?" in part.url for part in multipart.file_upload_parts)
     assert client.completed == [
         (
-            "lazycloud",
+            workspace_bucket,
             f"{namespace_key}/large.bin",
             multipart.upload_id,
             ((1, "etag-1"),),
@@ -209,9 +223,9 @@ def test_volume_control_presigned_and_multipart_requests_use_database_identity(
     ]
 
 
-def test_gateway_delete_path_does_not_delete_sibling_prefixes() -> None:
-    client = _FakeGatewayClient()
-    filesystem = _gateway_filesystem(client)
+def test_delete_path_does_not_delete_sibling_prefixes() -> None:
+    client = _FakeObjectClient()
+    filesystem = _workspace_filesystem(client)
     namespace = VolumeNamespace("workspace", "volume")
     filesystem.write_path(namespace, "directory/file.txt", (b"delete",))
     filesystem.write_path(namespace, "directory-sibling/file.txt", (b"keep",))
@@ -219,9 +233,9 @@ def test_gateway_delete_path_does_not_delete_sibling_prefixes() -> None:
     deleted = filesystem.delete_path(namespace, "directory")
 
     assert deleted == ("directory/file.txt",)
-    assert ("lazycloud", "volumes/workspace/volume/directory/file.txt") not in client.objects
+    assert ("workspace-workspace", "volumes/volume/directory/file.txt") not in client.objects
     assert (
-        client.objects[("lazycloud", "volumes/workspace/volume/directory-sibling/file.txt")].data
+        client.objects[("workspace-workspace", "volumes/volume/directory-sibling/file.txt")].data
         == b"keep"
     )
 
@@ -280,19 +294,6 @@ def _services_with_volume_metering(
     )
     request.addfinalizer(services.close)
     return services
-    with isolated_services.context.database.session() as session:
-        records = [
-            record
-            for record in UsageRepository(session).list_across_workspaces()
-            if record.metric is UsageMetric.PersistentVolumeByteSeconds
-            and record.resource_id == "retry"
-        ]
-    records.sort(key=lambda record: record.created_at)
-    assert len(records) == 2
-    assert (
-        records[0].metadata[METERING_WINDOW_ENDED_AT_METADATA_KEY]
-        == records[1].metadata[METERING_WINDOW_STARTED_AT_METADATA_KEY]
-    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -301,7 +302,7 @@ class _FakeObject:
     modified_at: datetime
 
 
-class _FakeGatewayClient:
+class _FakeObjectClient:
     def __init__(self) -> None:
         self.objects: dict[tuple[str, str], _FakeObject] = {}
         self.completed: list[tuple[str, str, str, tuple[tuple[int, str], ...]]] = []
@@ -396,6 +397,18 @@ class _FakeGatewayClient:
     def delete(self, key: str, *, bucket: str | None = None) -> None:
         self.objects.pop((bucket or "default", key), None)
 
+    def copy(
+        self,
+        source_key: str,
+        destination_key: str,
+        *,
+        bucket: str | None = None,
+        source_bucket: str | None = None,
+    ) -> None:
+        target_bucket = bucket or "default"
+        item = self.objects[(source_bucket or target_bucket, source_key)]
+        self.objects[(target_bucket, destination_key)] = item
+
     def generate_presigned_get_url(
         self,
         key: str,
@@ -467,32 +480,17 @@ class _FakeGatewayClient:
 
     @staticmethod
     def _url(key: str, *, bucket: str | None, suffix: str) -> str:
-        return f"https://gateway.invalid/{bucket or 'default'}/{key}?{suffix}"
+        return f"https://storage.invalid/{bucket or 'default'}/{key}?{suffix}"
 
 
-@dataclass(slots=True)
-class _FakeRenameClient:
-    gateway: _FakeGatewayClient
-
-    def move_path(self, source_key: str, destination_key: str) -> None:
-        matches = [
-            (bucket, key)
-            for bucket, key in self.gateway.objects
-            if key == source_key or key.startswith(f"{source_key}/")
-        ]
-        if not matches:
-            raise AssertionError(f"missing rename source {source_key}")
-        for bucket, key in matches:
-            suffix = key.removeprefix(source_key)
-            self.gateway.objects[(bucket, f"{destination_key}{suffix}")] = self.gateway.objects.pop(
-                (bucket, key)
-            )
-
-
-def _gateway_filesystem(client: _FakeGatewayClient) -> JuiceFsGatewayVolumeFilesystem:
-    return JuiceFsGatewayVolumeFilesystem(
-        client=client,
-        rename_client=_FakeRenameClient(client),
+def _workspace_filesystem(client: _FakeObjectClient) -> WorkspaceVolumeFilesystem:
+    # Production gives every workspace its own bucket; the fake resolver keeps
+    # that shape so key collisions across tenants would surface here.
+    return WorkspaceVolumeFilesystem(
+        resolve_store=lambda workspace_id: WorkspaceVolumeStore(
+            client=client,
+            bucket=f"workspace-{workspace_id}",
+        )
     )
 
 

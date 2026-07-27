@@ -30,7 +30,6 @@ DEFAULT_IMAGE_ARCHIVE_PRESIGN_SECONDS = 15 * 60
 class CacheOriginCredentialConfig(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_",
-        env_file=".env",
         extra="ignore",
         populate_by_name=True,
     )

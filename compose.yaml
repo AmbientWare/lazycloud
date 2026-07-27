@@ -62,24 +62,10 @@ x-object-store-env: &object-store-env
   LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY: "${LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY-lazycloud-local-secret}"
   LAZYCLOUD_OBJECT_STORE_SESSION_TOKEN: "${LAZYCLOUD_OBJECT_STORE_SESSION_TOKEN:-}"
   LAZYCLOUD_OBJECT_STORE_CREDENTIAL_EXPIRES_AT: "${LAZYCLOUD_OBJECT_STORE_CREDENTIAL_EXPIRES_AT:-}"
-  LAZYCLOUD_OBJECT_STORE_WORKSPACE_BUCKET_MODE: "${LAZYCLOUD_OBJECT_STORE_WORKSPACE_BUCKET_MODE:-dedicated}"
   LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE: "${LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE:-true}"
   LAZYCLOUD_OBJECT_STORE_TRANSFER_MULTIPART_THRESHOLD_BYTES: "${LAZYCLOUD_OBJECT_STORE_TRANSFER_MULTIPART_THRESHOLD_BYTES:-67108864}"
   LAZYCLOUD_OBJECT_STORE_TRANSFER_MULTIPART_CHUNK_SIZE_BYTES: "${LAZYCLOUD_OBJECT_STORE_TRANSFER_MULTIPART_CHUNK_SIZE_BYTES:-67108864}"
   LAZYCLOUD_OBJECT_STORE_TRANSFER_MAX_CONCURRENCY: "${LAZYCLOUD_OBJECT_STORE_TRANSFER_MAX_CONCURRENCY:-2}"
-
-x-juicefs-gateway-env: &juicefs-gateway-env
-  LAZYCLOUD_JUICEFS_GATEWAY_ENDPOINT_URL: "${LAZYCLOUD_JUICEFS_GATEWAY_ENDPOINT_URL:-http://juicefs-gateway:9900}"
-  LAZYCLOUD_JUICEFS_GATEWAY_WEBDAV_ENDPOINT_URL: "${LAZYCLOUD_JUICEFS_GATEWAY_WEBDAV_ENDPOINT_URL:-http://juicefs-webdav:9901}"
-  LAZYCLOUD_JUICEFS_GATEWAY_PRESIGNED_ENDPOINT_URL: "${LAZYCLOUD_JUICEFS_GATEWAY_PRESIGNED_ENDPOINT_URL:-http://juicefs-gateway.localhost:${LAZYCLOUD_COMPOSE_JUICEFS_GATEWAY_PORT:-9900}}"
-  LAZYCLOUD_JUICEFS_GATEWAY_BUCKET: "${LAZYCLOUD_JUICEFS_GATEWAY_BUCKET:-lazycloud}"
-  LAZYCLOUD_JUICEFS_GATEWAY_REGION_NAME: "${LAZYCLOUD_JUICEFS_GATEWAY_REGION_NAME:-us-east-1}"
-  LAZYCLOUD_JUICEFS_GATEWAY_ACCESS_KEY_ID: "${LAZYCLOUD_JUICEFS_GATEWAY_ACCESS_KEY_ID:-lazycloud-volume}"
-  LAZYCLOUD_JUICEFS_GATEWAY_SECRET_ACCESS_KEY: "${LAZYCLOUD_JUICEFS_GATEWAY_SECRET_ACCESS_KEY:-lazycloud-volume-secret}"
-  LAZYCLOUD_JUICEFS_GATEWAY_FORCE_PATH_STYLE: "${LAZYCLOUD_JUICEFS_GATEWAY_FORCE_PATH_STYLE:-true}"
-  LAZYCLOUD_JUICEFS_GATEWAY_TRANSFER_MULTIPART_THRESHOLD_BYTES: "${LAZYCLOUD_JUICEFS_GATEWAY_TRANSFER_MULTIPART_THRESHOLD_BYTES:-67108864}"
-  LAZYCLOUD_JUICEFS_GATEWAY_TRANSFER_MULTIPART_CHUNK_SIZE_BYTES: "${LAZYCLOUD_JUICEFS_GATEWAY_TRANSFER_MULTIPART_CHUNK_SIZE_BYTES:-67108864}"
-  LAZYCLOUD_JUICEFS_GATEWAY_TRANSFER_MAX_CONCURRENCY: "${LAZYCLOUD_JUICEFS_GATEWAY_TRANSFER_MAX_CONCURRENCY:-2}"
 
 x-image-archive-env: &image-archive-env
   LAZYCLOUD_IMAGE_ARCHIVE_PRESIGN_SECONDS: "${LAZYCLOUD_IMAGE_ARCHIVE_PRESIGN_SECONDS:-900}"
@@ -235,13 +221,6 @@ x-container-worker-tuning: &container-worker-tuning
   WORKER_ARTIFACT_RETENTION_RECENT_GUARD_SECONDS: "${WORKER_ARTIFACT_RETENTION_RECENT_GUARD_SECONDS:-3600}"
   WORKER_IMAGE_MATERIALIZATION_RETENTION_SECONDS: "${WORKER_IMAGE_MATERIALIZATION_RETENTION_SECONDS:-86400}"
   WORKER_CHECKPOINT_RETENTION_SECONDS: "${WORKER_CHECKPOINT_RETENTION_SECONDS:-604800}"
-  DATA_STORAGE_JUICEFS_FILESYSTEM_NAME: "${DATA_STORAGE_JUICEFS_FILESYSTEM_NAME:-lazycloud}"
-  DATA_STORAGE_JUICEFS_CACHE_SIZE: "${DATA_STORAGE_JUICEFS_CACHE_SIZE:-0}"
-  DATA_STORAGE_JUICEFS_BLOCK_SIZE: "${DATA_STORAGE_JUICEFS_BLOCK_SIZE:-4096}"
-  DATA_STORAGE_JUICEFS_PREFETCH: "${DATA_STORAGE_JUICEFS_PREFETCH:-1}"
-  DATA_STORAGE_JUICEFS_BUFFER_SIZE: "${DATA_STORAGE_JUICEFS_BUFFER_SIZE:-300}"
-  WORKER_WORKSPACE_STORAGE_MOUNTS_ENABLED: "${WORKER_WORKSPACE_STORAGE_MOUNTS_ENABLED:-true}"
-  WORKER_WORKSPACE_STORAGE_AVAILABLE: "${WORKER_WORKSPACE_STORAGE_AVAILABLE:-false}"
 
 x-lazycloud-build-args: &lazycloud-build-args
   TAILSCALE_IMAGE: "${LAZYCLOUD_TAILSCALE_IMAGE:-tailscale/tailscale:v1.98.8}"
@@ -253,16 +232,10 @@ x-lazycloud-depends: &lazycloud-depends
     condition: service_completed_successfully
   redis:
     condition: service_healthy
-  juicefs-redis:
-    condition: service_healthy
   object-store:
     condition: service_healthy
   object-store-bucket:
     condition: service_completed_successfully
-  juicefs-gateway:
-    condition: service_healthy
-  juicefs-webdav:
-    condition: service_healthy
 
 x-lazycloud-role-depends: &lazycloud-role-depends
   control-plane:
@@ -372,9 +345,12 @@ services:
         if test -e "$$token_path"; then
           test "$$(stat -c '%a' "$$token_path")" = "600"
         fi
-    environment: *database-bootstrap-env
+    environment:
+      <<: [*database-bootstrap-env, *object-store-env]
     depends_on:
       database-bootstrap:
+        condition: service_completed_successfully
+      object-store-bucket:
         condition: service_completed_successfully
     volumes:
       - lazycloud-administrator-token:/var/lib/lazycloud/bootstrap
@@ -390,19 +366,6 @@ services:
       - "${LAZYCLOUD_COMPOSE_REDIS_PORT:-6379}:6379"
     volumes:
       - redis-data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-
-  juicefs-redis:
-    image: redis:8-alpine
-    command: ["redis-server", "--appendonly", "yes"]
-    ports:
-      - "${LAZYCLOUD_COMPOSE_JUICEFS_REDIS_PORT:-6380}:6379"
-    volumes:
-      - juicefs-redis-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -450,94 +413,6 @@ services:
             || aws --endpoint-url "$$GARAGE_ENDPOINT_URL" s3api head-bucket --bucket "$$bucket" >/dev/null
         done
 
-  juicefs-format:
-    image: storage-gateway:local
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.storage-gateway
-      target: storage-gateway
-    entrypoint: ["/bin/sh", "-ec"]
-    command:
-      - |
-        exec juicefs format \
-          --storage s3 \
-          --bucket "${DATA_STORAGE_ENDPOINT_URL:-http://object-store:9000}/${DATA_STORAGE_BUCKET:-lazycloud-data}" \
-          --block-size "${DATA_STORAGE_JUICEFS_BLOCK_SIZE:-4096}" \
-          "${DATA_STORAGE_JUICEFS_REDIS_URL:-redis://juicefs-redis:6379/0}" \
-          "${DATA_STORAGE_JUICEFS_FILESYSTEM_NAME:-lazycloud}" \
-          --no-update
-    environment:
-      AWS_ACCESS_KEY_ID: "${DATA_STORAGE_ACCESS_KEY_ID:-lazycloud-local}"
-      AWS_SECRET_ACCESS_KEY: "${DATA_STORAGE_SECRET_ACCESS_KEY:-lazycloud-local-secret}"
-      JUICEFS_SECRET_KEY: "${DATA_STORAGE_SECRET_ACCESS_KEY:-lazycloud-local-secret}"
-    depends_on:
-      juicefs-redis:
-        condition: service_healthy
-      object-store-bucket:
-        condition: service_completed_successfully
-
-  juicefs-gateway:
-    image: storage-gateway:local
-    entrypoint: ["/bin/sh", "-ec"]
-    command:
-      - |
-        exec juicefs gateway \
-          --cache-size "${DATA_STORAGE_JUICEFS_CACHE_SIZE:-0}" \
-          --prefetch "${DATA_STORAGE_JUICEFS_GATEWAY_PREFETCH:--1}" \
-          --buffer-size "${DATA_STORAGE_JUICEFS_BUFFER_SIZE:-300}" \
-          --keep-etag \
-          --no-usage-report \
-          --no-banner \
-          "${DATA_STORAGE_JUICEFS_REDIS_URL:-redis://juicefs-redis:6379/0}" \
-          0.0.0.0:9900
-    environment:
-      AWS_ACCESS_KEY_ID: "${DATA_STORAGE_ACCESS_KEY_ID:-lazycloud-local}"
-      AWS_SECRET_ACCESS_KEY: "${DATA_STORAGE_SECRET_ACCESS_KEY:-lazycloud-local-secret}"
-      JUICEFS_SECRET_KEY: "${DATA_STORAGE_SECRET_ACCESS_KEY:-lazycloud-local-secret}"
-      MINIO_ROOT_USER: "${LAZYCLOUD_JUICEFS_GATEWAY_ACCESS_KEY_ID:-lazycloud-volume}"
-      MINIO_ROOT_PASSWORD: "${LAZYCLOUD_JUICEFS_GATEWAY_SECRET_ACCESS_KEY:-lazycloud-volume-secret}"
-    depends_on:
-      juicefs-format:
-        condition: service_completed_successfully
-    ports:
-      - "${LAZYCLOUD_COMPOSE_JUICEFS_GATEWAY_PORT:-9900}:9900"
-    healthcheck:
-      test: ["CMD", "nc", "-z", "127.0.0.1", "9900"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-      start_period: 5s
-
-  juicefs-webdav:
-    image: storage-gateway:local
-    entrypoint: ["/bin/sh", "-ec"]
-    command:
-      - |
-        exec juicefs webdav \
-          --cache-size "${DATA_STORAGE_JUICEFS_CACHE_SIZE:-0}" \
-          --prefetch "${DATA_STORAGE_JUICEFS_GATEWAY_PREFETCH:--1}" \
-          --buffer-size "${DATA_STORAGE_JUICEFS_BUFFER_SIZE:-300}" \
-          --no-usage-report \
-          "${DATA_STORAGE_JUICEFS_REDIS_URL:-redis://juicefs-redis:6379/0}" \
-          0.0.0.0:9901
-    environment:
-      AWS_ACCESS_KEY_ID: "${DATA_STORAGE_ACCESS_KEY_ID:-lazycloud-local}"
-      AWS_SECRET_ACCESS_KEY: "${DATA_STORAGE_SECRET_ACCESS_KEY:-lazycloud-local-secret}"
-      JUICEFS_SECRET_KEY: "${DATA_STORAGE_SECRET_ACCESS_KEY:-lazycloud-local-secret}"
-      WEBDAV_USER: "${LAZYCLOUD_JUICEFS_GATEWAY_ACCESS_KEY_ID:-lazycloud-volume}"
-      WEBDAV_PASSWORD: "${LAZYCLOUD_JUICEFS_GATEWAY_SECRET_ACCESS_KEY:-lazycloud-volume-secret}"
-    depends_on:
-      juicefs-gateway:
-        condition: service_healthy
-    expose:
-      - "9901"
-    healthcheck:
-      test: ["CMD", "nc", "-z", "127.0.0.1", "9901"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-      start_period: 5s
-
   tcp-certificate:
     image: api:local
     command:
@@ -581,7 +456,6 @@ services:
           *api-env,
           *workspace-events-env,
           *object-store-env,
-          *juicefs-gateway-env,
           *image-archive-env,
           *image-build-env,
           *artifact-retention-env,
@@ -643,7 +517,6 @@ services:
           *gateway-env,
           *workspace-events-env,
           *object-store-env,
-          *juicefs-gateway-env,
           *image-archive-env,
           *image-build-env,
           *artifact-retention-env,
@@ -798,7 +671,6 @@ services:
           --worker-runtime-http-url "$$gateway_url" \
           --worker-network "host" \
           --worker-host-alias "object-store.localhost:host-gateway" \
-          --worker-host-alias "juicefs-gateway.localhost:host-gateway" \
           --max-cpu "${LAZYCLOUD_COMPOSE_AGENT_MAX_CPU_CORES:-4}" \
           --max-memory "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_MEMORY_MIB:-8192}MiB" \
           --stream-interval-seconds "${LAZYCLOUD_COMPOSE_AGENT_STREAM_INTERVAL_SECONDS:-1}"
@@ -806,6 +678,16 @@ services:
       - "host.docker.internal:host-gateway"
     devices:
       - /dev/fuse:/dev/fuse
+    environment:
+      # Forwarded to worker slots so they can back platform volumes. Platform
+      # deployments set these; agents on customer infrastructure do not, and
+      # their slots refuse volume work instead of writing to disposable disk.
+      DATA_STORAGE_BUCKET: "${DATA_STORAGE_BUCKET:-lazycloud-data}"
+      DATA_STORAGE_ENDPOINT_URL: "${DATA_STORAGE_ENDPOINT_URL:-http://object-store:9000}"
+      DATA_STORAGE_REGION_NAME: "${DATA_STORAGE_REGION_NAME:-us-east-1}"
+      DATA_STORAGE_ACCESS_KEY_ID: "${DATA_STORAGE_ACCESS_KEY_ID:-lazycloud-local}"
+      DATA_STORAGE_SECRET_ACCESS_KEY: "${DATA_STORAGE_SECRET_ACCESS_KEY:-lazycloud-local-secret}"
+      DATA_STORAGE_FORCE_PATH_STYLE: "${DATA_STORAGE_FORCE_PATH_STYLE:-true}"
     depends_on:
       agent-join-token:
         condition: service_completed_successfully
@@ -853,7 +735,6 @@ services:
           *gateway-env,
           *workspace-events-env,
           *object-store-env,
-          *juicefs-gateway-env,
           *image-archive-env,
           *artifact-retention-env,
           *agent-artifact-env,
@@ -898,7 +779,6 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
       - "object-store.localhost:host-gateway"
-      - "juicefs-gateway.localhost:host-gateway"
     command:
       [
         "lazycloud-container-worker",
@@ -945,8 +825,6 @@ services:
       DATA_STORAGE_ACCESS_KEY_ID: "${DATA_STORAGE_ACCESS_KEY_ID:-lazycloud-local}"
       DATA_STORAGE_SECRET_ACCESS_KEY: "${DATA_STORAGE_SECRET_ACCESS_KEY:-lazycloud-local-secret}"
       DATA_STORAGE_FORCE_PATH_STYLE: "${DATA_STORAGE_FORCE_PATH_STYLE:-true}"
-      DATA_STORAGE_JUICEFS_REDIS_URL: "${DATA_STORAGE_JUICEFS_REDIS_URL:-redis://juicefs-redis:6379/0}"
-      WORKER_WORKSPACE_STORAGE_MODE: "${WORKER_WORKSPACE_STORAGE_MODE:-juicefs}"
       WORKER_WORKSPACE_STORAGE_BASE_MOUNT_PATH: "${WORKER_WORKSPACE_STORAGE_BASE_MOUNT_PATH:-/workspace}"
       WORKER_CONTAINER_COST_HOOK_ENDPOINT: "${WORKER_CONTAINER_COST_HOOK_ENDPOINT:-}"
       WORKER_CONTAINER_COST_HOOK_TOKEN: "${WORKER_CONTAINER_COST_HOOK_TOKEN:-}"
@@ -983,7 +861,6 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
       - "object-store.localhost:host-gateway"
-      - "juicefs-gateway.localhost:host-gateway"
     command:
       [
         "lazycloud-container-worker",
@@ -1041,7 +918,6 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
       - "object-store.localhost:host-gateway"
-      - "juicefs-gateway.localhost:host-gateway"
     runtime: nvidia
     gpus: all
     command:
@@ -1094,8 +970,6 @@ services:
       DATA_STORAGE_ACCESS_KEY_ID: "${DATA_STORAGE_ACCESS_KEY_ID:-lazycloud-local}"
       DATA_STORAGE_SECRET_ACCESS_KEY: "${DATA_STORAGE_SECRET_ACCESS_KEY:-lazycloud-local-secret}"
       DATA_STORAGE_FORCE_PATH_STYLE: "${DATA_STORAGE_FORCE_PATH_STYLE:-true}"
-      DATA_STORAGE_JUICEFS_REDIS_URL: "${DATA_STORAGE_JUICEFS_REDIS_URL:-redis://juicefs-redis:6379/0}"
-      WORKER_WORKSPACE_STORAGE_MODE: "${WORKER_WORKSPACE_STORAGE_MODE:-juicefs}"
       WORKER_WORKSPACE_STORAGE_BASE_MOUNT_PATH: "${WORKER_WORKSPACE_STORAGE_BASE_MOUNT_PATH:-/workspace}"
       WORKER_CONTAINER_COST_HOOK_ENDPOINT: "${WORKER_CONTAINER_COST_HOOK_ENDPOINT:-}"
       WORKER_CONTAINER_COST_HOOK_TOKEN: "${WORKER_CONTAINER_COST_HOOK_TOKEN:-}"
@@ -1213,9 +1087,6 @@ configs:
           image_build_root: ${WORKER_IMAGE_BUILD_ROOT:-/var/lib/lazycloud/builds}
           source_cache_root: ${WORKER_SOURCE_CACHE_ROOT:-/var/lib/lazycloud/source-cache}
           checkpoint_root: ${WORKER_CHECKPOINT_ROOT:-/var/lib/lazycloud/checkpoints}
-        data_storage:
-          mode: ${DATA_STORAGE_MODE:-juicefs}
-          path: ${DATA_STORAGE_PATH:-/data}
         monitoring:
           metrics_enabled: ${WORKER_METRICS_ENABLED:-true}
           metrics_interval_seconds: ${WORKER_METRICS_INTERVAL_SECONDS:-5}
@@ -1253,9 +1124,6 @@ configs:
           image_build_root: ${WORKER_IMAGE_BUILD_ROOT:-/var/lib/lazycloud/builds}
           source_cache_root: ${WORKER_SOURCE_CACHE_ROOT:-/var/lib/lazycloud/source-cache}
           checkpoint_root: ${WORKER_CHECKPOINT_ROOT:-/var/lib/lazycloud/checkpoints}
-        data_storage:
-          mode: ${DATA_STORAGE_MODE:-juicefs}
-          path: ${DATA_STORAGE_PATH:-/data}
         monitoring:
           metrics_enabled: ${WORKER_METRICS_ENABLED:-true}
           metrics_interval_seconds: ${WORKER_METRICS_INTERVAL_SECONDS:-5}
@@ -1271,7 +1139,6 @@ configs:
 volumes:
   postgres-data:
   redis-data:
-  juicefs-redis-data:
   object-store-data:
   lazycloud-files:
   lazycloud-administrator-token:

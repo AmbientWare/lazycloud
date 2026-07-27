@@ -31,6 +31,5 @@ class DatabaseSettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_DATABASE_",
-        env_file=".env",
         extra="ignore",
     )

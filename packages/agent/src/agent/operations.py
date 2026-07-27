@@ -44,13 +44,11 @@ from shared.tailscale_install import (
     TAILSCALE_INSTALL_VERSION,
 )
 from shared.timestamps import utc_now
-from storage_client.mounts import StorageMountMode
 from worker.configuration import (
     DEFAULT_WORKER_CONFIG_PATH,
     WORKER_CONFIG_PATH_ENV,
     WorkerCapacityConfiguration,
     WorkerConfiguration,
-    WorkerDataStorageConfiguration,
     WorkerExecutionConfiguration,
     WorkerMonitoringConfiguration,
     WorkerNetworkConfiguration,
@@ -1412,10 +1410,6 @@ def build_agent_worker_config(
             image_build_root=Path("/builds"),
             cache_root=Path("/cache"),
             checkpoint_root="/checkpoints",
-        ),
-        data_storage=WorkerDataStorageConfiguration(
-            mode=StorageMountMode.Local,
-            path=AGENT_CONTAINER_DATA_PATH,
         ),
         monitoring=WorkerMonitoringConfiguration(
             metrics_enabled=True,

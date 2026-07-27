@@ -28,7 +28,6 @@ class AwsAccountConnectionSettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_AWS_CONNECTION_",
-        env_file=".env",
         extra="ignore",
     )
 
@@ -67,7 +66,6 @@ class AwsCapacitySettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_AWS_CAPACITY_",
-        env_file=".env",
         extra="ignore",
     )
 
@@ -180,7 +178,6 @@ class AwsCapacityReconciliationSettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_AWS_CAPACITY_RECONCILIATION_",
-        env_file=".env",
         extra="ignore",
     )
 

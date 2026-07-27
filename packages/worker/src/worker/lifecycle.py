@@ -9,6 +9,8 @@ from pydantic import Field, JsonValue, TypeAdapter, ValidationError, field_valid
 from shared.container_requests import (
     DEFAULT_OUTPUTS_PATH,
     DEFAULT_OUTPUTS_PREFIX,
+    DEFAULT_VOLUMES_PATH,
+    DEFAULT_VOLUMES_PREFIX,
     DEFAULT_WORKSPACE_STORAGE_BASE_MOUNT_PATH,
     WORKER_CONTAINER_VOLUME_PATH,
     WORKER_USER_OUTPUT_VOLUME,
@@ -586,8 +588,23 @@ def adjust_mount_for_workspace_storage(
     workspace_name: str,
     base_mount_path: str = DEFAULT_WORKSPACE_STORAGE_BASE_MOUNT_PATH,
 ) -> RequestMount:
-    if mount.mount_type in {RequestMountType.Volume, RequestMountType.MountPoint}:
+    if mount.mount_type is RequestMountType.MountPoint:
         return mount
+    if mount.mount_type is RequestMountType.Volume:
+        # A platform volume lives in the workspace's own storage, so it resolves
+        # the same way outputs do. Without this the mount keeps the logical
+        # /data path, which nothing backs, and writes land on local disk.
+        return mount.model_copy(
+            update={
+                "local_path": rewrite_workspace_storage_local_path(
+                    mount.local_path,
+                    workspace_name=workspace_name,
+                    source_root=DEFAULT_VOLUMES_PATH,
+                    target_prefix=DEFAULT_VOLUMES_PREFIX,
+                    base_mount_path=base_mount_path,
+                )
+            }
+        )
     mount_path = mount.mount_path.rstrip("/")
     if mount_path != WORKER_USER_OUTPUT_VOLUME and not mount_path.startswith(
         WORKER_USER_OUTPUT_VOLUME + "/"

@@ -16,6 +16,7 @@ from shared.container_requests import (
     RequestMountPointConfig,
     RequestMountType,
 )
+from shared.errors import UpstreamUnavailableError
 from shared.mounts import MountAuthMode, validate_mount_auth
 from storage.service import ObjectStorage
 
@@ -118,9 +119,13 @@ def container_resource_mounts_require_workspace_storage(
 ) -> bool:
     with context.database.session() as session:
         workspace = context.workspace(session, workspace_id)
-    if not workspace.storage.bucket:
-        return False
-    return any(_mount_requires_workspace_storage(mount) for mount in mounts)
+    required = any(_mount_requires_workspace_storage(mount) for mount in mounts)
+    if required and not workspace.storage.bucket:
+        # There is no fallback tier: without workspace storage the mount would
+        # silently become a local directory that no reader can reach.
+        msg = f"workspace {workspace.name!r} has no storage provisioned"
+        raise UpstreamUnavailableError(msg)
+    return required
 
 
 def configured_volume_mounts(
@@ -145,15 +150,7 @@ def configured_volume_mounts(
             mount_path,
             fallback_name=name,
         )
-        external = _is_external_volume_config(config)
-        if external:
-            local_path = ""
-        else:
-            record = volume_service.get(name, workspace=workspace_id)
-            local_path = platform_volume_local_path(
-                workspace_id=workspace_id,
-                volume_id=record.id,
-            )
+        record = volume_service.get(name, workspace=workspace_id)
         mount = _volume_request_mount(
             name=name,
             workspace_name=workspace_name,
@@ -162,7 +159,9 @@ def configured_volume_mounts(
             link_path=_volume_link_path(container_id, mount_path),
             read_only=read_only,
             config=config,
-            local_path=local_path,
+            local_path=platform_volume_local_path(
+                workspace_name=workspace_name, volume_id=record.id
+            ),
         )
         if root_mount_path and root_mount_path != canonical_mount_path:
             mounts.append(
@@ -174,7 +173,9 @@ def configured_volume_mounts(
                     link_path="",
                     read_only=read_only,
                     config=config,
-                    local_path=local_path,
+                    local_path=platform_volume_local_path(
+                        workspace_name=workspace_name, volume_id=record.id
+                    ),
                 )
             )
         mounts.append(mount)
@@ -182,7 +183,11 @@ def configured_volume_mounts(
 
 
 def _mount_requires_workspace_storage(mount: RequestMount) -> bool:
-    if mount.mount_type in {RequestMountType.MountPoint, RequestMountType.Volume}:
+    # A platform volume lives in the workspace's own storage, so it needs the
+    # mount exactly as outputs do. An external bucket carries its own config.
+    if mount.mount_type is RequestMountType.Volume:
+        return True
+    if mount.mount_type is RequestMountType.MountPoint:
         return False
     mount_path = mount.mount_path.rstrip("/")
     return mount_path == WORKER_USER_OUTPUT_VOLUME or mount_path.startswith(
@@ -238,7 +243,7 @@ def _volume_request_mount(
             ),
         )
     return RequestMount(
-        local_path=_required_platform_volume_path(local_path),
+        local_path=local_path,
         mount_path=mount_path,
         link_path=link_path,
         read_only=read_only,
@@ -246,19 +251,13 @@ def _volume_request_mount(
     )
 
 
-def platform_volume_local_path(*, workspace_id: str, volume_id: str) -> str:
+def platform_volume_local_path(*, workspace_name: str, volume_id: str) -> str:
+    """Logical path of a volume, which the worker resolves into workspace storage."""
     return posixpath.join(
         DEFAULT_VOLUMES_PATH,
-        _namespace_segment(workspace_id, field="workspace_id"),
+        _namespace_segment(workspace_name, field="workspace_name"),
         _namespace_segment(volume_id, field="volume_id"),
     )
-
-
-def _required_platform_volume_path(local_path: str) -> str:
-    if not local_path:
-        msg = "platform volume local path is required"
-        raise ValueError(msg)
-    return local_path
 
 
 def _namespace_segment(value: str, *, field: str) -> str:

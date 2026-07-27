@@ -32,7 +32,6 @@ class TelemetrySettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_TELEMETRY_",
-        env_file=".env",
         extra="ignore",
     )
 
@@ -60,7 +59,6 @@ class UsageMetricsSettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_USAGE_METRICS_",
-        env_file=".env",
         extra="ignore",
     )
 
@@ -105,7 +103,6 @@ class UsagePricingSettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_USAGE_",
-        env_file=".env",
         extra="ignore",
     )
 
@@ -140,7 +137,6 @@ class ManagedBillingClientSettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_MANAGED_BILLING_",
-        env_file=".env",
         extra="ignore",
     )
 
@@ -166,7 +162,6 @@ class VolumeMeteringSettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_VOLUME_METERING_",
-        env_file=".env",
         extra="ignore",
     )
 
@@ -176,7 +171,6 @@ class WorkspaceChangeStreamSettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_WORKSPACE_CHANGE_STREAM_",
-        env_file=".env",
         extra="ignore",
     )
 

@@ -70,6 +70,51 @@ class WorkspaceStorageConfig(ContractModel):
     prefix: str = ""
     config: dict[str, JsonValue] = Field(default_factory=dict)
 
+    # The connection settings arrive as an open JSON bag because an externally
+    # attached bucket may carry provider-specific keys. These accessors are the
+    # one place that bag is read, so every consumer normalizes it identically.
+
+    @property
+    def endpoint_url(self) -> str:
+        return _storage_config_text(self.config.get("endpoint_url"))
+
+    @property
+    def region(self) -> str:
+        return _storage_config_text(self.config.get("region"))
+
+    @property
+    def access_key(self) -> str:
+        return _storage_config_text(self.config.get("access_key"))
+
+    @property
+    def secret_key(self) -> str:
+        return _storage_config_text(self.config.get("secret_key"))
+
+    @property
+    def force_path_style(self) -> bool:
+        value = self.config.get("force_path_style")
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.lower() in {"1", "true", "yes", "on"}
+        return False
+
+    @property
+    def key_prefix(self) -> str:
+        """Normalize `prefix` into a key-joinable form, empty or trailing-slashed.
+
+        The container's mount and the presigned URL both derive their keys from
+        this, so it is the one place the two can be kept in step.
+        """
+        segments = [segment for segment in self.prefix.split("/") if segment and segment != "."]
+        return f"{'/'.join(segments)}/" if segments else ""
+
+
+def _storage_config_text(value: JsonValue) -> str:
+    if value is None:
+        return ""
+    return value if isinstance(value, str) else str(value)
+
 
 class WorkspaceRecord(ContractModel):
     id: str

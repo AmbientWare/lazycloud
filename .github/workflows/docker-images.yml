@@ -106,32 +106,3 @@ jobs:
             container-worker.cache-to=type=gha,mode=max,scope=docker-images-worker
             container-worker.tags=ghcr.io/${{ github.repository }}-container-worker:${{ github.sha }}
 
-  storage-gateway:
-    name: Build storage-gateway image
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: Login to GHCR
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build storage-gateway image
-        uses: docker/bake-action@v7
-        with:
-          source: .
-          files: docker/bake.hcl
-          targets: storage-gateway
-          push: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') }}
-          set: |
-            storage-gateway.cache-from=type=gha,scope=docker-images-storage-gateway
-            storage-gateway.cache-to=type=gha,mode=max,scope=docker-images-storage-gateway
-            storage-gateway.tags=ghcr.io/${{ github.repository }}-storage-gateway:${{ github.sha }}

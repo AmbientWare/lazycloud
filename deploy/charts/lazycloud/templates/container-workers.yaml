@@ -56,8 +56,6 @@
 {{- $dataStorageJuicefsBlockSize := dig "dataStorage" "juicefsBlockSize" $.Values.containerWorkers.dataStorage.juicefsBlockSize $pool }}
 {{- $dataStorageJuicefsPrefetch := dig "dataStorage" "juicefsPrefetch" $.Values.containerWorkers.dataStorage.juicefsPrefetch $pool }}
 {{- $dataStorageJuicefsBufferSize := dig "dataStorage" "juicefsBufferSize" $.Values.containerWorkers.dataStorage.juicefsBufferSize $pool }}
-{{- $workspaceStorageAvailable := dig "workspaceStorage" "available" $.Values.containerWorkers.workspaceStorage.available $pool }}
-{{- $workspaceStorageMountsEnabled := dig "workspaceStorage" "mountsEnabled" $.Values.containerWorkers.workspaceStorage.mountsEnabled $pool }}
 {{- $workspaceStorageMode := dig "workspaceStorage" "mode" $.Values.containerWorkers.workspaceStorage.mode $pool }}
 {{- $workspaceStorageBaseMountPath := dig "workspaceStorage" "baseMountPath" $.Values.containerWorkers.workspaceStorage.baseMountPath $pool }}
 {{- $workspaceStorageMountpointBinary := dig "workspaceStorage" "mountpointBinary" $.Values.containerWorkers.workspaceStorage.mountpointBinary $pool }}
@@ -238,11 +236,6 @@ spec:
             - {{ $.Values.objectStore.bucket | quote }}
             - --data-storage-bucket
             - {{ $dataStorageBucket | quote }}
-            {{- if $workspaceStorageMountsEnabled }}
-            - --workspace-storage-mounts
-            {{- else }}
-            - --no-workspace-storage-mounts
-            {{- end }}
             - --workspace-storage-mode
             - {{ $workspaceStorageMode | quote }}
             - --workspace-storage-base-mount-path
@@ -343,14 +336,10 @@ spec:
               value: {{ $dataStorageJuicefsPrefetch | quote }}
             - name: DATA_STORAGE_JUICEFS_BUFFER_SIZE
               value: {{ $dataStorageJuicefsBufferSize | quote }}
-            - name: WORKER_WORKSPACE_STORAGE_MOUNTS_ENABLED
-              value: {{ $workspaceStorageMountsEnabled | quote }}
             - name: WORKER_WORKSPACE_STORAGE_MODE
               value: {{ $workspaceStorageMode | quote }}
             - name: WORKER_WORKSPACE_STORAGE_BASE_MOUNT_PATH
               value: {{ $workspaceStorageBaseMountPath | quote }}
-            - name: WORKER_WORKSPACE_STORAGE_AVAILABLE
-              value: {{ $workspaceStorageAvailable | quote }}
             - name: WORKER_WORKSPACE_STORAGE_MOUNTPOINT_BINARY
               value: {{ $workspaceStorageMountpointBinary | quote }}
             - name: WORKER_ARTIFACT_RETENTION_ENABLED

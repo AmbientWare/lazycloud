@@ -376,7 +376,6 @@ class WorkerImageStartupLoader:
 class WorkerRequestMountPreparer:
     mountpoint_backend: WorkerMountPointBackend | None = None
     source_materializer: SourceCodePackageMaterializer | None = None
-    workspace_storage_available: bool = False
 
     def setup_mounts(self, request: ContainerRequestContext) -> ContainerMountSetupResult:
         if not request.mounts:
@@ -386,9 +385,7 @@ class WorkerRequestMountPreparer:
             request_mounts,
             container_id=request.container_id,
             workspace_name=request.workspace_name or request.workspace_id,
-            workspace_storage_available=(
-                self.workspace_storage_available or request.workspace_storage_available
-            ),
+            workspace_storage_available=request.workspace_storage_available,
             workspace_storage_base_mount_path=request.workspace_storage_base_mount_path,
         )
         try:

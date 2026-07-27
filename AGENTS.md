@@ -15,6 +15,11 @@ repeat this policy.
 - Do not create fake success paths. Acceptance uses the production
   implementation and contracts; local processes may use real Docker-backed
   dependencies where those are the production boundary.
+- Use the single best production route. Do not add feature flags, capability
+  gates, environment switches, or fallbacks that let test and production take
+  different paths, and do not silently degrade to a weaker backend. A path only
+  production takes is a path only production debugs. Where a capability is
+  genuinely unavailable, fail loudly and name the reason.
 - Protect secrets and user work. Never expose secrets in output, URLs, logs,
   tests, comments, docs, or durable records. Inspect the dirty tree, preserve
   unrelated changes, and stage only intentional files.

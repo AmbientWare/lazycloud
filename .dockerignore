@@ -21,3 +21,41 @@ playwright-report/
 **/playwright-report/
 coverage/
 **/coverage/
+# Web build output. Generated at build time and never wanted in an image
+# context; .output alone is 12M and grows with the site.
+.output/
+**/.output/
+.nuxt/
+**/.nuxt/
+.nitro/
+**/.nitro/
+.source/
+**/.source/
+.tanstack/
+**/.tanstack/
+lazycloud_clients/
+
+# Local state and credentials. These must never reach a build context, where
+# they would be baked into a layer.
+.env.*
+!.env.example
+.lazycloud
+.terraform/
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfplan.*
+*.tfbackend
+terraform.tfvars
+*.auto.tfvars
+kubeconfig
+talosconfig
+secrets-backup/
+*.token
+*.pem
+*.key
+
+# Test scratch
+.coverage
+.htmlcov/

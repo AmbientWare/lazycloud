@@ -83,7 +83,6 @@ def test_volume_metering_records_byte_seconds_and_advances_checkpoint(
     assert measured.byte_seconds == len(payload) * 5
     assert measured.usage_record.metric is UsageMetric.PersistentVolumeByteSeconds
     assert measured.usage_record.unit is UsageUnit.ByteSeconds
-    assert measured.usage_record.labels["storage_backend"] == "juicefs"
     assert measured.usage_record.metadata["previous_size_bytes"] == len(payload)
     assert duplicate is None
     with isolated_services.context.database.session() as session:
