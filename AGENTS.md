@@ -179,18 +179,26 @@ architecture choice is genuinely unresolved.
 
 ## Work And Collaboration
 
-Use `board/todo.md`, `board/loop.md`, and `board/finished.md` only for substantial
-big-ticket work that genuinely needs tracked design, ownership, dependencies,
-or multiple acceptance checkpoints. Small fixes, subtasks, contained
-implementation, docs/config changes, and incidental follow-ups proceed directly
-without board bookkeeping, even when discovered during tracked work. Board
-entries record outcome, decisions, blockers, and concise evidence—not command
-diaries.
+GitHub Issues track work; the `ticket` label marks a tracked ticket. Open one
+only for substantial big-ticket work that genuinely needs tracked design,
+ownership, dependencies, or multiple acceptance checkpoints. Small fixes,
+subtasks, contained implementation, docs/config changes, and incidental
+follow-ups proceed directly without a ticket, even when discovered during
+tracked work.
 
-While `findings.md` remains open, findings work integrates in the shared main
-worktree with disjoint file ownership. Afterwards, board-managed code changes
-use a feature branch/worktree recorded on the active task; rebase, validate a
-clean feature tree, merge, and remove it after acceptance.
+Work continues under the ticket that owns it until that ticket is complete. Do
+not open a new ticket for follow-up, remaining scope, or a blocker discovered
+inside tracked work—record it as a comment on the owning ticket and keep going.
+Open a separate ticket only when the work has a genuinely different owner or
+outcome and would stand alone. Comments record outcome, decisions, blockers, and
+concise evidence—not command diaries. The issue body stays the current
+description of the ticket; edit it when scope changes rather than appending
+corrections.
+
+Ticket work uses a branch per ticket. Rebase, validate a clean feature tree, and
+merge through a pull request that references the ticket and closes it. A ticket
+is done when its acceptance passes and its pull request merges; move it on the
+board rather than restating the outcome in a file.
 
 Parallel work is optional and only for clearly disjoint scopes. The manager
 keeps ownership explicit, reviews returned work, and runs integrated acceptance.
