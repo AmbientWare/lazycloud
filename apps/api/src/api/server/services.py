@@ -1447,6 +1447,10 @@ def _worker_repository_service(
         container_credentials=WorkerCredentialService(
             services=core,
             container_repository=scheduler_containers,
+            platform_storage_endpoint=core.object_store_settings.endpoint_url or "",
+            platform_storage_public_endpoint=(
+                core.object_store_settings.presigned_endpoint_url or ""
+            ),
         ),
         origin_credentials=WorkerCacheOriginCredentialService(
             services=core,

@@ -125,6 +125,8 @@ class WorkerCredentialService:
     container_repository: WorkerCredentialContainerRepository | None = None
     container_lookup: WorkerCredentialContainerLookup | None = None
     gateway_token_ttl_seconds: int = DEFAULT_GATEWAY_TOKEN_TTL_SECONDS
+    platform_storage_endpoint: str = ""
+    platform_storage_public_endpoint: str = ""
     _gateway_token_leases: dict[str, _GatewayTokenLease] = field(
         default_factory=dict, init=False, repr=False
     )
@@ -270,7 +272,23 @@ class WorkerCredentialService:
         if not storage.bucket:
             msg = f"workspace storage is unavailable for {workspace_id!r}"
             raise WorkerCredentialError(msg)
-        return workspace_storage_credentials(storage)
+        credentials = workspace_storage_credentials(storage)
+        return credentials.model_copy(
+            update={"endpoint_url": self._reachable_endpoint(credentials.endpoint_url)}
+        )
+
+    def _reachable_endpoint(self, endpoint_url: str) -> str:
+        """Address the object store by a name the worker can actually resolve.
+
+        The stored endpoint is the one control-plane services use inside the
+        deployment. A worker runs outside that network — on customer hardware it
+        always does — so it reaches platform storage the same way a client does.
+        """
+        if not self.platform_storage_endpoint or not self.platform_storage_public_endpoint:
+            return endpoint_url
+        if endpoint_url.strip().rstrip("/") != self.platform_storage_endpoint.strip().rstrip("/"):
+            return endpoint_url
+        return self.platform_storage_public_endpoint
 
     def _mount_credentials(
         self,
