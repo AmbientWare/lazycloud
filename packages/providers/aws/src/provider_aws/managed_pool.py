@@ -543,6 +543,14 @@ class Boto3AwsManagedPoolClientProvider:
         )
 
 
+class _Image(_Response):
+    root_device_name: str = Field(default="", alias="RootDeviceName")
+
+
+class _Images(_Response):
+    values: tuple[_Image, ...] = Field(default=(), alias="Images")
+
+
 class _LaunchTemplate(_Response):
     id: str = Field(alias="LaunchTemplateId")
     latest_version: int = Field(alias="LatestVersionNumber")
@@ -781,22 +789,21 @@ class AwsManagedPoolProvisioner:
         AMI's default root size.
         """
         try:
-            response = self._ec2(
-                "describe capacity image",
-                self._clients.ec2.describe_images,
-                ImageIds=[ami_id],
+            described = _validate(
+                _Images,
+                self._ec2(
+                    "describe capacity image",
+                    self._clients.ec2.describe_images,
+                    ImageIds=[ami_id],
+                ),
+                operation="describe capacity image",
             )
         except AwsProviderControlError:
             return _DEFAULT_ROOT_DEVICE_NAME
-        images = response.get("Images")
-        if not isinstance(images, list) or not images:
-            return _DEFAULT_ROOT_DEVICE_NAME
-        described = images[0]
-        if not isinstance(described, Mapping):
-            return _DEFAULT_ROOT_DEVICE_NAME
-        root_device_name = described.get("RootDeviceName")
-        if isinstance(root_device_name, str) and root_device_name.strip():
-            return root_device_name.strip()
+        for image in described.values:
+            root_device_name = image.root_device_name.strip()
+            if root_device_name:
+                return root_device_name
         return _DEFAULT_ROOT_DEVICE_NAME
 
     def _ensure_launch_template(
