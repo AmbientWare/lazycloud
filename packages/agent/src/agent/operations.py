@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import math
-import os
 import posixpath
 import re
 from collections.abc import Mapping
@@ -16,6 +15,7 @@ from networking.routing import BackendDialPlan, TailnetPeer, build_backend_dial_
 from pydantic import Field, JsonValue, field_validator
 from shared.app_identity import (
     ADMIN_CLI_NAME,
+    AGENT_CONTAINER_DATA_PATH,
     AGENT_CONTAINER_LOG_PATH,
     AGENT_CONTAINER_TMP_PATH,
     AGENT_NAME,
@@ -25,7 +25,6 @@ from shared.app_identity import (
 )
 from shared.capacity import CAPACITY_OWNER_ID_PATTERN
 from shared.compute_enrollment import AgentCapacityState, PreflightSeverity
-from shared.container_requests import DEFAULT_DATA_STORAGE_PATH
 from shared.contracts import ContractModel
 from shared.env import (
     GATEWAY_GRPC_HOST_ENV,
@@ -1358,48 +1357,6 @@ def build_agent_worker_dirs(state_dir: str, worker_id: str) -> AgentWorkerDirs:
     )
 
 
-DATA_STORAGE_SLOT_ENV = (
-    "DATA_STORAGE_MODE",
-    "DATA_STORAGE_BUCKET",
-    "DATA_STORAGE_ENDPOINT_URL",
-    "DATA_STORAGE_REGION_NAME",
-    "DATA_STORAGE_ACCESS_KEY_ID",
-    "DATA_STORAGE_SECRET_ACCESS_KEY",
-    "DATA_STORAGE_FORCE_PATH_STYLE",
-    "DATA_STORAGE_JUICEFS_REDIS_URL",
-    "DATA_STORAGE_JUICEFS_FILESYSTEM_NAME",
-)
-
-
-def agent_data_storage_mode() -> StorageMountMode:
-    """Storage mode for this agent's worker slots.
-
-    A platform-operated agent is deployed with store settings and its slots mount
-    the shared filesystem. Without them there is no durable store, and volume
-    work is refused rather than written to a directory that disappears.
-    """
-    return StorageMountMode.JuiceFs if agent_data_storage_env() else StorageMountMode.Local
-
-
-def agent_data_storage_env() -> dict[str, str]:
-    """Durable data-store settings this agent passes to its worker slots.
-
-    Platform-operated agents are deployed with these values, so their slots can
-    back platform volumes. Agents on customer infrastructure are not, so their
-    slots have no store and volume-bearing work is refused rather than written
-    to disk that disappears. Cloud buckets remain available everywhere.
-    """
-    present = {name: os.environ.get(name, "") for name in DATA_STORAGE_SLOT_ENV}
-    required = (
-        "DATA_STORAGE_BUCKET",
-        "DATA_STORAGE_ENDPOINT_URL",
-        "DATA_STORAGE_JUICEFS_REDIS_URL",
-    )
-    if not all(present.get(name) for name in required):
-        return {}
-    return {name: value for name, value in present.items() if value}
-
-
 def agent_gateway_env(bootstrap: AgentBootstrap) -> dict[str, str]:
     runtime_http_url = bootstrap.gateway_runtime_http_url or bootstrap.gateway_public_http_url
     http_host, http_port, http_tls = agent_gateway_http_parts(runtime_http_url)
@@ -1457,11 +1414,8 @@ def build_agent_worker_config(
             checkpoint_root="/checkpoints",
         ),
         data_storage=WorkerDataStorageConfiguration(
-            mode=agent_data_storage_mode(),
-            # One shared path everywhere. The control plane names a volume by its
-            # location under this root, so a worker that rooted its data anywhere
-            # else would bind a path nothing backs.
-            path=DEFAULT_DATA_STORAGE_PATH,
+            mode=StorageMountMode.Local,
+            path=AGENT_CONTAINER_DATA_PATH,
         ),
         monitoring=WorkerMonitoringConfiguration(
             metrics_enabled=True,
@@ -1525,11 +1479,10 @@ def plan_worker_container(
         env["NVIDIA_VISIBLE_DEVICES"] = assignment
         env["WORKER_GPU_DEVICES"] = assignment
     env.update(agent_gateway_env(bootstrap))
-    store_env = agent_data_storage_env()
-    env.update(store_env)
     volumes = [
         f"{dirs.images}:/images",
         f"{dirs.tmp}:{AGENT_CONTAINER_TMP_PATH}",
+        f"{dirs.data}:{AGENT_CONTAINER_DATA_PATH}",
         f"{dirs.workspace}:/workspace",
         f"{dirs.cache}:/cache",
         f"{dirs.builds}:/builds",
@@ -1537,11 +1490,6 @@ def plan_worker_container(
         f"{dirs.logs}:{AGENT_CONTAINER_LOG_PATH}",
         f"{config_path}:{DEFAULT_WORKER_CONFIG_PATH}:ro",
     ]
-    if not store_env:
-        # No durable store for this agent, so the slot keeps a host-backed data
-        # directory for its own scratch. With a store the worker mounts it at
-        # this path itself and a host bind would shadow it.
-        volumes.insert(2, f"{dirs.data}:{DEFAULT_DATA_STORAGE_PATH}")
     docker_args = _worker_docker_args(
         name=name,
         image=image,

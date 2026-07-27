@@ -8,7 +8,6 @@ import re
 import shutil
 import socket
 import tarfile
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
@@ -39,16 +38,8 @@ from shared.checkpoints import CheckpointRecord
 from shared.env import GATEWAY_HTTP_URL_ENV, WORKER_REPOSITORY_URL_ENV
 from shared.routing import BackendRouteTransport
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
-from storage_client.data_mounts import (
-    MountedDataStorageConfig,
-    MountedDataStorageManager,
-    s3_bucket_url,
-)
 from storage_client.mounts import (
-    JuiceFsMountConfig,
-    MountPointConfig,
     StorageMountMode,
-    is_mounted,
 )
 from worker.adapters import (
     WorkerRouteIdentity,
@@ -103,10 +94,10 @@ from worker.container_service.supervisor_process_manager import (
     SupervisorSandboxProcessManagerFactory,
 )
 from worker.container_startup import (
+    WorkerImageArchiveCacheMetadata,
     IMAGE_MOUNT_MANIFEST_NAME,
     HostPortAllocator,
     ImageMountManifest,
-    WorkerImageArchiveCacheMetadata,
     WorkerImageArchiveMounter,
     WorkerImageArchiveSourceLoader,
     WorkerImageMountRequest,
@@ -526,10 +517,6 @@ class ProductionWorkerSettings(BaseSettings):
         default=300,
         validation_alias="DATA_STORAGE_JUICEFS_BUFFER_SIZE",
     )
-    workspace_storage_mounts_enabled: bool = Field(
-        default=False,
-        validation_alias="WORKER_WORKSPACE_STORAGE_MOUNTS_ENABLED",
-    )
     workspace_storage_mode: WorkerStorageMode = Field(
         default=WorkerStorageMode.JuiceFs,
         validation_alias="WORKER_WORKSPACE_STORAGE_MODE",
@@ -537,10 +524,6 @@ class ProductionWorkerSettings(BaseSettings):
     workspace_storage_base_mount_path: str = Field(
         default="/workspace",
         validation_alias="WORKER_WORKSPACE_STORAGE_BASE_MOUNT_PATH",
-    )
-    workspace_storage_available: bool = Field(
-        default=False,
-        validation_alias="WORKER_WORKSPACE_STORAGE_AVAILABLE",
     )
     workspace_storage_mountpoint_binary: str = Field(
         default="ms3",
@@ -1412,29 +1395,23 @@ def build_production_worker_process_services(
         publish_source_to_cache=cache_server is not None,
     )
     gpu_assigner = _gpu_assigner(config)
-    if _data_storage_configured(config):
-        MountedDataStorageManager(_worker_data_storage_config(config)).ensure_mounted()
-    workspace_storage_mounter = (
-        WorkerWorkspaceStorageManager(
-            config=WorkspaceStorageConfig(
-                base_mount_path=config.workspace_storage_base_mount_path,
-                default_storage_mode=config.workspace_storage_mode,
-                juicefs=WorkspaceJuiceFsStorageConfig(
-                    redis_uri=config.data_storage_juicefs_redis_url,
-                    cache_size=config.data_storage_juicefs_cache_size,
-                    block_size=config.data_storage_juicefs_block_size,
-                    prefetch=config.data_storage_juicefs_prefetch,
-                    buffer_size=config.data_storage_juicefs_buffer_size,
-                    filesystem_name=config.data_storage_juicefs_filesystem_name,
-                ),
-                mountpoint=WorkspaceMountPointStorageConfig(
-                    binary=config.workspace_storage_mountpoint_binary,
-                ),
+    workspace_storage_mounter = WorkerWorkspaceStorageManager(
+        config=WorkspaceStorageConfig(
+            base_mount_path=config.workspace_storage_base_mount_path,
+            default_storage_mode=config.workspace_storage_mode,
+            juicefs=WorkspaceJuiceFsStorageConfig(
+                redis_uri=config.data_storage_juicefs_redis_url,
+                cache_size=config.data_storage_juicefs_cache_size,
+                block_size=config.data_storage_juicefs_block_size,
+                prefetch=config.data_storage_juicefs_prefetch,
+                buffer_size=config.data_storage_juicefs_buffer_size,
+                filesystem_name=config.data_storage_juicefs_filesystem_name,
             ),
-            mode=config.workspace_storage_mode,
-        )
-        if config.workspace_storage_mounts_enabled
-        else None
+            mountpoint=WorkspaceMountPointStorageConfig(
+                binary=config.workspace_storage_mountpoint_binary,
+            ),
+        ),
+        mode=config.workspace_storage_mode,
     )
     image_archiver = TarContainerImageArchiver(
         target_root=Path(config.resolved_image_cache_path),
@@ -1456,8 +1433,6 @@ def build_production_worker_process_services(
         mount_preparer=WorkerRequestMountPreparer(
             request_mounts,
             source_materializer,
-            workspace_storage_available=config.workspace_storage_available,
-            volume_store_probe=_volume_store_probe(config),
         ),
         spec_builder=OciRuntimeSpecBuilder(
             bundle_root=config.resolved_bundle_root,
@@ -1475,7 +1450,6 @@ def build_production_worker_process_services(
             instances=instance_store,
             identity=identity,
             cache_available=cache_server is not None,
-            workspace_storage_available=config.workspace_storage_available,
         ),
         credential_hydrator=credential_hydrator,
         checkpoint_restorer=RuntimeCheckpointRestorer(
@@ -1583,99 +1557,6 @@ def _container_cost_resolver(
     )
 
 
-def _data_storage_configured(config: ProductionWorkerSettings) -> bool:
-    """Whether this worker was given a durable data store to mount.
-
-    A worker without one still runs ordinary work; it simply cannot back
-    platform volumes, and requests that need one are refused rather than served
-    from local disk.
-    """
-    if config.resolved_data_storage_mode is StorageMountMode.Local:
-        return False
-    if not config.data_storage_bucket or not config.data_storage_endpoint_url:
-        return False
-    if config.resolved_data_storage_mode is StorageMountMode.JuiceFs:
-        return bool(config.data_storage_juicefs_redis_url)
-    return True
-
-
-def _volume_store_probe(config: ProductionWorkerSettings) -> Callable[[], bool]:
-    """Report whether data storage is genuinely mounted on this worker.
-
-    Probed rather than assumed: the mount is held open by a background process,
-    and if it exits the path reverts to an ordinary writable directory that would
-    accept writes and lose them.
-    """
-    data_storage_path = config.resolved_data_storage_path
-    return lambda: is_mounted(data_storage_path)
-
-
-def _worker_data_storage_config(config: ProductionWorkerSettings) -> MountedDataStorageConfig:
-    bucket = config.data_storage_bucket
-    endpoint_url = config.data_storage_endpoint_url
-    region = config.data_storage_region_name
-    access_key = config.data_storage_access_key_id
-    secret_key = config.data_storage_secret_access_key
-    force_path_style = config.data_storage_force_path_style
-    return MountedDataStorageConfig(
-        mode=config.resolved_data_storage_mode,
-        local_path=config.resolved_data_storage_path,
-        # The platform formats this filesystem once, during deployment. A worker
-        # that formats on boot can silently bind a filesystem pointing at a
-        # different object store than the gateway serves.
-        format_juicefs=False,
-        juicefs=(
-            JuiceFsMountConfig(
-                redis_uri=config.data_storage_juicefs_redis_url,
-                bucket=s3_bucket_url(
-                    endpoint_url=endpoint_url,
-                    bucket_name=bucket,
-                    force_path_style=force_path_style,
-                ),
-                access_key=access_key,
-                secret_key=secret_key,
-                cache_size=config.data_storage_juicefs_cache_size,
-                block_size=config.data_storage_juicefs_block_size,
-                prefetch=config.data_storage_juicefs_prefetch,
-                buffer_size=config.data_storage_juicefs_buffer_size,
-                filesystem_name=config.data_storage_juicefs_filesystem_name,
-            )
-            if config.resolved_data_storage_mode is StorageMountMode.JuiceFs
-            else None
-        ),
-        mountpoint=(
-            MountPointConfig(
-                bucket_name=bucket,
-                access_key=access_key,
-                secret_key=secret_key,
-                endpoint_url=endpoint_url,
-                region=region,
-                force_path_style=force_path_style,
-            )
-            if config.resolved_data_storage_mode is StorageMountMode.MountPoint
-            else None
-        ),
-    )
-
-
-@dataclass(slots=True)
-class CacheServerImageArchiveMetadataProvider:
-    cache: FileCacheServer | WorkerCacheHttpClient
-
-    def image_archive_metadata(self, cache_path: str) -> WorkerImageArchiveCacheMetadata:
-        try:
-            metadata = self.cache.content_metadata(cache_path)
-        except CacheUnavailableError as exc:
-            return WorkerImageArchiveCacheMetadata(error=str(exc), reachable=False)
-        if metadata is None or not metadata.complete:
-            return WorkerImageArchiveCacheMetadata(error="content_not_found", reachable=False)
-        return WorkerImageArchiveCacheMetadata(
-            content_hash=metadata.content_hash,
-            size_bytes=metadata.size_bytes,
-            reachable=True,
-        )
-
-
 def _worker_content_cache(
     config: ProductionWorkerSettings,
 ) -> FileCacheServer | WorkerCacheHttpClient | None:
@@ -1771,6 +1652,24 @@ def planned_scheduler_worker_record_from_settings(
         config,
         [config.resolved_runtime],
     )
+
+
+@dataclass(slots=True)
+class CacheServerImageArchiveMetadataProvider:
+    cache: FileCacheServer | WorkerCacheHttpClient
+
+    def image_archive_metadata(self, cache_path: str) -> WorkerImageArchiveCacheMetadata:
+        try:
+            metadata = self.cache.content_metadata(cache_path)
+        except CacheUnavailableError as exc:
+            return WorkerImageArchiveCacheMetadata(error=str(exc), reachable=False)
+        if metadata is None or not metadata.complete:
+            return WorkerImageArchiveCacheMetadata(error="content_not_found", reachable=False)
+        return WorkerImageArchiveCacheMetadata(
+            content_hash=metadata.content_hash,
+            size_bytes=metadata.size_bytes,
+            reachable=True,
+        )
 
 
 def _scheduler_worker_record(

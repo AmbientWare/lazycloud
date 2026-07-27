@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import socket
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -377,19 +376,6 @@ class WorkerImageStartupLoader:
 class WorkerRequestMountPreparer:
     mountpoint_backend: WorkerMountPointBackend | None = None
     source_materializer: SourceCodePackageMaterializer | None = None
-    workspace_storage_available: bool = False
-    volume_store_probe: Callable[[], bool] | None = None
-
-    def _volume_store_available(self) -> bool:
-        """Probe the store rather than trusting a flag set earlier in startup.
-
-        The JuiceFS client is a managed background process. If it exits, the
-        mount root silently reverts to an ordinary writable directory, so a
-        stale flag would let a container bind local disk believing it is backed.
-        """
-        if self.volume_store_probe is None:
-            return False
-        return self.volume_store_probe()
 
     def setup_mounts(self, request: ContainerRequestContext) -> ContainerMountSetupResult:
         if not request.mounts:
@@ -399,11 +385,8 @@ class WorkerRequestMountPreparer:
             request_mounts,
             container_id=request.container_id,
             workspace_name=request.workspace_name or request.workspace_id,
-            workspace_storage_available=(
-                self.workspace_storage_available or request.workspace_storage_available
-            ),
+            workspace_storage_available=request.workspace_storage_available,
             workspace_storage_base_mount_path=request.workspace_storage_base_mount_path,
-            volume_store_available=self._volume_store_available(),
         )
         try:
             for mount in setup.mountpoint_mounts:

@@ -15,7 +15,6 @@ DEFAULT_OUTPUTS_PATH = "/data/outputs"
 DEFAULT_VOLUMES_PREFIX = "volumes"
 DEFAULT_OUTPUTS_PREFIX = "outputs"
 DEFAULT_WORKSPACE_STORAGE_BASE_MOUNT_PATH = "/workspace"
-DEFAULT_DATA_STORAGE_PATH = "/data"
 CONTAINER_INNER_PORT = 8001
 
 
@@ -90,35 +89,6 @@ class RequestMountPointConfig(ContractModel):
         return self
 
 
-class RequestVolumeStoreConfig(ContractModel):
-    """Identity of the platform store backing a volume mount.
-
-    Carries no credentials. The worker resolves the store from its own
-    configuration; this only names which filesystem and which path within it the
-    mount must resolve to, so a worker can refuse a mount it cannot back.
-    """
-
-    filesystem_name: str
-    root_path: str = DEFAULT_DATA_STORAGE_PATH
-    relative_path: str
-
-    @field_validator("filesystem_name", "relative_path")
-    @classmethod
-    def value_must_be_set(cls, value: str) -> str:
-        if not value.strip():
-            msg = "volume store filesystem name and relative path are required"
-            raise ValueError(msg)
-        return value
-
-    @field_validator("relative_path")
-    @classmethod
-    def relative_path_must_stay_inside_store(cls, value: str) -> str:
-        if value.startswith("/") or ".." in value.split("/"):
-            msg = "volume store relative path must be relative and must not traverse upward"
-            raise ValueError(msg)
-        return value
-
-
 class RequestMount(ContractModel):
     local_path: str = ""
     mount_path: str
@@ -126,7 +96,6 @@ class RequestMount(ContractModel):
     read_only: bool = False
     mount_type: RequestMountType = RequestMountType.Local
     mountpoint_config: RequestMountPointConfig | None = None
-    volume_config: RequestVolumeStoreConfig | None = None
     source_object_id: str = ""
     source_sha256: str = ""
     source_download_url: str = ""
@@ -138,15 +107,6 @@ class RequestMount(ContractModel):
             msg = "mount_path is required"
             raise ValueError(msg)
         return value
-
-    @model_validator(mode="after")
-    def platform_volume_declares_its_store(self) -> RequestMount:
-        # A volume mount without a store is exactly the shape that silently fell
-        # back to ephemeral local disk; make it unconstructible.
-        if self.mount_type is RequestMountType.Volume and self.volume_config is None:
-            msg = "platform volume mount requires volume_config"
-            raise ValueError(msg)
-        return self
 
 
 class WorkerContainerRequestPayload(ContractModel):
@@ -161,7 +121,6 @@ class WorkerContainerRequestPayload(ContractModel):
     secret_names: list[str] = Field(default_factory=list)
     gateway_token_required: bool = False
     workspace_storage_required: bool = False
-    volume_store_required: bool = False
     mounts: list[RequestMount] = Field(default_factory=list)
     workspace_storage_available: bool = False
     workspace_storage_base_mount_path: str = DEFAULT_WORKSPACE_STORAGE_BASE_MOUNT_PATH
@@ -197,7 +156,6 @@ class WorkerContainerRequestPayload(ContractModel):
 
 __all__ = [
     "CONTAINER_INNER_PORT",
-    "DEFAULT_DATA_STORAGE_PATH",
     "DEFAULT_OBJECTS_PATH",
     "DEFAULT_OUTPUTS_PATH",
     "DEFAULT_OUTPUTS_PREFIX",
@@ -212,7 +170,6 @@ __all__ = [
     "RequestMount",
     "RequestMountPointConfig",
     "RequestMountType",
-    "RequestVolumeStoreConfig",
     "RuntimeContainerStatus",
     "StopContainerReason",
     "WorkerContainerRequestPayload",

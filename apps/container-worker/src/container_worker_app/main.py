@@ -92,7 +92,6 @@ class ContainerWorkerArguments(argparse.Namespace):
     data_storage_path: str | None = None
     data_storage_bucket: str | None = None
     data_storage_juicefs_redis_url: str | None = None
-    workspace_storage_mounts_enabled: bool | None = None
     workspace_storage_mode: str | None = None
     workspace_storage_base_mount_path: str | None = None
     workspace_storage_mountpoint_binary: str | None = None
@@ -241,17 +240,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--data-storage-path")
     parser.add_argument("--data-storage-bucket")
     parser.add_argument("--data-storage-juicefs-redis-url")
-    parser.add_argument(
-        "--workspace-storage-mounts",
-        action="store_true",
-        dest="workspace_storage_mounts_enabled",
-        default=None,
-    )
-    parser.add_argument(
-        "--no-workspace-storage-mounts",
-        action="store_false",
-        dest="workspace_storage_mounts_enabled",
-    )
     parser.add_argument(
         "--workspace-storage-mode",
         choices=[item.value for item in WorkerStorageMode],
@@ -698,10 +686,6 @@ def _settings_from_args(args: ContainerWorkerArguments) -> ProductionWorkerSetti
         data_storage_juicefs_redis_url=_override(
             args.data_storage_juicefs_redis_url,
             base.data_storage_juicefs_redis_url,
-        ),
-        workspace_storage_mounts_enabled=_override(
-            args.workspace_storage_mounts_enabled,
-            base.workspace_storage_mounts_enabled,
         ),
         workspace_storage_mode=(
             WorkerStorageMode(args.workspace_storage_mode)

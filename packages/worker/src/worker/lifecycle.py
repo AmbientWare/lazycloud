@@ -7,8 +7,9 @@ from pathlib import Path
 
 from pydantic import Field, JsonValue, TypeAdapter, ValidationError, field_validator
 from shared.container_requests import (
-    DEFAULT_DATA_STORAGE_PATH,
     DEFAULT_OUTPUTS_PATH,
+    DEFAULT_VOLUMES_PATH,
+    DEFAULT_VOLUMES_PREFIX,
     DEFAULT_OUTPUTS_PREFIX,
     DEFAULT_WORKSPACE_STORAGE_BASE_MOUNT_PATH,
     WORKER_CONTAINER_VOLUME_PATH,
@@ -82,11 +83,6 @@ class RequestMountPrepareReason(StrEnum):
     EmptyLocalPath = "empty-local-path"
     MountPointExists = "mountpoint-exists"
     MountPointMissing = "mountpoint-missing"
-    VolumeStoreReady = "volume-store-ready"
-
-
-class WorkerVolumeStoreUnavailableError(RuntimeError):
-    """A platform volume mount cannot be backed by the platform store."""
 
 
 class BindMountSourceDirAction(StrEnum):
@@ -97,7 +93,6 @@ class BindMountSourceDirAction(StrEnum):
 class BindMountSourceDirReason(StrEnum):
     BindMountSource = "bind-mount-source"
     MountPoint = "mountpoint"
-    VolumeStore = "volume-store"
     EmptyLocalPath = "empty-local-path"
 
 
@@ -593,8 +588,23 @@ def adjust_mount_for_workspace_storage(
     workspace_name: str,
     base_mount_path: str = DEFAULT_WORKSPACE_STORAGE_BASE_MOUNT_PATH,
 ) -> RequestMount:
-    if mount.mount_type in {RequestMountType.Volume, RequestMountType.MountPoint}:
+    if mount.mount_type is RequestMountType.MountPoint:
         return mount
+    if mount.mount_type is RequestMountType.Volume:
+        # A platform volume lives in the workspace's own storage, so it resolves
+        # the same way outputs do. Without this the mount keeps the logical
+        # /data path, which nothing backs, and writes land on local disk.
+        return mount.model_copy(
+            update={
+                "local_path": rewrite_workspace_storage_local_path(
+                    mount.local_path,
+                    workspace_name=workspace_name,
+                    source_root=DEFAULT_VOLUMES_PATH,
+                    target_prefix=DEFAULT_VOLUMES_PREFIX,
+                    base_mount_path=base_mount_path,
+                )
+            }
+        )
     mount_path = mount.mount_path.rstrip("/")
     if mount_path != WORKER_USER_OUTPUT_VOLUME and not mount_path.startswith(
         WORKER_USER_OUTPUT_VOLUME + "/"
@@ -631,14 +641,11 @@ def plan_request_mount_setup(
     workspace_name: str,
     workspace_storage_available: bool,
     workspace_storage_base_mount_path: str = DEFAULT_WORKSPACE_STORAGE_BASE_MOUNT_PATH,
-    volume_store_available: bool = False,
 ) -> RequestMountSetupPlan:
     planned: list[RequestMount] = []
     mountpoint_mounts: list[RequestMount] = []
     for mount in mounts:
         current = mount
-        if current.mount_type is RequestMountType.Volume:
-            require_volume_store(current, available=volume_store_available)
         if workspace_storage_available:
             current = adjust_mount_for_workspace_storage(
                 current,
@@ -657,38 +664,6 @@ def plan_request_mount_setup(
         workspace_storage_base_mount_path=workspace_storage_base_mount_path,
         mountpoint_mounts=mountpoint_mounts,
     )
-
-
-def require_volume_store(mount: RequestMount, *, available: bool) -> None:
-    """Refuse a platform volume mount that no store can back.
-
-    The store root is a single shared constant, so the path the control plane
-    names is the path this worker mounts; a disagreement means the request was
-    built against a different contract and is refused rather than reinterpreted.
-
-    Refusing before any plan is produced or directory created is what turns a
-    missing store into a visible startup failure instead of a container quietly
-    writing to ephemeral local disk.
-    """
-    store = mount.volume_config
-    if store is None:
-        msg = f"platform volume mount {mount.mount_path} declares no store configuration"
-        raise WorkerVolumeStoreUnavailableError(msg)
-    if not available:
-        msg = (
-            f"this worker has no platform volume store, so {mount.mount_path} cannot be "
-            "backed. Platform volumes run on platform-operated compute; use a CloudBucket "
-            "volume on customer infrastructure. Refusing to start against local disk, "
-            "where writes would be invisible and lost when the container ends."
-        )
-        raise WorkerVolumeStoreUnavailableError(msg)
-    declared = posixpath.join(DEFAULT_DATA_STORAGE_PATH, store.relative_path)
-    if mount.local_path != declared or store.root_path != DEFAULT_DATA_STORAGE_PATH:
-        msg = (
-            f"platform volume mount {mount.mount_path} resolves to {mount.local_path!r}, "
-            f"not the store path {declared!r} this worker mounts"
-        )
-        raise WorkerVolumeStoreUnavailableError(msg)
 
 
 def plan_request_mount_preparation(
@@ -716,18 +691,6 @@ def plan_request_mount_preparation(
             mount=mount,
             action=RequestMountPrepareAction.Skip,
             reason=RequestMountPrepareReason.EmptyLocalPath,
-        )
-
-    if mount.mount_type is RequestMountType.Volume:
-        # Bind the store-backed path as-is. The store owns the directory, so this
-        # never asks for source-dir creation.
-        return PreparedRequestMount(
-            mount=mount,
-            action=RequestMountPrepareAction.Mount,
-            reason=RequestMountPrepareReason.VolumeStoreReady,
-            oci_mount=request_mount_oci_mount(mount),
-            link=_request_mount_link_plan(mount),
-            volume_cache_key=request_volume_cache_key(mount.mount_path),
         )
 
     cache_key = request_volume_cache_key(mount.mount_path)
@@ -790,18 +753,6 @@ def plan_bind_mount_source_dirs(mounts: list[RequestMount]) -> list[BindMountSou
                     local_path=mount.local_path,
                     action=BindMountSourceDirAction.Skip,
                     reason=BindMountSourceDirReason.MountPoint,
-                )
-            )
-            continue
-        if mount.mount_type is RequestMountType.Volume:
-            # The platform store owns this path. Creating it here is what made a
-            # missing store degrade silently into ephemeral local disk.
-            plans.append(
-                BindMountSourceDirPlan(
-                    mount_path=mount.mount_path,
-                    local_path=mount.local_path,
-                    action=BindMountSourceDirAction.Skip,
-                    reason=BindMountSourceDirReason.VolumeStore,
                 )
             )
             continue
