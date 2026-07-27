@@ -565,6 +565,7 @@ class ApiServices(ApiServiceCore):
         object_store_settings: S3ObjectStoreSettings | None = None,
         object_storage: ObjectStorage | None = None,
         object_store_client: ObjectByteClient | None = None,
+        workspace_storage_client: WorkspaceBucketClient | None = None,
         image_archive_settings: ImageArchiveSettings | None = None,
         image_archive_store: ImageBuildArchiveObjectStore | None = None,
         image_archive_presigner: PresignedPutClient | None = None,
@@ -713,7 +714,10 @@ class ApiServices(ApiServiceCore):
             owned_runtime_resources.append(created_image_archive_presigner)
         control_plane = ControlPlaneService(
             context,
-            workspace_storage_client=_workspace_bucket_client(object_storage_service.object_client),
+            workspace_storage_client=(
+                workspace_storage_client
+                or _workspace_bucket_client(object_storage_service.object_client)
+            ),
             workspace_storage_client_factory=_workspace_storage_client,
             workspace_changes=workspace_changes,
         )

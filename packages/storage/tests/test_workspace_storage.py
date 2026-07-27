@@ -131,7 +131,9 @@ def test_workspace_create_sets_up_default_storage_and_primary_token(
     assert created.workspace.storage.bucket == f"workspace-{created.workspace_id}"
     assert workspace.storage.bucket == f"workspace-{created.workspace_id}"
     assert workspace.storage.backend == "s3"
-    assert workspace.storage.prefix == created.workspace_id
+    # A dedicated bucket per workspace needs no prefix; it stays meaningful
+    # only for a bucket the customer attaches themselves.
+    assert workspace.storage.prefix == ""
     assert workspace.storage.config["endpoint_url"] == "http://storage:9000"
     assert workspace.storage.config["access_key"] == "default-access"
     assert bucket_client.created == [f"workspace-{created.workspace_id}"]

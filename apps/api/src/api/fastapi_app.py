@@ -430,6 +430,6 @@ def _provision_workspace_storage(api_services: ApiServices) -> None:
     storage client. Doing it at control-plane start keeps that credential in one
     place instead of handing it to the admin CLI.
     """
-    provisioned = api_services.control_plane_service.provision_missing_workspace_storage()
-    for name in provisioned:
-        logger.info("provisioned workspace storage for %s", name)
+    provisioned = api_services.control_plane_service.provision_bootstrap_workspace_storage()
+    if provisioned:
+        logger.info("provisioned workspace storage for %s", provisioned)

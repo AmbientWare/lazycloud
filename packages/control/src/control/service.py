@@ -331,20 +331,23 @@ class ControlPlaneService:
                 status=record.status.value,
             )
 
-    def provision_missing_workspace_storage(self) -> list[str]:
-        """Give every active workspace its storage, once, at control-plane start.
+    def provision_bootstrap_workspace_storage(self, workspace: str = "default") -> str:
+        """Give the bootstrap workspace its storage at control-plane start.
 
-        The bootstrap workspace is created through the identity repository, which
-        cannot know about object storage. Volumes and outputs have no fallback
-        tier, so a workspace without storage cannot run ordinary work.
+        It is created through the identity repository, which cannot know about
+        object storage, so it is the one workspace that never passes through
+        `create_workspace`. Every other workspace either provisions on creation
+        or is deliberately waiting to attach a bucket of its own, so a broader
+        sweep would hand those a platform bucket they never asked for.
         """
-        provisioned: list[str] = []
-        for record in self.list_workspaces():
-            if record.status is not WorkspaceStatus.Active or record.storage.bucket:
-                continue
-            self.ensure_workspace_storage(record.id)
-            provisioned.append(record.name)
-        return provisioned
+        try:
+            record = self.get_workspace(workspace)
+        except (NotFoundError, KeyError):
+            return ""
+        if record.storage.bucket:
+            return ""
+        self.ensure_workspace_storage(record.id)
+        return record.name
 
     def ensure_workspace_storage(self, workspace: str) -> WorkspaceRecord:
         """Provision workspace storage once, idempotently.
