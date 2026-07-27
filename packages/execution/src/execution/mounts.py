@@ -7,8 +7,8 @@ from database.repositories.storage import ObjectRepository
 from pydantic import BaseModel, JsonValue, TypeAdapter
 from shared.container_requests import (
     DEFAULT_OBJECTS_PATH,
-    DEFAULT_VOLUMES_PATH,
     DEFAULT_OUTPUTS_PATH,
+    DEFAULT_VOLUMES_PATH,
     WORKER_CONTAINER_VOLUME_PATH,
     WORKER_USER_CODE_VOLUME,
     WORKER_USER_OUTPUT_VOLUME,

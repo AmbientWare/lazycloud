@@ -94,10 +94,10 @@ from worker.container_service.supervisor_process_manager import (
     SupervisorSandboxProcessManagerFactory,
 )
 from worker.container_startup import (
-    WorkerImageArchiveCacheMetadata,
     IMAGE_MOUNT_MANIFEST_NAME,
     HostPortAllocator,
     ImageMountManifest,
+    WorkerImageArchiveCacheMetadata,
     WorkerImageArchiveMounter,
     WorkerImageArchiveSourceLoader,
     WorkerImageMountRequest,

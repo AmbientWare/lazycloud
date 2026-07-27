@@ -8,9 +8,9 @@ from pathlib import Path
 from pydantic import Field, JsonValue, TypeAdapter, ValidationError, field_validator
 from shared.container_requests import (
     DEFAULT_OUTPUTS_PATH,
+    DEFAULT_OUTPUTS_PREFIX,
     DEFAULT_VOLUMES_PATH,
     DEFAULT_VOLUMES_PREFIX,
-    DEFAULT_OUTPUTS_PREFIX,
     DEFAULT_WORKSPACE_STORAGE_BASE_MOUNT_PATH,
     WORKER_CONTAINER_VOLUME_PATH,
     WORKER_USER_OUTPUT_VOLUME,
