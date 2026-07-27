@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
 
+from pydantic import field_validator
 from shared.contracts import ContractModel
 
 from storage_client.mounts import (
@@ -13,7 +13,6 @@ from storage_client.mounts import (
     StorageMountManager,
     StorageMountMode,
     StorageMountResult,
-    StorageMountStatus,
     StorageMountSystem,
 )
 
@@ -25,11 +24,27 @@ class MountedDataStorageError(RuntimeError):
 
 
 class MountedDataStorageConfig(ContractModel):
-    mode: StorageMountMode = StorageMountMode.Local
+    """Durable data storage for a worker.
+
+    There is no local mode. Data storage holds volumes and outputs, which must
+    outlive the container that wrote them, and a local directory silently
+    accepts writes and loses them. Backing it always by an object store or a
+    shared filesystem makes that failure unrepresentable rather than guarded.
+    """
+
+    mode: StorageMountMode = StorageMountMode.JuiceFs
     local_path: str = DEFAULT_DATA_STORAGE_PATH
     format_juicefs: bool = True
     juicefs: JuiceFsMountConfig | None = None
     mountpoint: MountPointConfig | None = None
+
+    @field_validator("mode")
+    @classmethod
+    def mode_must_be_durable(cls, value: StorageMountMode) -> StorageMountMode:
+        if value is StorageMountMode.Local:
+            msg = "data storage must be juicefs or mountpoint; local storage is not durable"
+            raise ValueError(msg)
+        return value
 
 
 @dataclass(slots=True)
@@ -39,15 +54,6 @@ class MountedDataStorageManager:
 
     def ensure_mounted(self) -> StorageMountResult:
         local_path = self.config.local_path
-        if self.config.mode is StorageMountMode.Local:
-            Path(local_path).mkdir(parents=True, exist_ok=True)
-            return StorageMountResult(
-                mode=StorageMountMode.Local,
-                local_path=local_path,
-                status=StorageMountStatus.AlreadyMounted,
-                reason="local data storage path ready",
-            )
-
         manager = self._mount_manager()
         if isinstance(manager, JuiceFsMountManager) and self.config.format_juicefs:
             formatted = manager.format()
@@ -75,7 +81,7 @@ class MountedDataStorageManager:
                     raise MountedDataStorageError(msg)
                 return MountPointMountManager(self.config.mountpoint, system=self.system)
             case StorageMountMode.Local:
-                msg = "local data storage does not need a mount manager"
+                msg = "data storage must be juicefs or mountpoint; local storage is not durable"
                 raise MountedDataStorageError(msg)
 
 

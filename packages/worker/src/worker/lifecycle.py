@@ -671,8 +671,10 @@ def require_volume_store(mount: RequestMount, *, available: bool) -> None:
         raise WorkerVolumeStoreUnavailableError(msg)
     if not available:
         msg = (
-            f"platform volume store is not mounted on this worker, so {mount.mount_path} "
-            "cannot be backed; refusing to start the container against local disk"
+            f"this worker has no platform volume store, so {mount.mount_path} cannot be "
+            "backed. Platform volumes run on platform-operated compute; use a CloudBucket "
+            "volume on customer infrastructure. Refusing to start against local disk, "
+            "where writes would be invisible and lost when the container ends."
         )
         raise WorkerVolumeStoreUnavailableError(msg)
     expected = posixpath.join(store.root_path, store.relative_path)

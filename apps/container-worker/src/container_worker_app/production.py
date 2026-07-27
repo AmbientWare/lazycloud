@@ -1412,8 +1412,7 @@ def build_production_worker_process_services(
         publish_source_to_cache=cache_server is not None,
     )
     gpu_assigner = _gpu_assigner(config)
-    if config.resolved_data_storage_mode is not StorageMountMode.Local:
-        MountedDataStorageManager(_worker_data_storage_config(config)).ensure_mounted()
+    MountedDataStorageManager(_worker_data_storage_config(config)).ensure_mounted()
     workspace_storage_mounter = (
         WorkerWorkspaceStorageManager(
             config=WorkspaceStorageConfig(
@@ -1584,13 +1583,12 @@ def _container_cost_resolver(
 
 
 def _volume_store_probe(config: ProductionWorkerSettings) -> Callable[[], bool]:
-    """Report whether platform volumes are genuinely backed on this worker.
+    """Report whether data storage is genuinely mounted on this worker.
 
-    Local mode is never backed: it is an ordinary directory, which is exactly the
-    state that used to accept writes and lose them.
+    Probed rather than assumed: the mount is held open by a background process,
+    and if it exits the path reverts to an ordinary writable directory that would
+    accept writes and lose them.
     """
-    if config.resolved_data_storage_mode is StorageMountMode.Local:
-        return lambda: False
     data_storage_path = config.resolved_data_storage_path
     return lambda: is_mounted(data_storage_path)
 

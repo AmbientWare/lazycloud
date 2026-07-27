@@ -109,7 +109,7 @@ class WorkerPathConfiguration(ContractModel):
 
 
 class WorkerDataStorageConfiguration(ContractModel):
-    mode: StorageMountMode = StorageMountMode.Local
+    mode: StorageMountMode = StorageMountMode.JuiceFs
     path: str = DEFAULT_DATA_STORAGE_PATH
 
 

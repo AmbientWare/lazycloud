@@ -922,29 +922,6 @@ class AgentCapacityPlan(ContractModel):
     schedulable: bool = True
 
 
-class AgentVolumeStore(ContractModel):
-    """Connection facts for the platform volume store.
-
-    The control plane populates this only for pools it operates, because these
-    values grant access to every workspace's volume data. When it is absent the
-    worker runs without a volume store and any container declaring a platform
-    volume fails closed rather than writing to the agent's local disk.
-    """
-
-    juicefs_redis_url: str = ""
-    filesystem_name: str = ""
-    endpoint_url: str = ""
-    bucket: str = ""
-    region_name: str = ""
-    access_key_id: str = ""
-    secret_access_key: str = ""
-    force_path_style: bool = True
-
-    @property
-    def enabled(self) -> bool:
-        return bool(self.juicefs_redis_url and self.bucket and self.endpoint_url)
-
-
 class AgentBootstrap(ContractModel):
     gateway_public_http_url: str
     gateway_runtime_http_url: str = ""
@@ -955,7 +932,6 @@ class AgentBootstrap(ContractModel):
     image_local_cache_enabled: bool = True
     image_registry_store: str = "local"
     image_clip_version: int = 2
-    volume_store: AgentVolumeStore | None = None
 
     @field_validator("gateway_grpc_port", "image_clip_version")
     @classmethod
@@ -1381,22 +1357,6 @@ def build_agent_worker_dirs(state_dir: str, worker_id: str) -> AgentWorkerDirs:
     )
 
 
-def agent_volume_store_env(store: AgentVolumeStore) -> dict[str, str]:
-    """Worker-slot environment for mounting the platform volume store."""
-    return {
-        "DATA_STORAGE_MODE": StorageMountMode.JuiceFs.value,
-        "DATA_STORAGE_PATH": AGENT_CONTAINER_DATA_PATH,
-        "DATA_STORAGE_JUICEFS_REDIS_URL": store.juicefs_redis_url,
-        "DATA_STORAGE_JUICEFS_FILESYSTEM_NAME": store.filesystem_name,
-        "DATA_STORAGE_ENDPOINT_URL": store.endpoint_url,
-        "DATA_STORAGE_BUCKET": store.bucket,
-        "DATA_STORAGE_REGION_NAME": store.region_name,
-        "DATA_STORAGE_ACCESS_KEY_ID": store.access_key_id,
-        "DATA_STORAGE_SECRET_ACCESS_KEY": store.secret_access_key,
-        "DATA_STORAGE_FORCE_PATH_STYLE": str(store.force_path_style).lower(),
-    }
-
-
 def agent_gateway_env(bootstrap: AgentBootstrap) -> dict[str, str]:
     runtime_http_url = bootstrap.gateway_runtime_http_url or bootstrap.gateway_public_http_url
     http_host, http_port, http_tls = agent_gateway_http_parts(runtime_http_url)
@@ -1454,11 +1414,7 @@ def build_agent_worker_config(
             checkpoint_root="/checkpoints",
         ),
         data_storage=WorkerDataStorageConfiguration(
-            mode=(
-                StorageMountMode.JuiceFs
-                if bootstrap.volume_store is not None and bootstrap.volume_store.enabled
-                else StorageMountMode.Local
-            ),
+            mode=StorageMountMode.Local,
             path=AGENT_CONTAINER_DATA_PATH,
         ),
         monitoring=WorkerMonitoringConfiguration(
@@ -1523,13 +1479,10 @@ def plan_worker_container(
         env["NVIDIA_VISIBLE_DEVICES"] = assignment
         env["WORKER_GPU_DEVICES"] = assignment
     env.update(agent_gateway_env(bootstrap))
-    volume_store = bootstrap.volume_store
-    store_enabled = volume_store is not None and volume_store.enabled
-    if volume_store is not None and store_enabled:
-        env.update(agent_volume_store_env(volume_store))
     volumes = [
         f"{dirs.images}:/images",
         f"{dirs.tmp}:{AGENT_CONTAINER_TMP_PATH}",
+        f"{dirs.data}:{AGENT_CONTAINER_DATA_PATH}",
         f"{dirs.workspace}:/workspace",
         f"{dirs.cache}:/cache",
         f"{dirs.builds}:/builds",
@@ -1537,11 +1490,6 @@ def plan_worker_container(
         f"{dirs.logs}:{AGENT_CONTAINER_LOG_PATH}",
         f"{config_path}:{DEFAULT_WORKER_CONFIG_PATH}:ro",
     ]
-    if not store_enabled:
-        # Without a store the worker keeps its host-backed data directory. With
-        # one, the worker mounts the store at this path itself; a host bind here
-        # would shadow it and is shared across slots besides.
-        volumes.insert(2, f"{dirs.data}:{AGENT_CONTAINER_DATA_PATH}")
     docker_args = _worker_docker_args(
         name=name,
         image=image,
