@@ -22,6 +22,8 @@ node_modules/
 test-results/
 playwright-report/
 coverage/
+*.log
+logs/
 .terraform/
 *.tfstate
 *.tfstate.*
