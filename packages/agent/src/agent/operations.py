@@ -16,7 +16,6 @@ from networking.routing import BackendDialPlan, TailnetPeer, build_backend_dial_
 from pydantic import Field, JsonValue, field_validator
 from shared.app_identity import (
     ADMIN_CLI_NAME,
-    AGENT_CONTAINER_DATA_PATH,
     AGENT_CONTAINER_LOG_PATH,
     AGENT_CONTAINER_TMP_PATH,
     AGENT_NAME,
@@ -26,6 +25,7 @@ from shared.app_identity import (
 )
 from shared.capacity import CAPACITY_OWNER_ID_PATTERN
 from shared.compute_enrollment import AgentCapacityState, PreflightSeverity
+from shared.container_requests import DEFAULT_DATA_STORAGE_PATH
 from shared.contracts import ContractModel
 from shared.env import (
     GATEWAY_GRPC_HOST_ENV,
@@ -1458,7 +1458,10 @@ def build_agent_worker_config(
         ),
         data_storage=WorkerDataStorageConfiguration(
             mode=agent_data_storage_mode(),
-            path=AGENT_CONTAINER_DATA_PATH,
+            # One shared path everywhere. The control plane names a volume by its
+            # location under this root, so a worker that rooted its data anywhere
+            # else would bind a path nothing backs.
+            path=DEFAULT_DATA_STORAGE_PATH,
         ),
         monitoring=WorkerMonitoringConfiguration(
             metrics_enabled=True,
@@ -1538,7 +1541,7 @@ def plan_worker_container(
         # No durable store for this agent, so the slot keeps a host-backed data
         # directory for its own scratch. With a store the worker mounts it at
         # this path itself and a host bind would shadow it.
-        volumes.insert(2, f"{dirs.data}:{AGENT_CONTAINER_DATA_PATH}")
+        volumes.insert(2, f"{dirs.data}:{DEFAULT_DATA_STORAGE_PATH}")
     docker_args = _worker_docker_args(
         name=name,
         image=image,

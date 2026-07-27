@@ -7,6 +7,7 @@ from pathlib import Path
 
 from pydantic import Field, JsonValue, TypeAdapter, ValidationError, field_validator
 from shared.container_requests import (
+    DEFAULT_DATA_STORAGE_PATH,
     DEFAULT_OUTPUTS_PATH,
     DEFAULT_OUTPUTS_PREFIX,
     DEFAULT_WORKSPACE_STORAGE_BASE_MOUNT_PATH,
@@ -661,9 +662,13 @@ def plan_request_mount_setup(
 def require_volume_store(mount: RequestMount, *, available: bool) -> None:
     """Refuse a platform volume mount that no store can back.
 
-    Raising here — before any plan is produced or directory created — is what
-    turns a missing store into a visible startup failure instead of a container
-    quietly writing to ephemeral local disk.
+    The store root is a single shared constant, so the path the control plane
+    names is the path this worker mounts; a disagreement means the request was
+    built against a different contract and is refused rather than reinterpreted.
+
+    Refusing before any plan is produced or directory created is what turns a
+    missing store into a visible startup failure instead of a container quietly
+    writing to ephemeral local disk.
     """
     store = mount.volume_config
     if store is None:
@@ -677,11 +682,11 @@ def require_volume_store(mount: RequestMount, *, available: bool) -> None:
             "where writes would be invisible and lost when the container ends."
         )
         raise WorkerVolumeStoreUnavailableError(msg)
-    expected = posixpath.join(store.root_path, store.relative_path)
-    if mount.local_path != expected:
+    declared = posixpath.join(DEFAULT_DATA_STORAGE_PATH, store.relative_path)
+    if mount.local_path != declared or store.root_path != DEFAULT_DATA_STORAGE_PATH:
         msg = (
-            f"platform volume mount {mount.mount_path} resolves to {mount.local_path!r} "
-            f"which is outside its store path {expected!r}"
+            f"platform volume mount {mount.mount_path} resolves to {mount.local_path!r}, "
+            f"not the store path {declared!r} this worker mounts"
         )
         raise WorkerVolumeStoreUnavailableError(msg)
 
