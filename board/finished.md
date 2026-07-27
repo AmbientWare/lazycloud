@@ -32,10 +32,14 @@ logic, none reachable from the local loop:
   left every machine on a 16 GiB root, so image builds failed needing ~21 GiB — and every machine
   ever launched was billed for 200 GiB of unused gp3. Fixed by resolving `RootDeviceName` from the
   AMI, with a documented fallback.
-- A build was marked `complete` and its image row written although the archive never reached object
-  storage, permanently poisoning a content-addressed image so retries inherit the bad record
-  instead of rebuilding. Recorded as open follow-up work; it only triggered because of the first
-  defect.
+- A completed build left a content-addressed image whose archive object a worker could not fetch
+  (`HTTP 404` during `load-image`), and because the image is content-addressed the retry inherited
+  the record instead of rebuilding. The completion path is not missing a check: publication does a
+  real `head` plus size and sha256 comparison and completion is gated on it, and that gate is active
+  for the scheduler executor used here. The unexplained part is narrower — verification passed on
+  the same key the worker later missed, with no rename between — which points at archive object
+  resolution rather than an unverified write. Observed only while the first defect was corrupting
+  the upload path, and not reproduced since it was fixed. Recorded as open follow-up.
 
 Two environment faults that had blocked the previous two sessions were also resolved: the
 `tailnet-gateway` sidecar is stranded in a dead network namespace whenever the control plane is
