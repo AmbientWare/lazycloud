@@ -40,19 +40,12 @@ from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from worker.adapters import (
     WorkerRouteIdentity,
 )
-from worker.artifact_retention import (
-    DEFAULT_WORKER_CHECKPOINT_CACHE_MAX_BYTES,
-    DEFAULT_WORKER_IMAGE_CACHE_MAX_BYTES,
-    DEFAULT_WORKER_IMAGE_MATERIALIZATION_MAX_BYTES,
-    WorkerArtifactRetentionConfig,
-    WorkerArtifactRetentionService,
-)
 from worker.automatic_checkpoints import WorkerAutomaticCheckpointService
 from worker.cache_assets import (
     WorkspaceGeeseFsStorageConfig,
     WorkspaceStorageConfig,
 )
-from worker.checkpoint_activity import CheckpointArtifactLeaseRegistry
+from worker.checkpoint_activity import CheckpointLeaseRegistry
 from worker.checkpoint_restore import RuntimeCheckpointRestorer
 from worker.checkpoints import (
     CheckpointPersistencePlan,
@@ -62,7 +55,7 @@ from worker.configuration import (
     WORKER_CONFIG_PATH_ENV,
     WorkerConfiguration,
 )
-from worker.container_artifacts import (
+from worker.container_checkpoints import (
     ContainerFilesystemArchiveCreator,
     RuntimeCheckpointCreator,
     TarContainerImageArchiver,
@@ -129,7 +122,7 @@ from worker.image_lifecycle import (
     DEFAULT_IMAGE_ARCHIVE_EXTENSION,
     ImageArchiveStorageMode,
 )
-from worker.managed_runtime import MANAGED_RUNTIME_ARTIFACT_ROOT
+from worker.managed_runtime import MANAGED_RUNTIME_IMAGE_ROOT
 from worker.monitoring import (
     AsyncContainerLifecycleSink,
     ContainerRuntimeMonitorSettings,
@@ -168,6 +161,13 @@ from worker.repository_payloads import (
     PrepareCheckpointArchiveUploadRequest,
 )
 from worker.request_mounts import WorkerRequestMountLifecycle, WorkerRequestMountManager
+from worker.retention import (
+    DEFAULT_WORKER_CHECKPOINT_CACHE_MAX_BYTES,
+    DEFAULT_WORKER_IMAGE_CACHE_MAX_BYTES,
+    DEFAULT_WORKER_IMAGE_MATERIALIZATION_MAX_BYTES,
+    WorkerRetentionConfig,
+    WorkerRetentionService,
+)
 from worker.runtime_config import (
     OciRuntimeName,
     RuntimeAvailability,
@@ -400,14 +400,14 @@ class ProductionWorkerSettings(BaseSettings):
         default=DEFAULT_CHECKPOINT_CACHE_NAMESPACE,
         validation_alias="WORKER_CHECKPOINT_CACHE_NAMESPACE",
     )
-    artifact_retention_enabled: bool = Field(
+    retention_enabled: bool = Field(
         default=True,
-        validation_alias="WORKER_ARTIFACT_RETENTION_ENABLED",
+        validation_alias="WORKER_RETENTION_ENABLED",
     )
-    artifact_retention_interval_seconds: float = Field(
+    retention_interval_seconds: float = Field(
         default=5 * 60,
         gt=0,
-        validation_alias="WORKER_ARTIFACT_RETENTION_INTERVAL_SECONDS",
+        validation_alias="WORKER_RETENTION_INTERVAL_SECONDS",
     )
     image_cache_max_bytes: int = Field(
         default=DEFAULT_WORKER_IMAGE_CACHE_MAX_BYTES,
@@ -421,13 +421,13 @@ class ProductionWorkerSettings(BaseSettings):
         default=DEFAULT_WORKER_CHECKPOINT_CACHE_MAX_BYTES,
         validation_alias="WORKER_CHECKPOINT_CACHE_MAX_BYTES",
     )
-    artifact_retention_low_watermark_pct: float = Field(
+    retention_low_watermark_pct: float = Field(
         default=0.75,
-        validation_alias="WORKER_ARTIFACT_RETENTION_LOW_WATERMARK_PCT",
+        validation_alias="WORKER_RETENTION_LOW_WATERMARK_PCT",
     )
-    artifact_retention_recent_guard_seconds: int = Field(
+    retention_recent_guard_seconds: int = Field(
         default=60 * 60,
-        validation_alias="WORKER_ARTIFACT_RETENTION_RECENT_GUARD_SECONDS",
+        validation_alias="WORKER_RETENTION_RECENT_GUARD_SECONDS",
     )
     image_materialization_retention_seconds: int = Field(
         default=24 * 60 * 60,
@@ -553,7 +553,7 @@ class ProductionWorkerSettings(BaseSettings):
         "image_cache_max_bytes",
         "image_materialization_max_bytes",
         "checkpoint_cache_max_bytes",
-        "artifact_retention_recent_guard_seconds",
+        "retention_recent_guard_seconds",
         "image_materialization_retention_seconds",
         "checkpoint_retention_seconds",
     )
@@ -566,7 +566,7 @@ class ProductionWorkerSettings(BaseSettings):
             raise ValueError(msg)
         return value
 
-    @field_validator("artifact_retention_low_watermark_pct")
+    @field_validator("retention_low_watermark_pct")
     @classmethod
     def artifact_low_watermark_must_be_valid(cls, value: float) -> float:
         if not 0 < value <= 1:
@@ -1254,7 +1254,7 @@ def build_production_worker_process_services(
         runtime_configs=available_runtime_configs,
         container_runtime=instance_runtime,
     )
-    checkpoint_activity = CheckpointArtifactLeaseRegistry()
+    checkpoint_activity = CheckpointLeaseRegistry()
     cost_resolver = _container_cost_resolver(config)
     source_materializer = SourceCodePackageMaterializer(
         cache_root=config.resolved_source_cache_root,
@@ -1385,7 +1385,7 @@ def build_production_worker_process_services(
             image_mount_root=Path(config.resolved_image_mount_root),
             runtime_configs=available_runtime_configs,
             gateway_settings=_gateway_settings(config),
-            managed_runtime_artifact_root=MANAGED_RUNTIME_ARTIFACT_ROOT,
+            managed_runtime_root=MANAGED_RUNTIME_IMAGE_ROOT,
         ),
         runtime_executor=runtime,
         runtime_controller=runtime,
@@ -1444,9 +1444,9 @@ def build_production_worker_process_services(
         image_archive_publisher=image_archive_publisher,
         image_build_credential_loader=image_build_credential_loader,
     )
-    artifact_retention = WorkerArtifactRetentionService(
+    retention = WorkerRetentionService(
         instances=instance_store,
-        config=WorkerArtifactRetentionConfig(
+        config=WorkerRetentionConfig(
             image_cache_root=Path(config.resolved_image_cache_path),
             image_mount_root=Path(config.resolved_image_mount_root),
             checkpoint_root=Path(config.resolved_checkpoint_root),
@@ -1454,11 +1454,11 @@ def build_production_worker_process_services(
             image_cache_max_bytes=config.image_cache_max_bytes,
             image_materialization_max_bytes=config.image_materialization_max_bytes,
             checkpoint_cache_max_bytes=config.checkpoint_cache_max_bytes,
-            low_watermark_pct=config.artifact_retention_low_watermark_pct,
-            recent_guard_seconds=config.artifact_retention_recent_guard_seconds,
+            low_watermark_pct=config.retention_low_watermark_pct,
+            recent_guard_seconds=config.retention_recent_guard_seconds,
             materialization_retention_seconds=config.image_materialization_retention_seconds,
             checkpoint_retention_seconds=config.checkpoint_retention_seconds,
-            cache_pruning_enabled=config.artifact_retention_enabled,
+            cache_pruning_enabled=config.retention_enabled,
         ),
         image_build_scratch=image_build_scratch,
         checkpoint_activity=checkpoint_activity,
@@ -1487,7 +1487,7 @@ def build_production_worker_process_services(
         finalization_dependencies=finalization_dependencies,
         image_build_dependencies=image_build_dependencies,
         source_cache_reconciler=worker_repository,
-        artifact_retention=artifact_retention,
+        retention=retention,
     )
 
 

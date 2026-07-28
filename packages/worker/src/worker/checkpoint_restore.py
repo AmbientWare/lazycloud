@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict
 from shared.checkpoints import CheckpointRecord
 from shared.container_requests import WorkerStartupKind
 
-from worker.checkpoint_activity import CheckpointArtifactLeaseRegistry
+from worker.checkpoint_activity import CheckpointLeaseRegistry
 from worker.checkpoints import (
     CheckpointArchiveMaterializationRequest,
     CheckpointLifecycleAction,
@@ -91,8 +91,8 @@ class RuntimeCheckpointRestorer:
     state_sink: CheckpointRestoreStateSink
     runtime: CheckpointRuntimeController
     checkpoint_root: str
-    checkpoint_activity: CheckpointArtifactLeaseRegistry = field(
-        default_factory=CheckpointArtifactLeaseRegistry
+    checkpoint_activity: CheckpointLeaseRegistry = field(
+        default_factory=CheckpointLeaseRegistry
     )
 
     def restore(
@@ -105,7 +105,7 @@ class RuntimeCheckpointRestorer:
     ) -> ContainerRuntimeRunResult | None:
         if not context.checkpoint_id:
             return None
-        artifact_lease = self.checkpoint_activity.acquire(context.checkpoint_id)
+        checkpoint_lease = self.checkpoint_activity.acquire(context.checkpoint_id)
         checkpoint: CheckpointRecord | None = None
         prepared_filesystem: _PreparedRestoreFilesystem | None = None
         restore_started = False
@@ -158,7 +158,7 @@ class RuntimeCheckpointRestorer:
                 )
                 restore_started = True
                 on_started(pid)
-                artifact_lease.close()
+                checkpoint_lease.close()
 
             result = self.runtime.restore_container(
                 context.request.container_id,
@@ -190,7 +190,7 @@ class RuntimeCheckpointRestorer:
                     return None
             raise
         finally:
-            artifact_lease.close()
+            checkpoint_lease.close()
 
     def _materialized(self, checkpoint_id: str) -> bool:
         checkpoint_path = Path(self.checkpoint_root) / checkpoint_id

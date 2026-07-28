@@ -82,6 +82,15 @@ real local service, public workflow, container image, deployment, or provider
 only when that boundary changed. Reuse healthy infrastructure and clean up
 every process, port, and resource created for acceptance.
 
+Give a test run a short timeout and extend it only when a real result needs the
+time. Unit suites finish in seconds, so a long timeout does not make a slow run
+succeed—it hides why it was slow. A generous limit turns a test that blocks on
+an unreachable dependency into a wait instead of a finding, and discards the
+signal that something reaches outside its owner at all. Keep the output
+observable rather than piping a long run to `tail`, and prefer fail-fast
+(`pytest -x`) with narrow owner scopes so the first real failure surfaces
+immediately.
+
 Tests are optional evidence, not a completion ritual or count target. Add one
 only when it is the cheapest unique proof of a material contract, failure,
 authorization boundary, durable transition, data-loss risk, concurrency

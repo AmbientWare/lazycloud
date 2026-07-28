@@ -4,7 +4,7 @@ import base64
 from pathlib import Path
 
 import pytest
-from lazycloud.abstractions.output import OutputNotSavedError
+from lazycloud.abstractions.artifact import ArtifactNotSavedError
 from lazycloud.schema import Image
 
 PNG_1X1 = base64.b64decode(
@@ -46,5 +46,5 @@ def test_image_schema_accepts_structural_image_objects_without_pillow() -> None:
     field = Image(allowed_formats=["PNG"])
 
     assert field.validate(value) is value
-    with pytest.raises(OutputNotSavedError):
+    with pytest.raises(ArtifactNotSavedError):
         field.dump(value)

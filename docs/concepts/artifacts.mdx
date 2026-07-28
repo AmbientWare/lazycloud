@@ -1,0 +1,57 @@
+---
+title: "Artifacts"
+description: "Save file artifacts from tasks and share them with expiring public URLs."
+---
+
+`Artifact` saves files produced by a task — images, archives, reports — into
+workspace storage, associated with the producing task and retrievable after
+the container is gone.
+
+## Saving an artifact
+
+Inside a running task, the task id is picked up automatically:
+
+```python
+from lazycloud import App, Artifact
+
+app = App("renders")
+
+
+@app.function()
+def render(frame: int) -> str:
+    path = f"/tmp/frame-{frame}.png"
+    ...  # write the file
+    artifact = Artifact.file(path)
+    saved = artifact.save()
+    return artifact.public_url(expires=3600)
+```
+
+`save()` uploads the file (zipping it first if `path` is a directory) and
+returns a `SavedArtifact` carrying the `artifact_id`, `task_id`, and
+`filename` needed to look the artifact up again later. Called outside a task,
+with no `task_id` available, `save()` instead packages the artifact onto local
+disk and returns a `SavedArtifact` without an `artifact_id`.
+
+Constructors:
+
+| Constructor | Use |
+| --- | --- |
+| `Artifact.file(path, content_type=None, task_id=None)` | Wrap an existing file on disk. |
+| `Artifact.from_file(file_handle, suffix="")` | Persist an open binary file handle to a temp file first. |
+| `Artifact.from_pil_image(image, format="png")` | Persist a PIL image. |
+| `Artifact(path=..., content_type=..., task_id=...)` | Full-control form. |
+
+`artifact.zip_dir(dir_path)` zips a directory so a whole folder can be saved
+as one artifact.
+
+## Retrieving artifacts
+
+- `artifact.public_url(expires=3600)` returns an expiring URL that serves the
+  artifact without authentication — hand it to browsers or webhooks.
+- `artifact.exists()` and `artifact.stat()` check and describe the saved
+  artifact.
+- Saved artifacts are listed on the task detail views in the
+  [dashboard](/platform/dashboard).
+
+Artifacts belong to a task; pass `task_id=...` explicitly when saving from
+outside the producing container.

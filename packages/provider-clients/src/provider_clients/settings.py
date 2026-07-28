@@ -3,8 +3,8 @@ from __future__ import annotations
 import re
 from urllib.parse import urlparse
 
-from agent.artifacts import AgentArtifactSettings
-from provider_aws import AwsManagedPoolArtifacts
+from agent.binary import AgentBinarySettings
+from provider_aws import AwsManagedPoolBinaries
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from shared.app_identity import ENV_PREFIX
@@ -59,7 +59,7 @@ class AwsAccountConnectionSettings(BaseSettings):
 
 class AwsCapacitySettings(BaseSettings):
     worker_image_digest: str = ""
-    agent_artifact_url: str = ""
+    agent_binary_url: str = ""
     cpu_ami_ids: dict[str, str] = Field(default_factory=dict)
     gpu_ami_ids: dict[str, str] = Field(default_factory=dict)
     instance_hourly_micros: dict[str, int] = Field(default_factory=dict)
@@ -74,9 +74,9 @@ class AwsCapacitySettings(BaseSettings):
     def normalize_worker_image_digest(cls, value: str) -> str:
         return value.strip().lower()
 
-    @field_validator("agent_artifact_url")
+    @field_validator("agent_binary_url")
     @classmethod
-    def validate_agent_artifact_url(cls, value: str) -> str:
+    def validate_agent_binary_url(cls, value: str) -> str:
         url = value.strip()
         if not url:
             return url
@@ -125,7 +125,7 @@ class AwsCapacitySettings(BaseSettings):
         configured = any(
             (
                 self.worker_image_digest,
-                self.agent_artifact_url,
+                self.agent_binary_url,
                 self.cpu_ami_ids,
                 self.gpu_ami_ids,
                 self.instance_hourly_micros,
@@ -137,7 +137,7 @@ class AwsCapacitySettings(BaseSettings):
             name
             for name, value in (
                 ("worker image digest", self.worker_image_digest),
-                ("agent artifact URL", self.agent_artifact_url),
+                ("agent artifact URL", self.agent_binary_url),
                 ("regional CPU AMI catalog", self.cpu_ami_ids),
                 ("regional GPU AMI catalog", self.gpu_ami_ids),
                 ("instance price estimates", self.instance_hourly_micros),
@@ -150,10 +150,10 @@ class AwsCapacitySettings(BaseSettings):
             )
         return self
 
-    def artifacts_by_region(
+    def binaries_by_region(
         self,
-        agent_artifact: AgentArtifactSettings,
-    ) -> dict[str, AwsManagedPoolArtifacts]:
+        agent_artifact: AgentBinarySettings,
+    ) -> dict[str, AwsManagedPoolBinaries]:
         agent_version, agent_sha256 = agent_artifact.require_amd64()
         if not self.worker_image_digest:
             raise ValueError("AWS capacity is not configured")
@@ -161,7 +161,7 @@ class AwsCapacitySettings(BaseSettings):
         if not regions or not self.instance_hourly_micros:
             raise ValueError("AWS capacity is not configured")
         return {
-            region: AwsManagedPoolArtifacts(
+            region: AwsManagedPoolBinaries(
                 agent_version=agent_version,
                 agent_sha256=agent_sha256,
                 worker_image_digest=self.worker_image_digest,

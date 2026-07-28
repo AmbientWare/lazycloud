@@ -21,7 +21,7 @@ from .instance_catalog import (
     AwsInstanceCategory,
 )
 from .managed_pool import (
-    AwsManagedPoolArtifacts,
+    AwsManagedPoolBinaries,
     AwsManagedPoolBootstrap,
     AwsManagedPoolClientProvider,
     AwsManagedPoolPhase,
@@ -43,14 +43,14 @@ _PHASES = {
 class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
     provider_ref: str
     connection: AwsAccountConnectionTarget
-    artifacts_by_region: Mapping[str, AwsManagedPoolArtifacts]
+    binaries_by_region: Mapping[str, AwsManagedPoolBinaries]
     instance_hourly_micros: Mapping[str, int]
     allowed_instance_types: frozenset[str]
     client_provider: AwsManagedPoolClientProvider
 
     def list_offers(self) -> Iterable[ComputeOffer]:
         offers: list[ComputeOffer] = []
-        for region, artifacts in sorted(self.artifacts_by_region.items()):
+        for region, artifacts in sorted(self.binaries_by_region.items()):
             for instance in AWS_INSTANCE_CATALOG:
                 if (
                     self.allowed_instance_types
@@ -190,7 +190,7 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
         return AwsManagedPoolProvisioner.assume(target, client_provider=self.client_provider)
 
     def _spec(self, request: ProviderPoolRequest) -> AwsManagedPoolSpec:
-        artifacts = self.artifacts_by_region.get(request.offer.region)
+        artifacts = self.binaries_by_region.get(request.offer.region)
         if artifacts is None:
             raise ValueError(
                 f"AWS managed pool artifacts are not configured for {request.offer.region!r}"
@@ -223,7 +223,7 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
                 enrollment_request_id=request.bootstrap.enrollment_request_id,
                 agent_version=request.bootstrap.agent_version,
                 agent_sha256=request.bootstrap.agent_sha256,
-                agent_artifact_url=request.bootstrap.agent_artifact_url,
+                agent_binary_url=request.bootstrap.agent_binary_url,
                 worker_image_digest=request.bootstrap.worker_image_digest,
                 gpu_count=request.offer.gpu_count,
             ),

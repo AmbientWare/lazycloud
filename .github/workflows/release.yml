@@ -103,9 +103,9 @@ jobs:
 
       - name: Build and stage Linux agent executables
         run: >-
-          uv run --no-project python deploy/agent-artifact/build.py build
+          uv run --no-project python deploy/agent-binary/build.py build
           --version "${{ steps.version.outputs.version }}"
-          --output dist/agent-artifacts
+          --output dist/agent-binarys
           --arch amd64
 
       - name: Build and publish container worker
@@ -128,7 +128,7 @@ jobs:
         run: |
           cpu_ami_ids="$(uv run --group workspace python deploy/ami/bake.py \
             --release-version "${{ steps.version.outputs.version }}" \
-            --agent-version-dir "dist/agent-artifacts/${{ steps.version.outputs.version }}" \
+            --agent-version-dir "dist/agent-binarys/${{ steps.version.outputs.version }}" \
             --worker-image \
             "${{ steps.repository.outputs.uri }}@${{ steps.container-worker.outputs.digest }}" \
             --bucket "${{ vars.AWS_RELEASE_ASSET_BUCKET }}" \
@@ -142,7 +142,7 @@ jobs:
           uv run --group workspace python deploy/aws-release-assets/release.py stage
           --version "${{ steps.version.outputs.version }}"
           --agent-version-dir
-          "dist/agent-artifacts/${{ steps.version.outputs.version }}"
+          "dist/agent-binarys/${{ steps.version.outputs.version }}"
           --worker-image
           "${{ steps.repository.outputs.uri }}@${{ steps.container-worker.outputs.digest }}"
           --bucket "${{ vars.AWS_RELEASE_ASSET_BUCKET }}"

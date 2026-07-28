@@ -374,7 +374,7 @@ class GatewayControlService:
     agent_worker_image_name: str = CONTAINER_WORKER_IMAGE
     agent_worker_image_tag: str = "local"
     agent_artifact_version: str = ""
-    agent_artifact_sha256_by_arch: Mapping[str, str] = field(
+    agent_sha256_by_arch: Mapping[str, str] = field(
         default_factory=lambda: dict[str, str]()
     )
 
@@ -1148,7 +1148,7 @@ class GatewayControlService:
                 self.gateway_endpoint.http_url,
                 plan.token,
                 agent_version=self.agent_artifact_version,
-                agent_sha256_by_arch=self.agent_artifact_sha256_by_arch,
+                agent_sha256_by_arch=self.agent_sha256_by_arch,
             ),
             expires_at=plan.expires_at,
         )
@@ -1217,7 +1217,7 @@ class GatewayControlService:
                 self.gateway_endpoint.http_url,
                 plan.token,
                 agent_version=self.agent_artifact_version,
-                agent_sha256_by_arch=self.agent_artifact_sha256_by_arch,
+                agent_sha256_by_arch=self.agent_sha256_by_arch,
             ),
             expires_at=plan.expires_at,
         )

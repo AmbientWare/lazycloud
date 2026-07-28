@@ -163,7 +163,7 @@ class ContainerWorkerKeepaliveLoop:
 
 
 @dataclass(frozen=True, slots=True)
-class WorkerArtifactRetentionLoop:
+class WorkerRetentionLoop:
     stop_event: threading.Event
     thread: threading.Thread
 
@@ -259,7 +259,7 @@ def run_container_worker(
     container_service = _start_container_service(resolved_settings, worker_services)
     event_loop: ContainerWorkerEventLoop | None = None
     keepalive_loop: ContainerWorkerKeepaliveLoop | None = None
-    artifact_retention_loop: WorkerArtifactRetentionLoop | None = None
+    retention_loop: WorkerRetentionLoop | None = None
     shutdown_event = threading.Event()
     shutdown_registered_worker = False
     shutdown_signal = 0
@@ -312,9 +312,9 @@ def run_container_worker(
                     interval_seconds=interval_seconds,
                     stop_event=shutdown_event,
                 )
-                artifact_retention_loop = _start_artifact_retention_loop(
+                retention_loop = _start_retention_loop(
                     worker_services,
-                    interval_seconds=resolved_settings.artifact_retention_interval_seconds,
+                    interval_seconds=resolved_settings.retention_interval_seconds,
                     stop_event=shutdown_event,
                 )
                 heartbeat = None if heartbeat_file is None else HeartbeatFile(heartbeat_file)
@@ -359,8 +359,8 @@ def run_container_worker(
         shutdown_event.set()
         if keepalive_loop is not None:
             keepalive_loop.stop()
-        if artifact_retention_loop is not None:
-            artifact_retention_loop.stop()
+        if retention_loop is not None:
+            retention_loop.stop()
         if event_loop is not None:
             event_loop.stop()
         if shutdown_registered_worker:
@@ -380,7 +380,7 @@ def run_container_worker(
 
 
 def _reconcile_worker_artifacts(services: ContainerWorkerServices) -> None:
-    retention = services.artifact_retention
+    retention = services.retention
     if retention is None:
         return
     result = retention.reconcile()
@@ -479,26 +479,26 @@ def _report_keepalive_result(
     return failures
 
 
-def _start_artifact_retention_loop(
+def _start_retention_loop(
     services: ContainerWorkerServices,
     *,
     interval_seconds: float,
     stop_event: threading.Event | None = None,
-) -> WorkerArtifactRetentionLoop | None:
-    if services.artifact_retention is None:
+) -> WorkerRetentionLoop | None:
+    if services.retention is None:
         return None
     resolved_stop_event = stop_event or threading.Event()
     thread = threading.Thread(
-        target=_run_artifact_retention_loop,
+        target=_run_retention_loop,
         args=(services, resolved_stop_event, interval_seconds),
         name="container-worker-artifact-retention",
         daemon=True,
     )
     thread.start()
-    return WorkerArtifactRetentionLoop(stop_event=resolved_stop_event, thread=thread)
+    return WorkerRetentionLoop(stop_event=resolved_stop_event, thread=thread)
 
 
-def _run_artifact_retention_loop(
+def _run_retention_loop(
     services: ContainerWorkerServices,
     stop_event: threading.Event,
     interval_seconds: float,

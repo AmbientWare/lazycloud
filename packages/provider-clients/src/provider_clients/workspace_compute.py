@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 
-from agent.artifacts import AgentArtifactSettings
+from agent.binary import AgentBinarySettings
 from compute.policy import ComputeCatalogInstance, ComputeCatalogRegion
 from compute.providers import ComputeProviderResolver, ResolvedComputeProvider
 from networking.settings import (
@@ -18,7 +18,7 @@ from provider_aws import (
     AwsAccountConnectionTarget,
     AwsConnectedAccountPooledProvider,
     AwsInstanceCategory,
-    AwsManagedPoolArtifacts,
+    AwsManagedPoolBinaries,
     Boto3AwsManagedPoolClientProvider,
 )
 from pydantic import SecretStr
@@ -36,11 +36,11 @@ AwsConnectionLoader = Callable[[str], Iterable[AwsAccountConnection]]
 def configured_aws_compute_catalog(
     connection_settings: AwsAccountConnectionSettings,
     capacity_settings: AwsCapacitySettings,
-    agent_artifact_settings: AgentArtifactSettings,
+    agent_binary_settings: AgentBinarySettings,
 ) -> tuple[ComputeCatalogRegion, ...]:
     if not connection_settings.enabled:
         return ()
-    capacity_settings.artifacts_by_region(agent_artifact_settings)
+    capacity_settings.binaries_by_region(agent_binary_settings)
 
     priced_instance_types = capacity_settings.instance_hourly_micros.keys()
     regions = sorted(capacity_settings.cpu_ami_ids.keys() | capacity_settings.gpu_ami_ids.keys())
@@ -75,7 +75,7 @@ def configured_aws_compute_catalog(
 @dataclass(frozen=True, slots=True)
 class WorkspaceComputeProviderResolver(ComputeProviderResolver):
     connections: AwsConnectionLoader
-    artifacts_by_region: Mapping[str, AwsManagedPoolArtifacts]
+    binaries_by_region: Mapping[str, AwsManagedPoolBinaries]
     instance_hourly_micros: Mapping[str, int]
     allowed_instance_types: frozenset[str]
     client_provider: Boto3AwsManagedPoolClientProvider
@@ -100,7 +100,7 @@ class WorkspaceComputeProviderResolver(ComputeProviderResolver):
         authorization = connection.active_authorization
         if authorization is None:
             raise RuntimeError("ready AWS account connection has no active authorization")
-        region = sorted(self.artifacts_by_region)[0]
+        region = sorted(self.binaries_by_region)[0]
         managed = authorization.managed_authorization
         target = AwsAccountConnectionTarget(
             account_id=connection.account_id,
@@ -121,7 +121,7 @@ class WorkspaceComputeProviderResolver(ComputeProviderResolver):
             pooled=AwsConnectedAccountPooledProvider(
                 provider_ref=provider_ref,
                 connection=target,
-                artifacts_by_region=self.artifacts_by_region,
+                binaries_by_region=self.binaries_by_region,
                 instance_hourly_micros=self.instance_hourly_micros,
                 allowed_instance_types=self.allowed_instance_types,
                 client_provider=self.client_provider,
@@ -132,7 +132,7 @@ class WorkspaceComputeProviderResolver(ComputeProviderResolver):
 def workspace_compute_provider_resolver(
     connection_settings: AwsAccountConnectionSettings,
     capacity_settings: AwsCapacitySettings,
-    agent_artifact_settings: AgentArtifactSettings,
+    agent_binary_settings: AgentBinarySettings,
     *,
     connections: AwsConnectionLoader,
     gateway_origin: str,
@@ -149,10 +149,10 @@ def workspace_compute_provider_resolver(
         control=tailnet_control,
         backend_route=backend_route,
     )
-    artifacts = capacity_settings.artifacts_by_region(agent_artifact_settings)
+    artifacts = capacity_settings.binaries_by_region(agent_binary_settings)
     return WorkspaceComputeProviderResolver(
         connections=connections,
-        artifacts_by_region=artifacts,
+        binaries_by_region=artifacts,
         instance_hourly_micros=capacity_settings.instance_hourly_micros,
         allowed_instance_types=frozenset(),
         client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),

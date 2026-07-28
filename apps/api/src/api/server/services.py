@@ -7,7 +7,7 @@ from functools import partial
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-from agent.artifacts import AgentArtifactSettings
+from agent.binary import AgentBinarySettings
 from agent.service import AgentService
 from compute.agent_control import AgentImageConfig, GatewayEndpointConfig
 from compute.aws_connections import AwsAccountConnectionDirectory, AwsAccountConnectionService
@@ -21,8 +21,8 @@ from compute.service import ComputeService
 from compute.state import ComputeAgentTokenState, RedisComputeStateRepository
 from control.apps import (
     AppService,
-    DatabaseAppArtifactAvailability,
     DatabaseAppExecutionAdmission,
+    DatabaseAppImageAvailability,
 )
 from control.deployment_cleanup import AppDeploymentLifecycleService
 from control.deployment_registration import DeploymentRegistrationService
@@ -35,6 +35,7 @@ from coordination.redis_client import RedisClient
 from coordination.wake_signal import RedisWakeSignal
 from database.context import ServiceContext
 from database.records.apps import StubRecord
+from execution.artifacts.service import ArtifactStorageService
 from execution.collections.redis import RedisMapService, RedisSimpleQueueService
 from execution.collections.service import CollectionService
 from execution.containers.preemption import PreemptedContainerService
@@ -51,7 +52,6 @@ from execution.endpoints.service import (
     EndpointIngressDispatchSession,
 )
 from execution.functions.service import FunctionControlService
-from execution.outputs.service import OutputStorageService
 from execution.pods.service import PodControlService
 from execution.secrets.service import SecretService
 from execution.shells.service import ShellControlService
@@ -205,7 +205,7 @@ from storage.image_archive import (
     ImageArchiveSettings,
     ResolvedImageArchiveSettings,
 )
-from storage.retention_settings import ArtifactRetentionSettings
+from storage.retention_settings import RetentionSettings
 from storage.service import CacheStorage, ObjectByteClient, ObjectStorage
 from storage.volume_filesystem import (
     VolumeFilesystem,
@@ -453,7 +453,7 @@ class ApiServiceCore:
     agent_route_reconciliation_settings: AgentRouteReconciliationSettings
     gateway_settings: GatewaySettings
     workspace_change_stream_settings: WorkspaceChangeStreamSettings
-    agent_artifact_settings: AgentArtifactSettings
+    agent_binary_settings: AgentBinarySettings
     aws_account_connection_settings: AwsAccountConnectionSettings
     aws_capacity_settings: AwsCapacitySettings
     aws_capacity_reconciliation_settings: AwsCapacityReconciliationSettings
@@ -528,7 +528,7 @@ class ApiServices(ApiServiceCore):
     signal_service: RedisSignalService
     map_service: RedisMapService
     simple_queue_service: RedisSimpleQueueService
-    output_service: OutputStorageService
+    artifact_service: ArtifactStorageService
     endpoint_service: EndpointApiService
     function_service: FunctionApiService
     gateway_service: GatewayControlService
@@ -555,7 +555,7 @@ class ApiServices(ApiServiceCore):
         agent_route_reconciliation_settings: AgentRouteReconciliationSettings | None = None,
         gateway_settings: GatewaySettings | None = None,
         workspace_change_stream_settings: WorkspaceChangeStreamSettings | None = None,
-        agent_artifact_settings: AgentArtifactSettings | None = None,
+        agent_binary_settings: AgentBinarySettings | None = None,
         aws_account_connection_settings: AwsAccountConnectionSettings | None = None,
         aws_capacity_settings: AwsCapacitySettings | None = None,
         aws_capacity_reconciliation_settings: AwsCapacityReconciliationSettings | None = None,
@@ -573,7 +573,7 @@ class ApiServices(ApiServiceCore):
         image_build_registry_settings: ImageBuildRegistrySettings | None = None,
         image_build_container_settings: ImageBuildContainerSettings | None = None,
         container_service_settings: ContainerServiceSettings | None = None,
-        artifact_retention_settings: ArtifactRetentionSettings | None = None,
+        retention_settings: RetentionSettings | None = None,
         usage_metrics_settings: UsageMetricsSettings | None = None,
         usage_pricing_settings: UsagePricingSettings | None = None,
         managed_billing_settings: ManagedBillingClientSettings | None = None,
@@ -594,7 +594,7 @@ class ApiServices(ApiServiceCore):
         signal_service: RedisSignalService | None = None,
         map_service: RedisMapService | None = None,
         simple_queue_service: RedisSimpleQueueService | None = None,
-        output_service: OutputStorageService | None = None,
+        artifact_service: ArtifactStorageService | None = None,
         endpoint_service: EndpointApiService | None = None,
         function_service: FunctionApiService | None = None,
         gateway_service: GatewayControlService | None = None,
@@ -617,7 +617,7 @@ class ApiServices(ApiServiceCore):
         workspace_change_stream_config = (
             workspace_change_stream_settings or WorkspaceChangeStreamSettings()
         )
-        agent_artifact_config = agent_artifact_settings or AgentArtifactSettings()
+        agent_artifact_config = agent_binary_settings or AgentBinarySettings()
         aws_account_connection_config = (
             aws_account_connection_settings or AwsAccountConnectionSettings()
         )
@@ -640,7 +640,7 @@ class ApiServices(ApiServiceCore):
             image_build_container_settings or ImageBuildContainerSettings()
         )
         container_service_config = container_service_settings or ContainerServiceSettings()
-        artifact_retention_config = artifact_retention_settings or ArtifactRetentionSettings()
+        retention_config = retention_settings or RetentionSettings()
         usage_metrics_config = usage_metrics_settings or UsageMetricsSettings()
         usage_pricing_config = usage_pricing_settings or UsagePricingSettings()
         managed_billing_config = managed_billing_settings or ManagedBillingClientSettings()
@@ -781,7 +781,7 @@ class ApiServices(ApiServiceCore):
                 enrollment_request_id=pool.id,
                 agent_version=agent_version,
                 agent_sha256=agent_sha256,
-                agent_artifact_url=aws_capacity_config.agent_artifact_url,
+                agent_binary_url=aws_capacity_config.agent_binary_url,
                 worker_image_digest=aws_capacity_config.worker_image_digest,
             )
 
@@ -872,7 +872,7 @@ class ApiServices(ApiServiceCore):
                 redis,
                 container_shutdowns,
             ),
-            DatabaseAppArtifactAvailability(),
+            DatabaseAppImageAvailability(),
             workspace_changes=workspace_changes,
         )
         deployments = DeploymentService(
@@ -934,7 +934,7 @@ class ApiServices(ApiServiceCore):
                 object_storage=object_storage_service,
                 checkpoint_bucket=object_storage_service.default_bucket,
             ),
-            retention_seconds=artifact_retention_config.checkpoint_seconds,
+            retention_seconds=retention_config.checkpoint_seconds,
         )
         autoscaler_states = AutoscalerStateService(context)
         resolved_tailnet_runtime = tailnet_runtime or TailnetRuntime(
@@ -948,7 +948,7 @@ class ApiServices(ApiServiceCore):
             agent_route_reconciliation_settings=agent_route_reconciliation_config,
             gateway_settings=gateway_config,
             workspace_change_stream_settings=workspace_change_stream_config,
-            agent_artifact_settings=agent_artifact_config,
+            agent_binary_settings=agent_artifact_config,
             aws_account_connection_settings=aws_account_connection_config,
             aws_capacity_settings=aws_capacity_config,
             aws_capacity_reconciliation_settings=aws_capacity_reconciliation_config,
@@ -1008,7 +1008,7 @@ class ApiServices(ApiServiceCore):
             signal_service=signal_service,
             map_service=map_service,
             simple_queue_service=simple_queue_service,
-            output_service=output_service,
+            artifact_service=artifact_service,
             endpoint_service=endpoint_service,
             function_service=function_service,
             gateway_service=gateway_service,
@@ -1026,7 +1026,7 @@ class ApiServices(ApiServiceCore):
         signal_service: RedisSignalService | None = None,
         map_service: RedisMapService | None = None,
         simple_queue_service: RedisSimpleQueueService | None = None,
-        output_service: OutputStorageService | None = None,
+        artifact_service: ArtifactStorageService | None = None,
         endpoint_service: EndpointApiService | None = None,
         function_service: FunctionApiService | None = None,
         gateway_service: GatewayControlService | None = None,
@@ -1046,7 +1046,9 @@ class ApiServices(ApiServiceCore):
                 if simple_queue_service is not None
                 else self.simple_queue_service
             ),
-            output_service=(output_service if output_service is not None else self.output_service),
+            artifact_service=(
+                artifact_service if artifact_service is not None else self.artifact_service
+            ),
             endpoint_service=(
                 endpoint_service if endpoint_service is not None else self.endpoint_service
             ),
@@ -1123,7 +1125,7 @@ def _compose_api_services(
     signal_service: RedisSignalService | None,
     map_service: RedisMapService | None,
     simple_queue_service: RedisSimpleQueueService | None,
-    output_service: OutputStorageService | None,
+    artifact_service: ArtifactStorageService | None,
     endpoint_service: EndpointApiService | None,
     function_service: FunctionApiService | None,
     gateway_service: GatewayControlService | None,
@@ -1259,7 +1261,7 @@ def _compose_api_services(
         agent_route_reconciliation_settings=core.agent_route_reconciliation_settings,
         gateway_settings=core.gateway_settings,
         workspace_change_stream_settings=core.workspace_change_stream_settings,
-        agent_artifact_settings=core.agent_artifact_settings,
+        agent_binary_settings=core.agent_binary_settings,
         aws_account_connection_settings=core.aws_account_connection_settings,
         aws_capacity_settings=core.aws_capacity_settings,
         aws_capacity_reconciliation_settings=core.aws_capacity_reconciliation_settings,
@@ -1316,7 +1318,7 @@ def _compose_api_services(
         signal_service=signal_service or RedisSignalService(RedisSignalRepository(redis)),
         map_service=map_service or RedisMapService(core.binary_redis()),
         simple_queue_service=(simple_queue_service or RedisSimpleQueueService(core.binary_redis())),
-        output_service=output_service or OutputStorageService(core.context),
+        artifact_service=artifact_service or ArtifactStorageService(core.context),
         endpoint_service=endpoint,
         function_service=function,
         gateway_service=gateway,
@@ -1393,8 +1395,8 @@ def _gateway_control_service(
         ),
         route_authenticator=core.backend_route_settings.to_authenticator(),
         gateway_endpoint=GatewayEndpointConfig(http_url=core.gateway_settings.public_http_url),
-        agent_artifact_version=core.agent_artifact_settings.artifact_version,
-        agent_artifact_sha256_by_arch=core.agent_artifact_settings.artifact_sha256_by_arch,
+        agent_artifact_version=core.agent_binary_settings.artifact_version,
+        agent_sha256_by_arch=core.agent_binary_settings.sha256_by_arch,
         runtime_callback_http_url=core.gateway_settings.runtime_callback_http_url,
         capacity_interruption_sink=SchedulerAgentCapacityInterruptionSink(
             SchedulerCapacityInterruptionService(

@@ -5,8 +5,8 @@ from datetime import UTC, datetime
 from typing import overload
 from uuid import uuid4
 
-from database.repositories.artifact_cleanup import (
-    ArtifactCleanupRepository,
+from database.repositories.cleanup import (
+    CleanupRepository,
     object_location_lock_key,
 )
 from database.repositories.common import (
@@ -98,7 +98,7 @@ class ObjectRepository:
         )
 
     def upsert(self, record: ObjectRecord, *, workspace_id: str) -> ObjectRecord:
-        ArtifactCleanupRepository(self.session).assert_object_write_available(
+        CleanupRepository(self.session).assert_object_write_available(
             record,
             workspace_id=workspace_id,
         )
@@ -113,7 +113,7 @@ class ObjectRepository:
         overwrite: bool,
         reuse_existing: bool = False,
     ) -> ObjectWriteClaim:
-        claims = ArtifactCleanupRepository(self.session)
+        claims = CleanupRepository(self.session)
         claims.assert_object_location_available(
             workspace_id=workspace_id,
             bucket=command.bucket,
@@ -181,7 +181,7 @@ class ObjectRepository:
         if not claim.write_required:
             return claim.record
         WorkspaceRepository(self.session).lock_object_write_completion_owner(workspace_id)
-        claims = ArtifactCleanupRepository(self.session)
+        claims = CleanupRepository(self.session)
         claims.lock_keys(
             {
                 f"object:{claim.record.id}",
@@ -213,7 +213,7 @@ class ObjectRepository:
         if not claim.write_required:
             return
         WorkspaceRepository(self.session).lock_object_write_completion_owner(workspace_id)
-        claims = ArtifactCleanupRepository(self.session)
+        claims = CleanupRepository(self.session)
         claims.lock_keys(
             {
                 f"object:{claim.record.id}",
@@ -302,7 +302,7 @@ class ObjectRepository:
         workspace_id: str,
         overwrite: bool,
     ) -> ObjectRecord:
-        ArtifactCleanupRepository(self.session).assert_object_location_available(
+        CleanupRepository(self.session).assert_object_location_available(
             workspace_id=workspace_id,
             bucket=command.bucket,
             key=command.key,
@@ -363,7 +363,7 @@ class ObjectRepository:
         cleanup_kind: str,
         claimed_at: datetime,
     ) -> ObjectRecord:
-        claims = ArtifactCleanupRepository(self.session)
+        claims = CleanupRepository(self.session)
         claims.lock_keys(
             {
                 f"object:{owned.record.id}",
@@ -384,7 +384,7 @@ class ObjectRepository:
         owned = self.get_owned(object_id, include_operations=True)
         if owned is None:
             return False
-        claims = ArtifactCleanupRepository(self.session)
+        claims = CleanupRepository(self.session)
         claims.lock_keys(
             {
                 f"object:{object_id}",
@@ -622,7 +622,7 @@ def _write_object_row(row: ObjectTable, record: ObjectRecord) -> None:
 
 
 @dataclass(slots=True)
-class ArtifactReferenceRepository:
+class ObjectReferenceRepository:
     session: Session
 
     def list_source_cleanup_candidates(
@@ -994,7 +994,7 @@ class CacheEntryRepository:
     session: Session
 
     def lock(self, key: str) -> None:
-        ArtifactCleanupRepository(self.session).lock_keys({f"cache:{key}"})
+        CleanupRepository(self.session).lock_keys({f"cache:{key}"})
 
     def upsert(self, record: CacheEntry) -> CacheEntry:
         if self.session.get_bind().dialect.name == "postgresql":

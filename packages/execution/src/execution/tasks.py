@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Protocol
 
-from database.repositories.artifact_cleanup import ArtifactCleanupRepository
+from database.repositories.cleanup import CleanupRepository
 from database.repositories.execution import LogRepository, TaskAttemptRepository, TaskRepository
 from database.repositories.orchestration import ContainerRepository
 from database.types import DatabaseSession
@@ -136,7 +136,7 @@ class TaskService:
         resolved_root_task_id = optional_uuid(root_task_id, field="root_task_id")
         resolved_retry_policy = _task_retry_policy(retry_policy)
         if resolved_stub_id is not None:
-            ArtifactCleanupRepository(session).assert_stub_available(resolved_stub_id)
+            CleanupRepository(session).assert_stub_available(resolved_stub_id)
         resolved_workspace_id = workspace_id or self.context.default_workspace_id(session)
         persisted_container_id = (
             resolved_container_id if _container_exists(session, resolved_container_id) else None

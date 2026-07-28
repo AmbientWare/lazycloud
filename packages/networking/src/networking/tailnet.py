@@ -246,7 +246,16 @@ class TailnetRuntime:
         auth_key: str,
         hostname: str,
         control_url: str = "",
+        force: bool = False,
     ) -> TailnetStatus:
+        """Authenticate the daemon, optionally replacing an existing session.
+
+        An already-authenticated daemon normally short-circuits, which is what
+        lets a restart reuse its verified device. Set ``force`` when the control
+        plane has issued a new identity: the daemon is authenticated, but under a
+        name the control plane no longer recognizes, so keeping the session would
+        register the wrong device.
+        """
         if self.options.mode is not TailnetRuntimeMode.Managed:
             raise TailnetRuntimeError("only a managed tailnet runtime can authenticate")
         if not auth_key.strip():
@@ -257,7 +266,24 @@ class TailnetRuntime:
             self._validate_start_config()
             self._start_managed_daemon()
             status = self._managed_status()
-            if _sidecar_authenticated(status):
+            if _sidecar_authenticated(status) and not force:
+                self._started = True
+                return status
+            if force and _sidecar_authenticated(status):
+                # `tailscale up` will not move an authenticated node onto a new
+                # identity, so the existing session has to be dropped first or
+                # the daemon keeps the name the control plane already rejected.
+                self.runner.run(
+                    self._tailscale_args("logout"),
+                    timeout_seconds=self.options.login_timeout_seconds,
+                )
+                self._run_up(auth_key=auth_key, hostname=hostname, control_url=control_url)
+                status = self._managed_status()
+                if not _sidecar_authenticated(status):
+                    raise TailnetRuntimeError(
+                        f"tailnet re-login completed without an authenticated device "
+                        f"({status.backend_state or 'unknown'})"
+                    )
                 self._started = True
                 return status
             if status.backend_state.strip().lower() != "needslogin":

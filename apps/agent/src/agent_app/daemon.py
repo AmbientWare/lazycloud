@@ -132,6 +132,11 @@ JOIN_RETRY_MAX_SECONDS = 30.0
 AGENT_STATE_FILE = "agent-state.json"
 AGENT_ACTIVE_SLOTS_FILE = "active-worker-slots.json"
 DEFAULT_MACHINE_ID_PATHS = (Path("/etc/machine-id"), Path("/var/lib/dbus/machine-id"))
+# The control plane rejects a device registration with this when its enrollment
+# carries no issued identity yet. It means the agent's local session and the
+# control plane have diverged — recoverable by re-enrolling, unlike a revoked
+# authority — so it is named rather than matched inline.
+TAILNET_ENROLLMENT_NOT_AWAITING_DETAIL = "tailnet enrollment is not awaiting this device"
 AGENT_AUTHORITY_REVOKED_DETAILS = frozenset(
     {
         "invalid agent token",
@@ -303,6 +308,7 @@ class AgentTailnetRuntime(Protocol):
         auth_key: str,
         hostname: str,
         control_url: str = "",
+        force: bool = False,
     ) -> TailnetStatus: ...
 
     def status(self) -> TailnetStatus: ...
@@ -1216,12 +1222,17 @@ class AgentDaemonService:
                     control_url=credential.control_url,
                 )
             _require_authenticated_tailnet_status(status)
-            binding = self.client.register_agent_tailnet_device(
-                RegisterAgentTailnetDeviceRequest(
-                    agent_token=state.agent_token,
-                    node_id=status.self_node_id,
-                )
-            )
+            try:
+                binding = self._register_tailnet_device(state, status)
+            except HttpApiError as exc:
+                if not _tailnet_enrollment_needs_reissue(exc):
+                    raise
+                # The daemon is authenticated but the control plane holds no
+                # identity for it, so the two have diverged — most often because
+                # the local session outlived the enrollment record. Re-enrol into
+                # the identity the control plane issues and register that.
+                status = self._reissue_tailnet_identity(state, runtime)
+                binding = self._register_tailnet_device(state, status)
             if binding.node_id != status.self_node_id:
                 raise RuntimeError("control plane returned a different tailnet node binding")
             advertise_host = _tailnet_advertise_host(status)
@@ -1229,6 +1240,44 @@ class AgentDaemonService:
         except Exception:
             runtime.close()
             raise
+
+    def _register_tailnet_device(
+        self,
+        state: AgentState,
+        status: TailnetStatus,
+    ) -> RegisterAgentTailnetDeviceResponse:
+        return self.client.register_agent_tailnet_device(
+            RegisterAgentTailnetDeviceRequest(
+                agent_token=state.agent_token,
+                node_id=status.self_node_id,
+            )
+        )
+
+    def _reissue_tailnet_identity(
+        self,
+        state: AgentState,
+        runtime: AgentTailnetRuntime,
+    ) -> TailnetStatus:
+        """Take a fresh identity from the control plane and adopt it locally.
+
+        Forced, because the daemon already holds a session; without replacing it
+        the agent would re-register the same device the control plane just
+        rejected.
+        """
+        credential = self.client.request_agent_transport_credential(
+            RequestAgentTransportCredentialRequest(
+                agent_token=state.agent_token,
+                transport=BackendRouteTransport.TsnetRestricted,
+            )
+        )
+        status = runtime.authenticate(
+            auth_key=credential.auth_key,
+            hostname=credential.hostname,
+            control_url=credential.control_url,
+            force=True,
+        )
+        _require_authenticated_tailnet_status(status)
+        return status
 
     def _build_route_proxy(
         self,
@@ -1660,7 +1709,18 @@ def _agent_lock_pid(contents: str) -> int:
     return 0
 
 
+def _tailnet_enrollment_needs_reissue(exc: HttpApiError) -> bool:
+    return (
+        400 <= exc.status_code < 500
+        and (exc.detail or "").strip() == TAILNET_ENROLLMENT_NOT_AWAITING_DETAIL
+    )
+
+
 def _recoverable_stream_error(exc: Exception) -> bool:
+    # A diverged enrollment is a state mismatch rather than a rejection of the
+    # agent's authority, so it must not end the process; the next join re-enrols.
+    if isinstance(exc, HttpApiError) and _tailnet_enrollment_needs_reissue(exc):
+        return True
     if isinstance(exc, HttpApiError):
         return exc.status_code >= 500
     # A transport error means the request never reached a response, so the

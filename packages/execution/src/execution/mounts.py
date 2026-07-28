@@ -6,12 +6,12 @@ from collections.abc import Iterable, Mapping
 from database.repositories.storage import ObjectRepository
 from pydantic import BaseModel, JsonValue, TypeAdapter
 from shared.container_requests import (
+    DEFAULT_ARTIFACTS_PATH,
     DEFAULT_OBJECTS_PATH,
-    DEFAULT_OUTPUTS_PATH,
     DEFAULT_VOLUMES_PATH,
     WORKER_CONTAINER_VOLUME_PATH,
+    WORKER_USER_ARTIFACT_VOLUME,
     WORKER_USER_CODE_VOLUME,
-    WORKER_USER_OUTPUT_VOLUME,
     RequestMount,
     RequestMountPointConfig,
     RequestMountType,
@@ -95,8 +95,8 @@ def container_resource_mounts(
     if stub_id:
         mounts.append(
             RequestMount(
-                local_path=posixpath.join(DEFAULT_OUTPUTS_PATH, workspace_name, stub_id),
-                mount_path=WORKER_USER_OUTPUT_VOLUME,
+                local_path=posixpath.join(DEFAULT_ARTIFACTS_PATH, workspace_name, stub_id),
+                mount_path=WORKER_USER_ARTIFACT_VOLUME,
             )
         )
     mounts.extend(
@@ -184,14 +184,15 @@ def configured_volume_mounts(
 
 def _mount_requires_workspace_storage(mount: RequestMount) -> bool:
     # A platform volume lives in the workspace's own storage, so it needs the
-    # mount exactly as outputs do. An external bucket carries its own config.
+    # mount the same way an artifact does. An external bucket carries its own
+    # config.
     if mount.mount_type is RequestMountType.Volume:
         return True
     if mount.mount_type is RequestMountType.MountPoint:
         return False
     mount_path = mount.mount_path.rstrip("/")
-    return mount_path == WORKER_USER_OUTPUT_VOLUME or mount_path.startswith(
-        WORKER_USER_OUTPUT_VOLUME + "/"
+    return mount_path == WORKER_USER_ARTIFACT_VOLUME or mount_path.startswith(
+        WORKER_USER_ARTIFACT_VOLUME + "/"
     )
 
 

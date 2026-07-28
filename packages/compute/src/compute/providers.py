@@ -59,7 +59,7 @@ class ProviderPoolBootstrap(ContractModel):
     enrollment_request_id: str
     agent_version: str
     agent_sha256: str
-    agent_artifact_url: str
+    agent_binary_url: str
     worker_image_digest: str
 
 

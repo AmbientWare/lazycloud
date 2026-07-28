@@ -24,11 +24,11 @@ _AGENT_VERSION_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 def install_agent_script(
     services: ApiServices = Depends(current_services),
 ) -> PlainTextResponse:
-    artifact_settings = services.agent_artifact_settings
+    artifact_settings = services.agent_binary_settings
     script = build_agent_install_script(
         binary_name=artifact_settings.binary_name,
         artifact_version=artifact_settings.artifact_version,
-        artifact_sha256_by_arch=artifact_settings.artifact_sha256_by_arch,
+        sha256_by_arch=artifact_settings.sha256_by_arch,
     )
     return PlainTextResponse(
         script,
@@ -46,7 +46,7 @@ def install_agent_binary(
     arch: AgentInstallArch,
     services: ApiServices = Depends(current_services),
 ) -> FileResponse:
-    artifact_settings = services.agent_artifact_settings
+    artifact_settings = services.agent_binary_settings
     binary_dir = artifact_settings.binary_dir
     if binary_dir is None:
         raise HTTPException(
@@ -82,7 +82,7 @@ def install_versioned_agent_binary(
     arch: AgentInstallArch,
     services: ApiServices = Depends(current_services),
 ) -> FileResponse:
-    artifact_settings = services.agent_artifact_settings
+    artifact_settings = services.agent_binary_settings
     configured_version = artifact_settings.artifact_version
     if (
         not _AGENT_VERSION_PATTERN.fullmatch(version)
@@ -110,7 +110,7 @@ def install_versioned_agent_binary(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="agent binary artifact not found",
         )
-    configured_sha256 = artifact_settings.artifact_sha256_by_arch.get(arch.value, "")
+    configured_sha256 = artifact_settings.sha256_by_arch.get(arch.value, "")
     if not configured_sha256 or _sha256(path) != configured_sha256:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

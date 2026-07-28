@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
 
-from database.repositories.artifact_cleanup import OBJECT_CLEANUP_DELETE
+from database.repositories.cleanup import OBJECT_CLEANUP_DELETE
 from database.repositories.storage import (
     CacheEntryRepository,
     ObjectRepository,

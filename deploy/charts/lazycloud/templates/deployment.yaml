@@ -61,7 +61,7 @@ spec:
       initContainers:
         {{- include "lazycloud.databaseWaitInitContainer" . | nindent 8 }}
         {{- if and .Values.agentArtifact.version .Values.agentArtifact.url }}
-        - name: stage-agent-artifact
+        - name: stage-agent-binary
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: "{{ .Values.image.pullPolicy }}"
           command: ["python", "-c"]
@@ -87,7 +87,7 @@ spec:
             - {{ .Values.agentArtifact.sha256ByArch.amd64 | quote }}
             - {{ printf "%s/%s/lazycloud-agent-linux-amd64" .Values.agentArtifact.volume.mountPath .Values.agentArtifact.version | quote }}
           volumeMounts:
-            - name: agent-artifacts
+            - name: agent-binarys
               mountPath: {{ .Values.agentArtifact.volume.mountPath | quote }}
         {{- end }}
       containers:
@@ -142,7 +142,7 @@ spec:
             - name: lazycloud-home
               mountPath: {{ .Values.state.home }}
             {{- if .Values.agentArtifact.version }}
-            - name: agent-artifacts
+            - name: agent-binarys
               mountPath: {{ .Values.agentArtifact.volume.mountPath | quote }}
               readOnly: true
             {{- end }}
@@ -201,7 +201,7 @@ spec:
         - name: lazycloud-home
           emptyDir: {}
         {{- if .Values.agentArtifact.version }}
-        - name: agent-artifacts
+        - name: agent-binarys
           {{- if .Values.agentArtifact.volume.existingClaim }}
           persistentVolumeClaim:
             claimName: {{ .Values.agentArtifact.volume.existingClaim | quote }}

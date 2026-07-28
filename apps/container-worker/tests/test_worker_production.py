@@ -23,7 +23,7 @@ from container_worker_app.production import (
 )
 from pydantic import JsonValue
 from worker.checkpoints import CheckpointPersistenceAction, CheckpointPersistencePlan
-from worker.container_artifacts import TarContainerImageArchiver
+from worker.container_checkpoints import TarContainerImageArchiver
 from worker.container_service.models import WorkerContainerServiceInstance
 from worker.container_startup import (
     IMAGE_MOUNT_MANIFEST_NAME,

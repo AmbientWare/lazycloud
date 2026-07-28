@@ -5,11 +5,11 @@ from typing import Annotated
 from compute.aws_connections import AwsAccountConnectionDirectory, AwsAccountConnectionService
 from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
+from execution.artifacts.service import ArtifactStorageService
 from execution.collections.redis import (
     RedisMapService,
     RedisSimpleQueueService,
 )
-from execution.outputs.service import OutputStorageService
 from execution.pods.service import PodControlService
 from execution.shells.service import ShellControlService
 from execution.signals.redis import RedisSignalService
@@ -102,10 +102,10 @@ def image_service(
     return services.image_service
 
 
-def output_service(
+def artifact_service(
     services: Annotated[ApiServices, Depends(api_services)],
-) -> OutputStorageService:
-    return services.output_service
+) -> ArtifactStorageService:
+    return services.artifact_service
 
 
 def pod_service(

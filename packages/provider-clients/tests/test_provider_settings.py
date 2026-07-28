@@ -4,7 +4,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 import pytest
-from agent.artifacts import AgentArtifactSettings
+from agent.binary import AgentBinarySettings
 from provider_clients.settings import (
     AwsAccountConnectionSettings,
     AwsCapacitySettings,
@@ -38,7 +38,7 @@ def test_aws_capacity_settings_reject_partial_and_mutable_artifacts(
 
     capacity = AwsCapacitySettings(
         worker_image_digest="registry.example.com/worker:latest",
-        agent_artifact_url=(
+        agent_binary_url=(
             f"https://s3.us-east-1.amazonaws.com/releases/agents/0.1.0/{'b' * 64}/"
             "lazycloud-agent-linux-amd64"
         ),
@@ -46,11 +46,11 @@ def test_aws_capacity_settings_reject_partial_and_mutable_artifacts(
         gpu_ami_ids={"us-east-1": "ami-0fedcba9876543210"},
         instance_hourly_micros={"i4i.xlarge": 340_000},
     )
-    artifact = AgentArtifactSettings(
+    artifact = AgentBinarySettings(
         binary_dir=Path("/opt/lazycloud/agent"),
         artifact_version="0.1.0",
-        artifact_sha256_by_arch={"amd64": "b" * 64},
+        sha256_by_arch={"amd64": "b" * 64},
     )
 
     with pytest.raises(ValidationError, match="worker_image_digest"):
-        capacity.artifacts_by_region(artifact)
+        capacity.binaries_by_region(artifact)

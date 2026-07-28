@@ -28,7 +28,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import sqlalchemy
-from agent.artifacts import AgentArtifactSettings
+from agent.binary import AgentBinarySettings
 from api.server.services import ApiServices
 from compute.agent_control import TailnetConfig
 from compute.offers import ComputeOffer
@@ -84,7 +84,7 @@ _ACCOUNT_ID = "123456789012"
 _ROLE_NAME = "compute-node"
 _REGION = "us-east-1"
 _INSTANCE_TYPE = "i4i.xlarge"
-_AGENT_ARTIFACT_URL = "https://artifacts.fake-devloop.invalid/lazycloud-agent"
+_AGENT_BINARY_URL = "https://artifacts.fake-devloop.invalid/lazycloud-agent"
 _MAX_ITERATIONS = 10
 
 _TERMINAL_STATUSES = {"deleted", "failed"}
@@ -172,15 +172,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             binary_redis_client=binary_redis,
             owns_redis_client=True,
             owns_binary_redis_client=True,
-            agent_artifact_settings=AgentArtifactSettings(
+            agent_binary_settings=AgentBinarySettings(
                 binary_dir=Path(scratch),
                 artifact_version="fake-devloop",
-                artifact_sha256_by_arch={"amd64": "0" * 64},
+                sha256_by_arch={"amd64": "0" * 64},
             ),
             aws_account_connection_settings=AwsAccountConnectionSettings(enabled=False),
             aws_capacity_settings=AwsCapacitySettings(
                 worker_image_digest=f"worker@sha256:{'0' * 64}",
-                agent_artifact_url=_AGENT_ARTIFACT_URL,
+                agent_binary_url=_AGENT_BINARY_URL,
                 cpu_ami_ids={_REGION: "ami-00000000000000000"},
                 gpu_ami_ids={_REGION: "ami-00000000000000000"},
                 instance_hourly_micros={_INSTANCE_TYPE: 340_000},
@@ -462,7 +462,7 @@ def _bootstrap(pool: ComputePoolRecord, offer: ComputeOffer) -> ProviderPoolBoot
         enrollment_request_id=pool.id,
         agent_version="0.0.0-fake",
         agent_sha256="a" * 64,
-        agent_artifact_url=_AGENT_ARTIFACT_URL,
+        agent_binary_url=_AGENT_BINARY_URL,
         worker_image_digest=f"registry.fake-devloop.invalid/worker@sha256:{'b' * 64}",
     )
 

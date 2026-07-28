@@ -37,7 +37,7 @@ from shared.containers import ContainerStatus
 from shared.deployment_records import DeploymentSpec
 from shared.deployments import DeploymentKind
 from storage.image_archive import ImageArchiveSettings
-from storage.retention_settings import ArtifactRetentionSettings
+from storage.retention_settings import RetentionSettings
 from tests.real_redis import RealRedisActors
 from worker.event_bridge import WorkerEventHandlingResult, WorkerEventHandlingStatus
 from worker.events import WorkerStreamEvent, WorkerStreamEventKind
@@ -76,7 +76,7 @@ def _create_scheduler_app_services(
         storage=SchedulerStorageSettings(
             object_store=services.object_store_settings,
             image_archive=ImageArchiveSettings(),
-            artifact_retention=ArtifactRetentionSettings(),
+            retention=RetentionSettings(),
             volume_metering=VolumeMeteringSettings(),
         ),
         network=SchedulerNetworkSettings(
@@ -87,7 +87,7 @@ def _create_scheduler_app_services(
         capacity=SchedulerCapacitySettings(
             aws_connections=services.aws_account_connection_settings,
             aws_capacity=services.aws_capacity_settings,
-            agent_artifacts=services.agent_artifact_settings,
+            agent_binaries=services.agent_binary_settings,
             reclaim=ComputeReclaimPolicy(),
         ),
     )
@@ -102,15 +102,15 @@ def test_scheduler_runtime_closes_owned_services_on_exception(
     app_services = _create_scheduler_app_services(isolated_services, redis)
     container_requests = app_services.containers.scheduler
     assert isinstance(container_requests, SchedulerContainerRequestService)
-    artifact_retention = app_services.artifact_retention
-    assert artifact_retention is not None
+    retention = app_services.retention
+    assert retention is not None
     deployment = isolated_services.deployments.deploy(
         DeploymentSpec(
             name="checkpoint-retention-active-deployment",
             kind=DeploymentKind.Endpoint,
         )
     )
-    resource = artifact_retention.deployment_resources.list(
+    resource = retention.deployment_resources.list(
         workspace=None,
         deployment_id=deployment.id,
         active=True,
@@ -120,7 +120,7 @@ def test_scheduler_runtime_closes_owned_services_on_exception(
             resource.stub.workspace_id,
             resource.stub.id,
         )
-        in artifact_retention.protected_checkpoint_stub_keys()
+        in retention.protected_checkpoint_stub_keys()
     )
     runtime = SchedulerRuntime.from_services(
         scheduler_services=app_services,
@@ -130,9 +130,9 @@ def test_scheduler_runtime_closes_owned_services_on_exception(
         container_requests=container_requests,
         worker_pool_replica_scaler=None,
         image_build_container_settings=ImageBuildContainerSettings(),
-        artifact_retention_settings=ArtifactRetentionSettings(),
+        retention_settings=RetentionSettings(),
         volume_metering=app_services.volume_metering,
-        artifact_retention=app_services.artifact_retention,
+        retention=app_services.retention,
         tailnet_cleanup=app_services.tailnet_cleanup,
     )
     runtime.owned_services = app_services
@@ -369,7 +369,7 @@ class _ContainerWorkerServices:
         self.lifecycle = _ContainerWorkerLifecycle()
         self.event_source = event_source
         self.worker_events = worker_events
-        self.artifact_retention = None
+        self.retention = None
 
 
 class _ContainerWorkerLifecycle:

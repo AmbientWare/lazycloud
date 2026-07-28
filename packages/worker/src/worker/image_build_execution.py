@@ -26,7 +26,7 @@ from shared.managed_runtime_integrity import managed_package_source_digest
 from shared.scheduling import SchedulerWorkerRequest
 from shared.timestamps import utc_now
 
-from worker.container_artifacts import ContainerImageArchiver
+from worker.container_checkpoints import ContainerImageArchiver
 from worker.container_execution import WorkerAddressPublisher
 from worker.container_service.models import WorkerContainerServiceInstance
 from worker.container_service.protocols import WorkerContainerInstanceStore

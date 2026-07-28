@@ -5,49 +5,49 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from database.repositories.artifact_cleanup import (
+from database.repositories.cleanup import (
     OBJECT_CLEANUP_SOURCE,
-    ArtifactCleanupRepository,
+    CleanupRepository,
     object_location_lock_key,
 )
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.images import ImageBuildRepository, ImageRepository
 from database.repositories.source_cache import SourceCacheCleanupRepository
 from database.repositories.storage import (
-    ArtifactReferenceRepository,
     CacheEntryRepository,
+    ObjectReferenceRepository,
     ObjectRepository,
     OwnedObjectRecord,
 )
 from pydantic import field_validator
 from shared.app_identity import SOURCE_PACKAGE_BUCKET
-from shared.artifacts import normalize_artifact_path
 from shared.contracts import ContractModel
 from shared.identity import WorkspaceStatus
 from shared.image_building.records import BuildStatus, ImageBuildRecord, ImageRecord
 from shared.objects import ObjectRecord
+from shared.runtime_paths import normalize_runtime_path
 from shared.timestamps import utc_now
 
 from storage.checkpoint_retention import DurableCheckpointRetentionService
 from storage.context import StorageContext
 from storage.service import CacheStorage, ObjectByteClient, ObjectStorage
 
-DEFAULT_ARTIFACT_RETENTION_INTERVAL_SECONDS = 60 * 60
-DEFAULT_ARTIFACT_SOURCE_GRACE_SECONDS = 24 * 60 * 60
-DEFAULT_ARTIFACT_BUILD_RETENTION_SECONDS = 7 * 24 * 60 * 60
-DEFAULT_ARTIFACT_IMAGE_RETENTION_SECONDS = 7 * 24 * 60 * 60
-DEFAULT_ARTIFACT_MAX_ITEMS_PER_CYCLE = 100
+DEFAULT_RETENTION_INTERVAL_SECONDS = 60 * 60
+DEFAULT_RETENTION_SOURCE_GRACE_SECONDS = 24 * 60 * 60
+DEFAULT_RETENTION_BUILD_SECONDS = 7 * 24 * 60 * 60
+DEFAULT_RETENTION_IMAGE_SECONDS = 7 * 24 * 60 * 60
+DEFAULT_RETENTION_MAX_ITEMS_PER_CYCLE = 100
 OBJECT_CLEANUP_IMAGE_ARCHIVE = "image-archive-retention"
 
 
-class ArtifactRetentionConfig(ContractModel):
+class RetentionConfig(ContractModel):
     image_archive_bucket: str
     checkpoint_bucket: str
     image_archive_prefix: str = ""
-    source_grace_seconds: int = DEFAULT_ARTIFACT_SOURCE_GRACE_SECONDS
-    build_retention_seconds: int = DEFAULT_ARTIFACT_BUILD_RETENTION_SECONDS
-    image_retention_seconds: int = DEFAULT_ARTIFACT_IMAGE_RETENTION_SECONDS
-    max_items_per_cycle: int = DEFAULT_ARTIFACT_MAX_ITEMS_PER_CYCLE
+    source_grace_seconds: int = DEFAULT_RETENTION_SOURCE_GRACE_SECONDS
+    build_retention_seconds: int = DEFAULT_RETENTION_BUILD_SECONDS
+    image_retention_seconds: int = DEFAULT_RETENTION_IMAGE_SECONDS
+    max_items_per_cycle: int = DEFAULT_RETENTION_MAX_ITEMS_PER_CYCLE
     object_operation_lease_seconds: int = 2 * 60 * 60
 
     @field_validator(
@@ -65,7 +65,7 @@ class ArtifactRetentionConfig(ContractModel):
         return value
 
 
-class ArtifactRetentionResult(ContractModel):
+class RetentionResult(ContractModel):
     source_objects_removed: int = 0
     image_archives_removed: int = 0
     image_records_removed: int = 0
@@ -90,11 +90,11 @@ class ArtifactRetentionResult(ContractModel):
 
 
 @dataclass(slots=True)
-class ArtifactRetentionService:
+class RetentionService:
     context: StorageContext
     object_storage: ObjectStorage
     cache_storage: CacheStorage
-    config: ArtifactRetentionConfig
+    config: RetentionConfig
     image_archive_client: ObjectByteClient | None = None
 
     def reconcile(
@@ -102,7 +102,7 @@ class ArtifactRetentionService:
         *,
         active_recent_stub_keys: list[str],
         now: datetime | None = None,
-    ) -> ArtifactRetentionResult:
+    ) -> RetentionResult:
         current = now or utc_now()
         self.object_storage.reconcile_operations(
             now=current,
@@ -134,7 +134,7 @@ class ArtifactRetentionService:
             recent_build_after=build_cutoff,
         )
         cache_reconciliation = self.cache_storage.reconcile(limit=self.config.max_items_per_cycle)
-        return ArtifactRetentionResult(
+        return RetentionResult(
             source_objects_removed=source_removed,
             image_archives_removed=image_archives_removed,
             image_records_removed=image_records_removed,
@@ -159,7 +159,7 @@ class ArtifactRetentionService:
     ) -> int:
         removed = self._resume_claimed_source_objects()
         with self.context.database.session() as session:
-            candidates = ArtifactReferenceRepository(session).list_source_cleanup_candidates(
+            candidates = ObjectReferenceRepository(session).list_source_cleanup_candidates(
                 source_bucket=SOURCE_PACKAGE_BUCKET,
                 created_before=created_before,
                 recent_build_after=recent_build_after,
@@ -197,12 +197,12 @@ class ArtifactRetentionService:
         recent_build_after: datetime,
     ) -> ObjectRecord | None:
         with self.context.database.session() as session:
-            references = ArtifactReferenceRepository(session)
+            references = ObjectReferenceRepository(session)
             objects = ObjectRepository(session)
             current = objects.get_owned(candidate.record.id)
             if current is None:
                 return None
-            claims = ArtifactCleanupRepository(session)
+            claims = CleanupRepository(session)
             claims.lock_keys(
                 {
                     f"object:{current.record.id}",
@@ -238,7 +238,7 @@ class ArtifactRetentionService:
 
     def _resume_claimed_source_objects(self) -> int:
         with self.context.database.session() as session:
-            claimed = ArtifactCleanupRepository(session).list_claimed_objects(
+            claimed = CleanupRepository(session).list_claimed_objects(
                 limit=self.config.max_items_per_cycle,
                 cleanup_kind=OBJECT_CLEANUP_SOURCE,
             )
@@ -253,7 +253,7 @@ class ArtifactRetentionService:
                 f"source object deletion was not confirmed: {record.bucket}/{record.key}"
             )
         with self.context.database.session() as session:
-            claims = ArtifactCleanupRepository(session)
+            claims = CleanupRepository(session)
             current = ObjectRepository(session).get_owned(record.id, include_operations=True)
             if current is None:
                 return False
@@ -314,7 +314,7 @@ class ArtifactRetentionService:
         with self.context.database.session() as session:
             candidates = [
                 image
-                for image in ArtifactReferenceRepository(session).list_image_cleanup_candidates(
+                for image in ObjectReferenceRepository(session).list_image_cleanup_candidates(
                     excluded_image_ids=referenced_image_ids,
                     updated_before=updated_before,
                     recent_build_after=recent_build_after,
@@ -358,7 +358,7 @@ class ArtifactRetentionService:
         with self.context.database.session() as session:
             candidates = [
                 build
-                for build in ArtifactReferenceRepository(session).list_build_cleanup_candidates(
+                for build in ObjectReferenceRepository(session).list_build_cleanup_candidates(
                     excluded_build_ids=retained_build_ids,
                     finished_before=finished_before,
                     recent_build_after=recent_build_after,
@@ -405,8 +405,8 @@ class ArtifactRetentionService:
         recent_build_after: datetime,
     ) -> ImageRecord | None:
         with self.context.database.session() as session:
-            references = ArtifactReferenceRepository(session)
-            claims = ArtifactCleanupRepository(session)
+            references = ObjectReferenceRepository(session)
+            claims = CleanupRepository(session)
             claims.lock_keys({f"image:{candidate.workspace_id}:{candidate.image_id}"})
             images = ImageRepository(session)
             current = images.get_updated_before(
@@ -441,7 +441,7 @@ class ArtifactRetentionService:
         if limit <= 0:
             return []
         with self.context.database.session() as session:
-            claims = ArtifactCleanupRepository(session)
+            claims = CleanupRepository(session)
             claims.lock_keys({f"image:{workspace_id}:{image_id}"})
             image = ImageRepository(session).get(image_id, workspace_id=workspace_id)
             if image is None or image.cleanup_claimed_at is None:
@@ -476,7 +476,7 @@ class ArtifactRetentionService:
 
     def _resume_claimed_images(self) -> tuple[int, int, int, int, int]:
         with self.context.database.session() as session:
-            claimed = ArtifactCleanupRepository(session).list_claimed_images(
+            claimed = CleanupRepository(session).list_claimed_images(
                 limit=self.config.max_items_per_cycle
             )
         total = [0, 0, 0, 0, 0]
@@ -526,7 +526,7 @@ class ArtifactRetentionService:
             ):
                 cache_removed += 1
         with self.context.database.session() as session:
-            claims = ArtifactCleanupRepository(session)
+            claims = CleanupRepository(session)
             claims.lock_keys(
                 {f"image:{image.workspace_id}:{image.image_id}"}
                 | set().union(*(_build_claim_keys(build) for build in image_builds))
@@ -611,7 +611,7 @@ class ArtifactRetentionService:
             )
 
         with self.context.database.session() as session:
-            claims = ArtifactCleanupRepository(session)
+            claims = CleanupRepository(session)
             claims.lock_keys(
                 {
                     f"image:{image.workspace_id}:{image.image_id}",
@@ -671,11 +671,11 @@ class ArtifactRetentionService:
         recent_build_after: datetime,
     ) -> ImageBuildRecord | None:
         with self.context.database.session() as session:
-            references = ArtifactReferenceRepository(session)
+            references = ObjectReferenceRepository(session)
             builds = ImageBuildRepository(session)
             current = builds.get_across_workspaces(candidate.id)
             workspace_id = builds.workspace_id(candidate.id)
-            claims = ArtifactCleanupRepository(session)
+            claims = CleanupRepository(session)
             claim_keys = _build_claim_keys(candidate)
             if workspace_id is not None and candidate.image_id:
                 claim_keys.add(f"image:{workspace_id}:{candidate.image_id}")
@@ -710,14 +710,14 @@ class ArtifactRetentionService:
         with self.context.database.session() as session:
             images_claimed = {
                 (image.workspace_id, image.image_id)
-                for image in ArtifactCleanupRepository(session).list_claimed_images(
+                for image in CleanupRepository(session).list_claimed_images(
                     limit=self.config.max_items_per_cycle
                 )
             }
             builds = ImageBuildRepository(session)
             claimed = [
                 build
-                for build in ArtifactCleanupRepository(session).list_claimed_builds(
+                for build in CleanupRepository(session).list_claimed_builds(
                     limit=self.config.max_items_per_cycle
                 )
                 if not build.image_id
@@ -744,7 +744,7 @@ class ArtifactRetentionService:
             and self.cache_storage.delete_key(cache_key)
         )
         with self.context.database.session() as session:
-            claims = ArtifactCleanupRepository(session)
+            claims = CleanupRepository(session)
             claims.lock_keys(_build_claim_keys(build))
             current = ImageBuildRepository(session).get_across_workspaces(build.id)
             if current is None:
@@ -863,7 +863,7 @@ def _build_paths(build: ImageBuildRecord) -> tuple[Path, ...]:
         build.cache_metadata.get("dockerfile_path"),
         build.cache_metadata.get("manifest_path"),
     )
-    return tuple(Path(normalize_artifact_path(raw_path)) for raw_path in raw_paths if raw_path)
+    return tuple(Path(normalize_runtime_path(raw_path)) for raw_path in raw_paths if raw_path)
 
 
 def _build_cache_key(build: ImageBuildRecord) -> str:
@@ -891,8 +891,8 @@ def _owned_build_path(path: Path, *, root: Path) -> bool:
 
 
 __all__ = [
-    "DEFAULT_ARTIFACT_RETENTION_INTERVAL_SECONDS",
-    "ArtifactRetentionConfig",
-    "ArtifactRetentionResult",
-    "ArtifactRetentionService",
+    "DEFAULT_RETENTION_INTERVAL_SECONDS",
+    "RetentionConfig",
+    "RetentionResult",
+    "RetentionService",
 ]

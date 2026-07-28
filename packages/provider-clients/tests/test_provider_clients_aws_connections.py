@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from agent.artifacts import AgentArtifactSettings
+from agent.binary import AgentBinarySettings
 from compute.aws_connections import AwsAccountConnectionValidationError
 from networking.settings import (
     BackendRouteSettings,
@@ -62,7 +62,7 @@ _OPERATION_ID = "cleanup-12345678123441238123123456789abc"
 class _AwsOwnerSettings:
     connection: AwsAccountConnectionSettings
     capacity: AwsCapacitySettings
-    artifact: AgentArtifactSettings
+    artifact: AgentBinarySettings
     runtime: TailnetRuntimeSettings
     control: TailnetControlSettings
     backend_route: BackendRouteSettings
@@ -82,7 +82,7 @@ def _enabled_settings() -> _AwsOwnerSettings:
         ),
         capacity=AwsCapacitySettings(
             worker_image_digest=(f"registry.example.com/worker@sha256:{'c' * 64}"),
-            agent_artifact_url=(
+            agent_binary_url=(
                 f"https://s3.us-east-1.amazonaws.com/releases/agents/0.1.0/{'b' * 64}/"
                 "lazycloud-agent-linux-amd64"
             ),
@@ -90,10 +90,10 @@ def _enabled_settings() -> _AwsOwnerSettings:
             cpu_ami_ids={"us-east-1": "ami-0123456789abcdef0"},
             gpu_ami_ids={"us-east-1": "ami-0fedcba9876543210"},
         ),
-        artifact=AgentArtifactSettings(
-            binary_dir=Path("/tmp/agent-artifacts"),
+        artifact=AgentBinarySettings(
+            binary_dir=Path("/tmp/agent-binarys"),
             artifact_version="0.1.0",
-            artifact_sha256_by_arch={"amd64": "b" * 64},
+            sha256_by_arch={"amd64": "b" * 64},
         ),
         runtime=TailnetRuntimeSettings(),
         control=TailnetControlSettings(

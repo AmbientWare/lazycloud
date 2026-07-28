@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 from shared.image_building.authoring import LinuxArchitecture
-from worker.container_artifacts import ContainerImageArchiveResult
+from worker.container_checkpoints import ContainerImageArchiveResult
 from worker.image_build_architecture import (
     ImageBuildArchitectureError,
     ImageBuildArchitectureRuntime,

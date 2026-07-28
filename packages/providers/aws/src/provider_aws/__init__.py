@@ -63,7 +63,7 @@ from .instance_catalog import (
 from .managed_pool import (
     AWS_MANAGED_POOL_TAG,
     AWS_MANAGED_POOL_TAG_VALUE,
-    AwsManagedPoolArtifacts,
+    AwsManagedPoolBinaries,
     AwsManagedPoolBootstrap,
     AwsManagedPoolClientProvider,
     AwsManagedPoolClients,
@@ -175,7 +175,7 @@ __all__ = [
     "AwsK3sClusterPlan",
     "AwsMachineUserData",
     "AwsManagedNodeIdentity",
-    "AwsManagedPoolArtifacts",
+    "AwsManagedPoolBinaries",
     "AwsManagedPoolBootstrap",
     "AwsManagedPoolClientProvider",
     "AwsManagedPoolClients",

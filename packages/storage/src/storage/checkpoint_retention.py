@@ -3,9 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from database.repositories.artifact_cleanup import (
+from database.repositories.cleanup import (
     OBJECT_CLEANUP_CHECKPOINT,
-    ArtifactCleanupRepository,
+    CleanupRepository,
     object_location_lock_key,
 )
 from database.repositories.images import CheckpointRepository
@@ -37,7 +37,7 @@ class DurableCheckpointRetentionService:
     ) -> CheckpointPruneResult:
         current = now or utc_now()
         with self.context.database.session() as session:
-            claimed = ArtifactCleanupRepository(session).list_claimed_checkpoints(
+            claimed = CleanupRepository(session).list_claimed_checkpoints(
                 limit=self.max_items_per_cycle
             )
         pruned: list[CheckpointRecord] = []
@@ -68,7 +68,7 @@ class DurableCheckpointRetentionService:
     ) -> CheckpointRecord | None:
         active_keys = set(active_recent_stub_keys)
         with self.context.database.session() as session:
-            claims = ArtifactCleanupRepository(session)
+            claims = CleanupRepository(session)
             claims.lock_keys({f"checkpoint:{checkpoint_id}"})
             checkpoints = CheckpointRepository(session)
             checkpoint = checkpoints.get_across_workspaces(checkpoint_id, include_claimed=True)
@@ -163,7 +163,7 @@ class DurableCheckpointRetentionService:
                     )
 
         with self.context.database.session() as session:
-            claims = ArtifactCleanupRepository(session)
+            claims = CleanupRepository(session)
             keys = {f"checkpoint:{checkpoint.checkpoint_id}"}
             if checkpoint.origin_key:
                 keys.add(

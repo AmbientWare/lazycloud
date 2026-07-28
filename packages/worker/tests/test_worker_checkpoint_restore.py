@@ -14,7 +14,7 @@ from foundation.process import ProcessOutputSink
 from pydantic import JsonValue, TypeAdapter
 from shared.checkpoints import CheckpointRecord, CheckpointStatus
 from shared.container_requests import WorkerStartupKind
-from worker.checkpoint_activity import CheckpointArtifactLeaseRegistry
+from worker.checkpoint_activity import CheckpointLeaseRegistry
 from worker.checkpoint_restore import RuntimeCheckpointRestorer
 from worker.checkpoints import CheckpointStatePayload, WorkerCheckpointStatus
 from worker.container_execution import (
@@ -34,7 +34,7 @@ def test_runtime_checkpoint_restorer_reuses_owned_rootfs_after_source_image_evic
     tmp_path: Path,
 ) -> None:
     checkpoint, archive = _checkpoint_archive(tmp_path)
-    checkpoint_activity = CheckpointArtifactLeaseRegistry()
+    checkpoint_activity = CheckpointLeaseRegistry()
     source = _Source(
         checkpoint=checkpoint,
         archive=archive,
@@ -210,7 +210,7 @@ def test_concurrent_restores_materialize_once_then_run_independently(
     tmp_path: Path,
 ) -> None:
     checkpoint, archive = _checkpoint_archive(tmp_path)
-    activity = CheckpointArtifactLeaseRegistry()
+    activity = CheckpointLeaseRegistry()
     source = _ConcurrentSource(checkpoint=checkpoint, archive=archive)
     states = _StateSink()
     runtime = _ConcurrentRuntime(expected_starts=2)
@@ -270,7 +270,7 @@ def test_failed_materialization_releases_owner_for_waiting_restore_retry(
     tmp_path: Path,
 ) -> None:
     checkpoint, archive = _checkpoint_archive(tmp_path)
-    activity = CheckpointArtifactLeaseRegistry()
+    activity = CheckpointLeaseRegistry()
     source = _ConcurrentSource(
         checkpoint=checkpoint,
         archive=archive,
@@ -329,7 +329,7 @@ def test_failed_materialization_releases_owner_for_waiting_restore_retry(
 
 
 def test_materialization_ownership_is_per_checkpoint_and_retention_safe() -> None:
-    activity = CheckpointArtifactLeaseRegistry()
+    activity = CheckpointLeaseRegistry()
     first = activity.acquire_materialization("checkpoint-a")
     same_acquired = threading.Event()
     same_release = threading.Event()
@@ -422,7 +422,7 @@ class _Source:
     checkpoint: CheckpointRecord
     archive: Path
     lookups: list[tuple[str, str]] = field(default_factory=list)
-    checkpoint_activity: CheckpointArtifactLeaseRegistry | None = None
+    checkpoint_activity: CheckpointLeaseRegistry | None = None
     protected_during_download: set[str] = field(default_factory=set)
 
     def get_checkpoint(self, checkpoint_id: str, *, workspace_id: str) -> CheckpointRecord:
@@ -452,7 +452,7 @@ class _Runtime:
     image_paths: list[str] = field(default_factory=list)
     error_before_started: str = ""
     error_after_started: str = ""
-    checkpoint_activity: CheckpointArtifactLeaseRegistry | None = None
+    checkpoint_activity: CheckpointLeaseRegistry | None = None
     protected_during_restore: set[str] = field(default_factory=set)
 
     def restore_container(

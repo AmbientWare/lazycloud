@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from pydantic import JsonValue, TypeAdapter
 from scheduler.state import SchedulerWorkerRequest
-from worker.container_artifacts import ContainerImageArchiveResult
+from worker.container_checkpoints import ContainerImageArchiveResult
 from worker.container_client.models import ContainerStatusRequest
 from worker.container_service.service import WorkerContainerService
 from worker.container_service.state import LocalWorkerContainerInstanceStore

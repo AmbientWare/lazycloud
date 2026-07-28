@@ -38,9 +38,9 @@ from scheduler.preemption import (
 from scheduler.service import (
     MANAGED_COMPUTE_RECONCILE_INTERVAL_SECONDS,
     Scheduler,
-    SchedulerArtifactRetentionService,
     SchedulerCapacityControls,
     SchedulerMaintenanceControls,
+    SchedulerRetentionService,
     SchedulerStateStores,
     SchedulerTailnetCleanupService,
     SchedulerVolumeMeteringService,
@@ -53,7 +53,7 @@ from scheduler.state import (
     RedisWorkerNetworkIpRepository,
     RedisWorkerPoolStateRepository,
 )
-from storage.retention_settings import ArtifactRetentionSettings
+from storage.retention_settings import RetentionSettings
 
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
 from scheduler_app.capacity_interruptions import DatabaseCapacityInterruptionSource
@@ -125,9 +125,9 @@ class SchedulerRuntime:
                 container_requests=_container_requests(app_services),
                 worker_pool_replica_scaler=worker_pool_replica_scaler,
                 image_build_container_settings=image_build_container_settings,
-                artifact_retention_settings=storage.artifact_retention,
+                retention_settings=storage.retention,
                 volume_metering=app_services.volume_metering,
-                artifact_retention=app_services.artifact_retention,
+                retention=app_services.retention,
                 tailnet_cleanup=app_services.tailnet_cleanup,
                 interval_seconds=interval_seconds,
                 managed_compute_reconcile_interval_seconds=(
@@ -159,9 +159,9 @@ class SchedulerRuntime:
         container_requests: SchedulerContainerRequestService,
         worker_pool_replica_scaler: WorkerPoolReplicaScaler | None,
         image_build_container_settings: ImageBuildContainerSettings,
-        artifact_retention_settings: ArtifactRetentionSettings,
+        retention_settings: RetentionSettings,
         volume_metering: SchedulerVolumeMeteringService,
-        artifact_retention: SchedulerArtifactRetentionService | None,
+        retention: SchedulerRetentionService | None,
         tailnet_cleanup: SchedulerTailnetCleanupService,
         interval_seconds: float = 1.0,
         managed_compute_reconcile_interval_seconds: float = (
@@ -271,14 +271,14 @@ class SchedulerRuntime:
             ),
             maintenance=SchedulerMaintenanceControls(
                 volume_metering=volume_metering,
-                artifact_retention=artifact_retention,
+                retention=retention,
                 tailnet_cleanup=tailnet_cleanup,
             ),
-            artifact_retention_interval_seconds=artifact_retention_settings.interval_seconds,
-            artifact_retention_retry_initial_seconds=(
-                artifact_retention_settings.retry_initial_seconds
+            retention_interval_seconds=retention_settings.interval_seconds,
+            retention_retry_initial_seconds=(
+                retention_settings.retry_initial_seconds
             ),
-            artifact_retention_retry_max_seconds=artifact_retention_settings.retry_max_seconds,
+            retention_retry_max_seconds=retention_settings.retry_max_seconds,
         )
         return cls(scheduler=scheduler)
 

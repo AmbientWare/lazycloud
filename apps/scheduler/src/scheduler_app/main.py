@@ -5,7 +5,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from agent.artifacts import AgentArtifactSettings
+from agent.binary import AgentBinarySettings
 from compute.reclaim import ComputeReclaimSettings
 from gateway.settings import GatewaySettings
 from images.settings import ImageBuildContainerSettings
@@ -36,7 +36,7 @@ from shared.app_identity import NAME, SCHEDULER_PROCESS_NAME
 from shared.compute_fleet import Pool
 from shared.process_liveness import HeartbeatFile, heartbeat_path
 from storage.image_archive import ImageArchiveSettings
-from storage.retention_settings import ArtifactRetentionSettings
+from storage.retention_settings import RetentionSettings
 from storage_client.s3 import S3ObjectStoreSettings
 
 from scheduler_app.runtime import SchedulerRuntime
@@ -80,8 +80,8 @@ class SchedulerProcessResult:
     orphaned_container_failure_count: int = 0
     volume_metering_count: int = 0
     volume_metering_failure_count: int = 0
-    artifacts_removed: int = 0
-    artifact_retention_failure_count: int = 0
+    objects_removed: int = 0
+    retention_failure_count: int = 0
     tailnet_cleanup_processed_count: int = 0
     tailnet_cleanup_completed_count: int = 0
     tailnet_cleanup_failure_count: int = 0
@@ -106,8 +106,8 @@ class SchedulerProcessResult:
             "orphaned_container_failure_count": self.orphaned_container_failure_count,
             "volume_metering_count": self.volume_metering_count,
             "volume_metering_failure_count": self.volume_metering_failure_count,
-            "artifacts_removed": self.artifacts_removed,
-            "artifact_retention_failure_count": self.artifact_retention_failure_count,
+            "objects_removed": self.objects_removed,
+            "retention_failure_count": self.retention_failure_count,
             "tailnet_cleanup_processed_count": self.tailnet_cleanup_processed_count,
             "tailnet_cleanup_completed_count": self.tailnet_cleanup_completed_count,
             "tailnet_cleanup_failure_count": self.tailnet_cleanup_failure_count,
@@ -192,8 +192,8 @@ def run_scheduler(
                 orphaned_container_failure_count=len(result.orphaned_containers_failed),
                 volume_metering_count=result.volume_metering_count,
                 volume_metering_failure_count=result.volume_metering_failure_count,
-                artifacts_removed=result.artifacts_removed,
-                artifact_retention_failure_count=result.artifact_retention_failure_count,
+                objects_removed=result.objects_removed,
+                retention_failure_count=result.retention_failure_count,
                 tailnet_cleanup_processed_count=result.tailnet_cleanup_processed_count,
                 tailnet_cleanup_completed_count=result.tailnet_cleanup_completed_count,
                 tailnet_cleanup_failure_count=result.tailnet_cleanup_failure_count,
@@ -227,7 +227,7 @@ def build_scheduler_runtime(
         storage=SchedulerStorageSettings(
             object_store=S3ObjectStoreSettings(),
             image_archive=ImageArchiveSettings(),
-            artifact_retention=ArtifactRetentionSettings(),
+            retention=RetentionSettings(),
             volume_metering=VolumeMeteringSettings(),
         ),
         network=SchedulerNetworkSettings(
@@ -238,7 +238,7 @@ def build_scheduler_runtime(
         capacity=SchedulerCapacitySettings(
             aws_connections=AwsAccountConnectionSettings(),
             aws_capacity=AwsCapacitySettings(),
-            agent_artifacts=AgentArtifactSettings(),
+            agent_binaries=AgentBinarySettings(),
             reclaim=ComputeReclaimSettings().to_policy(),
         ),
         interval_seconds=interval_seconds,

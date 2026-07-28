@@ -6,10 +6,10 @@ from types import TracebackType
 from typing import Protocol
 
 from shared.container_requests import StopContainerReason
-from worker.artifact_retention import WorkerArtifactRetentionService
 from worker.event_bridge import WorkerEventHandlingResult
 from worker.events import WorkerStreamEvent
 from worker.repository_payloads import StreamWorkerEventsRequest
+from worker.retention import WorkerRetentionService
 from worker.scheduler_requests import WorkerSchedulerRequestResult
 from worker.status import WorkerSpindownPlan
 from worker.worker_lifecycle import WorkerLifecycleStepResult, WorkerShutdownResult
@@ -70,7 +70,7 @@ class ContainerWorkerServices(Protocol):
     def worker_events(self) -> ContainerWorkerEventHandler | None: ...
 
     @property
-    def artifact_retention(self) -> WorkerArtifactRetentionService | None: ...
+    def retention(self) -> WorkerRetentionService | None: ...
 
 
 @dataclass(slots=True)

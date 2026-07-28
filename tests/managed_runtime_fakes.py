@@ -6,13 +6,13 @@ import json
 import shutil
 from pathlib import Path
 
-from images.managed_runtime_artifacts import (
+from images.managed_runtime import (
     MANAGED_RUNTIME_ARCHITECTURES,
-    MANAGED_RUNTIME_ARTIFACT_SCHEMA_VERSION,
     MANAGED_RUNTIME_DISTRIBUTIONS,
     MANAGED_RUNTIME_PYTHON_VERSIONS,
-    ManagedRuntimeArtifactManifest,
+    MANAGED_RUNTIME_SCHEMA_VERSION,
     ManagedRuntimeCatalogManifest,
+    ManagedRuntimeManifest,
     managed_runtime_catalog_digest,
 )
 from shared.managed_runtime_integrity import (
@@ -50,9 +50,9 @@ def managed_runtime_catalog_root(
             ),
         }
     )
-    artifacts: dict[str, dict[str, ManagedRuntimeArtifactManifest]] = {}
+    artifacts: dict[str, dict[str, ManagedRuntimeManifest]] = {}
     for python_version in MANAGED_RUNTIME_PYTHON_VERSIONS:
-        version_artifacts: dict[str, ManagedRuntimeArtifactManifest] = {}
+        version_artifacts: dict[str, ManagedRuntimeManifest] = {}
         for architecture in MANAGED_RUNTIME_ARCHITECTURES:
             staging = tmp_path / f"staging-{python_version}-{architecture.value}"
             managed = staging / "managed"
@@ -101,7 +101,7 @@ def managed_runtime_catalog_root(
             destination = root / "content" / digest
             destination.parent.mkdir(exist_ok=True)
             staging.rename(destination)
-            version_artifacts[architecture.value] = ManagedRuntimeArtifactManifest(
+            version_artifacts[architecture.value] = ManagedRuntimeManifest(
                 python_major_minor=python_version,
                 architecture=architecture,
                 digest=digest,
@@ -126,7 +126,7 @@ def managed_runtime_catalog_root(
     launcher = root / "launcher.py"
     shutil.copy2(launcher_source, launcher)
     manifest = ManagedRuntimeCatalogManifest(
-        schema_version=MANAGED_RUNTIME_ARTIFACT_SCHEMA_VERSION,
+        schema_version=MANAGED_RUNTIME_SCHEMA_VERSION,
         digest="",
         source_digest=source_digest,
         launcher_digest=hashlib.sha256(launcher.read_bytes()).hexdigest(),

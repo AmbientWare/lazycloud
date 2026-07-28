@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from agent.artifacts import AgentArtifactSettings
+from agent.binary import AgentBinarySettings
 from compute.aws_connections import AwsAccountConnectionDirectory
 from compute.billing import managed_billing_client
 from compute.offers import ComputeOffer
@@ -17,8 +17,8 @@ from compute.service import ComputeService
 from compute.state import RedisComputeStateRepository
 from control.apps import (
     AppService,
-    DatabaseAppArtifactAvailability,
     DatabaseAppExecutionAdmission,
+    DatabaseAppImageAvailability,
 )
 from control.deployment_cleanup import AppDeploymentLifecycleService
 from control.deployment_registration import DeploymentRegistrationService
@@ -85,10 +85,10 @@ from shared.checkpoints import checkpoint_recent_stub_key
 from shared.compute_policy import ComputePoolRecord
 from storage.image_archive import ImageArchiveSettings, ResolvedImageArchiveSettings
 from storage.retention import (
-    ArtifactRetentionResult,
-    ArtifactRetentionService,
+    RetentionResult,
+    RetentionService,
 )
-from storage.retention_settings import ArtifactRetentionSettings
+from storage.retention_settings import RetentionSettings
 from storage.service import CacheStorage, ObjectStorage
 from storage.volume_filesystem import (
     WorkspaceVolumeFilesystem,
@@ -116,7 +116,7 @@ class SchedulerObservabilitySettings:
 class SchedulerStorageSettings:
     object_store: S3ObjectStoreSettings
     image_archive: ImageArchiveSettings
-    artifact_retention: ArtifactRetentionSettings
+    retention: RetentionSettings
     volume_metering: VolumeMeteringSettings
 
 
@@ -131,7 +131,7 @@ class SchedulerNetworkSettings:
 class SchedulerCapacitySettings:
     aws_connections: AwsAccountConnectionSettings
     aws_capacity: AwsCapacitySettings
-    agent_artifacts: AgentArtifactSettings
+    agent_binaries: AgentBinarySettings
     reclaim: ComputeReclaimPolicy
 
 
@@ -155,7 +155,7 @@ class SchedulerAppServices:
     usage: UsageService
     object_storage: ObjectStorage
     volume_metering: PersistentVolumeMeteringService
-    artifact_retention: SchedulerArtifactRetention | None
+    retention: SchedulerRetention | None
     redis_client: RedisClient
 
     @classmethod
@@ -213,11 +213,11 @@ class SchedulerAppServices:
             interval_seconds=storage.volume_metering.interval_seconds,
         )
         object_storage = ObjectStorage.from_settings(context, storage.object_store)
-        artifact_retention = scheduler_artifact_retention(
+        retention = scheduler_retention(
             context=context,
             object_storage=object_storage,
             cache_storage=CacheStorage(context),
-            settings=storage.artifact_retention,
+            settings=storage.retention,
             image_archive_settings=image_archive_config,
         )
         worker_repository = RedisSchedulerWorkerRepository(redis)
@@ -230,7 +230,7 @@ class SchedulerAppServices:
         provider_resolver = workspace_compute_provider_resolver(
             capacity.aws_connections,
             capacity.aws_capacity,
-            capacity.agent_artifacts,
+            capacity.agent_binaries,
             connections=AwsAccountConnectionDirectory(context).list_for_workspace,
             gateway_origin=gateway_origin,
             tailnet_runtime=network.tailnet_runtime,
@@ -238,7 +238,7 @@ class SchedulerAppServices:
             backend_route=network.backend_routes,
         )
         agent_version, agent_sha256 = (
-            capacity.agent_artifacts.require_amd64() if provider_resolver is not None else ("", "")
+            capacity.agent_binaries.require_amd64() if provider_resolver is not None else ("", "")
         )
 
         def pool_bootstrap(
@@ -251,7 +251,7 @@ class SchedulerAppServices:
                 enrollment_request_id=pool.id,
                 agent_version=agent_version,
                 agent_sha256=agent_sha256,
-                agent_artifact_url=capacity.aws_capacity.agent_artifact_url,
+                agent_binary_url=capacity.aws_capacity.agent_binary_url,
                 worker_image_digest=capacity.aws_capacity.worker_image_digest,
             )
 
@@ -327,7 +327,7 @@ class SchedulerAppServices:
                 redis,
                 container_shutdowns,
             ),
-            DatabaseAppArtifactAvailability(),
+            DatabaseAppImageAvailability(),
             workspace_changes=workspace_changes,
         )
         deployments = DeploymentService(
@@ -365,7 +365,7 @@ class SchedulerAppServices:
             usage=usage,
             object_storage=object_storage,
             volume_metering=volume_metering,
-            artifact_retention=artifact_retention,
+            retention=retention,
             redis_client=redis,
         )
 
@@ -377,8 +377,8 @@ class SchedulerAppServices:
 
 
 @dataclass(slots=True)
-class SchedulerArtifactRetention:
-    service: ArtifactRetentionService
+class SchedulerRetention:
+    service: RetentionService
     deployment_resources: DeploymentResourceService
 
     def protected_checkpoint_stub_keys(self, *, now: datetime | None = None) -> list[str]:
@@ -388,25 +388,25 @@ class SchedulerArtifactRetention:
             for resource in self.deployment_resources.list(workspace=None, active=True)
         )
 
-    def reconcile(self, *, now: datetime | None = None) -> ArtifactRetentionResult:
+    def reconcile(self, *, now: datetime | None = None) -> RetentionResult:
         return self.service.reconcile(
             active_recent_stub_keys=self.protected_checkpoint_stub_keys(now=now),
             now=now,
         )
 
 
-def scheduler_artifact_retention(
+def scheduler_retention(
     *,
     context: ServiceContext,
     object_storage: ObjectStorage,
     cache_storage: CacheStorage,
-    settings: ArtifactRetentionSettings,
+    settings: RetentionSettings,
     image_archive_settings: ResolvedImageArchiveSettings,
-) -> SchedulerArtifactRetention | None:
+) -> SchedulerRetention | None:
     if not settings.enabled:
         return None
-    return SchedulerArtifactRetention(
-        service=ArtifactRetentionService(
+    return SchedulerRetention(
+        service=RetentionService(
             context=context,
             object_storage=object_storage,
             cache_storage=cache_storage,

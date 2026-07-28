@@ -54,7 +54,7 @@
           "concepts/volumes",
           "concepts/secrets",
           "concepts/queues-maps-signals",
-          "concepts/outputs",
+          "concepts/artifacts",
           "concepts/tasks-and-logs"
         ]
       },

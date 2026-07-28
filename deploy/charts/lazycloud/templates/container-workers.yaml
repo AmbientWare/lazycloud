@@ -59,15 +59,15 @@
 {{- $workspaceStorageMode := dig "workspaceStorage" "mode" $.Values.containerWorkers.workspaceStorage.mode $pool }}
 {{- $workspaceStorageBaseMountPath := dig "workspaceStorage" "baseMountPath" $.Values.containerWorkers.workspaceStorage.baseMountPath $pool }}
 {{- $workspaceStorageMountpointBinary := dig "workspaceStorage" "mountpointBinary" $.Values.containerWorkers.workspaceStorage.mountpointBinary $pool }}
-{{- $artifactRetentionEnabled := dig "artifactRetention" "enabled" $.Values.containerWorkers.artifactRetention.enabled $pool }}
-{{- $artifactRetentionIntervalSeconds := dig "artifactRetention" "intervalSeconds" $.Values.containerWorkers.artifactRetention.intervalSeconds $pool }}
-{{- $imageCacheMaxBytes := dig "artifactRetention" "imageCacheMaxBytes" $.Values.containerWorkers.artifactRetention.imageCacheMaxBytes $pool }}
-{{- $imageMaterializationMaxBytes := dig "artifactRetention" "imageMaterializationMaxBytes" $.Values.containerWorkers.artifactRetention.imageMaterializationMaxBytes $pool }}
-{{- $checkpointCacheMaxBytes := dig "artifactRetention" "checkpointCacheMaxBytes" $.Values.containerWorkers.artifactRetention.checkpointCacheMaxBytes $pool }}
-{{- $artifactRetentionLowWatermarkPct := dig "artifactRetention" "lowWatermarkPct" $.Values.containerWorkers.artifactRetention.lowWatermarkPct $pool }}
-{{- $artifactRetentionRecentGuardSeconds := dig "artifactRetention" "recentGuardSeconds" $.Values.containerWorkers.artifactRetention.recentGuardSeconds $pool }}
-{{- $imageMaterializationRetentionSeconds := dig "artifactRetention" "imageMaterializationSeconds" $.Values.containerWorkers.artifactRetention.imageMaterializationSeconds $pool }}
-{{- $checkpointRetentionSeconds := dig "artifactRetention" "checkpointSeconds" $.Values.containerWorkers.artifactRetention.checkpointSeconds $pool }}
+{{- $retentionEnabled := dig "retention" "enabled" $.Values.containerWorkers.retention.enabled $pool }}
+{{- $retentionIntervalSeconds := dig "retention" "intervalSeconds" $.Values.containerWorkers.retention.intervalSeconds $pool }}
+{{- $imageCacheMaxBytes := dig "retention" "imageCacheMaxBytes" $.Values.containerWorkers.retention.imageCacheMaxBytes $pool }}
+{{- $imageMaterializationMaxBytes := dig "retention" "imageMaterializationMaxBytes" $.Values.containerWorkers.retention.imageMaterializationMaxBytes $pool }}
+{{- $checkpointCacheMaxBytes := dig "retention" "checkpointCacheMaxBytes" $.Values.containerWorkers.retention.checkpointCacheMaxBytes $pool }}
+{{- $retentionLowWatermarkPct := dig "retention" "lowWatermarkPct" $.Values.containerWorkers.retention.lowWatermarkPct $pool }}
+{{- $retentionRecentGuardSeconds := dig "retention" "recentGuardSeconds" $.Values.containerWorkers.retention.recentGuardSeconds $pool }}
+{{- $imageMaterializationRetentionSeconds := dig "retention" "imageMaterializationSeconds" $.Values.containerWorkers.retention.imageMaterializationSeconds $pool }}
+{{- $checkpointRetentionSeconds := dig "retention" "checkpointSeconds" $.Values.containerWorkers.retention.checkpointSeconds $pool }}
 {{- $sourceCacheMaxBytes := dig "sourceCache" "maxBytes" $.Values.containerWorkers.sourceCache.maxBytes $pool }}
 {{- $sourceCacheMaxEntries := dig "sourceCache" "maxEntries" $.Values.containerWorkers.sourceCache.maxEntries $pool }}
 {{- $sourceCacheRoot := dig "sourceCache" "root" $.Values.containerWorkers.sourceCache.root $pool }}
@@ -342,20 +342,20 @@ spec:
               value: {{ $workspaceStorageBaseMountPath | quote }}
             - name: WORKER_WORKSPACE_STORAGE_MOUNTPOINT_BINARY
               value: {{ $workspaceStorageMountpointBinary | quote }}
-            - name: WORKER_ARTIFACT_RETENTION_ENABLED
-              value: {{ $artifactRetentionEnabled | quote }}
-            - name: WORKER_ARTIFACT_RETENTION_INTERVAL_SECONDS
-              value: {{ $artifactRetentionIntervalSeconds | quote }}
+            - name: WORKER_RETENTION_ENABLED
+              value: {{ $retentionEnabled | quote }}
+            - name: WORKER_RETENTION_INTERVAL_SECONDS
+              value: {{ $retentionIntervalSeconds | quote }}
             - name: WORKER_IMAGE_CACHE_MAX_BYTES
               value: {{ $imageCacheMaxBytes | quote }}
             - name: WORKER_IMAGE_MATERIALIZATION_MAX_BYTES
               value: {{ $imageMaterializationMaxBytes | quote }}
             - name: WORKER_CHECKPOINT_CACHE_MAX_BYTES
               value: {{ $checkpointCacheMaxBytes | quote }}
-            - name: WORKER_ARTIFACT_RETENTION_LOW_WATERMARK_PCT
-              value: {{ $artifactRetentionLowWatermarkPct | quote }}
-            - name: WORKER_ARTIFACT_RETENTION_RECENT_GUARD_SECONDS
-              value: {{ $artifactRetentionRecentGuardSeconds | quote }}
+            - name: WORKER_RETENTION_LOW_WATERMARK_PCT
+              value: {{ $retentionLowWatermarkPct | quote }}
+            - name: WORKER_RETENTION_RECENT_GUARD_SECONDS
+              value: {{ $retentionRecentGuardSeconds | quote }}
             - name: WORKER_IMAGE_MATERIALIZATION_RETENTION_SECONDS
               value: {{ $imageMaterializationRetentionSeconds | quote }}
             - name: WORKER_CHECKPOINT_RETENTION_SECONDS

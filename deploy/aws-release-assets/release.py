@@ -31,7 +31,7 @@ _VERSION_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 _S3_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
 _REGION_PATTERN = re.compile(r"^(us-gov|us|af|ap|ca|cn|eu|il|me|mx|sa)-[a-z0-9-]+-[0-9]+$")
 _WORKER_IMAGE_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._:/-]*@sha256:[0-9a-f]{64}$")
-_AGENT_ARTIFACTS_DIRECTORY = "agent-artifacts"
+_AGENT_BINARY_DIRECTORY = "agent-binarys"
 _AGENT_AMD64_FILENAME = "lazycloud-agent-linux-amd64"
 _OCI_IMAGE_MANIFEST_MEDIA_TYPE = "application/vnd.oci.image.manifest.v1+json"
 _DOCKER_IMAGE_MANIFEST_MEDIA_TYPE = "application/vnd.docker.distribution.manifest.v2+json"
@@ -181,7 +181,7 @@ class AwsReleaseManifest(ReleaseModel):
         if self.connection_template_sha256 not in urlparse(template_url).path:
             raise ValueError("connection template URL must contain its bundled digest")
         if (
-            self.deployment_environment.get("LAZYCLOUD_AGENT_ARTIFACT_VERSION")
+            self.deployment_environment.get("LAZYCLOUD_AGENT_BINARY_VERSION")
             != self.agent_artifact_version
         ):
             raise ValueError("deployment environment agent version does not match the release")
@@ -191,13 +191,13 @@ class AwsReleaseManifest(ReleaseModel):
         ):
             raise ValueError("deployment environment worker image does not match the release")
         expected_environment = {
-            "LAZYCLOUD_AGENT_ARTIFACT_SHA256_BY_ARCH": json.dumps(
+            "LAZYCLOUD_AGENT_BINARY_SHA256_BY_ARCH": json.dumps(
                 {"amd64": self.agent_artifact_sha256},
                 sort_keys=True,
                 separators=(",", ":"),
             ),
-            "LAZYCLOUD_AGENT_ARTIFACT_VERSION": self.agent_artifact_version,
-            "LAZYCLOUD_AWS_CAPACITY_AGENT_ARTIFACT_URL": agent_objects[0].public_url,
+            "LAZYCLOUD_AGENT_BINARY_VERSION": self.agent_artifact_version,
+            "LAZYCLOUD_AWS_CAPACITY_AGENT_BINARY_URL": agent_objects[0].public_url,
             "LAZYCLOUD_AWS_CAPACITY_WORKER_IMAGE_DIGEST": self.container_worker_image,
             "LAZYCLOUD_AWS_CONNECTION_TEMPLATE_URL": template_objects[0].public_url,
         }
@@ -356,7 +356,7 @@ def stage_release(
 
     release_root = output.resolve() / version
     template_local = Path("objects") / "connection-template.json"
-    agent_local = Path(_AGENT_ARTIFACTS_DIRECTORY) / version / agent.filename
+    agent_local = Path(_AGENT_BINARY_DIRECTORY) / version / agent.filename
     template_path = release_root / template_local
     agent_path = release_root / agent_local
     _write_immutable(template_path, template)
@@ -408,11 +408,11 @@ def stage_release(
             ),
         ],
         deployment_environment={
-            "LAZYCLOUD_AGENT_ARTIFACT_SHA256_BY_ARCH": json.dumps(
+            "LAZYCLOUD_AGENT_BINARY_SHA256_BY_ARCH": json.dumps(
                 {"amd64": agent.sha256}, sort_keys=True, separators=(",", ":")
             ),
-            "LAZYCLOUD_AGENT_ARTIFACT_VERSION": version,
-            "LAZYCLOUD_AWS_CAPACITY_AGENT_ARTIFACT_URL": agent_url,
+            "LAZYCLOUD_AGENT_BINARY_VERSION": version,
+            "LAZYCLOUD_AWS_CAPACITY_AGENT_BINARY_URL": agent_url,
             "LAZYCLOUD_AWS_CAPACITY_WORKER_IMAGE_DIGEST": worker_image,
             "LAZYCLOUD_AWS_CONNECTION_TEMPLATE_URL": template_url,
             **(
@@ -481,7 +481,7 @@ def validated_local_agent_artifact_root(
 ) -> Path:
     bundle_root = manifest_path.expanduser().resolve().parent
     expected_local_path = (
-        Path(_AGENT_ARTIFACTS_DIRECTORY) / manifest.agent_artifact_version / _AGENT_AMD64_FILENAME
+        Path(_AGENT_BINARY_DIRECTORY) / manifest.agent_artifact_version / _AGENT_AMD64_FILENAME
     )
     agent_objects = [
         release_object
@@ -496,7 +496,7 @@ def validated_local_agent_artifact_root(
             "AWS release bundle does not retain the agent in its versioned artifact directory"
         )
 
-    artifact_root = bundle_root / _AGENT_ARTIFACTS_DIRECTORY
+    artifact_root = bundle_root / _AGENT_BINARY_DIRECTORY
     version_root = artifact_root / manifest.agent_artifact_version
     agent_path = bundle_root / expected_local_path
     resolved_artifact_root = artifact_root.resolve()
