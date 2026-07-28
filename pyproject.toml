@@ -38,7 +38,6 @@ workspace = [
     "worker-bootstrap-app",
     "provider-aws",
     "provider-fake",
-    "provider-kubernetes",
 ]
 dev = [
     { include-group = "workspace" },
@@ -88,7 +87,6 @@ members = [
     "apps/worker-bootstrap",
     "packages/providers/aws",
     "packages/providers/fake",
-    "packages/providers/kubernetes",
 ]
 
 [tool.uv.sources]
@@ -124,7 +122,6 @@ worker-repository = { workspace = true }
 worker-bootstrap-app = { workspace = true }
 provider-aws = { workspace = true }
 provider-fake = { workspace = true }
-provider-kubernetes = { workspace = true }
 
 [tool.pytest.ini_options]
 pythonpath = [

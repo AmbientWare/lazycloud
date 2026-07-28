@@ -959,7 +959,6 @@ class GatewayControlService:
                 name,
                 workspace_id=workspace_id,
             )
-            self._assert_pool_deletion_owner(pool)
             with self.capacity_reservations.mutation_lock(pool.capacity_owner_id):
                 if self.capacity_reservations.has_open_reservations(pool.capacity_owner_id):
                     raise ConflictError(f"compute pool {name!r} has active capacity reservations")
@@ -1090,7 +1089,6 @@ class GatewayControlService:
         pool = next((candidate for candidate in pools if candidate.name == name), None)
         if pool is None:
             return
-        self._assert_pool_deletion_owner(pool)
         with self.capacity_reservations.mutation_lock(pool.capacity_owner_id):
             if self.capacity_reservations.has_open_reservations(pool.capacity_owner_id):
                 raise ConflictError(f"compute pool {name!r} has active capacity reservations")
@@ -1110,14 +1108,6 @@ class GatewayControlService:
                 workspace_id=workspace_id,
             )
             self.scheduler_pool_state_repository.delete_pool_state(pool.capacity_owner_id)
-
-    @staticmethod
-    def _assert_pool_deletion_owner(pool: Pool) -> None:
-        if pool.provider == "kubernetes":
-            raise ConflictError(
-                f"compute pool {pool.name!r} is Helm-owned; remove it through the owning "
-                "Helm release so Kubernetes capacity is deleted before durable policy"
-            )
 
     def machine_join_command(
         self,
