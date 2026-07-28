@@ -12,7 +12,11 @@ from shared.image_building.authoring import LinuxArchitecture
 from worker.execution import OciMount, OciMountType
 from worker.managed_runtime_catalog import ManagedRuntimeCatalog
 
-MANAGED_RUNTIME_ROOT = Path("/opt/lazycloud/managed-runtime")
+# Where the runtime is baked into the worker image. Distinct from
+# MANAGED_RUNTIME_CONTAINER_ROOT below, which is where it is mounted inside a
+# user's container — collapsing the two leaves the worker reading a path that
+# only exists on the other side of the bind.
+MANAGED_RUNTIME_IMAGE_ROOT = Path("/opt/lazycloud/managed-runtime-source")
 MANAGED_RUNTIME_CONTAINER_ROOT = "/opt/lazycloud/managed-runtime"
 MANAGED_RUNTIME_LAUNCHER_PATH = f"{MANAGED_RUNTIME_CONTAINER_ROOT}/launcher.py"
 MANAGED_RUNTIME_CATALOG_DIGEST_ENV = "LAZYCLOUD_MANAGED_RUNTIME_CATALOG_DIGEST"
@@ -116,9 +120,9 @@ __all__ = [
     "MANAGED_RUNTIME_CATALOG_DIGEST_ENV",
     "MANAGED_RUNTIME_CONTAINER_ROOT",
     "MANAGED_RUNTIME_DIGEST_ENV",
+    "MANAGED_RUNTIME_IMAGE_ROOT",
     "MANAGED_RUNTIME_LAUNCHER_PATH",
     "MANAGED_RUNTIME_MODULES",
-    "MANAGED_RUNTIME_ROOT",
     "MANAGED_RUNTIME_STARTUP_KINDS",
     "ManagedRuntimePlan",
     "managed_runtime_python_version",

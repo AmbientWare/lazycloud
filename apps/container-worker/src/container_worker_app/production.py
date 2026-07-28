@@ -122,7 +122,7 @@ from worker.image_lifecycle import (
     DEFAULT_IMAGE_ARCHIVE_EXTENSION,
     ImageArchiveStorageMode,
 )
-from worker.managed_runtime import MANAGED_RUNTIME_ROOT
+from worker.managed_runtime import MANAGED_RUNTIME_IMAGE_ROOT
 from worker.monitoring import (
     AsyncContainerLifecycleSink,
     ContainerRuntimeMonitorSettings,
@@ -1385,7 +1385,7 @@ def build_production_worker_process_services(
             image_mount_root=Path(config.resolved_image_mount_root),
             runtime_configs=available_runtime_configs,
             gateway_settings=_gateway_settings(config),
-            managed_runtime_root=MANAGED_RUNTIME_ROOT,
+            managed_runtime_root=MANAGED_RUNTIME_IMAGE_ROOT,
         ),
         runtime_executor=runtime,
         runtime_controller=runtime,
