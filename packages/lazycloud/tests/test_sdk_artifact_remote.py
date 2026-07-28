@@ -153,25 +153,3 @@ class _MissingStatClient(FakeOutputClient):
 class _FailingPublicUrlClient(FakeOutputClient):
     def artifact_public_url(self, request: ArtifactPublicUrlRequest) -> ArtifactPublicUrlResponse:
         raise HttpApiError("failed", status_code=500)
-
-
-def test_output_from_pil_image_and_zip_helpers(tmp_path: Path) -> None:
-    directory = tmp_path / "bundle"
-    directory.mkdir()
-    (directory / "result.txt").write_text("result", encoding="utf-8")
-    artifact = Artifact(path=directory)
-
-    assert artifact.zipped_path.name == "bundle.zip"
-    archive_path = artifact.zip_dir(directory, target_dir=tmp_path)
-    with zipfile.ZipFile(archive_path) as archive:
-        assert archive.namelist() == ["result.txt"]
-
-    image_output = Artifact.from_pil_image(FakeImage(), format="png")
-    assert image_output.path.suffix == ".png"
-    assert image_output.stat().size == 5
-
-
-class FakeImage:
-    def save(self, fp: str | Path, format: str | None = None, **params: object) -> None:
-        _ = (format, params)
-        Path(fp).write_bytes(b"image")

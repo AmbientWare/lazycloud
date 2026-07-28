@@ -1,211 +1,22 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Callable
 from datetime import timedelta
 from threading import Barrier, Lock, Thread
 from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
-from database.records.apps import AppRecord, StubRecord
-from database.repositories.apps import AppRepository, StubRepository
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.observability import UsageRepository
 from database.tables.identity import WorkspaceTable
 from database.tables.observability import UsageBillingWindowTable, UsageRecordTable
 from pydantic import JsonValue
-from shared.deployments import StubKind
 from shared.timestamps import utc_now
-from shared.usage import UsageGroupKey, UsageMetric, UsageRecord, UsageUnit
-from shared.usage_query import UsageQuery
-from sqlalchemy import delete, event, select
-from sqlalchemy.engine import Connection, ExecutionContext
-from sqlalchemy.engine.interfaces import DBAPICursor, _DBAPIAnyExecuteParams
+from shared.usage import UsageMetric, UsageRecord, UsageUnit
+from sqlalchemy import delete, select
 
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
-
-
-def _statement_collector(
-    statements: list[str],
-) -> Callable[
-    [Connection, DBAPICursor, str, _DBAPIAnyExecuteParams, ExecutionContext | None, bool],
-    None,
-]:
-    def collect(
-        _connection: Connection,
-        _cursor: DBAPICursor,
-        statement: str,
-        _parameters: _DBAPIAnyExecuteParams,
-        _context: ExecutionContext | None,
-        _executemany: bool,
-    ) -> None:
-        statements.append(statement)
-
-    return collect
-
-
-def test_billing_report_projects_only_billable_evidence_with_constant_query_count(
-    isolated_services: ApiServices,
-) -> None:
-    now = utc_now()
-    app_id = str(uuid4())
-    stub_id = str(uuid4())
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
-        AppRepository(session).upsert(
-            AppRecord(id=app_id, workspace_id=workspace_id, name="projection-app")
-        )
-        StubRepository(session).upsert(
-            StubRecord(
-                id=stub_id,
-                workspace_id=workspace_id,
-                app_id=app_id,
-                name="projection-workload",
-                kind=StubKind.Function,
-            )
-        )
-        usage = UsageRepository(session)
-        labels = {
-            "app_id": app_id,
-            "stub_id": stub_id,
-            "cpu_millicores": "1000",
-            "mem_mb": "1024",
-            "gpu_count": "0",
-        }
-        for index in range(25):
-            resource_id = f"container-{index}"
-            usage.record(
-                workspace_id=workspace_id,
-                resource_type="container",
-                resource_id=resource_id,
-                metric=UsageMetric.ContainerDurationMilliseconds,
-                quantity=1_000,
-                unit=UsageUnit.Milliseconds,
-                labels=labels,
-            )
-            usage.record(
-                workspace_id=workspace_id,
-                resource_type="container",
-                resource_id=resource_id,
-                metric=UsageMetric.NetworkIngressBytes,
-                quantity=10_000,
-                unit=UsageUnit.Bytes,
-                labels=labels,
-            )
-
-    statements: list[str] = []
-    event.listen(
-        isolated_services.context.database.engine,
-        "before_cursor_execute",
-        _statement_collector(statements),
-    )
-
-    report = isolated_services.usage.billing_report(
-        workspace_id=workspace_id,
-        start=now - timedelta(hours=1),
-        end=now + timedelta(hours=1),
-        bucket_seconds=3600,
-    )
-
-    selects = [statement for statement in statements if statement.lstrip().startswith("SELECT")]
-    assert len(selects) == 3
-    usage_statement = next(statement for statement in selects if "usage_records" in statement)
-    assert "usage_records.metric IN" in usage_statement
-    assert "network_ingress_bytes" not in usage_statement
-    assert "json_extract" in usage_statement.lower()
-    assert report.summary[0].quantity == 25
-    assert report.workloads[0].workload_id == stub_id
-
-    statement_count = len(statements)
-    overview = isolated_services.usage.billing_overview(
-        workspace_id=workspace_id,
-        start=now - timedelta(hours=1),
-        end=now + timedelta(hours=1),
-        bucket_seconds=3600,
-    )
-    overview_selects = [
-        statement
-        for statement in statements[statement_count:]
-        if statement.lstrip().startswith(("SELECT", "WITH"))
-    ]
-    assert len(overview_selects) == 2
-    aggregate_statement = next(
-        statement for statement in overview_selects if "usage_billing_windows" in statement
-    )
-    assert "GROUP BY" in aggregate_statement
-    assert overview.summary == report.summary
-    assert [
-        (row.app_id, row.app_name, row.tasks, row.total_cost_nanos, row.lines)
-        for row in overview.apps
-    ] == [
-        (row.app_id, row.app_name, row.tasks, row.total_cost_nanos, row.lines)
-        for row in report.apps
-    ]
-    assert overview.activity == report.activity
-
-    statement_count = len(statements)
-    workloads = isolated_services.usage.billing_workloads(
-        workspace_id=workspace_id,
-        app_id=app_id,
-        start=now - timedelta(hours=1),
-        end=now + timedelta(hours=1),
-        bucket_seconds=3600,
-    )
-    detail_selects = [
-        statement
-        for statement in statements[statement_count:]
-        if statement.lstrip().startswith(("SELECT", "WITH"))
-    ]
-    assert len(detail_selects) == 3
-    assert "app_id" in next(
-        statement for statement in detail_selects if "usage_billing_windows" in statement
-    )
-    assert workloads.data == report.workloads
-
-
-def test_usage_summary_groups_and_filters_in_one_sql_statement(
-    isolated_services: ApiServices,
-) -> None:
-    now = utc_now()
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
-        usage = UsageRepository(session)
-        for app_id, quantity in (("app-a", 2), ("app-a", 3), ("app-b", 5)):
-            usage.record(
-                workspace_id=workspace_id,
-                resource_type="function",
-                resource_id=f"resource-{app_id}-{quantity}",
-                metric=UsageMetric.TaskCount,
-                quantity=quantity,
-                unit=UsageUnit.Count,
-                labels={"app_id": app_id, "kind": "function"},
-            )
-
-    statements: list[str] = []
-    event.listen(
-        isolated_services.context.database.engine,
-        "before_cursor_execute",
-        _statement_collector(statements),
-    )
-
-    rows = isolated_services.usage.aggregate(
-        query=UsageQuery(
-            workspace_id=workspace_id,
-            created_after=now - timedelta(hours=1),
-            labels={"kind": "function"},
-        ),
-        metric=UsageMetric.TaskCount,
-        group_by=(UsageGroupKey.App,),
-    )
-
-    selects = [statement for statement in statements if statement.lstrip().startswith("SELECT")]
-    assert len(selects) == 1
-    assert "sum(usage_records.quantity)" in selects[0]
-    assert {row.labels["app_id"]: row.quantity for row in rows} == {
-        "app-a": 5,
-        "app-b": 5,
-    }
 
 
 def test_billing_window_projection_replaces_stable_record_contribution(

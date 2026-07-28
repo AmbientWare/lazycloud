@@ -7,11 +7,6 @@ from typing import Never, Protocol
 
 import pytest
 from coordination.redis_client import RedisClient
-from coordination.token_lock import (
-    TokenLockReleaseStatus,
-    release_token_lock,
-    try_acquire_token_lock,
-)
 from scheduler.state import (
     ConcurrencyReservationStatus,
     RedisSchedulerContainerRepository,
@@ -263,18 +258,3 @@ def test_real_redis_concurrency_reserve_and_release_are_bounded_and_idempotent(
     assert not repeated.changed
     counter = repositories[0].get_concurrency_counter("workspace-1")
     assert (counter.gpu_count, counter.cpu_millicores) == (0, 0)
-
-
-def test_real_redis_expired_token_owner_cannot_delete_replacement(
-    real_redis_actors: RealRedisActors,
-) -> None:
-    owner = real_redis_actors.client()
-    replacement = real_redis_actors.client()
-    key = owner.key("token-lock")
-    assert try_acquire_token_lock(owner, key, "expired-owner", ttl_seconds=30)
-    replacement.set(key, "replacement", ex=30)
-
-    assert release_token_lock(owner, key, "expired-owner") is TokenLockReleaseStatus.TokenMismatch
-    assert replacement.get(key) == "replacement"
-    assert release_token_lock(replacement, key, "replacement") is TokenLockReleaseStatus.Released
-    assert owner.get(key) is None

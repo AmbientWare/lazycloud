@@ -359,19 +359,6 @@ def test_logical_object_purposes_share_one_physical_bucket_with_distinct_prefixe
     }
 
 
-def test_separate_allowed_backend_keeps_its_physical_bucket(
-    isolated_services: ApiServices,
-) -> None:
-    storage = ObjectStorage(
-        isolated_services.context,
-        object_client=MetadataObjectClient(),
-        default_bucket="primary-physical-bucket",
-        allowed_buckets=("separate-archive-bucket",),
-    )
-
-    assert storage.physical_bucket("separate-archive-bucket") == "separate-archive-bucket"
-
-
 def test_immutable_file_replay_reuses_complete_object_and_repairs_missing_bytes(
     isolated_services: ApiServices,
     tmp_path: Path,

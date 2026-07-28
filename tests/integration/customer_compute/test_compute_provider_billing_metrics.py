@@ -70,7 +70,9 @@ def test_compute_launch_reconcile_billing_and_termination(isolated_services: Api
     assert billing.launch_requests[0].quantity == 1
     assert provider.list_machines("gpu")[0].machine_id == state.reservations[0].machine_id
 
-    later = utc_now() + timedelta(minutes=10)
+    # Both reconciles stay inside the bootstrap phase deadline so the terminal
+    # status below is attributable to credit exhaustion, not bootstrap reclaim.
+    later = utc_now() + timedelta(minutes=2)
     reconciled = isolated_services.compute.reconcile_provider_capacity(now=later)[0]
     assert reconciled.reservations[0].status in {"active", "pending"}
     assert billing.usage
@@ -82,7 +84,7 @@ def test_compute_launch_reconcile_billing_and_termination(isolated_services: Api
         message="credits exhausted",
     )
     terminated = isolated_services.compute.reconcile_provider_capacity(
-        now=later + timedelta(minutes=10)
+        now=later + timedelta(minutes=1)
     )[0]
     assert terminated.reservations[0].status == "deleted"
     assert provider.list_machines("gpu") == []

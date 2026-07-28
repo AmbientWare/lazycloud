@@ -47,26 +47,6 @@ stack does not arrange on its own:
 The remaining local, Kubernetes, Tailnet, GPU, and browser scenarios document
 their own additional prerequisites in their modules.
 
-The canonical Compose readiness check observes the public agent-managed pool,
-machine, and worker records only:
-
-```sh
-uv run python -m tests.e2e.local.compose.readiness
-```
-
-## Provider-Neutral Function
-
-The Function round trip follows the workspace's selected provider. It proves
-only the public input, result, task log, app deletion, and return to the public
-compute baseline:
-
-```sh
-uv run python -m tests.e2e.function_round_trip --run-id 20260723-01
-```
-
-No placement is set on the Function. Run it against the local platform before
-selecting AWS, then run the same module after the AWS readiness scenario.
-
 ## Connected AWS
 
 Connected AWS is split into three independent paid scenarios. The ambient AWS
@@ -107,9 +87,14 @@ for fast starts:
 uv run python -m tests.e2e.external.aws.one_machine_readiness
 ```
 
-Run the provider-neutral Function round trip above to prove the complete data
-plane. It must return the exact result and log marker without an AWS placement
-override.
+Run one paid Function on that warm baseline to prove the complete data plane. It
+must return the exact result, retain the log marker in public task logs, and run
+on the exact warm-baseline machine:
+
+```sh
+uv run python -m tests.e2e.external.aws.connected_aws_function \
+  --run-id <id> --app-slug <slug>
+```
 
 Finally, disable the warm floor, disconnect through the public owner, wait for
 public zero capacity and cost, and perform one workspace-scoped AWS

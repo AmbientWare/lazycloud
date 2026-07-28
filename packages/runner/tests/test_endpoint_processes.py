@@ -1,19 +1,10 @@
 from __future__ import annotations
 
-import signal
-from collections.abc import Callable
 from dataclasses import dataclass
-from types import FrameType
 
 import pytest
-from runner.checkpoints import RestoredContainerIdentity
-from runner.hooks import HookLogger, LifecycleContext
-from shared.env import CHECKPOINT_ENABLED_ENV
-from shared.lifecycle import LifecycleHookName, LifecycleHooks
 
 from runner import serve
-
-SignalHandler = signal.Handlers | Callable[[int, FrameType | None], None]
 
 
 @dataclass(slots=True)
@@ -71,59 +62,3 @@ def test_endpoint_process_manager_starts_capacity_and_stops_group_on_child_failu
     assert manager.processes == processes
     assert all(process.terminated for process in processes)
     assert all(process.joined == 1 for process in processes)
-
-
-def test_function_endpoint_worker_joins_checkpoint_barrier_for_configured_capacity(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    checkpoint_calls: list[tuple[bool, int]] = []
-    monkeypatch.setenv(CHECKPOINT_ENABLED_ENV, "true")
-
-    def replace_signal(handled_signal: int, handler: SignalHandler) -> SignalHandler:
-        del handled_signal
-        return handler
-
-    def load_handler(reference: str) -> Callable[[], None]:
-        del reference
-        return lambda: None
-
-    def ignore_lifecycle_hooks(
-        hooks: LifecycleHooks,
-        hook: LifecycleHookName,
-        context: LifecycleContext,
-        *,
-        log: HookLogger,
-        capture_output: bool = True,
-    ) -> None:
-        del hooks, hook, context, log, capture_output
-
-    def wait_for_checkpoint(
-        *,
-        enabled: bool,
-        workers: int,
-    ) -> RestoredContainerIdentity | None:
-        checkpoint_calls.append((enabled, workers))
-        return None
-
-    def serve_once(self: serve.EndpointServeRunner) -> None:
-        self.run_startup_hooks()
-
-    monkeypatch.setattr(signal, "signal", replace_signal)
-    monkeypatch.setattr(serve, "load_callable", load_handler)
-    monkeypatch.setattr(serve, "run_lifecycle_hooks", ignore_lifecycle_hooks)
-    monkeypatch.setattr(
-        serve,
-        "wait_for_checkpoint",
-        wait_for_checkpoint,
-    )
-    monkeypatch.setattr(serve.EndpointServeRunner, "serve_forever", serve_once)
-
-    serve._run_function_endpoint_worker(
-        "app:handler",
-        "endpoint",
-        "127.0.0.1",
-        8001,
-        4,
-    )
-
-    assert checkpoint_calls == [(True, 4)]

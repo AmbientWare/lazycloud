@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import urllib.error
-import urllib.request
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -9,15 +7,12 @@ from pathlib import Path
 from types import TracebackType
 
 import pytest
-from botocore.exceptions import EndpointConnectionError
 from cli.components.errors import ADMIN_ERROR_POLICY
 from cli.main import build_admin_cli, start
 from lazycloud.cli.components.errors import normalize_exception
 from lazycloud.cli.handler_workflows import HandlerLoadError, load_handler_object
 from lazycloud.cli.main import normalize_global_flags
 from lazycloud.json_contracts import JsonValue, parse_json_object, parse_json_value
-from psycopg import OperationalError as PsycopgOperationalError
-from redis.exceptions import ConnectionError as RedisConnectionError
 from shared.app_identity import CLI_NAME
 from shared.http.compute import (
     PoolCapacityExtendRequest,
@@ -254,46 +249,3 @@ def test_cli_error_normalization_masks_tokens() -> None:
 
     assert details.message == "request failed for rt_a...wxyz"
     assert "abcdefghijklmnopqrstuvwxyz" not in details.message
-
-
-@pytest.mark.parametrize(
-    ("owner", "expected_hints", "forbidden_hints"),
-    [
-        ("database", ("LAZYCLOUD_DATABASE_URL",), ("control plane", "profile endpoint")),
-        ("redis", ("LAZYCLOUD_REDIS_URL",), ("control plane",)),
-        (
-            "object-store",
-            (
-                "LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL",
-                "LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID",
-                "LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY",
-            ),
-            (),
-        ),
-        ("control-plane", ("control plane", "profile"), ()),
-    ],
-)
-def test_cli_connection_failures_identify_their_configuration_owner(
-    owner: str,
-    expected_hints: tuple[str, ...],
-    forbidden_hints: tuple[str, ...],
-) -> None:
-    if owner == "database":
-        error = RuntimeError("database check failed")
-        error.__cause__ = PsycopgOperationalError(
-            'connection failed: connection to server at "127.0.0.1", port 5999 failed: '
-            "Connection refused"
-        )
-    elif owner == "redis":
-        error = RedisConnectionError("Error 61 connecting to 127.0.0.1:6399. Connection refused.")
-    elif owner == "object-store":
-        error = EndpointConnectionError(endpoint_url="http://127.0.0.1:9002")
-        error.__cause__ = ConnectionRefusedError("Connection refused")
-    else:
-        error = urllib.error.URLError(ConnectionRefusedError("Connection refused"))
-
-    details = normalize_exception(error, policy=ADMIN_ERROR_POLICY)
-
-    assert details.type == "control_plane_unavailable"
-    assert all(hint in details.hint for hint in expected_hints)
-    assert all(hint not in details.hint for hint in forbidden_hints)

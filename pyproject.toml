@@ -45,6 +45,7 @@ dev = [
     "basedpyright>=1.39.9",
     "boto3-stubs[autoscaling,cloudformation,ec2,s3,sts]>=1.40,<2",
     "httpx2>=2.4.0",
+    "lupa>=2.8",
     "pytest>=8,<9",
     "ruff>=0.6",
 ]

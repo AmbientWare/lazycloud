@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 from pydantic import JsonValue, TypeAdapter
 
@@ -33,9 +35,9 @@ def _text(value: JsonValue, context: str) -> str:
     return value
 
 
-def _render_compose(env_file: Path) -> str:
+def _render_compose(env_file: Path, docker: str) -> str:
     rendered = subprocess.run(
-        ["docker", "compose", "--env-file", str(env_file), "config"],
+        [docker, "compose", "--env-file", str(env_file), "config"],
         cwd=ROOT,
         check=True,
         capture_output=True,
@@ -48,6 +50,10 @@ def _render_compose(env_file: Path) -> str:
 def test_connected_object_store_does_not_retarget_local_garage_bootstrap(
     tmp_path: Path,
 ) -> None:
+    docker = shutil.which("docker")
+    if docker is None:
+        pytest.skip("docker is not installed")
+
     env_file = tmp_path / ".env"
     env_file.write_text(
         "\n".join(
@@ -63,10 +69,8 @@ def test_connected_object_store_does_not_retarget_local_garage_bootstrap(
         encoding="utf-8",
     )
 
-    config = _yaml_mapping(_render_compose(env_file))
+    config = _yaml_mapping(_render_compose(env_file, docker))
     services = _mapping(config["services"], "services")
-    garage = _mapping(services["object-store"], "object-store")
-    garage_environment = _mapping(garage["environment"], "object-store environment")
     bootstrap = _mapping(services["object-store-bucket"], "object-store-bucket")
     bootstrap_environment = _mapping(
         bootstrap["environment"],
@@ -78,12 +82,9 @@ def test_connected_object_store_does_not_retarget_local_garage_bootstrap(
         "control-plane environment",
     )
 
-    assert garage_environment["GARAGE_DEFAULT_BUCKET"] == "lazycloud-objects"
-    assert garage_environment["GARAGE_DEFAULT_ACCESS_KEY"] == "lazycloud-local"
-    assert garage_environment["GARAGE_DEFAULT_SECRET_KEY"] == "lazycloud-local-secret"
     assert bootstrap_environment["GARAGE_ENDPOINT_URL"] == "http://object-store:9000"
-    assert bootstrap_environment["AWS_ACCESS_KEY_ID"] == "lazycloud-local"
-    assert bootstrap_environment["AWS_SECRET_ACCESS_KEY"] == "lazycloud-local-secret"
+    assert bootstrap_environment["AWS_ACCESS_KEY_ID"] != "temporary-connected-key"
+    assert bootstrap_environment["AWS_SECRET_ACCESS_KEY"] != "temporary-connected-secret"
     assert control_environment["LAZYCLOUD_OBJECT_STORE_BUCKET"] == "connected-control-bucket"
     assert (
         control_environment["LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL"]

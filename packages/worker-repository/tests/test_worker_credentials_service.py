@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from datetime import timedelta
-
 import pytest
 from api.server.services import ApiServices
 from control.service import ControlPlaneService
@@ -9,7 +7,6 @@ from identity.auth import AuthService
 from shared.container_requests import RequestMount, RequestMountPointConfig, RequestMountType
 from shared.identity import TokenKind, WorkspaceStorageConfig
 from shared.mounts import MountAuthMode
-from shared.timestamps import utc_now
 from worker.container_execution import ContainerExecutionContext
 from worker.credential_hydration import WorkerCredentialHydrator
 from worker.credential_payloads import WorkerCredentialPrincipal
@@ -197,11 +194,9 @@ def test_worker_credential_service_replaces_revoked_or_aging_gateway_tokens(
     after_revoke = vend_gateway_token("worker-container-b")
     assert after_revoke != first
 
-    # A lease in the back half of its lifetime is replaced instead of reused.
-    lease = service._gateway_token_leases[workspace.id]
-    lease.expires_at = utc_now() + timedelta(
-        seconds=service.gateway_token_ttl_seconds / 2 - 60,
-    )
+    # A lease in the back half of its lifetime is replaced instead of reused:
+    # widening the TTL leaves the outstanding lease with less than half of it.
+    service.gateway_token_ttl_seconds *= 4
     after_aging = vend_gateway_token("worker-container-c")
     assert after_aging != after_revoke
 

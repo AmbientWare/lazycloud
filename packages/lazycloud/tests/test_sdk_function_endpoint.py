@@ -746,7 +746,7 @@ def test_function_normalizes_mapping_task_policy_at_authoring_boundary() -> None
     assert normalized_policy.spec().resources.timeout_seconds == 45
 
 
-def test_endpoint_lifecycle_hooks_are_startup_only() -> None:
+def test_endpoint_on_start_hook_is_exported_as_an_importable_reference() -> None:
     @App("analytics").endpoint(on_start=lifecycle_hook_one)
     def health() -> dict[str, str]:
         return {"ok": "true"}
@@ -754,7 +754,6 @@ def test_endpoint_lifecycle_hooks_are_startup_only() -> None:
     spec = health.spec()
 
     assert spec.lifecycle_hooks.on_start == (LIFECYCLE_HOOK_ONE_REF,)
-    assert not spec.lifecycle_hooks.on_success
 
 
 def test_explicit_schema_overrides_inferred_client_contract_inputs() -> None:

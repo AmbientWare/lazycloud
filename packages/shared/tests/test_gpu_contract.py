@@ -1,39 +1,5 @@
 from shared.gpu import normalize_gpu_type
 
-CANONICAL_GPU_VALUES = {
-    "",
-    "any",
-    "A10",
-    "A10G",
-    "A100",
-    "A100-40",
-    "A100-80",
-    "A16",
-    "A30",
-    "A40",
-    "A4000",
-    "A5000",
-    "A6000",
-    "B200",
-    "B300",
-    "GAUDI2",
-    "GH200",
-    "H100",
-    "H200",
-    "L4",
-    "L40",
-    "L40S",
-    "RTX4000Ada",
-    "RTX4090",
-    "RTX5090",
-    "RTX6000",
-    "RTX6000Ada",
-    "RTXPro6000",
-    "T4",
-    "V100",
-    "V100-32",
-}
-
 
 def test_gpu_normalization_preserves_no_gpu_any_and_overlapping_aliases() -> None:
     assert normalize_gpu_type("") == ""

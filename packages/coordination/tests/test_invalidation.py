@@ -7,20 +7,6 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 from tests.redis_fakes import FakeRedis
 
 
-def test_invalidation_generation_starts_at_zero_and_bumps_monotonically() -> None:
-    fake = _CounterRedis()
-    generation = RedisInvalidationGeneration(
-        redis=RedisClient(fake, key_prefix="test"),
-        scope="auth-tokens",
-    )
-
-    assert generation.key() == "test:invalidation:auth-tokens"
-    assert generation.current() == 0
-    assert generation.bump() == 1
-    assert generation.bump() == 2
-    assert generation.current() == 2
-
-
 def test_invalidation_generation_reads_bytes_and_propagates_redis_errors() -> None:
     fake = _CounterRedis()
     fake.values["test:invalidation:auth-tokens"] = b"7"

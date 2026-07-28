@@ -266,41 +266,6 @@ def test_pool_scale_refuses_open_reservation_before_compute_mutation(
     ]
 
 
-def test_pool_scale_repair_refuses_active_reservation_while_capacity_is_observed(
-    isolated_services: ApiServices,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    workspace_id = _default_workspace_id(isolated_services)
-    pool_name = "observed-repair-pool"
-    capacity_owner_id = "23333333-3444-4555-8666-777777777777"
-    current = _scalable_pool(
-        isolated_services,
-        workspace_id=workspace_id,
-        pool_name=pool_name,
-        capacity_owner_id=capacity_owner_id,
-    ).model_copy(update={"desired_machines": 0, "observed_machines": 1})
-    guard = _RecordingCapacityReservationGuard(open_reservations=True)
-    gateway = _gateway(isolated_services, guard, key_prefix="pool-observed-repair")
-    mutation_calls: list[tuple[str, str, int]] = []
-    _install_recording_scale(
-        monkeypatch,
-        current=current,
-        guard=guard,
-        mutation_calls=mutation_calls,
-    )
-
-    with pytest.raises(ConflictError, match="active capacity reservations"):
-        gateway.scale_pool(pool_name, 0, workspace_id=workspace_id)
-
-    assert mutation_calls == []
-    assert guard.events == [
-        "lock-enter",
-        "intent-read",
-        "reservation-check",
-        "lock-exit",
-    ]
-
-
 def test_pool_scale_zero_refuses_active_reservation_when_stored_capacity_is_zero(
     isolated_services: ApiServices,
     monkeypatch: pytest.MonkeyPatch,

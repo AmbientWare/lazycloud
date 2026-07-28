@@ -108,8 +108,15 @@ describe("AWS connection controller", () => {
 
   it("closes both dialogs and invalidates every AWS projection after accepted removal", async () => {
     const queryClient = testQueryClient();
-    const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
     const onClose = vi.fn();
+    const projections = [
+      computeQueryKeys.awsConnection("workspace-1"),
+      computeQueryKeys.policy("workspace-1"),
+      computeQueryKeys.instances("workspace-1"),
+    ];
+    for (const queryKey of projections) {
+      queryClient.setQueryData(queryKey, { stale: true });
+    }
     removeMock.mockResolvedValue(awsConnection("disconnect_draining"));
     const { result } = renderController(queryClient, onClose, () => popupFixture().value);
 
@@ -119,11 +126,11 @@ describe("AWS connection controller", () => {
 
     expect(result.current.removeOpen).toBe(false);
     expect(onClose).toHaveBeenCalledOnce();
-    expect(invalidateQueries.mock.calls.map(([filters]) => filters?.queryKey)).toEqual([
-      computeQueryKeys.awsConnection("workspace-1"),
-      computeQueryKeys.policy("workspace-1"),
-      computeQueryKeys.instances("workspace-1"),
-    ]);
+    await waitFor(() =>
+      expect(
+        projections.map((queryKey) => queryClient.getQueryState(queryKey)?.isInvalidated),
+      ).toEqual([true, true, true]),
+    );
   });
 });
 

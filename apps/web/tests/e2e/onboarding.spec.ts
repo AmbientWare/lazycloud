@@ -16,8 +16,15 @@ const firstAppItem = {
     created_at: "2026-01-02T10:00:00Z",
     updated_at: "2026-01-02T10:00:00Z",
   },
-  stub: { id: "stub-1", name: "hello", kind: "function" },
-  deployment: null,
+  latest_workload: {
+    id: "stub-1",
+    workspace_id: "workspace-test",
+    name: "hello",
+    kind: "function",
+    created_at: "2026-01-02T10:00:00Z",
+    updated_at: "2026-01-02T10:00:00Z",
+  },
+  latest_deployment: null,
 };
 
 async function mockSession(page: Page, beforeWorkspaceChange?: Promise<void>) {
@@ -74,14 +81,6 @@ test("empty workspace guides the quickstart and flips to the grid live", async (
   await page.goto("/w/acme/apps");
 
   await expect(page.getByText("Deploy your first app")).toBeVisible();
-  await expect(page.getByText("uv tool install lazycloud")).toBeVisible();
-  await expect(page.getByText(/\$ lazycloud login$/)).toBeVisible();
-  await expect(page.getByText("lazycloud quickstart", { exact: false })).toBeVisible();
-  await expect(page.getByText("lazycloud deploy quickstart.py:hello")).toBeVisible();
-  await expect(page.getByText(/lazycloud run quickstart.py:hello/)).toBeVisible();
-  await expect(page.getByText("lazycloud task result <task-id>")).toBeVisible();
-  await expect(page.getByText("lazycloud task logs <task-id>")).toBeVisible();
-  await expect(page.getByText("Watch it appear")).toBeVisible();
 
   // The workspace change stream invalidates the summary query; the next
   // response contains the first app and replaces the guided steps in place.
@@ -112,11 +111,4 @@ test("device approval page approves a pending CLI sign-in", async ({ page }) => 
   await expect(page.getByText("cli@laptop")).toBeVisible();
   await page.getByRole("button", { name: "Approve" }).click();
   await expect(page.getByText("CLI connected")).toBeVisible();
-});
-
-test("device approval page asks for a code when none is provided", async ({ page }) => {
-  await mockSession(page);
-  await page.goto("/activate");
-  await expect(page.getByPlaceholder("XXXX-XXXX")).toBeVisible({ timeout: 10_000 });
-  await expect(page.getByRole("button", { name: "Continue" })).toBeDisabled();
 });

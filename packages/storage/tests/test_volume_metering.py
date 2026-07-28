@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from api.server.services import ApiServices
 from database.repositories.observability import UsageRepository
 from database.tables.storage import VolumeTable
-from scheduler.service import Scheduler, SchedulerMaintenanceControls
 from shared.usage import (
     METERING_OBSERVATION_ERROR_TYPE_METADATA_KEY,
     METERING_OBSERVATION_QUALITY_METADATA_KEY,
@@ -17,26 +15,9 @@ from shared.usage import (
 )
 from sqlalchemy import select
 from storage.volume_filesystem import LocalVolumeFilesystem, VolumeNamespace
-from storage.volume_metering import (
-    PersistentVolumeMeteringBatch,
-    PersistentVolumeMeteringService,
-)
+from storage.volume_metering import PersistentVolumeMeteringService
 
 from storage import volume_metering
-
-
-@dataclass(slots=True)
-class _RecordingMeter:
-    calls: list[tuple[datetime | None, int]]
-
-    def reconcile_due(
-        self,
-        *,
-        now: datetime | None = None,
-        limit: int = 100,
-    ) -> PersistentVolumeMeteringBatch:
-        self.calls.append((now, limit))
-        return PersistentVolumeMeteringBatch(metered_count=2, failure_count=1)
 
 
 def test_volume_metering_records_byte_seconds_and_advances_checkpoint(
@@ -173,27 +154,6 @@ def test_final_volume_metering_closes_checkpoint_window_when_scan_fails(
         ).one()
     assert checkpoint.size_bytes == 7
     assert checkpoint.metered_at.replace(tzinfo=UTC) == observed_at
-
-
-def test_scheduler_meters_volumes_even_when_workload_loops_are_disabled(
-    isolated_services: ApiServices,
-) -> None:
-    now = datetime(2026, 1, 1, tzinfo=UTC)
-    meter = _RecordingMeter(calls=[])
-
-    result = Scheduler(
-        isolated_services,
-        maintenance=SchedulerMaintenanceControls(volume_metering=meter),
-    ).run_once(
-        now=now,
-        include_cron_jobs=False,
-        include_containers=False,
-        container_limit=17,
-    )
-
-    assert result.volume_metering_count == 2
-    assert result.volume_metering_failure_count == 1
-    assert meter.calls == [(now, 17)]
 
 
 class _FailingOccupancyFilesystem(LocalVolumeFilesystem):

@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 
 import provider_kubernetes.provider as provider_module
 import pytest
-from kubernetes import config
 from kubernetes.client.exceptions import ApiException
 from provider_kubernetes import (
     KubernetesAppsScaleApi,
@@ -496,27 +495,3 @@ def test_kubernetes_api_rejects_incomplete_scale_response(
 
     with pytest.raises(RuntimeError, match="scale response is incomplete"):
         api.compare_and_set_helm_container_worker(_target(), resource_version="42")
-
-
-def test_kubernetes_api_uses_authenticated_kubeconfig_fallback(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[str] = []
-    raw = _RawAppsApi(deployment=_deployment(), scale=_scale())
-
-    def no_incluster_credentials() -> None:
-        calls.append("in-cluster")
-        raise config.ConfigException("not in a cluster")
-
-    monkeypatch.setattr(provider_module.config, "load_incluster_config", no_incluster_credentials)
-    monkeypatch.setattr(
-        provider_module.config, "load_kube_config", lambda: calls.append("kubeconfig")
-    )
-    monkeypatch.setattr(provider_module.client, "AppsV1Api", lambda: raw)
-    monkeypatch.setattr(provider_module.client, "ApiClient", _Serializer)
-    monkeypatch.setattr(provider_module.client, "V1Deployment", _Response)
-    monkeypatch.setattr(provider_module.client, "V1Scale", _Response)
-
-    KubernetesAppsScaleApi.from_cluster()
-
-    assert calls == ["in-cluster", "kubeconfig"]

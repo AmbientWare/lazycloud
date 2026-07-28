@@ -33,11 +33,12 @@ export LAZYCLOUD_E2E_KUBERNETES_NAMESPACE=lazycloud
 export LAZYCLOUD_E2E_KUBERNETES_RELEASE=lazycloud
 export LAZYCLOUD_ENDPOINT=http://127.0.0.1:8000
 export LAZYCLOUD_TOKEN=<temporary-workspace-token>
-
-uv run python -m tests.e2e.local.kubernetes.chart_readiness --live
 ```
 
-Run only the exact subsequent Kubernetes scenario required by the changed
-capability. Worker-pod interruption and scheduler rollout restart are explicit
-operator actions; the corresponding post-action scenarios accept concrete
-resource identities and never delete the cluster, namespace, release, or pod.
+Run only the exact Kubernetes scenario required by the changed capability. Each
+scenario blocks on its own preconditions—the public endpoint's health and the
+prepared worker pool's ready baseline—so a release that is not actually serving
+reports itself as blocked rather than failing the scenario. Worker-pod
+interruption and scheduler rollout restart are explicit operator actions; the
+corresponding post-action scenarios accept concrete resource identities and
+never delete the cluster, namespace, release, or pod.
