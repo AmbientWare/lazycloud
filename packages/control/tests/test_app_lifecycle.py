@@ -592,10 +592,16 @@ def test_disconnected_worker_shutdown_remains_durable_and_retry_cleans_ack_state
     assert not services.container_shutdowns.events.claim(event_id).claimed
 
 
-def test_active_container_without_durable_worker_fails_closed(
+def test_pause_fences_a_queued_container_no_worker_owns(
     isolated_services: ApiServices,
     real_redis_actors: RealRedisActors,
 ) -> None:
+    """A container still waiting in the queue is fenced, not waited on.
+
+    No worker owns it, so nothing would ever acknowledge a stop event and pause
+    would block until it timed out. Leaving the request queued is worse: a
+    worker could claim it afterwards and start a container for a paused app.
+    """
     redis = real_redis_actors.client()
     services = services_with_redis_container_control(isolated_services, redis)
     app = services.apps.create("unowned_container_shutdown")
@@ -615,13 +621,14 @@ def test_active_container_without_durable_worker_fails_closed(
         stub_id=deployment.stub_id,
         app_id=app.id,
     )
+    assert services.scheduler_workers.has_recoverable_container_request(container.id)
     fast_shutdown = ContainerShutdownService(
         services.scheduler_containers,
         services.container_shutdowns.events,
         redis,
         poll_interval_seconds=0.001,
     )
-    crashing = replace(
+    lifecycle = replace(
         services.apps,
         execution_effects=ProductionAppExecutionLifecycleEffects(
             services.context,
@@ -633,14 +640,15 @@ def test_active_container_without_durable_worker_fails_closed(
         ),
     )
 
-    with pytest.raises(UpstreamUnavailableError, match="containers="):
-        crashing.pause(app.id, workspace=app.workspace_id)
+    paused = lifecycle.pause(app.id, workspace=app.workspace_id)
 
-    failed = crashing.get(app.id, workspace=app.workspace_id)
-    assert failed.lifecycle_state is AppLifecycleState.CleanupFailed
+    assert paused.lifecycle_state is AppLifecycleState.Paused
+    assert services.containers.get(container.id).status is ContainerStatus.Stopped
+    assert services.scheduler_containers.is_container_cancelled(container.id)
+    assert not services.scheduler_workers.has_recoverable_container_request(container.id)
+    assert services.scheduler_workers.claim_ready_container_requests(limit=5) == []
     with services.context.database.session() as session:
-        intents = AppContainerShutdownIntentRepository(session).list(app_id=app.id)
-    assert [(intent.container_id, intent.worker_id) for intent in intents] == [(container.id, "")]
+        assert AppContainerShutdownIntentRepository(session).list(app_id=app.id) == []
     assert redis.scan(f"{redis.key('worker-events', 'pending')}:*") == []
 
 

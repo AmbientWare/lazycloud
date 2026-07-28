@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Protocol
 
-from coordination.redis_client import RedisClient, redis_text
 from pydantic import Field
 from shared.capacity import (
     CapacityPoolPolicy,
@@ -17,37 +15,6 @@ from shared.compute_fleet import Pool
 from shared.contracts import ContractModel
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from shared.timestamps import utc_now
-
-
-class WorkerPoolReplicaScaleOutcome(StrEnum):
-    ExistingPending = "existing_pending"
-    Requested = "requested"
-    AtLimit = "at_limit"
-    TemporarilyUnavailable = "temporarily_unavailable"
-    Unsupported = "unsupported"
-
-
-class WorkerPoolReplicaScaleResult(ContractModel):
-    outcome: WorkerPoolReplicaScaleOutcome
-    capacity_owner_id: str
-    pool_name: str
-    desired_replicas: int
-    observed_replicas: int = 0
-    resource_version: str = ""
-    provider: str = ""
-    target: str = ""
-    retry_after_seconds: float = 0
-    reason: str
-
-
-class WorkerPoolReplicaState(ContractModel):
-    capacity_owner_id: str
-    pool_name: str
-    provider: str = ""
-    desired_replicas: int = 0
-    observed_replicas: int = 0
-    target: str = ""
-    updated_at: datetime = Field(default_factory=utc_now)
 
 
 class CapacityPoolOperationalHealth(StrEnum):
@@ -103,31 +70,6 @@ class WorkerPoolSizingAllocation(Protocol):
     gpu_count: int
 
 
-class WorkerPoolReplicaScaler(Protocol):
-    def describe_worker_pool(
-        self,
-        pool: Pool,
-        *,
-        reservation_id: str,
-        operation_id: str,
-    ) -> WorkerPoolReplicaScaleResult: ...
-
-    def scale_worker_pool(
-        self,
-        pool: Pool,
-        replicas: int,
-        *,
-        reservation_id: str,
-        operation_id: str,
-    ) -> WorkerPoolReplicaScaleResult: ...
-
-
-class WorkerPoolReplicaStateStore(Protocol):
-    def get_state(self, capacity_owner_id: str) -> WorkerPoolReplicaState | None: ...
-
-    def save_state(self, state: WorkerPoolReplicaState) -> WorkerPoolReplicaState: ...
-
-
 class CapacityPoolSizingStateService(Protocol):
     def get_pool_sizing_state(self, capacity_owner_id: str) -> CapacityPoolSizingState: ...
 
@@ -135,31 +77,6 @@ class CapacityPoolSizingStateService(Protocol):
         self,
         update: CapacityPoolSizingStateUpdate,
     ) -> CapacityPoolSizingState: ...
-
-
-@dataclass(slots=True)
-class RedisWorkerPoolReplicaStateStore:
-    redis: RedisClient
-    namespace: str = "scheduler"
-
-    def get_state(self, capacity_owner_id: str) -> WorkerPoolReplicaState | None:
-        raw = self.redis.get(self._key(capacity_owner_id))
-        if not raw:
-            return None
-        return WorkerPoolReplicaState.model_validate_json(redis_text(raw))
-
-    def save_state(self, state: WorkerPoolReplicaState) -> WorkerPoolReplicaState:
-        stored = state.model_copy(update={"updated_at": utc_now()})
-        self.redis.set(self._key(stored.capacity_owner_id), stored.model_dump_json())
-        return stored
-
-    def _key(self, capacity_owner_id: str) -> str:
-        return self.redis.key(
-            self.namespace,
-            "capacity-owners",
-            capacity_owner_id,
-            "replicas",
-        )
 
 
 def capacity_pool_operational_health(
@@ -426,13 +343,7 @@ def _worker_matches_pool_policy(pool: Pool, worker: SchedulerWorkerRecord) -> bo
 __all__ = [
     "CapacityPoolOperationalHealth",
     "CapacityPoolSizingStateService",
-    "RedisWorkerPoolReplicaStateStore",
     "WorkerPoolEffectiveHeadroom",
-    "WorkerPoolReplicaScaleOutcome",
-    "WorkerPoolReplicaScaleResult",
-    "WorkerPoolReplicaScaler",
-    "WorkerPoolReplicaState",
-    "WorkerPoolReplicaStateStore",
     "WorkerPoolSizingAction",
     "WorkerPoolSizingPlan",
     "capacity_pool_operational_health",

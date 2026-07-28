@@ -7,9 +7,7 @@ from typing import Never, Protocol
 
 import pytest
 import shared.tasks
-import typer
 from cli.main import build_admin_cli
-from lazycloud.cli.main import build_public_cli
 from lazycloud.json_contracts import parse_json_object
 from lazycloud.session.task import TaskResult
 from pydantic import JsonValue
@@ -20,8 +18,8 @@ from shared.http.tasks import TaskResponse
 from shared.tasks import TaskStatus
 from typer.testing import CliRunner
 
-client_cli = build_public_cli()
 full_cli = build_admin_cli()
+TASK_CLIENT_TARGET = "lazycloud.cli.resources.task_client"
 
 
 @dataclass(slots=True)
@@ -68,16 +66,7 @@ class _TaskClientFactory(Protocol):
     ) -> _TaskClient: ...
 
 
-@pytest.mark.parametrize(
-    ("cli", "patch_target"),
-    [
-        (full_cli, "lazycloud.cli.resources.task_client"),
-        (client_cli, "lazycloud.cli.resources.task_client"),
-    ],
-)
 def test_task_result_human_presents_structured_json_value(
-    cli: typer.Typer,
-    patch_target: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     value: dict[str, JsonValue] = {"status": "healthy", "details": ["ready", 2]}
@@ -85,9 +74,9 @@ def test_task_result_human_presents_structured_json_value(
         FunctionJsonResult(value=value).model_dump(mode="json"),
         kind=StubKind.CronJob,
     )
-    monkeypatch.setattr(patch_target, _task_client_factory(response))
+    monkeypatch.setattr(TASK_CLIENT_TARGET, _task_client_factory(response))
 
-    result = CliRunner().invoke(cli, ["task", "result", response.id, "--no-wait"])
+    result = CliRunner().invoke(full_cli, ["task", "result", response.id, "--no-wait"])
 
     assert result.exit_code == 0
     assert "'status': 'healthy'" in result.stdout
@@ -95,25 +84,16 @@ def test_task_result_human_presents_structured_json_value(
     assert "value_base64" not in result.stdout
 
 
-@pytest.mark.parametrize(
-    ("cli", "patch_target"),
-    [
-        (full_cli, "lazycloud.cli.resources.task_client"),
-        (client_cli, "lazycloud.cli.resources.task_client"),
-    ],
-)
 def test_task_result_json_preserves_canonical_json_result(
-    cli: typer.Typer,
-    patch_target: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     value: dict[str, JsonValue] = {"value": 2}
     encoded = FunctionJsonResult(value=value).model_dump(mode="json")
     response = _task_response(encoded)
-    monkeypatch.setattr(patch_target, _task_client_factory(response))
+    monkeypatch.setattr(TASK_CLIENT_TARGET, _task_client_factory(response))
 
     result = CliRunner().invoke(
-        cli,
+        full_cli,
         ["--json", "task", "result", response.id, "--no-wait"],
     )
 
@@ -121,23 +101,14 @@ def test_task_result_json_preserves_canonical_json_result(
     assert parse_json_object(result.stdout)["result"] == encoded
 
 
-@pytest.mark.parametrize(
-    ("cli", "patch_target"),
-    [
-        (full_cli, "lazycloud.cli.resources.task_client"),
-        (client_cli, "lazycloud.cli.resources.task_client"),
-    ],
-)
 def test_task_result_inspection_never_deserializes_cloudpickle(
-    cli: typer.Typer,
-    patch_target: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     encoded = FunctionCloudpickleResult.from_bytes(pickle.dumps({"unsafe": "payload"})).model_dump(
         mode="json"
     )
     response = _task_response(encoded)
-    monkeypatch.setattr(patch_target, _task_client_factory(response))
+    monkeypatch.setattr(TASK_CLIENT_TARGET, _task_client_factory(response))
 
     def fail_deserialize(value: bytes) -> Never:
         pytest.fail(f"Python payload was deserialized: {len(value)} bytes")
@@ -147,10 +118,10 @@ def test_task_result_inspection_never_deserializes_cloudpickle(
         fail_deserialize,
     )
 
-    human = CliRunner().invoke(cli, ["task", "result", response.id, "--no-wait"])
+    human = CliRunner().invoke(full_cli, ["task", "result", response.id, "--no-wait"])
 
     machine = CliRunner().invoke(
-        cli,
+        full_cli,
         ["--json", "task", "result", response.id, "--no-wait"],
     )
 

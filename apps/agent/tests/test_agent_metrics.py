@@ -1,20 +1,12 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 from agent_app.metrics import (
     CGROUP_V2_MEMORY_CURRENT,
     CGROUP_V2_MEMORY_MAX,
-    AgentMetricSampler,
     agent_cpu_utilization_pct,
     agent_memory_sample,
     agent_network_sample,
 )
-
-
-class _FakeGpuProvider:
-    def available_devices(self) -> list[int]:
-        return [0, 2]
 
 
 def test_agent_memory_sample_uses_cgroup_limit_when_lower_than_host() -> None:
@@ -40,19 +32,6 @@ def test_agent_memory_sample_uses_cgroup_limit_when_lower_than_host() -> None:
 def test_agent_cpu_utilization_normalizes_load_average() -> None:
     assert agent_cpu_utilization_pct(cpu_count=4, load_average=2.0) == 50.0
     assert agent_cpu_utilization_pct(cpu_count=2, load_average=5.0) == 100.0
-
-
-def test_agent_metric_sampler_includes_disk_memory_cpu_and_gpu(tmp_path: Path) -> None:
-    snapshot = AgentMetricSampler(
-        tmp_path,
-        gpu_provider=_FakeGpuProvider(),
-    ).snapshot(worker_count=3)
-
-    assert snapshot.worker_count == 3
-    assert snapshot.memory_total_mb > 0
-    assert snapshot.disk_total_mb > 0
-    assert snapshot.disk_path == "/"
-    assert snapshot.free_gpu_count == 2
 
 
 def test_agent_network_sample_sums_non_loopback_interfaces() -> None:

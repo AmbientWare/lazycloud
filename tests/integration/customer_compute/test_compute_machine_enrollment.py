@@ -116,9 +116,7 @@ def _gateway(
             RedisCapacityReservationRepository(selected_redis),
             lambda: [],
         ),
-        tailnet=TailnetConfig(
-            enabled=True,
-        ),
+        tailnet=TailnetConfig(),
         tailnet_control=tailnet_control or _FakeTailnetControl(),
     )
 
@@ -554,9 +552,7 @@ def test_workspace_deletion_preflight_preserves_enrolled_self_hosted_ownership(
         scheduler_workers=RedisSchedulerWorkerRepository(redis),
         scheduler_containers=RedisSchedulerContainerRepository(redis),
         scheduler_pool_states=RedisWorkerPoolStateRepository(redis),
-        tailnet=TailnetConfig(
-            enabled=True,
-        ),
+        tailnet=TailnetConfig(),
         tailnet_control=_FakeTailnetControl(),
     )
     bootstrap = _create_join_token(gateway, "workspace-machine-pool", workspace.id)
@@ -728,7 +724,7 @@ def test_machine_join_command_owns_the_workspace_self_hosted_fleet(
         owner_token_id="token-one",
     )
 
-    assert "http://127.0.0.1:9000" in first.command
+    assert gateway.gateway_endpoint.http_url in first.command
     fleets = [
         pool
         for pool in isolated_services.compute.list_pools(workspace=workspace_id)

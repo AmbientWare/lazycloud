@@ -1,9 +1,9 @@
 """File-heartbeat liveness for loop processes without a serving socket.
 
 Loop processes such as the task worker and the cache reconciler touch a
-heartbeat file once per loop iteration. Container healthchecks and Kubernetes
-exec probes run this module as a check command; a missing or stale heartbeat
-means the loop is wedged and the probe fails.
+heartbeat file once per loop iteration. Container healthchecks run this module
+as a check command; a missing or stale heartbeat means the loop is wedged and
+the check fails.
 """
 
 from __future__ import annotations

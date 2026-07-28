@@ -9,11 +9,9 @@ from typing import Never
 
 import pytest
 from container_worker_app.main import (
-    DEFAULT_WORKER_KEEPALIVE_INTERVAL_SECONDS,
+    MAX_WORKER_KEEPALIVE_INTERVAL_SECONDS,
     ContainerWorkerRegistrationError,
     ContainerWorkerShutdownRequested,
-    _container_worker_shutdown_handlers,
-    _parse_arguments,
     _validate_keepalive_interval,
     run_container_worker,
 )
@@ -22,6 +20,7 @@ from shared.container_requests import StopContainerReason
 from worker.repository_client import WorkerRepositoryClientError
 from worker.status import WorkerSpindownPlan
 from worker.worker_lifecycle import (
+    DEFAULT_WORKER_KEEPALIVE_TTL_SECONDS,
     WorkerLifecycleAction,
     WorkerLifecycleStatus,
     WorkerLifecycleStepResult,
@@ -29,26 +28,13 @@ from worker.worker_lifecycle import (
 )
 
 
-def test_shutdown_handler_records_request_before_interrupting_worker() -> None:
-    shutdown_event = threading.Event()
-
-    with (
-        pytest.raises(ContainerWorkerShutdownRequested),
-        _container_worker_shutdown_handlers(shutdown_event),
-    ):
-        os.kill(os.getpid(), signal.SIGTERM)
-
-    assert shutdown_event.is_set()
-
-
-def test_worker_keepalive_defaults_and_bounds_are_lease_safe() -> None:
-    assert (
-        _parse_arguments([]).keepalive_interval_seconds == DEFAULT_WORKER_KEEPALIVE_INTERVAL_SECONDS
-    )
-    _validate_keepalive_interval(20)
-    with pytest.raises(ValueError, match="no more than 20 seconds"):
-        _validate_keepalive_interval(20.1)
-    with pytest.raises(ValueError, match="greater than zero"):
+def test_worker_keepalive_interval_bound_is_lease_safe() -> None:
+    _validate_keepalive_interval(MAX_WORKER_KEEPALIVE_INTERVAL_SECONDS)
+    # An interval that fits fewer than three renewals into the lease lets a
+    # healthy worker be reaped after a single missed keepalive.
+    with pytest.raises(ValueError):
+        _validate_keepalive_interval(DEFAULT_WORKER_KEEPALIVE_TTL_SECONDS / 2)
+    with pytest.raises(ValueError):
         _validate_keepalive_interval(0)
 
 

@@ -50,10 +50,10 @@ uv run --group dev pytest -q packages/scheduler/tests
 ```
 
 Run `uv lock --check` only when dependency or workspace metadata changes.
-Pull-request CI derives this scope from the changed files. Web, Compose, and
-Helm validation run only when their owning paths change. Live Docker, browser,
-provider, and Kubernetes workflows are explicit feature or release acceptance,
-not blanket development checks. Release validation is defined by the release
+Pull-request CI derives this scope from the changed files. Web and Compose
+validation run only when their owning paths change. Live Docker, browser, and
+provider workflows are explicit feature or release acceptance, not blanket
+development checks. Release validation is defined by the release
 task and the production boundaries changed since the previous release.
 
 ## CLI Examples

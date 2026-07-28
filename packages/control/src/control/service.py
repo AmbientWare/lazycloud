@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import shutil
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime, time
@@ -232,6 +232,21 @@ def _replace_config_object_references(
     remap: dict[str, str],
 ) -> dict[str, JsonValue]:
     return {key: _replace_config_references(value, remap) for key, value in config.items()}
+
+
+def _config_reference_values(value: JsonValue) -> set[str]:
+    if isinstance(value, str):
+        return {value}
+    if isinstance(value, list):
+        return {item for entry in value for item in _config_reference_values(entry)}
+    if isinstance(value, dict):
+        return {item for entry in value.values() for item in _config_reference_values(entry)}
+    return set()
+
+
+def _config_object_references(config: Mapping[str, JsonValue]) -> set[str]:
+    """Identifiers a config may point at, matched against real object ids by the caller."""
+    return {item for value in config.values() for item in _config_reference_values(value)}
 
 
 @dataclass(slots=True)
@@ -755,40 +770,40 @@ class ControlPlaneService:
                 runtime_config["gpu"] = overrides.gpu
             if overrides.gpu_count is not None:
                 runtime_config["gpu_count"] = overrides.gpu_count
-        cloned = self.create_stub(
-            source.name,
-            workspace=target_workspace.id,
-            kind=source.kind,
-            handler=source.handler,
-            deployment_id=source.deployment_id,
-            public=source.public,
-            config=config,
-            metadata={**source.metadata, "source_stub_id": source.id},
-        )
-        copied_objects = self._copy_stub_objects(source, cloned, target_workspace)
+        copied_objects = self._copy_stub_objects(source, config=config, target=target_workspace)
+        metadata: dict[str, JsonValue] = {**source.metadata, "source_stub_id": source.id}
         if copied_objects:
-            object_remap = {source_id: target_id for source_id, target_id in copied_objects}
-            config = _replace_config_object_references(config, object_remap)
-            cloned.config = StubConfig.model_validate(config)
-            cloned.metadata["source_stub_id"] = source.id
-            cloned.metadata["copied_object_ids"] = [target_id for _, target_id in copied_objects]
-            cloned.updated_at = utc_now()
-            with self.context.database.session() as session:
-                cloned = _stub_records(session).upsert(
-                    cloned,
-                    workspace_id=cloned.workspace_id,
-                    name=cloned.name,
-                )
-        config = self._remap_clone_runtime_config(config, target_workspace)
-        cloned.config = StubConfig.model_validate(config)
-        cloned.updated_at = utc_now()
-        with self.context.database.session() as session:
-            cloned = _stub_records(session).upsert(
-                cloned,
-                workspace_id=cloned.workspace_id,
-                name=cloned.name,
+            config = _replace_config_object_references(
+                config,
+                {source_id: target_object.id for source_id, target_object in copied_objects},
             )
-        self._publish_stub_change(cloned, WorkspaceChangeType.Updated)
+            metadata["copied_object_ids"] = [
+                target_object.id for _, target_object in copied_objects
+            ]
+        else:
+            metadata.pop("copied_object_ids", None)
+        config = self._remap_clone_runtime_config(config, target_workspace)
+        try:
+            cloned = self.create_stub(
+                source.name,
+                workspace=target_workspace.id,
+                kind=source.kind,
+                handler=source.handler,
+                deployment_id=source.deployment_id,
+                public=source.public,
+                config=config,
+                metadata=metadata,
+            )
+        except Exception as clone_failure:
+            try:
+                self._discard_copied_objects(copied_objects, workspace_id=target_workspace.id)
+            except Exception as cleanup_failure:
+                raise ExceptionGroup(
+                    "stub clone failed and copied object cleanup was incomplete",
+                    [clone_failure, cleanup_failure],
+                ) from None
+            raise
+        self._own_copied_objects(copied_objects, stub=cloned)
         app = apps.create(
             source.name,
             stub_id=cloned.id,
@@ -801,23 +816,34 @@ class ControlPlaneService:
             cloned_stub=cloned,
             app=app,
             copied_config=_masked_config_object(config),
-            copied_objects=tuple(target_id for _, target_id in copied_objects),
+            copied_objects=tuple(target_object.id for _, target_object in copied_objects),
         )
 
     def _copy_stub_objects(
         self,
         source: StubRecord,
-        cloned: StubRecord,
-        target_workspace: WorkspaceRecord,
-    ) -> list[tuple[str, str]]:
+        *,
+        config: Mapping[str, JsonValue],
+        target: WorkspaceRecord,
+    ) -> list[tuple[str, ObjectRecord]]:
+        """Copy the source objects a clone needs into the target workspace.
+
+        The copies must exist before the cloned stub is created, because stub
+        creation rejects a config that references objects the target workspace
+        does not own. Copies are therefore keyed by their own identifier and are
+        bound to the cloned stub once that stub exists.
+        """
+        referenced = _config_object_references(config)
         with self.context.database.session() as session:
             repository = ObjectRepository(session)
             source_objects = [
                 item
                 for item in repository.list(workspace_id=source.workspace_id)
-                if item.metadata.get("stub_id") == source.id or item.key.endswith(source.id)
+                if item.id in referenced
+                or item.metadata.get("stub_id") == source.id
+                or item.key.endswith(source.id)
             ]
-        copied: list[tuple[str, str]] = []
+        copied: list[tuple[str, ObjectRecord]] = []
         for source_object in source_objects:
             source_path = _local_object_path(source_object.path)
             if source_path is None:
@@ -830,13 +856,12 @@ class ControlPlaneService:
                 msg = f"stub clone source object file not found: {source_object.path}"
                 raise FileNotFoundError(msg)
             target_object_id = str(uuid4())
-            target_key = f"clones/{cloned.id}/{Path(source_object.key).name or target_object_id}"
-            target_path = (
-                self.context.paths.root / "objects" / target_workspace.id / target_object_id
+            target_key = (
+                f"clones/{target_object_id}/{Path(source_object.key).name or target_object_id}"
             )
+            target_path = self.context.paths.root / "objects" / target.id / target_object_id
             target_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source_path, target_path)
-            metadata = {"stub_id": cloned.id, "workspace_id": target_workspace.id}
             target_object = ObjectRecord(
                 id=target_object_id,
                 bucket=source_object.bucket,
@@ -845,15 +870,45 @@ class ControlPlaneService:
                 size=source_object.size,
                 sha256=source_object.sha256,
                 content_type=source_object.content_type,
-                metadata=metadata,
+                metadata={"workspace_id": target.id},
             )
             with self.context.database.session() as session:
                 target_object = ObjectRepository(session).upsert(
                     target_object,
-                    workspace_id=target_workspace.id,
+                    workspace_id=target.id,
                 )
-            copied.append((source_object.id, target_object.id))
+            copied.append((source_object.id, target_object))
         return copied
+
+    def _own_copied_objects(
+        self,
+        copied_objects: Sequence[tuple[str, ObjectRecord]],
+        *,
+        stub: StubRecord,
+    ) -> None:
+        if not copied_objects:
+            return
+        with self.context.database.session() as session:
+            repository = ObjectRepository(session)
+            for _source_id, target_object in copied_objects:
+                repository.upsert(
+                    target_object.model_copy(
+                        update={"metadata": {**target_object.metadata, "stub_id": stub.id}}
+                    ),
+                    workspace_id=stub.workspace_id,
+                )
+
+    def _discard_copied_objects(
+        self,
+        copied_objects: Sequence[tuple[str, ObjectRecord]],
+        *,
+        workspace_id: str,
+    ) -> None:
+        """Undo the copies made for a clone that never became a stub."""
+        for _source_id, target_object in copied_objects:
+            with self.context.database.session() as session:
+                ObjectRepository(session).delete(target_object.id, workspace_id=workspace_id)
+            Path(target_object.path).unlink(missing_ok=True)
 
     def _remap_clone_runtime_config(
         self,

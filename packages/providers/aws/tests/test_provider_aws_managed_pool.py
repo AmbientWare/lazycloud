@@ -628,20 +628,6 @@ def test_managed_pool_delete_converges_after_asg_instance_cleanup() -> None:
     assert deleted.resource_ids == AwsManagedPoolResourceIds()
 
 
-def test_managed_pool_describe_and_scale_use_the_owned_group() -> None:
-    ec2 = _Ec2()
-    autoscaling = _AutoScaling()
-    provisioner = AwsManagedPoolProvisioner(AwsManagedPoolClients(ec2=ec2, autoscaling=autoscaling))
-    created = provisioner.ensure(_spec())
-
-    provisioner.scale(_spec(), desired_nodes=2, max_nodes=2)
-    snapshot = provisioner.describe(_spec(), created.resource_ids)
-
-    assert snapshot.phase is AwsManagedPoolPhase.Provisioning
-    assert snapshot.desired_nodes == 2
-    assert snapshot.max_nodes == 2
-
-
 def test_managed_pool_partial_failure_returns_last_durable_checkpoint() -> None:
     class _FailingAutoScaling(_AutoScaling):
         def create_auto_scaling_group(self, **kwargs: object) -> Mapping[str, object]:

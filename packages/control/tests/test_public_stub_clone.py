@@ -13,6 +13,7 @@ from database.repositories.storage import ObjectRepository, VolumeRepository
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
 from pydantic import JsonValue, TypeAdapter
+from shared.app_identity import SOURCE_PACKAGE_BUCKET
 from shared.identity import AuthScope, TokenKind
 from storage.service import ObjectStorage
 from storage_client.s3 import S3ObjectInfo
@@ -96,8 +97,8 @@ def test_public_clone_copies_local_object_and_remaps_target_workspace_refs(
     source_object = _create_object(
         isolated_services,
         workspace_id=owner.id,
-        bucket="packages",
-        key=f"packages/{source.id}",
+        bucket=SOURCE_PACKAGE_BUCKET,
+        key=f"sources/{source.id}",
         path=str(source_file),
         content=source_bytes,
         metadata={"stub_id": source.id, "workspace_id": owner.id},
@@ -153,7 +154,7 @@ def test_public_clone_copies_local_object_and_remaps_target_workspace_refs(
     assert isinstance(cloned_volume, dict)
     assert cloned_volume["id"] == target_volume.id
     assert cloned_volume["name"] == target_volume.name
-    assert "path" not in cloned_volume
+    assert cloned_volume.get("path", "") == ""
     assert copied is not None
     cloned_id = cloned["id"]
     assert isinstance(cloned_id, str)
@@ -194,10 +195,18 @@ def test_deployment_package_download_streams_local_file_and_redirects_presigned(
     local_file = tmp_path / "local.pkg"
     local_bytes = b"local deployment package"
     local_file.write_bytes(local_bytes)
+    object_client = _PresignedObjectClient()
+    object_storage = ObjectStorage(isolated_services.context, object_client=object_client)
+    remote_bucket = object_storage.physical_bucket(SOURCE_PACKAGE_BUCKET)
+    remote_key = object_storage.physical_key_for_workspace(
+        workspace.id,
+        bucket=SOURCE_PACKAGE_BUCKET,
+        key="remote.pkg",
+    )
     _create_object(
         isolated_services,
         workspace_id=workspace.id,
-        bucket="packages",
+        bucket=SOURCE_PACKAGE_BUCKET,
         key="local.pkg",
         path=str(local_file),
         content=local_bytes,
@@ -206,22 +215,14 @@ def test_deployment_package_download_streams_local_file_and_redirects_presigned(
     _create_object(
         isolated_services,
         workspace_id=workspace.id,
-        bucket="packages",
+        bucket=SOURCE_PACKAGE_BUCKET,
         key="remote.pkg",
-        path="s3://packages/remote.pkg",
+        path=f"s3://{remote_bucket}/{remote_key}",
         content=b"remote package",
         metadata={"stub_id": remote_stub.id, "workspace_id": workspace.id},
     )
-    object_client = _PresignedObjectClient()
-    object_client.put_bytes("remote.pkg", b"remote package", bucket="packages")
-    services = _services_with_object_storage(
-        isolated_services,
-        ObjectStorage(
-            isolated_services.context,
-            object_client=object_client,
-        ),
-        request,
-    )
+    object_client.put_bytes(remote_key, b"remote package", bucket=remote_bucket)
+    services = _services_with_object_storage(isolated_services, object_storage, request)
     token = _workspace_token(services, workspace.id, "package-token")
     client = client_stack.enter_context(TestClient(create_app(services)))
 
@@ -239,12 +240,12 @@ def test_deployment_package_download_streams_local_file_and_redirects_presigned(
     assert local_response.content == local_bytes
     assert "local.pkg" in local_response.headers["content-disposition"]
     assert remote_response.status_code == 307
-    assert remote_response.headers["location"] == "https://objects.example/packages/remote.pkg"
-    assert object_client.presigned == [("packages", "remote.pkg", 600)]
-    assert object_client.exists("remote.pkg", bucket="packages")
-    assert object_client.read_bytes("remote.pkg", bucket="packages") == b"remote package"
-    object_client.delete("remote.pkg", bucket="packages")
-    assert not object_client.exists("remote.pkg", bucket="packages")
+    assert (
+        remote_response.headers["location"]
+        == f"https://objects.example/{remote_bucket}/{remote_key}"
+    )
+    assert object_client.presigned == [(remote_bucket, remote_key, 600)]
+    assert object_client.read_bytes(remote_key, bucket=remote_bucket) == b"remote package"
 
 
 def _services_with_object_storage(

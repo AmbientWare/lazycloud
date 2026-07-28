@@ -16,6 +16,7 @@ from storage.volume_filesystem import LocalVolumeFilesystem
 from storage_client.s3 import S3ObjectStoreSettings
 
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
+from tests.fakes import FakeObjectClient
 from tests.redis_fakes import FakeRedis
 
 
@@ -40,10 +41,10 @@ class _InMemoryWorkspaceBuckets:
     )
     created: list[str] = field(default_factory=list)
 
-    def create_bucket(self, bucket: str) -> None:
-        self.created.append(bucket)
+    def create_bucket(self, bucket: str | None = None) -> None:
+        self.created.append(bucket or self.settings.bucket)
 
-    def validate_bucket_access(self, bucket: str) -> None:
+    def validate_bucket_access(self, bucket: str | None = None) -> None:
         del bucket
 
 
@@ -70,6 +71,10 @@ def isolated_services(tmp_path: Path) -> Iterator[ApiServices]:
         map_service=maps,
         simple_queue_service=simple_queues,
         volume_filesystem=volume_filesystem,
+        # Without this the graph wires a real S3 client at the configured
+        # endpoint, so a unit test that touches object storage reaches out over
+        # the network instead of failing on its own terms.
+        object_store_client=FakeObjectClient(),
         workspace_storage_client=_InMemoryWorkspaceBuckets(),
         agent_binary_settings=AgentBinarySettings(
             binary_dir=tmp_path,

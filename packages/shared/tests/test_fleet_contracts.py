@@ -14,9 +14,9 @@ from shared.provider_config import ProviderConfig, ProviderKind
 
 
 def test_compute_pool_capacity_policy_rejects_ambiguous_ownership_and_shape() -> None:
-    with pytest.raises(ValidationError, match="requires source 'kubernetes'"):
+    with pytest.raises(ValidationError, match="requires source 'managed'"):
         Pool(
-            capacity_owner_kind=CapacityOwnerKind.GlobalKubernetesDeployment,
+            capacity_owner_kind=CapacityOwnerKind.ManagedPool,
             capacity_owner_source=CapacityOwnerSource.Agent,
             name="invalid-owner",
         )

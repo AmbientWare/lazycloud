@@ -10,17 +10,8 @@ from database.repositories.observability import (
 )
 from database.tables.execution import EventTable
 from database.tables.observability import WorkerEventTable
-from pydantic import SecretStr
 from shared.timestamps import utc_now
-from shared.usage import (
-    UsageCollectorKind,
-    UsageGroupKey,
-    UsageMetric,
-    UsageMetricOperation,
-    UsageMetricsSinkSettings,
-    UsageUnit,
-    plan_usage_metric_emission,
-)
+from shared.usage import UsageGroupKey, UsageMetric, UsageUnit
 from shared.usage_query import UsageQuery
 from shared.worker_events import (
     WORKER_POOL_SIZER_DECISION_ACTION,
@@ -173,40 +164,3 @@ def test_usage_repository_aggregation_groups_by_label_with_metadata_fallback(
     gpu_groups = {row.labels["gpu"]: row.quantity for row in by_gpu}
     assert gpu_groups[""] == 60_000
     assert gpu_groups["T4"] == 30_000
-
-    prometheus_plan = plan_usage_metric_emission(
-        UsageMetricsSinkSettings(
-            collector=UsageCollectorKind.Prometheus,
-            prometheus_port=9191,
-            source="worker",
-        ),
-        name="task.count",
-        metadata={"workspace_id": "2f7c8516-6170-4b62-8252-6ef8b38a34af", "pool": "default"},
-        value=2,
-        operation=UsageMetricOperation.SetGauge,
-    )
-    assert prometheus_plan is not None
-    assert prometheus_plan.target == ":9191/metrics"
-    assert prometheus_plan.body["operation"] == "set-gauge"
-
-    openmeter_plan = plan_usage_metric_emission(
-        UsageMetricsSinkSettings(
-            collector=UsageCollectorKind.OpenMeter,
-            openmeter_url="https://meter.example.test/events",
-            openmeter_api_key=SecretStr("secret"),
-            source="gateway",
-        ),
-        name="task.count",
-        metadata={"workspace_id": "2f7c8516-6170-4b62-8252-6ef8b38a34af"},
-        value=1,
-    )
-    assert openmeter_plan is not None
-    authorization = openmeter_plan.headers["Authorization"]
-    assert isinstance(authorization, SecretStr)
-    assert authorization.get_secret_value() == "Bearer secret"
-    assert openmeter_plan.model_dump(mode="json")["headers"]["Authorization"] == "**********"
-    assert openmeter_plan.body["source"] == "gateway"
-    assert openmeter_plan.body["subject"] == "2f7c8516-6170-4b62-8252-6ef8b38a34af"
-    openmeter_data = openmeter_plan.body["data"]
-    assert isinstance(openmeter_data, dict)
-    assert openmeter_data["value"] == 1

@@ -9,7 +9,6 @@ dependencies = [
     "coordination",
     "database",
     "identity",
-    "kubernetes>=30,<35",
     "scheduler",
     "worker",
 ]

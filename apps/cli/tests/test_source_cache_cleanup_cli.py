@@ -5,7 +5,6 @@ from dataclasses import dataclass, field
 import pytest
 from cli.api_client import AdminApiClient
 from cli.main import build_admin_cli
-from lazycloud.cli.main import build_public_cli
 from pydantic import JsonValue
 from shared.http.source_cache_cleanup import SourceCacheCleanupStatusResponse
 from shared.http_transport import HttpChannel
@@ -54,13 +53,3 @@ def test_workspace_cleanup_status_uses_typed_admin_api_and_clean_json(
     assert channel.requests == [
         "/api/v1/workspaces/team%2Fa/source-cache-cleanup",
     ]
-
-
-def test_workspace_cleanup_status_is_operator_only() -> None:
-    result = CliRunner().invoke(
-        build_public_cli(),
-        ["workspace", "cleanup-status", "default"],
-    )
-
-    assert result.exit_code != 0
-    assert "No such command" in result.output

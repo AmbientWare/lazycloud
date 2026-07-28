@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -302,8 +303,11 @@ cp "$SOURCE_AGENT" "$out"
 
 
 def test_install_script_refuses_missing_docker_when_install_is_disabled(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    _fake_uname(fake_bin)
     agent_binary = _executable(tmp_path / AGENT_NAME, "#!/bin/sh\nexit 0\n")
-    env = _linux_environment(tmp_path, minimal_path=True)
+    env = _hermetic_environment(fake_bin, "sh", "sed", "tr")
 
     completed = _run_installer(
         tmp_path,
@@ -387,10 +391,21 @@ chmod 0755 "$target"
         tmp_path / AGENT_NAME,
         '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$AGENT_ARGS_FILE"\n',
     )
-    env = os.environ.copy()
+    env = _hermetic_environment(
+        fake_bin,
+        "sh",
+        "sed",
+        "tr",
+        "awk",
+        "basename",
+        "chmod",
+        "cp",
+        "mkdir",
+        "mktemp",
+        "rm",
+    )
     env.update(
         {
-            "PATH": f"{fake_bin}:/usr/bin:/bin",
             "FAKE_BIN": str(fake_bin),
             "AGENT_ARGS_FILE": str(args_file),
             "TAILSCALE_URL_FILE": str(tailscale_url_file),
@@ -990,13 +1005,29 @@ def _allow_service_manager(
     _ = platform, mutation
 
 
-def _linux_environment(tmp_path: Path, *, minimal_path: bool = False) -> dict[str, str]:
+def _linux_environment(tmp_path: Path) -> dict[str, str]:
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir(exist_ok=True)
     _fake_uname(fake_bin)
     env = os.environ.copy()
-    suffix = "/usr/bin:/bin" if minimal_path else os.environ.get("PATH", "")
-    env["PATH"] = f"{fake_bin}:{suffix}"
+    env["PATH"] = f"{fake_bin}:{os.environ.get('PATH', '')}"
+    return env
+
+
+def _hermetic_environment(fake_bin: Path, *host_utilities: str) -> dict[str, str]:
+    """Installer environment whose PATH resolves only fakes and the named host tools.
+
+    The installer probes the host for Docker and Tailscale, so a PATH that still
+    reaches /usr/bin makes the result depend on what the developer happens to
+    have installed. Naming every real utility keeps the probe outcome under the
+    test's control.
+    """
+    for utility in host_utilities:
+        resolved = shutil.which(utility)
+        assert resolved is not None, f"the installer requires host utility {utility}"
+        (fake_bin / utility).symlink_to(resolved)
+    env = os.environ.copy()
+    env["PATH"] = str(fake_bin)
     return env
 
 
@@ -1013,6 +1044,8 @@ if [ "${1:-}" = "-s" ]; then printf 'Linux\\n'; else printf 'x86_64\\n'; fi
 
 
 def _executable(path: Path, contents: str) -> Path:
+    # Never write through a symlink into a real host binary.
+    path.unlink(missing_ok=True)
     path.write_text(contents, encoding="utf-8")
     path.chmod(0o755)
     return path

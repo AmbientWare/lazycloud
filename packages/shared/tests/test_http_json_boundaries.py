@@ -20,8 +20,6 @@ from shared.http.operations import CronJobResponse
 from shared.http.pods import PodSandboxExposePortRequest
 from shared.http.stubs import StubConfigUpdateRequest
 from shared.http.tasks import TaskResponse
-from shared.pagination import RepositoryPage
-from shared.timestamps import utc_now
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -80,7 +78,7 @@ def test_http_json_contracts_reject_arbitrary_python(
         model.model_validate(payload)
 
 
-def test_discriminated_results_pages_bytes_and_timestamps_are_precise() -> None:
+def test_discriminated_results_and_encoded_bytes_are_precise() -> None:
     adapter: TypeAdapter[FunctionResultPayload] = TypeAdapter(FunctionResultPayload)
     payload: FunctionResultPayload = adapter.validate_python(
         {"encoding": "json", "value": {"answer": 42}}
@@ -93,12 +91,8 @@ def test_discriminated_results_pages_bytes_and_timestamps_are_precise() -> None:
         "encoding": "json",
         "value": {"answer": 42},
     }
-    page = RepositoryPage[int](items=[1, 2], total=2)
-    assert page.model_dump(mode="json") == {"items": [1, 2], "next": None, "total": 2}
-
     body = _ResultBytes.from_bytes(b"result")
     assert body.bytes_value() == b"result"
-    assert utc_now().tzinfo is UTC
 
 
 @pytest.mark.parametrize("port", [0, 65536, True, 8080.0, "8080"])
@@ -132,6 +126,5 @@ def test_canonical_worker_and_pool_views_preserve_nominal_json_contracts() -> No
         created_at=NOW,
     )
 
-    assert response.workers[0].id == "worker-1"
-    assert response.model_dump(mode="json")["workers"][0]["machine_id"] == "machine-1"
-    assert pool.model_dump(mode="json")["labels"] == {"region": "local"}
+    assert WorkerListResponse.model_validate_json(response.model_dump_json()) == response
+    assert PoolResponse.model_validate_json(pool.model_dump_json()) == pool

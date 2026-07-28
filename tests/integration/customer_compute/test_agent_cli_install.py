@@ -4,16 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from agent.operations import (
-    AgentInstallTarget,
-    AgentJoinRequest,
-    AgentRouteProxy,
-    AgentTransportEnvelope,
-    build_agent_install_plan,
-    build_join_command,
-    redact_telemetry,
-    summarize_agent_status,
-)
+from agent.operations import redact_telemetry
 from cli.agent_install import (
     AgentInstallCommandResult,
     AgentInstallEnvironment,
@@ -27,7 +18,7 @@ from cli.agent_install import (
 from cli.main import build_admin_cli
 from fastapi.testclient import TestClient
 from pydantic import JsonValue, TypeAdapter
-from shared.app_identity import ADMIN_CLI_NAME, AGENT_LAUNCHD_LABEL_PREFIX, AGENT_NAME
+from shared.app_identity import AGENT_NAME
 from shared.http_transport import HttpChannel
 from tests.url_constants import EXAMPLE_COM_URL
 
@@ -74,46 +65,18 @@ class _FakeInstallRunner:
         return AgentInstallCommandResult(command=command, ignored=ignore_failure)
 
 
-def test_agent_install_join_redaction_and_summary() -> None:
-    request = AgentJoinRequest(
-        name="worker-a",
-        pool="gpu",
-        endpoint=EXAMPLE_COM_URL,
-        token_secret=f"{AGENT_NAME}-token",
-        labels={"zone": "us"},
-    )
-    command = build_join_command(request)
-    assert command[:4] == [ADMIN_CLI_NAME, "agent", "join", "--name"]
-    assert "--token-secret" in command
-    plan = build_agent_install_plan(request, target=AgentInstallTarget.Systemd)
-    assert plan.service_commands
-
+def test_agent_telemetry_never_reports_secret_material() -> None:
     line = (
         "Authorization: Bearer secret-token "
         "AWS_SECRET_ACCESS_KEY=aws-value apiKey=api-value password=pass"
     )
+
     redacted = redact_telemetry(line)
+
     assert "secret-token" not in redacted
     assert "aws-value" not in redacted
     assert "api-value" not in redacted
     assert "password=pass" not in redacted
-
-    summary = summarize_agent_status(["gpu", "gpu", "cpu"], active_leases=2)
-    assert summary.agents == 3
-    assert summary.pools == {"gpu": 2, "cpu": 1}
-
-    proxy = AgentRouteProxy(
-        agent_id="agent_1",
-        target_host="127.0.0.1",
-        target_port=9000,
-        public_path="/agent/agent_1",
-    )
-    envelope = AgentTransportEnvelope(
-        agent_id=proxy.agent_id,
-        action="heartbeat",
-        payload={"path": proxy.public_path},
-    )
-    assert envelope.payload["path"] == "/agent/agent_1"
 
 
 def test_agent_install_writes_token_config_service_and_runs_commands(tmp_path: Path) -> None:
@@ -152,12 +115,14 @@ def test_agent_install_writes_token_config_service_and_runs_commands(tmp_path: P
     assert runner.commands == result.service.commands
 
 
-def test_agent_install_launchd_content_and_unsupported_platform(tmp_path: Path) -> None:
+def test_agent_install_plan_keeps_the_join_token_out_of_the_service_unit(
+    tmp_path: Path,
+) -> None:
     launchd = plan_agent_service_install(
         AgentInstallRequest(
             name="private pool",
             endpoint=EXAMPLE_COM_URL,
-            join_token="join-token",
+            join_token="private-pool-join-secret",
             state_dir=str(tmp_path / "state"),
         ),
         environment=AgentInstallEnvironment(os_name="darwin", uid=501, home=tmp_path / "home"),
@@ -165,11 +130,8 @@ def test_agent_install_launchd_content_and_unsupported_platform(tmp_path: Path) 
     assert launchd.manager is AgentServiceManager.Launchd
     assert launchd.scope is AgentServiceScope.User
     assert launchd.service is not None
-    assert f"<string>{AGENT_LAUNCHD_LABEL_PREFIX}.{AGENT_NAME}-private-pool</string>" in (
-        launchd.service.content
-    )
-    assert "<key>ProgramArguments</key>" in launchd.service.content
-    assert "<string>--join-token-file</string>" in launchd.service.content
+    assert "private-pool-join-secret" not in launchd.service.content
+    assert launchd.token_path in launchd.service.content
 
     unsupported = plan_agent_service_install(
         AgentInstallRequest(name="worker-a"),
@@ -177,4 +139,4 @@ def test_agent_install_launchd_content_and_unsupported_platform(tmp_path: Path) 
     )
     assert unsupported.state is AgentInstallState.Unsupported
     assert unsupported.supported is False
-    assert unsupported.reason == "unsupported operating system"
+    assert unsupported.service is None

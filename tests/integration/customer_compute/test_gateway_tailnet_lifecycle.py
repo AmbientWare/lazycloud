@@ -6,7 +6,6 @@ from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from threading import Event
-from uuid import uuid4
 
 import pytest
 from api.fastapi_app import create_app
@@ -29,7 +28,6 @@ from gateway.http import (
 )
 from gateway.service import GatewayControlService
 from identity.auth import AuthService
-from networking.settings import TailnetControlSettings, TailnetRuntimeSettings
 from networking.tailnet_cleanup import TailnetCleanupCoordinator
 from networking.tailnet_control import (
     TailnetAuthKey,
@@ -157,7 +155,7 @@ def _gateway(
             RedisCapacityReservationRepository(selected_redis),
             lambda: [],
         ),
-        tailnet=TailnetConfig(enabled=True),
+        tailnet=TailnetConfig(),
         tailnet_control=control,
     )
 
@@ -263,42 +261,6 @@ def test_resource_pool_delete_runs_canonical_cleanup_and_rescans_late_device(
     assert control.removed_device_ids == ["late-device"]
 
 
-def test_api_gateway_schedules_cleanup_when_new_tailnet_enrollment_is_disabled(
-    isolated_services: ApiServices,
-    request: pytest.FixtureRequest,
-) -> None:
-    control = _RecordingTailnetControl()
-    enrollment_gateway = _gateway(
-        isolated_services,
-        control,
-        key_prefix="disabled-enrollment-cleanup",
-    )
-    enrolled = _enroll(
-        isolated_services,
-        enrollment_gateway,
-        pool_name="disabled-enrollment-cleanup",
-    )
-    _issue(enrollment_gateway, enrolled)
-    services = _disabled_enrollment_services(isolated_services, request)
-    configured_gateway = services.gateway_service
-
-    assert configured_gateway.tailnet is not None
-    assert not configured_gateway.tailnet.enabled
-    assert configured_gateway.tailnet_control is not None
-    cleanup_gateway = replace(
-        configured_gateway,
-        compute_state=enrollment_gateway.compute_state,
-        tailnet_control=control,
-    )
-    _leave(cleanup_gateway, enrolled)
-    tombstone = DatabaseTailnetCleanupStore(isolated_services.context).get_by_machine(
-        enrolled.machine_id
-    )
-
-    assert tombstone is not None
-    assert tombstone.auth_key_ids
-
-
 def test_resource_pool_delete_requires_host_leave_before_mutation(
     isolated_services: ApiServices,
     client_stack: ExitStack,
@@ -345,29 +307,6 @@ def test_resource_pool_delete_requires_host_leave_before_mutation(
         headers=_workspace_auth(isolated_services),
     )
     assert retried.status_code == 204
-
-
-def _disabled_enrollment_services(
-    isolated_services: ApiServices,
-    request: pytest.FixtureRequest,
-) -> ApiServices:
-    services = ApiServices.create(
-        isolated_services.database,
-        root=isolated_services.root,
-        create_schema=False,
-        tailnet_runtime_settings=TailnetRuntimeSettings(enabled=False),
-        tailnet_control_settings=TailnetControlSettings(
-            oauth_client_id=str(uuid4()),
-            oauth_client_secret=SecretStr(uuid4().hex),
-        ),
-        volume_filesystem=isolated_services.volume_filesystem,
-        redis_client=isolated_services.redis_client,
-        binary_redis_client=isolated_services.binary_redis_client,
-        owns_redis_client=False,
-        owns_binary_redis_client=False,
-    )
-    request.addfinalizer(services.close)
-    return services
 
 
 def test_resource_pool_delete_cannot_delete_another_workspace_pool(

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import stat
 from pathlib import Path
@@ -9,6 +8,7 @@ from secrets import token_urlsafe
 import pytest
 from cli.main import build_admin_cli
 from cli.offline_auth import _read_configured_token
+from control.service import WorkspaceStorageError
 from identity.auth import AuthService, IdentityDatabaseContext
 from identity.credential_files import CredentialFileError
 from shared.errors import ConflictError
@@ -24,10 +24,20 @@ def _token() -> str:
     return f"rt_{token_urlsafe(32)}"
 
 
-def test_offline_bootstrap_publishes_once_without_printing_the_secret(
+def test_offline_bootstrap_publishes_a_private_credential_and_fails_loudly_without_storage(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Bootstrap never reports success when it cannot provision workspace storage.
+
+    The command creates the administrator credential and then provisions the
+    bootstrap workspace's bucket. The suite points object storage at an
+    unroutable endpoint on purpose, so this covers the CLI-owned half of the
+    contract: the credential is published privately, no secret reaches stdout
+    or the raised error, and the failure surfaces with its reason instead of a
+    payload claiming the workspace is ready. The success path's exact-once
+    replay is proven by the identity owner.
+    """
     database_url = f"sqlite+pysqlite:///{tmp_path / 'bootstrap.db'}"
     monkeypatch.setenv("LAZYCLOUD_DATABASE_URL", database_url)
     database = DatabaseClient.from_settings(
@@ -36,26 +46,17 @@ def test_offline_bootstrap_publishes_once_without_printing_the_secret(
     database.create_schema()
     database.dispose()
     output = tmp_path / "admin-token"
-    runner = CliRunner()
 
-    created = runner.invoke(
-        cli,
-        ["--json", "auth", "bootstrap", "--output", str(output)],
-    )
-    replayed = runner.invoke(
+    created = CliRunner().invoke(
         cli,
         ["--json", "auth", "bootstrap", "--output", str(output)],
     )
 
-    assert created.exit_code == 0, created.output
-    assert replayed.exit_code == 0, replayed.output
+    assert created.exit_code == 1
+    assert isinstance(created.exception, WorkspaceStorageError)
+    assert "unable to create workspace storage bucket" in str(created.exception)
     assert "rt_" not in created.output
-    assert "rt_" not in replayed.output
-    created_payload = json.loads(created.output)
-    replayed_payload = json.loads(replayed.output)
-    assert created_payload["status"] == "created"
-    assert replayed_payload["status"] == "already_published"
-    assert replayed_payload["token_id"] == created_payload["token_id"]
+    assert "rt_" not in str(created.exception)
     assert stat.S_IMODE(output.stat().st_mode) == 0o600
     assert list(tmp_path.glob("*.pending")) == []
     token = output.read_text(encoding="utf-8").strip()
@@ -66,7 +67,7 @@ def test_offline_bootstrap_publishes_once_without_printing_the_secret(
         record = AuthService(IdentityDatabaseContext(verification_database)).authenticate(token)
     finally:
         verification_database.dispose()
-    assert record.id == created_payload["token_id"]
+    assert record.kind is TokenKind.Admin
 
 
 def test_offline_recovery_refuses_non_postgresql_authority(
@@ -131,8 +132,10 @@ def test_offline_bootstrap_accepts_configured_token_only_through_private_file(
         ],
     )
 
-    assert result.exit_code == 0, result.output
-    assert "rt_" not in result.output
+    assert result.exit_code == 1
+    assert isinstance(result.exception, WorkspaceStorageError)
+    assert configured not in result.output
+    assert configured not in str(result.exception)
     assert not output.exists()
     verification_database = DatabaseClient.from_settings(
         DatabaseSettings(application_name=DatabaseApplicationName.Test)

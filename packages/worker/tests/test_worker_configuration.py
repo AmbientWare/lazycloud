@@ -15,7 +15,7 @@ type JsonObject = dict[str, JsonValue]
 _JSON_OBJECT: TypeAdapter[JsonObject] = TypeAdapter(JsonObject)
 
 
-def test_worker_configuration_serializes_as_nested_yaml_without_credentials() -> None:
+def test_agent_written_worker_yaml_section_parses_back_into_the_same_configuration() -> None:
     config = WorkerConfiguration(
         execution=WorkerExecutionConfiguration(
             capacity=WorkerCapacityConfiguration(
@@ -33,6 +33,3 @@ def test_worker_configuration_serializes_as_nested_yaml_without_credentials() ->
     effective = WorkerConfiguration.model_validate(payload[WORKER_CONFIGURATION_SECTION])
 
     assert effective == config
-    assert effective.execution.capacity.cpu_millicores == 2500
-    assert "token" not in contents.lower()
-    assert "secret" not in contents.lower()

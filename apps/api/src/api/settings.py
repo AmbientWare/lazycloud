@@ -21,7 +21,6 @@ class TcpIngressSettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_TCP_INGRESS_",
-        env_file=".env",
         extra="ignore",
     )
 
@@ -51,7 +50,6 @@ class AgentRouteReconciliationSettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_AGENT_ROUTE_RECONCILIATION_",
-        env_file=".env",
         extra="ignore",
     )
 
@@ -76,7 +74,6 @@ class CapacityBootstrapSettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_CAPACITY_BOOTSTRAP_",
-        env_file=".env",
         extra="ignore",
     )
 

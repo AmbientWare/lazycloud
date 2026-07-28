@@ -7,7 +7,6 @@ from compute.projection import PoolConfig as ComputePoolConfig
 from compute.projection import PrivatePoolState
 from fastapi import APIRouter, Depends, Query, Response, status
 from gateway.service import GatewayControlService
-from identity.auth import AuthorizationDeniedError
 from shared.compute_policy import ComputePoolRecord
 from shared.http.compute import (
     PoolCapacityExtendRequest,
@@ -28,7 +27,6 @@ from shared.http.compute import (
     PoolScaleRequest,
     PoolScaleResponse,
 )
-from shared.identity import TokenKind
 
 from api.server.auth import read_workspace, write_token, write_workspace
 from api.server.dependencies import current_services
@@ -165,8 +163,6 @@ def create_pool(
     workspace_id: write_workspace,
     services: ApiServices = Depends(current_services),
 ) -> PoolResponse:
-    if request.provider.strip().lower() == "kubernetes" and token.kind is not TokenKind.Admin:
-        raise AuthorizationDeniedError("admin token required to create Kubernetes capacity pools")
     return PoolResponse.model_validate(
         services.compute.create_pool(
             request.name,

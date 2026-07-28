@@ -102,10 +102,16 @@ class WorkspaceDeletionService:
     def _assert_compute_disconnected(session: DatabaseSession, workspace_id: str) -> None:
         connection = AwsAccountConnectionRepository(session).get_for_workspace(workspace_id)
         pools = ComputePoolRepository(session).list_internal(workspace_id=workspace_id)
-        if connection is not None or any(
-            pool.phase is not ComputePoolPhase.Deleted for pool in pools
-        ):
+        if connection is not None:
             raise ConflictError("disconnect AWS compute before deleting this workspace")
+        live = sorted(pool.name for pool in pools if pool.phase is not ComputePoolPhase.Deleted)
+        if live:
+            # Deletion drains drained pools; it never terminates running capacity
+            # on the tenant's behalf, so name the pools the operator must release.
+            raise ConflictError(
+                "release compute capacity before deleting this workspace; pools still active: "
+                + ", ".join(live)
+            )
 
     def _wake_source_cache_cleanup(self, workspace_id: str) -> None:
         try:

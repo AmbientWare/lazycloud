@@ -128,7 +128,6 @@ def test_scheduler_runtime_closes_owned_services_on_exception(
         runtime_callback_http_url=isolated_services.gateway_settings.runtime_callback_http_url,
         redis_client=redis,
         container_requests=container_requests,
-        worker_pool_replica_scaler=None,
         image_build_container_settings=ImageBuildContainerSettings(),
         retention_settings=RetentionSettings(),
         volume_metering=app_services.volume_metering,

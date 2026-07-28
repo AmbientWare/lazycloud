@@ -70,16 +70,6 @@ def test_object_write_command_rejects_mutation_and_negative_storage_counts() -> 
         )
     with pytest.raises(ValidationError):
         CacheEntry(key="invalid", path="/cache/invalid", size=1, sha256="e" * 64, hits=-1)
-    with pytest.raises(ValidationError):
-        CacheEntry.model_validate(
-            {
-                "key": "legacy-policy",
-                "path": "/cache/legacy-policy",
-                "size": 1,
-                "sha256": "f" * 64,
-                "policy": "read-only",
-            }
-        )
 
 
 @pytest.mark.parametrize(

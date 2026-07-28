@@ -16,18 +16,12 @@ from scheduler.capacity_reservations import (
     CapacityWorkerRepository,
     ComputePoolCapacityController,
     PendingCapacityOwner,
-    StaticWorkerPoolCapacityController,
 )
 from scheduler.pool_drain import (
     WorkerPoolDrainContainerRepository,
     WorkerPoolDrainController,
     WorkerPoolDrainWorkerRepository,
     managed_compute_drain_controllers,
-    static_worker_pool_drain_controllers,
-)
-from scheduler.pool_sizing import (
-    WorkerPoolReplicaScaler,
-    WorkerPoolReplicaStateStore,
 )
 from scheduler.services import SchedulerServices
 
@@ -44,10 +38,8 @@ class SchedulerCapacityWorkerRepository(
 class SchedulerCapacityControllerProvider:
     services: SchedulerServices
     compute_states: RedisComputeStateRepository
-    replica_states: WorkerPoolReplicaStateStore
     workers: SchedulerCapacityWorkerRepository
     containers: WorkerPoolDrainContainerRepository
-    worker_pool_replicas: WorkerPoolReplicaScaler | None
 
     def agent_pool_configs(self) -> list[AgentPoolConfig]:
         configs: dict[tuple[str, str], AgentPoolConfig] = {}
@@ -63,17 +55,7 @@ class SchedulerCapacityControllerProvider:
     def capacity_acquisition_controllers(self) -> list[CapacityAcquisitionController]:
         controllers: list[CapacityAcquisitionController] = []
         for workspace_id, pool in self.services.compute.list_pools_across_workspaces():
-            if pool.provider == "kubernetes":
-                if self.worker_pool_replicas is not None:
-                    controllers.append(
-                        StaticWorkerPoolCapacityController(
-                            pool,
-                            self.worker_pool_replicas,
-                            self.workers,
-                            self.services.compute,
-                        )
-                    )
-            elif pool.capacity_owner_kind in {
+            if pool.capacity_owner_kind in {
                 CapacityOwnerKind.ManagedPool,
                 CapacityOwnerKind.PooledProvider,
             }:
@@ -95,11 +77,7 @@ class SchedulerCapacityControllerProvider:
                 capacity_owner_id=pool.capacity_owner_id,
                 owner_kind=pool.capacity_owner_kind,
                 pool_name=pool.name,
-                workspace_id=(
-                    ""
-                    if pool.capacity_owner_kind is CapacityOwnerKind.GlobalKubernetesDeployment
-                    else workspace_id
-                ),
+                workspace_id=workspace_id,
                 registration_timeout_seconds=pool.registration_timeout_seconds,
             )
         for state in self.compute_states.list_all_pool_states():
@@ -124,15 +102,4 @@ class SchedulerCapacityControllerProvider:
                 self.containers,
             )
         )
-        if self.worker_pool_replicas is not None:
-            controllers.extend(
-                static_worker_pool_drain_controllers(
-                    [pool for _, pool in self.services.compute.list_pools_across_workspaces()],
-                    self.workers,
-                    self.containers,
-                    self.worker_pool_replicas,
-                    self.replica_states,
-                    self.services.compute,
-                )
-            )
         return controllers

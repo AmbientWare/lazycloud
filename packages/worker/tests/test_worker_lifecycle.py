@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from shared.container_requests import RequestMount, RequestMountType
 from worker.lifecycle import (
-    BindMountSourceDirAction,
-    plan_bind_mount_source_dirs,
+    ensure_bind_mount_source_dirs,
     plan_request_mount_setup,
 )
 
@@ -48,18 +49,29 @@ def test_platform_volume_keeps_its_logical_path_without_workspace_storage() -> N
     assert [mount.local_path for mount in plan.mounts] == ["/data/volumes/ws-1/vol-1"]
 
 
-def test_volume_source_directory_is_created_inside_workspace_storage() -> None:
+def test_volume_source_directory_is_created_inside_workspace_storage(tmp_path: Path) -> None:
     """Creating the directory inside the mount materializes the object prefix.
 
     The prefix is lazy in object storage, so the volume's directory only exists
-    once something creates it on the mounted filesystem.
+    once something creates it on the mounted filesystem. A mount point is backed
+    by its own filesystem, so pre-creating its source would shadow the mount.
     """
-    resolved = RequestMount(
-        local_path="/workspace/ws-1/volumes/vol-1",
-        mount_path="/volumes/data",
-        mount_type=RequestMountType.Volume,
-    )
+    volume_source = tmp_path / "workspace" / "ws-1" / "volumes" / "vol-1"
+    mount_point_source = tmp_path / "workspace" / "ws-1" / "mountpoints" / "bucket"
+    resolved = [
+        RequestMount(
+            local_path=str(volume_source),
+            mount_path="/volumes/data",
+            mount_type=RequestMountType.Volume,
+        ),
+        RequestMount(
+            local_path=str(mount_point_source),
+            mount_path="/mnt/bucket",
+            mount_type=RequestMountType.MountPoint,
+        ),
+    ]
 
-    plans = plan_bind_mount_source_dirs([resolved])
+    ensure_bind_mount_source_dirs(resolved)
 
-    assert [plan.action for plan in plans] == [BindMountSourceDirAction.Create]
+    assert volume_source.is_dir()
+    assert not mount_point_source.exists()

@@ -59,8 +59,12 @@ def test_usage_contracts_reject_non_json_metadata() -> None:
 
 
 def test_usage_identity_is_deterministic() -> None:
-    assert usage_record_id("task_count", "workspace-1", 123) == usage_record_id(
-        "task_count",
-        "workspace-1",
-        123,
-    )
+    # Metered usage is deduplicated on this id, so the same observation must
+    # resolve to one record while a different tenant, metric, or resource must
+    # never collapse into another tenant's usage.
+    identity = usage_record_id("task_count", "workspace-1", 123)
+
+    assert identity == usage_record_id("task_count", "workspace-1", 123)
+    assert identity != usage_record_id("task_count", "workspace-2", 123)
+    assert identity != usage_record_id("cpu_seconds", "workspace-1", 123)
+    assert identity != usage_record_id("task_count", "workspace-1", 124)

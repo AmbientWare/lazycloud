@@ -26,7 +26,6 @@ from worker.image_build_execution import (
     WorkerImageArchivePublishResult,
     WorkerImageBuildRequestPayload,
 )
-from worker.image_build_runtime_credentials import RemoteImageBuildCredentialLoader
 from worker.image_build_scratch import ImageBuildScratchLease, ImageBuildScratchManager
 from worker.image_lifecycle import BuildahDirectoryPlan, BuildahStorageDriver
 from worker.origin_access import (
@@ -34,8 +33,6 @@ from worker.origin_access import (
     ImageArchiveUploadCredentials,
 )
 from worker.repository_payloads import (
-    GetImageBuildCredentialsRequest,
-    GetImageBuildCredentialsResponse,
     ImageBuildPrivateInputs,
     ImageBuildRegistryAuth,
     PrepareImageBuildContextDownloadRequest,
@@ -51,37 +48,6 @@ _JSON_OBJECT: TypeAdapter[JsonObject] = TypeAdapter(JsonObject)
 
 def _buildah_path(binary: str) -> str | None:
     return "/usr/bin/buildah" if binary == "buildah" else None
-
-
-def test_remote_image_build_credential_loader_consumes_once_without_polling() -> None:
-    requests: list[GetImageBuildCredentialsRequest] = []
-
-    class MissingCredentialRepository:
-        def get_image_build_credentials(
-            self,
-            request: GetImageBuildCredentialsRequest,
-        ) -> GetImageBuildCredentialsResponse:
-            requests.append(request)
-            return GetImageBuildCredentialsResponse()
-
-    loaded = RemoteImageBuildCredentialLoader(MissingCredentialRepository()).load(
-        workspace_id="workspace-1",
-        build_id="build-1",
-        container_id="container-1",
-        registry="registry.example.com",
-        cache_key="one-use-capability",
-    )
-
-    assert loaded.empty
-    assert requests == [
-        GetImageBuildCredentialsRequest(
-            workspace_id="workspace-1",
-            build_id="build-1",
-            container_id="container-1",
-            registry="registry.example.com",
-            cache_key="one-use-capability",
-        )
-    ]
 
 
 def test_image_build_worker_rejects_managed_package_version_mismatch(

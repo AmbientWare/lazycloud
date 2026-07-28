@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
@@ -10,19 +10,12 @@ from compute.service import ComputeService
 from compute.state import ComputePoolState, RedisComputeStateRepository
 from coordination.redis_client import RedisClient
 from pydantic import Field
-from shared.compute_fleet import Pool
 from shared.contracts import ContractModel
 from shared.env import truthy_env_value
 from shared.scheduling import SchedulerContainerStatus, SchedulerWorkerStatus
 from shared.timestamps import utc_now
 
 from scheduler.pool_sizing import (
-    CapacityPoolSizingStateService,
-    WorkerPoolReplicaScaleOutcome,
-    WorkerPoolReplicaScaler,
-    WorkerPoolReplicaScaleResult,
-    WorkerPoolReplicaState,
-    WorkerPoolReplicaStateStore,
     sizing_state_update,
 )
 from scheduler.state import WorkerPoolLockKind, WorkerPoolLockPlan
@@ -166,176 +159,6 @@ class WorkerPoolDrainService:
 
 
 @dataclass(slots=True)
-class StaticWorkerPoolDrainController:
-    pool: Pool
-    workers: WorkerPoolDrainWorkerRepository
-    containers: WorkerPoolDrainContainerRepository
-    scaler: WorkerPoolReplicaScaler
-    replica_states: WorkerPoolReplicaStateStore
-    sizing_states: CapacityPoolSizingStateService
-
-    @property
-    def pool_name(self) -> str:
-        return self.pool.name
-
-    @property
-    def capacity_owner_id(self) -> str:
-        return self.pool.capacity_owner_id
-
-    def reconcile(self, *, now: datetime | None = None) -> WorkerPoolDrainResult:
-        current_time = now or utc_now()
-        config = _drain_config_from_pool(self.pool)
-        if not config.enabled:
-            return WorkerPoolDrainResult(
-                capacity_owner_id=self.capacity_owner_id,
-                pool_name=self.pool_name,
-                reason="worker-pool drain disabled",
-            )
-        sizing_state = self.sizing_states.get_pool_sizing_state(self.capacity_owner_id)
-        if sizing_state.operation_id:
-            return WorkerPoolDrainResult(
-                capacity_owner_id=self.capacity_owner_id,
-                pool_name=self.pool_name,
-                reason="worker-pool sizing operation is awaiting registration",
-            )
-        latest_mutation = max(
-            (
-                changed_at
-                for changed_at in (
-                    sizing_state.last_scale_up_at,
-                    sizing_state.last_scale_down_at,
-                )
-                if changed_at is not None
-            ),
-            default=None,
-        )
-        if latest_mutation is not None:
-            next_scale_down_at = latest_mutation + timedelta(
-                seconds=self.pool.scale_down_cooldown_seconds
-            )
-            if next_scale_down_at > current_time:
-                return WorkerPoolDrainResult(
-                    capacity_owner_id=self.capacity_owner_id,
-                    pool_name=self.pool_name,
-                    reason="worker-pool scale-down cooldown is active",
-                )
-        operation_id = f"pool-drain-{self.capacity_owner_id}"
-        authoritative = self.scaler.describe_worker_pool(
-            self.pool,
-            reservation_id=operation_id,
-            operation_id=operation_id,
-        )
-        self._save_replica_state(authoritative)
-        if authoritative.outcome is not WorkerPoolReplicaScaleOutcome.ExistingPending:
-            return WorkerPoolDrainResult(
-                capacity_owner_id=self.capacity_owner_id,
-                pool_name=self.pool_name,
-                desired_replicas=authoritative.desired_replicas,
-                observed_replicas=authoritative.observed_replicas,
-                reason=authoritative.reason,
-            )
-        workers = [
-            worker
-            for worker in self.workers.list_workers_in_pool(self.pool_name)
-            if worker.capacity_owner_id == self.capacity_owner_id
-        ]
-        registered_replicas = len(workers)
-        if authoritative.desired_replicas != authoritative.observed_replicas:
-            return WorkerPoolDrainResult(
-                capacity_owner_id=self.capacity_owner_id,
-                pool_name=self.pool_name,
-                desired_replicas=authoritative.desired_replicas,
-                observed_replicas=authoritative.observed_replicas,
-                reason="waiting for authoritative worker replicas to converge",
-            )
-        if authoritative.desired_replicas != registered_replicas:
-            return WorkerPoolDrainResult(
-                capacity_owner_id=self.capacity_owner_id,
-                pool_name=self.pool_name,
-                desired_replicas=authoritative.desired_replicas,
-                observed_replicas=authoritative.observed_replicas,
-                reason="waiting for desired worker replicas to register or terminate",
-            )
-        if authoritative.desired_replicas <= config.min_workers:
-            return WorkerPoolDrainResult(
-                capacity_owner_id=self.capacity_owner_id,
-                pool_name=self.pool_name,
-                desired_replicas=authoritative.desired_replicas,
-                observed_replicas=authoritative.observed_replicas,
-                reason="pool is at min workers",
-            )
-        if _pool_has_active_containers(workers, self.containers):
-            return WorkerPoolDrainResult(
-                capacity_owner_id=self.capacity_owner_id,
-                pool_name=self.pool_name,
-                desired_replicas=authoritative.desired_replicas,
-                observed_replicas=authoritative.observed_replicas,
-                reason="pool has active containers",
-            )
-        idle_workers = _idle_workers(workers, current_time, config.idle_seconds)
-        if len(idle_workers) != registered_replicas:
-            return WorkerPoolDrainResult(
-                capacity_owner_id=self.capacity_owner_id,
-                pool_name=self.pool_name,
-                desired_replicas=authoritative.desired_replicas,
-                observed_replicas=authoritative.observed_replicas,
-                reason="pool has workers inside drain idle window",
-            )
-        desired_replicas = max(authoritative.desired_replicas - 1, config.min_workers)
-        result = self.scaler.scale_worker_pool(
-            self.pool,
-            desired_replicas,
-            reservation_id=operation_id,
-            operation_id=operation_id,
-        )
-        self._save_replica_state(result)
-        if result.outcome is not WorkerPoolReplicaScaleOutcome.Requested:
-            return WorkerPoolDrainResult(
-                capacity_owner_id=self.capacity_owner_id,
-                pool_name=self.pool_name,
-                desired_replicas=result.desired_replicas,
-                observed_replicas=result.observed_replicas,
-                reason=result.reason,
-            )
-        self.sizing_states.compare_and_set_pool_sizing_state(
-            sizing_state_update(
-                sizing_state.model_copy(
-                    update={
-                        "last_scale_down_at": current_time,
-                        "target_units": result.desired_replicas,
-                        "terminal_reason": "",
-                    }
-                )
-            )
-        )
-        return WorkerPoolDrainResult(
-            capacity_owner_id=self.capacity_owner_id,
-            pool_name=self.pool_name,
-            action=WorkerPoolDrainAction.ScaleWorkerPool,
-            desired_replicas=result.desired_replicas,
-            observed_replicas=result.observed_replicas,
-            drained_worker_ids=[idle_workers[0].worker_id],
-            reason="scaled one idle worker pool replica down",
-        )
-
-    def _save_replica_state(self, result: WorkerPoolReplicaScaleResult) -> None:
-        if result.capacity_owner_id != self.capacity_owner_id:
-            raise ValueError("worker pool replica state returned a different capacity owner")
-        if result.pool_name != self.pool_name:
-            raise ValueError("worker pool replica state returned a different pool")
-        self.replica_states.save_state(
-            WorkerPoolReplicaState(
-                capacity_owner_id=self.capacity_owner_id,
-                pool_name=self.pool_name,
-                provider=result.provider or self.pool.provider,
-                desired_replicas=result.desired_replicas,
-                observed_replicas=result.observed_replicas,
-                target=result.target,
-            )
-        )
-
-
-@dataclass(slots=True)
 class ManagedComputeWorkerPoolDrainController:
     state: ComputePoolState
     compute: ComputeService
@@ -462,33 +285,6 @@ class ManagedComputeWorkerPoolDrainController:
         )
 
 
-def static_worker_pool_drain_controllers(
-    pools: Iterable[Pool],
-    workers: WorkerPoolDrainWorkerRepository,
-    containers: WorkerPoolDrainContainerRepository,
-    scaler: WorkerPoolReplicaScaler,
-    replica_states: WorkerPoolReplicaStateStore,
-    sizing_states: CapacityPoolSizingStateService,
-    *,
-    providers: Iterable[str] = ("kubernetes",),
-) -> list[StaticWorkerPoolDrainController]:
-    provider_names = {provider.strip() for provider in providers if provider.strip()}
-    controllers = [
-        StaticWorkerPoolDrainController(
-            pool,
-            workers,
-            containers,
-            scaler,
-            replica_states,
-            sizing_states,
-        )
-        for pool in pools
-        if _static_worker_pool_enabled(pool, provider_names)
-    ]
-    controllers.sort(key=lambda item: item.pool_name)
-    return controllers
-
-
 def managed_compute_drain_controllers(
     compute: ComputeService,
     compute_states: RedisComputeStateRepository,
@@ -504,14 +300,6 @@ def managed_compute_drain_controllers(
         )
     controllers.sort(key=lambda item: item.pool_name)
     return controllers
-
-
-def _drain_config_from_pool(pool: Pool) -> WorkerPoolDrainConfig:
-    return WorkerPoolDrainConfig(
-        enabled=pool.scaling_enabled,
-        min_workers=pool.min_workers,
-        idle_seconds=pool.idle_drain_timeout_seconds,
-    )
 
 
 def _drain_config_from_state(state: ComputePoolState) -> WorkerPoolDrainConfig:
@@ -540,10 +328,6 @@ def _int_sizing_label(state: ComputePoolState, key: str, default: int) -> int:
         return max(int(raw), 0)
     except (TypeError, ValueError):
         return default
-
-
-def _static_worker_pool_enabled(pool: Pool, providers: set[str]) -> bool:
-    return pool.provider in providers and pool.scaling_enabled
 
 
 def _capacity_owner_id_from_state(state: ComputePoolState) -> str:

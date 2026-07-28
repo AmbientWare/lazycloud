@@ -12,7 +12,7 @@ lazycloud login [--endpoint <url>] [--token <token>] [--workspace <name>]
 
 - Plain `lazycloud login` targets the hosted platform. The endpoint resolves in
   order: `--endpoint` flag, `LAZYCLOUD_ENDPOINT` env, stored profile, then the
-  packaged hosted default. Self-hosters and local dev pass `--endpoint`.
+  packaged hosted default.
 - Without `--token`, a device-code flow prints a verification URL and code to
   approve in the dashboard; the minted token is stored in the profile.
 - `--activate` (default) makes the profile the active one.

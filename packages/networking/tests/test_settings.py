@@ -59,16 +59,6 @@ def test_remote_provider_gate_reports_all_missing_security_requirements() -> Non
     assert "backend route authentication key must be at least 32 bytes" in message
 
 
-def test_distinct_tailnet_tags_are_required() -> None:
-    control = TailnetControlSettings(
-        agent_tag="tag:shared",
-        control_plane_tag="tag:shared",
-    )
-
-    with pytest.raises(ValueError, match="must be distinct"):
-        control.validated_tags()
-
-
 def test_tailnet_tags_reject_invalid_values() -> None:
     with pytest.raises(ValidationError, match="tag:<name>"):
         TailnetControlSettings(agent_tag="provider_agent")

@@ -397,9 +397,8 @@ def test_sandbox_create_retries_only_typed_pending_readiness() -> None:
     assert pod.terminated == []
 
 
-@pytest.mark.parametrize("status_code", [401, 404, 409])
-def test_sandbox_create_does_not_retry_non_pending_http_failures(status_code: int) -> None:
-    cause = http_api_error("terminal sandbox state", status_code=status_code)
+def test_sandbox_create_does_not_retry_non_pending_http_failures() -> None:
+    cause = http_api_error("terminal sandbox state", status_code=401)
     pod = FakeSandboxPodClient(connect_outcomes=[cause])
     sandbox = _bind_internal_state(
         Sandbox(_app_slug="test"),

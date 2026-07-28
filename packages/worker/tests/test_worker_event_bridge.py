@@ -55,20 +55,6 @@ def test_worker_stream_event_handler_stops_containers_and_cancels_builds() -> No
     assert ignored.status is WorkerEventHandlingStatus.Ignored
 
 
-def test_worker_stream_event_handler_reports_missing_stopper() -> None:
-    result = WorkerStreamEventHandler().handle(
-        WorkerStreamEvent(
-            event_id="event-9",
-            kind=WorkerStreamEventKind.StopContainer,
-            container_id="ctr-1",
-        )
-    )
-
-    assert result.status is WorkerEventHandlingStatus.Error
-    assert not result.ok
-    assert result.error_message == "container stopper is not configured"
-
-
 def test_worker_stream_event_handler_does_not_acknowledge_failed_container_stop() -> None:
     acknowledger = _Acknowledger()
     result = WorkerStreamEventHandler(

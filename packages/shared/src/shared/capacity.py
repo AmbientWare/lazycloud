@@ -30,14 +30,12 @@ CAPACITY_OWNER_ID_PATTERN = (
 
 
 class CapacityOwnerKind(StringEnum):
-    GlobalKubernetesDeployment = "global_kubernetes_deployment"
     WorkspaceAgent = "workspace_agent"
     ManagedPool = "managed_pool"
     PooledProvider = "pooled_provider"
 
 
 class CapacityOwnerSource(StringEnum):
-    Kubernetes = "kubernetes"
     Agent = "agent"
     Managed = "managed"
     Provider = "provider"
@@ -99,7 +97,6 @@ class CapacityAcquisitionResult(ContractModel):
 
 
 _OWNER_SOURCES: dict[CapacityOwnerKind, CapacityOwnerSource] = {
-    CapacityOwnerKind.GlobalKubernetesDeployment: CapacityOwnerSource.Kubernetes,
     CapacityOwnerKind.WorkspaceAgent: CapacityOwnerSource.Agent,
     CapacityOwnerKind.ManagedPool: CapacityOwnerSource.Managed,
     CapacityOwnerKind.PooledProvider: CapacityOwnerSource.Provider,
@@ -231,11 +228,6 @@ class CapacityPoolSizingStateUpdate(ContractModel):
 
 def capacity_owner_for_provider(provider: str) -> tuple[CapacityOwnerKind, CapacityOwnerSource]:
     normalized = provider.strip().lower()
-    if normalized == CapacityOwnerSource.Kubernetes.value:
-        return (
-            CapacityOwnerKind.GlobalKubernetesDeployment,
-            CapacityOwnerSource.Kubernetes,
-        )
     if normalized in {"", "agent", "local"}:
         return CapacityOwnerKind.WorkspaceAgent, CapacityOwnerSource.Agent
     if normalized == CapacityOwnerSource.Managed.value:

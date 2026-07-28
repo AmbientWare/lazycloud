@@ -8,7 +8,7 @@ from provider_aws import (
     AwsProvider,
     AwsProviderSettings,
 )
-from provider_aws.ec2 import AwsEc2Response
+from provider_aws.ec2 import AwsEc2MachineProvisionPlan, AwsEc2Response
 from pydantic import JsonValue
 from shared.app_identity import NAME
 
@@ -22,21 +22,42 @@ def test_aws_ec2_provision_machine_creates_atomically_tagged_idempotent_instance
             gateway_url="https://control.example.com",
         )
     )
-    plan = provider.provision_machine_plan(
-        pool_name="default",
-        registration_token="join-token",
-        compute=AwsComputeRequest(cpu_millicores=1_000, memory_mb=1_024),
-        machine_id="machine123",
-        subnet_id="subnet-1",
-    )
+
+    def plan_for(operation_id: str) -> AwsEc2MachineProvisionPlan:
+        return provider.provision_machine_plan(
+            pool_name="default",
+            registration_token="join-token",
+            compute=AwsComputeRequest(cpu_millicores=1_000, memory_mb=1_024),
+            machine_id="machine123",
+            operation_id=operation_id,
+            subnet_id="subnet-1",
+        )
+
+    plan = plan_for("operation-1")
     client = FakeEc2Client()
 
     instance_id = provider.provision_machine(plan, ec2_client=client)
 
     assert instance_id == "i-123"
+    # A retried provisioning operation must reuse the EC2 idempotency token so
+    # AWS returns the existing instance instead of billing a second one.
+    assert plan_for("operation-1").client_token == plan.client_token
+    assert plan_for("operation-2").client_token != plan.client_token
+
     assert client.run_instances_kwargs is not None
-    assert client.run_instances_kwargs["ClientToken"] == plan.client_token
-    assert client.run_instances_kwargs["TagSpecifications"]
+    tag_specifications = client.run_instances_kwargs["TagSpecifications"]
+    assert isinstance(tag_specifications, list)
+    instance_specification = tag_specifications[0]
+    assert isinstance(instance_specification, dict)
+    assert instance_specification["ResourceType"] == "instance"
+    tags = instance_specification["Tags"]
+    assert isinstance(tags, list)
+    applied = {tag["Key"]: tag["Value"] for tag in tags if isinstance(tag, dict)}
+    # reconcile_machines matches live instances on these tags, so they must be
+    # present at creation instead of applied afterwards.
+    assert applied[AwsEc2TagKey.MachineId.value] == "machine123"
+    assert applied[AwsEc2TagKey.ClusterName.value] == f"{NAME}-prod"
+    assert applied[AwsEc2TagKey.PoolName.value] == "default"
 
 
 def test_aws_ec2_health_and_reconcile() -> None:

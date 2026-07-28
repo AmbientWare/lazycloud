@@ -400,6 +400,7 @@ def test_task_queue_preemption_releases_once_for_existing_retry_policy(
         retry_delay_seconds=5,
     )
     put = service.task_queue_put(stub.id, _invocation_bytes("clip.mp4"))
+    _create_consumer_container(isolated_services, stub, TASK_QUEUE_CONTAINER_ID)
     assert service.task_queue_pop(_pop_request(stub.id)).task_msg
     workspace = ControlPlaneService(isolated_services.context).get_workspace(stub.workspace_id)
     release_calls = 0
@@ -473,6 +474,7 @@ def test_task_queue_preemption_acknowledges_non_retryable_attempt_once(
     service = _task_queue_service(isolated_services)
     stub = _create_stub(isolated_services, complete_handler, retries=0)
     put = service.task_queue_put(stub.id, _invocation_bytes("clip.mp4"))
+    _create_consumer_container(isolated_services, stub, TASK_QUEUE_CONTAINER_ID)
     assert service.task_queue_pop(_pop_request(stub.id)).task_msg
     ack_calls = 0
     original_ack = TaskQueueControlService._ack_message
@@ -614,9 +616,11 @@ def test_task_queue_preemption_defers_to_newer_database_attempt_owner(
     service = _task_queue_service(isolated_services)
     stub = _create_stub(isolated_services, complete_handler, retries=1)
     put = service.task_queue_put(stub.id, _invocation_bytes("clip.mp4"))
+    _create_consumer_container(isolated_services, stub, TASK_QUEUE_CONTAINER_ID)
+    _create_consumer_container(isolated_services, stub, CURRENT_TASK_QUEUE_CONTAINER_ID)
     assert service.task_queue_pop(_pop_request(stub.id)).task_msg
     task = isolated_services.tasks.get(put.task_id)
-    task.kwargs["container_id"] = CURRENT_TASK_QUEUE_CONTAINER_ID
+    task.container_id = CURRENT_TASK_QUEUE_CONTAINER_ID
     isolated_services.tasks.save(task)
 
     result = service.task_queue_preempted(
@@ -633,7 +637,7 @@ def test_task_queue_preemption_defers_to_newer_database_attempt_owner(
     assert not result.message_acknowledged
     assert not result.locks_cleared
     assert current.status is TaskStatus.Running
-    assert current.kwargs["container_id"] == CURRENT_TASK_QUEUE_CONTAINER_ID
+    assert current.container_id == CURRENT_TASK_QUEUE_CONTAINER_ID
     assert current.exit_code is None
     assert _messages(isolated_services, stub)[0].leased_until is not None
 
@@ -666,6 +670,25 @@ def _create_stub(
         handler=_reference(handler),
         config=config,
     )
+
+
+def _create_consumer_container(
+    services: ApiServices,
+    stub: StubRecord,
+    container_id: str,
+) -> None:
+    with services.context.database.session() as session:
+        ContainerRepository(session).upsert(
+            ContainerRecord(
+                id=container_id,
+                name=f"taskqueue-consumer-{container_id}",
+                image="taskqueue:local",
+                command=["python3.12", "-m", "runner.taskqueue"],
+                workspace_id=stub.workspace_id,
+                stub_id=stub.id,
+                status=ContainerStatus.Running,
+            )
+        )
 
 
 def _messages(services: ApiServices, stub: StubRecord) -> list[QueueMessage]:

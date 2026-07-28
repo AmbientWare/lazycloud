@@ -126,23 +126,6 @@ class FailingAttachGatewayClient(InterruptingGatewayClient):
         raise RuntimeError("attach failed")
 
 
-@dataclass
-class StreamingGatewayClient(InterruptingGatewayClient):
-    responses: list[AttachToContainerResponse] = field(default_factory=list)
-    attached: list[str] = field(default_factory=list)
-    poll_intervals: list[float] = field(default_factory=list)
-
-    def attach_to_container_events(
-        self,
-        container_id: str,
-        *,
-        poll_interval_seconds: float = 0.25,
-    ) -> Iterator[AttachToContainerResponse]:
-        self.attached.append(container_id)
-        self.poll_intervals.append(poll_interval_seconds)
-        yield from self.responses
-
-
 def test_serve_preview_resolves_stub_url_and_stops_container_on_interrupt() -> None:
     gateway = InterruptingGatewayClient()
 
@@ -185,30 +168,6 @@ def test_serve_preview_retries_attach_timeout() -> None:
 
     assert gateway.stopped == []
     assert gateway.timeouts_remaining == 0
-
-
-def test_serve_preview_uses_attach_event_stream() -> None:
-    gateway = StreamingGatewayClient(
-        responses=[
-            AttachToContainerResponse(output="ready\n"),
-            AttachToContainerResponse(done=True),
-        ]
-    )
-    session = ServePreviewSession(
-        stub_id="stub-endpoint",
-        container_id="ctr-serve",
-        url="https://example.test/endpoint/id/stub-endpoint",
-        gateway_client=gateway,
-        resource_client=gateway,
-        terminal=Terminal(quiet=True),
-        sync_dir=None,
-        attach_poll_seconds=0.75,
-    )
-
-    session.run()
-
-    assert gateway.attached == ["ctr-serve"]
-    assert gateway.poll_intervals == [0.75]
 
 
 def test_serve_preview_stops_container_when_attach_fails() -> None:

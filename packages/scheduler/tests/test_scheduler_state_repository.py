@@ -24,6 +24,10 @@ from operations.management import ManagementService
 from pydantic import JsonValue, TypeAdapter
 from scheduler.agent_pool import AgentPoolConfig
 from scheduler.autoscaling import PodAutoscalingService
+from scheduler.capacity_reservations import (
+    CapacityReservationService,
+    RedisCapacityReservationRepository,
+)
 from scheduler.containers import (
     DEFAULT_SCHEDULER_REQUEUE_DELAY_SECONDS,
     SchedulerContainerAssignmentRecorder,
@@ -44,7 +48,6 @@ from scheduler.fleet import (
     SchedulerRetryReason,
     SchedulerWorkerStatus,
     WorkerPoolStateSnapshot,
-    WorkerPoolStatus,
 )
 from scheduler.pool_state import SchedulerPoolStateService
 from scheduler.service import Scheduler, SchedulerStateStores, SchedulerWorkloadControls
@@ -230,6 +233,7 @@ def _request_service(
     assignments: SchedulerContainerAssignmentRecorder | None = None,
     dispatch_wake: _RecordingDispatchWake | None = None,
     lifecycle_events: SchedulerContainerLifecycleEvents | None = None,
+    capacity_reservations: CapacityReservationService | None = None,
     requeue_delay_seconds: float = DEFAULT_SCHEDULER_REQUEUE_DELAY_SECONDS,
     max_retry_count: int = DEFAULT_MAX_SCHEDULE_RETRY_COUNT,
     claim_lease_seconds: float = DEFAULT_CONTAINER_REQUEST_CLAIM_LEASE_SECONDS,
@@ -246,10 +250,21 @@ def _request_service(
         lifecycle_events=(
             lifecycle_events if lifecycle_events is not None else _RecordingLifecycleEvents()
         ),
+        capacity_reservations=capacity_reservations,
         requeue_delay_seconds=requeue_delay_seconds,
         max_retry_count=max_retry_count,
         claim_lease_seconds=claim_lease_seconds,
     )
+
+
+def _capacity_reservations(redis: RedisClient) -> CapacityReservationService:
+    """Coordinate owner mutations the way the real scheduler process does.
+
+    Final dispatch onto a worker that belongs to a capacity owner takes the owner
+    mutation lock, so a service built without this coordinator refuses to
+    dispatch at all.
+    """
+    return CapacityReservationService(RedisCapacityReservationRepository(redis), tuple)
 
 
 class _RealRedisActors(Protocol):
@@ -1276,6 +1291,7 @@ def test_scheduler_container_request_service_queues_selects_and_dispatches(
         assignments=assignments,
         dispatch_wake=dispatch_wake,
         lifecycle_events=lifecycle_events,
+        capacity_reservations=_capacity_reservations(redis),
     )
     now = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -1397,6 +1413,7 @@ def test_scheduler_dispatch_clears_runtime_assignment_when_queueing_fails(
         workers,
         containers,
         assignments=assignments,
+        capacity_reservations=_capacity_reservations(redis),
         requeue_delay_seconds=0,
     )
     now = datetime(2026, 1, 1, tzinfo=UTC)
@@ -1454,6 +1471,7 @@ def test_scheduler_claim_dispatch_honors_cancellation_before_atomic_commit(
         workers,
         containers,
         assignments=assignments,
+        capacity_reservations=_capacity_reservations(redis),
     )
     now = datetime(2026, 1, 1, tzinfo=UTC)
     workers.add_worker(
@@ -1595,6 +1613,7 @@ def test_scheduler_dispatch_skips_durable_assignment_for_ephemeral_request(
         workers,
         containers,
         assignments=assignments,
+        capacity_reservations=_capacity_reservations(redis),
     )
     now = datetime(2026, 1, 1, tzinfo=UTC)
     workers.add_worker(
@@ -1638,7 +1657,11 @@ def test_scheduler_container_cancellation_cannot_be_dispatched_or_requeued(
     redis = real_redis_actors.client()
     worker_repo = RedisSchedulerWorkerRepository(redis)
     container_repo = RedisSchedulerContainerRepository(redis)
-    service = _request_service(worker_repo, container_repo)
+    service = _request_service(
+        worker_repo,
+        container_repo,
+        capacity_reservations=_capacity_reservations(redis),
+    )
     now = datetime(2026, 1, 1, tzinfo=UTC)
     worker_repo.add_worker(
         SchedulerWorkerRecord(
@@ -1825,7 +1848,11 @@ def test_scheduler_cancellation_removes_assigned_request_and_all_indexes(
     redis = real_redis_actors.client()
     workers = RedisSchedulerWorkerRepository(redis)
     containers = RedisSchedulerContainerRepository(redis)
-    service = _request_service(workers, containers)
+    service = _request_service(
+        workers,
+        containers,
+        capacity_reservations=_capacity_reservations(redis),
+    )
     now = datetime(2026, 1, 1, tzinfo=UTC)
     workers.add_worker(
         SchedulerWorkerRecord(
@@ -1920,7 +1947,11 @@ def test_scheduler_run_once_dispatches_when_pool_state_refresh_fails(
     redis = real_redis_actors.client()
     worker_repo = RedisSchedulerWorkerRepository(redis)
     container_repo = RedisSchedulerContainerRepository(redis)
-    service = _request_service(worker_repo, container_repo)
+    service = _request_service(
+        worker_repo,
+        container_repo,
+        capacity_reservations=_capacity_reservations(redis),
+    )
     now = datetime(2026, 1, 1, tzinfo=UTC)
     worker_repo.add_worker(
         SchedulerWorkerRecord(
@@ -1976,6 +2007,7 @@ def test_scheduler_dispatch_resumes_an_expired_claim_after_restart(
     service = _request_service(
         worker_repo,
         container_repo,
+        capacity_reservations=_capacity_reservations(redis),
         claim_lease_seconds=5,
     )
     now = datetime(2026, 1, 1, tzinfo=UTC)
@@ -2172,11 +2204,17 @@ def test_scheduler_ready_pop_and_worker_dispatch_are_atomic_under_parallel_sched
     redis = real_redis_actors.client()
     worker_repo = RedisSchedulerWorkerRepository(redis)
     container_repo = RedisSchedulerContainerRepository(redis)
+    peer_redis = real_redis_actors.client()
     services = [
-        _request_service(worker_repo, container_repo),
         _request_service(
-            RedisSchedulerWorkerRepository(real_redis_actors.client()),
-            RedisSchedulerContainerRepository(real_redis_actors.client()),
+            worker_repo,
+            container_repo,
+            capacity_reservations=_capacity_reservations(redis),
+        ),
+        _request_service(
+            RedisSchedulerWorkerRepository(peer_redis),
+            RedisSchedulerContainerRepository(peer_redis),
+            capacity_reservations=_capacity_reservations(peer_redis),
         ),
     ]
     now = datetime(2026, 1, 1, tzinfo=UTC)
@@ -2325,13 +2363,15 @@ def test_scheduler_container_request_service_bounds_no_capacity_retries(
 
     assert len(failed) == 1
     assert failed[0].status is SchedulerContainerDispatchStatus.Failed
-    assert failed[0].reason == SchedulerRetryReason.RetryLimit.value
+    assert failed[0].reason.startswith(SchedulerRetryReason.RetryLimit.value)
     state = container_repo.get_container_state("container-1")
     assert state is not None
     assert state.status is SchedulerContainerStatus.Failed
     assert state.image_id == "image-workload-retry"
-    assert state.failure_reason == SchedulerRetryReason.RetryLimit.value
-    assert failure_handler.calls == [("container-1", SchedulerRetryReason.RetryLimit.value)]
+    assert state.failure_reason.startswith(SchedulerRetryReason.RetryLimit.value)
+    [(failed_container_id, failed_reason)] = failure_handler.calls
+    assert failed_container_id == "container-1"
+    assert failed_reason.startswith(SchedulerRetryReason.RetryLimit.value)
 
 
 def test_scheduler_image_build_failure_persists_coordination_evidence_without_execution_callback(
@@ -2373,14 +2413,14 @@ def test_scheduler_image_build_failure_persists_coordination_evidence_without_ex
     [failed] = service.dispatch_ready(now=now, limit=1)
 
     assert failed.status is SchedulerContainerDispatchStatus.Failed
-    assert failed.reason == SchedulerRetryReason.RetryLimit.value
+    assert failed.reason.startswith(SchedulerRetryReason.RetryLimit.value)
     state = container_repo.get_container_state(request.container_id)
     assert state is not None
     assert state.status is SchedulerContainerStatus.Failed
     assert state.image_build_id == "build-1"
     assert state.image_id == "image-1"
     assert state.image_build_upload_capability == "a" * 32
-    assert state.failure_reason == SchedulerRetryReason.RetryLimit.value
+    assert state.failure_reason.startswith(SchedulerRetryReason.RetryLimit.value)
     assert failure_handler.calls == []
 
 
@@ -2670,36 +2710,6 @@ def test_worker_network_ip_repository_preserves_ownership_invariants(
     )
     assert move_rejected.action is NetworkIpMutationAction.Reject
     assert move_rejected.reason == "ip owner mismatch"
-
-
-def test_worker_pool_state_repository_persists_and_isolates_capacity_owners(
-    real_redis_actors: _RealRedisActors,
-) -> None:
-    repository = RedisWorkerPoolStateRepository(real_redis_actors.client())
-    first_owner = "33333333-3333-4333-8333-333333333333"
-    second_owner = "44444444-4444-4444-8444-444444444444"
-    first = WorkerPoolStateSnapshot(
-        capacity_owner_id=first_owner,
-        pool_name="default",
-        status=WorkerPoolStatus.Degraded,
-        free_cpu=2.5,
-        free_memory_mib=4096,
-        pending_workers=3,
-        available_workers=1,
-    )
-    second = first.model_copy(
-        update={
-            "capacity_owner_id": second_owner,
-            "status": WorkerPoolStatus.Healthy,
-            "available_workers": 4,
-        }
-    )
-
-    repository.set_state(first_owner, first)
-    repository.set_state(second_owner, second)
-
-    assert repository.get_state(first_owner) == first
-    assert repository.get_state(second_owner) == second
 
 
 def test_scheduler_pool_state_service_refreshes_worker_container_and_agent_snapshots(

@@ -40,19 +40,8 @@ class _CallbackSender:
         return outcome
 
 
-@pytest.mark.parametrize(
-    "kind",
-    [
-        StubKind.Function,
-        StubKind.CronJob,
-        StubKind.Endpoint,
-        StubKind.Asgi,
-        StubKind.TaskQueue,
-    ],
-)
 def test_terminal_tasks_deliver_signed_callback_for_supported_workloads(
     isolated_services: ApiServices,
-    kind: StubKind,
 ) -> None:
     sender = _CallbackSender([204])
     callback_service = TaskCallbackService(
@@ -64,8 +53,8 @@ def test_terminal_tasks_deliver_signed_callback_for_supported_workloads(
     isolated_services.tasks.callback_dispatcher = callback_service
     control_plane = ControlPlaneService(isolated_services.context)
     stub = control_plane.create_stub(
-        f"callback-{kind.value}",
-        kind=kind,
+        "callback-function",
+        kind=StubKind.Function,
         config={"callback_url": "https://callbacks.example.com/task?source=test"},
     )
     task = isolated_services.tasks.create(

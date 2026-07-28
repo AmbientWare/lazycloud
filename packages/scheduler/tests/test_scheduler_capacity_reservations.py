@@ -25,7 +25,6 @@ from scheduler.capacity_reservations import (
     ComputePoolCapacityController,
     PendingCapacityOwner,
     RedisCapacityReservationRepository,
-    StaticWorkerPoolCapacityController,
     reservation_shape_for_request,
 )
 from scheduler.containers import (
@@ -35,8 +34,6 @@ from scheduler.containers import (
 from scheduler.pool_sizing import (
     CapacityPoolOperationalHealth,
     WorkerPoolEffectiveHeadroom,
-    WorkerPoolReplicaScaleOutcome,
-    WorkerPoolReplicaScaleResult,
     WorkerPoolSizingAction,
     WorkerPoolSizingAllocation,
     WorkerPoolSizingPlan,
@@ -112,7 +109,7 @@ def _repository(real_redis_actors: _RealRedisActors) -> RedisCapacityReservation
 @dataclass(slots=True)
 class _Controller:
     capacity_owner_id: str = OWNER_ID
-    owner_kind: CapacityOwnerKind = CapacityOwnerKind.GlobalKubernetesDeployment
+    owner_kind: CapacityOwnerKind = CapacityOwnerKind.ManagedPool
     pool_name: str = "default"
     registration_timeout: timedelta = timedelta(minutes=10)
     plan_calls: list[str] = field(default_factory=list)
@@ -310,71 +307,6 @@ class _UnusedComputeCapacity(_SizingStates):
         raise AssertionError(f"unexpected capacity release: {request.operation_id}")
 
 
-@dataclass(slots=True)
-class _ReplicaScaler:
-    desired: int = 0
-    observed: int = 0
-    scale_calls: list[int] = field(default_factory=list)
-    fail_after_apply: bool = False
-
-    def describe_worker_pool(
-        self,
-        pool: Pool,
-        *,
-        reservation_id: str,
-        operation_id: str,
-    ) -> WorkerPoolReplicaScaleResult:
-        _ = reservation_id, operation_id
-        return self._result(pool, WorkerPoolReplicaScaleOutcome.ExistingPending)
-
-    def scale_worker_pool(
-        self,
-        pool: Pool,
-        replicas: int,
-        *,
-        reservation_id: str,
-        operation_id: str,
-    ) -> WorkerPoolReplicaScaleResult:
-        _ = reservation_id, operation_id
-        self.scale_calls.append(replicas)
-        self.desired = replicas
-        if self.fail_after_apply:
-            self.fail_after_apply = False
-            raise RuntimeError("lost response after authoritative scale")
-        return self._result(pool, WorkerPoolReplicaScaleOutcome.Requested)
-
-    def _result(
-        self,
-        pool: Pool,
-        outcome: WorkerPoolReplicaScaleOutcome,
-    ) -> WorkerPoolReplicaScaleResult:
-        return WorkerPoolReplicaScaleResult(
-            outcome=outcome,
-            capacity_owner_id=pool.capacity_owner_id,
-            pool_name=pool.name,
-            desired_replicas=self.desired,
-            observed_replicas=self.observed,
-            provider="kubernetes",
-            target=f"deployment/{pool.name}",
-            reason="authoritative test Deployment state",
-        )
-
-
-def _static_pool() -> Pool:
-    return Pool(
-        name="default",
-        provider="kubernetes",
-        capacity_owner_id=OWNER_ID,
-        capacity_owner_kind=CapacityOwnerKind.GlobalKubernetesDeployment,
-        capacity_owner_source=CapacityOwnerSource.Kubernetes,
-        max_workers=2,
-        scaling_enabled=True,
-        default_eligible=True,
-        worker_cpu_millicores=4_000,
-        worker_memory_mib=8_192,
-    )
-
-
 def _managed_pool() -> Pool:
     return Pool(
         name="default",
@@ -462,7 +394,7 @@ def test_reservation_is_idempotent_per_request_and_reuses_compatible_capacity(
         first = repository.reserve(
             capacity_owner_id=OWNER_ID,
             pool_name="default",
-            owner_kind=CapacityOwnerKind.GlobalKubernetesDeployment,
+            owner_kind=CapacityOwnerKind.ManagedPool,
             request=_request("container-1"),
             shape=_shape(),
             registration_timeout=timedelta(minutes=10),
@@ -471,7 +403,7 @@ def test_reservation_is_idempotent_per_request_and_reuses_compatible_capacity(
         repeated = repository.reserve(
             capacity_owner_id=OWNER_ID,
             pool_name="default",
-            owner_kind=CapacityOwnerKind.GlobalKubernetesDeployment,
+            owner_kind=CapacityOwnerKind.ManagedPool,
             request=_request("container-1"),
             shape=_shape(),
             registration_timeout=timedelta(minutes=10),
@@ -480,7 +412,7 @@ def test_reservation_is_idempotent_per_request_and_reuses_compatible_capacity(
         second = repository.reserve(
             capacity_owner_id=OWNER_ID,
             pool_name="default",
-            owner_kind=CapacityOwnerKind.GlobalKubernetesDeployment,
+            owner_kind=CapacityOwnerKind.ManagedPool,
             request=_request("container-2"),
             shape=_shape(),
             registration_timeout=timedelta(minutes=10),
@@ -506,7 +438,7 @@ def test_reservation_capacity_and_owner_identity_prevent_false_reuse(
         first = repository.reserve(
             capacity_owner_id=OWNER_ID,
             pool_name="shared-name",
-            owner_kind=CapacityOwnerKind.GlobalKubernetesDeployment,
+            owner_kind=CapacityOwnerKind.ManagedPool,
             request=_request("container-1", cpu=3_000),
             shape=_shape(),
             registration_timeout=timedelta(minutes=10),
@@ -515,7 +447,7 @@ def test_reservation_capacity_and_owner_identity_prevent_false_reuse(
         second = repository.reserve(
             capacity_owner_id=OWNER_ID,
             pool_name="shared-name",
-            owner_kind=CapacityOwnerKind.GlobalKubernetesDeployment,
+            owner_kind=CapacityOwnerKind.ManagedPool,
             request=_request("container-2", cpu=3_000),
             shape=_shape(),
             registration_timeout=timedelta(minutes=10),
@@ -526,7 +458,7 @@ def test_reservation_capacity_and_owner_identity_prevent_false_reuse(
         other = repository.reserve(
             capacity_owner_id=OTHER_OWNER_ID,
             pool_name="shared-name",
-            owner_kind=CapacityOwnerKind.GlobalKubernetesDeployment,
+            owner_kind=CapacityOwnerKind.ManagedPool,
             request=other_request,
             shape=_shape(),
             registration_timeout=timedelta(minutes=10),
@@ -664,31 +596,6 @@ def test_attached_pool_at_limit_remains_strict_without_fallback(
     assert fallback.plan_calls == []
 
 
-def test_static_pool_persists_exact_desired_replica_before_scale(
-    real_redis_actors: _RealRedisActors,
-) -> None:
-    scaler = _ReplicaScaler()
-    controller = StaticWorkerPoolCapacityController(
-        _static_pool(),
-        scaler,
-        _WorkerRepository(),
-        _SizingStates(_static_pool()),
-    )
-    service = CapacityReservationService(
-        _repository(real_redis_actors),
-        lambda: [controller],
-    )
-
-    result = service.acquire(_request("container-static"), now=datetime(2026, 1, 1, tzinfo=UTC))
-    reservation = service.reservations.get(result.reservation_id)
-
-    assert result.status is CapacityAcquisitionStatus.Requested
-    assert scaler.scale_calls == [1]
-    assert reservation is not None
-    assert reservation.desired_unit == 1
-    assert reservation.acquisition_created
-
-
 def test_fixed_pool_rejects_cross_workspace_and_oversized_capacity_requests() -> None:
     compute = ComputePoolCapacityController(
         "workspace-1",
@@ -696,87 +603,11 @@ def test_fixed_pool_rejects_cross_workspace_and_oversized_capacity_requests() ->
         _UnusedComputeCapacity(_managed_pool()),
         _WorkerRepository(),
     )
-    static = StaticWorkerPoolCapacityController(
-        _static_pool(),
-        _ReplicaScaler(),
-        _WorkerRepository(),
-        _SizingStates(_static_pool()),
-    )
-
     assert compute.accepts(_request("fits"))
     assert not compute.accepts(
         _request("wrong-workspace").model_copy(update={"workspace_id": "workspace-2"})
     )
-    oversized = _request("oversized", cpu=4_001)
-    assert not compute.accepts(oversized)
-    assert not static.accepts(oversized)
-
-
-def test_static_pool_lost_scale_response_reconciles_without_second_increment(
-    real_redis_actors: _RealRedisActors,
-) -> None:
-    scaler = _ReplicaScaler(fail_after_apply=True)
-    controller = StaticWorkerPoolCapacityController(
-        _static_pool(),
-        scaler,
-        _WorkerRepository(),
-        _SizingStates(_static_pool()),
-    )
-    service = CapacityReservationService(
-        _repository(real_redis_actors),
-        lambda: [controller],
-    )
-    now = datetime(2026, 1, 1, tzinfo=UTC)
-
-    try:
-        service.acquire(_request("container-restart"), now=now)
-    except RuntimeError as exc:
-        assert str(exc) == "lost response after authoritative scale"
-    else:
-        raise AssertionError("lost scale response must cross the controller boundary")
-
-    reconciled = service.acquire(
-        _request("container-restart"),
-        now=now + timedelta(seconds=1),
-    )
-
-    assert reconciled.status is CapacityAcquisitionStatus.ExistingPending
-    assert scaler.desired == 1
-    assert scaler.scale_calls == [1]
-
-
-def test_disabled_static_pool_releases_capacity_owned_by_open_reservation(
-    real_redis_actors: _RealRedisActors,
-) -> None:
-    repository = _repository(real_redis_actors)
-    scaler = _ReplicaScaler()
-    enabled = StaticWorkerPoolCapacityController(
-        _static_pool(),
-        scaler,
-        _WorkerRepository(),
-        _SizingStates(_static_pool()),
-    )
-    service = CapacityReservationService(repository, lambda: [enabled])
-    now = datetime(2026, 1, 1, tzinfo=UTC)
-
-    acquired = service.acquire(_request("container-disable"), now=now)
-    disabled = StaticWorkerPoolCapacityController(
-        _static_pool().model_copy(update={"scaling_enabled": False}),
-        scaler,
-        _WorkerRepository(),
-        _SizingStates(_static_pool()),
-    )
-    service = CapacityReservationService(repository, lambda: [disabled])
-    service.release_request(
-        "container-disable",
-        now=now + timedelta(seconds=1),
-    )
-
-    reservation = repository.get(acquired.reservation_id)
-    assert reservation is not None
-    assert reservation.status is CapacityReservationStatus.Released
-    assert scaler.scale_calls == [1, 0]
-    assert not disabled.accepts(_request("container-after-disable"))
+    assert not compute.accepts(_request("oversized", cpu=4_001))
 
 
 def test_placement_miss_transfers_capacity_to_dispatch_before_reconciliation(
@@ -785,17 +616,10 @@ def test_placement_miss_transfers_capacity_to_dispatch_before_reconciliation(
     redis = real_redis_actors.client()
     workers = RedisSchedulerWorkerRepository(redis)
     containers = RedisSchedulerContainerRepository(redis)
-    scaler = _ReplicaScaler()
+    controller = _Controller()
     capacity = CapacityReservationService(
         RedisCapacityReservationRepository(redis),
-        lambda: [
-            StaticWorkerPoolCapacityController(
-                _static_pool(),
-                scaler,
-                workers,
-                _SizingStates(_static_pool()),
-            )
-        ],
+        lambda: [controller],
     )
     requests = SchedulerContainerRequestService(
         workers=workers,
@@ -814,7 +638,7 @@ def test_placement_miss_transfers_capacity_to_dispatch_before_reconciliation(
     [waiting] = requests.dispatch_ready(now=now, limit=1)
 
     assert waiting.status is SchedulerContainerDispatchStatus.Waiting
-    assert scaler.scale_calls == [1]
+    assert [unit for _id, unit in controller.ensure_calls] == [1]
 
     worker = _worker(OWNER_ID, created_at=now + timedelta(milliseconds=500))
     workers.add_worker(worker, now=worker.created_at)
@@ -831,7 +655,7 @@ def test_placement_miss_transfers_capacity_to_dispatch_before_reconciliation(
     assert reservation is not None
     assert reservation.status is CapacityReservationStatus.Released
     assert reservation.target_worker_id == worker.worker_id
-    assert scaler.scale_calls == [1]
+    assert [unit for _id, unit in controller.ensure_calls] == [1]
     updated = workers.get_worker(worker.worker_id)
     assert updated is not None
     assert updated.free_cpu_millicores == 3_000
@@ -1176,7 +1000,7 @@ def test_real_redis_dispatch_atomically_consumes_capacity_allocation(
         decision = reservations.reserve(
             capacity_owner_id=OWNER_ID,
             pool_name="default",
-            owner_kind=CapacityOwnerKind.GlobalKubernetesDeployment,
+            owner_kind=CapacityOwnerKind.ManagedPool,
             request=request,
             shape=_shape(),
             registration_timeout=timedelta(minutes=10),
@@ -1199,72 +1023,6 @@ def test_real_redis_dispatch_atomically_consumes_capacity_allocation(
     assert reservations.allocation_for_request(request.container_id) is None
     assert reservations.allocations_for(decision.reservation.id) == []
     assert workers.get_next_container_request(worker.worker_id) == request
-
-
-def test_incompatible_static_misses_claim_distinct_units_and_cancel_without_resurrection(
-    real_redis_actors: _RealRedisActors,
-) -> None:
-    scaler = _ReplicaScaler()
-    service = CapacityReservationService(
-        _repository(real_redis_actors),
-        lambda: [
-            StaticWorkerPoolCapacityController(
-                _static_pool(),
-                scaler,
-                _WorkerRepository(),
-                _SizingStates(_static_pool()),
-            )
-        ],
-    )
-    now = datetime(2026, 1, 1, tzinfo=UTC)
-
-    first = service.acquire(_request("incompatible-a", cpu=3_000), now=now)
-    second = service.acquire(_request("incompatible-b", cpu=3_000), now=now)
-
-    assert (first.status, first.desired_unit) == (CapacityAcquisitionStatus.Requested, 1)
-    assert (second.status, second.desired_unit) == (CapacityAcquisitionStatus.Requested, 2)
-    assert scaler.scale_calls == [1, 2]
-
-    service.release_request("incompatible-a", now=now + timedelta(seconds=1))
-    surviving = service.reservations.get(second.reservation_id)
-
-    assert scaler.scale_calls == [1, 2, 1]
-    assert surviving is not None
-    assert surviving.desired_unit == 1
-    repeated = service.acquire(
-        _request("incompatible-b", cpu=3_000),
-        now=now + timedelta(seconds=2),
-    )
-    assert repeated.status is CapacityAcquisitionStatus.ExistingPending
-    assert scaler.scale_calls == [1, 2, 1]
-
-
-def test_unclaimed_initial_pending_unit_is_claimed_once(
-    real_redis_actors: _RealRedisActors,
-) -> None:
-    scaler = _ReplicaScaler(desired=1)
-    service = CapacityReservationService(
-        _repository(real_redis_actors),
-        lambda: [
-            StaticWorkerPoolCapacityController(
-                _static_pool(),
-                scaler,
-                _WorkerRepository(),
-                _SizingStates(_static_pool()),
-            )
-        ],
-    )
-    now = datetime(2026, 1, 1, tzinfo=UTC)
-
-    first = service.acquire(_request("initial-a", cpu=3_000), now=now)
-    second = service.acquire(_request("initial-b", cpu=3_000), now=now)
-
-    assert (first.status, first.desired_unit) == (
-        CapacityAcquisitionStatus.ExistingPending,
-        1,
-    )
-    assert (second.status, second.desired_unit) == (CapacityAcquisitionStatus.Requested, 2)
-    assert scaler.scale_calls == [2]
 
 
 @pytest.mark.parametrize(
@@ -1301,7 +1059,7 @@ def test_cpu_memory_and_gpu_exhaustion_prevent_false_compatible_reuse(
         first = repository.reserve(
             capacity_owner_id=OWNER_ID,
             pool_name="default",
-            owner_kind=CapacityOwnerKind.GlobalKubernetesDeployment,
+            owner_kind=CapacityOwnerKind.ManagedPool,
             request=first_request,
             shape=shape,
             registration_timeout=timedelta(minutes=10),
@@ -1310,7 +1068,7 @@ def test_cpu_memory_and_gpu_exhaustion_prevent_false_compatible_reuse(
         second = repository.reserve(
             capacity_owner_id=OWNER_ID,
             pool_name="default",
-            owner_kind=CapacityOwnerKind.GlobalKubernetesDeployment,
+            owner_kind=CapacityOwnerKind.ManagedPool,
             request=second_request,
             shape=shape,
             registration_timeout=timedelta(minutes=10),
@@ -1353,11 +1111,12 @@ def test_agent_and_disabled_pool_pending_workers_are_durably_reserved(
     reconciled = service.reconcile([available], now=now + timedelta(seconds=2))
     assert reconciled[-1].status is CapacityReservationStatus.Registered
 
-    disabled = StaticWorkerPoolCapacityController(
-        _static_pool().model_copy(update={"scaling_enabled": False}),
-        _ReplicaScaler(),
+    disabled_pool = _managed_pool().model_copy(update={"scaling_enabled": False})
+    disabled = ComputePoolCapacityController(
+        "workspace-1",
+        disabled_pool,
+        _UnusedComputeCapacity(disabled_pool),
         _WorkerRepository(),
-        _SizingStates(_static_pool()),
     )
     disabled_service = CapacityReservationService(repository, lambda: [disabled])
     disabled_result = disabled_service.reserve_pending(
@@ -1422,7 +1181,7 @@ def test_reservation_repository_rejects_registered_state_regression(
         decision = repository.reserve(
             capacity_owner_id=OWNER_ID,
             pool_name="default",
-            owner_kind=CapacityOwnerKind.GlobalKubernetesDeployment,
+            owner_kind=CapacityOwnerKind.ManagedPool,
             request=_request("state-regression"),
             shape=_shape(),
             registration_timeout=timedelta(minutes=10),

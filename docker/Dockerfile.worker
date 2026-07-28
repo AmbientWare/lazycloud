@@ -155,7 +155,6 @@ COPY packages/storage-client/pyproject.toml ./packages/storage-client/pyproject.
 COPY packages/worker/pyproject.toml ./packages/worker/pyproject.toml
 COPY packages/worker-repository/pyproject.toml ./packages/worker-repository/pyproject.toml
 COPY packages/providers/aws/pyproject.toml ./packages/providers/aws/pyproject.toml
-COPY packages/providers/kubernetes/pyproject.toml ./packages/providers/kubernetes/pyproject.toml
 COPY apps/agent/pyproject.toml ./apps/agent/pyproject.toml
 COPY apps/api/pyproject.toml ./apps/api/pyproject.toml
 COPY apps/cache-server/pyproject.toml ./apps/cache-server/pyproject.toml

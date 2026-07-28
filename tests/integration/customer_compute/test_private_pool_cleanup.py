@@ -30,6 +30,8 @@ from shared.errors import UpstreamUnavailableError
 from tests.provider_fixtures import RecordingDirectMachineProvider, configure_test_provider
 from tests.real_redis import RealRedisActors
 
+_FOREIGN_CAPACITY_OWNER_ID = "11111111-1111-4111-8111-111111111111"
+
 
 class _BillingRecorder:
     def __init__(self) -> None:
@@ -129,7 +131,7 @@ def test_delete_pool_cleans_private_agent_state(
     )
     compute_states.save_agent_worker_slot_state(
         ComputeAgentWorkerSlotState(
-            capacity_owner_id="11111111-1111-4111-8111-111111111111",
+            capacity_owner_id=pool.capacity_owner_id,
             workspace_id=workspace_id,
             pool_name="cleanup-pool",
             machine_id="machine-one",
@@ -149,10 +151,26 @@ def test_delete_pool_cleans_private_agent_state(
     )
     scheduler_workers.add_worker(
         SchedulerWorkerRecord(
-            capacity_owner_id="11111111-1111-4111-8111-111111111111",
+            capacity_owner_id=pool.capacity_owner_id,
             worker_id="worker-one",
             pool_name="cleanup-pool",
             machine_id="machine-one",
+            status=SchedulerWorkerStatus.Available,
+            free_cpu_millicores=1000,
+            free_memory_mib=1024,
+            total_cpu_millicores=1000,
+            total_memory_mib=1024,
+            requires_pool_selector=True,
+        )
+    )
+    # A worker owned by a different pool must survive this deletion even though
+    # it reports the same pool name.
+    scheduler_workers.add_worker(
+        SchedulerWorkerRecord(
+            capacity_owner_id=_FOREIGN_CAPACITY_OWNER_ID,
+            worker_id="worker-foreign",
+            pool_name="cleanup-pool",
+            machine_id="machine-two",
             status=SchedulerWorkerStatus.Available,
             free_cpu_millicores=1000,
             free_memory_mib=1024,
@@ -184,7 +202,9 @@ def test_delete_pool_cleans_private_agent_state(
         == []
     )
     assert compute_states.list_agent_route_states(workspace_id, "cleanup-pool", "machine-one") == []
-    assert scheduler_workers.list_workers_in_pool("cleanup-pool") == []
+    assert [
+        worker.worker_id for worker in scheduler_workers.list_workers_in_pool("cleanup-pool")
+    ] == ["worker-foreign"]
     assert not scheduler_pool_states.delete_pool_state(pool.capacity_owner_id)
     assert redis.get(scheduler_replicas_key) is None
 

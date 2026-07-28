@@ -18,10 +18,10 @@ NOW = datetime(2026, 1, 1, tzinfo=UTC)
 def _pool(**updates: object) -> Pool:
     values: dict[str, object] = {
         "capacity_owner_id": OWNER_ID,
-        "capacity_owner_kind": CapacityOwnerKind.GlobalKubernetesDeployment,
-        "capacity_owner_source": CapacityOwnerSource.Kubernetes,
+        "capacity_owner_kind": CapacityOwnerKind.ManagedPool,
+        "capacity_owner_source": CapacityOwnerSource.Managed,
         "name": "cpu",
-        "provider": "kubernetes",
+        "provider": "managed",
         "initial_workers": 2,
         "min_workers": 1,
         "max_workers": 4,

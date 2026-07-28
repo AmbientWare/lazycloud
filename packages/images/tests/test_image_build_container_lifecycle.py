@@ -1,24 +1,18 @@
 from __future__ import annotations
 
 from api.server.services import ApiServices
-from coordination.event_bus import RedisEventBus
-from coordination.redis_client import RedisClient
 from images.building import (
     IMAGE_BUILD_CONTAINER_TTL_SECONDS,
     ImageBuildLifecycleAction,
     plan_image_build_session,
 )
 from images.lifecycle import (
-    EventBusImageBuildStopPublisher,
     ImageBuildContainerLifecycleService,
     ImageBuildContainerLifecycleStatus,
     ImageBuildStopEventResult,
-    RedisImageBuildContainerTtlStore,
 )
-from shared.app_identity import REDIS_KEY_PREFIX
 from shared.image_building.authoring import ImageSpec
 from shared.image_building.records import BuildStatus
-from tests.redis_fakes import FakeRedis
 
 
 def test_image_build_container_lifecycle_service_refreshes_ttl_and_cancels() -> None:
@@ -80,23 +74,6 @@ def test_image_build_container_lifecycle_deletes_pending_state_on_pending_cancel
         ImageBuildLifecycleAction.DeletePendingState,
     ]
     assert state.deleted == ["build-container-2"]
-
-
-def test_redis_ttl_store_and_event_bus_deliver_expiry_and_stop() -> None:
-    fake = FakeRedis()
-    redis = RedisClient(fake, key_prefix=REDIS_KEY_PREFIX)
-    ttl = RedisImageBuildContainerTtlStore(redis)
-    publisher = EventBusImageBuildStopPublisher(RedisEventBus(redis))
-
-    assert ttl.set_build_container_ttl("build-container-3", 60)
-    assert ttl.has_build_container_ttl("build-container-3")
-    published = publisher.send_stop_build("build-container-3")
-
-    assert ttl.has_build_container_ttl("build-container-3")
-    assert 60 in fake.expirations.values()
-    assert published.status is ImageBuildContainerLifecycleStatus.Complete
-    assert len(published.event_ids) == 1
-    assert len(fake.published) == 1
 
 
 def test_runtime_image_build_fails_when_lifecycle_start_errors(

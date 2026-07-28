@@ -1208,16 +1208,6 @@ class ManagementService:
                 raise ConflictError(f"workspace cleanup requires deleting state: {workspace_id}")
             return tuple(ContainerRepository(session).list(workspace_id=workspace_id))
 
-    def capture_active_container_shutdown_targets(
-        self,
-        workspace: str,
-    ) -> list[ContainerShutdownTarget]:
-        workspace_record = self.control_plane.get_workspace(workspace)
-        with self.services.context.database.session() as session:
-            return ContainerRepository(session).list_active_shutdown_targets(
-                workspace_id=workspace_record.id
-            )
-
     def capture_active_container_shutdown_targets_for_workspace_deletion(
         self,
         workspace_id: str,

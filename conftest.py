@@ -11,6 +11,12 @@ from tests.real_redis import RealRedisActors
 
 TEST_ENVIRONMENT_FILE = Path(__file__).parent / "tests" / "env.test"
 
+# Cleared from the environment before the suite declares its own configuration.
+# `LAZYCLOUD_TEST_` is exempt: those name the real Redis and PostgreSQL services
+# an opt-in test tier connects to, and the harness must not remove them.
+_INHERITED_PREFIXES = ("LAZYCLOUD_", "AWS_")
+_RETAINED_PREFIX = "LAZYCLOUD_TEST_"
+
 
 def _test_environment() -> dict[str, str]:
     """Read the suite's declared configuration.
@@ -33,17 +39,16 @@ def _test_environment() -> dict[str, str]:
 
 @pytest.fixture(autouse=True)
 def isolated_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    # Clear first, then declare. A positive list cannot express "unset", and it
+    # silently grows stale as settings classes are added; clearing the prefixes
+    # outright makes the suite's configuration exactly what this file states,
+    # whatever the developer's shell or `.env` happens to hold.
+    for name in tuple(os.environ):
+        if name.startswith(_INHERITED_PREFIXES) and not name.startswith(_RETAINED_PREFIX):
+            monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("LAZYCLOUD_HOME", str(tmp_path))
-    # Tests run with an explicitly configured endpoint, exactly like production
-    # clients after `lazycloud login` or with LAZYCLOUD_ENDPOINT exported. Tests that
-    # assert the endpoint-required contract delete this variable themselves.
-    monkeypatch.setenv("LAZYCLOUD_ENDPOINT", "http://127.0.0.1:9000")
-    # Settings classes read `.env` from the working directory, so without these
-    # the suite silently inherits whatever the developer's machine points at and
-    # a test can pass or fail on local configuration. Declare what the suite
-    # needs instead; the environment wins over `.env`, so these are what every
-    # run sees. Endpoints resolve nowhere on purpose: a unit test that reaches a
-    # real object store should fail loudly rather than depend on one running.
+    # Endpoints resolve nowhere on purpose: a unit test that reaches a real
+    # object store should fail loudly rather than depend on one running.
     for name, value in _test_environment().items():
         monkeypatch.setenv(name, value)
     lazycloud.config.reset_settings_cache()
