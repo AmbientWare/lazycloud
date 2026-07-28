@@ -1,8 +1,8 @@
 # Deployment
 
-Root `compose.yaml` is the canonical local stack; Compose and Helm remain
-aligned with Pydantic settings and provide PostgreSQL, Redis, object storage,
-health checks, and explicit service ownership. Never commit secrets, generated
+Root `compose.yaml` is the canonical local stack; it stays aligned with
+Pydantic settings and provides PostgreSQL, Redis, object storage, health
+checks, and explicit service ownership. Never commit secrets, generated
 credentials, or local state. While predeployment, maintain one fresh-install
 database baseline and no historical transition paths. Validate the affected
 render/build/startup boundary and update operator docs when behavior changes.

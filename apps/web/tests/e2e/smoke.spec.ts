@@ -20,27 +20,6 @@ async function mockControlPlane(page: Page) {
       },
     });
   });
-  await page.route("**/api/v1/concurrency-limits*", async (route) => {
-    await route.fulfill({
-      json: {
-        limits: [
-          {
-            id: "limit-1",
-            workspace_id: "workspace-test",
-            name: "cpu",
-            limit: 30,
-            in_flight: 0,
-            resource_type: "workspace",
-            resource_id: null,
-            available: 30,
-            saturated: false,
-            created_at: "2026-01-01T00:00:00Z",
-            updated_at: "2026-01-01T00:00:00Z",
-          },
-        ],
-      },
-    });
-  });
   await page.route("**/api/v1/tasks/metrics*", async (route) => {
     await route.fulfill({
       json: {
@@ -167,7 +146,8 @@ async function mockControlPlane(page: Page) {
   await page.route("**/api/v1/usage/billing*", async (route) => {
     await route.fulfill({ json: emptyUsageBillingOverviewFixture("workspace-test") });
   });
-  // Non-admin token by default: the Compute nav entry stays hidden.
+  // The shell probes admin scope through this route; answering 403 keeps the
+  // signed-in surface deterministic for a non-admin token.
   await page.route("**/api/v1/workers*", async (route) => {
     await route.fulfill({ status: 403, json: { detail: "admin scope required" } });
   });
@@ -188,23 +168,19 @@ test("dashboard entry lands on Apps and the responsive shell switches workspaces
   await expect(nav.getByRole("link", { name: "Tasks" })).toBeVisible();
   await expect(nav.getByRole("link", { name: "Storage" })).toBeVisible();
   await expect(nav.getByRole("link", { name: "Usage" })).toBeVisible();
-  await expect(nav.getByRole("link", { name: "Home" })).toHaveCount(0);
   if (mobile) {
     await page.getByRole("button", { name: "Open workspace menu" }).click();
     const menu = page.getByRole("dialog");
     await expect(menu.getByRole("link", { name: "Settings" })).toBeVisible();
-    await expect(menu.getByRole("link", { name: "Compute" })).toHaveCount(0);
     await page.getByRole("button", { name: "Close" }).click();
   } else {
     await expect(nav.getByRole("link", { name: "Apps" })).toHaveAttribute("aria-current", "page");
     const secondary = page.getByRole("navigation", { name: "Workspace navigation" });
     await expect(secondary.getByRole("link", { name: "Settings" })).toBeVisible();
-    await expect(secondary.getByRole("link", { name: "Compute" })).toHaveCount(0);
   }
 
   await expect(page.getByRole("link", { name: /square_app/ })).toBeVisible();
   await expect(page.getByRole("contentinfo")).toHaveCount(0);
-  await expect(page.getByText(/cpu concurrency/)).toHaveCount(0);
 
   await page.getByRole("button", { name: "Workspace", exact: true }).click();
   await page.getByRole("menuitem", { name: "beta" }).click();

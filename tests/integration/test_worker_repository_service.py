@@ -2231,7 +2231,7 @@ def test_agent_route_status_update_reconciles_scheduler_backend_route(
         scheduler_workers=RedisSchedulerWorkerRepository(redis),
         scheduler_containers=containers,
         scheduler_pool_states=RedisWorkerPoolStateRepository(redis),
-        tailnet=TailnetConfig(enabled=True),
+        tailnet=TailnetConfig(),
         tailnet_control=_WorkerRepositoryTailnetControl(),
     )
     workspace_id, machine_id, agent_token = _join_gateway_agent(

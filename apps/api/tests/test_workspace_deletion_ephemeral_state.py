@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable
 from contextlib import ExitStack
 from uuid import uuid4
@@ -9,6 +10,8 @@ from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from api.server.workspace_deletion import _delete_workspace_workload_state
 from control.service import ControlPlaneService
+from coordination.event_bus import EventBusEventType
+from coordination.redis_client import RedisClient, redis_text
 from database.repositories.orchestration import ContainerRepository
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
@@ -24,6 +27,24 @@ _WORKLOAD_KEY_ROOTS: tuple[tuple[str, ...], ...] = (
     ("taskqueue",),
     ("scheduler", "serve", "lock"),
 )
+
+
+def _stop_container_event_count(redis: RedisClient, pattern: str) -> int:
+    """Stop-container events on the bus.
+
+    Workspace deletion also wakes global source-cache reconciliation, which is a
+    different owner, so the bus is filtered by event type rather than required to
+    stay empty.
+    """
+    count = 0
+    for key in redis.scan(pattern):
+        raw = redis.get(key)
+        if raw is None:
+            continue
+        payload = json.loads(redis_text(raw))
+        if payload.get("type") == EventBusEventType.StopContainer:
+            count += 1
+    return count
 
 
 def test_workspace_deletion_removes_only_its_ephemeral_workload_state(
@@ -128,12 +149,12 @@ def test_workspace_deletion_ignores_terminal_container_history_with_stale_worker
     )
 
     redis = isolated_services.redis()
-    event_patterns = (
-        redis.key("event", "*"),
+    delivery_patterns = (
         redis.key("worker-events", "pending", "*"),
         redis.key("worker-events", "ack", "*"),
     )
-    event_keys_before = {pattern: set(redis.scan(pattern)) for pattern in event_patterns}
+    delivery_keys_before = {pattern: set(redis.scan(pattern)) for pattern in delivery_patterns}
+    event_bus_pattern = redis.key("event", "*")
     admin_token, _record = AuthService(isolated_services.context).create_token(
         "terminal-container-cleanup-admin",
         kind=TokenKind.Admin,
@@ -147,7 +168,10 @@ def test_workspace_deletion_ignores_terminal_container_history_with_stale_worker
     )
 
     assert response.status_code == 204, response.text
-    assert {pattern: set(redis.scan(pattern)) for pattern in event_patterns} == event_keys_before
+    assert {
+        pattern: set(redis.scan(pattern)) for pattern in delivery_patterns
+    } == delivery_keys_before
+    assert _stop_container_event_count(redis, event_bus_pattern) == 0
     assert cleaned_scheduler_state == [(deleted_workspace.id, deleted_container_ids)]
     with isolated_services.context.database.session() as session:
         assert (

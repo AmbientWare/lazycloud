@@ -12,9 +12,12 @@ from urllib.parse import quote
 import httpx
 from pydantic import TypeAdapter
 from shared.http.compute import WorkerDrainResponse, WorkerListResponse, WorkerResponse
+from shared.scheduling import SchedulerWorkerStatus
 
 BLOCKED = 77
 _WORKER = TypeAdapter(WorkerResponse)
+_AVAILABLE = SchedulerWorkerStatus.Available.value
+_DRAINED = SchedulerWorkerStatus.Unavailable.value
 
 
 def main() -> int:
@@ -38,8 +41,8 @@ def main() -> int:
     except httpx.HTTPError as exc:
         return _blocked(f"prepared control plane is unavailable: {exc}")
     source = _exact_worker(workers, args.worker_id)
-    if source.status != "ready":
-        return _blocked(f"worker {source.id} is not ready")
+    if source.status != _AVAILABLE:
+        return _blocked(f"worker {source.id} is not {_AVAILABLE}")
     if source.active_containers:
         return _blocked(f"worker {source.id} owns active containers and will not be drained")
 
@@ -55,9 +58,9 @@ def main() -> int:
         response.raise_for_status()
         result = WorkerDrainResponse.model_validate(response.json())
         drained = True
-        if result.worker.status != "draining" or result.stopped_container_ids:
+        if result.worker.status != _DRAINED or result.stopped_container_ids:
             raise RuntimeError("public drain returned an unsafe or unexpected outcome")
-        replacement = _await_ready_worker(
+        replacement = _await_available_worker(
             endpoint,
             headers,
             args.replacement_worker_id,
@@ -80,8 +83,8 @@ def main() -> int:
             )
             response.raise_for_status()
             restored = _WORKER.validate_python(response.json())
-            if restored.status != "ready":
-                cleanup_error = f"worker {source.id} did not return to ready"
+            if restored.status != _AVAILABLE:
+                cleanup_error = f"worker {source.id} did not return to {_AVAILABLE}"
         except Exception as exc:
             cleanup_error = str(exc)
     if primary_error is not None:
@@ -97,7 +100,7 @@ def main() -> int:
             {
                 "accepted": True,
                 "evidence": evidence,
-                "cleanup": f"worker {source.id} returned to ready",
+                "cleanup": f"worker {source.id} returned to {_AVAILABLE}",
             },
             sort_keys=True,
         )
@@ -122,7 +125,7 @@ def _exact_worker(workers: list[WorkerResponse], worker_id: str) -> WorkerRespon
     return matches[0]
 
 
-def _await_ready_worker(
+def _await_available_worker(
     endpoint: str,
     headers: dict[str, str],
     worker_id: str,
@@ -130,10 +133,10 @@ def _await_ready_worker(
     deadline = time.monotonic() + 120
     while time.monotonic() < deadline:
         matches = [worker for worker in _workers(endpoint, headers) if worker.id == worker_id]
-        if len(matches) == 1 and matches[0].status == "ready":
+        if len(matches) == 1 and matches[0].status == _AVAILABLE:
             return matches[0]
         time.sleep(0.5)
-    raise RuntimeError(f"replacement worker {worker_id} did not become ready")
+    raise RuntimeError(f"replacement worker {worker_id} did not become {_AVAILABLE}")
 
 
 def _blocked(reason: str) -> int:

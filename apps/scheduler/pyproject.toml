@@ -19,7 +19,6 @@ dependencies = [
     "observability",
     "operations",
     "provider-clients",
-    "provider-kubernetes",
     "scheduler",
     "storage",
     "storage-client",

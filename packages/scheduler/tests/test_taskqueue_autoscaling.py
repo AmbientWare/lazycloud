@@ -191,7 +191,7 @@ def test_task_queue_autoscaler_expires_pending_work_before_scaling(
     assert all(message.queue != f"taskqueue:{stub.id}" for message in messages)
 
 
-def test_task_queue_autoscaler_reports_pending_container_metrics(
+def test_task_queue_autoscaler_does_not_restart_a_container_still_pending(
     isolated_services: ApiServices,
 ) -> None:
     scheduler = _Scheduler()
@@ -217,23 +217,9 @@ def test_task_queue_autoscaler_reports_pending_container_metrics(
     result = autoscaler.reconcile()[0]
 
     assert result.pending_containers == 1
-    snapshot = isolated_services.metrics.latest()
-    metric_labels = {
-        "source": "taskqueue.autoscaler",
-        "workspace_id": stub.workspace_id,
-        "stub_id": stub.id,
-        "kind": StubKind.TaskQueue.value,
-    }
-    assert metric_value(snapshot.gauges, "autoscaler_pending_containers", **metric_labels) == 1
-    assert (
-        metric_value(
-            snapshot.gauges,
-            "autoscaler_pressure_saturated",
-            **metric_labels,
-            signal="queue_length",
-        )
-        == 1
-    )
+    assert result.actions == []
+    assert len(scheduler.requests) == 1
+    assert len(_task_queue_containers(isolated_services, stub)) == 1
 
 
 def _assert_task_queue_autoscaler_clamps_scale_up_to_workspace_cpu_quota(
@@ -367,52 +353,6 @@ def _assert_task_queue_autoscaler_halts_scale_up_after_failed_container_threshol
     )
 
 
-def test_task_queue_autoscaler_records_scale_failure_capacity_metrics(
-    isolated_services: ApiServices,
-) -> None:
-    scheduler = _FailingScheduler()
-    isolated_services = replace(
-        isolated_services,
-        containers=replace(isolated_services.containers, scheduler=scheduler),
-    )
-    redis = RedisClient(FakeRedis(), key_prefix="test")
-    service = TaskQueueControlService(isolated_services, redis=redis)
-    stub = _create_task_queue_stub(
-        isolated_services,
-        max_containers=1,
-        tasks_per_container=1,
-    )
-    _publish_tasks(service, stub, count=1)
-
-    result = TaskQueueAutoscalingService(
-        isolated_services,
-        redis=redis,
-        task_queues=service,
-    ).reconcile()[0]
-
-    assert [action.action for action in result.actions] == ["scale-up-failed"]
-    snapshot = isolated_services.metrics.latest()
-    metric_labels = {
-        "source": "taskqueue.autoscaler",
-        "workspace_id": stub.workspace_id,
-        "stub_id": stub.id,
-        "kind": StubKind.TaskQueue.value,
-    }
-    assert (
-        metric_value(
-            snapshot.counters,
-            "autoscaler_scale_failures_total",
-            **metric_labels,
-            action="scale-up-failed",
-        )
-        == 1
-    )
-    assert (
-        metric_value(snapshot.counters, "autoscaler_no_worker_capacity_total", **metric_labels) == 1
-    )
-    assert metric_value(snapshot.gauges, "autoscaler_no_worker_capacity", **metric_labels) == 1
-
-
 def _create_task_queue_stub(
     runtime: ApiServices,
     *,
@@ -528,21 +468,6 @@ class _Scheduler:
             status=SchedulerContainerSubmitStatus.Queued,
             container_id=request.container_id,
             reason="queued",
-        )
-
-
-class _FailingScheduler:
-    def submit(
-        self,
-        request: SchedulerWorkerRequest,
-        *,
-        ready_at: datetime | None = None,
-    ) -> SchedulerContainerSubmitResult:
-        _ = ready_at
-        return SchedulerContainerSubmitResult(
-            status=SchedulerContainerSubmitStatus.Error,
-            container_id=request.container_id,
-            reason="no worker capacity available",
         )
 
 

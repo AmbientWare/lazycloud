@@ -373,6 +373,8 @@ def test_postgresql_cleanup_targets_only_global_and_matching_private_generations
                 owner_generation.id,
             }
             assert sibling_generation.id not in {target.cache_generation_id for target in targets}
+            deleting_owner = workspaces.lock_for_deletion(owner.id)
+            workspaces.mark_deleting(deleting_owner)
             workspaces.purge_owned_records(owner.id)
             assert repository.get_generation(owner_generation.id) is not None
             assert len(repository.list_targets(workspace_id=owner.id)) == 2
@@ -451,8 +453,11 @@ def test_postgresql_cleanup_claims_are_disjoint_and_tombstones_survive_workspace
             assert "source_cache_cleanup_targets" not in workspace_repository.deletion_blockers(
                 workspace.id
             )
+            deleting = workspace_repository.mark_deleting(
+                workspace_repository.lock_for_deletion(workspace.id)
+            )
             workspace_repository.purge_owned_records(workspace.id)
-            workspace_repository.tombstone(workspace)
+            workspace_repository.tombstone(deleting)
             targets = SourceCacheCleanupRepository(session).list_targets(workspace_id=workspace.id)
             assert len(targets) == len(sources)
 

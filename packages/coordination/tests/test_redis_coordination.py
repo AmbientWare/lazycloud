@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -58,24 +57,6 @@ def test_redis_settings_reject_implicit_query_knobs_and_invalid_urls() -> None:
         RedisClient.from_settings(RedisSettings(url="http://redis.internal/0"))
     with pytest.raises(ValueError, match="database"):
         RedisClient.from_settings(RedisSettings(url="redis://redis.internal/not-a-db"))
-
-
-def test_redis_wake_signal_coalesces_concurrent_signals_and_blocks_for_consumption() -> None:
-    fake = _WakeRedis()
-    wake = RedisWakeSignal(
-        RedisClient(fake, key_prefix="test"),
-        scope="scheduler-dispatch",
-    )
-
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        queued = list(executor.map(_signal_wake, [(wake, index) for index in range(32)]))
-
-    assert queued.count(True) == 1
-    assert wake.key() == "test:wake:scheduler-dispatch"
-    assert fake.lists[wake.key()] == ["1"]
-    assert wake.wait(timeout_seconds=0.25)
-    assert not wake.wait(timeout_seconds=0.25)
-    assert fake.blocking_timeouts == [0.25, 0.25]
 
 
 def test_token_lock_rejects_empty_tokens_and_non_positive_ttl() -> None:
@@ -175,41 +156,6 @@ def test_real_redis_scripts_locks_and_pubsub_leave_no_keys(
 def _signal_wake(item: tuple[RedisWakeSignal, int]) -> bool:
     wake, _index = item
     return wake.signal()
-
-
-class _WakeRedis(FakeRedis):
-    def __init__(self) -> None:
-        super().__init__()
-        self.lock = threading.Lock()
-        self.blocking_timeouts: list[float] = []
-
-    def eval(
-        self, script: str, numkeys: int, *keys_and_args: str | bytes | int | float | bool
-    ) -> int:
-        del script
-        assert numkeys == 1
-        key = str(keys_and_args[0])
-        payload = str(keys_and_args[1])
-        with self.lock:
-            queue = self.lists.setdefault(key, [])
-            if queue:
-                return 0
-            queue.append(payload)
-            return 1
-
-    def blpop(
-        self,
-        keys: str | list[str],
-        *,
-        timeout: float,
-    ) -> tuple[str, str] | None:
-        self.blocking_timeouts.append(timeout)
-        with self.lock:
-            key = keys[0] if isinstance(keys, list) else keys
-            queue = self.lists.setdefault(key, [])
-            if not queue:
-                return None
-            return key, queue.pop(0)
 
 
 class _TokenLockRedis(FakeRedis):

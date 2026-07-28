@@ -97,6 +97,7 @@ def _aws_catalog_configuration() -> _AwsCatalogConfiguration:
     )
     template_identity = aws_account_connection_template_identity()
     aws_account_connection_settings = AwsAccountConnectionSettings(
+        enabled=True,
         template_url=(
             "https://assets.s3.us-east-1.amazonaws.com/templates/"
             f"{template_identity.sha256}/connection.json"
@@ -442,7 +443,7 @@ def test_managed_placement_binds_workspace_agent_capacity_owner(
     isolated_services.compute.create_pool(
         "platform-default",
         workspace=workspace_id,
-        provider="kubernetes",
+        provider="aws",
         default_eligible=True,
         priority=1_000,
         worker_cpu_millicores=8_000,

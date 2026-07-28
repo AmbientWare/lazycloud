@@ -29,7 +29,6 @@ from scheduler.containers import (
     SchedulerContainerRequestService,
 )
 from scheduler.pool_drain import WorkerPoolDrainService
-from scheduler.pool_sizing import RedisWorkerPoolReplicaStateStore, WorkerPoolReplicaScaler
 from scheduler.pool_state import SchedulerPoolStateService
 from scheduler.preemption import (
     SchedulerCapacityInterruptionService,
@@ -68,7 +67,6 @@ from scheduler_app.services import (
     SchedulerObservabilitySettings,
     SchedulerStorageSettings,
 )
-from scheduler_app.settings import KubernetesCapacityPoolSettings
 
 
 @dataclass(slots=True)
@@ -91,9 +89,7 @@ class SchedulerRuntime:
         managed_compute_reconcile_interval_seconds: float = (
             MANAGED_COMPUTE_RECONCILE_INTERVAL_SECONDS
         ),
-        worker_pool_replica_scaler: WorkerPoolReplicaScaler | None,
         image_build_container_settings: ImageBuildContainerSettings,
-        kubernetes_capacity_pools: tuple[KubernetesCapacityPoolSettings, ...] = (),
         create_schema: bool = False,
     ) -> SchedulerRuntime:
         database = DatabaseClient.from_settings(
@@ -113,17 +109,12 @@ class SchedulerRuntime:
                 network=network,
                 capacity=capacity,
             )
-            _reconcile_kubernetes_capacity_pools(
-                app_services,
-                kubernetes_capacity_pools,
-            )
             runtime = cls.from_services(
                 scheduler_services=app_services,
                 execution_services=app_services,
                 runtime_callback_http_url=runtime_callback_http_url,
                 redis_client=app_services.redis_client,
                 container_requests=_container_requests(app_services),
-                worker_pool_replica_scaler=worker_pool_replica_scaler,
                 image_build_container_settings=image_build_container_settings,
                 retention_settings=storage.retention,
                 volume_metering=app_services.volume_metering,
@@ -157,7 +148,6 @@ class SchedulerRuntime:
         runtime_callback_http_url: str,
         redis_client: RedisClient,
         container_requests: SchedulerContainerRequestService,
-        worker_pool_replica_scaler: WorkerPoolReplicaScaler | None,
         image_build_container_settings: ImageBuildContainerSettings,
         retention_settings: RetentionSettings,
         volume_metering: SchedulerVolumeMeteringService,
@@ -170,7 +160,6 @@ class SchedulerRuntime:
     ) -> SchedulerRuntime:
         compute_states = RedisComputeStateRepository(redis_client)
         pool_states = RedisWorkerPoolStateRepository(redis_client)
-        replica_states = RedisWorkerPoolReplicaStateStore(redis_client)
         worker_states = RedisSchedulerWorkerRepository(redis_client)
         container_states = RedisSchedulerContainerRepository(redis_client)
         function_control = FunctionControlService(
@@ -193,10 +182,8 @@ class SchedulerRuntime:
         capacity_controllers = SchedulerCapacityControllerProvider(
             services=scheduler_services,
             compute_states=compute_states,
-            replica_states=replica_states,
             workers=worker_states,
             containers=container_states,
-            worker_pool_replicas=worker_pool_replica_scaler,
         )
         agent_pool_service = SchedulerAgentPoolService(compute_states, worker_states)
         capacity_reservations = CapacityReservationService(
@@ -332,34 +319,3 @@ def _container_requests_with_capacity(
         max_retry_age_seconds=base.max_retry_age_seconds,
         claim_lease_seconds=base.claim_lease_seconds,
     )
-
-
-def _reconcile_kubernetes_capacity_pools(
-    services: SchedulerAppServices,
-    pools: tuple[KubernetesCapacityPoolSettings, ...],
-) -> None:
-    for pool in pools:
-        services.compute.create_pool(
-            pool.pool_name,
-            provider="kubernetes",
-            capacity_owner_id=pool.capacity_owner_id,
-            initial_workers=pool.initial_workers,
-            min_workers=pool.min_workers,
-            max_workers=pool.max_workers,
-            scaling_enabled=pool.scaling_enabled,
-            default_eligible=pool.default_eligible,
-            priority=pool.priority,
-            min_free_cpu_millicores=pool.min_free_cpu_millicores,
-            min_free_memory_mib=pool.min_free_memory_mib,
-            min_free_gpu_count=pool.min_free_gpu_count,
-            worker_cpu_millicores=pool.worker_cpu_millicores,
-            worker_memory_mib=pool.worker_memory_mib,
-            worker_gpu_type=pool.worker_gpu_type,
-            worker_gpu_count=pool.worker_gpu_count,
-            worker_runtimes=pool.worker_runtimes,
-            worker_preemptible=pool.worker_preemptible,
-            idle_drain_timeout_seconds=pool.idle_drain_timeout_seconds,
-            scale_up_cooldown_seconds=pool.scale_up_cooldown_seconds,
-            scale_down_cooldown_seconds=pool.scale_down_cooldown_seconds,
-            registration_timeout_seconds=pool.registration_timeout_seconds,
-        )

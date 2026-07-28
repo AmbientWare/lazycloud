@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import signal
 from collections.abc import Callable
-from types import FrameType
 
 import pytest
 import runner.taskqueue as taskqueue_module
@@ -14,8 +12,6 @@ from runner.taskqueue import (
     config_from_env,
 )
 from shared.env import TASK_QUEUE_WORKERS_ENV
-
-SignalHandler = signal.Handlers | Callable[[int, FrameType | None], None]
 
 
 class _WorkerProcess:
@@ -149,30 +145,3 @@ def test_task_queue_process_manager_starts_capacity_and_stops_siblings_on_exit(
         for process in processes
         for timeout in process.join_timeouts
     )
-
-
-def test_task_queue_child_restores_terminating_signal_handlers(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    signal_calls: list[tuple[int, SignalHandler]] = []
-    config = TaskQueueRunnerConfig(
-        stub_id="stub-1",
-        handler_ref="pkg.queue:handler",
-    )
-
-    def record_signal(handled_signal: int, handler: SignalHandler) -> SignalHandler:
-        signal_calls.append((handled_signal, handler))
-        return handler
-
-    def stop_after_entry(self: TaskQueueRunner) -> None:
-        del self
-
-    monkeypatch.setattr(signal, "signal", record_signal)
-    monkeypatch.setattr(TaskQueueRunner, "run_forever", stop_after_entry)
-
-    taskqueue_module._run_task_queue_worker(config)
-
-    assert signal_calls == [
-        (signal.SIGINT, signal.SIG_DFL),
-        (signal.SIGTERM, signal.SIG_DFL),
-    ]

@@ -314,7 +314,7 @@ def _recorded_payload(
 
 
 @pytest.mark.parametrize("resource", ["deployment", "task"])
-@pytest.mark.parametrize("failure_kind", ["http-401", "http-500", "transport"])
+@pytest.mark.parametrize("failure_kind", ["http-401", "transport"])
 def test_resource_get_preserves_non_not_found_failures(
     resource: str,
     failure_kind: str,

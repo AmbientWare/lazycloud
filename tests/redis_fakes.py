@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import json
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from fnmatch import fnmatch
+from typing import Protocol, runtime_checkable
 
-from coordination.redis_client import RedisWireScalar
+from coordination.redis_client import RedisWireResponse, RedisWireScalar
+from lupa.lua51 import LuaRuntime, lua_type
+from pydantic import JsonValue
 from redis.client import Pipeline, PubSub
+from redis.exceptions import DataError, ResponseError
 from redis.typing import EncodableT, FieldT, KeyT, StreamIdT
 
 type FakeRedisStreamEntry = tuple[str, dict[str, str]]
@@ -157,6 +163,22 @@ class FakeRedis:
     def hlen(self, name: str) -> int:
         return len(self.hashes.get(name, {}))
 
+    def hexists(self, name: str, key: str) -> bool:
+        return key in self.hashes.get(name, {})
+
+    def hincrby(self, name: str, key: str, amount: int) -> int:
+        with self._lock:
+            bucket = self.hashes.setdefault(name, {})
+            value = int(bucket.get(key, "0")) + amount
+            bucket[key] = str(value)
+            return value
+
+    def persist(self, name: str) -> bool:
+        with self._lock:
+            if not self._key_exists(name):
+                return False
+            return self.expirations.pop(name, None) is not None
+
     def rpush(self, name: str, *values: RedisWireScalar) -> int:
         with self._list_condition:
             bucket = self.lists.setdefault(name, [])
@@ -199,6 +221,26 @@ class FakeRedis:
 
     def llen(self, name: str) -> int:
         return len(self.lists.get(name, []))
+
+    def lrem(self, name: str, count: int, value: str) -> int:
+        with self._lock:
+            values = self.lists.get(name)
+            if values is None:
+                return 0
+            if count == 0:
+                removed = values.count(value)
+                values[:] = [item for item in values if item != value]
+                return removed
+            positions = range(len(values)) if count > 0 else range(len(values) - 1, -1, -1)
+            doomed: set[int] = set()
+            for position in positions:
+                if values[position] != value:
+                    continue
+                doomed.add(position)
+                if len(doomed) == abs(count):
+                    break
+            values[:] = [item for index, item in enumerate(values) if index not in doomed]
+            return len(doomed)
 
     def zadd(self, name: str, mapping: Mapping[str, float]) -> int:
         bucket = self.zsets.setdefault(name, {})
@@ -337,6 +379,12 @@ class FakeRedis:
             entries = entries[:count]
         return [(entry_id, dict(fields)) for entry_id, fields in entries]
 
+    def xrange(self, name: str, count: int | None = None) -> list[tuple[str, dict[str, str]]]:
+        entries = list(self.streams.get(name, []))
+        if count is not None:
+            entries = entries[:count]
+        return [(entry_id, dict(fields)) for entry_id, fields in entries]
+
     def xread(
         self,
         streams: dict[KeyT, StreamIdT],
@@ -372,9 +420,14 @@ class FakeRedis:
         script: str,
         numkeys: int,
         *keys_and_args: RedisWireScalar,
-    ) -> int:
-        _ = script, numkeys, keys_and_args
-        raise NotImplementedError("FakeRedis does not implement atomic Lua transitions")
+    ) -> RedisWireResponse:
+        """Run the caller's Lua body against this store, atomically, as Redis does."""
+
+        if numkeys < 0 or numkeys > len(keys_and_args):
+            raise ResponseError("Number of keys can't be greater than number of args")
+        arguments = [_wire_text(value) for value in keys_and_args]
+        with self._lock:
+            return _LuaScriptRun(self).execute(script, arguments[:numkeys], arguments[numkeys:])
 
     def pubsub(self, *, ignore_subscribe_messages: bool = False) -> PubSub:
         _ = ignore_subscribe_messages
@@ -397,6 +450,354 @@ class FakeRedis:
             or key in self.zsets
             or key in self.streams
         )
+
+
+@dataclass(frozen=True, slots=True)
+class _StatusReply:
+    """A Redis status reply, which Lua receives as a table carrying an ``ok`` field."""
+
+    text: str
+
+
+type _CommandReply = str | int | None | _StatusReply | list[_CommandReply]
+
+
+@runtime_checkable
+class _LuaTable(Protocol):
+    """The Lua table surface reply conversion reads back out of the interpreter."""
+
+    def __getitem__(self, key: str | int, /) -> object: ...
+
+
+class _LuaScriptRun:
+    """Execute one production Lua body over a `FakeRedis` store.
+
+    The scripts are never reimplemented here: the caller's own Lua source runs on
+    a Lua 5.1 interpreter, the version Redis embeds, so control flow, `unpack`,
+    `tonumber`, `cjson`, and every return value come from production's own text.
+    `redis.call` is the only bridge, and it dispatches into the same `FakeRedis`
+    storage the direct commands mutate, so a script and a direct command can never
+    observe two different stores. Every command, option, argument type, and reply
+    type the bridge cannot honour exactly raises instead of guessing.
+    """
+
+    def __init__(self, redis: FakeRedis) -> None:
+        self._redis = redis
+        self._runtime = LuaRuntime(unpack_returned_tuples=False)
+        self._commands: dict[str, Callable[[Sequence[str]], _CommandReply]] = {
+            "DEL": self._delete,
+            "DECR": self._decrement,
+            "EXISTS": self._exists,
+            "EXPIRE": self._expire,
+            "GET": self._get,
+            "HDEL": self._hash_delete,
+            "HEXISTS": self._hash_exists,
+            "HGET": self._hash_get,
+            "HINCRBY": self._hash_increment,
+            "HSET": self._hash_set,
+            "INCR": self._increment,
+            "LLEN": self._list_length,
+            "LPOP": self._list_pop,
+            "LRANGE": self._list_range,
+            "LREM": self._list_remove,
+            "PERSIST": self._persist,
+            "RPUSH": self._list_push,
+            "SADD": self._set_add,
+            "SET": self._set,
+            "SREM": self._set_remove,
+            "XADD": self._stream_add,
+            "XRANGE": self._stream_range,
+            "ZADD": self._sorted_set_add,
+            "ZRANGEBYSCORE": self._sorted_set_range_by_score,
+            "ZREM": self._sorted_set_remove,
+        }
+
+    def execute(
+        self,
+        script: str,
+        keys: Sequence[str],
+        argv: Sequence[str],
+    ) -> RedisWireResponse:
+        environment = self._runtime.globals()
+        # Redis exposes no host bridge to a script; drop the one lupa installs.
+        environment["python"] = None
+        environment["KEYS"] = self._runtime.table_from(list(keys))
+        environment["ARGV"] = self._runtime.table_from(list(argv))
+        environment["redis"] = self._runtime.table_from({"call": self._call})
+        environment["cjson"] = self._runtime.table_from({"decode": self._decode_json})
+        return self._from_lua(self._runtime.execute(script))
+
+    def _call(self, *arguments: object) -> object:
+        if not arguments:
+            raise ResponseError("Please specify at least one argument for this redis lib call")
+        name = _lua_text(arguments[0]).upper()
+        command = self._commands.get(name)
+        if command is None:
+            raise ResponseError(f"Unknown Redis command '{name}' called from script")
+        return self._to_lua(command([_lua_text(value) for value in arguments[1:]]))
+
+    def _decode_json(self, document: object) -> object:
+        decoded: JsonValue = json.loads(_lua_text(document))
+        return self._to_lua_json(decoded)
+
+    def _to_lua(self, reply: _CommandReply) -> object:
+        if reply is None:
+            return False
+        if isinstance(reply, _StatusReply):
+            return self._runtime.table_from({"ok": reply.text})
+        if isinstance(reply, list):
+            return self._runtime.table_from([self._to_lua(item) for item in reply])
+        return reply
+
+    def _to_lua_json(self, document: JsonValue) -> object:
+        if isinstance(document, dict):
+            return self._runtime.table_from(
+                {key: self._to_lua_json(value) for key, value in document.items()}
+            )
+        if isinstance(document, list):
+            return self._runtime.table_from([self._to_lua_json(item) for item in document])
+        return document
+
+    def _from_lua(self, value: object) -> RedisWireResponse:
+        if value is None or value is False:
+            return None
+        if value is True:
+            return 1
+        if isinstance(value, (int, float)):
+            return int(value)
+        if isinstance(value, str):
+            return value
+        if lua_type(value) != "table" or not isinstance(value, _LuaTable):
+            raise ResponseError("Lua script returned a value Redis cannot convert to a reply")
+        error = value["err"]
+        if error is not None:
+            raise ResponseError(_lua_text(error))
+        status = value["ok"]
+        if status is not None:
+            return _lua_text(status)
+        reply: list[RedisWireResponse] = []
+        position = 1
+        while True:
+            item = value[position]
+            if item is None:
+                return reply
+            reply.append(self._from_lua(item))
+            position += 1
+
+    def _get(self, arguments: Sequence[str]) -> _CommandReply:
+        (key,) = _fixed(arguments, 1, "GET")
+        return _stored_text(self._redis.get(key))
+
+    def _set(self, arguments: Sequence[str]) -> _CommandReply:
+        if len(arguments) < 2:
+            raise ResponseError("wrong number of arguments for 'set' command")
+        key, value = arguments[0], arguments[1]
+        expire_seconds: int | None = None
+        only_if_absent = False
+        options = list(arguments[2:])
+        while options:
+            option = options.pop(0).upper()
+            if option == "EX":
+                expire_seconds = int(options.pop(0))
+            elif option == "NX":
+                only_if_absent = True
+            else:
+                raise ResponseError(f"FakeRedis does not implement SET option '{option}'")
+        stored = self._redis.set(key, value, ex=expire_seconds, nx=only_if_absent)
+        return _StatusReply("OK") if stored else None
+
+    def _delete(self, arguments: Sequence[str]) -> _CommandReply:
+        return self._redis.delete(*_at_least(arguments, 1, "DEL"))
+
+    def _exists(self, arguments: Sequence[str]) -> _CommandReply:
+        return self._redis.exists(*_at_least(arguments, 1, "EXISTS"))
+
+    def _expire(self, arguments: Sequence[str]) -> _CommandReply:
+        key, seconds = _fixed(arguments, 2, "EXPIRE")
+        if not self._redis.exists(key):
+            return 0
+        self._redis.expire(key, int(seconds))
+        return 1
+
+    def _persist(self, arguments: Sequence[str]) -> _CommandReply:
+        (key,) = _fixed(arguments, 1, "PERSIST")
+        return int(self._redis.persist(key))
+
+    def _increment(self, arguments: Sequence[str]) -> _CommandReply:
+        (key,) = _fixed(arguments, 1, "INCR")
+        return self._redis.incr(key)
+
+    def _decrement(self, arguments: Sequence[str]) -> _CommandReply:
+        (key,) = _fixed(arguments, 1, "DECR")
+        return self._redis.decr(key)
+
+    def _hash_get(self, arguments: Sequence[str]) -> _CommandReply:
+        key, field = _fixed(arguments, 2, "HGET")
+        return self._redis.hget(key, field)
+
+    def _hash_set(self, arguments: Sequence[str]) -> _CommandReply:
+        if len(arguments) < 3 or len(arguments) % 2 != 1:
+            raise ResponseError("wrong number of arguments for 'hset' command")
+        key = arguments[0]
+        fields = dict(zip(arguments[1::2], arguments[2::2], strict=True))
+        return self._redis.hset(key, mapping=fields)
+
+    def _hash_delete(self, arguments: Sequence[str]) -> _CommandReply:
+        key, *fields = _at_least(arguments, 2, "HDEL")
+        return self._redis.hdel(key, *fields)
+
+    def _hash_exists(self, arguments: Sequence[str]) -> _CommandReply:
+        key, field = _fixed(arguments, 2, "HEXISTS")
+        return int(self._redis.hexists(key, field))
+
+    def _hash_increment(self, arguments: Sequence[str]) -> _CommandReply:
+        key, field, amount = _fixed(arguments, 3, "HINCRBY")
+        return self._redis.hincrby(key, field, int(amount))
+
+    def _set_add(self, arguments: Sequence[str]) -> _CommandReply:
+        key, *members = _at_least(arguments, 2, "SADD")
+        return self._redis.sadd(key, *members)
+
+    def _set_remove(self, arguments: Sequence[str]) -> _CommandReply:
+        key, *members = _at_least(arguments, 2, "SREM")
+        return self._redis.srem(key, *members)
+
+    def _list_push(self, arguments: Sequence[str]) -> _CommandReply:
+        key, *values = _at_least(arguments, 2, "RPUSH")
+        return self._redis.rpush(key, *values)
+
+    def _list_pop(self, arguments: Sequence[str]) -> _CommandReply:
+        (key,) = _fixed(arguments, 1, "LPOP")
+        return self._redis.lpop(key)
+
+    def _list_length(self, arguments: Sequence[str]) -> _CommandReply:
+        (key,) = _fixed(arguments, 1, "LLEN")
+        return self._redis.llen(key)
+
+    def _list_range(self, arguments: Sequence[str]) -> _CommandReply:
+        key, start, stop = _fixed(arguments, 3, "LRANGE")
+        entries: list[_CommandReply] = list(self._redis.lrange(key, int(start), int(stop)))
+        return entries
+
+    def _list_remove(self, arguments: Sequence[str]) -> _CommandReply:
+        key, count, value = _fixed(arguments, 3, "LREM")
+        return self._redis.lrem(key, int(count), value)
+
+    def _sorted_set_add(self, arguments: Sequence[str]) -> _CommandReply:
+        if len(arguments) < 3 or len(arguments) % 2 != 1:
+            raise ResponseError("wrong number of arguments for 'zadd' command")
+        key = arguments[0]
+        scored = {
+            member: float(score)
+            for score, member in zip(arguments[1::2], arguments[2::2], strict=True)
+        }
+        return self._redis.zadd(key, scored)
+
+    def _sorted_set_remove(self, arguments: Sequence[str]) -> _CommandReply:
+        key, *members = _at_least(arguments, 2, "ZREM")
+        return self._redis.zrem(key, *members)
+
+    def _sorted_set_range_by_score(self, arguments: Sequence[str]) -> _CommandReply:
+        if len(arguments) not in (3, 6):
+            raise ResponseError("FakeRedis implements ZRANGEBYSCORE with an optional LIMIT only")
+        key, minimum, maximum = arguments[0], arguments[1], arguments[2]
+        members: list[_CommandReply] = list(self._redis.zrangebyscore(key, minimum, maximum))
+        if len(arguments) == 3:
+            return members
+        if arguments[3].upper() != "LIMIT":
+            raise ResponseError(f"FakeRedis does not implement ZRANGEBYSCORE '{arguments[3]}'")
+        offset, count = int(arguments[4]), int(arguments[5])
+        return members[offset:] if count < 0 else members[offset : offset + count]
+
+    def _stream_add(self, arguments: Sequence[str]) -> _CommandReply:
+        if len(arguments) < 4:
+            raise ResponseError("wrong number of arguments for 'xadd' command")
+        key = arguments[0]
+        position = 1
+        maxlen: int | None = None
+        approximate = False
+        if arguments[position].upper() == "MAXLEN":
+            position += 1
+            if arguments[position] in ("~", "="):
+                approximate = arguments[position] == "~"
+                position += 1
+            maxlen = int(arguments[position])
+            position += 1
+        entry_id = arguments[position]
+        if entry_id != "*":
+            raise ResponseError("FakeRedis assigns stream entry identifiers and requires '*'")
+        position += 1
+        remaining = arguments[position:]
+        if not remaining or len(remaining) % 2 != 0:
+            raise ResponseError("wrong number of arguments for 'xadd' command")
+        fields: dict[FieldT, EncodableT] = dict(zip(remaining[0::2], remaining[1::2], strict=True))
+        return self._redis.xadd(key, fields, maxlen=maxlen, approximate=approximate)
+
+    def _stream_range(self, arguments: Sequence[str]) -> _CommandReply:
+        if len(arguments) not in (3, 5):
+            raise ResponseError("FakeRedis implements XRANGE with an optional COUNT only")
+        key, minimum, maximum = arguments[0], arguments[1], arguments[2]
+        if minimum != "-" or maximum != "+":
+            raise ResponseError("FakeRedis implements XRANGE over the full stream only")
+        count: int | None = None
+        if len(arguments) == 5:
+            if arguments[3].upper() != "COUNT":
+                raise ResponseError(f"FakeRedis does not implement XRANGE '{arguments[3]}'")
+            count = int(arguments[4])
+        entries: list[_CommandReply] = []
+        for entry_id, entry_fields in self._redis.xrange(key, count=count):
+            flattened: list[_CommandReply] = []
+            for field, value in entry_fields.items():
+                flattened.append(field)
+                flattened.append(value)
+            entries.append([entry_id, flattened])
+        return entries
+
+
+def _fixed(arguments: Sequence[str], count: int, command: str) -> Sequence[str]:
+    if len(arguments) != count:
+        raise ResponseError(f"wrong number of arguments for '{command.lower()}' command")
+    return arguments
+
+
+def _at_least(arguments: Sequence[str], count: int, command: str) -> Sequence[str]:
+    if len(arguments) < count:
+        raise ResponseError(f"wrong number of arguments for '{command.lower()}' command")
+    return arguments
+
+
+def _lua_text(value: object) -> str:
+    """Encode one Lua value the way Redis encodes a script's command arguments."""
+
+    if isinstance(value, bool):
+        raise ResponseError("Lua redis lib command arguments must be strings or integers")
+    if isinstance(value, str):
+        return value
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return f"{value:.17g}"
+    raise ResponseError("Lua redis lib command arguments must be strings or integers")
+
+
+def _wire_text(value: RedisWireScalar) -> str:
+    """Encode one EVAL argument the way the redis client encodes a bulk string."""
+
+    if isinstance(value, bool):
+        raise DataError("Invalid input of type: 'bool'")
+    if isinstance(value, bytes):
+        return value.decode()
+    if isinstance(value, str):
+        return value
+    return repr(value)
+
+
+def _stored_text(value: RedisWireScalar | None) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        return value.decode()
+    return str(value)
 
 
 def _stream_entry_number(value: str) -> int:

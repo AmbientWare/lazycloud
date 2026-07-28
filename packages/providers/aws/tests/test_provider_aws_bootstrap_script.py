@@ -58,7 +58,9 @@ def _require_tooling() -> tuple[str, str]:
     return bash, openssl
 
 
-def test_bootstrap_script_reports_phases_and_bounded_failures_without_gateway_installs() -> None:
+def test_bootstrap_script_refuses_an_agent_binary_that_fails_digest_verification(
+    tmp_path: Path,
+) -> None:
     bash, _ = _require_tooling()
     script = aws_managed_pool_bootstrap_script(_spec())
 
@@ -67,44 +69,62 @@ def test_bootstrap_script_reports_phases_and_bounded_failures_without_gateway_in
     )
     assert syntax.returncode == 0, syntax.stderr
 
-    # The gateway install route is never used: the agent binary comes from the
-    # release artifact URL and is digest-verified before it runs.
+    # The gateway install route is never used, and the agent owns its own unit:
+    # when this script wrote one too, a machine ran the agent's unit while this
+    # script claimed a different restart policy, so a fix made here never
+    # reached any machine.
     assert "/install/agent" not in script
-    assert _AGENT_BINARY_URL in script
-    assert 'curl -fsSL --retry 5 --retry-delay 2 "$AGENT_BINARY_URL" -o "$agent_download"' in (
-        script
-    )
-    assert '[ "$(sha256sum "$agent_download" | awk \'{print $1}\')" != "$AGENT_SHA256" ]' in script
-
-    # The booting report is the first act after identity material, before any
-    # install step can touch the platform gateway.
-    main_body = script[script.index("bootstrap_main() {") :]
-    assert "report_phase booting" in main_body
-    assert main_body.index("report_phase booting") < main_body.index("ensure_docker")
-    assert main_body.index("ensure_docker") < main_body.index("report_phase joining")
-    assert main_body.index("report_phase joining") < main_body.index("install-service")
-
-    # The agent runs as a persistent service, never as a cloud-init child: a
-    # cloud-init child dies with that script module, leaving a machine that
-    # enrolls once and then has no agent, so its worker never leaves `pending`.
-    #
-    # The agent installs that unit itself. This script must not write one too:
-    # when both did, a machine ran the agent's unit while this script claimed a
-    # different restart policy, so a fix made here never reached any machine.
-    # The unit's contents are owned and proven by render_systemd_unit.
-    assert '"$AGENT_BIN" install-service' in script
     assert "/etc/systemd/system/lazycloud-agent.service" not in script
-    assert 'exec "$AGENT_BIN" join' not in script
 
-    # Every failure posts one bounded, exact enrollment failure reason.
-    assert "docker) reason=runtime_install_failed ;;" in script
-    assert "tailscale) reason=network_join_failed ;;" in script
-    assert "agent) reason=agent_download_failed ;;" in script
-    assert 'report_failure "$reason"' in script
-    assert "report bootstrap-failure failure_reason" in script
-    assert "report bootstrap-phase phase" in script
-    # Each report mints a fresh single-use proof.
-    assert 'proof="$(mint_proof)"' in script
+    agent_bin = tmp_path / "lazycloud-agent"
+    curl_log = tmp_path / "curl.log"
+    lines = script.rstrip("\n").split("\n")
+    assert lines[-1] == "bootstrap_main"
+    driver = tmp_path / "ensure_agent.sh"
+    driver.write_text(
+        "\n".join(
+            [
+                *lines[:-1],
+                f'AGENT_BIN="{agent_bin}"',
+                f'CURL_LOG="{curl_log}"',
+                'mint_proof() { printf "https://sts.test/proof"; }',
+                # Stand in for the network: record every request and serve an
+                # agent artifact whose digest does not match AGENT_SHA256.
+                "curl() {",
+                '  local out="" data="" previous=""',
+                '  printf "%s\\n" "$*" >>"$CURL_LOG"',
+                '  for argument in "$@"; do',
+                '    case "$previous" in',
+                '      -o) out="$argument" ;;',
+                '      --data) data="$argument" ;;',
+                "    esac",
+                '    previous="$argument"',
+                "  done",
+                '  if [ -n "$out" ]; then',
+                '    printf "tampered-agent-binary" >"$out"',
+                "    return 0",
+                "  fi",
+                '  printf "%s\\n" "$data" >>"$CURL_LOG"',
+                "  return 0",
+                "}",
+                "STEP=agent",
+                "ensure_agent",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    run = subprocess.run([bash, driver.as_posix()], capture_output=True, text=True, check=False)
+    reported = curl_log.read_text(encoding="utf-8")
+
+    assert run.returncode != 0
+    assert not agent_bin.exists()
+    assert not list(tmp_path.glob("lazycloud-agent.download.*"))
+    # The artifact came from the pinned release URL, and the mismatch is
+    # reported as one bounded enrollment failure reason.
+    assert _AGENT_BINARY_URL in reported
+    assert '"failure_reason":"agent_download_failed"' in reported
 
 
 def test_shell_minted_sigv4_proof_matches_botocore_query_auth(tmp_path: Path) -> None:

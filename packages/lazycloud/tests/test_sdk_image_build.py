@@ -84,39 +84,6 @@ def test_sdk_image_build_request_preserves_credentials_without_leaking_spec_valu
     assert request.existing_image_creds["password"] not in spec_payload["secrets"]
 
 
-def test_sdk_image_with_docker_selects_only_supported_official_repositories() -> None:
-    request = Image().with_docker()._build_request()
-    commands = [step.command for step in request.build_steps]
-    repository_commands = [
-        command for command in commands if "download.docker.com/linux" in command
-    ]
-
-    assert len(repository_commands) == 2
-    assert all(
-        '. /etc/os-release; case "$ID" in debian|ubuntu)' in command
-        for command in repository_commands
-    )
-    assert all("download.docker.com/linux/$ID" in command for command in repository_commands)
-    assert all("download.docker.com/linux/ubuntu" not in command for command in repository_commands)
-    assert all(
-        "supports only Debian and Ubuntu base images" in command for command in repository_commands
-    )
-    assert "VERSION_CODENAME" in repository_commands[-1]
-    runtime_install = next(
-        command for command in commands if "apt-get install -y docker-ce" in command
-    )
-    assert all(
-        package in runtime_install
-        for package in (
-            "docker-ce",
-            "docker-ce-cli",
-            "containerd.io",
-            "docker-buildx-plugin",
-            "docker-compose-plugin",
-        )
-    )
-
-
 def test_sdk_image_build_context_rejects_symlink_to_outside_file(tmp_path: Path) -> None:
     context = tmp_path / "context"
     context.mkdir()

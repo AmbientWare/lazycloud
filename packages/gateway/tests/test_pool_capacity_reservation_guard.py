@@ -266,41 +266,6 @@ def test_pool_scale_refuses_open_reservation_before_compute_mutation(
     ]
 
 
-def test_pool_scale_repair_refuses_active_reservation_while_capacity_is_observed(
-    isolated_services: ApiServices,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    workspace_id = _default_workspace_id(isolated_services)
-    pool_name = "observed-repair-pool"
-    capacity_owner_id = "23333333-3444-4555-8666-777777777777"
-    current = _scalable_pool(
-        isolated_services,
-        workspace_id=workspace_id,
-        pool_name=pool_name,
-        capacity_owner_id=capacity_owner_id,
-    ).model_copy(update={"desired_machines": 0, "observed_machines": 1})
-    guard = _RecordingCapacityReservationGuard(open_reservations=True)
-    gateway = _gateway(isolated_services, guard, key_prefix="pool-observed-repair")
-    mutation_calls: list[tuple[str, str, int]] = []
-    _install_recording_scale(
-        monkeypatch,
-        current=current,
-        guard=guard,
-        mutation_calls=mutation_calls,
-    )
-
-    with pytest.raises(ConflictError, match="active capacity reservations"):
-        gateway.scale_pool(pool_name, 0, workspace_id=workspace_id)
-
-    assert mutation_calls == []
-    assert guard.events == [
-        "lock-enter",
-        "intent-read",
-        "reservation-check",
-        "lock-exit",
-    ]
-
-
 def test_pool_scale_zero_refuses_active_reservation_when_stored_capacity_is_zero(
     isolated_services: ApiServices,
     monkeypatch: pytest.MonkeyPatch,
@@ -604,34 +569,6 @@ def test_pool_delete_refuses_open_capacity_reservation_without_mutating_owned_st
             == 1
         )
         assert WorkerRepository(session).get_across_workspaces(worker_id) is not None
-
-
-def test_public_delete_refuses_helm_owned_kubernetes_pool_before_mutation(
-    isolated_services: ApiServices,
-) -> None:
-    workspace_id = _default_workspace_id(isolated_services)
-    pool_name = "helm-owned-pool"
-    isolated_services.compute.create_pool(
-        pool_name,
-        workspace=workspace_id,
-        provider="kubernetes",
-        initial_workers=1,
-        min_workers=1,
-        max_workers=2,
-        scaling_enabled=True,
-        worker_cpu_millicores=4_000,
-        worker_memory_mib=8_192,
-    )
-    guard = _RecordingCapacityReservationGuard(open_reservations=False)
-    gateway = _gateway(isolated_services, guard, key_prefix="helm-owned-delete")
-
-    with pytest.raises(ConflictError, match="Helm-owned"):
-        gateway.delete_pool(pool_name, workspace_id=workspace_id)
-
-    assert [pool.name for pool in isolated_services.compute.list_pools(workspace=workspace_id)] == [
-        pool_name
-    ]
-    assert guard.events == []
 
 
 def test_pool_delete_uses_durable_capacity_owner_for_guard_and_scheduler_state(

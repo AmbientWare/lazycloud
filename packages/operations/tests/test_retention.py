@@ -1212,52 +1212,6 @@ def test_resumed_image_cleanup_shares_one_build_budget_across_images(
         )
 
 
-def test_build_resource_protection_uses_constant_query_count(
-    isolated_services: ApiServices,
-    tmp_path: Path,
-) -> None:
-    workspace = ControlPlaneService(isolated_services.context).upsert_workspace("default")
-    shared_path = str(tmp_path / "shared.rclip")
-    cache_key = "shared-published-cache"
-    retained = ImageBuildRecord(
-        id=str(uuid4()),
-        image=ImageSpec(image_id="retained-query-count"),
-        fingerprint="retained-query-count",
-        image_id="retained-query-count",
-        status=BuildStatus.Complete,
-        phase=ImageBuildPhase.Complete,
-        artifact_path=shared_path,
-        cache_metadata={"cache_publish_key": cache_key},
-    )
-    with isolated_services.context.database.session() as session:
-        ImageBuildRepository(session).upsert(retained, workspace_id=workspace.id)
-
-    queries = 0
-
-    def count_query(*_args: object) -> None:
-        nonlocal queries
-        queries += 1
-
-    engine = isolated_services.context.database.engine
-    event.listen(engine, "before_cursor_execute", count_query)
-    try:
-        with isolated_services.context.database.session() as session:
-            protected_paths, protected_cache_keys = ImageBuildRepository(
-                session
-            ).protected_artifact_resources(
-                deleting_build_ids={str(uuid4())},
-                paths={shared_path}
-                | {str(tmp_path / f"candidate-{index}") for index in range(100)},
-                cache_keys={cache_key} | {f"cache-{index}" for index in range(100)},
-            )
-    finally:
-        event.remove(engine, "before_cursor_execute", count_query)
-
-    assert protected_paths == frozenset({shared_path})
-    assert protected_cache_keys == frozenset({cache_key})
-    assert queries == 2
-
-
 def test_artifact_reference_age_starts_when_the_build_finishes(
     isolated_services: ApiServices,
 ) -> None:

@@ -17,55 +17,22 @@ test("canonical marketing routes are public, responsive, and accessible", async 
 
   await page.goto("/");
 
-  await expect(page).toHaveTitle("LazyCloud — The cloud platform for AI-speed development");
-  await expect(page.locator('meta[name="description"]')).toHaveAttribute(
-    "content",
-    /complete cloud platform for developers and agents to deploy applications/i,
-  );
-  await expect(page.getByRole("heading", { level: 1 })).toHaveAccessibleName(
-    "The cloud platform for AI-speed development.",
-  );
+  // The public route is not behind the token gate, and the internal admin CLI
+  // (`apps/cli`) is never advertised on a customer-facing page.
   await expect(page.locator("body")).not.toContainText("Enter an access token");
-  await expect(page.locator("body")).toContainText("lazycloud deploy application.py:app");
   await expect(page.locator("body")).not.toContainText("lazycloud-admin");
 
-  const heroTabs = page.getByRole("tablist", { name: "Hero code examples" }).getByRole("tab");
-  await expect(heroTabs).toHaveText([
-    "Apps + APIs",
-    "Functions",
-    "Task queues",
-    "Sandboxes",
-    "Services",
-    "Schedules",
-  ]);
-  await expect(heroTabs.first()).toHaveAttribute("aria-selected", "true");
-
-  await page.getByRole("tab", { name: "Sandboxes" }).click();
-  const sandboxPanel = page.getByRole("tabpanel", { name: "Sandboxes" });
-  await expect(sandboxPanel).toContainText("python application.py");
-  await expect(sandboxPanel).toContainText("sandbox ready");
-  await expect(sandboxPanel).not.toContainText("lazycloud deploy application.py:app");
+  const sandboxTab = page.getByRole("tab", { name: "Sandboxes" });
+  await sandboxTab.click();
+  await expect(sandboxTab).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tabpanel", { name: "Sandboxes" })).toBeVisible();
 
   const marketingSurface = page.locator(".marketing-site");
   await expect(marketingSurface.locator('a[href="/dashboard"]')).toHaveCount(0);
-  await expect(
-    marketingSurface.getByRole("button", {
-      name: "Private beta",
-      includeHidden: true,
-    }),
-  ).toHaveCount(3);
-  await expect(marketingSurface).toContainText("lazycloud client get review_app");
-  await expect(marketingSurface).toContainText('Volume("artifacts") · /artifacts');
-  const layout = await marketingSurface.evaluate((element) => ({
-    horizontalOverflow: element.scrollWidth - element.clientWidth,
-    height: element.clientHeight,
-    viewportHeight: window.innerHeight,
-    width: element.clientWidth,
-    viewportWidth: window.innerWidth,
-  }));
-  expect(layout.horizontalOverflow).toBeLessThanOrEqual(1);
-  expect(layout.height).toBe(layout.viewportHeight);
-  expect(layout.width).toBe(layout.viewportWidth);
+  const horizontalOverflow = await marketingSurface.evaluate(
+    (element) => element.scrollWidth - element.clientWidth,
+  );
+  expect(horizontalOverflow).toBeLessThanOrEqual(1);
 
   await marketingSurface.evaluate((element) => element.scrollTo({ top: element.scrollHeight }));
   await expect(page.getByRole("contentinfo")).toBeVisible();

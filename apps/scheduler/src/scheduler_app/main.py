@@ -22,18 +22,7 @@ from observability.settings import (
     WorkspaceChangeStreamSettings,
 )
 from provider_clients.settings import AwsAccountConnectionSettings, AwsCapacitySettings
-from provider_kubernetes import (
-    KubernetesContainerWorkerReplicaScaler,
-    KubernetesContainerWorkerScaleResult,
-    KubernetesContainerWorkerScalerSettings,
-)
-from scheduler.pool_sizing import (
-    WorkerPoolReplicaScaleOutcome,
-    WorkerPoolReplicaScaler,
-    WorkerPoolReplicaScaleResult,
-)
-from shared.app_identity import NAME, SCHEDULER_PROCESS_NAME
-from shared.compute_fleet import Pool
+from shared.app_identity import SCHEDULER_PROCESS_NAME
 from shared.process_liveness import HeartbeatFile, heartbeat_path
 from storage.image_archive import ImageArchiveSettings
 from storage.retention_settings import RetentionSettings
@@ -245,89 +234,7 @@ def build_scheduler_runtime(
         managed_compute_reconcile_interval_seconds=(
             scheduler_settings.managed_compute_reconcile_interval_seconds
         ),
-        worker_pool_replica_scaler=worker_pool_replica_scaler_from_settings(scheduler_settings),
         image_build_container_settings=ImageBuildContainerSettings(),
-        kubernetes_capacity_pools=scheduler_settings.kubernetes_capacity_pools,
-    )
-
-
-@dataclass(slots=True)
-class KubernetesWorkerPoolReplicaScaler:
-    scaler: KubernetesContainerWorkerReplicaScaler
-
-    def describe_worker_pool(
-        self,
-        pool: Pool,
-        *,
-        reservation_id: str,
-        operation_id: str,
-    ) -> WorkerPoolReplicaScaleResult:
-        return self._result(
-            self.scaler.describe_pool(
-                pool.name,
-                minimum_replicas=pool.min_workers,
-                maximum_replicas=pool.max_workers,
-                capacity_owner_id=pool.capacity_owner_id,
-                reservation_id=reservation_id,
-                operation_id=operation_id,
-            )
-        )
-
-    def scale_worker_pool(
-        self,
-        pool: Pool,
-        replicas: int,
-        *,
-        reservation_id: str,
-        operation_id: str,
-    ) -> WorkerPoolReplicaScaleResult:
-        return self._result(
-            self.scaler.scale_pool(
-                pool.name,
-                replicas,
-                minimum_replicas=pool.min_workers,
-                maximum_replicas=pool.max_workers,
-                capacity_owner_id=pool.capacity_owner_id,
-                reservation_id=reservation_id,
-                operation_id=operation_id,
-            )
-        )
-
-    @staticmethod
-    def _result(
-        result: KubernetesContainerWorkerScaleResult,
-    ) -> WorkerPoolReplicaScaleResult:
-        state = result.state
-        return WorkerPoolReplicaScaleResult(
-            outcome=WorkerPoolReplicaScaleOutcome(result.outcome.value),
-            capacity_owner_id=result.target.capacity_owner_id,
-            pool_name=result.target.pool_name,
-            desired_replicas=(
-                result.target.desired_replicas if state is None else state.desired_replicas
-            ),
-            observed_replicas=0 if state is None else state.observed_replicas,
-            resource_version="" if state is None else state.resource_version,
-            provider="kubernetes",
-            target=result.target.deployment_name,
-            retry_after_seconds=result.retry_after_seconds or 0,
-            reason=result.reason,
-        )
-
-
-def worker_pool_replica_scaler_from_settings(
-    scheduler_settings: SchedulerProcessSettings,
-) -> WorkerPoolReplicaScaler | None:
-    if not any(pool.scaling_enabled for pool in scheduler_settings.kubernetes_capacity_pools):
-        return None
-    name = scheduler_settings.worker_pool_scaler_kubernetes_name or NAME
-    namespace = scheduler_settings.worker_pool_scaler_kubernetes_namespace or f"{name}-system"
-    return KubernetesWorkerPoolReplicaScaler(
-        KubernetesContainerWorkerReplicaScaler.from_cluster(
-            KubernetesContainerWorkerScalerSettings(
-                deployment_prefix=name,
-                namespace=namespace,
-            )
-        )
     )
 
 

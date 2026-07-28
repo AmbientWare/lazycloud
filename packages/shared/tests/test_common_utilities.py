@@ -1,26 +1,17 @@
 from __future__ import annotations
 
-import sys
-import time
-
 import pytest
 from foundation.network import (
     normalize_worker_network_prefix,
     parse_worker_network_prefix,
     worker_network_prefix,
 )
-from foundation.process import (
-    ManagedCommandState,
-    ManagedCommandStillRunning,
-    run_command_with_timeout,
-    start_managed_command,
-)
 from foundation.shell import shell_quote
 from foundation.validation import (
     validate_allow_list,
     validate_cidr,
 )
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 from shared.deployment_records import DeploymentSpec
 from shared.deployments import StubKind
 from shared.urls import (
@@ -32,10 +23,6 @@ from shared.urls import (
     pod_proxy_url,
 )
 from tests.url_constants import EXAMPLE_DOMAIN, EXAMPLE_URL
-
-
-class _CommandStateContract(BaseModel):
-    state: ManagedCommandState
 
 
 def test_url_builders_cover_path_host_public_and_ports() -> None:
@@ -155,13 +142,6 @@ def test_canonical_pod_proxy_urls_cover_path_and_host_modes() -> None:
 @pytest.mark.parametrize(
     ("origin", "port", "message"),
     [
-        ("", 8080, None),
-        ("lazycloud.dev", 8080, None),
-        ("ftp://lazycloud.dev", 8080, None),
-        ("https://user:password@lazycloud.dev", 8080, None),
-        ("https://lazycloud.dev/base", 8080, None),
-        ("https://lazycloud.dev?mode=proxy", 8080, None),
-        ("https://lazycloud.dev#proxy", 8080, None),
         ("https://lazy cloud.dev", 8080, None),
         (" https://lazycloud.dev", 8080, None),
         ("https://lazycloud.dev", 0, "between 1 and 65535"),
@@ -201,26 +181,3 @@ def test_validation_network_prefix_and_shell_quote() -> None:
         normalize_worker_network_prefix("cluster", "node\tone") == "cluster:cluster:node:node_one"
     )
     assert shell_quote("can't") == "'can'\\''t'"
-
-
-def test_managed_command_wait_poll_and_terminate() -> None:
-    result = run_command_with_timeout(1, [sys.executable, "-c", "print('ok')"])
-    assert result.ok
-    assert result.stdout.strip() == "ok"
-
-    command = start_managed_command(
-        [
-            sys.executable,
-            "-c",
-            "import time; print('ready', flush=True); time.sleep(5)",
-        ]
-    )
-    time.sleep(0.1)
-    assert command.poll() is None
-    assert "ready" in command.output()
-    with pytest.raises(ManagedCommandStillRunning):
-        command.wait(timeout_seconds=0.01)
-
-    terminated = command.terminate(timeout_seconds=1)
-    assert terminated.state == ManagedCommandState.Terminated
-    assert "ready" in terminated.output

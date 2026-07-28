@@ -80,8 +80,7 @@ command validates the retained executable and derives its absolute
 `agent-binarys` root from the local manifest path before activation.
 
 The uploaded workflow evidence contains `manifest.json`. Its
-`deployment_environment` object is the canonical Compose configuration. For
-Helm, map the same fields as follows:
+`deployment_environment` object is the canonical Compose configuration.
 
 ```text
 agentArtifact.version                     LAZYCLOUD_AGENT_BINARY_VERSION

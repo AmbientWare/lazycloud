@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import pytest
+from execution.collections.planning import MAX_MAP_VALUE_SIZE_BYTES
 from execution.collections.redis import (
     RedisMapService,
     RedisSimpleQueueService,
 )
+from shared.errors import InvalidInputError, NotFoundError
+from shared.http.collections import MAX_MAP_TTL_SECONDS
 from tests.real_redis import RealRedisActors
 
 
@@ -30,6 +34,42 @@ def test_real_redis_map_round_trip_stats_and_workspace_cleanup(
 
     assert service.map_names("workspace-a") == ()
     assert service.map_get("workspace-b", "cache", "other") == b"preserved"
+
+
+def test_real_redis_map_drops_expired_index_entries_and_refuses_oversized_entries(
+    real_redis_actors: RealRedisActors,
+) -> None:
+    redis = real_redis_actors.client()
+    service = RedisMapService(redis)
+
+    service.map_set("workspace-a", "cache", "alpha", b"first")
+    service.map_set("workspace-a", "cache", "beta", b"second")
+    # An expired value leaves its index entry behind; reads must reconcile it
+    # rather than report a key whose value is already gone.
+    redis.delete(redis.key("map:workspace-a:cache:alpha"))
+
+    assert service.map_keys("workspace-a", "cache") == ("beta",)
+    assert service.map_count("workspace-a", "cache") == 1
+    assert redis.set_members(redis.key("map:workspace-a:cache:index")) == {"beta"}
+    with pytest.raises(NotFoundError, match="map key not found"):
+        service.map_get("workspace-a", "cache", "alpha")
+
+    with pytest.raises(InvalidInputError, match="larger than 1 MiB"):
+        service.map_set(
+            "workspace-a",
+            "cache",
+            "oversized",
+            b"x" * (MAX_MAP_VALUE_SIZE_BYTES + 1),
+        )
+    with pytest.raises(InvalidInputError, match="longer than 1 week"):
+        service.map_set(
+            "workspace-a",
+            "cache",
+            "long-lived",
+            b"value",
+            ttl_seconds=MAX_MAP_TTL_SECONDS + 1,
+        )
+    assert service.map_keys("workspace-a", "cache") == ("beta",)
 
 
 def test_real_redis_simple_queue_round_trip_stats_and_workspace_cleanup(

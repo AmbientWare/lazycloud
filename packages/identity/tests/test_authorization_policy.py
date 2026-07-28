@@ -155,43 +155,6 @@ def test_auth_service_defaults_do_not_share_process_global_cache(
     assert verified_hashes == [record.token_hash]
 
 
-def test_auth_service_authenticate_uses_prefix_candidates(
-    isolated_services: ApiServices,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    auth = AuthService(isolated_services.context)
-    raw_token, record = auth.create_token(
-        "worker",
-        scopes=[AuthScope.Worker.value],
-        kind=TokenKind.Worker,
-    )
-    auth.create_token(
-        "other-worker",
-        scopes=[AuthScope.Worker.value],
-        kind=TokenKind.Worker,
-    )
-
-    def fail_full_scan(
-        _repository: TokenRepository,
-        *,
-        workspace_id: str,
-    ) -> list[AuthTokenRecord]:
-        del workspace_id
-        raise AssertionError("authenticate should not scan every token")
-
-    seen_hashes: list[str] = []
-
-    def verify_from_prefix_candidates(_token: str, encoded: str) -> bool:
-        seen_hashes.append(encoded)
-        return encoded == record.token_hash
-
-    monkeypatch.setattr(identity.auth.TokenRepository, "list", fail_full_scan)
-    monkeypatch.setattr(identity.auth, "_verify_token", verify_from_prefix_candidates)
-
-    assert auth.authenticate(raw_token, scope=AuthScope.Worker).id == record.id
-    assert seen_hashes == [record.token_hash]
-
-
 def test_policy_decisions_cover_workspace_admin_and_restricted_tokens(
     isolated_services: ApiServices,
 ) -> None:

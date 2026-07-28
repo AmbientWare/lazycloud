@@ -21,21 +21,6 @@ def _replica_context(services: ApiServices) -> ServiceContext:
     return ServiceContext(database=services.context.database, paths=services.context.paths)
 
 
-def test_local_cache_alone_serves_stale_token_without_invalidation_signal(
-    isolated_services: ApiServices,
-) -> None:
-    auth_a = AuthService(isolated_services.context)
-    auth_b = AuthService(_replica_context(isolated_services))
-    raw_token, record = auth_a.create_token("api-key")
-
-    assert auth_b.authenticate(raw_token).id == record.id
-    auth_a.revoke_token(record.id)
-
-    # Replica B still trusts its warm local cache inside the TTL window: this is
-    # exactly the staleness the invalidation signal exists to eliminate.
-    assert auth_b.authenticate(raw_token).id == record.id
-
-
 def test_revoked_token_rejected_immediately_across_replicas(
     isolated_services: ApiServices,
 ) -> None:
