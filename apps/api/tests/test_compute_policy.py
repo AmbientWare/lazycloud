@@ -443,7 +443,7 @@ def test_managed_placement_binds_workspace_agent_capacity_owner(
     isolated_services.compute.create_pool(
         "platform-default",
         workspace=workspace_id,
-        provider="kubernetes",
+        provider="aws",
         default_eligible=True,
         priority=1_000,
         worker_cpu_millicores=8_000,

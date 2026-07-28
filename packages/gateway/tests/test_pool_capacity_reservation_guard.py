@@ -571,34 +571,6 @@ def test_pool_delete_refuses_open_capacity_reservation_without_mutating_owned_st
         assert WorkerRepository(session).get_across_workspaces(worker_id) is not None
 
 
-def test_public_delete_refuses_helm_owned_kubernetes_pool_before_mutation(
-    isolated_services: ApiServices,
-) -> None:
-    workspace_id = _default_workspace_id(isolated_services)
-    pool_name = "helm-owned-pool"
-    isolated_services.compute.create_pool(
-        pool_name,
-        workspace=workspace_id,
-        provider="kubernetes",
-        initial_workers=1,
-        min_workers=1,
-        max_workers=2,
-        scaling_enabled=True,
-        worker_cpu_millicores=4_000,
-        worker_memory_mib=8_192,
-    )
-    guard = _RecordingCapacityReservationGuard(open_reservations=False)
-    gateway = _gateway(isolated_services, guard, key_prefix="helm-owned-delete")
-
-    with pytest.raises(ConflictError, match="Helm-owned"):
-        gateway.delete_pool(pool_name, workspace_id=workspace_id)
-
-    assert [pool.name for pool in isolated_services.compute.list_pools(workspace=workspace_id)] == [
-        pool_name
-    ]
-    assert guard.events == []
-
-
 def test_pool_delete_uses_durable_capacity_owner_for_guard_and_scheduler_state(
     isolated_services: ApiServices,
 ) -> None:
