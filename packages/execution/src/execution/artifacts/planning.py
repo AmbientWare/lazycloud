@@ -6,29 +6,29 @@ from pathlib import PurePosixPath
 
 from pydantic import Field
 from shared.contracts import ContractModel
-from shared.http.outputs import DEFAULT_OUTPUT_PUBLIC_URL_EXPIRES_SECONDS
+from shared.http.artifacts import DEFAULT_ARTIFACT_PUBLIC_URL_EXPIRES_SECONDS
 
-OUTPUT_ROUTE_PREFIX = "/output"
-DEFAULT_OUTPUTS_PATH = "/data/outputs"
-DEFAULT_OUTPUTS_PREFIX = "outputs"
+OUTPUT_ROUTE_PREFIX = "/artifact"
+DEFAULT_ARTIFACTS_PATH = "/data/artifacts"
+DEFAULT_ARTIFACTS_PREFIX = "artifacts"
 
 
-class OutputStorageMode(StrEnum):
+class ArtifactStorageMode(StrEnum):
     LocalFilesystem = "local-filesystem"
     WorkspaceObjectStorage = "workspace-object-storage"
 
 
-class OutputPublicUrlStatus(StrEnum):
+class ArtifactPublicUrlStatus(StrEnum):
     CachedProxyUrl = "cached-proxy-url"
     PresignedObjectUrl = "presigned-object-url"
     InvalidRequest = "invalid-request"
 
 
-class OutputPathPlan(ContractModel):
+class ArtifactPathPlan(ContractModel):
     workspace_name: str
     stub_external_id: str
     task_external_id: str
-    output_id: str
+    artifact_id: str
     filename: str
     root_path: str
     file_path: str
@@ -36,8 +36,8 @@ class OutputPathPlan(ContractModel):
     storage_key: str
 
 
-class OutputStatPlan(ContractModel):
-    output_id: str
+class ArtifactStatPlan(ContractModel):
+    artifact_id: str
     task_id: str
     filename: str
     mode: str
@@ -46,95 +46,95 @@ class OutputStatPlan(ContractModel):
     modified_at: datetime | None = None
 
 
-class OutputPublicUrlPlan(ContractModel):
-    status: OutputPublicUrlStatus
-    output_id: str
+class ArtifactPublicUrlPlan(ContractModel):
+    status: ArtifactPublicUrlStatus
+    artifact_id: str
     cache_key: str
     target_path: str
     public_url: str
     expires_seconds: int = Field(ge=0)
-    storage_mode: OutputStorageMode
+    storage_mode: ArtifactStorageMode
 
     @property
     def ok(self) -> bool:
         return self.status in {
-            OutputPublicUrlStatus.CachedProxyUrl,
-            OutputPublicUrlStatus.PresignedObjectUrl,
+            ArtifactPublicUrlStatus.CachedProxyUrl,
+            ArtifactPublicUrlStatus.PresignedObjectUrl,
         }
 
 
-def output_public_url_key(output_id: str) -> str:
-    return f"output:{output_id}"
+def artifact_public_url_key(artifact_id: str) -> str:
+    return f"artifact:{artifact_id}"
 
 
-def output_task_root_path(
+def artifact_task_root_path(
     workspace_name: str,
     stub_external_id: str,
     task_external_id: str,
     *,
-    outputs_path: str = DEFAULT_OUTPUTS_PATH,
+    artifacts_path: str = DEFAULT_ARTIFACTS_PATH,
 ) -> str:
-    return _join(outputs_path, workspace_name, stub_external_id, task_external_id)
+    return _join(artifacts_path, workspace_name, stub_external_id, task_external_id)
 
 
-def output_storage_prefix(stub_external_id: str, task_external_id: str) -> str:
-    return _join(DEFAULT_OUTPUTS_PREFIX, stub_external_id, task_external_id)
+def artifact_storage_prefix(stub_external_id: str, task_external_id: str) -> str:
+    return _join(DEFAULT_ARTIFACTS_PREFIX, stub_external_id, task_external_id)
 
 
-def plan_output_path(
+def plan_artifact_path(
     workspace_name: str,
     stub_external_id: str,
     task_external_id: str,
-    output_id: str,
+    artifact_id: str,
     filename: str,
     *,
-    outputs_path: str = DEFAULT_OUTPUTS_PATH,
-) -> OutputPathPlan:
+    artifacts_path: str = DEFAULT_ARTIFACTS_PATH,
+) -> ArtifactPathPlan:
     safe_name = _safe_filename(filename)
-    root = output_task_root_path(
+    root = artifact_task_root_path(
         workspace_name,
         stub_external_id,
         task_external_id,
-        outputs_path=outputs_path,
+        artifacts_path=artifacts_path,
     )
-    storage_prefix = output_storage_prefix(stub_external_id, task_external_id)
-    return OutputPathPlan(
+    storage_prefix = artifact_storage_prefix(stub_external_id, task_external_id)
+    return ArtifactPathPlan(
         workspace_name=workspace_name,
         stub_external_id=stub_external_id,
         task_external_id=task_external_id,
-        output_id=output_id,
+        artifact_id=artifact_id,
         filename=safe_name,
         root_path=root,
-        file_path=_join(root, output_id, safe_name),
+        file_path=_join(root, artifact_id, safe_name),
         storage_prefix=storage_prefix,
-        storage_key=_join(storage_prefix, output_id, safe_name),
+        storage_key=_join(storage_prefix, artifact_id, safe_name),
     )
 
 
-def plan_output_public_url(
+def plan_artifact_public_url(
     *,
-    output_id: str,
+    artifact_id: str,
     target_path: str,
     gateway_external_url: str,
-    expires_seconds: int = DEFAULT_OUTPUT_PUBLIC_URL_EXPIRES_SECONDS,
-    storage_mode: OutputStorageMode = OutputStorageMode.LocalFilesystem,
+    expires_seconds: int = DEFAULT_ARTIFACT_PUBLIC_URL_EXPIRES_SECONDS,
+    storage_mode: ArtifactStorageMode = ArtifactStorageMode.LocalFilesystem,
     presigned_url: str = "",
-) -> OutputPublicUrlPlan:
-    cache_key = output_public_url_key(output_id)
-    if storage_mode is OutputStorageMode.WorkspaceObjectStorage:
+) -> ArtifactPublicUrlPlan:
+    cache_key = artifact_public_url_key(artifact_id)
+    if storage_mode is ArtifactStorageMode.WorkspaceObjectStorage:
         if not presigned_url:
-            return OutputPublicUrlPlan(
-                status=OutputPublicUrlStatus.InvalidRequest,
-                output_id=output_id,
+            return ArtifactPublicUrlPlan(
+                status=ArtifactPublicUrlStatus.InvalidRequest,
+                artifact_id=artifact_id,
                 cache_key=cache_key,
                 target_path=target_path,
                 public_url="",
                 expires_seconds=expires_seconds,
                 storage_mode=storage_mode,
             )
-        return OutputPublicUrlPlan(
-            status=OutputPublicUrlStatus.PresignedObjectUrl,
-            output_id=output_id,
+        return ArtifactPublicUrlPlan(
+            status=ArtifactPublicUrlStatus.PresignedObjectUrl,
+            artifact_id=artifact_id,
             cache_key=cache_key,
             target_path=target_path,
             public_url=presigned_url,
@@ -142,12 +142,12 @@ def plan_output_public_url(
             storage_mode=storage_mode,
         )
 
-    return OutputPublicUrlPlan(
-        status=OutputPublicUrlStatus.CachedProxyUrl,
-        output_id=output_id,
+    return ArtifactPublicUrlPlan(
+        status=ArtifactPublicUrlStatus.CachedProxyUrl,
+        artifact_id=artifact_id,
         cache_key=cache_key,
         target_path=target_path,
-        public_url=f"{gateway_external_url.rstrip('/')}{OUTPUT_ROUTE_PREFIX}/id/{output_id}",
+        public_url=f"{gateway_external_url.rstrip('/')}{OUTPUT_ROUTE_PREFIX}/id/{artifact_id}",
         expires_seconds=expires_seconds,
         storage_mode=storage_mode,
     )
@@ -156,7 +156,7 @@ def plan_output_public_url(
 def _safe_filename(filename: str) -> str:
     normalized = filename.replace("\\", "/").rstrip("/")
     name = PurePosixPath(normalized).name
-    return name or "output"
+    return name or "artifact"
 
 
 def _join(*parts: str) -> str:

@@ -9,8 +9,8 @@ from uuid import uuid4
 
 import uvicorn
 from compute.aws_connections import AwsAccountConnectionService
+from execution.artifacts.service import ArtifactStorageService
 from execution.collections.redis import RedisMapService, RedisSimpleQueueService
-from execution.outputs.service import OutputStorageService
 from execution.pods.service import PodControlService
 from execution.shells.service import ShellControlService
 from execution.signals.redis import RedisSignalService
@@ -77,7 +77,7 @@ def create_app(
     signal_service: RedisSignalService | None = None,
     map_service: RedisMapService | None = None,
     simple_queue_service: RedisSimpleQueueService | None = None,
-    output_service: OutputStorageService | None = None,
+    artifact_service: ArtifactStorageService | None = None,
     endpoint_service: EndpointApiService | None = None,
     function_service: FunctionApiService | None = None,
     gateway_service: GatewayControlService | None = None,
@@ -93,7 +93,7 @@ def create_app(
         signal_service=signal_service,
         map_service=map_service,
         simple_queue_service=simple_queue_service,
-        output_service=output_service,
+        artifact_service=artifact_service,
         endpoint_service=endpoint_service,
         function_service=function_service,
         gateway_service=gateway_service,

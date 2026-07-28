@@ -35,6 +35,7 @@ from coordination.redis_client import RedisClient
 from coordination.wake_signal import RedisWakeSignal
 from database.context import ServiceContext
 from database.records.apps import StubRecord
+from execution.artifacts.service import ArtifactStorageService
 from execution.collections.redis import RedisMapService, RedisSimpleQueueService
 from execution.collections.service import CollectionService
 from execution.containers.preemption import PreemptedContainerService
@@ -51,7 +52,6 @@ from execution.endpoints.service import (
     EndpointIngressDispatchSession,
 )
 from execution.functions.service import FunctionControlService
-from execution.outputs.service import OutputStorageService
 from execution.pods.service import PodControlService
 from execution.secrets.service import SecretService
 from execution.shells.service import ShellControlService
@@ -528,7 +528,7 @@ class ApiServices(ApiServiceCore):
     signal_service: RedisSignalService
     map_service: RedisMapService
     simple_queue_service: RedisSimpleQueueService
-    output_service: OutputStorageService
+    artifact_service: ArtifactStorageService
     endpoint_service: EndpointApiService
     function_service: FunctionApiService
     gateway_service: GatewayControlService
@@ -594,7 +594,7 @@ class ApiServices(ApiServiceCore):
         signal_service: RedisSignalService | None = None,
         map_service: RedisMapService | None = None,
         simple_queue_service: RedisSimpleQueueService | None = None,
-        output_service: OutputStorageService | None = None,
+        artifact_service: ArtifactStorageService | None = None,
         endpoint_service: EndpointApiService | None = None,
         function_service: FunctionApiService | None = None,
         gateway_service: GatewayControlService | None = None,
@@ -1008,7 +1008,7 @@ class ApiServices(ApiServiceCore):
             signal_service=signal_service,
             map_service=map_service,
             simple_queue_service=simple_queue_service,
-            output_service=output_service,
+            artifact_service=artifact_service,
             endpoint_service=endpoint_service,
             function_service=function_service,
             gateway_service=gateway_service,
@@ -1026,7 +1026,7 @@ class ApiServices(ApiServiceCore):
         signal_service: RedisSignalService | None = None,
         map_service: RedisMapService | None = None,
         simple_queue_service: RedisSimpleQueueService | None = None,
-        output_service: OutputStorageService | None = None,
+        artifact_service: ArtifactStorageService | None = None,
         endpoint_service: EndpointApiService | None = None,
         function_service: FunctionApiService | None = None,
         gateway_service: GatewayControlService | None = None,
@@ -1046,7 +1046,9 @@ class ApiServices(ApiServiceCore):
                 if simple_queue_service is not None
                 else self.simple_queue_service
             ),
-            output_service=(output_service if output_service is not None else self.output_service),
+            artifact_service=(
+                artifact_service if artifact_service is not None else self.artifact_service
+            ),
             endpoint_service=(
                 endpoint_service if endpoint_service is not None else self.endpoint_service
             ),
@@ -1123,7 +1125,7 @@ def _compose_api_services(
     signal_service: RedisSignalService | None,
     map_service: RedisMapService | None,
     simple_queue_service: RedisSimpleQueueService | None,
-    output_service: OutputStorageService | None,
+    artifact_service: ArtifactStorageService | None,
     endpoint_service: EndpointApiService | None,
     function_service: FunctionApiService | None,
     gateway_service: GatewayControlService | None,
@@ -1316,7 +1318,7 @@ def _compose_api_services(
         signal_service=signal_service or RedisSignalService(RedisSignalRepository(redis)),
         map_service=map_service or RedisMapService(core.binary_redis()),
         simple_queue_service=(simple_queue_service or RedisSimpleQueueService(core.binary_redis())),
-        output_service=output_service or OutputStorageService(core.context),
+        artifact_service=artifact_service or ArtifactStorageService(core.context),
         endpoint_service=endpoint,
         function_service=function,
         gateway_service=gateway,

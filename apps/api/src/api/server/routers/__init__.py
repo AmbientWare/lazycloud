@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from api.server.routers import (
+    artifacts,
     collections,
     control_plane,
     endpoints,
@@ -10,7 +11,6 @@ from api.server.routers import (
     gateway,
     images,
     install,
-    outputs,
     pods,
     resource_api,
     shells,
@@ -34,7 +34,7 @@ def include_api_routers(app: FastAPI) -> None:
     app.include_router(gateway.router)
     app.include_router(images.router)
     app.include_router(pods.router)
-    app.include_router(outputs.router)
+    app.include_router(artifacts.router)
     app.include_router(shells.router)
     app.include_router(signals.router)
     app.include_router(collections.router)

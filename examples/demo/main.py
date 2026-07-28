@@ -6,7 +6,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from lazycloud.clients.output.control import OutputControlClient
+from lazycloud.clients.artifact.control import ArtifactControlClient
 from lazycloud.control import resolve_control_client_config
 from lazycloud.http_transport import request_raw
 from lazycloud.json_contracts import parse_json_value
@@ -158,7 +158,7 @@ def resource_smoke(value: int = 8) -> dict[str, JsonValue]:
         "task_id": os.environ.get("TASK_ID", ""),
         "volume_path": str(volume_path),
         "volume_written": volume_path.exists(),
-        "output_id": saved_output.output_id,
+        "artifact_id": saved_output.artifact_id,
         "output_filename": saved_output.filename,
         "output_remote": saved_output.remote,
     }
@@ -345,12 +345,12 @@ def run_remote_resource_smoke_verified(value: int = 8) -> dict[str, JsonValue]:
     try:
         result = _invoke_remote_resource_smoke(value)
         task_id = str(result.get("task_id") or "")
-        output_id = str(result.get("output_id") or "")
+        artifact_id = str(result.get("artifact_id") or "")
         output_filename = str(result.get("output_filename") or "resource-smoke-output.json")
         output_client = _output_control_client()
-        output_stat = output_client.stat(output_id, task_id, output_filename)
+        artifact_stat = output_client.stat(artifact_id, task_id, output_filename)
         output_url = output_client.public_url(
-            output_id,
+            artifact_id,
             task_id,
             output_filename,
             gateway_external_url=resolve_control_client_config().endpoint,
@@ -363,12 +363,12 @@ def run_remote_resource_smoke_verified(value: int = 8) -> dict[str, JsonValue]:
         if not 200 <= response.status_code < 300:
             raise RuntimeError(f"output download failed with HTTP {response.status_code}")
         volume_stat = resource_smoke_volume.stat("result.json")
-        output_stat_payload: dict[str, JsonValue] = {"ok": False}
-        if output_stat.stat is not None:
-            output_stat_payload = {
+        artifact_stat_payload: dict[str, JsonValue] = {"ok": False}
+        if artifact_stat.stat is not None:
+            artifact_stat_payload = {
                 "ok": True,
-                "mode": output_stat.stat.mode,
-                "size": output_stat.stat.size,
+                "mode": artifact_stat.stat.mode,
+                "size": artifact_stat.stat.size,
             }
         return {
             **result,
@@ -377,7 +377,7 @@ def run_remote_resource_smoke_verified(value: int = 8) -> dict[str, JsonValue]:
                 "size": volume_stat.size,
                 "is_dir": volume_stat.is_dir,
             },
-            "post_worker_output_stat": output_stat_payload,
+            "post_worker_artifact_stat": artifact_stat_payload,
             "post_worker_output_url_ok": bool(output_url.public_url),
             "post_worker_output_payload": _json_or_text(response.content.decode("utf-8")),
         }
@@ -390,9 +390,9 @@ def run_remote_signal_handler_smoke() -> dict[str, JsonValue]:
     return signal_handler_smoke.remote()
 
 
-def _output_control_client() -> OutputControlClient:
+def _output_control_client() -> ArtifactControlClient:
     config = resolve_control_client_config()
-    return OutputControlClient.from_endpoint(
+    return ArtifactControlClient.from_endpoint(
         config.endpoint,
         token=config.token,
         timeout_seconds=config.timeout_seconds,

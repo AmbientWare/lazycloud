@@ -11,7 +11,7 @@ from identity.auth import AuthService
 from shared.bytes_transport import encode_bytes
 from shared.deployment_records import DeploymentSpec, VolumeMount
 from shared.deployments import DeploymentKind
-from shared.http.outputs import OutputSaveResponse
+from shared.http.artifacts import ArtifactSaveResponse
 from shared.identity import TokenKind
 from shared.mounts import MountAuthMode
 from storage.service import ObjectStorage
@@ -31,7 +31,7 @@ def test_workspace_object_cleanup_preserves_external_bucket_data(
     storage.put_bytes_for_workspace(
         workspace_id=workspace.id,
         bucket="owned",
-        key="outputs/task/result.txt",
+        key="artifacts/task/result.txt",
         data=b"owned-data",
     )
     object_client.put_bytes(
@@ -41,7 +41,7 @@ def test_workspace_object_cleanup_preserves_external_bucket_data(
     )
 
     assert storage.delete_workspace_objects(workspace.id) == 1
-    assert ("owned", "outputs/task/result.txt") not in object_client.objects
+    assert ("owned", "artifacts/task/result.txt") not in object_client.objects
     assert object_client.objects[("external", "customer/preserved.txt")] == b"external-data"
 
 
@@ -104,7 +104,7 @@ def _save_output(
     content: bytes,
 ) -> str:
     response = client.post(
-        "/api/v1/outputs/save",
+        "/api/v1/artifacts/save",
         headers=_headers(token),
         json={
             "task_id": task_id,
@@ -113,7 +113,7 @@ def _save_output(
         },
     )
     assert response.status_code == 200, response.text
-    return OutputSaveResponse.model_validate_json(response.content).id
+    return ArtifactSaveResponse.model_validate_json(response.content).id
 
 
 def _workspace_token(isolated_services: ApiServices, workspace_id: str, name: str) -> str:

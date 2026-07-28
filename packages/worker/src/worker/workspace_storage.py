@@ -7,8 +7,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from shared.container_requests import (
-    DEFAULT_OUTPUTS_PATH,
-    WORKER_USER_OUTPUT_VOLUME,
+    DEFAULT_ARTIFACTS_PATH,
+    WORKER_USER_ARTIFACT_VOLUME,
     RequestMount,
     RequestMountType,
 )
@@ -249,10 +249,10 @@ def _mount_requires_workspace_storage(mount: RequestMount) -> bool:
     mount_path = mount.mount_path.rstrip("/")
     local_path = mount.local_path.rstrip("/")
     return (
-        mount_path == WORKER_USER_OUTPUT_VOLUME
-        or mount_path.startswith(WORKER_USER_OUTPUT_VOLUME + "/")
-        or local_path == DEFAULT_OUTPUTS_PATH
-        or local_path.startswith(DEFAULT_OUTPUTS_PATH + "/")
+        mount_path == WORKER_USER_ARTIFACT_VOLUME
+        or mount_path.startswith(WORKER_USER_ARTIFACT_VOLUME + "/")
+        or local_path == DEFAULT_ARTIFACTS_PATH
+        or local_path.startswith(DEFAULT_ARTIFACTS_PATH + "/")
     )
 
 

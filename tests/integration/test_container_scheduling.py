@@ -24,7 +24,7 @@ from scheduler.state import (
     SchedulerWorkerRequest,
 )
 from shared.container_requests import (
-    WORKER_USER_OUTPUT_VOLUME,
+    WORKER_USER_ARTIFACT_VOLUME,
     WorkerContainerRequestPayload,
 )
 from shared.containers import ContainerStatus
@@ -126,7 +126,7 @@ def test_function_invoke_requests_workspace_storage_when_workspace_bucket_availa
     assert response.exit_code == 0
     payload = WorkerContainerRequestPayload.model_validate(scheduler.requests[0].payload)
     assert payload.workspace_storage_required
-    assert [mount.mount_path for mount in payload.mounts] == [WORKER_USER_OUTPUT_VOLUME]
+    assert [mount.mount_path for mount in payload.mounts] == [WORKER_USER_ARTIFACT_VOLUME]
 
 
 def test_function_dependency_waits_then_schedules_materialized_args(
