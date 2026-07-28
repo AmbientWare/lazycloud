@@ -16,7 +16,8 @@ from compute.agent_control import (
     plan_route_prewarm_result,
     route_peer_attrs,
 )
-from networking.dialer import BackendRouteDialer
+from networking.dialer import DEFAULT_BACKEND_ROUTE_DIAL_TIMEOUT_SECONDS, BackendRouteDialer
+from networking.tailnet import DEFAULT_TAILNET_STATUS_TIMEOUT_SECONDS
 from pydantic import JsonValue
 from shared.events import Event
 from shared.routing import AgentBackendRoute
@@ -56,10 +57,24 @@ class TailnetPeerStatusProvider(Protocol):
     def peers(self) -> list[TailnetPeerView]: ...
 
 
+def route_prewarm_shutdown_timeout_seconds(dial_timeout_seconds: float) -> float:
+    """Time one in-flight prewarm still needs once shutdown starts.
+
+    A prewarm thread runs a single backend dial to that dial's own deadline and
+    then records the outcome, which reads tailnet peer status before emitting
+    the event. Both terms are owned by the operations that bound them, so a
+    shutdown budget derived here can never be shorter than the work it waits
+    on and no caller has to keep a second number in step.
+    """
+    return dial_timeout_seconds + DEFAULT_TAILNET_STATUS_TIMEOUT_SECONDS
+
+
 @dataclass(slots=True)
 class ThreadRoutePrewarmRunner:
     thread_name_prefix: str = "route-prewarm"
-    shutdown_timeout_seconds: float = 10.0
+    shutdown_timeout_seconds: float = route_prewarm_shutdown_timeout_seconds(
+        DEFAULT_BACKEND_ROUTE_DIAL_TIMEOUT_SECONDS
+    )
     _threads: set[threading.Thread] = field(default_factory=set, init=False, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     _closed: bool = field(default=False, init=False, repr=False)
@@ -98,15 +113,27 @@ class ThreadRoutePrewarmRunner:
             )
 
 
-@dataclass(slots=True)
 class RoutePrewarmService:
-    dialer: BackendRouteDialer
-    events: RoutePrewarmEventEmitter
-    runner: RoutePrewarmRunner = field(default_factory=ThreadRoutePrewarmRunner)
-    peer_provider: TailnetPeerStatusProvider | None = None
-    interval_seconds: float = 30.0
-    attempts: dict[str, datetime] = field(default_factory=dict, init=False)
-    _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
+    def __init__(
+        self,
+        dialer: BackendRouteDialer,
+        events: RoutePrewarmEventEmitter,
+        *,
+        runner: RoutePrewarmRunner | None = None,
+        peer_provider: TailnetPeerStatusProvider | None = None,
+        interval_seconds: float = 30.0,
+    ) -> None:
+        self.dialer = dialer
+        self.events = events
+        self.runner = runner or ThreadRoutePrewarmRunner(
+            shutdown_timeout_seconds=route_prewarm_shutdown_timeout_seconds(
+                dialer.config.timeout_seconds
+            )
+        )
+        self.peer_provider = peer_provider
+        self.interval_seconds = interval_seconds
+        self.attempts: dict[str, datetime] = {}
+        self._lock = threading.Lock()
 
     def prewarm_route(
         self,
