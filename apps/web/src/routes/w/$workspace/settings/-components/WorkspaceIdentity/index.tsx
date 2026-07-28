@@ -43,9 +43,7 @@ export function WorkspaceIdentity({
       className={`h-fit lg:col-start-1 lg:row-start-1 lg:h-auto lg:min-h-0 ${fullWidth ? "lg:col-span-full" : "lg:col-span-3"}`}
       contentClassName="overflow-visible lg:overflow-y-auto"
     >
-      <dl
-        className={`grid grid-cols-2 gap-x-5 gap-y-4 p-4 ${fullWidth ? "sm:grid-cols-4" : ""}`}
-      >
+      <dl className={`grid grid-cols-2 gap-x-5 gap-y-4 p-4 ${fullWidth ? "sm:grid-cols-4" : ""}`}>
         <div className={identity.isEditing ? "col-span-2 min-w-0" : "min-w-0"}>
           <dt className="micro-label mb-1.5">Name</dt>
           <dd>

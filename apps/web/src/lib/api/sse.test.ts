@@ -25,13 +25,15 @@ describe("streamServerSentEvents", () => {
   it("parses id, event, and data fields into frames", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
-        streamResponse([
-          ": connected\n\n",
-          'id: 1\nevent: status\ndata: {"status":"running"}\n\n',
-          'id: 2\nevent: log\ndata: {"message":"hello"}\n\n',
-        ]),
-      ),
+      vi
+        .fn()
+        .mockResolvedValue(
+          streamResponse([
+            ": connected\n\n",
+            'id: 1\nevent: status\ndata: {"status":"running"}\n\n',
+            'id: 2\nevent: log\ndata: {"message":"hello"}\n\n',
+          ]),
+        ),
     );
 
     const events: ServerSentEvent[] = [];
@@ -52,9 +54,9 @@ describe("streamServerSentEvents", () => {
   it("handles frames split across network chunks", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
-        streamResponse(["id: 7\neve", "nt: log\ndata: par", "tial line\n\n"]),
-      ),
+      vi
+        .fn()
+        .mockResolvedValue(streamResponse(["id: 7\neve", "nt: log\ndata: par", "tial line\n\n"])),
     );
 
     const events: ServerSentEvent[] = [];

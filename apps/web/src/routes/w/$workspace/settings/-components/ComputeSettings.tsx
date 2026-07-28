@@ -35,11 +35,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import type {
-  AwsConnection,
-  CustomerComputeInstance,
-  PoolMachine,
-} from "@/lib/api/schemas";
+import type { AwsConnection, CustomerComputeInstance, PoolMachine } from "@/lib/api/schemas";
 import { relativeTime } from "@/lib/format";
 import {
   awsConnectionQueryOptions,
@@ -52,10 +48,7 @@ import { cn } from "@/lib/utils";
 import { AwsConnectionDialog } from "./AwsConnectionDialog";
 import { JoinMachineDialog } from "./JoinMachineDialog";
 import { useComputePolicyController } from "./ComputePolicyForm/controller";
-import {
-  regionOptions,
-  toggleAllowedRegion,
-} from "./region-selection";
+import { regionOptions, toggleAllowedRegion } from "./region-selection";
 
 export function ComputeSettings({ workspaceId }: { workspaceId: string }) {
   const connection = useQuery(awsConnectionQueryOptions(workspaceId));
@@ -64,9 +57,7 @@ export function ComputeSettings({ workspaceId }: { workspaceId: string }) {
   const [expandedProvider, setExpandedProvider] = useState<"aws" | null>(null);
   const [awsDialogOpen, setAwsDialogOpen] = useState(false);
   const [joinDialogOpen, setJoinDialogOpen] = useState(false);
-  const catalog = useQuery(
-    computeCatalogQueryOptions(workspaceId, expandedProvider === "aws"),
-  );
+  const catalog = useQuery(computeCatalogQueryOptions(workspaceId, expandedProvider === "aws"));
   const loadError = connection.error ?? instances.error;
 
   if (connection.isPending || instances.isPending) {
@@ -100,9 +91,7 @@ export function ComputeSettings({ workspaceId }: { workspaceId: string }) {
         catalogRegions={catalog.data?.data.map((item) => item.region) ?? []}
         catalogLoading={catalog.isPending && expandedProvider === "aws"}
         catalogError={catalog.error}
-        onToggle={() =>
-          setExpandedProvider((current) => (current === "aws" ? null : "aws"))
-        }
+        onToggle={() => setExpandedProvider((current) => (current === "aws" ? null : "aws"))}
         onManageAws={() => setAwsDialogOpen(true)}
       />
       <SelfHostedPanel
@@ -161,8 +150,8 @@ function ConnectedCloudsPanel({
           <CloudCog className="size-5 text-muted-foreground" aria-hidden="true" />
           <p className="mt-3 text-sm font-medium">No connected clouds</p>
           <p className="mt-1 max-w-sm text-xs leading-5 text-muted-foreground">
-            Connect an AWS account once. Capacity is then provisioned there only when a
-            workload requests AWS placement.
+            Connect an AWS account once. Capacity is then provisioned there only when a workload
+            requests AWS placement.
           </p>
         </div>
       ) : (
@@ -197,10 +186,7 @@ function ConnectedCloudsPanel({
                       {catalogError.message}
                     </p>
                   ) : (
-                    <AwsPolicyForm
-                      workspaceId={workspaceId}
-                      regions={catalogRegions}
-                    />
+                    <AwsPolicyForm workspaceId={workspaceId} regions={catalogRegions} />
                   )}
                 </section>
                 <CloudInstances instances={instances} />
@@ -337,13 +323,7 @@ function CloudProviderRow({
   );
 }
 
-function AwsPolicyForm({
-  workspaceId,
-  regions,
-}: {
-  workspaceId: string;
-  regions: string[];
-}) {
+function AwsPolicyForm({ workspaceId, regions }: { workspaceId: string; regions: string[] }) {
   const controller = useComputePolicyController(workspaceId);
   const [advanced, setAdvanced] = useState(false);
 
@@ -376,9 +356,7 @@ function AwsPolicyForm({
         <Field label="Default region" htmlFor="compute-default-region">
           <Select
             value={draft.defaultRegion}
-            onValueChange={(value) =>
-              controller.updateField({ field: "defaultRegion", value })
-            }
+            onValueChange={(value) => controller.updateField({ field: "defaultRegion", value })}
           >
             <SelectTrigger id="compute-default-region" className="w-full font-mono">
               <SelectValue />
@@ -398,9 +376,7 @@ function AwsPolicyForm({
           value={draft.maxCpuInstances}
           min={draft.initialCpuWorkers}
           max={100}
-          onChange={(value) =>
-            controller.updateField({ field: "maxCpuInstances", value })
-          }
+          onChange={(value) => controller.updateField({ field: "maxCpuInstances", value })}
         />
         <NumberField
           id="compute-max-gpu"
@@ -408,9 +384,7 @@ function AwsPolicyForm({
           value={draft.maxGpuInstances}
           min={0}
           max={100}
-          onChange={(value) =>
-            controller.updateField({ field: "maxGpuInstances", value })
-          }
+          onChange={(value) => controller.updateField({ field: "maxGpuInstances", value })}
         />
       </div>
 
@@ -450,9 +424,7 @@ function AwsPolicyForm({
             value={draft.initialCpuWorkers}
             min={draft.minCpuWorkers}
             max={draft.maxCpuInstances}
-            onChange={(value) =>
-              controller.updateField({ field: "initialCpuWorkers", value })
-            }
+            onChange={(value) => controller.updateField({ field: "initialCpuWorkers", value })}
           />
           <NumberField
             id="compute-min-cpu-workers"
@@ -460,9 +432,7 @@ function AwsPolicyForm({
             value={draft.minCpuWorkers}
             min={0}
             max={draft.initialCpuWorkers}
-            onChange={(value) =>
-              controller.updateField({ field: "minCpuWorkers", value })
-            }
+            onChange={(value) => controller.updateField({ field: "minCpuWorkers", value })}
           />
           <NumberField
             id="compute-min-free-cpu"
@@ -470,9 +440,7 @@ function AwsPolicyForm({
             value={draft.minFreeCpuMillicores}
             min={0}
             suffix="millicores"
-            onChange={(value) =>
-              controller.updateField({ field: "minFreeCpuMillicores", value })
-            }
+            onChange={(value) => controller.updateField({ field: "minFreeCpuMillicores", value })}
           />
           <NumberField
             id="compute-min-free-memory"
@@ -480,9 +448,7 @@ function AwsPolicyForm({
             value={draft.minFreeMemoryMib}
             min={0}
             suffix="MiB"
-            onChange={(value) =>
-              controller.updateField({ field: "minFreeMemoryMib", value })
-            }
+            onChange={(value) => controller.updateField({ field: "minFreeMemoryMib", value })}
           />
           <NumberField
             id="compute-idle-timeout"
@@ -491,9 +457,7 @@ function AwsPolicyForm({
             min={60}
             max={86_400}
             suffix="seconds"
-            onChange={(value) =>
-              controller.updateField({ field: "idleTimeoutSeconds", value })
-            }
+            onChange={(value) => controller.updateField({ field: "idleTimeoutSeconds", value })}
           />
           <NumberField
             id="compute-root-volume"
@@ -502,9 +466,7 @@ function AwsPolicyForm({
             min={50}
             max={2048}
             suffix="GiB"
-            onChange={(value) =>
-              controller.updateField({ field: "rootVolumeGib", value })
-            }
+            onChange={(value) => controller.updateField({ field: "rootVolumeGib", value })}
           />
           <Field label="Allowed regions" htmlFor="compute-allowed-regions">
             <RegionMultiSelect
@@ -512,9 +474,7 @@ function AwsPolicyForm({
               options={regionOptions(regions, draft.allowedRegions)}
               value={draft.allowedRegions}
               defaultRegion={draft.defaultRegion}
-              onValueChange={(value) =>
-                controller.updateField({ field: "allowedRegions", value })
-              }
+              onValueChange={(value) => controller.updateField({ field: "allowedRegions", value })}
             />
           </Field>
           <Field label="Allowed instance types" htmlFor="compute-allowed-types">
@@ -590,7 +550,10 @@ function CloudInstances({ instances }: { instances: CustomerComputeInstance[] })
           </p>
         </div>
       ) : (
-        <ul aria-label="AWS compute instances" className="divide-y divide-border border-y border-border">
+        <ul
+          aria-label="AWS compute instances"
+          className="divide-y divide-border border-y border-border"
+        >
           {instances.map((instance) => (
             <li
               key={instance.id}
@@ -604,10 +567,7 @@ function CloudInstances({ instances }: { instances: CustomerComputeInstance[] })
                   {instance.instance_type ?? "AWS instance"} · {instance.region}
                 </p>
               </div>
-              <StatusChip
-                status={instance.status}
-                live={instanceStatusReady(instance.status)}
-              />
+              <StatusChip status={instance.status} live={instanceStatusReady(instance.status)} />
               <div className="text-left text-[11px] text-muted-foreground sm:text-right">
                 <p className="mono text-foreground">
                   {formatCpu(instance.cpu_millicores)} · {formatMemory(instance.memory_mb)}
@@ -658,10 +618,7 @@ function RegionMultiSelect({
           <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align="start"
-        className="w-64 max-w-[calc(100vw-2rem)]"
-      >
+      <DropdownMenuContent align="start" className="w-64 max-w-[calc(100vw-2rem)]">
         {options.map((option) => {
           const selected = value.includes(option);
           const isDefault = option === defaultRegion;
@@ -796,9 +753,7 @@ function NumberField({
           min={min}
           max={max}
           value={value}
-          onChange={(event) =>
-            onChange(clamp(Number(event.target.value), min, max))
-          }
+          onChange={(event) => onChange(clamp(Number(event.target.value), min, max))}
           className={cn("font-mono", suffix && "pr-16")}
         />
         {suffix ? (
@@ -843,10 +798,7 @@ function connectionActionLabel(connection: AwsConnection): string | null {
   ) {
     return "Resolve";
   }
-  if (
-    connection.phase === "reconnect_pending" ||
-    connection.phase === "retiring_authorization"
-  ) {
+  if (connection.phase === "reconnect_pending" || connection.phase === "retiring_authorization") {
     return "Review";
   }
   return "Manage";

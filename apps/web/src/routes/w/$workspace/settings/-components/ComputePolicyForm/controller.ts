@@ -47,14 +47,7 @@ export type ComputePolicyDraftUpdate =
   | { field: "rootVolumeGib"; value: number };
 
 type EditorMode =
-  | "loading"
-  | "ready"
-  | "saving"
-  | "saved"
-  | "error"
-  | "review"
-  | "recovering"
-  | "recovery_error";
+  "loading" | "ready" | "saving" | "saved" | "error" | "review" | "recovering" | "recovery_error";
 
 type EditorState = {
   workspaceId: string;
@@ -128,10 +121,7 @@ export function useComputePolicyController(workspaceId: string): ComputePolicyCo
     },
     onSuccess: (outcome) => {
       if (outcome.kind === "saved") {
-        queryClient.setQueryData(
-          computeQueryKeys.policy(outcome.workspaceId),
-          outcome.policy,
-        );
+        queryClient.setQueryData(computeQueryKeys.policy(outcome.workspaceId), outcome.policy);
       }
       setState((current) => {
         if (current.workspaceId !== outcome.workspaceId) return current;
@@ -198,9 +188,7 @@ export function useComputePolicyController(workspaceId: string): ComputePolicyCo
   const review = () => {
     setState((current) => {
       const owned = currentEditorState(current, workspaceId, query.data);
-      return owned.mode === "review"
-        ? { ...owned, mode: "ready", error: null }
-        : owned;
+      return owned.mode === "review" ? { ...owned, mode: "ready", error: null } : owned;
     });
   };
 
@@ -287,10 +275,7 @@ function emptyState(workspaceId: string): EditorState {
   };
 }
 
-function stateFromAuthority(
-  workspaceId: string,
-  policy: WorkspaceComputePolicy,
-): EditorState {
+function stateFromAuthority(workspaceId: string, policy: WorkspaceComputePolicy): EditorState {
   return {
     workspaceId,
     base: policy,
@@ -492,10 +477,7 @@ function applyDraftUpdate(
   }
 }
 
-function policiesEqual(
-  left: WorkspaceComputePolicy,
-  right: WorkspaceComputePolicy,
-): boolean {
+function policiesEqual(left: WorkspaceComputePolicy, right: WorkspaceComputePolicy): boolean {
   return (
     left.revision === right.revision &&
     left.default_placement === right.default_placement &&
@@ -517,7 +499,14 @@ function policiesEqual(
 }
 
 function commaList(value: string): string[] {
-  return [...new Set(value.split(",").map((item) => item.trim()).filter(Boolean))];
+  return [
+    ...new Set(
+      value
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  ];
 }
 
 function asError(error: unknown): Error {

@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  usageBillingOverviewQueryOptions,
-  usageBillingWorkloadsQueryOptions,
-} from "./usage";
+import { usageBillingOverviewQueryOptions, usageBillingWorkloadsQueryOptions } from "./usage";
 
 const window = {
   start: "2026-07-01T00:00:00Z",
@@ -25,11 +22,7 @@ describe("usage query recovery", () => {
   });
 
   it("keys and refreshes the backend-owned current period without browser dates", () => {
-    const options = usageBillingOverviewQueryOptions(
-      "workspace-1",
-      { period: "current" },
-      86_400,
-    );
+    const options = usageBillingOverviewQueryOptions("workspace-1", { period: "current" }, 86_400);
 
     expect(options.queryKey).toContainEqual({
       period: "current",

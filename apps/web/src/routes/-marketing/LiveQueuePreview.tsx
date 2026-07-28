@@ -78,10 +78,7 @@ const SAMPLES: Sample[] = (() => {
        per interval; scale-down waits through an idle grace period. Processing
        for this sample used the previous worker count, preserving startup lag. */
     if (index % SCALE_EVALUATION_SAMPLES === 0) {
-      targetWorkers = Math.min(
-        MAX_WORKERS,
-        Math.ceil(depth / TARGET_TASKS_PER_WORKER),
-      );
+      targetWorkers = Math.min(MAX_WORKERS, Math.ceil(depth / TARGET_TASKS_PER_WORKER));
     }
     if (workers < targetWorkers && index % 2 === 1) {
       workers += 1;
@@ -99,11 +96,7 @@ const SAMPLES: Sample[] = (() => {
 })();
 
 const TASK_CEILING =
-  Math.ceil(
-    Math.max(
-      ...SAMPLES.flatMap((sample) => [sample.depth, sample.processing]),
-    ) / 10,
-  ) * 10;
+  Math.ceil(Math.max(...SAMPLES.flatMap((sample) => [sample.depth, sample.processing])) / 10) * 10;
 
 function plotY(value: number, ceiling: number, height: number) {
   const top = 5;
@@ -150,17 +143,10 @@ export function LiveQueuePreview() {
      represented by empty samples until this activation has produced it. */
   const windowSamples = Array.from({ length: WINDOW }, (_, index) => {
     const sampleIndex = cycleTick - WINDOW + 1 + index;
-    return sampleIndex < 0
-      ? EMPTY_SAMPLE
-      : (SAMPLES[sampleIndex] ?? EMPTY_SAMPLE);
+    return sampleIndex < 0 ? EMPTY_SAMPLE : (SAMPLES[sampleIndex] ?? EMPTY_SAMPLE);
   });
 
-  const queuedPath = tracePath(
-    windowSamples,
-    (sample) => sample.depth,
-    TASK_CEILING,
-    CHART_HEIGHT,
-  );
+  const queuedPath = tracePath(windowSamples, (sample) => sample.depth, TASK_CEILING, CHART_HEIGHT);
   const processingPath = tracePath(
     windowSamples,
     (sample) => sample.processing,
@@ -177,9 +163,7 @@ export function LiveQueuePreview() {
   return (
     <div
       className="marketing-queue-preview flex min-h-0 flex-1 flex-col"
-      data-animation-state={
-        reducedMotion ? "settled" : active ? "running" : "paused"
-      }
+      data-animation-state={reducedMotion ? "settled" : active ? "running" : "paused"}
       ref={previewRef}
     >
       <div className="queue-metrics grid grid-cols-3 border-b border-border">
@@ -257,18 +241,9 @@ function QueueMetric({
   );
 }
 
-function QueueAxis({
-  ceiling,
-  workers = false,
-}: {
-  ceiling: number;
-  workers?: boolean;
-}) {
+function QueueAxis({ ceiling, workers = false }: { ceiling: number; workers?: boolean }) {
   return (
-    <span
-      className={`queue-y-axis ${workers ? "is-workers" : ""}`}
-      aria-hidden="true"
-    >
+    <span className={`queue-y-axis ${workers ? "is-workers" : ""}`} aria-hidden="true">
       <span>{ceiling}</span>
       <span>{ceiling / 2}</span>
       <span>0</span>
@@ -279,15 +254,6 @@ function QueueAxis({
 function ChartGrid({ ceiling, height }: { ceiling: number; height: number }) {
   return [ceiling, ceiling / 2, 0].map((value) => {
     const y = plotY(value, ceiling, height);
-    return (
-      <line
-        className="queue-grid-line"
-        key={value}
-        x1={0}
-        x2={WIDTH}
-        y1={y}
-        y2={y}
-      />
-    );
+    return <line className="queue-grid-line" key={value} x1={0} x2={WIDTH} y1={y} y2={y} />;
   });
 }

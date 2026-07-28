@@ -6,11 +6,7 @@ import type { Workspace } from "@/lib/api/schemas";
 
 import { useWorkspaceDeletion } from "./context";
 
-export function WorkspaceDeletionPanel({
-  workspace,
-}: {
-  workspace: Workspace;
-}) {
+export function WorkspaceDeletionPanel({ workspace }: { workspace: Workspace }) {
   const deletion = useWorkspaceDeletion();
   const availability = deletion.availability(workspace);
 
@@ -24,15 +20,11 @@ export function WorkspaceDeletionPanel({
       contentClassName="p-4 lg:overflow-y-auto"
     >
       <div className="flex items-start gap-3">
-        <TriangleAlert
-          className="mt-0.5 size-4 shrink-0 text-destructive"
-          aria-hidden="true"
-        />
+        <TriangleAlert className="mt-0.5 size-4 shrink-0 text-destructive" aria-hidden="true" />
         <div className="min-w-0 flex-1">
           <p className="text-xs leading-5 text-muted-foreground">
-            Deletes workspace resources, configuration, and credentials
-            permanently. The default, token-owning, and final workspaces are
-            protected.
+            Deletes workspace resources, configuration, and credentials permanently. The default,
+            token-owning, and final workspaces are protected.
           </p>
           <Button
             type="button"

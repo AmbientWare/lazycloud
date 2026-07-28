@@ -1,12 +1,7 @@
 import { queryOptions } from "@tanstack/react-query";
 import { z } from "zod";
 
-import {
-  apiRequest,
-  listWorkspaces,
-  postJson,
-  withWorkspace,
-} from "@/lib/api/client";
+import { apiRequest, listWorkspaces, postJson, withWorkspace } from "@/lib/api/client";
 import { workspaceSchema, type Workspace } from "@/lib/api/schemas";
 
 export function workspacesQueryOptions() {
@@ -33,25 +28,14 @@ export function createWorkspace(name: string): Promise<Workspace> {
 
 /** Admin-only: irreversibly delete an empty, non-system workspace. */
 export function deleteWorkspace(workspaceId: string): Promise<null> {
-  return apiRequest(
-    `/api/v1/workspaces/${encodeURIComponent(workspaceId)}`,
-    z.null(),
-    {
-      method: "DELETE",
-    },
-  );
+  return apiRequest(`/api/v1/workspaces/${encodeURIComponent(workspaceId)}`, z.null(), {
+    method: "DELETE",
+  });
 }
 
-export function updateWorkspace(
-  workspaceId: string,
-  name: string,
-): Promise<Workspace> {
-  return apiRequest(
-    withWorkspace("/api/v1/workspaces/current", workspaceId),
-    workspaceSchema,
-    {
-      method: "PATCH",
-      body: JSON.stringify({ name: name.trim() }),
-    },
-  );
+export function updateWorkspace(workspaceId: string, name: string): Promise<Workspace> {
+  return apiRequest(withWorkspace("/api/v1/workspaces/current", workspaceId), workspaceSchema, {
+    method: "PATCH",
+    body: JSON.stringify({ name: name.trim() }),
+  });
 }

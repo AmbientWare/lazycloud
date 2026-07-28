@@ -41,10 +41,7 @@ describe("compute policy controller", () => {
       allowedInstanceTypes: "g5.xlarge",
     });
     expect(result.current.policy?.revision).toBe(3);
-    expect(result.current.dirtyFields).toEqual([
-      "maxCpuInstances",
-      "allowedInstanceTypes",
-    ]);
+    expect(result.current.dirtyFields).toEqual(["maxCpuInstances", "allowedInstanceTypes"]);
     expect(result.current.canSave).toBe(false);
 
     act(() => result.current.review());
@@ -111,9 +108,7 @@ describe("compute policy controller", () => {
         },
       }),
     );
-    expect(queryClient.getQueryData(computeQueryKeys.policy("workspace-1"))).toEqual(
-      authoritative,
-    );
+    expect(queryClient.getQueryData(computeQueryKeys.policy("workspace-1"))).toEqual(authoritative);
 
     const accepted = policy(5, { maxCpuInstances: 44, maxGpuInstances: 8 });
     pending.resolve(jsonResponse(accepted));
@@ -123,9 +118,7 @@ describe("compute policy controller", () => {
       maxCpuInstances: 44,
       maxGpuInstances: 8,
     });
-    expect(queryClient.getQueryData(computeQueryKeys.policy("workspace-1"))).toEqual(
-      accepted,
-    );
+    expect(queryClient.getQueryData(computeQueryKeys.policy("workspace-1"))).toEqual(accepted);
   });
 
   it("keeps an ordinary failure retryable", async () => {
@@ -142,7 +135,9 @@ describe("compute policy controller", () => {
     act(() => result.current.updateField({ field: "maxCpuInstances", value: 24 }));
 
     act(() => result.current.save());
-    await waitFor(() => expect(result.current.saveError?.message).toBe("policy service unavailable"));
+    await waitFor(() =>
+      expect(result.current.saveError?.message).toBe("policy service unavailable"),
+    );
     expect(result.current.canSave).toBe(true);
 
     act(() => result.current.save());
@@ -221,12 +216,13 @@ describe("compute policy controller", () => {
 
   it("drops another workspace's base, draft, and errors on workspace change", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) =>
-      jsonResponse(String(input).includes("workspace-2") ? policy(8, { maxCpuInstances: 80 }) : policy(1)),
+      jsonResponse(
+        String(input).includes("workspace-2") ? policy(8, { maxCpuInstances: 80 }) : policy(1),
+      ),
     );
     const queryClient = testQueryClient();
     const { result, rerender } = renderHook(
-      ({ workspaceId }: { workspaceId: string }) =>
-        useComputePolicyController(workspaceId),
+      ({ workspaceId }: { workspaceId: string }) => useComputePolicyController(workspaceId),
       {
         initialProps: { workspaceId: "workspace-1" },
         wrapper: controllerWrapper(queryClient),

@@ -66,16 +66,61 @@ const KNOWN_METRICS: Record<string, Omit<MetricDisplay, "internal"> & { internal
   },
   storage_bytes: { label: "Storage", format: formatBytes, order: 9 },
   // Scheduler/operator counters: never rendered on customer pages.
-  container_requested_count: { label: "Containers requested", format: formatCount, order: 100, internal: true },
-  container_scheduled_count: { label: "Containers scheduled", format: formatCount, order: 101, internal: true },
+  container_requested_count: {
+    label: "Containers requested",
+    format: formatCount,
+    order: 100,
+    internal: true,
+  },
+  container_scheduled_count: {
+    label: "Containers scheduled",
+    format: formatCount,
+    order: 101,
+    internal: true,
+  },
   node_usage: { label: "Node usage", format: formatCount, order: 102, internal: true },
-  customer_cloud_management_cost_cents: { label: "Customer cloud management cost", format: formatCents, order: 103, internal: true },
-  customer_cloud_allocated_cpu_seconds: { label: "Customer cloud CPU allocation", format: formatSeconds, order: 104, internal: true },
-  customer_cloud_allocated_memory_gib_seconds: { label: "Customer cloud memory allocation", format: formatGibSeconds, order: 105, internal: true },
-  customer_cloud_allocated_gpu_seconds: { label: "Customer cloud GPU allocation", format: formatSeconds, order: 106, internal: true },
-  customer_cloud_allocated_disk_gib_seconds: { label: "Customer cloud disk allocation", format: formatGibSeconds, order: 107, internal: true },
-  customer_cloud_network_ingress_bytes: { label: "Customer cloud network ingress", format: formatBytes, order: 108, internal: true },
-  customer_cloud_network_egress_bytes: { label: "Customer cloud network egress", format: formatBytes, order: 109, internal: true },
+  customer_cloud_management_cost_cents: {
+    label: "Customer cloud management cost",
+    format: formatCents,
+    order: 103,
+    internal: true,
+  },
+  customer_cloud_allocated_cpu_seconds: {
+    label: "Customer cloud CPU allocation",
+    format: formatSeconds,
+    order: 104,
+    internal: true,
+  },
+  customer_cloud_allocated_memory_gib_seconds: {
+    label: "Customer cloud memory allocation",
+    format: formatGibSeconds,
+    order: 105,
+    internal: true,
+  },
+  customer_cloud_allocated_gpu_seconds: {
+    label: "Customer cloud GPU allocation",
+    format: formatSeconds,
+    order: 106,
+    internal: true,
+  },
+  customer_cloud_allocated_disk_gib_seconds: {
+    label: "Customer cloud disk allocation",
+    format: formatGibSeconds,
+    order: 107,
+    internal: true,
+  },
+  customer_cloud_network_ingress_bytes: {
+    label: "Customer cloud network ingress",
+    format: formatBytes,
+    order: 108,
+    internal: true,
+  },
+  customer_cloud_network_egress_bytes: {
+    label: "Customer cloud network egress",
+    format: formatBytes,
+    order: 109,
+    internal: true,
+  },
 };
 
 const UNIT_FORMATTERS: Record<string, (quantity: number) => string> = {

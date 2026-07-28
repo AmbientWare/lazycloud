@@ -189,10 +189,7 @@ export function cancelAwsConnectionReconnect(workspaceId: string) {
 }
 
 export function retryAwsConnection(workspaceId: string) {
-  return postJson(
-    withWorkspace("/api/v1/aws-connection/retry", workspaceId),
-    awsConnectionSchema,
-  );
+  return postJson(withWorkspace("/api/v1/aws-connection/retry", workspaceId), awsConnectionSchema);
 }
 
 export function createMachineJoinCommand(workspaceId: string) {

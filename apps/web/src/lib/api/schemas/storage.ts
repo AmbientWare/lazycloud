@@ -75,7 +75,6 @@ export const mapListSchema = z.object({
   maps: z.array(mapSchema).default([]),
 });
 
-
 export const queueSizeSchema = z.object({ size: z.number().default(0) });
 export const mapCountSchema = z.object({ count: z.number().default(0) });
 

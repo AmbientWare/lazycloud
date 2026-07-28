@@ -6,10 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthToken, TokenKind, TokenListResponse } from "@/lib/api/schemas";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 
-import {
-  isManagedToken,
-  useWorkspaceTokensController,
-} from "./controller";
+import { isManagedToken, useWorkspaceTokensController } from "./controller";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -49,9 +46,7 @@ describe("workspace tokens controller", () => {
     expect(result.current.createMode).toBe("creating");
     expect(result.current.actionMode).toBe("idle");
 
-    createResponse.resolve(
-      jsonResponse({ token: "one-time-value", record: accepted }, 201),
-    );
+    createResponse.resolve(jsonResponse({ token: "one-time-value", record: accepted }, 201));
     await waitFor(() => expect(result.current.createMode).toBe("issued"));
 
     expect(result.current.issuedSecret).toBe("one-time-value");
@@ -146,9 +141,7 @@ describe("workspace tokens controller", () => {
       "worker-private",
       "machine",
     ];
-    const managed = managedKinds.map((kind, index) =>
-      token({ id: `managed-${index}`, kind }),
-    );
+    const managed = managedKinds.map((kind, index) => token({ id: `managed-${index}`, kind }));
     const foreign = token({ id: "foreign", workspace_id: "workspace-2" });
     const fetch = vi
       .spyOn(globalThis, "fetch")
@@ -182,10 +175,7 @@ describe("workspace tokens controller", () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const path = String(input);
       if (init?.method === "POST") {
-        return jsonResponse(
-          { token: "workspace-one-value", record: created },
-          201,
-        );
+        return jsonResponse({ token: "workspace-one-value", record: created }, 201);
       }
       return path.includes("workspace=workspace-2")
         ? jsonResponse({ tokens: [second] })
@@ -193,8 +183,7 @@ describe("workspace tokens controller", () => {
     });
     const queryClient = testQueryClient();
     const { result, rerender } = renderHook(
-      ({ workspaceId }: { workspaceId: string }) =>
-        useWorkspaceTokensController(workspaceId),
+      ({ workspaceId }: { workspaceId: string }) => useWorkspaceTokensController(workspaceId),
       {
         initialProps: { workspaceId: "workspace-1" },
         wrapper: controllerWrapper(queryClient),
@@ -220,9 +209,7 @@ describe("workspace tokens controller", () => {
     expect(tokenCache(queryClient, "workspace-1")).toEqual({
       tokens: [first, created],
     });
-    expect(serializedQueryState(queryClient)).not.toContain(
-      "workspace-one-value",
-    );
+    expect(serializedQueryState(queryClient)).not.toContain("workspace-one-value");
   });
 });
 
@@ -246,10 +233,7 @@ function testQueryClient(): QueryClient {
   });
 }
 
-function tokenCache(
-  queryClient: QueryClient,
-  workspaceId: string,
-): TokenListResponse | undefined {
+function tokenCache(queryClient: QueryClient, workspaceId: string): TokenListResponse | undefined {
   return queryClient.getQueryData<TokenListResponse>(
     workspaceQueryKeys.settings.tokens(workspaceId),
   );
@@ -257,7 +241,10 @@ function tokenCache(
 
 function serializedQueryState(queryClient: QueryClient): string {
   return JSON.stringify(
-    queryClient.getQueryCache().getAll().map((query) => query.state.data),
+    queryClient
+      .getQueryCache()
+      .getAll()
+      .map((query) => query.state.data),
   );
 }
 

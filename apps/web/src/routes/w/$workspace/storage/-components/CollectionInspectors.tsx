@@ -43,11 +43,7 @@ export function QueueInspector({
 
   return (
     <div className="min-w-0 px-4 py-3">
-      <InspectorHeader
-        label="Head message"
-        count={depth}
-        singular="message"
-      />
+      <InspectorHeader label="Head message" count={depth} singular="message" />
       <CollectionStats
         items={[
           {
@@ -90,9 +86,7 @@ export function MapInspector({
   const effectiveSelectedKey = keys.data?.keys.includes(selectedKey)
     ? selectedKey
     : (keys.data?.keys[0] ?? "");
-  const value = useQuery(
-    mapValueQueryOptions(workspaceId, name, effectiveSelectedKey),
-  );
+  const value = useQuery(mapValueQueryOptions(workspaceId, name, effectiveSelectedKey));
   const error = count.error ?? keys.error;
   if (error) return <p className="p-4 text-sm text-destructive">{error.message}</p>;
 
@@ -123,11 +117,7 @@ export function MapInspector({
         <>
           <div className="mt-3 border-t border-border/60 pt-3">
             <Select value={effectiveSelectedKey} onValueChange={setSelectedKey}>
-              <SelectTrigger
-                size="sm"
-                aria-label="Map key"
-                className="mono w-full text-xs sm:w-64"
-              >
+              <SelectTrigger size="sm" aria-label="Map key" className="mono w-full text-xs sm:w-64">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent align="start">
@@ -150,10 +140,7 @@ export function MapInspector({
             ) : value.isError ? (
               <p className="text-xs text-destructive">{value.error.message}</p>
             ) : (
-              <EncodedValuePreview
-                valueBase64={value.data?.value_base64}
-                className="max-h-40"
-              />
+              <EncodedValuePreview valueBase64={value.data?.value_base64} className="max-h-40" />
             )}
           </div>
         </>
@@ -195,9 +182,7 @@ function CollectionStats({ items }: { items: Array<{ label: string; value: strin
       {items.map((item) => (
         <div key={item.label} className="min-w-0">
           <dt className="micro-label truncate">{item.label}</dt>
-          <dd className="mono mt-1 truncate text-xs tabular-nums text-foreground">
-            {item.value}
-          </dd>
+          <dd className="mono mt-1 truncate text-xs tabular-nums text-foreground">{item.value}</dd>
         </div>
       ))}
     </dl>

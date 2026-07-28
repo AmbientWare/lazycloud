@@ -74,10 +74,7 @@ function PlaygroundForm({
   workloadName: string;
 }) {
   const fields = useMemo(() => playgroundFields(manifest), [manifest]);
-  const seeded = useMemo(
-    () => JSON.stringify(exampleBody(manifest), null, 2),
-    [manifest],
-  );
+  const seeded = useMemo(() => JSON.stringify(exampleBody(manifest), null, 2), [manifest]);
   const [values, setValues] = useState<Record<string, string>>({});
   const [rawText, setRawText] = useState(seeded);
   const [inputError, setInputError] = useState<string | null>(null);

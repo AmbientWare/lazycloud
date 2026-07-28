@@ -114,7 +114,5 @@ export function workspaceInvalidationTargets(
 function compactTargets(
   targets: Array<WorkspaceInvalidationTarget | null>,
 ): WorkspaceInvalidationTarget[] {
-  return targets.filter(
-    (target): target is WorkspaceInvalidationTarget => target !== null,
-  );
+  return targets.filter((target): target is WorkspaceInvalidationTarget => target !== null);
 }

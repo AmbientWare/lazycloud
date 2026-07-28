@@ -6,7 +6,11 @@ export type ShellBreadcrumb = {
 const topLevelDestinations = new Set(["apps", "tasks", "storage", "usage", "settings"]);
 
 /** Workspace switches keep the current product area, but never carry scoped resource ids. */
-export function workspaceLandingPath(pathname: string, currentBase: string, nextBase: string): string {
+export function workspaceLandingPath(
+  pathname: string,
+  currentBase: string,
+  nextBase: string,
+): string {
   const relative = pathname.startsWith(currentBase) ? pathname.slice(currentBase.length) : "";
   const segment = relative.split("/").filter(Boolean)[0] ?? "apps";
   if (!topLevelDestinations.has(segment)) return `${nextBase}/apps`;
@@ -19,11 +23,7 @@ export function shellBreadcrumbs(
   appName?: string,
 ): ShellBreadcrumb[] {
   const base = `/w/${encodeURIComponent(workspaceName)}`;
-  const parts = pathname
-    .slice(base.length)
-    .split("/")
-    .filter(Boolean)
-    .map(safeDecode);
+  const parts = pathname.slice(base.length).split("/").filter(Boolean).map(safeDecode);
   const [section, resourceId, childSection, childId] = parts;
 
   if (!section || section === "apps") {
@@ -50,11 +50,7 @@ export function shellBreadcrumbs(
 
   if (section === "sandboxes") {
     return resourceId
-      ? [
-          { label: "Apps", href: `${base}/apps` },
-          { label: "Sandbox" },
-          { label: resourceId },
-        ]
+      ? [{ label: "Apps", href: `${base}/apps` }, { label: "Sandbox" }, { label: resourceId }]
       : [{ label: "Apps", href: `${base}/apps` }, { label: "Sandboxes" }];
   }
 

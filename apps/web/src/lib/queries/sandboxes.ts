@@ -36,11 +36,7 @@ export function sandboxesQueryOptions(
   });
 }
 
-export function sandboxFilesQueryOptions(
-  workspaceId: string,
-  containerId: string,
-  path: string,
-) {
+export function sandboxFilesQueryOptions(workspaceId: string, containerId: string, path: string) {
   const params = new URLSearchParams({ container_path: path || "/" });
   return queryOptions({
     queryKey: workspaceQueryKeys.sandboxes.files(workspaceId, containerId, path),
@@ -56,18 +52,12 @@ export function sandboxFilesQueryOptions(
   });
 }
 
-export function sandboxProcessesQueryOptions(
-  workspaceId: string,
-  containerId: string,
-) {
+export function sandboxProcessesQueryOptions(workspaceId: string, containerId: string) {
   return queryOptions({
     queryKey: workspaceQueryKeys.sandboxes.processes(workspaceId, containerId),
     queryFn: () =>
       apiRequest(
-        withWorkspace(
-          `/api/v1/pods/${encodeURIComponent(containerId)}/processes`,
-          workspaceId,
-        ),
+        withWorkspace(`/api/v1/pods/${encodeURIComponent(containerId)}/processes`, workspaceId),
         podProcessListSchema,
       ),
     refetchInterval: 5_000,
@@ -91,17 +81,11 @@ export function sandboxUrlsQueryOptions(
   });
 }
 
-export function uploadSandboxFileMutationOptions(
-  workspaceId: string,
-  containerId: string,
-) {
+export function uploadSandboxFileMutationOptions(workspaceId: string, containerId: string) {
   return mutationOptions({
     mutationFn: async ({ path, file }: { path: string; file: File }) =>
       postJson(
-        withWorkspace(
-          `/api/v1/pods/${encodeURIComponent(containerId)}/files/upload`,
-          workspaceId,
-        ),
+        withWorkspace(`/api/v1/pods/${encodeURIComponent(containerId)}/files/upload`, workspaceId),
         podEmptyMutationSchema,
         {
           container_path: path,
@@ -111,10 +95,7 @@ export function uploadSandboxFileMutationOptions(
   });
 }
 
-export function deleteSandboxFileMutationOptions(
-  workspaceId: string,
-  containerId: string,
-) {
+export function deleteSandboxFileMutationOptions(workspaceId: string, containerId: string) {
   return mutationOptions({
     mutationFn: (path: string) =>
       apiRequest(
@@ -128,10 +109,7 @@ export function deleteSandboxFileMutationOptions(
   });
 }
 
-export function killSandboxProcessMutationOptions(
-  workspaceId: string,
-  containerId: string,
-) {
+export function killSandboxProcessMutationOptions(workspaceId: string, containerId: string) {
   return mutationOptions({
     mutationFn: (pid: number) =>
       postJson(

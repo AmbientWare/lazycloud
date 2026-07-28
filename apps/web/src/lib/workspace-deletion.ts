@@ -1,8 +1,6 @@
 import type { Workspace } from "@/lib/api/schemas";
 
-type DeleteAvailability =
-  | { allowed: true }
-  | { allowed: false; reason: string };
+type DeleteAvailability = { allowed: true } | { allowed: false; reason: string };
 
 export function workspaceDeleteAvailability(
   candidate: Workspace,

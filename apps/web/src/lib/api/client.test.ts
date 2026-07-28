@@ -81,7 +81,9 @@ describe("responseErrorMessage", () => {
   });
 
   it("sends a client request ID and preserves it when the server does not echo one", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response('{"detail":"Unavailable"}', { status: 503 }));
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response('{"detail":"Unavailable"}', { status: 503 }));
     vi.stubGlobal("fetch", fetchMock);
 
     let error: ApiError | undefined;

@@ -3,11 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ContainerWithAppPage } from "@/lib/api/schemas";
 
-import {
-  containersQueryOptions,
-  nextContainerCursor,
-  selectContainerList,
-} from "./containers";
+import { containersQueryOptions, nextContainerCursor, selectContainerList } from "./containers";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -19,14 +15,8 @@ describe("container pagination", () => {
     const second = containerPage(["container-2", "container-1"], "");
 
     expect(
-      selectContainerList({ pages: [first, second] }, false).items.map(
-        (item) => item.container.id,
-      ),
-    ).toEqual([
-      "container-3",
-      "container-2",
-      "container-1",
-    ]);
+      selectContainerList({ pages: [first, second] }, false).items.map((item) => item.container.id),
+    ).toEqual(["container-3", "container-2", "container-1"]);
   });
 
   it("stops when a server repeats a cursor", () => {

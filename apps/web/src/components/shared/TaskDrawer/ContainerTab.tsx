@@ -57,10 +57,7 @@ function ContainerDetails({
   useEffect(() => {
     if (wasLive.current && !live) {
       void queryClient.invalidateQueries({
-        queryKey: workspaceQueryKeys.containers.metrics(
-          workspaceId,
-          containerId,
-        ),
+        queryKey: workspaceQueryKeys.containers.metrics(workspaceId, containerId),
       });
     }
     wasLive.current = live;
@@ -151,10 +148,7 @@ function ContainerDetails({
         ) : (
           <>
             <ContainerCapacity sample={latest} />
-            <ContainerMetricsCharts
-              points={metrics.data.points}
-              className="mt-5 sm:grid-cols-2"
-            />
+            <ContainerMetricsCharts points={metrics.data.points} className="mt-5 sm:grid-cols-2" />
           </>
         )}
       </section>

@@ -36,7 +36,10 @@ export function logHistoryQueryOptions(workspaceId: string, scope: LogScope) {
       const params = logScopeParams(scope);
       params.set("limit", String(LOG_PAGE_SIZE));
       params.set("page", String(pageParam));
-      return apiRequest(withWorkspace(`/api/v1/logs?${params.toString()}`, workspaceId), logQuerySchema);
+      return apiRequest(
+        withWorkspace(`/api/v1/logs?${params.toString()}`, workspaceId),
+        logQuerySchema,
+      );
     },
     initialPageParam: 0,
     getNextPageParam: (lastPage) => {

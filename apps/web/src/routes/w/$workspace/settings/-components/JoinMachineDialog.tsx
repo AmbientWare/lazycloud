@@ -14,10 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import type { PoolMachine } from "@/lib/api/schemas";
 import { relativeTime } from "@/lib/format";
-import {
-  createMachineJoinCommand,
-  machinesQueryOptions,
-} from "@/lib/queries/compute";
+import { createMachineJoinCommand, machinesQueryOptions } from "@/lib/queries/compute";
 import { cn } from "@/lib/utils";
 
 export function JoinMachineDialog({
@@ -31,9 +28,7 @@ export function JoinMachineDialog({
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      {open ? (
-        <JoinMachineFlow workspaceId={workspaceId} />
-      ) : null}
+      {open ? <JoinMachineFlow workspaceId={workspaceId} /> : null}
     </Dialog>
   );
 }
@@ -46,9 +41,7 @@ function JoinMachineFlow({ workspaceId }: { workspaceId: string }) {
     mutationFn: () => createMachineJoinCommand(workspaceId),
     onMutate: () => {
       setGeneratedAt(Date.now());
-      setBaselineMachineIds(
-        new Set((machinesQuery.data?.data ?? []).map((machine) => machine.id)),
-      );
+      setBaselineMachineIds(new Set((machinesQuery.data?.data ?? []).map((machine) => machine.id)));
     },
   });
   const targetMachine = findJoinedMachine(
@@ -109,7 +102,9 @@ function GenerateCommandStep({
 }) {
   return (
     <section aria-labelledby="generate-command-title">
-      <h3 id="generate-command-title" className="text-sm font-medium">Prepare the host</h3>
+      <h3 id="generate-command-title" className="text-sm font-medium">
+        Prepare the host
+      </h3>
       <p className="mt-1 text-xs text-muted-foreground">
         Generate a short-lived install command for one prepared Linux machine.
       </p>
@@ -140,9 +135,7 @@ function JoinProgress({
   const ready = machine?.readiness_phase === "ready";
   const blocked = machine?.readiness_phase === "blocked";
   const failedChecks = machine?.preflight_checks.filter((check) => !check.ok) ?? [];
-  const checkRemediations = new Set(
-    failedChecks.map((check) => check.remediation).filter(Boolean),
-  );
+  const checkRemediations = new Set(failedChecks.map((check) => check.remediation).filter(Boolean));
   const remediation = new Set(
     machine?.remediation.filter((item) => item && !checkRemediations.has(item)) ?? [],
   );
@@ -192,7 +185,10 @@ function JoinProgress({
       </section>
 
       {blocked ? (
-        <section aria-labelledby="remediation-title" className="border-l-2 border-destructive bg-destructive/[0.035] p-3">
+        <section
+          aria-labelledby="remediation-title"
+          className="border-l-2 border-destructive bg-destructive/[0.035] p-3"
+        >
           <div className="flex items-start gap-2">
             <AlertTriangle className="mt-0.5 size-4 shrink-0 text-destructive" />
             <div className="min-w-0 flex-1">
@@ -231,7 +227,9 @@ function ProgressRow({
   last?: boolean;
 }) {
   return (
-    <div className={cn("grid grid-cols-[2.25rem_minmax(0,1fr)]", !last && "border-b border-border")}>
+    <div
+      className={cn("grid grid-cols-[2.25rem_minmax(0,1fr)]", !last && "border-b border-border")}
+    >
       <div className="flex items-center justify-center border-r border-border bg-muted/20">
         {state === "complete" ? (
           <Check className="size-4 text-positive" />

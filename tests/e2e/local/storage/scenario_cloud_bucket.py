@@ -4,6 +4,11 @@ Requires an authenticated public lazycloud profile plus
 LAZYCLOUD_E2E_STORAGE_OBJECT_ACCESS_KEY and
 LAZYCLOUD_E2E_STORAGE_OBJECT_SECRET_KEY. The scenario publicly deletes its
 unique app and secrets, and removes only its unique external object prefix.
+
+The bucket endpoint given to the Function is the one workers resolve, not the
+Compose service name: worker containers run on the host network, so they reach
+the local object store through the `object-store.localhost` host alias that the
+agent is started with, on the published host port.
 """
 
 from __future__ import annotations
@@ -68,7 +73,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "LAZYCLOUD_E2E_BUCKET": bucket_name,
         "LAZYCLOUD_E2E_BUCKET_INTERNAL_ENDPOINT": os.getenv(
             "LAZYCLOUD_E2E_STORAGE_OBJECT_INTERNAL_ENDPOINT",
-            "http://object-store:9000",
+            "http://object-store.localhost:9002",
         ),
         "LAZYCLOUD_E2E_BUCKET_PREFIX": prefix,
         "LAZYCLOUD_E2E_BUCKET_REGION": os.getenv(

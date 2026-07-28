@@ -62,9 +62,7 @@ function sampleAt(index: number): Sample {
       1,
       Math.round(
         endpoint.base +
-          Math.sin(index / endpoint.period + series * 1.3) *
-            endpoint.swing *
-            0.36 +
+          Math.sin(index / endpoint.period + series * 1.3) * endpoint.swing * 0.36 +
           Math.sin(index / 2.1 + series * 0.8) * endpoint.swing * 0.16 +
           boundedDrift(index, series + 1) * endpoint.swing * 0.62,
       ),
@@ -73,9 +71,7 @@ function sampleAt(index: number): Sample {
 }
 
 function initialSamples() {
-  return Array.from({ length: POINTS + 1 }, (_, offset) =>
-    sampleAt(START_INDEX + offset),
-  );
+  return Array.from({ length: POINTS + 1 }, (_, offset) => sampleAt(START_INDEX + offset));
 }
 
 function stepPath(values: number[], scale: number) {
@@ -102,19 +98,14 @@ export function LiveEndpointChart() {
     if (reducedMotion || !active) return;
 
     const timer = window.setInterval(() => {
-      setSamples((current) => [
-        ...current.slice(1),
-        sampleAt(nextIndex.current++),
-      ]);
+      setSamples((current) => [...current.slice(1), sampleAt(nextIndex.current++)]);
       setTick((current) => current + 1);
     }, TICK_MS);
     return () => window.clearInterval(timer);
   }, [active, reducedMotion]);
 
   const bands = ENDPOINTS.map((_, series) =>
-    samples.map((sample) =>
-      sample.slice(0, series + 1).reduce((total, value) => total + value, 0),
-    ),
+    samples.map((sample) => sample.slice(0, series + 1).reduce((total, value) => total + value, 0)),
   );
   const totals = bands.at(-1) ?? [];
   const axisMax = Math.ceil(Math.max(...totals) / 10) * 10;
@@ -135,9 +126,7 @@ export function LiveEndpointChart() {
   return (
     <div
       className="marketing-endpoint-chart"
-      data-animation-state={
-        reducedMotion ? "settled" : active ? "running" : "paused"
-      }
+      data-animation-state={reducedMotion ? "settled" : active ? "running" : "paused"}
       ref={previewRef}
     >
       <div className="marketing-stat-grid endpoint-overview-stats">
@@ -173,28 +162,15 @@ export function LiveEndpointChart() {
               viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
             >
               {[PLOT_TOP, HEIGHT / 2, HEIGHT - PLOT_BOTTOM].map((y) => (
-                <line
-                  className="endpoint-grid-line"
-                  key={y}
-                  x1="0"
-                  x2={WIDTH}
-                  y1={y}
-                  y2={y}
-                />
+                <line className="endpoint-grid-line" key={y} x1="0" x2={WIDTH} y1={y} y2={y} />
               ))}
               <g className="endpoint-shift" key={tick}>
                 {ENDPOINTS.map((endpoint, series) => ({ endpoint, series }))
                   .reverse()
                   .map(({ endpoint, series }) => (
                     <g className={endpoint.tone} key={endpoint.route}>
-                      <path
-                        className="endpoint-area"
-                        d={areaPath(bands[series] ?? [], scale)}
-                      />
-                      <path
-                        className="endpoint-line"
-                        d={stepPath(bands[series] ?? [], scale)}
-                      />
+                      <path className="endpoint-area" d={areaPath(bands[series] ?? [], scale)} />
+                      <path className="endpoint-line" d={stepPath(bands[series] ?? [], scale)} />
                     </g>
                   ))}
               </g>

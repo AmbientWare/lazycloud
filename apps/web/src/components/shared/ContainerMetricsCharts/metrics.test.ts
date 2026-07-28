@@ -43,9 +43,6 @@ describe("container metric chart data", () => {
     expect(hasIoSamples(points)).toBe(false);
   });
 
-
-
-
   it("keeps the network readout null until interval-bearing samples arrive", () => {
     const data = buildMetricData([
       containerMetricsPointSchema.parse({ timestamp: "2026-07-09T12:00:00Z", ...base }),

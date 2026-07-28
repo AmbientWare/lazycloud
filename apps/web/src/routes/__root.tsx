@@ -12,10 +12,7 @@ import { Toaster } from "sonner";
 
 import { AuthGate } from "@/components/shared/AuthGate";
 import { ThemeProvider } from "@/components/shared/ThemeProvider";
-import {
-  themeInitScript,
-  useTheme,
-} from "@/components/shared/ThemeProvider/theme";
+import { themeInitScript, useTheme } from "@/components/shared/ThemeProvider/theme";
 import { Button } from "@/components/ui/button";
 
 import "../styles.css";
@@ -81,10 +78,7 @@ function RootErrorComponent({ error, reset }: ErrorComponentProps) {
             <span className="text-lg font-bold text-brand">LazyCloud</span>
           </div>
           <div className="mt-4 flex items-start gap-2.5">
-            <AlertTriangle
-              className="mt-0.5 size-4 shrink-0 text-warning"
-              aria-hidden="true"
-            />
+            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" />
             <div className="min-w-0">
               <h1 className="text-base font-semibold">Something went wrong</h1>
               <p className="mt-1 break-words text-sm text-muted-foreground">

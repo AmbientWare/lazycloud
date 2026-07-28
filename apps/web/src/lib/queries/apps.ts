@@ -66,10 +66,7 @@ export function startDeploymentMutationOptions(workspaceId: string, deploymentId
   return {
     mutationFn: () =>
       postJson(
-        withWorkspace(
-          `/api/v1/deployments/${encodeURIComponent(deploymentId)}/start`,
-          workspaceId,
-        ),
+        withWorkspace(`/api/v1/deployments/${encodeURIComponent(deploymentId)}/start`, workspaceId),
         deploymentSchema,
       ),
   };
@@ -79,10 +76,7 @@ export function stopDeploymentMutationOptions(workspaceId: string, deploymentId:
   return {
     mutationFn: () =>
       postJson(
-        withWorkspace(
-          `/api/v1/deployments/${encodeURIComponent(deploymentId)}/stop`,
-          workspaceId,
-        ),
+        withWorkspace(`/api/v1/deployments/${encodeURIComponent(deploymentId)}/stop`, workspaceId),
         deploymentSchema,
       ),
   };
@@ -96,10 +90,7 @@ export function scaleDeploymentMutationOptions(
   return {
     mutationFn: () =>
       postJson(
-        withWorkspace(
-          `/api/v1/deployments/${encodeURIComponent(deploymentId)}/scale`,
-          workspaceId,
-        ),
+        withWorkspace(`/api/v1/deployments/${encodeURIComponent(deploymentId)}/scale`, workspaceId),
         deploymentSchema,
         { replicas },
       ),
@@ -110,10 +101,7 @@ export function deleteDeploymentMutationOptions(workspaceId: string, deploymentI
   return {
     mutationFn: () =>
       apiRequest(
-        withWorkspace(
-          `/api/v1/deployments/${encodeURIComponent(deploymentId)}`,
-          workspaceId,
-        ),
+        withWorkspace(`/api/v1/deployments/${encodeURIComponent(deploymentId)}`, workspaceId),
         noContentSchema,
         { method: "DELETE" },
       ),

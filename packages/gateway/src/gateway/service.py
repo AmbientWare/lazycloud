@@ -374,9 +374,7 @@ class GatewayControlService:
     agent_worker_image_name: str = CONTAINER_WORKER_IMAGE
     agent_worker_image_tag: str = "local"
     agent_artifact_version: str = ""
-    agent_sha256_by_arch: Mapping[str, str] = field(
-        default_factory=lambda: dict[str, str]()
-    )
+    agent_sha256_by_arch: Mapping[str, str] = field(default_factory=lambda: dict[str, str]())
 
     @property
     def objects(self) -> ObjectStorage:

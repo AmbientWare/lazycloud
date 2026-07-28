@@ -43,10 +43,7 @@ export function LatencyPanel({
   const buckets = latency.data.buckets;
   const tasks = buckets.reduce((total, bucket) => total + bucket.count, 0);
   const coldStarts = buckets.reduce((total, bucket) => total + bucket.cold_starts, 0);
-  const failures = buckets.reduce(
-    (total, bucket) => total + (bucket.status_counts.failed ?? 0),
-    0,
-  );
+  const failures = buckets.reduce((total, bucket) => total + (bucket.status_counts.failed ?? 0), 0);
   const latest = [...buckets].reverse().find((bucket) => bucket.count > 0);
 
   if (tasks === 0 && coldStarts === 0) {

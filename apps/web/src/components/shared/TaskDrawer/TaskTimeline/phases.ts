@@ -72,9 +72,7 @@ export function executionPhases(
     phases.push(phase("queued", "Queued", domain.startMs, queuedEnd));
   }
   if (preparationStart !== null && preparationEnd > preparationStart) {
-    phases.push(
-      phase("startup", "Container preparation", preparationStart, preparationEnd),
-    );
+    phases.push(phase("startup", "Container preparation", preparationStart, preparationEnd));
   }
 
   if (executionStart !== null && taskEnd > executionStart) {
@@ -83,10 +81,10 @@ export function executionPhases(
 
   const spanMs = domain.endMs - domain.startMs;
   return phases.map((entry) => ({
-      ...entry,
-      leftPct: ((entry.startMs - domain.startMs) / spanMs) * 100,
-      widthPct: (entry.durationMs / spanMs) * 100,
-    }));
+    ...entry,
+    leftPct: ((entry.startMs - domain.startMs) / spanMs) * 100,
+    widthPct: (entry.durationMs / spanMs) * 100,
+  }));
 }
 
 function phase(

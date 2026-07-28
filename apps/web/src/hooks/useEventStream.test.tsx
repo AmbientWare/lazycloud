@@ -59,7 +59,6 @@ describe("useEventStream", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-
   it("backs off repeated connection failures exponentially", async () => {
     const fetchMock = vi.fn().mockRejectedValue(new Error("offline"));
     vi.stubGlobal("fetch", fetchMock);
@@ -119,12 +118,13 @@ describe("useEventStream", () => {
   });
 
   it("aborts the previous stream when the workspace URL changes", async () => {
-    const fetchMock = vi.fn((_: RequestInfo | URL, init?: RequestInit) =>
-      new Promise<Response>((_, reject) => {
-        init?.signal?.addEventListener("abort", () =>
-          reject(new DOMException("Aborted", "AbortError")),
-        );
-      }),
+    const fetchMock = vi.fn(
+      (_: RequestInfo | URL, init?: RequestInit) =>
+        new Promise<Response>((_, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(new DOMException("Aborted", "AbortError")),
+          );
+        }),
     );
     vi.stubGlobal("fetch", fetchMock);
 

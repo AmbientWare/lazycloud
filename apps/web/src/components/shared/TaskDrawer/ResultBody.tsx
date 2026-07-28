@@ -3,7 +3,13 @@ import { Check, Copy, Download } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 
-export function ResultBody({ error, result }: { error: string | null | undefined; result: unknown }): ReactNode {
+export function ResultBody({
+  error,
+  result,
+}: {
+  error: string | null | undefined;
+  result: unknown;
+}): ReactNode {
   const [copied, setCopied] = useState(false);
   const content = error
     ? error

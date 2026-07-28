@@ -143,10 +143,6 @@ def test_workspace_create_sets_up_default_storage_and_primary_token(
     )
 
 
-
-
-
-
 def test_workspace_storage_creation_validates_before_persisting(
     isolated_services: ApiServices,
 ) -> None:

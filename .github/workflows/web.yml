@@ -35,8 +35,8 @@ jobs:
       - name: Validate web owner
         working-directory: apps/web
         run: |
+          bun run format:check
           bun run lint
           bun run typecheck
           bun run test
           bun run build
-          bun run quality:bundle

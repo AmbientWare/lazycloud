@@ -64,9 +64,7 @@ function ShellDialog({ containerId }: { containerId: string }) {
         <header className="flex min-h-14 shrink-0 items-center gap-3 border-b border-border bg-card px-4 py-3 pr-12">
           <TerminalSquare className="size-4 shrink-0 text-brand" aria-hidden="true" />
           <Dialog.Title className="text-base font-semibold text-foreground">Shell</Dialog.Title>
-          <Dialog.Description className="sr-only">
-            Interactive terminal session
-          </Dialog.Description>
+          <Dialog.Description className="sr-only">Interactive terminal session</Dialog.Description>
         </header>
 
         <div className="flex min-h-0 flex-1 flex-col bg-background p-3 sm:p-4">

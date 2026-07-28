@@ -285,10 +285,7 @@
   min-height: 0;
   overflow: hidden;
   background-image:
-    linear-gradient(
-      color-mix(in oklab, var(--foreground) 6%, transparent) 1px,
-      transparent 1px
-    ),
+    linear-gradient(color-mix(in oklab, var(--foreground) 6%, transparent) 1px, transparent 1px),
     linear-gradient(
       90deg,
       color-mix(in oklab, var(--foreground) 6%, transparent) 1px,
@@ -924,10 +921,7 @@
 .marketing-example-figure {
   background-color: var(--card);
   background-image:
-    linear-gradient(
-      color-mix(in oklab, var(--foreground) 7%, transparent) 1px,
-      transparent 1px
-    ),
+    linear-gradient(color-mix(in oklab, var(--foreground) 7%, transparent) 1px, transparent 1px),
     linear-gradient(
       90deg,
       color-mix(in oklab, var(--foreground) 7%, transparent) 1px,

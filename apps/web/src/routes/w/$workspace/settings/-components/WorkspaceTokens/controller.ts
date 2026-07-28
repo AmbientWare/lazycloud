@@ -1,9 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import {
-  useQuery,
-  useQueryClient,
-  type QueryClient,
-} from "@tanstack/react-query";
+import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 
 import type { AuthToken, TokenListResponse } from "@/lib/api/schemas";
 import {
@@ -71,19 +67,14 @@ export function isManagedToken(token: AuthToken): boolean {
   return token.kind !== "workspace";
 }
 
-export function useWorkspaceTokensController(
-  workspaceId: string,
-): WorkspaceTokensController {
+export function useWorkspaceTokensController(workspaceId: string): WorkspaceTokensController {
   const queryClient = useQueryClient();
   const query = useQuery(tokensQueryOptions(workspaceId));
   const activeCommand = useRef<ActiveCommand | null>(null);
   const nextCommandId = useRef(0);
-  const [state, setState] = useState<ControllerState>(() =>
-    initialState(workspaceId),
-  );
+  const [state, setState] = useState<ControllerState>(() => initialState(workspaceId));
 
-  const ownedState =
-    state.workspaceId === workspaceId ? state : initialState(workspaceId);
+  const ownedState = state.workspaceId === workspaceId ? state : initialState(workspaceId);
   if (state.workspaceId !== workspaceId) {
     setState(ownedState);
   }
@@ -94,8 +85,7 @@ export function useWorkspaceTokensController(
     }
   }, [workspaceId]);
 
-  const commandIsCurrent = (command: ActiveCommand) =>
-    activeCommand.current?.id === command.id;
+  const commandIsCurrent = (command: ActiveCommand) => activeCommand.current?.id === command.id;
 
   const finishCommand = (command: ActiveCommand) => {
     if (activeCommand.current?.id === command.id) {
@@ -133,10 +123,7 @@ export function useWorkspaceTokensController(
   };
 
   const cancelCreate = () => {
-    if (
-      activeCommand.current !== null ||
-      !["drafting", "error"].includes(ownedState.create.mode)
-    ) {
+    if (activeCommand.current !== null || !["drafting", "error"].includes(ownedState.create.mode)) {
       return;
     }
     setState((current) => ({
@@ -214,10 +201,7 @@ export function useWorkspaceTokensController(
   };
 
   const runToggle = (token: AuthToken) => {
-    if (
-      !tokenCanBeManaged(token, workspaceId) ||
-      ownedState.create.mode !== "closed"
-    ) {
+    if (!tokenCanBeManaged(token, workspaceId) || ownedState.create.mode !== "closed") {
       return;
     }
     const command = startCommand("toggle", token.id);
@@ -349,11 +333,7 @@ function tokenCanBeManaged(token: AuthToken, workspaceId: string): boolean {
   return token.workspace_id === workspaceId && !isManagedToken(token);
 }
 
-function insertTokenRecord(
-  queryClient: QueryClient,
-  workspaceId: string,
-  record: AuthToken,
-): void {
+function insertTokenRecord(queryClient: QueryClient, workspaceId: string, record: AuthToken): void {
   queryClient.setQueryData<TokenListResponse>(
     workspaceQueryKeys.settings.tokens(workspaceId),
     (current) => ({
@@ -377,11 +357,7 @@ function replaceTokenRecord(
   );
 }
 
-function removeTokenRecord(
-  queryClient: QueryClient,
-  workspaceId: string,
-  tokenId: string,
-): void {
+function removeTokenRecord(queryClient: QueryClient, workspaceId: string, tokenId: string): void {
   queryClient.setQueryData<TokenListResponse>(
     workspaceQueryKeys.settings.tokens(workspaceId),
     (current) => ({

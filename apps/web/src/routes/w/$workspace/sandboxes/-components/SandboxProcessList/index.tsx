@@ -27,10 +27,7 @@ export function SandboxProcessList({
     ...killSandboxProcessMutationOptions(workspace.id, containerId),
     onSuccess: () =>
       queryClient.invalidateQueries({
-        queryKey: workspaceQueryKeys.sandboxes.processes(
-          workspace.id,
-          containerId,
-        ),
+        queryKey: workspaceQueryKeys.sandboxes.processes(workspace.id, containerId),
       }),
   });
 

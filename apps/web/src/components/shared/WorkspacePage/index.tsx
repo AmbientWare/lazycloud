@@ -34,7 +34,9 @@ export function WorkspacePage({
             <div className="mt-1 text-xs text-muted-foreground">{description}</div>
           ) : null}
         </div>
-        {actions ? <div className="flex min-w-0 flex-wrap items-center gap-2">{actions}</div> : null}
+        {actions ? (
+          <div className="flex min-w-0 flex-wrap items-center gap-2">{actions}</div>
+        ) : null}
       </header>
       <div
         data-workspace-page-content=""

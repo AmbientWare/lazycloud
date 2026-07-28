@@ -36,9 +36,7 @@ export const stubSchema = z.object({
   deployment_id: z.string().nullish(),
   app_id: z.string().nullish(),
   public: z.boolean().default(false),
-  config: z
-    .object({ runtime: stubRuntimeConfigSchema.nullish() })
-    .default({ runtime: null }),
+  config: z.object({ runtime: stubRuntimeConfigSchema.nullish() }).default({ runtime: null }),
   created_at: z.string(),
   updated_at: z.string(),
 });

@@ -7,6 +7,7 @@ from pathlib import Path
 from cache.protocol import CacheContentStoreResult, CacheContentStoreStatus
 from pydantic import JsonValue, TypeAdapter
 from shared.checkpoints import CheckpointRecord
+from shared.container_requests import WORKER_USER_ARTIFACT_VOLUME
 from worker.checkpoint_activity import CheckpointLeaseRegistry
 from worker.checkpoints import CheckpointStatePayload, WorkerCheckpointStatus
 from worker.container_checkpoints import (
@@ -23,6 +24,7 @@ from worker.image_build_execution import WorkerImageArchivePublishResult
 type JsonObject = dict[str, JsonValue]
 
 _JSON_OBJECT: TypeAdapter[JsonObject] = TypeAdapter(JsonObject)
+_ARTIFACT_DIR = WORKER_USER_ARTIFACT_VOLUME.strip("/")
 
 
 def test_runtime_checkpoint_creator_runs_runtime_persists_archive_and_records_state(
@@ -32,8 +34,8 @@ def test_runtime_checkpoint_creator_runs_runtime_persists_archive_and_records_st
     upper.mkdir()
     (upper / "app.py").write_text("print('ok')", encoding="utf-8")
     (upper / "config.json").write_text("skip", encoding="utf-8")
-    (upper / "outputs").mkdir()
-    (upper / "outputs" / "result.txt").write_text("skip", encoding="utf-8")
+    (upper / _ARTIFACT_DIR).mkdir()
+    (upper / _ARTIFACT_DIR / "result.txt").write_text("skip", encoding="utf-8")
     (upper / "missing-link").symlink_to("missing-target")
     checkpoint_activity = CheckpointLeaseRegistry()
     runtime = RuntimeCheckpoint(checkpoint_activity=checkpoint_activity)
@@ -84,7 +86,7 @@ def test_runtime_checkpoint_creator_runs_runtime_persists_archive_and_records_st
     assert (filesystem_path / "missing-link").is_symlink()
     assert (filesystem_path / "missing-link").readlink() == Path("missing-target")
     assert not (filesystem_path / "config.json").exists()
-    assert not (filesystem_path / "outputs").exists()
+    assert not (filesystem_path / _ARTIFACT_DIR).exists()
     assert uploader.calls[0][0] == "checkpoints/chk-1.tar"
     payload = state.payloads[-1]
     assert cache.calls[0][1:] == ("checkpoints/chk-1.tar", payload.cache_hash)

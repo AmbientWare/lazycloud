@@ -85,10 +85,7 @@ describe("groupDeploymentsByWorkload", () => {
 
   it("routes to the newest version even when an older version is still active", () => {
     const groups = groupDeploymentsByWorkload(
-      [
-        deployment({ id: "d1", version: 1, active: true }),
-        deployment({ id: "d2", version: 2 }),
-      ],
+      [deployment({ id: "d1", version: 1, active: true }), deployment({ id: "d2", version: 2 })],
       "app-1",
     );
     expect(groups[0].active).toBe(false);

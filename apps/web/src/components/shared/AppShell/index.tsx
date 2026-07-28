@@ -115,12 +115,7 @@ export function AppShell() {
         Skip to content
       </a>
 
-      <DesktopRail
-        path={path}
-        basePath={basePath}
-        onOpenSearch={openSearch}
-        onLogout={logout}
-      />
+      <DesktopRail path={path} basePath={basePath} onOpenSearch={openSearch} onLogout={logout} />
 
       <div className="flex min-w-0 flex-1 flex-col">
         <MobileHeader onOpenSearch={openSearch} onLogout={logout} />
@@ -220,7 +215,15 @@ function DesktopRail({
   );
 }
 
-function RailLink({ item, active, workspaceName }: { item: NavItem; active: boolean; workspaceName: string }) {
+function RailLink({
+  item,
+  active,
+  workspaceName,
+}: {
+  item: NavItem;
+  active: boolean;
+  workspaceName: string;
+}) {
   const Icon = item.icon;
   return (
     <Link
@@ -242,7 +245,13 @@ function RailLink({ item, active, workspaceName }: { item: NavItem; active: bool
   );
 }
 
-function MobileHeader({ onOpenSearch, onLogout }: { onOpenSearch: () => void; onLogout: () => void }) {
+function MobileHeader({
+  onOpenSearch,
+  onLogout,
+}: {
+  onOpenSearch: () => void;
+  onLogout: () => void;
+}) {
   const { workspace } = useWorkspace();
   return (
     <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border bg-card/45 px-3 lg:hidden">
@@ -255,7 +264,13 @@ function MobileHeader({ onOpenSearch, onLogout }: { onOpenSearch: () => void; on
         <img src="/lazycloud.png" alt="" className="size-8" />
       </Link>
       <WorkspaceSwitcher className="min-w-0 flex-1" compact />
-      <Button variant="ghost" size="icon" onClick={onOpenSearch} aria-label="Search workspace" title="Search workspace">
+      <Button
+        variant="ghost"
+        size="icon"
+        onClick={onOpenSearch}
+        aria-label="Search workspace"
+        title="Search workspace"
+      >
         <Search className="size-4" />
       </Button>
       <MobileMenu onLogout={onLogout} />
@@ -268,7 +283,13 @@ function MobileMenu({ onLogout }: { onLogout: () => void }) {
   const { workspace } = useWorkspace();
   return (
     <Sheet open={open} onOpenChange={setOpen}>
-      <Button variant="ghost" size="icon" onClick={() => setOpen(true)} aria-label="Open workspace menu" title="Workspace menu">
+      <Button
+        variant="ghost"
+        size="icon"
+        onClick={() => setOpen(true)}
+        aria-label="Open workspace menu"
+        title="Workspace menu"
+      >
         <Menu className="size-4" />
       </Button>
       <SheetContent aria-describedby={undefined} className="max-w-xs gap-0">
@@ -276,7 +297,11 @@ function MobileMenu({ onLogout }: { onLogout: () => void }) {
           <SheetTitle>{workspace.name}</SheetTitle>
         </header>
         <nav aria-label="Workspace menu" className="p-3">
-          <MobileMenuLink item={settingsNav} workspaceName={workspace.name} onSelect={() => setOpen(false)} />
+          <MobileMenuLink
+            item={settingsNav}
+            workspaceName={workspace.name}
+            onSelect={() => setOpen(false)}
+          />
           <ThemeToggle className="mt-0.5 h-10 gap-3 px-3 text-sm" />
         </nav>
         <div className="mt-auto border-t border-border p-3">
@@ -297,7 +322,15 @@ function MobileMenu({ onLogout }: { onLogout: () => void }) {
   );
 }
 
-function MobileMenuLink({ item, workspaceName, onSelect }: { item: NavItem; workspaceName: string; onSelect: () => void }) {
+function MobileMenuLink({
+  item,
+  workspaceName,
+  onSelect,
+}: {
+  item: NavItem;
+  workspaceName: string;
+  onSelect: () => void;
+}) {
   const Icon = item.icon;
   return (
     <Link
@@ -334,7 +367,15 @@ function ThemeToggle({ className }: { className?: string }) {
   );
 }
 
-function ContextBar({ path, basePath, onOpenSearch }: { path: string; basePath: string; onOpenSearch: () => void }) {
+function ContextBar({
+  path,
+  basePath,
+  onOpenSearch,
+}: {
+  path: string;
+  basePath: string;
+  onOpenSearch: () => void;
+}) {
   const { workspace } = useWorkspace();
   const router = useRouter();
   const appId = appIdFromPath(path, basePath);
@@ -344,10 +385,17 @@ function ContextBar({ path, basePath, onOpenSearch }: { path: string; basePath: 
 
   return (
     <div className="flex h-10 shrink-0 items-center gap-3 border-b border-border bg-card/30 px-3 sm:px-4 lg:h-12 lg:px-5">
-      <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+      <nav
+        aria-label="Breadcrumb"
+        className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground"
+      >
         {breadcrumbs.map((crumb, index) => (
           <span key={`${crumb.label}-${index}`} className="flex min-w-0 items-center gap-1.5">
-            {index > 0 ? <span aria-hidden="true" className="text-border">/</span> : null}
+            {index > 0 ? (
+              <span aria-hidden="true" className="text-border">
+                /
+              </span>
+            ) : null}
             {crumb.href ? (
               <a
                 href={crumb.href}
@@ -361,7 +409,10 @@ function ContextBar({ path, basePath, onOpenSearch }: { path: string; basePath: 
                 {crumb.label}
               </a>
             ) : (
-              <span aria-current={index === breadcrumbs.length - 1 ? "page" : undefined} className="mono max-w-52 truncate text-foreground">
+              <span
+                aria-current={index === breadcrumbs.length - 1 ? "page" : undefined}
+                className="mono max-w-52 truncate text-foreground"
+              >
                 {crumb.label}
               </span>
             )}
@@ -384,7 +435,10 @@ function ContextBar({ path, basePath, onOpenSearch }: { path: string; basePath: 
 function MobileNavigation({ path, basePath }: { path: string; basePath: string }) {
   const { workspace } = useWorkspace();
   return (
-    <nav aria-label="Mobile navigation" className="grid h-14 shrink-0 grid-cols-4 border-t border-sidebar-border bg-sidebar/90 shadow-[0_-6px_24px_oklch(0_0_0/0.14)] lg:hidden">
+    <nav
+      aria-label="Mobile navigation"
+      className="grid h-14 shrink-0 grid-cols-4 border-t border-sidebar-border bg-sidebar/90 shadow-[0_-6px_24px_oklch(0_0_0/0.14)] lg:hidden"
+    >
       {primaryNav.map((item) => {
         const Icon = item.icon;
         const active = navItemActive(path, basePath, item.segment);
@@ -415,7 +469,14 @@ function CreateWorkspaceControl() {
   if (adminAccess.data !== true) return null;
   return (
     <>
-      <Button variant="ghost" size="icon" aria-label="Create workspace" title="Create workspace" className="size-8 text-muted-foreground" onClick={() => setOpen(true)}>
+      <Button
+        variant="ghost"
+        size="icon"
+        aria-label="Create workspace"
+        title="Create workspace"
+        className="size-8 text-muted-foreground"
+        onClick={() => setOpen(true)}
+      >
         <Plus className="size-3.5" />
       </Button>
       {open ? <CreateWorkspaceSheet onClose={() => setOpen(false)} /> : null}
@@ -463,9 +524,13 @@ function CreateWorkspaceSheet({ onClose }: { onClose: () => void }) {
             <Button type="submit" size="sm" disabled={create.isPending || !name.trim()}>
               {create.isPending ? <Loader2 className="size-3.5 animate-spin" /> : "Create"}
             </Button>
-            <Button type="button" variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
+            <Button type="button" variant="ghost" size="sm" onClick={onClose}>
+              Cancel
+            </Button>
           </div>
-          {create.isError ? <p className="text-xs text-destructive">{create.error.message}</p> : null}
+          {create.isError ? (
+            <p className="text-xs text-destructive">{create.error.message}</p>
+          ) : null}
         </form>
       </SheetContent>
     </Sheet>

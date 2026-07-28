@@ -2,12 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { DeploymentManifest } from "@/lib/api/schemas";
 
-import {
-  buildBody,
-  curlSnippet,
-  playgroundFields,
-  pythonSnippet,
-} from "./playground-form";
+import { buildBody, curlSnippet, playgroundFields, pythonSnippet } from "./playground-form";
 
 function manifest(overrides: Partial<DeploymentManifest> = {}): DeploymentManifest {
   return {
@@ -106,20 +101,15 @@ describe("buildBody", () => {
     expect(buildBody(fields, { value: "" }).error).toBe("value is required");
     expect(buildBody(fields, { value: "4.5" }).error).toBe("value must be an integer");
     expect(buildBody(fields, { value: "4", ratio: "abc" }).error).toBe("ratio must be a number");
-    expect(buildBody(fields, { value: "4", flag: "yes" }).error).toBe(
-      "flag must be true or false",
-    );
+    expect(buildBody(fields, { value: "4", flag: "yes" }).error).toBe("flag must be true or false");
   });
 });
 
 describe("snippets", () => {
   const url = "http://127.0.0.1:9000/api/v1/functions/public/stub-1";
 
-
   it("shell-escapes single quotes in the payload", () => {
     const snippet = curlSnippet(url, { label: "it's" });
     expect(snippet).toContain(`-d '{"label":"it'\\''s"}'`);
   });
-
-
 });

@@ -1,10 +1,6 @@
 import { z } from "zod";
 
-import {
-  errorResponseSchema,
-  workspaceListSchema,
-  type Workspace,
-} from "@/lib/api/schemas";
+import { errorResponseSchema, workspaceListSchema, type Workspace } from "@/lib/api/schemas";
 import { clearStoredAuthToken, getStoredAuthToken, setStoredAuthToken } from "@/lib/auth";
 
 export class ApiError extends Error {
@@ -37,11 +33,7 @@ export class ApiProtocolError extends Error {
   }
 }
 
-export function responseErrorMessage(
-  status: number,
-  statusText: string,
-  body: string,
-): string {
+export function responseErrorMessage(status: number, statusText: string, body: string): string {
   if (!body) return `${status} ${statusText}`;
   try {
     const payload: unknown = JSON.parse(body);
@@ -70,8 +62,8 @@ export function responseErrorMessage(
 function validationMessage(value: unknown): string[] {
   if (!isRecord(value) || typeof value.msg !== "string") return [];
   const location = Array.isArray(value.loc)
-    ? value.loc.filter((part): part is string | number =>
-        typeof part === "string" || typeof part === "number",
+    ? value.loc.filter(
+        (part): part is string | number => typeof part === "string" || typeof part === "number",
       )
     : [];
   const field = location.at(-1);

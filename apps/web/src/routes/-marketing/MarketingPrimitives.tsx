@@ -36,9 +36,7 @@ export function Pill({ children }: { children: ReactNode }) {
 
 /* Live status dot, shared by pills, terminal footers, and product rows. */
 export function StatusDot() {
-  return (
-    <i className="size-1.5 rounded-full bg-positive shadow-[0_0_10px_var(--positive)]" />
-  );
+  return <i className="size-1.5 rounded-full bg-positive shadow-[0_0_10px_var(--positive)]" />;
 }
 
 export function MarketingButton({
@@ -115,13 +113,7 @@ export function PendingTextLink({ children }: { children: ReactNode }) {
 }
 
 /* Destinations that are not built yet: visible, honest, and inert. */
-export function PendingLink({
-  children,
-  className,
-}: {
-  children: ReactNode;
-  className?: string;
-}) {
+export function PendingLink({ children, className }: { children: ReactNode; className?: string }) {
   return (
     <button
       className={cn("cursor-not-allowed text-muted-foreground/55", className)}
@@ -146,12 +138,7 @@ export function SectionHeading({
   centered?: boolean;
 }) {
   return (
-    <div
-      className={cn(
-        "mb-10 max-w-[770px] sm:mb-12 lg:mb-14",
-        centered && "mx-auto text-center",
-      )}
-    >
+    <div className={cn("mb-10 max-w-[770px] sm:mb-12 lg:mb-14", centered && "mx-auto text-center")}>
       {label ? <SectionLabel>{label}</SectionLabel> : null}
       <h2
         className={cn(
@@ -175,11 +162,7 @@ export function SectionHeading({
   );
 }
 
-export function Faq({
-  items,
-}: {
-  items: Array<{ question: string; answer: string }>;
-}) {
+export function Faq({ items }: { items: Array<{ question: string; answer: string }> }) {
   return (
     <section className="py-16 sm:py-20 lg:py-28">
       <div

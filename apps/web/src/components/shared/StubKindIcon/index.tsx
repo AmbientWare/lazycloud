@@ -14,7 +14,13 @@ const KIND_ICONS: Record<string, { icon: LucideIcon; label: string }> = {
   shell: { icon: Terminal, label: "Shell" },
 };
 
-export function StubKindIcon({ kind, className }: { kind: string | undefined; className?: string }) {
+export function StubKindIcon({
+  kind,
+  className,
+}: {
+  kind: string | undefined;
+  className?: string;
+}) {
   const entry = kind ? KIND_ICONS[kind] : undefined;
   const Icon = entry?.icon ?? Zap;
   return (

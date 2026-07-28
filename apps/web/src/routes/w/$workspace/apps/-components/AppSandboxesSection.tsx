@@ -42,7 +42,9 @@ export function AppSandboxesSection({
         contentClassName="p-0"
       >
         {error ? (
-          <div className="flex min-h-32 items-center justify-center px-4 text-sm text-destructive">{error}</div>
+          <div className="flex min-h-32 items-center justify-center px-4 text-sm text-destructive">
+            {error}
+          </div>
         ) : pending ? (
           <div className="space-y-2 p-4" aria-hidden="true">
             {Array.from({ length: 3 }, (_, index) => (
@@ -55,26 +57,26 @@ export function AppSandboxesSection({
           </div>
         ) : (
           <div className="divide-y divide-border/80">
-              {sandboxes?.map((sandbox, index) => {
-                return sandbox.container_id ? (
-                  <Link
-                    key={sandbox.id}
-                    to="/w/$workspace/sandboxes/$containerId"
-                    params={{ workspace: workspaceName, containerId: sandbox.container_id }}
-                    aria-label={`${sandbox.status === "running" ? "Open" : "View"} ${sandbox.name} sandbox${index > 0 ? ` ${index + 1}` : ""}`}
-                    className="interactive-row grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 px-4 py-3"
-                  >
-                    <SandboxRowContent sandbox={sandbox} linked />
-                  </Link>
-                ) : (
-                  <div
-                    key={sandbox.id}
-                    className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 px-4 py-3"
-                  >
-                    <SandboxRowContent sandbox={sandbox} linked={false} />
-                  </div>
-                );
-              })}
+            {sandboxes?.map((sandbox, index) => {
+              return sandbox.container_id ? (
+                <Link
+                  key={sandbox.id}
+                  to="/w/$workspace/sandboxes/$containerId"
+                  params={{ workspace: workspaceName, containerId: sandbox.container_id }}
+                  aria-label={`${sandbox.status === "running" ? "Open" : "View"} ${sandbox.name} sandbox${index > 0 ? ` ${index + 1}` : ""}`}
+                  className="interactive-row grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 px-4 py-3"
+                >
+                  <SandboxRowContent sandbox={sandbox} linked />
+                </Link>
+              ) : (
+                <div
+                  key={sandbox.id}
+                  className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 px-4 py-3"
+                >
+                  <SandboxRowContent sandbox={sandbox} linked={false} />
+                </div>
+              );
+            })}
           </div>
         )}
       </Panel>
@@ -83,18 +85,28 @@ export function AppSandboxesSection({
 }
 
 function SandboxRowContent({ sandbox, linked }: { sandbox: SandboxRow; linked: boolean }) {
-  const startup = sandbox.time_to_started_ms == null ? "—" : formatDuration(sandbox.time_to_started_ms);
+  const startup =
+    sandbox.time_to_started_ms == null ? "—" : formatDuration(sandbox.time_to_started_ms);
   const lifetime = sandbox.lifetime_ms == null ? "—" : formatDuration(sandbox.lifetime_ms);
 
   return (
     <>
       <span className="min-w-0">
-        <span className="mono block truncate text-sm font-medium text-foreground">{sandbox.name}</span>
-        <span className="mt-0.5 block text-[11px] text-muted-foreground">{sandbox.gpu || "CPU"}</span>
+        <span className="mono block truncate text-sm font-medium text-foreground">
+          {sandbox.name}
+        </span>
+        <span className="mt-0.5 block text-[11px] text-muted-foreground">
+          {sandbox.gpu || "CPU"}
+        </span>
       </span>
       <span className="flex items-center justify-end gap-2">
         <StatusChip status={sandbox.status} live={sandbox.status === "running"} />
-        {linked ? <ArrowUpRight className="interactive-row-indicator size-3.5 text-muted-foreground" aria-hidden="true" /> : null}
+        {linked ? (
+          <ArrowUpRight
+            className="interactive-row-indicator size-3.5 text-muted-foreground"
+            aria-hidden="true"
+          />
+        ) : null}
       </span>
       <span className="col-span-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-muted-foreground">
         <span>Startup {startup}</span>

@@ -23,10 +23,7 @@ export function QuickstartEmptyState() {
     {
       title: "Create and deploy the starter app",
       detail: "Writes quickstart.py with one function, then deploys it here.",
-      commands: [
-        "lazycloud quickstart",
-        "lazycloud deploy quickstart.py:hello",
-      ],
+      commands: ["lazycloud quickstart", "lazycloud deploy quickstart.py:hello"],
     },
     {
       title: "Run and inspect it",

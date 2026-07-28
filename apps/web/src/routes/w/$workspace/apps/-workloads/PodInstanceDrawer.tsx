@@ -1,34 +1,20 @@
-import {
-  useInfiniteQuery,
-  useQuery,
-  type UseQueryResult,
-} from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery, type UseQueryResult } from "@tanstack/react-query";
 
 import { ApiErrorNotice } from "@/components/shared/ApiErrorNotice";
 import { CliHint } from "@/components/shared/CliHint";
-import {
-  ChartSkeleton,
-  ContainerMetricsCharts,
-} from "@/components/shared/ContainerMetricsCharts";
+import { ChartSkeleton, ContainerMetricsCharts } from "@/components/shared/ContainerMetricsCharts";
 import { PanelErrorBoundary } from "@/components/shared/ErrorBoundary";
 import { ShellButton } from "@/components/shared/ShellDialog";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
-import type {
-  ContainerDetail,
-  ContainerMetricsTimeseries,
-  Deployment,
-} from "@/lib/api/schemas";
+import type { ContainerDetail, ContainerMetricsTimeseries, Deployment } from "@/lib/api/schemas";
 import { relativeTime } from "@/lib/format";
 import {
   containerMetricsTimeseriesQueryOptions,
   containerQueryOptions,
 } from "@/lib/queries/containers";
-import {
-  deploymentsInfiniteQueryOptions,
-  selectDeploymentList,
-} from "@/lib/queries/deployments";
+import { deploymentsInfiniteQueryOptions, selectDeploymentList } from "@/lib/queries/deployments";
 import { cn } from "@/lib/utils";
 
 import { currentDeployment, findWorkloadGroup } from "./grouping";
@@ -152,7 +138,10 @@ function PodInstanceDrawerBody({
       </header>
 
       <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
-        <section className="panel shrink-0 overflow-hidden rounded-md" aria-label="Instance summary">
+        <section
+          className="panel shrink-0 overflow-hidden rounded-md"
+          aria-label="Instance summary"
+        >
           <dl className="grid grid-cols-2 gap-x-5 gap-y-4 p-4 sm:grid-cols-4">
             <DrawerFact
               label="Placement"
@@ -199,7 +188,10 @@ function PodInstanceDrawerBody({
           ) : null}
         </section>
 
-        <section className="panel min-h-[24rem] shrink-0 overflow-hidden rounded-md" aria-label="Instance compute">
+        <section
+          className="panel min-h-[24rem] shrink-0 overflow-hidden rounded-md"
+          aria-label="Instance compute"
+        >
           <div className="flex min-h-11 items-center justify-between gap-3 border-b border-border/80 px-4 py-2.5">
             <div>
               <h3 className="text-sm font-medium">Compute</h3>
@@ -224,7 +216,10 @@ function PodInstanceDrawerBody({
                 <ChartSkeleton />
               </div>
             ) : metrics.isError ? (
-              <div className="flex h-44 items-center justify-center text-sm text-destructive" role="alert">
+              <div
+                className="flex h-44 items-center justify-center text-sm text-destructive"
+                role="alert"
+              >
                 {metrics.error.message}
               </div>
             ) : (

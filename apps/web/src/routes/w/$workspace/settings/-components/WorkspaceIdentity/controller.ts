@@ -9,12 +9,7 @@ import {
   workspacesQueryOptions,
 } from "@/lib/queries/workspace";
 
-export type WorkspaceIdentityMode =
-  | "idle"
-  | "editing"
-  | "saving"
-  | "saved"
-  | "error";
+export type WorkspaceIdentityMode = "idle" | "editing" | "saving" | "saved" | "error";
 
 type WorkspaceIdentityState = {
   workspaceId: string;
@@ -70,9 +65,8 @@ export function useWorkspaceIdentityController({
       queryClient.setQueryData<Workspace[]>(workspacesQueryOptions().queryKey, (workspaces) =>
         workspaces?.map((item) => (item.id === updated.id ? updated : item)),
       );
-      queryClient.setQueryData<Workspace>(
-        currentWorkspaceQueryOptions().queryKey,
-        (owner) => (owner?.id === updated.id ? updated : owner),
+      queryClient.setQueryData<Workspace>(currentWorkspaceQueryOptions().queryKey, (owner) =>
+        owner?.id === updated.id ? updated : owner,
       );
       setState((current) => {
         if (current.workspaceId !== command.workspaceId) return current;
@@ -106,10 +100,7 @@ export function useWorkspaceIdentityController({
   const editing = isEditorMode(currentState.mode);
   const saving = currentState.mode === "saving";
   const canSave =
-    editing &&
-    !saving &&
-    validWorkspaceName(normalizedName) &&
-    normalizedName !== workspace.name;
+    editing && !saving && validWorkspaceName(normalizedName) && normalizedName !== workspace.name;
 
   return {
     mode: currentState.mode,

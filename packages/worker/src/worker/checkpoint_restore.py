@@ -91,9 +91,7 @@ class RuntimeCheckpointRestorer:
     state_sink: CheckpointRestoreStateSink
     runtime: CheckpointRuntimeController
     checkpoint_root: str
-    checkpoint_activity: CheckpointLeaseRegistry = field(
-        default_factory=CheckpointLeaseRegistry
-    )
+    checkpoint_activity: CheckpointLeaseRegistry = field(default_factory=CheckpointLeaseRegistry)
 
     def restore(
         self,

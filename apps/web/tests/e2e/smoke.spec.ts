@@ -173,7 +173,9 @@ async function mockControlPlane(page: Page) {
   });
 }
 
-test("dashboard entry lands on Apps and the responsive shell switches workspaces", async ({ page }) => {
+test("dashboard entry lands on Apps and the responsive shell switches workspaces", async ({
+  page,
+}) => {
   await mockControlPlane(page);
   await page.goto("/dashboard");
   await expect(page).toHaveURL(/\/w\/acme\/apps\/?$/);
@@ -194,10 +196,7 @@ test("dashboard entry lands on Apps and the responsive shell switches workspaces
     await expect(menu.getByRole("link", { name: "Compute" })).toHaveCount(0);
     await page.getByRole("button", { name: "Close" }).click();
   } else {
-    await expect(nav.getByRole("link", { name: "Apps" })).toHaveAttribute(
-      "aria-current",
-      "page",
-    );
+    await expect(nav.getByRole("link", { name: "Apps" })).toHaveAttribute("aria-current", "page");
     const secondary = page.getByRole("navigation", { name: "Workspace navigation" });
     await expect(secondary.getByRole("link", { name: "Settings" })).toBeVisible();
     await expect(secondary.getByRole("link", { name: "Compute" })).toHaveCount(0);

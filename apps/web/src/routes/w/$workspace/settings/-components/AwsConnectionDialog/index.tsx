@@ -208,8 +208,7 @@ function ConnectForm({
         <div>
           <h3 className="text-sm font-medium">One-time AWS authorization</h3>
           <p className="mt-0.5 text-xs leading-5 text-muted-foreground">
-            You will review the requested access in AWS. Access and secret keys are never
-            requested.
+            You will review the requested access in AWS. Access and secret keys are never requested.
           </p>
         </div>
       </div>
@@ -246,12 +245,9 @@ function ConnectionActions({
   const customerAction = connection.customer_action;
   const customerActionAvailable = Boolean(customerAction?.url);
   const pending = pendingAction !== null;
-  const showCapacity =
-    connection.accepts_placement || connection.can_manage_existing_capacity;
+  const showCapacity = connection.accepts_placement || connection.can_manage_existing_capacity;
   const showActionBar =
-    actionPlan.primary !== null ||
-    actionPlan.secondary !== null ||
-    actionPlan.destructive !== null;
+    actionPlan.primary !== null || actionPlan.secondary !== null || actionPlan.destructive !== null;
 
   return (
     <div className="space-y-5">

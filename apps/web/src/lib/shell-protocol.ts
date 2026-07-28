@@ -35,10 +35,7 @@ export function encodeShellFrame(
   return frame;
 }
 
-export function encodeJsonFrame(
-  type: number,
-  value: unknown,
-): Uint8Array<ArrayBuffer> {
+export function encodeJsonFrame(type: number, value: unknown): Uint8Array<ArrayBuffer> {
   return encodeShellFrame(type, encoder.encode(JSON.stringify(value)));
 }
 
@@ -51,11 +48,10 @@ export class ShellFrameDecoder {
     const frames: ShellFrame[] = [];
     for (;;) {
       if (this.buffer.length < HEADER_SIZE) break;
-      const length = new DataView(
-        this.buffer.buffer,
-        this.buffer.byteOffset + 1,
-        4,
-      ).getUint32(0, false);
+      const length = new DataView(this.buffer.buffer, this.buffer.byteOffset + 1, 4).getUint32(
+        0,
+        false,
+      );
       if (length > MAX_PAYLOAD_BYTES) {
         throw new Error("shell frame payload exceeds maximum size");
       }

@@ -12,10 +12,7 @@ export function MarketingExampleImage({
   return (
     <img
       alt=""
-      className={cn(
-        "marketing-example-image h-full w-full object-cover",
-        className,
-      )}
+      className={cn("marketing-example-image h-full w-full object-cover", className)}
       decoding="async"
       fetchPriority={eager ? "high" : "auto"}
       height={1254}

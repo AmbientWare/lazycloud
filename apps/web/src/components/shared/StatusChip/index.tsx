@@ -6,7 +6,9 @@ import { displayValue, statusTone } from "@/lib/format";
 export function StatusChip({ status, live = false }: { status: RowValue; live?: boolean }) {
   return (
     <Badge tone={statusTone(status)} className="gap-1.5">
-      {live ? <span className="pulse-live size-1.5 rounded-full bg-current" aria-hidden="true" /> : null}
+      {live ? (
+        <span className="pulse-live size-1.5 rounded-full bg-current" aria-hidden="true" />
+      ) : null}
       {displayValue(status)}
     </Badge>
   );

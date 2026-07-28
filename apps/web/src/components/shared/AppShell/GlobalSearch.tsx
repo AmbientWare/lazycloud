@@ -34,7 +34,13 @@ type SearchResult = {
   icon: typeof Search;
 };
 
-export function GlobalSearch({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+export function GlobalSearch({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
   const { workspace } = useWorkspace();
   const router = useRouter();
   const [query, setQuery] = useState("");
@@ -51,15 +57,46 @@ export function GlobalSearch({ open, onOpenChange }: { open: boolean; onOpenChan
 
   const results = useMemo(() => {
     const base = `/w/${encodeURIComponent(workspace.name)}`;
-    const matches = (value: string) => !normalizedQuery || value.toLowerCase().includes(normalizedQuery);
+    const matches = (value: string) =>
+      !normalizedQuery || value.toLowerCase().includes(normalizedQuery);
     const next: SearchResult[] = [];
 
     const destinations: SearchResult[] = [
-      { key: "destination-apps", label: "Apps", detail: "Workspace", href: `${base}/apps`, icon: Boxes },
-      { key: "destination-tasks", label: "Tasks", detail: "Workspace", href: `${base}/tasks`, icon: Activity },
-      { key: "destination-storage", label: "Storage", detail: "Workspace", href: `${base}/storage`, icon: Database },
-      { key: "destination-usage", label: "Usage", detail: "Workspace", href: `${base}/usage`, icon: ChartNoAxesCombined },
-      { key: "destination-settings", label: "Settings", detail: "Workspace", href: `${base}/settings`, icon: Settings },
+      {
+        key: "destination-apps",
+        label: "Apps",
+        detail: "Workspace",
+        href: `${base}/apps`,
+        icon: Boxes,
+      },
+      {
+        key: "destination-tasks",
+        label: "Tasks",
+        detail: "Workspace",
+        href: `${base}/tasks`,
+        icon: Activity,
+      },
+      {
+        key: "destination-storage",
+        label: "Storage",
+        detail: "Workspace",
+        href: `${base}/storage`,
+        icon: Database,
+      },
+      {
+        key: "destination-usage",
+        label: "Usage",
+        detail: "Workspace",
+        href: `${base}/usage`,
+        icon: ChartNoAxesCombined,
+      },
+      {
+        key: "destination-settings",
+        label: "Settings",
+        detail: "Workspace",
+        href: `${base}/settings`,
+        icon: Settings,
+      },
     ];
     next.push(...destinations.filter((item) => matches(`${item.label} ${item.detail}`)));
 
@@ -75,7 +112,11 @@ export function GlobalSearch({ open, onOpenChange }: { open: boolean; onOpenChan
     }
 
     for (const workload of workloads.data?.stubs ?? []) {
-      if (!workload.app_id || !matches(`${workload.name} ${workload.handler ?? ""} ${workload.id} ${workload.kind}`)) continue;
+      if (
+        !workload.app_id ||
+        !matches(`${workload.name} ${workload.handler ?? ""} ${workload.id} ${workload.kind}`)
+      )
+        continue;
       next.push({
         key: `workload-${workload.id}`,
         label: workload.name,
@@ -98,7 +139,11 @@ export function GlobalSearch({ open, onOpenChange }: { open: boolean; onOpenChan
     }
 
     for (const sandbox of sandboxes.data?.data ?? []) {
-      if (!sandbox.container_id || !matches(`${sandbox.name} ${sandbox.id} ${sandbox.container_id}`)) continue;
+      if (
+        !sandbox.container_id ||
+        !matches(`${sandbox.name} ${sandbox.id} ${sandbox.container_id}`)
+      )
+        continue;
       next.push({
         key: `sandbox-${sandbox.id}-${sandbox.container_id}`,
         label: sandbox.name,
@@ -117,15 +162,19 @@ export function GlobalSearch({ open, onOpenChange }: { open: boolean; onOpenChan
     router.history.push(result.href);
   };
 
-  const loading = apps.isPending || workloads.isPending || sandboxes.isPending || (deferredQuery.length >= 2 && tasks.isPending);
+  const loading =
+    apps.isPending ||
+    workloads.isPending ||
+    sandboxes.isPending ||
+    (deferredQuery.length >= 2 && tasks.isPending);
   const partialError = apps.isError || workloads.isError || sandboxes.isError || tasks.isError;
 
   return (
     <CommandDialog
       open={open}
       onOpenChange={(nextOpen) => {
-      if (!nextOpen) setQuery("");
-      onOpenChange(nextOpen);
+        if (!nextOpen) setQuery("");
+        onOpenChange(nextOpen);
       }}
       title="Search workspace"
       description="Find apps, workloads, tasks, sandboxes, and workspace destinations"
@@ -138,13 +187,8 @@ export function GlobalSearch({ open, onOpenChange }: { open: boolean; onOpenChan
         placeholder="Search apps, workloads, tasks, sandboxes"
         className="pr-10"
       />
-      <CommandList
-        data-search-results-scroll=""
-        className="max-h-[calc(75svh-3rem)] min-h-24 p-2"
-      >
-        <CommandEmpty>
-          {loading ? "Searching workspace" : "No matching resources"}
-        </CommandEmpty>
+      <CommandList data-search-results-scroll="" className="max-h-[calc(75svh-3rem)] min-h-24 p-2">
+        <CommandEmpty>{loading ? "Searching workspace" : "No matching resources"}</CommandEmpty>
         <CommandGroup>
           {results.map((result) => {
             const Icon = result.icon;

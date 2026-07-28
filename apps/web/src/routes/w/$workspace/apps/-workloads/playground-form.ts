@@ -109,8 +109,7 @@ function placeholderValue(type: string): JsonValue {
 }
 
 export type BuildBodyResult =
-  | { body: Record<string, JsonValue>; error?: undefined }
-  | { body?: undefined; error: string };
+  { body: Record<string, JsonValue>; error?: undefined } | { body?: undefined; error: string };
 
 /**
  * Parse typed field inputs into the kwargs JSON body. Empty optional fields

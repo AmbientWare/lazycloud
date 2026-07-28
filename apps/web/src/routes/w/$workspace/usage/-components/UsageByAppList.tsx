@@ -1,24 +1,13 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import {
-  ArrowUpRight,
-  ChevronRight,
-  RefreshCw,
-  TriangleAlert,
-} from "lucide-react";
+import { ArrowUpRight, ChevronRight, RefreshCw, TriangleAlert } from "lucide-react";
 
 import { StubKindIcon } from "@/components/shared/StubKindIcon";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import type {
-  UsageBillingAppSummary,
-  UsageBillingAttribution,
-} from "@/lib/api/schemas";
-import {
-  usageBillingWorkloadsQueryOptions,
-  type UsageWindow,
-} from "@/lib/queries/usage";
+import type { UsageBillingAppSummary, UsageBillingAttribution } from "@/lib/api/schemas";
+import { usageBillingWorkloadsQueryOptions, type UsageWindow } from "@/lib/queries/usage";
 import { metricDisplay } from "@/lib/metric-display";
 import { cn } from "@/lib/utils";
 import { formatCostNanos } from "./usage-report";
@@ -90,12 +79,7 @@ function AppUsageSection({
   bucketSeconds: number;
 }) {
   const workloads = useQuery({
-    ...usageBillingWorkloadsQueryOptions(
-      workspaceId,
-      app.app_id,
-      window,
-      bucketSeconds,
-    ),
+    ...usageBillingWorkloadsQueryOptions(workspaceId, app.app_id, window, bucketSeconds),
     enabled: open,
   });
   const triggerId = `usage-app-${safeDomId(app.app_id || app.app_name)}`;
@@ -123,9 +107,7 @@ function AppUsageSection({
             {app.app_name || "Unlinked"}
           </span>
           <span className="mt-0.5 block text-[11px] text-muted-foreground">
-            {workloads.data
-              ? `${formatCount(workloads.data.data.length, "workload")} · `
-              : null}
+            {workloads.data ? `${formatCount(workloads.data.data.length, "workload")} · ` : null}
             {formatCount(app.tasks, "task")}
           </span>
         </span>
@@ -186,13 +168,7 @@ function WorkloadsLoading() {
   );
 }
 
-function WorkloadsFailure({
-  onRetry,
-  isRetrying,
-}: {
-  onRetry: () => void;
-  isRetrying: boolean;
-}) {
+function WorkloadsFailure({ onRetry, isRetrying }: { onRetry: () => void; isRetrying: boolean }) {
   return (
     <div className="flex min-h-24 items-center justify-between gap-4 px-4 py-3" role="alert">
       <span className="flex min-w-0 items-center gap-2 text-xs text-destructive">
@@ -241,9 +217,7 @@ function WorkloadUsageRow({
           contributors.map((line) => (
             <span key={line.metric} className="whitespace-nowrap">
               {metricDisplay(line.metric, line.unit).label}{" "}
-              <span className="mono">
-                {formatCostNanos(line.cost_nanos, false, currency)}
-              </span>
+              <span className="mono">{formatCostNanos(line.cost_nanos, false, currency)}</span>
             </span>
           ))
         ) : (

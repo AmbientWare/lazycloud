@@ -19,31 +19,17 @@ import { adminAccessQueryOptions } from "@/lib/queries/compute";
 import { currentWorkspaceQueryOptions } from "@/lib/queries/workspace";
 import { useWorkspaceSelection } from "@/lib/workspace-selection";
 
-import {
-  useWorkspaceDeletionController,
-  type WorkspaceDeletionController,
-} from "./controller";
+import { useWorkspaceDeletionController, type WorkspaceDeletionController } from "./controller";
 import { WorkspaceDeletionContext } from "./context";
 
-export function WorkspaceDeletionProvider({
-  children,
-}: {
-  children: ReactNode;
-}) {
+export function WorkspaceDeletionProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
   const { workspaces } = useSession();
-  const lastWorkspaceName = useWorkspaceSelection(
-    (state) => state.lastWorkspaceName,
-  );
-  const rememberWorkspaceName = useWorkspaceSelection(
-    (state) => state.rememberWorkspaceName,
-  );
+  const lastWorkspaceName = useWorkspaceSelection((state) => state.lastWorkspaceName);
+  const rememberWorkspaceName = useWorkspaceSelection((state) => state.rememberWorkspaceName);
   const authorityWorkspace =
-    workspaces.find((workspace) => workspace.status === "active") ??
-    workspaces[0];
-  const adminAccess = useQuery(
-    adminAccessQueryOptions(authorityWorkspace.id),
-  );
+    workspaces.find((workspace) => workspace.status === "active") ?? workspaces[0];
+  const adminAccess = useQuery(adminAccessQueryOptions(authorityWorkspace.id));
   const currentWorkspace = useQuery({
     ...currentWorkspaceQueryOptions(),
     enabled: adminAccess.data === true,
@@ -65,11 +51,7 @@ export function WorkspaceDeletionProvider({
   );
 }
 
-function WorkspaceDeletionDialog({
-  controller,
-}: {
-  controller: WorkspaceDeletionController;
-}) {
+function WorkspaceDeletionDialog({ controller }: { controller: WorkspaceDeletionController }) {
   const workspace = controller.target?.workspace ?? null;
   return (
     <AlertDialog
@@ -81,13 +63,11 @@ function WorkspaceDeletionDialog({
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>
-            {workspace?.status === "deleting" ? "Resume deleting" : "Delete"}{" "}
-            {workspace?.name}?
+            {workspace?.status === "deleting" ? "Resume deleting" : "Delete"} {workspace?.name}?
           </AlertDialogTitle>
           <AlertDialogDescription>
-            This permanently removes the workspace identity, access tokens,
-            configuration, and remaining owned resources. Enter the workspace
-            name to continue.
+            This permanently removes the workspace identity, access tokens, configuration, and
+            remaining owned resources. Enter the workspace name to continue.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <label className="block text-xs font-medium text-muted-foreground">
@@ -95,9 +75,7 @@ function WorkspaceDeletionDialog({
           <Input
             autoFocus
             value={controller.confirmation}
-            onChange={(event) =>
-              controller.setConfirmation(event.target.value)
-            }
+            onChange={(event) => controller.setConfirmation(event.target.value)}
             className="mono mt-1"
             autoComplete="off"
             disabled={controller.isPending}
@@ -109,9 +87,7 @@ function WorkspaceDeletionDialog({
           </p>
         ) : null}
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={controller.isPending}>
-            Keep workspace
-          </AlertDialogCancel>
+          <AlertDialogCancel disabled={controller.isPending}>Keep workspace</AlertDialogCancel>
           <Button
             type="button"
             variant="destructive"
@@ -122,11 +98,7 @@ function WorkspaceDeletionDialog({
             }
             onClick={controller.submit}
           >
-            {controller.isPending ? (
-              <Loader2 className="animate-spin" />
-            ) : (
-              <Trash2 />
-            )}
+            {controller.isPending ? <Loader2 className="animate-spin" /> : <Trash2 />}
             Delete permanently
           </Button>
         </AlertDialogFooter>

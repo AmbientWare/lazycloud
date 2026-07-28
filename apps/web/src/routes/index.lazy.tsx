@@ -219,10 +219,9 @@ function MarketingHome() {
                 The cloud platform for <em>AI-speed development.</em>
               </h1>
               <p className="mt-5 max-w-[540px] text-base leading-[1.58] text-muted-foreground sm:mt-6 sm:text-lg">
-                Developers and agents deploy applications, run durable work,
-                create isolated environments, and operate every workload through
-                one programmable control plane—without stitching together cloud
-                infrastructure.
+                Developers and agents deploy applications, run durable work, create isolated
+                environments, and operate every workload through one programmable control
+                plane—without stitching together cloud infrastructure.
               </p>
               <div className="mt-7 flex flex-col gap-2.5 sm:flex-row sm:flex-wrap">
                 <PendingMarketingButton className="marketing-action-primary stamp border-brand/45">
@@ -369,12 +368,9 @@ function usePlatformStoryScroll(onScrollSelect: (index: number) => void) {
   const storyRefs = useRef<Array<HTMLElement | null>>([]);
   const [scrollDriven, setScrollDriven] = useState(false);
 
-  const registerStory = useCallback(
-    (index: number, node: HTMLElement | null) => {
-      storyRefs.current[index] = node;
-    },
-    [],
-  );
+  const registerStory = useCallback((index: number, node: HTMLElement | null) => {
+    storyRefs.current[index] = node;
+  }, []);
 
   useEffect(() => {
     const query = window.matchMedia("(min-width: 1024px)");
@@ -397,9 +393,7 @@ function usePlatformStoryScroll(onScrollSelect: (index: number) => void) {
       const scrollportRect = scrollport?.getBoundingClientRect();
       const viewportTop = scrollportRect?.top ?? 0;
       const viewportHeight = scrollport?.clientHeight ?? window.innerHeight;
-      const header = section.ownerDocument.querySelector<HTMLElement>(
-        ".marketing-site > header",
-      );
+      const header = section.ownerDocument.querySelector<HTMLElement>(".marketing-site > header");
       const headerHeight = header?.offsetHeight ?? 0;
       const readingLine =
         viewportTop +
@@ -439,18 +433,11 @@ function usePlatformStoryScroll(onScrollSelect: (index: number) => void) {
       const scrollportRect = scrollport?.getBoundingClientRect();
       const viewportTop = scrollportRect?.top ?? 0;
       const scrollPosition = scrollport ? scrollport.scrollTop : window.scrollY;
-      const header = section.ownerDocument.querySelector<HTMLElement>(
-        ".marketing-site > header",
-      );
+      const header = section.ownerDocument.querySelector<HTMLElement>(".marketing-site > header");
       const headerHeight = header?.offsetHeight ?? 0;
       const target =
-        scrollPosition +
-        story.getBoundingClientRect().top -
-        viewportTop -
-        headerHeight -
-        32;
-      const behavior = window.matchMedia("(prefers-reduced-motion: reduce)")
-        .matches
+        scrollPosition + story.getBoundingClientRect().top - viewportTop - headerHeight - 32;
+      const behavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches
         ? "auto"
         : "smooth";
 
@@ -494,10 +481,7 @@ function PlatformStoryRail() {
             }
             body="Developers and agents use the same SDK, machine-readable CLI, and typed clients to deploy, call, and operate every workload through one control plane."
           />
-          <nav
-            aria-label="Platform use cases"
-            className="border-t border-border"
-          >
+          <nav aria-label="Platform use cases" className="border-t border-border">
             <ol className="m-0 list-none p-0">
               {platformStories.map((story, index) => {
                 const active = story.key === activeKey;
@@ -508,8 +492,7 @@ function PlatformStoryRail() {
                       aria-current={active ? "location" : undefined}
                       className={cn(
                         "flex min-h-12 w-full items-center gap-3 border-b border-border bg-transparent py-3 pr-1 pl-3 text-left text-sm text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:min-h-14 sm:pl-4",
-                        active &&
-                          "font-medium text-foreground shadow-[inset_3px_0_0_var(--brand)]",
+                        active && "font-medium text-foreground shadow-[inset_3px_0_0_var(--brand)]",
                       )}
                       onClick={() => moveToStory(index)}
                       type="button"
@@ -622,13 +605,9 @@ function ComputeSection() {
                   <span className="inline-flex size-9 items-center justify-center rounded-xl border border-brand/25 text-brand">
                     <Glyph>{path.icon}</Glyph>
                   </span>
-                  <h3 className="text-lg font-medium tracking-[-0.02em]">
-                    {path.title}
-                  </h3>
+                  <h3 className="text-lg font-medium tracking-[-0.02em]">{path.title}</h3>
                 </div>
-                <p className="mt-3 text-[13px] text-muted-foreground">
-                  {path.body}
-                </p>
+                <p className="mt-3 text-[13px] text-muted-foreground">{path.body}</p>
                 {path.command ? (
                   <code className="mt-3 inline-flex max-w-full items-center gap-2 rounded-md border border-border bg-muted/60 px-2.5 py-1.5 font-mono text-[11px] break-all text-foreground">
                     <span className="text-brand">$</span> {path.command}

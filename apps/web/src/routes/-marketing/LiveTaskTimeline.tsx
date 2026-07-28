@@ -98,9 +98,7 @@ export function LiveTaskTimeline() {
     /* A newly selected story starts at zero. The panel owner unmounts this
        preview when it is inactive, so returning creates a fresh run. */
     const timer = window.setInterval(() => {
-      setClock((current) =>
-        current >= TOTAL_SECONDS + HOLD_SECONDS ? 0 : current + TICK_SECONDS,
-      );
+      setClock((current) => (current >= TOTAL_SECONDS + HOLD_SECONDS ? 0 : current + TICK_SECONDS));
     }, TICK_MS);
     return () => window.clearInterval(timer);
   }, [active, reducedMotion]);
@@ -108,29 +106,17 @@ export function LiveTaskTimeline() {
   const visibleClock = reducedMotion ? TOTAL_SECONDS : clock;
 
   const running = TASKS.filter(
-    (task) =>
-      visibleClock > task.start && visibleClock < task.start + task.duration,
+    (task) => visibleClock > task.start && visibleClock < task.start + task.duration,
   ).length;
-  const completed = TASKS.filter(
-    (task) => visibleClock >= task.start + task.duration,
-  ).length;
-  const progress = Math.min(
-    100,
-    Math.round((visibleClock / TOTAL_SECONDS) * 100),
-  );
+  const completed = TASKS.filter((task) => visibleClock >= task.start + task.duration).length;
+  const progress = Math.min(100, Math.round((visibleClock / TOTAL_SECONDS) * 100));
   const runState =
-    visibleClock >= TOTAL_SECONDS
-      ? "Completed"
-      : visibleClock > 0
-        ? "Running"
-        : "Ready";
+    visibleClock >= TOTAL_SECONDS ? "Completed" : visibleClock > 0 ? "Running" : "Ready";
 
   return (
     <div
       className="marketing-timeline"
-      data-animation-state={
-        reducedMotion ? "settled" : active ? "running" : "paused"
-      }
+      data-animation-state={reducedMotion ? "settled" : active ? "running" : "paused"}
       ref={previewRef}
     >
       <div className="pipeline-run-summary">
@@ -174,22 +160,12 @@ export function LiveTaskTimeline() {
         </div>
         <div className="timeline-rows">
           {TASKS.map((task) => {
-            const elapsed = Math.min(
-              Math.max(visibleClock - task.start, 0),
-              task.duration,
-            );
+            const elapsed = Math.min(Math.max(visibleClock - task.start, 0), task.duration);
             const state =
-              elapsed <= 0
-                ? "queued"
-                : elapsed < task.duration
-                  ? "running"
-                  : "complete";
+              elapsed <= 0 ? "queued" : elapsed < task.duration ? "running" : "complete";
             return (
               <div className="timeline-row" key={task.name}>
-                <span
-                  className="timeline-name"
-                  style={{ paddingLeft: `${task.depth * 9}px` }}
-                >
+                <span className="timeline-name" style={{ paddingLeft: `${task.depth * 9}px` }}>
                   {task.depth > 0 ? <i className="timeline-branch">↳</i> : null}
                   {task.name}
                   <small>{task.kind}</small>
@@ -207,9 +183,7 @@ export function LiveTaskTimeline() {
                     }}
                   />
                 </span>
-                <code className="timeline-duration">
-                  {formatElapsed(elapsed, task.duration)}
-                </code>
+                <code className="timeline-duration">{formatElapsed(elapsed, task.duration)}</code>
               </div>
             );
           })}

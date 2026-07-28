@@ -42,7 +42,9 @@ export async function streamServerSentEvents(
   const mediaType = response.headers.get("Content-Type")?.split(";", 1)[0]?.trim().toLowerCase();
   if (mediaType !== "text/event-stream") {
     await response.body.cancel().catch(() => undefined);
-    throw new Error(`Expected text/event-stream response, received ${mediaType || "no content type"}`);
+    throw new Error(
+      `Expected text/event-stream response, received ${mediaType || "no content type"}`,
+    );
   }
   onOpen?.();
 

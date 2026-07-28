@@ -8,7 +8,8 @@ const MAX_RECONNECT_DELAY_MS = 30_000;
 const RECONNECT_JITTER_RATIO = 0.25;
 const STABLE_CONNECTION_RESET_MS = 30_000;
 
-export type EventStreamStatus = "idle" | "connecting" | "open" | "reconnecting" | "closed" | "error";
+export type EventStreamStatus =
+  "idle" | "connecting" | "open" | "reconnecting" | "closed" | "error";
 
 /**
  * Follow a server-sent-event endpoint with automatic reconnect and
