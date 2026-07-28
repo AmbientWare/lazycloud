@@ -14,6 +14,7 @@ from uuid import uuid4
 from cache.protocol import CacheContentStoreResult
 from pydantic import Field, JsonValue, TypeAdapter
 from shared.checkpoints import CheckpointRecord
+from shared.container_requests import WORKER_USER_ARTIFACT_VOLUME
 from shared.contracts import ContractModel
 
 from worker.checkpoint_activity import CheckpointLeaseRegistry
@@ -39,7 +40,13 @@ from worker.oci_runtime import OCI_CONFIG_FILE_NAME
 from worker.runtime_config import build_base_oci_config, runtime_capabilities
 
 ARCHIVE_INITIAL_CONFIG_FILE_NAME = "initial_config.json"
-CHECKPOINT_COPY_EXCLUDES = frozenset({OCI_CONFIG_FILE_NAME, "outputs", "snapshot"})
+# Derived from the mount constant rather than written out: a checkpoint that
+# stops excluding the user artifact mount silently copies a task's saved files
+# into the image, and a hand-written copy of the directory name is exactly what
+# stops matching when the mount is renamed.
+CHECKPOINT_COPY_EXCLUDES = frozenset(
+    {OCI_CONFIG_FILE_NAME, WORKER_USER_ARTIFACT_VOLUME.strip("/"), "snapshot"}
+)
 
 type JsonObject = dict[str, JsonValue]
 
@@ -191,9 +198,7 @@ class RuntimeCheckpointCreator:
     content_cache_available: bool
     id_factory: Callable[[], str] = field(default_factory=lambda: lambda: str(uuid4()))
     nvidia_driver_major: int | None = None
-    checkpoint_activity: CheckpointLeaseRegistry = field(
-        default_factory=CheckpointLeaseRegistry
-    )
+    checkpoint_activity: CheckpointLeaseRegistry = field(default_factory=CheckpointLeaseRegistry)
 
     def create_checkpoint(
         self,

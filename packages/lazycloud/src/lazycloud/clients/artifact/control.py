@@ -91,7 +91,6 @@ class ArtifactControlClient:
         filename: str,
         *,
         expires: int = 3600,
-        gateway_external_url: str = "http://127.0.0.1:9000",
     ) -> ArtifactPublicUrlResponse:
         return self.artifact_public_url(
             ArtifactPublicUrlRequest(
@@ -99,7 +98,6 @@ class ArtifactControlClient:
                 task_id=task_id,
                 filename=filename,
                 expires=expires,
-                gateway_external_url=gateway_external_url,
             )
         )
 

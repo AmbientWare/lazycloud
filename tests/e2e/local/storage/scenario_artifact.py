@@ -35,7 +35,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         profile = require_live(argv, description=__doc__ or "Artifact")
     except LivePrerequisiteError as exc:
         return blocked(exc)
-    from .workload_artifact import APP_NAME, app, output_owner
+    from .workload_artifact import APP_NAME, app, artifact_owner
 
     endpoint = profile.resolved_endpoint().rstrip("/")
     workspace = profile.workspace
@@ -46,7 +46,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             source_root=SOURCE_ROOT,
             env={"LAZYCLOUD_E2E_APP": APP_NAME},
         )
-        call = output_owner.spawn(marker)
+        call = artifact_owner.spawn(marker)
         if call.get(timeout_seconds=120, poll_interval_seconds=0.5) != marker:
             raise RuntimeError("Artifact owner Function returned the wrong marker")
         artifacts = ArtifactControlClient.from_endpoint(
@@ -69,7 +69,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             saved.id,
             call.task_id,
             "accepted.txt",
-            gateway_external_url=endpoint,
         )
         response = httpx.get(public.public_url, timeout=30)
         response.raise_for_status()

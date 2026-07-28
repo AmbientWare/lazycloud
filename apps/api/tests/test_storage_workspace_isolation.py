@@ -8,10 +8,8 @@ from api.server.services import ApiServices
 from control.service import ControlPlaneService
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
-from shared.bytes_transport import encode_bytes
 from shared.deployment_records import DeploymentSpec, VolumeMount
 from shared.deployments import DeploymentKind
-from shared.http.artifacts import ArtifactSaveResponse
 from shared.identity import TokenKind
 from shared.mounts import MountAuthMode
 from storage.service import ObjectStorage
@@ -94,26 +92,6 @@ def test_secret_relationships_decode_persisted_cloud_bucket_credentials(
             "active_versions": [deployment.version],
         }
     ]
-
-
-def _save_output(
-    client: TestClient,
-    *,
-    token: str,
-    task_id: str,
-    content: bytes,
-) -> str:
-    response = client.post(
-        "/api/v1/artifacts/save",
-        headers=_headers(token),
-        json={
-            "task_id": task_id,
-            "filename": "result.txt",
-            "value_base64": encode_bytes(content),
-        },
-    )
-    assert response.status_code == 200, response.text
-    return ArtifactSaveResponse.model_validate_json(response.content).id
 
 
 def _workspace_token(isolated_services: ApiServices, workspace_id: str, name: str) -> str:

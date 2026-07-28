@@ -184,7 +184,8 @@ def configured_volume_mounts(
 
 def _mount_requires_workspace_storage(mount: RequestMount) -> bool:
     # A platform volume lives in the workspace's own storage, so it needs the
-    # mount exactly as outputs do. An external bucket carries its own config.
+    # mount the same way an artifact does. An external bucket carries its own
+    # config.
     if mount.mount_type is RequestMountType.Volume:
         return True
     if mount.mount_type is RequestMountType.MountPoint:

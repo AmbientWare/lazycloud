@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from urllib.parse import quote, unquote
 from uuid import uuid4
 
 from database.repositories.execution import TaskRepository
@@ -16,7 +17,6 @@ from execution.artifacts.planning import (
     ArtifactPathPlan,
     ArtifactPublicUrlPlan,
     ArtifactStatPlan,
-    ArtifactStorageMode,
     artifact_storage_prefix,
     plan_artifact_path,
     plan_artifact_public_url,
@@ -28,6 +28,20 @@ ARTIFACT_METADATA_TASK_ID = "task_id"
 ARTIFACT_METADATA_WORKSPACE_ID = "workspace_id"
 ARTIFACT_METADATA_FILENAME = "filename"
 ARTIFACT_METADATA_STUB_ID = "stub_external_id"
+
+
+def _encode_metadata_filename(filename: str) -> str:
+    """Percent-encode a filename for object metadata.
+
+    Object metadata is US-ASCII by protocol, and the store rejects the whole
+    upload when it is not. A name like ``résumé.txt`` is ordinary, so it is
+    encoded on the way in rather than costing the user their artifact.
+    """
+    return quote(filename, safe="")
+
+
+def _decode_metadata_filename(value: str) -> str:
+    return unquote(value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,7 +96,7 @@ class ArtifactStorageService:
                 ARTIFACT_METADATA_ID: artifact_id,
                 ARTIFACT_METADATA_TASK_ID: task.id,
                 ARTIFACT_METADATA_WORKSPACE_ID: workspace_id,
-                ARTIFACT_METADATA_FILENAME: path.filename,
+                ARTIFACT_METADATA_FILENAME: _encode_metadata_filename(path.filename),
                 ARTIFACT_METADATA_STUB_ID: stub_external_id,
             },
         )
@@ -110,7 +124,9 @@ class ArtifactStorageService:
             ArtifactListing(
                 artifact_id=record.metadata.get(ARTIFACT_METADATA_ID, record.id),
                 task_id=task.id,
-                filename=record.metadata.get(ARTIFACT_METADATA_FILENAME, "")
+                filename=_decode_metadata_filename(
+                    record.metadata.get(ARTIFACT_METADATA_FILENAME, "")
+                )
                 or record.key.rsplit("/", 1)[-1],
                 content_type=record.content_type or "application/octet-stream",
                 size=record.size or 0,
@@ -185,7 +201,6 @@ class ArtifactStorageService:
         task_id: str,
         artifact_id: str,
         filename: str,
-        gateway_external_url: str,
         expires_seconds: int = DEFAULT_ARTIFACT_PUBLIC_URL_EXPIRES_SECONDS,
     ) -> ArtifactPublicUrlPlan:
         path, _ = self._path_and_record(
@@ -203,9 +218,7 @@ class ArtifactStorageService:
         return plan_artifact_public_url(
             artifact_id=artifact_id,
             target_path=path.storage_key,
-            gateway_external_url=gateway_external_url,
             expires_seconds=expires_seconds,
-            storage_mode=ArtifactStorageMode.WorkspaceObjectStorage,
             presigned_url=presigned_url,
         )
 

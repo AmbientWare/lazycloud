@@ -331,29 +331,14 @@ class ControlPlaneService:
                 status=record.status.value,
             )
 
-    def provision_bootstrap_workspace_storage(self, workspace: str = "default") -> str:
-        """Give the bootstrap workspace its storage at control-plane start.
-
-        It is created through the identity repository, which cannot know about
-        object storage, so it is the one workspace that never passes through
-        `create_workspace`. Every other workspace either provisions on creation
-        or is deliberately waiting to attach a bucket of its own, so a broader
-        sweep would hand those a platform bucket they never asked for.
-        """
-        try:
-            record = self.get_workspace(workspace)
-        except (NotFoundError, KeyError):
-            return ""
-        if record.storage.bucket:
-            return ""
-        self.ensure_workspace_storage(record.id)
-        return record.name
-
     def ensure_workspace_storage(self, workspace: str) -> WorkspaceRecord:
         """Provision workspace storage once, idempotently.
 
-        Every workspace needs it: volumes and outputs have no fallback tier, so a
-        workspace without storage cannot run ordinary work.
+        Every workspace needs it: neither volumes nor artifacts have a fallback
+        tier, so a workspace without storage cannot run ordinary work. Called by
+        workspace creation, the administrator bootstrap command, and the explicit
+        create-storage route — never as a side effect of serving a request, so a
+        workspace deliberately waiting to attach its own bucket keeps waiting.
         """
         record = self.get_workspace(workspace)
         if record.storage.bucket:

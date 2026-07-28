@@ -19,23 +19,21 @@ export function taskArtifactsQuery(workspaceId: string, taskId: string) {
 }
 
 /**
- * Fetch an artifact's bytes from the control plane as an object URL.
+ * Fetch an artifact's bytes from the control plane.
  *
  * Same-origin on purpose: a presigned URL names the object store, which is
  * routinely unreachable from wherever the dashboard is actually open. The
- * caller owns the returned URL and must revoke it.
+ * Blob is returned rather than an object URL so the caller that renders it
+ * also owns creating and revoking the URL.
  */
-export async function fetchArtifactObjectUrl(
+export async function fetchArtifactBlob(
   workspaceId: string,
   artifact: { id: string; task_id: string; filename: string },
-): Promise<string> {
+): Promise<Blob> {
   const query = new URLSearchParams({
     id: artifact.id,
     task_id: artifact.task_id,
     filename: artifact.filename,
   });
-  const blob = await apiBlob(
-    withWorkspace(`/api/v1/artifacts/content?${query.toString()}`, workspaceId),
-  );
-  return URL.createObjectURL(blob);
+  return apiBlob(withWorkspace(`/api/v1/artifacts/content?${query.toString()}`, workspaceId));
 }

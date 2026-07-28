@@ -42,7 +42,6 @@ class ArtifactPublicUrlRequest(HttpModel):
     task_id: str
     filename: str
     expires: int = Field(default=DEFAULT_ARTIFACT_PUBLIC_URL_EXPIRES_SECONDS, ge=0)
-    gateway_external_url: str = "http://127.0.0.1:9000"
 
 
 class ArtifactPublicUrlResponse(HttpModel):

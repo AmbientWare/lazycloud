@@ -14,6 +14,7 @@ from shared.http.artifacts import (
     ArtifactStatResponse,
     ArtifactSummary,
 )
+from shared.http_headers import INLINE_RENDERABLE_CONTENT_TYPES, content_disposition
 
 from api.server.auth import read_workspace, write_workspace
 from api.server.service_dependencies import artifact_service
@@ -79,11 +80,16 @@ def read_artifact_content(
         artifact_id=id,
         filename=filename,
     )
-    disposition = "attachment" if download else "inline"
+    inline = not download and content_type in INLINE_RENDERABLE_CONTENT_TYPES
     return Response(
         content=content,
         media_type=content_type,
-        headers={"Content-Disposition": f'{disposition}; filename="{name}"'},
+        headers={
+            "Content-Disposition": content_disposition(name, inline=inline),
+            # The content type is whatever the task declared when it saved the
+            # file, so the browser must not be free to reinterpret it.
+            "X-Content-Type-Options": "nosniff",
+        },
     )
 
 
@@ -120,7 +126,6 @@ def artifact_public_url(
         task_id=request.task_id,
         artifact_id=request.id,
         filename=request.filename,
-        gateway_external_url=request.gateway_external_url,
         expires_seconds=request.expires,
     )
     return ArtifactPublicUrlResponse(public_url=plan.public_url)

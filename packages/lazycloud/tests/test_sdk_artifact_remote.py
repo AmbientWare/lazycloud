@@ -93,7 +93,6 @@ def test_artifact_save_remote_chunks_file_and_returns_saved_metadata(tmp_path: P
     stat = artifact.stat()
     public_url = artifact.public_url(
         expires=120,
-        gateway_external_url="https://gateway.example",
     )
 
     assert saved.remote is True
@@ -107,7 +106,6 @@ def test_artifact_save_remote_chunks_file_and_returns_saved_metadata(tmp_path: P
     assert public_url == "https://objects.example/out_123"
     assert client.stat_requests[0].id == "out_123"
     assert client.public_url_requests[0].expires == 120
-    assert client.public_url_requests[0].gateway_external_url == "https://gateway.example"
 
 
 def test_artifact_save_remote_packages_directories_and_empty_files(tmp_path: Path) -> None:

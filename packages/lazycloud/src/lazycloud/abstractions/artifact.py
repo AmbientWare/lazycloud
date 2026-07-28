@@ -70,7 +70,6 @@ class SavedArtifact:
         client: ArtifactMetadataClient,
         *,
         expires: int = 3600,
-        gateway_external_url: str = "http://127.0.0.1:9000",
     ) -> str:
         if not self.artifact_id or not self.task_id:
             raise ArtifactNotSavedError("artifact has not been saved remotely")
@@ -81,7 +80,6 @@ class SavedArtifact:
                     task_id=self.task_id,
                     filename=self.filename or self.path.name,
                     expires=expires,
-                    gateway_external_url=gateway_external_url,
                 )
             )
         except HttpApiError as exc:
@@ -290,7 +288,6 @@ class Artifact:
         self,
         expires: int = 3600,
         *,
-        gateway_external_url: str = "http://127.0.0.1:9000",
         base_url: str | None = None,
     ) -> str:
         if not self.id:
@@ -303,7 +300,6 @@ class Artifact:
                 task_id=self._remote_task_id(),
                 filename=self._remote_filename(),
                 expires=expires,
-                gateway_external_url=gateway_external_url,
             )
         )
         return response.public_url
@@ -440,9 +436,6 @@ class ArtifactPublicURLError(RuntimeError):
     pass
 
 
-ArtifactPublicUrlError = ArtifactPublicURLError
-
-
 class ArtifactCannotRunLocallyError(RuntimeError):
     pass
 
@@ -500,7 +493,6 @@ __all__ = [
     "ArtifactNotFoundError",
     "ArtifactNotSavedError",
     "ArtifactPublicURLError",
-    "ArtifactPublicUrlError",
     "ArtifactRemoteClient",
     "ArtifactSaveClient",
     "ArtifactSaveError",

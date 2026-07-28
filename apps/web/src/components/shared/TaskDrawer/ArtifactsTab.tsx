@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Download, Loader2, Search } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -10,7 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { fetchArtifactObjectUrl, taskArtifactsQuery } from "@/lib/queries/artifacts";
+import { fetchArtifactBlob, taskArtifactsQuery } from "@/lib/queries/artifacts";
 import type { ArtifactSummary } from "@/lib/api/schemas";
 
 /** Bytes as something a person reads at a glance. */
@@ -29,20 +30,28 @@ function formatSize(bytes: number): string {
 type PreviewKind = "image" | "pdf" | "text" | "none";
 
 /**
+ * Types that are plain text but are not spelled `text/*`. These are what
+ * Python's `mimetypes` actually returns for the file extensions a task is
+ * likely to save, so they belong in the text branch rather than falling
+ * through to download-only.
+ */
+const TEXTUAL_CONTENT_TYPES = new Set([
+  "application/javascript",
+  "application/json",
+  "application/toml",
+  "application/x-yaml",
+  "application/xml",
+  "application/yaml",
+]);
+
+/**
  * How to render an artifact. The stored content type decides, which is why the
  * SDK infers it at save time rather than leaving everything octet-stream.
  */
 function previewKind(contentType: string): PreviewKind {
   if (contentType.startsWith("image/")) return "image";
   if (contentType === "application/pdf") return "pdf";
-  if (
-    contentType.startsWith("text/") ||
-    contentType === "application/json" ||
-    contentType === "application/xml" ||
-    contentType === "application/javascript"
-  ) {
-    return "text";
-  }
+  if (contentType.startsWith("text/") || TEXTUAL_CONTENT_TYPES.has(contentType)) return "text";
   return "none";
 }
 
@@ -64,30 +73,37 @@ function PreviewBody({
   const [text, setText] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [undecodable, setUndecodable] = useState(false);
+  // Depend on the identifying fields rather than the artifact object: the
+  // list query hands back a fresh object on every refetch, and re-running
+  // this effect would revoke a URL the rendered element is still showing.
+  const { id, task_id: taskId, filename } = artifact;
 
   useEffect(() => {
     let objectUrl: string | null = null;
     let cancelled = false;
     void (async () => {
       try {
-        const next = await fetchArtifactObjectUrl(workspaceId, artifact);
-        objectUrl = next;
+        const blob = await fetchArtifactBlob(workspaceId, { id, task_id: taskId, filename });
+        const decoded = kind === "text" ? await blob.text() : null;
         if (cancelled) return;
-        if (kind === "text") {
-          setText(await (await fetch(next)).text());
+        objectUrl = URL.createObjectURL(blob);
+        if (cancelled) {
+          // Cleanup already ran, so nothing else will revoke this one.
+          URL.revokeObjectURL(objectUrl);
+          objectUrl = null;
+          return;
         }
-        setUrl(next);
+        if (decoded !== null) setText(decoded);
+        setUrl(objectUrl);
       } catch (error) {
         if (!cancelled) setFailure(error instanceof Error ? error.message : "unknown error");
       }
     })();
     return () => {
       cancelled = true;
-      // The object URL is ours to release; a drawer left open for a long
-      // session would otherwise pin every artifact ever previewed in memory.
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [artifact, workspaceId, kind]);
+  }, [workspaceId, id, taskId, filename, kind]);
 
   if (failure) {
     return (
@@ -149,11 +165,15 @@ function ArtifactRow({
     setDownloading(true);
     let url: string | null = null;
     try {
-      url = await fetchArtifactObjectUrl(workspaceId, artifact);
+      url = URL.createObjectURL(await fetchArtifactBlob(workspaceId, artifact));
       const link = document.createElement("a");
       link.href = url;
       link.download = artifact.filename;
       link.click();
+    } catch (error) {
+      toast.error("Download failed", {
+        description: error instanceof Error ? error.message : "unknown error",
+      });
     } finally {
       if (url) URL.revokeObjectURL(url);
       setDownloading(false);

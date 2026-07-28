@@ -8,18 +8,10 @@ from pydantic import Field
 from shared.contracts import ContractModel
 from shared.http.artifacts import DEFAULT_ARTIFACT_PUBLIC_URL_EXPIRES_SECONDS
 
-OUTPUT_ROUTE_PREFIX = "/artifact"
-DEFAULT_ARTIFACTS_PATH = "/data/artifacts"
 DEFAULT_ARTIFACTS_PREFIX = "artifacts"
 
 
-class ArtifactStorageMode(StrEnum):
-    LocalFilesystem = "local-filesystem"
-    WorkspaceObjectStorage = "workspace-object-storage"
-
-
 class ArtifactPublicUrlStatus(StrEnum):
-    CachedProxyUrl = "cached-proxy-url"
     PresignedObjectUrl = "presigned-object-url"
     InvalidRequest = "invalid-request"
 
@@ -30,8 +22,6 @@ class ArtifactPathPlan(ContractModel):
     task_external_id: str
     artifact_id: str
     filename: str
-    root_path: str
-    file_path: str
     storage_prefix: str
     storage_key: str
 
@@ -53,28 +43,14 @@ class ArtifactPublicUrlPlan(ContractModel):
     target_path: str
     public_url: str
     expires_seconds: int = Field(ge=0)
-    storage_mode: ArtifactStorageMode
 
     @property
     def ok(self) -> bool:
-        return self.status in {
-            ArtifactPublicUrlStatus.CachedProxyUrl,
-            ArtifactPublicUrlStatus.PresignedObjectUrl,
-        }
+        return self.status is ArtifactPublicUrlStatus.PresignedObjectUrl
 
 
 def artifact_public_url_key(artifact_id: str) -> str:
     return f"artifact:{artifact_id}"
-
-
-def artifact_task_root_path(
-    workspace_name: str,
-    stub_external_id: str,
-    task_external_id: str,
-    *,
-    artifacts_path: str = DEFAULT_ARTIFACTS_PATH,
-) -> str:
-    return _join(artifacts_path, workspace_name, stub_external_id, task_external_id)
 
 
 def artifact_storage_prefix(stub_external_id: str, task_external_id: str) -> str:
@@ -87,16 +63,8 @@ def plan_artifact_path(
     task_external_id: str,
     artifact_id: str,
     filename: str,
-    *,
-    artifacts_path: str = DEFAULT_ARTIFACTS_PATH,
 ) -> ArtifactPathPlan:
     safe_name = _safe_filename(filename)
-    root = artifact_task_root_path(
-        workspace_name,
-        stub_external_id,
-        task_external_id,
-        artifacts_path=artifacts_path,
-    )
     storage_prefix = artifact_storage_prefix(stub_external_id, task_external_id)
     return ArtifactPathPlan(
         workspace_name=workspace_name,
@@ -104,8 +72,6 @@ def plan_artifact_path(
         task_external_id=task_external_id,
         artifact_id=artifact_id,
         filename=safe_name,
-        root_path=root,
-        file_path=_join(root, artifact_id, safe_name),
         storage_prefix=storage_prefix,
         storage_key=_join(storage_prefix, artifact_id, safe_name),
     )
@@ -115,41 +81,27 @@ def plan_artifact_public_url(
     *,
     artifact_id: str,
     target_path: str,
-    gateway_external_url: str,
     expires_seconds: int = DEFAULT_ARTIFACT_PUBLIC_URL_EXPIRES_SECONDS,
-    storage_mode: ArtifactStorageMode = ArtifactStorageMode.LocalFilesystem,
     presigned_url: str = "",
 ) -> ArtifactPublicUrlPlan:
-    cache_key = artifact_public_url_key(artifact_id)
-    if storage_mode is ArtifactStorageMode.WorkspaceObjectStorage:
-        if not presigned_url:
-            return ArtifactPublicUrlPlan(
-                status=ArtifactPublicUrlStatus.InvalidRequest,
-                artifact_id=artifact_id,
-                cache_key=cache_key,
-                target_path=target_path,
-                public_url="",
-                expires_seconds=expires_seconds,
-                storage_mode=storage_mode,
-            )
-        return ArtifactPublicUrlPlan(
-            status=ArtifactPublicUrlStatus.PresignedObjectUrl,
-            artifact_id=artifact_id,
-            cache_key=cache_key,
-            target_path=target_path,
-            public_url=presigned_url,
-            expires_seconds=expires_seconds,
-            storage_mode=storage_mode,
-        )
+    """Plan the short-lived direct link to an artifact's stored object.
 
+    Artifacts live in the workspace's own object storage, so the link is always
+    a presigned object URL; there is no second addressing scheme to choose
+    between.
+    """
+    status = (
+        ArtifactPublicUrlStatus.PresignedObjectUrl
+        if presigned_url
+        else ArtifactPublicUrlStatus.InvalidRequest
+    )
     return ArtifactPublicUrlPlan(
-        status=ArtifactPublicUrlStatus.CachedProxyUrl,
+        status=status,
         artifact_id=artifact_id,
-        cache_key=cache_key,
+        cache_key=artifact_public_url_key(artifact_id),
         target_path=target_path,
-        public_url=f"{gateway_external_url.rstrip('/')}{OUTPUT_ROUTE_PREFIX}/id/{artifact_id}",
+        public_url=presigned_url,
         expires_seconds=expires_seconds,
-        storage_mode=storage_mode,
     )
 
 
