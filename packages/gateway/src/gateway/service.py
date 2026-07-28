@@ -64,7 +64,7 @@ from database.repositories.compute import (
     ComputeMachineEnrollmentRecord,
     ComputeMachineEnrollmentRepository,
 )
-from database.repositories.orchestration import MachineRepository, WorkerRepository
+from database.repositories.orchestration import MachineRepository, PoolRepository, WorkerRepository
 from database.tailnet_cleanup import DatabaseTailnetCleanupStore
 from execution.containers.service import ContainerService
 from execution.functions.service import FunctionControlService
@@ -1263,11 +1263,17 @@ class GatewayControlService:
         return [machine_view(machine, agent_states.get(machine.id)) for machine in machines]
 
     def require_workspace_self_hosted_decommissioned(self, workspace_id: str) -> None:
-        self_hosted_pool_names = {
-            pool.name
-            for pool in self.services.compute.list_pools(workspace=workspace_id)
-            if pool.provider == "agent"
-        }
+        # Scoped by workspace id rather than resolved through the tenant-facing
+        # listing, which accepts only an Active workspace. This guard runs both
+        # before a workspace is marked Deleting and again on a retry after an
+        # aborted attempt; resolving by status would make every retry raise
+        # not-found and strand the workspace and its paid capacity for good.
+        with self.services.context.database.session() as session:
+            self_hosted_pool_names = {
+                pool.name
+                for pool in PoolRepository(session).list(workspace_id=workspace_id)
+                if pool.provider == "agent"
+            }
         if not self_hosted_pool_names:
             return
         with self.services.context.database.session() as session:
