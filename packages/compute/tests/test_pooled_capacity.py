@@ -41,7 +41,12 @@ from database.repositories.compute import (
     TailnetCleanupTombstoneRepository,
     WorkspaceComputePolicyRepository,
 )
-from database.repositories.orchestration import MachineRepository, PoolRepository, WorkerRepository
+from database.repositories.orchestration import (
+    ContainerRepository,
+    MachineRepository,
+    PoolRepository,
+    WorkerRepository,
+)
 from database.repositories.source_cache import SourceCacheCleanupRepository
 from shared.aws_connections import (
     AwsAccountAuthorizationGeneration,
@@ -76,6 +81,7 @@ from shared.compute_policy import (
     ComputeResourceRequirements,
     WorkspaceComputePolicy,
 )
+from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import ConflictError, UpstreamUnavailableError
 from shared.source_cache_cleanup import WorkerCacheGenerationState
 
@@ -461,6 +467,8 @@ def test_aws_default_capacity_is_one_durable_floor_preserved_by_placement(
             for item in PoolRepository(session).list(workspace_id=baseline.workspace_id)
         }
     assert placed.id == baseline.id
+    # Demand-driven placement never shrinks a pool it did not size.
+    assert placed.desired_machines == 1
     assert [pool.id for pool in internal if pool.min_machines > 0] == [baseline.id]
     policy = policies[baseline.name]
     assert policy.initial_workers == 1
@@ -1457,7 +1465,9 @@ def test_zero_capacity_policy_update_drives_internal_pool_desired_to_zero(
     policies.update_policy(
         workspace="default",
         expected_revision=current.revision,
-        default_placement=ComputePlacementTarget.Managed,
+        # AWS stays the default placement: zeroing the policy is the only control
+        # the user is given, and it has to release the machine on its own.
+        default_placement=ComputePlacementTarget.Aws,
         aws=current.aws.model_copy(
             update={
                 "initial_cpu_workers": 0,
@@ -1474,6 +1484,154 @@ def test_zero_capacity_policy_update_drives_internal_pool_desired_to_zero(
     assert drained.min_machines == 0
     assert drained.desired_machines == 0
     assert provider.desired == 0
+    # Proves the guarded scale owner ran rather than a bare zero record being
+    # written, which leaves the sizing state to raise the machine straight back.
+    assert (0, 1) in provider.capacity_calls
+
+
+def test_policy_owned_capacity_tracks_lowered_and_raised_bounds(
+    isolated_services: ApiServices,
+) -> None:
+    _seed_connection(isolated_services)
+    provider = _PooledProvider()
+    compute = ComputeService(
+        isolated_services.context,
+        provider_resolver=_Resolver(provider),
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=_MutationLeases(),
+    )
+
+    def reconcile(*, floor: int, ceiling: int) -> ComputePoolRecord:
+        return compute.reconcile_aws_default_capacity(
+            workspace="default",
+            region="us-east-1",
+            instance_type="i4i.xlarge",
+            initial_machines=floor,
+            min_machines=floor,
+            max_machines=ceiling,
+            min_free_cpu_millicores=1_000,
+            min_free_memory_mib=1_024,
+            root_volume_gib=200,
+            idle_timeout_seconds=300,
+        )
+
+    assert reconcile(floor=1, ceiling=10).desired_machines == 1
+    grown = compute.prepare_pooled_capacity(
+        workspace="default",
+        requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
+        region="us-east-1",
+        desired_machines=5,
+        workspace_machine_limit=10,
+        root_volume_gib=200,
+    )
+    assert grown.desired_machines == 5
+
+    # Lowering the floor releases exactly the capacity that floor was holding and
+    # leaves demand-grown capacity to the scheduler's own owners.
+    assert reconcile(floor=0, ceiling=10).desired_machines == 4
+    # Lowering the ceiling clamps desired down to it.
+    assert reconcile(floor=0, ceiling=2).desired_machines == 2
+    # Raising the floor still reconciles capacity upward.
+    assert reconcile(floor=3, ceiling=10).desired_machines == 3
+
+
+def test_lowered_policy_floor_does_not_terminate_a_machine_running_work(
+    isolated_services: ApiServices,
+) -> None:
+    _seed_connection(isolated_services)
+    provider = _PooledProvider()
+    compute = ComputeService(
+        isolated_services.context,
+        provider_resolver=_Resolver(provider),
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=_MutationLeases(),
+    )
+    pool = compute.reconcile_aws_default_capacity(
+        workspace="default",
+        region="us-east-1",
+        instance_type="i4i.xlarge",
+        initial_machines=1,
+        min_machines=1,
+        max_machines=10,
+        min_free_cpu_millicores=1_000,
+        min_free_memory_mib=1_024,
+        root_volume_gib=200,
+        idle_timeout_seconds=300,
+    )
+    compute.reconcile_pooled_capacity()
+    assert provider.desired == 1
+
+    machine_id = "44444444-4444-4444-8444-444444444444"
+    with isolated_services.context.database.session() as session:
+        MachineRepository(session).upsert(
+            Machine(
+                id=machine_id,
+                pool=pool.name,
+                provider=pool.provider_ref,
+                status=ResourceStatus.Running,
+            ),
+            workspace_id=pool.workspace_id,
+        )
+        bound = ComputeProviderInstanceRepository(session).bind_machine(
+            pool.id,
+            "i-00000000000000000",
+            machine_id,
+        )
+        assert bound is not None
+        ContainerRepository(session).upsert(
+            ContainerRecord(
+                id="55555555-5555-4555-8555-555555555555",
+                name="container-running",
+                image="",
+                command=[],
+                workspace_id=pool.workspace_id,
+                machine_id=machine_id,
+                status=ContainerStatus.Running,
+            )
+        )
+
+    policies = WorkspaceComputePolicyService(
+        isolated_services.context,
+        available_catalog=(
+            ComputeCatalogRegion(
+                region="us-east-1",
+                instances=(
+                    ComputeCatalogInstance(
+                        instance_type="i4i.xlarge",
+                        kind="cpu",
+                        cpu_millicores=4_000,
+                        memory_mb=32 * 1024,
+                    ),
+                ),
+            ),
+        ),
+        aws_default_capacity=AwsDefaultCapacityBaseline(capacity=compute),
+    )
+    current = policies.get_policy(workspace="default")
+    policies.update_policy(
+        workspace="default",
+        expected_revision=current.revision,
+        default_placement=ComputePlacementTarget.Aws,
+        aws=current.aws.model_copy(
+            update={
+                "initial_cpu_workers": 0,
+                "min_cpu_workers": 0,
+                "max_cpu_instances": 0,
+                "max_gpu_instances": 0,
+            }
+        ),
+    )
+
+    with isolated_services.context.database.session() as session:
+        held = ComputePoolRepository(session).get(pool.id)
+    assert held is not None
+    # The provider scales in by picking its own victim, so the running workload is
+    # only safe while the floor still holds its machine.
+    assert held.desired_machines == 1
+    assert provider.desired == 1
+    # The floor is gone, which is what lets the drain owner release the machine
+    # once the work finishes.
+    assert held.min_machines == 0
 
 
 def _mark_open_record_booting(
