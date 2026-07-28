@@ -59,9 +59,7 @@ export function SecretsTab({
         ) : query.isError ? (
           <p className="p-4 text-sm text-destructive">{query.error.message}</p>
         ) : query.data.secrets.length === 0 && !creating ? (
-          <p className="p-6 text-center text-sm text-muted-foreground">
-            No secrets
-          </p>
+          <p className="p-6 text-center text-sm text-muted-foreground">No secrets</p>
         ) : (
           query.data.secrets.map((secret) =>
             editing === secret.name ? (
@@ -184,18 +182,12 @@ function SecretRow({
           Rotated {displayValue(secret.updated_at ?? secret.created_at)}
         </p>
         <div className="mt-1 pl-5.5">
-          <ResourceWorkloadLinks
-            workspaceName={workspaceName}
-            workloads={secret.workloads}
-          />
+          <ResourceWorkloadLinks workspaceName={workspaceName} workloads={secret.workloads} />
         </div>
       </div>
 
       <div className="col-span-2 flex h-9 min-w-0 items-center rounded-md border border-input bg-background/70 pl-3 shadow-xs transition-colors focus-within:border-ring sm:col-span-1">
-        <code
-          aria-live="polite"
-          className="mono min-w-0 flex-1 truncate text-xs text-foreground"
-        >
+        <code aria-live="polite" className="mono min-w-0 flex-1 truncate text-xs text-foreground">
           {revealedValue ?? "********"}
         </code>
         <Button
@@ -237,17 +229,9 @@ function SecretRow({
             disabled={remove.isPending}
             onClick={() => remove.mutate()}
           >
-            {remove.isPending ? (
-              <Loader2 className="size-3.5 animate-spin" />
-            ) : (
-              "Delete"
-            )}
+            {remove.isPending ? <Loader2 className="size-3.5 animate-spin" /> : "Delete"}
           </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setConfirming(false)}
-          >
+          <Button variant="ghost" size="sm" onClick={() => setConfirming(false)}>
             Keep
           </Button>
         </div>
@@ -357,9 +341,7 @@ function SecretForm({
         <Button
           type="submit"
           size="sm"
-          disabled={
-            mutation.isPending || !value || (mode === "create" && !name.trim())
-          }
+          disabled={mutation.isPending || !value || (mode === "create" && !name.trim())}
         >
           {mutation.isPending ? (
             <Loader2 className="size-3.5 animate-spin" />

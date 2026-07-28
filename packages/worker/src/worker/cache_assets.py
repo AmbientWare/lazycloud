@@ -44,9 +44,7 @@ class WorkspaceGeeseFsStorageConfig(ContractModel):
 
 class WorkspaceStorageConfig(ContractModel):
     base_mount_path: str = "/workspace"
-    geesefs: WorkspaceGeeseFsStorageConfig = Field(
-        default_factory=WorkspaceGeeseFsStorageConfig
-    )
+    geesefs: WorkspaceGeeseFsStorageConfig = Field(default_factory=WorkspaceGeeseFsStorageConfig)
 
 
 class WorkspaceMountState(ContractModel):

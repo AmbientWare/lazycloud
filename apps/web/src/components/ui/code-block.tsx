@@ -23,9 +23,7 @@ export function CodeBlock({
     <div
       className={cn(
         "min-w-0 overflow-hidden rounded-xl border border-border bg-card text-card-foreground",
-        tone === "ink"
-          ? "dark"
-          : "code-block-paper shadow-[0_10px_24px_rgb(25_24_17/0.07)]",
+        tone === "ink" ? "dark" : "code-block-paper shadow-[0_10px_24px_rgb(25_24_17/0.07)]",
         className,
       )}
     >

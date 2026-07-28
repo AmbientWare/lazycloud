@@ -1,11 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
-import {
-  executionPhaseDomain,
-  executionPhases,
-  type ExecutionPhase,
-} from "./phases";
+import { executionPhaseDomain, executionPhases, type ExecutionPhase } from "./phases";
 import { axisTicks, elapsedLabel } from "./timeline";
 import { isTerminalTaskStatus, type Task } from "@/lib/api/schemas";
 import { formatDuration } from "@/lib/format";
@@ -33,20 +29,17 @@ export function PhaseBar({ workspaceId, task }: { workspaceId: string; task: Tas
   if (!domain || !phases.length) return null;
   const ticks = axisTicks(domain, 4);
   const defaultPhase = phases.find((phase) => phase.kind === "execution") ?? phases[0];
-  const activePhase =
-    phases.find((phase) => phaseKey(phase) === activePhaseKey) ?? defaultPhase;
+  const activePhase = phases.find((phase) => phaseKey(phase) === activePhaseKey) ?? defaultPhase;
 
   return (
     <div className="overflow-x-auto px-4 pb-3 pt-1.5">
       <div className="min-w-[340px]">
         <div className="flex h-7 min-w-0 items-center gap-2 text-[11px]">
-          <span
-            className={cn("size-2 shrink-0", phaseClass(activePhase))}
-            aria-hidden="true"
-          />
+          <span className={cn("size-2 shrink-0", phaseClass(activePhase))} aria-hidden="true" />
           <span className="min-w-0 truncate text-foreground">{activePhase.label}</span>
           <span className="shrink-0 tabular-nums text-muted-foreground">
-            {formatDuration(activePhase.durationMs)} · {elapsedLabel(activePhase.startMs - domain.startMs)}-
+            {formatDuration(activePhase.durationMs)} ·{" "}
+            {elapsedLabel(activePhase.startMs - domain.startMs)}-
             {elapsedLabel(activePhase.endMs - domain.startMs)}
           </span>
         </div>

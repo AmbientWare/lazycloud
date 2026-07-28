@@ -35,7 +35,10 @@ export function AppActivitySection({
             {error}
           </div>
         ) : pending ? (
-          <div className="flex h-full min-h-32 flex-col justify-between gap-3 p-4" aria-hidden="true">
+          <div
+            className="flex h-full min-h-32 flex-col justify-between gap-3 p-4"
+            aria-hidden="true"
+          >
             <div className="flex gap-3">
               <Skeleton className="h-7 w-20" />
               <Skeleton className="h-4 w-16" />
@@ -65,7 +68,10 @@ export function AppActivitySection({
               label="App task and failure activity over the last 24 hours"
               className="mt-2 min-h-8 flex-1"
             />
-            <div className="mt-1 flex shrink-0 justify-between text-[10px] text-muted-foreground" aria-hidden="true">
+            <div
+              className="mt-1 flex shrink-0 justify-between text-[10px] text-muted-foreground"
+              aria-hidden="true"
+            >
               <span>24h ago</span>
               <span>Now</span>
             </div>

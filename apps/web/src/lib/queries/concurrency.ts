@@ -9,7 +9,10 @@ export function concurrencyLimitsQueryOptions(workspaceId: string) {
   return queryOptions({
     queryKey: workspaceQueryKeys.settings.concurrency(workspaceId),
     queryFn: () =>
-      apiRequest(withWorkspace("/api/v1/concurrency-limits", workspaceId), concurrencyLimitListSchema),
+      apiRequest(
+        withWorkspace("/api/v1/concurrency-limits", workspaceId),
+        concurrencyLimitListSchema,
+      ),
     meta: workspaceLiveQueryMeta(true),
   });
 }

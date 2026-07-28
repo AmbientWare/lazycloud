@@ -27,10 +27,7 @@ function SettingsPage() {
   const navigate = Route.useNavigate();
 
   return (
-    <WorkspacePage
-      title="Settings"
-      contentClassName="min-h-0 overflow-y-auto lg:overflow-hidden"
-    >
+    <WorkspacePage title="Settings" contentClassName="min-h-0 overflow-y-auto lg:overflow-hidden">
       <Tabs
         value={search.view}
         onValueChange={(view) => {
@@ -50,10 +47,7 @@ function SettingsPage() {
           className="mt-3 min-h-0 flex-1 overflow-visible lg:overflow-hidden"
         >
           <div className="grid min-h-full gap-4 pb-1 lg:h-full lg:grid-cols-5 lg:grid-rows-[11.5rem_minmax(0,1fr)]">
-            <WorkspaceIdentity
-              workspace={workspace}
-              fullWidth={!deletion.canManage}
-            />
+            <WorkspaceIdentity workspace={workspace} fullWidth={!deletion.canManage} />
             <WorkspaceTokens workspaceId={workspace.id} />
             <WorkspaceDeletionPanel workspace={workspace} />
           </div>

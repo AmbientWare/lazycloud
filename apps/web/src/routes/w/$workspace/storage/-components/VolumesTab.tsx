@@ -1,14 +1,6 @@
 import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  ChevronRight,
-  Download,
-  File,
-  Folder,
-  Loader2,
-  Trash2,
-  Upload,
-} from "lucide-react";
+import { ChevronRight, Download, File, Folder, Loader2, Trash2, Upload } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -41,8 +33,7 @@ export function VolumesTab({
   const query = useQuery(volumesQueryOptions(workspaceId));
   const [selectedName, setSelectedName] = useState("");
   const selectedVolume =
-    query.data?.volumes.find((volume) => volume.name === selectedName) ??
-    query.data?.volumes[0];
+    query.data?.volumes.find((volume) => volume.name === selectedName) ?? query.data?.volumes[0];
 
   return (
     <div className="flex min-h-full flex-col lg:h-full lg:min-h-0">
@@ -177,7 +168,9 @@ function VolumeRow({
           </Button>
         </div>
       ) : null}
-      {remove.isError ? <p className="mt-2 text-xs text-destructive">{remove.error.message}</p> : null}
+      {remove.isError ? (
+        <p className="mt-2 text-xs text-destructive">{remove.error.message}</p>
+      ) : null}
     </div>
   );
 }
@@ -264,7 +257,9 @@ function VolumeBrowser({ workspaceId, volume }: { workspaceId: string; volume: V
         </Button>
       </div>
 
-      {transferError ? <p className="border-b border-border px-3 py-2 text-xs text-destructive">{transferError}</p> : null}
+      {transferError ? (
+        <p className="border-b border-border px-3 py-2 text-xs text-destructive">{transferError}</p>
+      ) : null}
       <div className="min-h-0 flex-1 overflow-visible lg:overflow-y-auto">
         {query.isPending ? (
           <FileSkeleton />
@@ -278,7 +273,10 @@ function VolumeBrowser({ workspaceId, volume }: { workspaceId: string; volume: V
               const itemName = fileName(item.path);
               const confirming = confirmPath === item.path;
               return (
-                <div key={item.path} className="interactive-row group flex min-w-0 items-center gap-2 px-3 py-2">
+                <div
+                  key={item.path}
+                  className="interactive-row group flex min-w-0 items-center gap-2 px-3 py-2"
+                >
                   {item.is_dir ? (
                     <Folder className="size-4 shrink-0 text-brand" />
                   ) : (
@@ -349,7 +347,11 @@ function VolumeBrowser({ workspaceId, volume }: { workspaceId: string; volume: V
           </div>
         )}
       </div>
-      {remove.isError ? <p className="border-t border-border px-3 py-2 text-xs text-destructive">{remove.error.message}</p> : null}
+      {remove.isError ? (
+        <p className="border-t border-border px-3 py-2 text-xs text-destructive">
+          {remove.error.message}
+        </p>
+      ) : null}
     </section>
   );
 }

@@ -35,8 +35,7 @@ export const Route = createFileRoute("/w/$workspace/tasks")({
     status: pickOption(search.status, taskStatuses),
     kind: pickOption(search.kind, stubKinds),
     app: typeof search.app === "string" && search.app ? search.app : undefined,
-    workload:
-      typeof search.workload === "string" && search.workload ? search.workload : undefined,
+    workload: typeof search.workload === "string" && search.workload ? search.workload : undefined,
     deployment:
       typeof search.deployment === "string" && search.deployment ? search.deployment : undefined,
     q: typeof search.q === "string" && search.q.trim() ? search.q.trim() : undefined,
@@ -74,12 +73,10 @@ function TasksPage() {
   );
   const apps = useQuery(appSummariesQueryOptions(workspace.id));
   const taskList = selectTaskList(tasks.data, tasks.hasNextPage);
-  const selectedDeployment = taskList.items.find(
-    (task) => task.deployment_id === search.deployment,
-  )?.deployment?.name;
-  const selectedWorkload = taskList.items.find(
-    (task) => task.stub_id === search.workload,
-  )?.workload?.name;
+  const selectedDeployment = taskList.items.find((task) => task.deployment_id === search.deployment)
+    ?.deployment?.name;
+  const selectedWorkload = taskList.items.find((task) => task.stub_id === search.workload)?.workload
+    ?.name;
 
   const setSearch = (patch: Partial<TasksSearch>) => {
     void navigate({ search: (previous: TasksSearch) => ({ ...previous, ...patch }) });

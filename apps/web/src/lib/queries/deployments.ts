@@ -1,11 +1,7 @@
 import { infiniteQueryOptions } from "@tanstack/react-query";
 
 import { apiRequest, withWorkspace } from "@/lib/api/client";
-import {
-  deploymentListSchema,
-  type Deployment,
-  type DeploymentList,
-} from "@/lib/api/schemas";
+import { deploymentListSchema, type Deployment, type DeploymentList } from "@/lib/api/schemas";
 
 import { selectInfiniteList, type InfiniteListQueryData } from "./infinite-list";
 import { workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
@@ -55,10 +51,7 @@ export function nextDeploymentCursor(
   return cursorAlreadySeen ? undefined : lastPage.next;
 }
 
-function deploymentListParams(
-  options: DeploymentListOptions,
-  cursor: string,
-): URLSearchParams {
+function deploymentListParams(options: DeploymentListOptions, cursor: string): URLSearchParams {
   const params = new URLSearchParams({ limit: String(options.limit ?? 100) });
   if (cursor) params.set("cursor", cursor);
   if (options.appId) params.set("app_id", options.appId);

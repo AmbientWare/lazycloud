@@ -21,8 +21,7 @@ const cssTargets = {
   firefox: 113 << 16,
 };
 
-const colorMixSupportsCondition =
-  "@supports (color:color-mix(in lab, red, red))";
+const colorMixSupportsCondition = "@supports (color:color-mix(in lab, red, red))";
 
 /**
  * Tailwind wraps every opacity-modified theme color in a
@@ -39,17 +38,12 @@ function stripColorMixFallbacks(): Plugin {
     enforce: "post",
     generateBundle(_options, bundle) {
       for (const asset of Object.values(bundle)) {
-        if (asset.type !== "asset" || !asset.fileName.endsWith(".css"))
-          continue;
+        if (asset.type !== "asset" || !asset.fileName.endsWith(".css")) continue;
         const source =
-          typeof asset.source === "string"
-            ? asset.source
-            : Buffer.from(asset.source).toString();
+          typeof asset.source === "string" ? asset.source : Buffer.from(asset.source).toString();
         const result = transform({
           filename: asset.fileName,
-          code: Buffer.from(
-            unwrapAlwaysTrueSupports(source, colorMixSupportsCondition),
-          ),
+          code: Buffer.from(unwrapAlwaysTrueSupports(source, colorMixSupportsCondition)),
           minify: true,
           targets: cssTargets,
         });
@@ -62,11 +56,7 @@ function stripColorMixFallbacks(): Plugin {
 /** Replace every `condition { ... }` block with its own inner rules. */
 function unwrapAlwaysTrueSupports(css: string, condition: string): string {
   let output = css;
-  for (
-    let start = output.indexOf(condition);
-    start !== -1;
-    start = output.indexOf(condition)
-  ) {
+  for (let start = output.indexOf(condition); start !== -1; start = output.indexOf(condition)) {
     const open = output.indexOf("{", start);
     let depth = 1;
     let close = open + 1;
@@ -76,10 +66,7 @@ function unwrapAlwaysTrueSupports(css: string, condition: string): string {
       else if (character === "}") depth -= 1;
       close += 1;
     }
-    output =
-      output.slice(0, start) +
-      output.slice(open + 1, close - 1) +
-      output.slice(close);
+    output = output.slice(0, start) + output.slice(open + 1, close - 1) + output.slice(close);
   }
   return output;
 }
@@ -99,10 +86,7 @@ function isDashboardFoundationModule(id: string): boolean {
     "/node_modules/react-dom/",
     "/node_modules/scheduler/",
   ];
-  if (
-    foundationPackages.some((packageRoot) => normalized.includes(packageRoot))
-  )
-    return true;
+  if (foundationPackages.some((packageRoot) => normalized.includes(packageRoot))) return true;
   const lucideRoot = "/node_modules/lucide-react/dist/esm/";
   return normalized.includes(lucideRoot);
 }
@@ -123,8 +107,7 @@ function isMarketingSharedModule(id: string): boolean {
 function isMarketingProofModule(id: string): boolean {
   const normalized = id.replaceAll("\\", "/");
   return (
-    normalized.includes("/apps/web/src/routes/-marketing/") &&
-    !isMarketingSharedModule(normalized)
+    normalized.includes("/apps/web/src/routes/-marketing/") && !isMarketingSharedModule(normalized)
   );
 }
 

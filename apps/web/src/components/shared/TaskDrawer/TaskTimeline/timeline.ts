@@ -167,7 +167,12 @@ export function statusColor(status: string): string {
   }
 }
 
-function segment(kind: BarSegment["kind"], fromMs: number, toMs: number, domain: TimeDomain): BarSegment {
+function segment(
+  kind: BarSegment["kind"],
+  fromMs: number,
+  toMs: number,
+  domain: TimeDomain,
+): BarSegment {
   const spanMs = domain.endMs - domain.startMs;
   const leftPct = ((fromMs - domain.startMs) / spanMs) * 100;
   const clampedLeft = clampPct(leftPct);

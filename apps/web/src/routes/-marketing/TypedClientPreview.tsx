@@ -148,12 +148,7 @@ const COMMAND_AT = GENERATE_START;
 const COMMAND_DONE_AT = COMMAND_AT + typingTicks(GENERATE_COMMAND.length);
 const VERSION_AT = COMMAND_DONE_AT + 4;
 const FILES_AT = [VERSION_AT + 4, VERSION_AT + 7, VERSION_AT + 10];
-const SYMBOLS_AT = [
-  FILES_AT[2] + 4,
-  FILES_AT[2] + 9,
-  FILES_AT[2] + 14,
-  FILES_AT[2] + 19,
-];
+const SYMBOLS_AT = [FILES_AT[2] + 4, FILES_AT[2] + 9, FILES_AT[2] + 14, FILES_AT[2] + 19];
 const GENERATE_DONE_AT = SYMBOLS_AT[3] + 2;
 
 /* 03 Import: cannot start until every symbol above exists. Each boundary is
@@ -163,8 +158,7 @@ const GENERATE_DONE_AT = SYMBOLS_AT[3] + 2;
    call -> resolved value. */
 const IMPORT_START = GENERATE_DONE_AT + HANDOFF;
 const IMPORT_LINE_AT = IMPORT_START;
-const IMPORT_LINE_DONE_AT =
-  IMPORT_LINE_AT + typingTicks(segmentLength(IMPORT_LINE));
+const IMPORT_LINE_DONE_AT = IMPORT_LINE_AT + typingTicks(segmentLength(IMPORT_LINE));
 const CALL_LINE_AT = IMPORT_LINE_DONE_AT + 1;
 /* The popup opens on the frame the trigger dot lands, and not one tick before. */
 const POPUP_OPEN_AT = CALL_LINE_AT + typingTicks(CALL_TRIGGER_CHARS);
@@ -175,14 +169,12 @@ const CALL_DONE_AT = POPUP_CLOSE_AT + typingTicks(CALL_ACCEPTED_CHARS);
 const RETURN_TYPE_AT = CALL_DONE_AT + BEAT;
 /* Only then can a field be read off the result. */
 const FIELD_LINE_AT = RETURN_TYPE_AT + BEAT;
-const FIELD_LINE_DONE_AT =
-  FIELD_LINE_AT + typingTicks(segmentLength(FIELD_LINE));
+const FIELD_LINE_DONE_AT = FIELD_LINE_AT + typingTicks(segmentLength(FIELD_LINE));
 const TASK_LINE_AT = FIELD_LINE_DONE_AT + BEAT;
 const TASK_LINE_DONE_AT = TASK_LINE_AT + typingTicks(segmentLength(TASK_LINE));
 /* Reading the resolved value is the last thing that happens. */
 const VALUE_LINE_AT = TASK_LINE_DONE_AT + BEAT;
-const VALUE_LINE_DONE_AT =
-  VALUE_LINE_AT + typingTicks(segmentLength(VALUE_LINE));
+const VALUE_LINE_DONE_AT = VALUE_LINE_AT + typingTicks(segmentLength(VALUE_LINE));
 
 /* One timeline for the whole section, in ticks. */
 const TIMELINE = {
@@ -239,18 +231,11 @@ export function useTypedClientClock(active: boolean): number {
   }, []);
 
   useEffect(() => {
-    if (
-      !active ||
-      !documentVisible ||
-      reducedMotion ||
-      document.visibilityState !== "visible"
-    ) {
+    if (!active || !documentVisible || reducedMotion || document.visibilityState !== "visible") {
       return;
     }
     const timer = window.setInterval(() => {
-      setClock((current) =>
-        current >= TIMELINE.total + TIMELINE.hold ? 0 : current + 1,
-      );
+      setClock((current) => (current >= TIMELINE.total + TIMELINE.hold ? 0 : current + 1));
     }, TICK_MS);
     return () => window.clearInterval(timer);
   }, [active, documentVisible, reducedMotion]);
@@ -361,13 +346,7 @@ const GENERATED_FILES = [
   { name: "lazycloud-clients.lock.json", note: "pinned" },
 ];
 
-export function GeneratedPackagePanel({
-  clock,
-  active,
-}: {
-  clock: number;
-  active: boolean;
-}) {
+export function GeneratedPackagePanel({ clock, active }: { clock: number; active: boolean }) {
   const shown = typedFrom(clock, TIMELINE.commandAt);
   const command = GENERATE_COMMAND.slice(0, shown);
   const typing = shown > 0 && shown < GENERATE_COMMAND.length;
@@ -438,9 +417,7 @@ export function GeneratedPackagePanel({
         <div className="flex min-w-0 flex-col">
           <div className="mb-1.5 flex items-center justify-between text-[9px] tracking-[0.12em] text-muted-foreground">
             <span>__all__</span>
-            <span className="uppercase">
-              {done ? "4 symbols" : "generating"}
-            </span>
+            <span className="uppercase">{done ? "4 symbols" : "generating"}</span>
           </div>
           <div className="flex min-w-0 flex-col gap-1">
             {GENERATED_SYMBOLS.map((item, index) => {
@@ -450,9 +427,7 @@ export function GeneratedPackagePanel({
                   className="typed-symbol-row flex min-h-[28px] min-w-0 items-baseline gap-2 rounded-md border border-border bg-background/40 px-2.5 py-1"
                   key={item.symbol}
                 >
-                  <span
-                    className={`min-w-0 flex-1 self-center ${ready ? "hidden" : ""}`}
-                  >
+                  <span className={`min-w-0 flex-1 self-center ${ready ? "hidden" : ""}`}>
                     <SkeletonBar width="w-2/3" />
                   </span>
                   <span
@@ -463,10 +438,7 @@ export function GeneratedPackagePanel({
                   <span
                     className={`typed-symbol-signature min-w-0 flex-1 truncate text-[10.5px] ${ready ? "" : "hidden"}`}
                   >
-                    <Segments
-                      segments={item.signature}
-                      shown={segmentLength(item.signature)}
-                    />
+                    <Segments segments={item.signature} shown={segmentLength(item.signature)} />
                   </span>
                   <span
                     className={`shrink-0 text-[9px] tracking-[0.1em] text-muted-foreground uppercase max-[520px]:hidden ${
@@ -558,21 +530,13 @@ function typedChars(clock: number, line: EditorLine): number {
   return raw;
 }
 
-export function TypedImportPanel({
-  clock,
-  active,
-}: {
-  clock: number;
-  active: boolean;
-}) {
+export function TypedImportPanel({ clock, active }: { clock: number; active: boolean }) {
   /* Strictly ordered against the shared clock: the popup of callable members
      only exists between the frame the trigger dot is typed and the frame a
      member is accepted; the returned type only exists once the accepted call
      is fully typed; the read field only highlights once it has been typed. */
-  const popupOpen =
-    clock >= TIMELINE.popupOpenAt && clock < TIMELINE.popupCloseAt;
-  const returnReady =
-    clock >= TIMELINE.returnTypeAt && clock >= TIMELINE.callDoneAt;
+  const popupOpen = clock >= TIMELINE.popupOpenAt && clock < TIMELINE.popupCloseAt;
+  const returnReady = clock >= TIMELINE.returnTypeAt && clock >= TIMELINE.callDoneAt;
   const fieldRead = clock >= TIMELINE.fieldLineDoneAt;
   const settled = clock >= TIMELINE.valueLineDoneAt;
 
@@ -582,9 +546,7 @@ export function TypedImportPanel({
         <span className="rounded border border-border bg-background/60 px-2 py-0.5 text-foreground">
           release.py
         </span>
-        <span className="px-2 py-0.5 text-muted-foreground">
-          pyproject.toml
-        </span>
+        <span className="px-2 py-0.5 text-muted-foreground">pyproject.toml</span>
         <span className="ml-auto shrink-0 truncate text-[9px] tracking-[0.12em] text-muted-foreground uppercase">
           your codebase
         </span>
@@ -595,8 +557,7 @@ export function TypedImportPanel({
           {EDITOR_LINES.map((line, index) => {
             const shown = typedChars(clock, line);
             const total = segmentLength(line.segments);
-            const caret =
-              shown > 0 && (shown < total || (popupOpen && index === 1));
+            const caret = shown > 0 && (shown < total || (popupOpen && index === 1));
             return (
               <div
                 className="typed-code-line flex min-w-0 gap-2.5 text-[11px] leading-[1.6]"
@@ -606,11 +567,7 @@ export function TypedImportPanel({
                   {index + 1}
                 </span>
                 <span className="min-w-0 break-words whitespace-normal [overflow-wrap:anywhere]">
-                  {shown > 0 ? (
-                    <Segments segments={line.segments} shown={shown} />
-                  ) : (
-                    " "
-                  )}
+                  {shown > 0 ? <Segments segments={line.segments} shown={shown} /> : " "}
                   {caret ? <Caret /> : null}
                 </span>
               </div>
@@ -647,10 +604,7 @@ export function TypedImportPanel({
                     {member.name}
                   </span>
                   <span className="min-w-0 truncate text-[10px]">
-                    <Segments
-                      segments={member.detail}
-                      shown={segmentLength(member.detail)}
-                    />
+                    <Segments segments={member.detail} shown={segmentLength(member.detail)} />
                   </span>
                 </div>
               ))}
@@ -684,11 +638,7 @@ export function TypedImportPanel({
                     key={field.name}
                   >
                     <span className="min-w-0 truncate text-[10px]">
-                      <span
-                        className={
-                          read ? "text-foreground" : "text-muted-foreground"
-                        }
-                      >
+                      <span className={read ? "text-foreground" : "text-muted-foreground"}>
                         {field.name}
                       </span>
                       <span className={TONE.punc}>: </span>
@@ -717,9 +667,7 @@ export function TypedImportPanel({
           >
             {settled ? <StatusDot /> : null} 0 problems
           </span>
-          <span className="ml-auto shrink-0 truncate">
-            python 3.12 · fully typed
-          </span>
+          <span className="ml-auto shrink-0 truncate">python 3.12 · fully typed</span>
         </div>
       </div>
     </div>

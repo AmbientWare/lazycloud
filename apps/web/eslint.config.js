@@ -10,6 +10,9 @@ export default defineConfig([
     "dist",
     "coverage",
     "node_modules",
+    ".output",
+    ".source",
+    ".tanstack",
     "src/routeTree.gen.ts",
     "src/lib/api/generated/**",
   ]),
@@ -26,10 +29,7 @@ export default defineConfig([
       globals: globals.browser,
     },
     rules: {
-      "react-refresh/only-export-components": [
-        "error",
-        { allowConstantExport: true },
-      ],
+      "react-refresh/only-export-components": ["error", { allowConstantExport: true }],
     },
   },
   {

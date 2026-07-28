@@ -13,8 +13,7 @@ import { cn } from "@/lib/utils";
 
 type ShellCredentials = { username: string; password: string };
 
-type ConnectionState =
-  "connecting" | "authenticating" | "open" | "closed" | "error";
+type ConnectionState = "connecting" | "authenticating" | "open" | "closed" | "error";
 
 /**
  * xterm.js terminal wired to the gateway shell WebSocket. The connection opens,
@@ -90,9 +89,7 @@ export function Terminal({
         } else if (frame.type === ShellFrameType.Data) {
           term.write(frame.payload);
         } else if (frame.type === ShellFrameType.Error) {
-          setErrorMessage(
-            new TextDecoder().decode(frame.payload) || "shell error",
-          );
+          setErrorMessage(new TextDecoder().decode(frame.payload) || "shell error");
           setState("error");
           socket.close();
         } else if (frame.type === ShellFrameType.Exit) {
@@ -130,16 +127,12 @@ export function Terminal({
         setState("error");
         return;
       }
-      setState((current) =>
-        current === "error" || current === "closed" ? current : "closed",
-      );
+      setState((current) => (current === "error" || current === "closed" ? current : "closed"));
     };
 
     const inputDisposable = term.onData((data) => {
       if (socket.readyState === WebSocket.OPEN && authenticated) {
-        socket.send(
-          encodeShellFrame(ShellFrameType.Data, new TextEncoder().encode(data)),
-        );
+        socket.send(encodeShellFrame(ShellFrameType.Data, new TextEncoder().encode(data)));
       }
     });
 
@@ -179,9 +172,7 @@ export function Terminal({
           )}
         />
         <span>{connectionLabel(state)}</span>
-        {errorMessage ? (
-          <span className="text-destructive">— {errorMessage}</span>
-        ) : null}
+        {errorMessage ? <span className="text-destructive">— {errorMessage}</span> : null}
       </div>
       <div
         ref={containerRef}

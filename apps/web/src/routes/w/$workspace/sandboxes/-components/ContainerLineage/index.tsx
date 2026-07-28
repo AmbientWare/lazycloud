@@ -13,7 +13,10 @@ export function ContainerLineage({
 }) {
   if (!record.app && !record.workload && !record.task_id) return null;
   return (
-    <nav aria-label="Container lineage" className="mt-1.5 flex flex-wrap items-center gap-1 text-xs">
+    <nav
+      aria-label="Container lineage"
+      className="mt-1.5 flex flex-wrap items-center gap-1 text-xs"
+    >
       {record.app ? (
         <Link
           to="/w/$workspace/apps/$appId"
@@ -23,7 +26,9 @@ export function ContainerLineage({
           {record.app.name}
         </Link>
       ) : null}
-      {record.app && record.workload ? <ChevronRight className="size-3 text-muted-foreground" /> : null}
+      {record.app && record.workload ? (
+        <ChevronRight className="size-3 text-muted-foreground" />
+      ) : null}
       {record.app && record.workload ? (
         <Link
           to="/w/$workspace/apps/$appId/workloads/$name"

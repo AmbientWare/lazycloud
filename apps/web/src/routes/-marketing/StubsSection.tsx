@@ -51,9 +51,7 @@ function PhaseHeader({
 }) {
   return (
     <div className="mb-2 flex flex-wrap items-baseline gap-x-2.5 gap-y-1 sm:mb-3 sm:gap-x-3">
-      <h3
-        className={`${phaseLabel} ${active ? "text-foreground" : "text-muted-foreground"}`}
-      >
+      <h3 className={`${phaseLabel} ${active ? "text-foreground" : "text-muted-foreground"}`}>
         <span className="text-brand">{step}</span> {title}
       </h3>
       <span className="min-w-0 font-mono text-xs leading-snug text-muted-foreground sm:text-sm">
@@ -121,10 +119,7 @@ function StubsStory({ active }: { active: boolean }) {
               step="02"
               title="Generate"
             />
-            <GeneratedPackagePanel
-              active={phase === "generate"}
-              clock={clock}
-            />
+            <GeneratedPackagePanel active={phase === "generate"} clock={clock} />
           </div>
 
           <div className="flex min-w-0 flex-col">
@@ -150,15 +145,12 @@ export function StubsSection() {
     const section = sectionRef.current;
     if (!section) return;
 
-    const observer = new IntersectionObserver(
-      ([entry]) => setActive(entry.isIntersecting),
-      {
-        /* Begin once the section has clearly entered the reading area, not
+    const observer = new IntersectionObserver(([entry]) => setActive(entry.isIntersecting), {
+      /* Begin once the section has clearly entered the reading area, not
            while it is still below the fold during initial page load. */
-        rootMargin: "0px 0px -15% 0px",
-        threshold: 0.1,
-      },
-    );
+      rootMargin: "0px 0px -15% 0px",
+      threshold: 0.1,
+    });
     observer.observe(section);
     return () => observer.disconnect();
   }, []);

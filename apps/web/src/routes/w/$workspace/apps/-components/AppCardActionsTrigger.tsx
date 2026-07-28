@@ -8,13 +8,7 @@ const AppCardActions = lazy(() =>
   import("./AppCardActions").then((module) => ({ default: module.AppCardActions })),
 );
 
-export function AppCardActionsTrigger({
-  app,
-  workspaceId,
-}: {
-  app: App;
-  workspaceId: string;
-}) {
+export function AppCardActionsTrigger({ app, workspaceId }: { app: App; workspaceId: string }) {
   const [loaded, setLoaded] = useState(false);
   const trigger = (
     <Button

@@ -82,18 +82,12 @@ function tokenize(code: string, pattern: RegExp, wordClass: string[]): Token[] {
   let cursor = 0;
 
   pattern.lastIndex = 0;
-  for (
-    let match = pattern.exec(code);
-    match !== null;
-    match = pattern.exec(code)
-  ) {
+  for (let match = pattern.exec(code); match !== null; match = pattern.exec(code)) {
     if (match.index > cursor) {
       tokens.push({ className: null, value: code.slice(cursor, match.index) });
     }
 
-    const groupIndex = match.findIndex(
-      (group, index) => index > 0 && group !== undefined,
-    );
+    const groupIndex = match.findIndex((group, index) => index > 0 && group !== undefined);
     const value = match[0];
     const isWordGroup = groupIndex === wordClass.length + 1;
     const className = isWordGroup
@@ -113,18 +107,8 @@ function tokenize(code: string, pattern: RegExp, wordClass: string[]): Token[] {
 export function highlight(code: string): ReactNode {
   const isShell = /^\s*\$/.test(code);
   const tokens = isShell
-    ? tokenize(code, SHELL_TOKEN, [
-        "tok-comment",
-        "tok-string",
-        "tok-prompt",
-        "tok-param",
-      ])
-    : tokenize(code, PYTHON_TOKEN, [
-        "tok-comment",
-        "tok-string",
-        "tok-decorator",
-        "tok-number",
-      ]);
+    ? tokenize(code, SHELL_TOKEN, ["tok-comment", "tok-string", "tok-prompt", "tok-param"])
+    : tokenize(code, PYTHON_TOKEN, ["tok-comment", "tok-string", "tok-decorator", "tok-number"]);
 
   return tokens.map((token, index) =>
     token.className ? (

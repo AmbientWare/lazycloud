@@ -58,7 +58,8 @@ export function TaskTimeline({
       <div className="min-w-[352px]">
         <div className="flex h-9 items-center border-b border-border px-3 text-[11px] text-muted-foreground">
           <span>
-            {rows.length} {rows.length === 1 ? "task" : "tasks"} · {formatDuration(domain.endMs - domain.startMs)}
+            {rows.length} {rows.length === 1 ? "task" : "tasks"} ·{" "}
+            {formatDuration(domain.endMs - domain.startMs)}
           </span>
           {live && streamStatus !== "open" ? (
             <span className="ml-3 flex items-center gap-1.5 text-warning" data-stream-stale="">
@@ -167,7 +168,10 @@ function TimelineBarRow({
           </span>
           <span className="flex min-w-0 items-center gap-1.5 text-[10px] text-muted-foreground">
             <span
-              className={cn("size-1.5 shrink-0 rounded-full", node.status === "running" && "pulse-live")}
+              className={cn(
+                "size-1.5 shrink-0 rounded-full",
+                node.status === "running" && "pulse-live",
+              )}
               style={{ background: statusColor(node.status) }}
               aria-hidden="true"
             />
@@ -230,7 +234,9 @@ function TreeBranch({
     <span className="flex h-full shrink-0" aria-hidden="true">
       {ancestorContinues.map((continues, index) => (
         <span key={index} className="relative w-3 shrink-0">
-          {continues ? <span className="absolute inset-y-0 left-1.5 border-l border-border" /> : null}
+          {continues ? (
+            <span className="absolute inset-y-0 left-1.5 border-l border-border" />
+          ) : null}
         </span>
       ))}
       <span className="relative w-3 shrink-0">

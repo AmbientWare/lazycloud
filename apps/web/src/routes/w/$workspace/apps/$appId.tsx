@@ -5,10 +5,7 @@ import { RouteErrorFallback } from "@/components/shared/ErrorBoundary";
 import type { Deployment } from "@/lib/api/schemas";
 import { appQueryOptions } from "@/lib/queries/apps";
 import { containersQueryOptions, selectContainerList } from "@/lib/queries/containers";
-import {
-  deploymentsInfiniteQueryOptions,
-  selectDeploymentList,
-} from "@/lib/queries/deployments";
+import { deploymentsInfiniteQueryOptions, selectDeploymentList } from "@/lib/queries/deployments";
 import { sandboxesQueryOptions } from "@/lib/queries/sandboxes";
 import { taskBucketsQueryOptions, tasksQueryOptions } from "@/lib/queries/tasks";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -30,17 +27,11 @@ function AppDetailPage() {
   const { appId } = Route.useParams();
   const { workspace } = useWorkspace();
   const app = useQuery(appQueryOptions(workspace.id, appId));
-  const deployments = useInfiniteQuery(
-    deploymentsInfiniteQueryOptions(workspace.id, { appId }),
-  );
+  const deployments = useInfiniteQuery(deploymentsInfiniteQueryOptions(workspace.id, { appId }));
   const containers = useInfiniteQuery(containersQueryOptions(workspace.id, { appId }));
   const activity = useQuery(taskBucketsQueryOptions(workspace.id, 3600, { appId }));
-  const tasks = useQuery(
-    tasksQueryOptions(workspace.id, { limit: 15, appId, rootOnly: true }),
-  );
-  const sandboxes = useQuery(
-    sandboxesQueryOptions(workspace.id, { limit: 50, appId }),
-  );
+  const tasks = useQuery(tasksQueryOptions(workspace.id, { limit: 15, appId, rootOnly: true }));
+  const sandboxes = useQuery(sandboxesQueryOptions(workspace.id, { limit: 50, appId }));
 
   const deploymentList = selectDeploymentList(deployments.data, deployments.hasNextPage);
   const deploymentRows = deploymentList.items;
@@ -89,9 +80,7 @@ function AppDetailPage() {
                   pending={deployments.isPending || containers.isPending}
                   error={queryError(deployments.error) ?? queryError(containers.error)}
                   nextCursor={continuationCursor}
-                  loadingMore={
-                    deployments.isFetchingNextPage || containers.isFetchingNextPage
-                  }
+                  loadingMore={deployments.isFetchingNextPage || containers.isFetchingNextPage}
                   loadMoreError={
                     deployments.isFetchNextPageError || containers.isFetchNextPageError
                   }

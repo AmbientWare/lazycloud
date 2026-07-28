@@ -4,9 +4,7 @@ import { AlertDialog as AlertDialogPrimitive } from "radix-ui";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-export function AlertDialog(
-  props: React.ComponentProps<typeof AlertDialogPrimitive.Root>,
-) {
+export function AlertDialog(props: React.ComponentProps<typeof AlertDialogPrimitive.Root>) {
   return <AlertDialogPrimitive.Root data-slot="alert-dialog" {...props} />;
 }
 
@@ -45,17 +43,11 @@ export function AlertDialogContent({
   );
 }
 
-export function AlertDialogHeader({
-  className,
-  ...props
-}: React.ComponentProps<"div">) {
+export function AlertDialogHeader({ className, ...props }: React.ComponentProps<"div">) {
   return <div className={cn("space-y-1.5", className)} {...props} />;
 }
 
-export function AlertDialogFooter({
-  className,
-  ...props
-}: React.ComponentProps<"div">) {
+export function AlertDialogFooter({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       className={cn("flex flex-col-reverse gap-2 sm:flex-row sm:justify-end", className)}
@@ -69,10 +61,7 @@ export function AlertDialogTitle({
   ...props
 }: React.ComponentProps<typeof AlertDialogPrimitive.Title>) {
   return (
-    <AlertDialogPrimitive.Title
-      className={cn("text-lg font-semibold", className)}
-      {...props}
-    />
+    <AlertDialogPrimitive.Title className={cn("text-lg font-semibold", className)} {...props} />
   );
 }
 

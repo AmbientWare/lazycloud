@@ -52,9 +52,7 @@ export const workspaceTokenCreateRequestSchema = z
     reusable: z.literal(true),
   })
   .strict();
-export type WorkspaceTokenCreateRequest = z.infer<
-  typeof workspaceTokenCreateRequestSchema
->;
+export type WorkspaceTokenCreateRequest = z.infer<typeof workspaceTokenCreateRequestSchema>;
 
 export const tokenCreateResponseSchema = z
   .object({

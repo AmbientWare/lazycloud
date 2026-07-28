@@ -4,10 +4,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { Workspace } from "@/lib/api/schemas";
-import {
-  currentWorkspaceQueryOptions,
-  workspacesQueryOptions,
-} from "@/lib/queries/workspace";
+import { currentWorkspaceQueryOptions, workspacesQueryOptions } from "@/lib/queries/workspace";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 
 import { useWorkspaceDeletionController } from "./controller";
@@ -46,18 +43,10 @@ describe("workspace deletion controller", () => {
     await waitFor(() => expect(result.current.target).toBeNull());
     expect(deleteCommand).toHaveBeenCalledOnce();
     expect(deleteCommand).toHaveBeenCalledWith(target.id);
-    expect(queryClient.getQueryData(workspacesQueryOptions().queryKey)).toEqual([
-      sibling,
-    ]);
-    expect(
-      queryClient.getQueryData(workspaceQueryKeys.apps.root(target.id)),
-    ).toBeUndefined();
-    expect(
-      queryClient.getQueryData(workspaceQueryKeys.apps.root(sibling.id)),
-    ).toEqual(["sibling"]);
-    expect(queryClient.getQueryData(currentWorkspaceQueryOptions().queryKey)).toEqual(
-      sibling,
-    );
+    expect(queryClient.getQueryData(workspacesQueryOptions().queryKey)).toEqual([sibling]);
+    expect(queryClient.getQueryData(workspaceQueryKeys.apps.root(target.id))).toBeUndefined();
+    expect(queryClient.getQueryData(workspaceQueryKeys.apps.root(sibling.id))).toEqual(["sibling"]);
+    expect(queryClient.getQueryData(currentWorkspaceQueryOptions().queryKey)).toEqual(sibling);
     expect(queryClient.getQueryData(["global", "health"])).toBe("healthy");
     expect(rememberWorkspaceName).toHaveBeenCalledWith(sibling.name);
     expect(replacePath).toHaveBeenCalledWith("/w/default/apps");

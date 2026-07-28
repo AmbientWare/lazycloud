@@ -21,10 +21,7 @@ export function secretsQueryOptions(workspaceId: string) {
   return queryOptions({
     queryKey: workspaceQueryKeys.storage.secrets(workspaceId),
     queryFn: () =>
-      apiRequest(
-        withWorkspace("/api/v1/secrets", workspaceId),
-        secretMaskedListSchema,
-      ),
+      apiRequest(withWorkspace("/api/v1/secrets", workspaceId), secretMaskedListSchema),
     meta: workspaceLiveQueryMeta(true),
   });
 }
@@ -39,14 +36,10 @@ export function createSecret(
   name: string,
   value: string,
 ): Promise<{ id: string; name: string }> {
-  return postJson(
-    withWorkspace("/api/v1/secrets", workspaceId),
-    createSecretResponseSchema,
-    {
-      name,
-      value,
-    },
-  );
+  return postJson(withWorkspace("/api/v1/secrets", workspaceId), createSecretResponseSchema, {
+    name,
+    value,
+  });
 }
 
 export function updateSecretValue(
@@ -72,10 +65,7 @@ export async function revealSecretValue(workspaceId: string, name: string): Prom
 
 const emptyResponseSchema = z.object({}).passthrough();
 
-export function deleteSecret(
-  workspaceId: string,
-  name: string,
-): Promise<unknown> {
+export function deleteSecret(workspaceId: string, name: string): Promise<unknown> {
   return apiRequest(
     withWorkspace(`/api/v1/secrets/${encodeURIComponent(name)}`, workspaceId),
     emptyResponseSchema,
@@ -88,11 +78,7 @@ export function deleteSecret(
 export function volumesQueryOptions(workspaceId: string) {
   return queryOptions({
     queryKey: workspaceQueryKeys.storage.volumes(workspaceId),
-    queryFn: () =>
-      apiRequest(
-        withWorkspace("/api/v1/volumes", workspaceId),
-        volumeListSchema,
-      ),
+    queryFn: () => apiRequest(withWorkspace("/api/v1/volumes", workspaceId), volumeListSchema),
     meta: workspaceLiveQueryMeta(true),
   });
 }
@@ -101,38 +87,23 @@ const getOrCreateVolumeResponseSchema = z.object({
   volume: volumeSchema.nullish(),
 });
 
-export function createVolume(
-  workspaceId: string,
-  name: string,
-): Promise<Volume | null> {
-  return postJson(
-    withWorkspace("/api/v1/volumes", workspaceId),
-    getOrCreateVolumeResponseSchema,
-    { name },
-  ).then((response) => response.volume ?? null);
+export function createVolume(workspaceId: string, name: string): Promise<Volume | null> {
+  return postJson(withWorkspace("/api/v1/volumes", workspaceId), getOrCreateVolumeResponseSchema, {
+    name,
+  }).then((response) => response.volume ?? null);
 }
 
 const deleteVolumeResponseSchema = z.object({}).passthrough();
 
-export function deleteVolume(
-  workspaceId: string,
-  name: string,
-): Promise<unknown> {
+export function deleteVolume(workspaceId: string, name: string): Promise<unknown> {
   return postJson(
-    withWorkspace(
-      `/api/v1/volumes/${encodeURIComponent(name)}/delete`,
-      workspaceId,
-    ),
+    withWorkspace(`/api/v1/volumes/${encodeURIComponent(name)}/delete`, workspaceId),
     deleteVolumeResponseSchema,
     { name },
   );
 }
 
-export function volumePathQueryOptions(
-  workspaceId: string,
-  volumeName: string,
-  path: string,
-) {
+export function volumePathQueryOptions(workspaceId: string, volumeName: string, path: string) {
   const target = joinVolumePath(volumeName, path);
   return queryOptions({
     queryKey: workspaceQueryKeys.storage.volumePath(workspaceId, volumeName, path),
@@ -155,14 +126,10 @@ export async function uploadVolumeFile(
   file: File,
 ): Promise<void> {
   const destination = joinVolumePath(volumeName, joinRelativePath(path, file.name));
-  await postJson(
-    withWorkspace("/api/v1/volumes/copy-path", workspaceId),
-    copyPathResponseSchema,
-    {
-      path: destination,
-      value_base64: await fileBase64(file),
-    },
-  );
+  await postJson(withWorkspace("/api/v1/volumes/copy-path", workspaceId), copyPathResponseSchema, {
+    path: destination,
+    value_base64: await fileBase64(file),
+  });
 }
 
 const deletePathResponseSchema = z.object({
@@ -176,10 +143,7 @@ export function deleteVolumePath(
 ): Promise<{ deleted: string[] }> {
   const target = joinVolumePath(volumeName, path);
   return postJson(
-    withWorkspace(
-      `/api/v1/volumes/${encodePath(target)}/delete`,
-      workspaceId,
-    ),
+    withWorkspace(`/api/v1/volumes/${encodePath(target)}/delete`, workspaceId),
     deletePathResponseSchema,
   );
 }
@@ -191,16 +155,12 @@ export function volumeDownloadUrl(
   volumeName: string,
   path: string,
 ): Promise<string> {
-  return postJson(
-    withWorkspace("/api/v1/volumes/presigned-url", workspaceId),
-    presignedUrlSchema,
-    {
-      volume_name: volumeName,
-      volume_path: path,
-      expires: 300,
-      method: "get-object",
-    },
-  ).then((response) => response.url);
+  return postJson(withWorkspace("/api/v1/volumes/presigned-url", workspaceId), presignedUrlSchema, {
+    volume_name: volumeName,
+    volume_path: path,
+    expires: 300,
+    method: "get-object",
+  }).then((response) => response.url);
 }
 
 function joinVolumePath(volumeName: string, path: string): string {

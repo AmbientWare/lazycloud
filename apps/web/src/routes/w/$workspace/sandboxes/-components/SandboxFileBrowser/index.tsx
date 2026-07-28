@@ -168,9 +168,7 @@ export function SandboxFileBrowser({
                     type="button"
                     className="interactive-row flex min-w-0 flex-1 items-center gap-2 rounded px-1 py-1.5 text-left text-sm"
                     onClick={() =>
-                      file.is_dir
-                        ? (setPath(target), setPreview(null))
-                        : void openFile(file)
+                      file.is_dir ? (setPath(target), setPreview(null)) : void openFile(file)
                     }
                   >
                     {file.is_dir ? (

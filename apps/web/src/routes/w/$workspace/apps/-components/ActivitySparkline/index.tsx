@@ -33,10 +33,7 @@ export function ActivitySparkline({
             title={`${value} task${value === 1 ? "" : "s"}, ${failed} failed`}
           >
             <span
-              className={cn(
-                "flex w-full flex-col overflow-hidden",
-                value === 0 && "bg-border",
-              )}
+              className={cn("flex w-full flex-col overflow-hidden", value === 0 && "bg-border")}
               style={{ height: `${height}%` }}
             >
               {failed > 0 ? (

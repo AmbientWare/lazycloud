@@ -60,20 +60,13 @@ export function mapKeysQueryOptions(workspaceId: string, name: string) {
   });
 }
 
-export function mapValueQueryOptions(
-  workspaceId: string,
-  name: string,
-  key: string,
-) {
+export function mapValueQueryOptions(workspaceId: string, name: string, key: string) {
   const params = new URLSearchParams({ key });
   return queryOptions({
     queryKey: workspaceQueryKeys.collections.mapValue(workspaceId, name, key),
     queryFn: () =>
       apiRequest(
-        withWorkspace(
-          `/api/v1/maps/${encodePath(name)}/get?${params.toString()}`,
-          workspaceId,
-        ),
+        withWorkspace(`/api/v1/maps/${encodePath(name)}/get?${params.toString()}`, workspaceId),
         encodedValueSchema,
       ),
     enabled: Boolean(key),

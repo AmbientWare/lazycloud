@@ -4,9 +4,7 @@ import { RouteErrorFallback } from "@/components/shared/ErrorBoundary";
 import { TaskDrawer } from "@/components/shared/TaskDrawer";
 import { useWorkspace } from "@/lib/workspace-context";
 
-export const Route = createFileRoute(
-  "/w/$workspace/apps/$appId_/workloads/$name/tasks/$taskId",
-)({
+export const Route = createFileRoute("/w/$workspace/apps/$appId_/workloads/$name/tasks/$taskId")({
   component: WorkloadTaskDrawerRoute,
   errorComponent: RouteErrorFallback,
 });

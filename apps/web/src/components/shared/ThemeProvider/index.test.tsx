@@ -35,7 +35,6 @@ describe("ThemeProvider", () => {
     document.documentElement.classList.remove("dark");
   });
 
-
   it("follows a dark system preference on first visit", () => {
     mockMatchMedia(true);
     render(

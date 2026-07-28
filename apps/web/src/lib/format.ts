@@ -28,13 +28,26 @@ export type StatusTone = "success" | "warning" | "danger" | "muted";
 export function statusTone(value: RowValue): StatusTone {
   const normalized = String(value ?? "").toLowerCase();
   if (
-    ["ok", "ready", "active", "deployed", "true", "running", "complete", "completed", "success", "healthy"].includes(
-      normalized,
-    )
+    [
+      "ok",
+      "ready",
+      "active",
+      "deployed",
+      "true",
+      "running",
+      "complete",
+      "completed",
+      "success",
+      "healthy",
+    ].includes(normalized)
   ) {
     return "success";
   }
-  if (["pending", "queued", "starting", "retrying", "retry", "building", "warning"].includes(normalized)) {
+  if (
+    ["pending", "queued", "starting", "retrying", "retry", "building", "warning"].includes(
+      normalized,
+    )
+  ) {
     return "warning";
   }
   if (["failed", "error", "timeout", "expired", "unhealthy", "not ok"].includes(normalized)) {

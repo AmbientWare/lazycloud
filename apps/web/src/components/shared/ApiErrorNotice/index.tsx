@@ -22,7 +22,9 @@ export function ApiErrorNotice({
 }) {
   const apiError = error instanceof ApiError ? error : null;
   const [now, setNow] = useState(() => Date.now());
-  const waitSeconds = apiError?.retryAt ? Math.max(0, Math.ceil((apiError.retryAt - now) / 1_000)) : 0;
+  const waitSeconds = apiError?.retryAt
+    ? Math.max(0, Math.ceil((apiError.retryAt - now) / 1_000))
+    : 0;
 
   useEffect(() => {
     if (!apiError?.retryAt || waitSeconds === 0) return;
@@ -33,7 +35,11 @@ export function ApiErrorNotice({
   return (
     <div
       role="alert"
-      className={cn("flex min-w-0 items-start gap-3 text-sm", compact ? "px-4 py-2.5" : "p-4", className)}
+      className={cn(
+        "flex min-w-0 items-start gap-3 text-sm",
+        compact ? "px-4 py-2.5" : "p-4",
+        className,
+      )}
     >
       <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" />
       <div className="min-w-0 flex-1">
@@ -42,7 +48,9 @@ export function ApiErrorNotice({
         {apiError?.requestId || apiError?.status === 429 ? (
           <div className="mt-1.5 flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
             {apiError.status === 429 ? (
-              <span>{waitSeconds > 0 ? `Retry available in ${waitSeconds}s` : "Retry available"}</span>
+              <span>
+                {waitSeconds > 0 ? `Retry available in ${waitSeconds}s` : "Retry available"}
+              </span>
             ) : null}
             {apiError.requestId ? (
               <span className="mono min-w-0 truncate" title={apiError.requestId}>

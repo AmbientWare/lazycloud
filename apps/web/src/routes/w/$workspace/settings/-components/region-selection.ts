@@ -19,9 +19,6 @@ export function toggleAllowedRegion(
   return [...allowedRegions, region];
 }
 
-export function regionsEqual(
-  left: readonly string[],
-  right: readonly string[],
-): boolean {
+export function regionsEqual(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((region, index) => region === right[index]);
 }

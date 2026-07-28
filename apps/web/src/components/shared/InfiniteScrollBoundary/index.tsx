@@ -36,13 +36,21 @@ export function InfiniteScrollBoundary({
   }, [error, loading, nextCursor, onLoadMore]);
 
   if (!nextCursor) {
-    return <p className="sr-only" aria-live="polite">All {resourceLabel} loaded</p>;
+    return (
+      <p className="sr-only" aria-live="polite">
+        All {resourceLabel} loaded
+      </p>
+    );
   }
 
   return (
     <div
       ref={boundaryRef}
-      className={loading || error ? "flex min-h-10 shrink-0 items-center justify-center px-3 py-2" : "h-px shrink-0"}
+      className={
+        loading || error
+          ? "flex min-h-10 shrink-0 items-center justify-center px-3 py-2"
+          : "h-px shrink-0"
+      }
     >
       {error ? (
         <Button

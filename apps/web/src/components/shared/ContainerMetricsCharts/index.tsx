@@ -1,12 +1,4 @@
-import {
-  Area,
-  CartesianGrid,
-  ComposedChart,
-  Line,
-  LineChart,
-  XAxis,
-  YAxis,
-} from "recharts";
+import { Area, CartesianGrid, ComposedChart, Line, LineChart, XAxis, YAxis } from "recharts";
 import type { TooltipValueType } from "recharts";
 
 import {
@@ -75,17 +67,17 @@ export function ContainerMetricsCharts({
     const readout = latestComputeReadout(data);
     return (
       <div className={cn("grid grid-cols-1 gap-x-5 gap-y-4 sm:grid-cols-2", className)}>
-          <CpuChart data={data} compact readout={readout?.cpu} />
-          <MemoryChart
-            title="Memory"
-            data={data}
-            usedKey="memoryUsed"
-            totalKey="memoryTotal"
-            usedLabel="RSS"
-            color="var(--chart-2)"
-            compact
-            readout={readout?.memory}
-          />
+        <CpuChart data={data} compact readout={readout?.cpu} />
+        <MemoryChart
+          title="Memory"
+          data={data}
+          usedKey="memoryUsed"
+          totalKey="memoryTotal"
+          usedLabel="RSS"
+          color="var(--chart-2)"
+          compact
+          readout={readout?.memory}
+        />
         {hasIo ? (
           <RatePairChart
             title="Network"
@@ -164,7 +156,13 @@ export function ContainerMetricsCharts({
 }
 
 /** Layout-matched loading placeholder for one compute chart panel. */
-export function ChartSkeleton({ className, compact = false }: { className?: string; compact?: boolean }) {
+export function ChartSkeleton({
+  className,
+  compact = false,
+}: {
+  className?: string;
+  compact?: boolean;
+}) {
   return (
     <div className={cn("space-y-2", className)} aria-hidden="true">
       <Skeleton className="h-3.5 w-16" />
@@ -201,7 +199,11 @@ function CpuChart({
     <section className="space-y-2" aria-label="CPU">
       <ChartHeader title="CPU" readout={readout} />
       <ChartContainer config={config} className={cn("w-full", compact ? "h-36" : "h-44")}>
-        <LineChart data={data} syncId={METRICS_SYNC_ID} margin={{ top: 8, right: 8, bottom: 4, left: 0 }}>
+        <LineChart
+          data={data}
+          syncId={METRICS_SYNC_ID}
+          margin={{ top: 8, right: 8, bottom: 4, left: 0 }}
+        >
           <CartesianGrid stroke="var(--border)" vertical={false} />
           <XAxis
             dataKey="label"
@@ -281,7 +283,11 @@ function MemoryChart({
     <section className="space-y-2" aria-label={title}>
       <ChartHeader title={title} readout={readout} />
       <ChartContainer config={config} className={cn("w-full", compact ? "h-36" : "h-44")}>
-        <ComposedChart data={data} syncId={METRICS_SYNC_ID} margin={{ top: 8, right: 8, bottom: 4, left: 0 }}>
+        <ComposedChart
+          data={data}
+          syncId={METRICS_SYNC_ID}
+          margin={{ top: 8, right: 8, bottom: 4, left: 0 }}
+        >
           <CartesianGrid stroke="var(--border)" vertical={false} />
           <XAxis
             dataKey="label"
@@ -368,7 +374,11 @@ function RatePairChart({
     <section className={cn("space-y-2", className)} aria-label={title}>
       <ChartHeader title={title} readout={readout} />
       <ChartContainer config={config} className={cn("w-full", compact ? "h-36" : "h-44")}>
-        <LineChart data={data} syncId={METRICS_SYNC_ID} margin={{ top: 8, right: 8, bottom: 4, left: 0 }}>
+        <LineChart
+          data={data}
+          syncId={METRICS_SYNC_ID}
+          margin={{ top: 8, right: 8, bottom: 4, left: 0 }}
+        >
           <CartesianGrid stroke="var(--border)" vertical={false} />
           <XAxis
             dataKey="label"
@@ -415,7 +425,10 @@ function RatePairChart({
   );
 }
 
-function formatCpuValue(value: TooltipValueType | undefined, point: MetricDatum | undefined): string {
+function formatCpuValue(
+  value: TooltipValueType | undefined,
+  point: MetricDatum | undefined,
+): string {
   const numberValue = toNumber(value);
   if (numberValue === null) return String(value ?? "");
   const percent = `${numberValue.toFixed(1)}%`;
@@ -423,11 +436,17 @@ function formatCpuValue(value: TooltipValueType | undefined, point: MetricDatum 
   return `${percent} (${Math.round(point.cpuUsed)}m / ${Math.round(point.cpuTotal)}m)`;
 }
 
-function bytesTooltipFormatter(value: TooltipValueType | undefined, name: number | string | undefined) {
+function bytesTooltipFormatter(
+  value: TooltipValueType | undefined,
+  name: number | string | undefined,
+) {
   return tooltipRow(name, formatTooltipValue(value, formatBytes));
 }
 
-function rateTooltipFormatter(value: TooltipValueType | undefined, name: number | string | undefined) {
+function rateTooltipFormatter(
+  value: TooltipValueType | undefined,
+  name: number | string | undefined,
+) {
   return tooltipRow(name, formatTooltipValue(value, formatBytesPerSecond));
 }
 

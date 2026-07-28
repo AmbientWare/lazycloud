@@ -3,8 +3,9 @@ from __future__ import annotations
 import subprocess
 import sys
 
-from lazycloud import App, ComputePlacementTarget, Image
 from lazycloud.abstractions.function import Function
+
+from lazycloud import App, ComputePlacementTarget, Image
 
 
 def _python312_base() -> str:

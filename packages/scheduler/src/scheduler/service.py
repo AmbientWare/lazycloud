@@ -611,15 +611,11 @@ class Scheduler:
         if retention is None:
             return (0, 0)
         current = now or utc_now()
-        if (
-            self.next_retention_attempt_at is not None
-            and current < self.next_retention_attempt_at
-        ):
+        if self.next_retention_attempt_at is not None and current < self.next_retention_attempt_at:
             return (0, 0)
         if (
             self.last_retention_at is not None
-            and (current - self.last_retention_at).total_seconds()
-            < self.retention_interval_seconds
+            and (current - self.last_retention_at).total_seconds() < self.retention_interval_seconds
         ):
             return (0, 0)
         try:

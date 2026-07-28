@@ -1,10 +1,7 @@
 import type { z } from "zod";
 
 import { apiRequest, withWorkspace } from "@/lib/api/client";
-import {
-  mapListSchema,
-  queueListSchema,
-} from "@/lib/api/schemas";
+import { mapListSchema, queueListSchema } from "@/lib/api/schemas";
 
 export type RowValue = string | number | boolean | null | undefined;
 export type ResourceRow = Record<string, RowValue> & { id: string };

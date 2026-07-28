@@ -317,7 +317,13 @@ function compareLogRecords(a: LogRecord, b: LogRecord): number {
 function formatLogRecords(records: LogRecord[]): string {
   return records
     .map((record) => {
-      const context = [record.stream, record.app_id, record.stub_id, record.task_id, record.container_id]
+      const context = [
+        record.stream,
+        record.app_id,
+        record.stub_id,
+        record.task_id,
+        record.container_id,
+      ]
         .filter(Boolean)
         .join(" ");
       return `${record.timestamp}${context ? ` ${context}` : ""} ${record.message}`;

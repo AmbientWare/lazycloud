@@ -131,7 +131,7 @@ class ObjectRepository:
                 f"object location already has a different id: {command.bucket}/{command.key}"
             )
         if existing is not None and not overwrite:
-            if not _object_matches_write_command(existing, command):
+            if not _object_content_matches_write_command(existing, command):
                 raise ConflictError(f"object already exists: {command.bucket}/{command.key}")
             if reuse_existing:
                 return ObjectWriteClaim(
@@ -575,18 +575,24 @@ def _object_operation_active(record: ObjectRecord) -> bool:
     return record.write_claimed_at is not None or record.cleanup_claimed_at is not None
 
 
-def _object_matches_write_command(
+def _object_content_matches_write_command(
     record: ObjectRecord,
     command: ObjectWriteCommand,
 ) -> bool:
+    """Whether a stored object holds the same bytes this command is writing.
+
+    Conflict means different content at one key, so only content identity
+    participates. Content type and metadata are deliberately excluded: a caller
+    that re-sends identical bytes with different metadata already dedupes to the
+    existing record when the stored object is intact, and a repair of the same
+    bytes must not be rejected for describing them differently.
+    """
     return (
         record.bucket == command.bucket
         and record.key == command.key
         and record.path == command.path
         and record.size == command.size
         and record.sha256 == command.sha256
-        and record.content_type == command.content_type
-        and record.metadata == command.metadata
     )
 
 
