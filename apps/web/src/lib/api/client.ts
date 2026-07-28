@@ -91,13 +91,32 @@ export function withWorkspace(path: string, workspaceId: string): string {
   return `${path}${separator}workspace=${encodeURIComponent(workspaceId)}`;
 }
 
+/**
+ * A correlation id for one request.
+ *
+ * `crypto.randomUUID` is restricted to secure contexts, so it is undefined when
+ * the dashboard is served over plain HTTP from anything other than localhost —
+ * reaching for it directly made every request throw before it was sent, which
+ * surfaced as the control plane being unreachable.
+ */
+function newRequestId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  }
+  return `${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`;
+}
+
 export async function apiRequest<T>(
   path: string,
   schema: z.ZodType<T, z.ZodTypeDef, unknown>,
   init: RequestInit = {},
 ): Promise<T> {
   const headers = new Headers(init.headers);
-  const clientRequestId = headers.get("X-Request-ID") || crypto.randomUUID();
+  const clientRequestId = headers.get("X-Request-ID") || newRequestId();
   headers.set("X-Request-ID", clientRequestId);
   const token = getStoredAuthToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);
@@ -139,6 +158,30 @@ export async function apiRequest<T>(
     }
   }
   return schema.parse(json);
+}
+
+/**
+ * Fetch raw bytes through the same auth and error handling as `apiRequest`.
+ *
+ * Artifact content is served by the control plane rather than linked directly
+ * at the object store, so it needs a bearer token like any other API call.
+ */
+export async function apiBlob(path: string): Promise<Blob> {
+  const clientRequestId = newRequestId();
+  const headers = new Headers({ "X-Request-ID": clientRequestId });
+  const token = getStoredAuthToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+
+  const response = await fetch(path, { headers, credentials: "include" });
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    if (response.status === 401) clearStoredAuthToken();
+    throw new ApiError(response.status, response.statusText, body, {
+      requestId: response.headers.get("X-Request-ID") || clientRequestId,
+      retryAfter: response.headers.get("Retry-After"),
+    });
+  }
+  return response.blob();
 }
 
 function retryAfterAt(value: string | null): number | null {

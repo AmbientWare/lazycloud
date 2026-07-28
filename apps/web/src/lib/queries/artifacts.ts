@@ -1,12 +1,7 @@
 import { queryOptions } from "@tanstack/react-query";
 
-import { apiRequest, postJson, withWorkspace } from "@/lib/api/client";
-import {
-  artifactListSchema,
-  artifactPublicUrlSchema,
-  type ArtifactList,
-  type ArtifactPublicUrl,
-} from "@/lib/api/schemas";
+import { apiBlob, apiRequest, withWorkspace } from "@/lib/api/client";
+import { artifactListSchema, type ArtifactList } from "@/lib/api/schemas";
 
 import { workspaceQueryKeys } from "./workspace-keys";
 
@@ -24,18 +19,23 @@ export function taskArtifactsQuery(workspaceId: string, taskId: string) {
 }
 
 /**
- * A short-lived direct link to one artifact. Minted on demand rather than
- * listed, so a link is only ever created for something the reader opened.
+ * Fetch an artifact's bytes from the control plane as an object URL.
+ *
+ * Same-origin on purpose: a presigned URL names the object store, which is
+ * routinely unreachable from wherever the dashboard is actually open. The
+ * caller owns the returned URL and must revoke it.
  */
-export function artifactPublicUrl(
+export async function fetchArtifactObjectUrl(
   workspaceId: string,
-  artifactId: string,
-  taskId: string,
-  filename: string,
-): Promise<ArtifactPublicUrl> {
-  return postJson(
-    withWorkspace("/api/v1/artifacts/public-url", workspaceId),
-    artifactPublicUrlSchema,
-    { id: artifactId, task_id: taskId, filename },
+  artifact: { id: string; task_id: string; filename: string },
+): Promise<string> {
+  const query = new URLSearchParams({
+    id: artifact.id,
+    task_id: artifact.task_id,
+    filename: artifact.filename,
+  });
+  const blob = await apiBlob(
+    withWorkspace(`/api/v1/artifacts/content?${query.toString()}`, workspaceId),
   );
+  return URL.createObjectURL(blob);
 }

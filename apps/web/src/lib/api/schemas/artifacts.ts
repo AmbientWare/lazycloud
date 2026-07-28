@@ -20,8 +20,3 @@ export const artifactListSchema = z.object({
   next: z.string().default(""),
 });
 export type ArtifactList = z.infer<typeof artifactListSchema>;
-
-export const artifactPublicUrlSchema = z.object({
-  public_url: z.string().default(""),
-});
-export type ArtifactPublicUrl = z.infer<typeof artifactPublicUrlSchema>;

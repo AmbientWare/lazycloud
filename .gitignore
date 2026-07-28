@@ -38,3 +38,4 @@ secrets-backup/
 *.token
 *.pem
 *.key
+artifact-changes.md

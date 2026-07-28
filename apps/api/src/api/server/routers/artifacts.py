@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from execution.artifacts.service import ArtifactStorageService
 from fastapi import APIRouter, Depends
+from fastapi.responses import Response
 from shared.http.artifacts import (
     ArtifactListResponse,
     ArtifactPublicUrlRequest,
@@ -55,6 +56,34 @@ def list_artifacts(
             )
             for item in listings
         ]
+    )
+
+
+@router.get("/content", operation_id="read_artifact_content")
+def read_artifact_content(
+    id: str,
+    task_id: str,
+    filename: str,
+    workspace_id: read_workspace,
+    download: bool = False,
+    service: ArtifactStorageService = Depends(artifact_service),
+) -> Response:
+    """Serve an artifact's bytes from the control plane.
+
+    Same-origin so a reader can render it without reaching the object store,
+    which is usually not routable from wherever the dashboard is open.
+    """
+    content, content_type, name = service.read_content(
+        workspace_id=workspace_id,
+        task_id=task_id,
+        artifact_id=id,
+        filename=filename,
+    )
+    disposition = "attachment" if download else "inline"
+    return Response(
+        content=content,
+        media_type=content_type,
+        headers={"Content-Disposition": f'{disposition}; filename="{name}"'},
     )
 
 

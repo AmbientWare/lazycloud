@@ -151,6 +151,33 @@ class ArtifactStorageService:
             modified_at=modified_at,
         )
 
+    def read_content(
+        self,
+        *,
+        workspace_id: str,
+        task_id: str,
+        artifact_id: str,
+        filename: str,
+    ) -> tuple[bytes, str, str]:
+        """Return an artifact's bytes, content type, and filename.
+
+        Serving content through the control plane keeps a reader on one origin.
+        A presigned URL names the object store directly, which a browser outside
+        the deployment's network often cannot reach.
+        """
+        path, record = self._path_and_record(
+            workspace_id=workspace_id,
+            task_id=task_id,
+            artifact_id=artifact_id,
+            filename=filename,
+        )
+        content = self.object_storage.read_bytes_for_workspace(
+            workspace_id=workspace_id,
+            bucket=self.bucket,
+            key=path.storage_key,
+        )
+        return (content, record.content_type or "application/octet-stream", path.filename)
+
     def public_url(
         self,
         *,
