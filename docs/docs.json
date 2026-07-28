@@ -80,12 +80,6 @@
         ]
       },
       {
-        "group": "Self-Hosting",
-        "pages": [
-          "self-hosting/compose"
-        ]
-      },
-      {
         "group": "Reference",
         "pages": [
           "reference/limitations"

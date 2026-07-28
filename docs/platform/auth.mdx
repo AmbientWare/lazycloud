@@ -26,8 +26,8 @@ plane **endpoint** resolves in this order:
 3. The endpoint stored in the selected profile
 4. The packaged hosted default
 
-Self-hosters and local dev override the default with `--endpoint` or
-`LAZYCLOUD_ENDPOINT`; hosted customers need neither.
+Hosted customers need neither `--endpoint` nor `LAZYCLOUD_ENDPOINT`; both
+override the default when a command must reach a different control plane.
 
 Without `--token`, login runs a device-code flow: the CLI prints a
 verification URL and confirmation code, you approve it in the web dashboard,
@@ -36,7 +36,7 @@ token is stored directly — use this for CI and scripts.
 
 ```bash
 lazycloud login
-lazycloud login --endpoint https://your-control-plane.example.com
+lazycloud login --endpoint https://control-plane.example.com
 lazycloud login --token <token>
 ```
 

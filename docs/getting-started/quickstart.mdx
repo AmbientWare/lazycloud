@@ -15,9 +15,9 @@ Login starts a device-code flow: the CLI prints a verification URL and a
 confirmation code, you approve it in the web dashboard, and the CLI stores the
 minted workspace token in its profile.
 
-`lazycloud login` targets the hosted LazyCloud platform by default. If you run
-your own stack (self-hosting or local dev), point at it with `--endpoint` or
-the `LAZYCLOUD_ENDPOINT` environment variable; the endpoint is stored in your
+`lazycloud login` targets the hosted LazyCloud platform by default. To reach a
+different control plane, point at it with `--endpoint` or the
+`LAZYCLOUD_ENDPOINT` environment variable; the endpoint is stored in your
 profile for future commands. For non-interactive use, pass a token directly:
 
 ```bash
