@@ -230,7 +230,7 @@ def _run(
     )
     sts_client = FakeStsHttpClient(account_id=_ACCOUNT_ID, role_name=_ROLE_NAME)
     enrollment = ProviderNodeEnrollmentService(
-        gateway=replace(services.gateway_service, tailnet=TailnetConfig(enabled=True)),
+        gateway=replace(services.gateway_service, tailnet=TailnetConfig()),
         compute=compute,
         identity_verifier=AwsProviderNodeIdentityAdapter(
             http_client=sts_client,

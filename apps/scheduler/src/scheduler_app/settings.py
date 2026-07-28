@@ -36,7 +36,6 @@ class SchedulerProcessSettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_",
-        env_file=".env",
         extra="ignore",
     )
 

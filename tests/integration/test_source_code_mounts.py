@@ -147,11 +147,12 @@ def test_source_code_mounts_presign_for_the_source_workspace(
         object_id=record.id,
     )
     physical_key = object_storage.physical_key_for_record(record)
+    physical_bucket = object_storage.physical_bucket(SOURCE_PACKAGE_BUCKET)
 
     assert mounts[0].source_download_url == (
-        f"https://objects.test/{SOURCE_PACKAGE_BUCKET}/{physical_key}"
+        f"https://objects.test/{physical_bucket}/{physical_key}"
     )
-    assert object_client.presigned == [(SOURCE_PACKAGE_BUCKET, physical_key, 900)]
+    assert object_client.presigned == [(physical_bucket, physical_key, 900)]
 
 
 def test_object_storage_deletes_only_the_target_workspace_objects(
@@ -176,11 +177,12 @@ def test_object_storage_deletes_only_the_target_workspace_objects(
     )
     target_physical_key = object_storage.physical_key_for_record(target_record)
     retained_physical_key = object_storage.physical_key_for_record(retained_record)
+    physical_bucket = object_storage.physical_bucket(SOURCE_PACKAGE_BUCKET)
 
     assert object_storage.delete_workspace_objects(target.id) == 1
 
-    assert (SOURCE_PACKAGE_BUCKET, target_physical_key) not in object_client.objects
-    assert (SOURCE_PACKAGE_BUCKET, retained_physical_key) in object_client.objects
+    assert (physical_bucket, target_physical_key) not in object_client.objects
+    assert (physical_bucket, retained_physical_key) in object_client.objects
     assert object_storage.list_for_workspace(workspace_id=target.id) == []
     assert (
         object_storage.get_by_id_for_workspace(
@@ -215,10 +217,11 @@ def test_object_storage_deletes_each_workspace_physical_object_independently(
     )
     first_physical_key = object_storage.physical_key_for_record(first_record)
     last_physical_key = object_storage.physical_key_for_record(last_record)
+    physical_bucket = object_storage.physical_bucket(SOURCE_PACKAGE_BUCKET)
 
     assert object_storage.delete_workspace_objects(first.id) == 1
-    assert not object_client.exists(first_physical_key, bucket=SOURCE_PACKAGE_BUCKET)
-    assert object_client.exists(last_physical_key, bucket=SOURCE_PACKAGE_BUCKET)
+    assert not object_client.exists(first_physical_key, bucket=physical_bucket)
+    assert object_client.exists(last_physical_key, bucket=physical_bucket)
     assert object_storage.list_for_workspace(workspace_id=first.id) == []
     assert (
         object_storage.get_by_id_for_workspace(last_record.id, workspace_id=last.id).id
@@ -226,7 +229,7 @@ def test_object_storage_deletes_each_workspace_physical_object_independently(
     )
 
     assert object_storage.delete_workspace_objects(last.id) == 1
-    assert not object_client.exists(last_physical_key, bucket=SOURCE_PACKAGE_BUCKET)
+    assert not object_client.exists(last_physical_key, bucket=physical_bucket)
     assert first_record.id != last_record.id
 
 
@@ -250,7 +253,7 @@ def test_object_storage_preserves_metadata_when_physical_delete_is_not_confirmed
     assert (
         object_storage.get_by_id_for_workspace(record.id, workspace_id=workspace.id).id == record.id
     )
-    assert object_client.exists(physical_key, bucket=record.bucket)
+    assert object_client.exists(physical_key, bucket=object_storage.physical_bucket(record.bucket))
 
 
 class _StickyDeleteObjectClient(_ObjectClient):
@@ -261,27 +264,30 @@ class _StickyDeleteObjectClient(_ObjectClient):
 def test_container_resource_mounts_require_workspace_storage_when_workspace_has_bucket(
     isolated_services: ApiServices,
 ) -> None:
-    with isolated_services.context.database.session() as session:
-        workspace = isolated_services.context.workspace(session)
+    control = ControlPlaneService(isolated_services.context)
+    unprovisioned = control.upsert_workspace("mount-storage-unprovisioned")
     mounts = container_resource_mounts(
         context=isolated_services.context,
         object_storage=isolated_services.object_storage,
-        workspace_id=workspace.id,
-        workspace_name=workspace.name,
+        workspace_id=unprovisioned.id,
+        workspace_name=unprovisioned.name,
         object_id="",
         stub_id="stub-1",
         container_id="ctr-1",
         volumes=[],
     )
 
-    assert not container_resource_mounts_require_workspace_storage(
-        context=isolated_services.context,
-        workspace_id=workspace.id,
-        mounts=mounts,
-    )
+    # The artifact mount always needs workspace storage, and there is no fallback
+    # tier, so an unprovisioned workspace must fail rather than mount local disk.
+    with pytest.raises(UpstreamUnavailableError, match="no storage provisioned"):
+        container_resource_mounts_require_workspace_storage(
+            context=isolated_services.context,
+            workspace_id=unprovisioned.id,
+            mounts=mounts,
+        )
 
-    ControlPlaneService(isolated_services.context).set_workspace_storage(
-        workspace.id,
+    control.set_workspace_storage(
+        unprovisioned.id,
         WorkspaceStorageConfig(
             backend="s3",
             bucket="workspace-bucket",
@@ -297,29 +303,31 @@ def test_container_resource_mounts_require_workspace_storage_when_workspace_has_
 
     assert container_resource_mounts_require_workspace_storage(
         context=isolated_services.context,
-        workspace_id=workspace.id,
+        workspace_id=unprovisioned.id,
         mounts=mounts,
     )
 
+    # A platform volume lives in the workspace's own storage, so it needs the
+    # mount the same way an artifact does, even with no artifact mount present.
     volume_only_mounts = container_resource_mounts(
         context=isolated_services.context,
         object_storage=isolated_services.object_storage,
-        workspace_id=workspace.id,
-        workspace_name=workspace.name,
+        workspace_id=unprovisioned.id,
+        workspace_name=unprovisioned.name,
         object_id="",
         stub_id="",
         container_id="ctr-volume-only",
         volumes=[{"id": "canonical", "mount_path": "/volumes/canonical"}],
     )
-    assert not container_resource_mounts_require_workspace_storage(
+    assert container_resource_mounts_require_workspace_storage(
         context=isolated_services.context,
-        workspace_id=workspace.id,
+        workspace_id=unprovisioned.id,
         mounts=volume_only_mounts,
     )
 
 
 @pytest.mark.parametrize(
-    ("workspace_id", "volume_id"),
+    ("workspace_name", "volume_id"),
     [
         ("../workspace", "volume-1"),
         ("workspace-1", "../volume"),
@@ -328,11 +336,11 @@ def test_container_resource_mounts_require_workspace_storage_when_workspace_has_
     ],
 )
 def test_platform_volume_local_path_rejects_namespace_traversal(
-    workspace_id: str,
+    workspace_name: str,
     volume_id: str,
 ) -> None:
-    with pytest.raises(ValueError, match=r"unsafe (workspace_id|volume_id)"):
-        platform_volume_local_path(workspace_id=workspace_id, volume_id=volume_id)
+    with pytest.raises(ValueError, match=r"unsafe (workspace_name|volume_id)"):
+        platform_volume_local_path(workspace_name=workspace_name, volume_id=volume_id)
 
 
 def test_worker_source_materializer_extracts_isolated_container_workspaces(tmp_path: Path) -> None:
