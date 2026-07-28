@@ -275,9 +275,7 @@ class SchedulerRuntime:
                 tailnet_cleanup=tailnet_cleanup,
             ),
             retention_interval_seconds=retention_settings.interval_seconds,
-            retention_retry_initial_seconds=(
-                retention_settings.retry_initial_seconds
-            ),
+            retention_retry_initial_seconds=(retention_settings.retry_initial_seconds),
             retention_retry_max_seconds=retention_settings.retry_max_seconds,
         )
         return cls(scheduler=scheduler)

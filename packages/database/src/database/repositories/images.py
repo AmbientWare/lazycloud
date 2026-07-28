@@ -737,9 +737,7 @@ class CheckpointRepository:
 
     def upsert(self, checkpoint: CheckpointRecord) -> CheckpointRecord:
         """System-authority write keyed by checkpoint id; workers own checkpoint state."""
-        CleanupRepository(self.session).assert_checkpoint_available(
-            checkpoint.checkpoint_id
-        )
+        CleanupRepository(self.session).assert_checkpoint_available(checkpoint.checkpoint_id)
         saved = self.records.upsert_across_workspaces(
             checkpoint,
             key=checkpoint.checkpoint_id,

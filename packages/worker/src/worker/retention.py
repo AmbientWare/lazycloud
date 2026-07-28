@@ -129,9 +129,7 @@ class WorkerRetentionService:
     instances: WorkerArtifactInstanceSource
     config: WorkerRetentionConfig
     image_build_scratch: ImageBuildScratchManager | None = None
-    checkpoint_activity: CheckpointLeaseRegistry = field(
-        default_factory=CheckpointLeaseRegistry
-    )
+    checkpoint_activity: CheckpointLeaseRegistry = field(default_factory=CheckpointLeaseRegistry)
 
     def reconcile(self, *, now: datetime | None = None) -> WorkerRetentionResult:
         current = now or utc_now()
