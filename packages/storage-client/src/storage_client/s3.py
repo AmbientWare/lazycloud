@@ -29,8 +29,8 @@ from typing_extensions import TypeVar
 # the object store publishes host port 9002 with these local-dev credentials
 # (`compose.yaml` object-store defaults). Every containerized deployment path
 # sets the `LAZYCLOUD_OBJECT_STORE_*` environment explicitly (Compose
-# `x-object-store-env`, the Helm chart's objectStoreEnv/config Secret, and the
-# Kubernetes provider bootstrap), so these defaults only apply on the host.
+# `x-object-store-env` and the provider bootstrap), so these defaults only
+# apply on the host.
 LOCAL_OBJECT_STORE_ENDPOINT_URL = "http://localhost:9002"
 LOCAL_OBJECT_STORE_ACCESS_KEY_ID = f"{NAME}-local"
 LOCAL_OBJECT_STORE_SECRET_ACCESS_KEY = f"{NAME}-local-secret"

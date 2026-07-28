@@ -1,7 +1,7 @@
 """Load a developer `.env` at process start.
 
 Settings classes read the environment, which every deployment sets directly
-through Compose, Helm, or the provider bootstrap. `.env` is a convenience for
+through Compose or the provider bootstrap. `.env` is a convenience for
 running a process from a host shell, so it is loaded here, by the entrypoint
 that owns the process, rather than by each settings class. A library that read
 it would resolve the file against whatever directory it happened to be called
