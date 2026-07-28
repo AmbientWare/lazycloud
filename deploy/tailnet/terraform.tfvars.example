@@ -3,7 +3,7 @@ confirm_dedicated_tailnet = true
 overwrite_existing_policy = true
 environment               = "production"
 
-# Keep these aligned with Compose or Helm deployment values.
+# Keep these aligned with Compose deployment values.
 agent_tag         = "tag:lazycloud-agent"
 control_plane_tag = "tag:lazycloud-control-plane"
 agent_proxy_port  = 29443

@@ -35,7 +35,7 @@ docker compose up -d --wait --build
 ```
 
 The first start builds the service images. Each image has one build owner, so
-rebuilding `control-plane` or `juicefs-format` does not build the privileged
+rebuilding `control-plane` or `agent` does not build the privileged
 container-worker toolchain. Use `docker compose build <service>` when only one
 service image changed; a normal `docker compose up -d --wait --build` still
 builds every required image.
@@ -144,6 +144,3 @@ docker compose down               # stop; add -v to also delete all data volumes
 Durable state lives in named Docker volumes (PostgreSQL data, object storage,
 image caches, and tokens). `docker compose down -v` destroys the entire local
 installation.
-
-For multi-node Kubernetes installations, use the
-[Helm chart](/self-hosting/helm).

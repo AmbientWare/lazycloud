@@ -44,8 +44,8 @@ stack does not arrange on its own:
   identically for the agent process and the daemon: keep it on daemon-local
   storage rather than a remote or virtualised mount.
 
-The remaining local, Kubernetes, Tailnet, GPU, and browser scenarios document
-their own additional prerequisites in their modules.
+The remaining local, Tailnet, GPU, and browser scenarios document their own
+additional prerequisites in their modules.
 
 ## Connected AWS
 
