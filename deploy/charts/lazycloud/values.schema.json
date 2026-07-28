@@ -460,7 +460,7 @@
         "replicas": {"type": "integer", "minimum": 1},
         "intervalSeconds": {"type": "number", "exclusiveMinimum": 0},
         "containerLimit": {"type": "integer", "minimum": 1},
-        "artifactRetention": {
+        "retention": {
           "type": "object",
           "properties": {
             "enabled": {"type": "boolean"},
@@ -611,7 +611,7 @@
           },
           "additionalProperties": false
         },
-        "artifactRetention": {
+        "retention": {
           "type": "object",
           "properties": {
             "enabled": {"type": "boolean"},
@@ -969,7 +969,7 @@
       },
       "additionalProperties": false
     },
-    "workerArtifactRetention": {
+    "workerRetention": {
       "type": "object",
       "properties": {
         "enabled": {"type": "boolean"},
@@ -1106,7 +1106,7 @@
         "gvisorRoot": {"type": "string", "minLength": 1},
         "dataStorage": {"$ref": "#/definitions/workerDataStorage"},
         "workspaceStorage": {"$ref": "#/definitions/workerWorkspaceStorage"},
-        "artifactRetention": {"$ref": "#/definitions/workerArtifactRetention"},
+        "retention": {"$ref": "#/definitions/workerRetention"},
         "sourceCache": {
           "type": "object",
           "properties": {

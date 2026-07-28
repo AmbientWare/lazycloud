@@ -69,7 +69,7 @@ dist/connected-aws/$VERSION/
   manifest.json
   objects/
     connection-template.json
-  agent-artifacts/
+  agent-binarys/
     $VERSION/
       lazycloud-agent-linux-amd64
 ```
@@ -77,19 +77,19 @@ dist/connected-aws/$VERSION/
 The agent object's `local_path` is relative to the bundle. No machine-specific
 artifact root is written to the published manifest. The Compose configuration
 command validates the retained executable and derives its absolute
-`agent-artifacts` root from the local manifest path before activation.
+`agent-binarys` root from the local manifest path before activation.
 
 The uploaded workflow evidence contains `manifest.json`. Its
 `deployment_environment` object is the canonical Compose configuration. For
 Helm, map the same fields as follows:
 
 ```text
-agentArtifact.version                     LAZYCLOUD_AGENT_ARTIFACT_VERSION
+agentArtifact.version                     LAZYCLOUD_AGENT_BINARY_VERSION
 agentArtifact.url                         agent object public_url
 agentArtifact.sha256ByArch.amd64           manifest agent_artifact_sha256
 awsCapacity.connectionTemplateUrl          LAZYCLOUD_AWS_CONNECTION_TEMPLATE_URL
 awsCapacity.workerImageDigest              LAZYCLOUD_AWS_CAPACITY_WORKER_IMAGE_DIGEST
-awsCapacity.agentArtifactUrl               LAZYCLOUD_AWS_CAPACITY_AGENT_ARTIFACT_URL
+awsCapacity.agentArtifactUrl               LAZYCLOUD_AWS_CAPACITY_AGENT_BINARY_URL
 awsCapacity.cpuAmiIds                      LAZYCLOUD_AWS_CAPACITY_CPU_AMI_IDS
 ```
 
@@ -107,12 +107,12 @@ storage; the URL and claim modes are mutually exclusive.
 With release AWS identity and Docker registry login already configured:
 
 ```sh
-uv run --no-project python deploy/agent-artifact/build.py build \
-  --version "$VERSION" --output dist/agent-artifacts --arch amd64
+uv run --no-project python deploy/agent-binary/build.py build \
+  --version "$VERSION" --output dist/agent-binarys --arch amd64
 
 uv run --group workspace python deploy/aws-release-assets/release.py stage \
   --version "$VERSION" \
-  --agent-version-dir "dist/agent-artifacts/$VERSION" \
+  --agent-version-dir "dist/agent-binarys/$VERSION" \
   --worker-image "public.ecr.aws/ALIAS/lazycloud/container-worker@sha256:DIGEST" \
   --bucket "$AWS_RELEASE_ASSET_BUCKET" \
   --region us-east-1 \
@@ -133,7 +133,7 @@ and fail on any collision. Local validation verifies the canonical manifest,
 every retained artifact digest and size, the executable mode, and the bundled
 connection-template policy without contacting AWS. Release objects and image
 digests are durable production artifacts; retain the staged bundle at the path
-used for Compose activation so its read-only agent-artifact mount remains valid.
+used for Compose activation so its read-only agent-binary mount remains valid.
 Published metadata stays portable.
 Temporary live-acceptance stacks, connections, pools, and instances are cleaned
 separately after the provider lifecycle smoke.

@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
@@ -127,6 +128,18 @@ function isMarketingProofModule(id: string): boolean {
   );
 }
 
+/**
+ * Host names the dev server answers to, beyond the loopback names Vite always
+ * allows: this machine's own name, plus anything the operator adds.
+ */
+const devAllowedHosts = [
+  os.hostname(),
+  os.hostname().split(".")[0],
+  ...viteEnv.VITE_DEV_ALLOWED_HOSTS.split(","),
+]
+  .map((host) => host.trim())
+  .filter(Boolean);
+
 export default defineConfig({
   build: {
     rolldownOptions: {
@@ -202,6 +215,13 @@ export default defineConfig({
     },
   },
   server: {
+    /* Listen on every interface so the dev server is reachable by machine
+       name, and accept the names it will be reached by. Vite rejects an
+       unexpected Host header, so its own machine name has to be named
+       explicitly — that is how the dev server is reached from another device
+       on the same tailnet or LAN. */
+    host: true,
+    allowedHosts: devAllowedHosts,
     proxy: {
       "/api": {
         target: viteEnv.VITE_API_TARGET,

@@ -3,14 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from database.repositories.artifact_cleanup import ArtifactCleanupRepository
+from database.repositories.cleanup import CleanupRepository
 from database.repositories.common import (
     TableRepositoryConfig,
     WorkspaceTableRepository,
 )
 from database.repositories.identity import WorkspaceRepository
 from database.tables.images import CheckpointTable, ImageBuildTable, ImageTable
-from shared.artifacts import artifact_path_digest, normalize_artifact_path
 from shared.checkpoints import (
     CHECKPOINT_RETENTION_ELIGIBLE_STATUSES,
     CheckpointPruneResult,
@@ -23,6 +22,7 @@ from shared.image_building.records import (
     ImageBuildRecord,
     ImageRecord,
 )
+from shared.runtime_paths import archive_path_digest, normalize_runtime_path
 from shared.timestamps import utc_now
 from sqlalchemy import case, delete, exists, func, or_, select, text, tuple_, update
 from sqlalchemy.engine import CursorResult
@@ -41,7 +41,7 @@ class ImageRepository:
         )
 
     def upsert(self, image: ImageRecord) -> ImageRecord:
-        ArtifactCleanupRepository(self.session).assert_image_write_available(
+        CleanupRepository(self.session).assert_image_write_available(
             image.image_id,
             workspace_id=image.workspace_id,
         )
@@ -221,7 +221,7 @@ class ImageBuildRepository:
             resolved_workspace_id = str(row.workspace_id) if row is not None else None
         if resolved_workspace_id is None:
             raise ValueError("image build persistence requires workspace ownership")
-        ArtifactCleanupRepository(self.session).assert_build_available(
+        CleanupRepository(self.session).assert_build_available(
             build,
             workspace_id=resolved_workspace_id,
         )
@@ -285,16 +285,16 @@ class ImageBuildRepository:
     ) -> tuple[frozenset[str], frozenset[str]]:
         protected_paths: set[str] = set()
         if paths:
-            path_digests = {artifact_path_digest(path) for path in paths}
+            path_digests = {archive_path_digest(path) for path in paths}
             statement = select(
-                ImageBuildTable.artifact_path_value,
+                ImageBuildTable.archive_path_value,
                 ImageBuildTable.manifest_path_value,
                 ImageBuildTable.dockerfile_path_value,
                 ImageBuildTable.cache_manifest_path_value,
             ).where(
                 ImageBuildTable.id.not_in(deleting_build_ids),
                 or_(
-                    ImageBuildTable.artifact_path_digest.in_(path_digests),
+                    ImageBuildTable.archive_path_digest.in_(path_digests),
                     ImageBuildTable.manifest_path_digest.in_(path_digests),
                     ImageBuildTable.dockerfile_path_digest.in_(path_digests),
                     ImageBuildTable.cache_manifest_path_digest.in_(path_digests),
@@ -680,18 +680,18 @@ class ImageBuildRepository:
 
 def _sync_image_build_row(row: ImageBuildTable, build: ImageBuildRecord) -> None:
     row.created_at = build.created_at
-    row.artifact_path_value = normalize_artifact_path(build.artifact_path)
-    row.artifact_path_digest = artifact_path_digest(row.artifact_path_value)
-    row.manifest_path_value = normalize_artifact_path(build.manifest_path)
-    row.manifest_path_digest = artifact_path_digest(row.manifest_path_value)
-    row.dockerfile_path_value = normalize_artifact_path(
+    row.archive_path_value = normalize_runtime_path(build.artifact_path)
+    row.archive_path_digest = archive_path_digest(row.archive_path_value)
+    row.manifest_path_value = normalize_runtime_path(build.manifest_path)
+    row.manifest_path_digest = archive_path_digest(row.manifest_path_value)
+    row.dockerfile_path_value = normalize_runtime_path(
         build.cache_metadata.get("dockerfile_path", "")
     )
-    row.dockerfile_path_digest = artifact_path_digest(row.dockerfile_path_value)
-    row.cache_manifest_path_value = normalize_artifact_path(
+    row.dockerfile_path_digest = archive_path_digest(row.dockerfile_path_value)
+    row.cache_manifest_path_value = normalize_runtime_path(
         build.cache_metadata.get("manifest_path", "")
     )
-    row.cache_manifest_path_digest = artifact_path_digest(row.cache_manifest_path_value)
+    row.cache_manifest_path_digest = archive_path_digest(row.cache_manifest_path_value)
     row.cache_publish_key = build.cache_metadata.get("cache_publish_key", "")
 
 
@@ -737,7 +737,7 @@ class CheckpointRepository:
 
     def upsert(self, checkpoint: CheckpointRecord) -> CheckpointRecord:
         """System-authority write keyed by checkpoint id; workers own checkpoint state."""
-        ArtifactCleanupRepository(self.session).assert_checkpoint_available(
+        CleanupRepository(self.session).assert_checkpoint_available(
             checkpoint.checkpoint_id
         )
         saved = self.records.upsert_across_workspaces(

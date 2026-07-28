@@ -16,7 +16,7 @@ from compute.providers import (
 from provider_aws import (
     AwsAccountConnectionTarget,
     AwsConnectedAccountPooledProvider,
-    AwsManagedPoolArtifacts,
+    AwsManagedPoolBinaries,
     AwsManagedPoolBootstrap,
     AwsManagedPoolClients,
     AwsManagedPoolPhase,
@@ -278,7 +278,7 @@ def _spec() -> AwsManagedPoolSpec:
             enrollment_request_id="12345678-1234-4123-8123-123456789abc",
             agent_version="0.1.0",
             agent_sha256="a" * 64,
-            agent_artifact_url=(
+            agent_binary_url=(
                 f"https://s3.us-east-1.amazonaws.com/releases/agents/0.1.0/{'a' * 64}/"
                 "lazycloud-agent-linux-amd64"
             ),
@@ -411,7 +411,7 @@ def _pool_request(provider_ref: str) -> ProviderPoolRequest:
             enrollment_request_id="22345678-1234-4123-8123-123456789abc",
             agent_version="0.1.0",
             agent_sha256="a" * 64,
-            agent_artifact_url=(
+            agent_binary_url=(
                 f"https://s3.us-east-1.amazonaws.com/releases/agents/0.1.0/{'a' * 64}/"
                 "lazycloud-agent-linux-amd64"
             ),
@@ -427,8 +427,8 @@ def test_pooled_provider_scales_and_reports_machine_infrastructure_health() -> N
     provider = AwsConnectedAccountPooledProvider(
         provider_ref="aws:12345678-1234-4123-8123-123456789abc",
         connection=_connection_target(),
-        artifacts_by_region={
-            "us-east-1": AwsManagedPoolArtifacts(
+        binaries_by_region={
+            "us-east-1": AwsManagedPoolBinaries(
                 agent_version="0.1.0",
                 agent_sha256="a" * 64,
                 worker_image_digest=f"registry.example.com/worker@sha256:{'b' * 64}",
@@ -527,8 +527,8 @@ def test_pooled_provider_requires_the_stack_provisioned_network() -> None:
     provider = AwsConnectedAccountPooledProvider(
         provider_ref="aws:12345678-1234-4123-8123-123456789abc",
         connection=_connection_target(vpc_id=None, subnet_ids=(), security_group_id=None),
-        artifacts_by_region={
-            "us-east-1": AwsManagedPoolArtifacts(
+        binaries_by_region={
+            "us-east-1": AwsManagedPoolBinaries(
                 agent_version="0.1.0",
                 agent_sha256="a" * 64,
                 worker_image_digest=f"registry.example.com/worker@sha256:{'b' * 64}",
@@ -554,8 +554,8 @@ def test_pooled_provider_does_not_offer_unpriced_instance_types() -> None:
     provider = AwsConnectedAccountPooledProvider(
         provider_ref="aws:12345678-1234-4123-8123-123456789abc",
         connection=_connection_target(),
-        artifacts_by_region={
-            "us-east-1": AwsManagedPoolArtifacts(
+        binaries_by_region={
+            "us-east-1": AwsManagedPoolBinaries(
                 agent_version="0.1.0",
                 agent_sha256="a" * 64,
                 worker_image_digest=f"registry.example.com/worker@sha256:{'b' * 64}",

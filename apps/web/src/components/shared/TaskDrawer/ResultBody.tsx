@@ -14,7 +14,7 @@ export function ResultBody({ error, result }: { error: string | null | undefined
   if (content === null) {
     return (
       <div className="flex h-24 items-center justify-center text-sm text-muted-foreground">
-        No output recorded
+        No result recorded
       </div>
     );
   }
@@ -23,13 +23,13 @@ export function ResultBody({ error, result }: { error: string | null | undefined
   return (
     <div className="flex min-h-full flex-col">
       <div className="flex h-10 shrink-0 items-center border-b border-border px-2">
-        <span className="px-1 text-xs text-muted-foreground">{error ? "Error" : "Output"}</span>
+        <span className="px-1 text-xs text-muted-foreground">{error ? "Error" : "Result"}</span>
         <div className="ml-auto flex items-center gap-1">
           <Button
             variant="ghost"
             size="icon"
-            aria-label={`Copy ${error ? "error" : "output"}`}
-            title={`Copy ${error ? "error" : "output"}`}
+            aria-label={`Copy ${error ? "error" : "result"}`}
+            title={`Copy ${error ? "error" : "result"}`}
             onClick={() => {
               void navigator.clipboard.writeText(content).then(() => {
                 setCopied(true);
@@ -42,9 +42,9 @@ export function ResultBody({ error, result }: { error: string | null | undefined
           <Button
             variant="ghost"
             size="icon"
-            aria-label={`Download ${error ? "error" : "output"}`}
-            title={`Download ${error ? "error" : "output"}`}
-            onClick={() => downloadText(`task-${error ? "error" : "output"}.${extension}`, content)}
+            aria-label={`Download ${error ? "error" : "result"}`}
+            title={`Download ${error ? "error" : "result"}`}
+            onClick={() => downloadText(`task-${error ? "error" : "result"}.${extension}`, content)}
           >
             <Download className="size-3.5" />
           </Button>

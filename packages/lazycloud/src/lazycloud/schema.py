@@ -171,16 +171,16 @@ class File(SchemaField):
         if raw is not None:
             path = Path(raw).expanduser()
             if path.is_file():
-                from lazycloud.abstractions.output import Output
+                from lazycloud.abstractions.artifact import Artifact
 
-                return Output.file(path).public_url()
+                return Artifact.file(path).public_url()
         if isinstance(value, PublicUrlProvider):
             return str(value.public_url())
 
         validated = self.validate(value)
-        from lazycloud.abstractions.output import Output
+        from lazycloud.abstractions.artifact import Artifact
 
-        return Output.from_file(_binary_reader(validated)).public_url()
+        return Artifact.from_file(_binary_reader(validated)).public_url()
 
 
 class Image(File):
@@ -224,10 +224,10 @@ class Image(File):
             handle.write(image.data)
             path = Path(handle.name)
         try:
-            from lazycloud.abstractions.output import Output
+            from lazycloud.abstractions.artifact import Artifact
 
             with path.open("rb") as handle:
-                return Output.from_file(handle, suffix=path.suffix).public_url()
+                return Artifact.from_file(handle, suffix=path.suffix).public_url()
         finally:
             path.unlink(missing_ok=True)
 
@@ -249,10 +249,10 @@ class Image(File):
             path = Path(handle.name)
         value.save(path, format=output_format, **save_params)
         try:
-            from lazycloud.abstractions.output import Output
+            from lazycloud.abstractions.artifact import Artifact
 
             with path.open("rb") as handle:
-                return Output.from_file(handle, suffix=path.suffix).public_url()
+                return Artifact.from_file(handle, suffix=path.suffix).public_url()
         finally:
             path.unlink(missing_ok=True)
 

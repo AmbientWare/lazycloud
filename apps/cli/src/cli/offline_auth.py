@@ -9,10 +9,14 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from control.service import ControlPlaneService
+from database.context import ServiceContext
 from identity.auth import AuthService, BootstrapAdminToken, IdentityDatabaseContext
 from identity.credential_files import CredentialFileError, CredentialFilePublication
 from lazycloud.cli.components.output import print_payload
 from shared.errors import ConflictError
+from shared.identity import WorkspaceStorageConfig
+from storage_client.s3 import S3ObjectStoreClient, S3ObjectStoreSettings
 
 from database import (
     ControlPlaneRecoveryFence,
@@ -59,6 +63,7 @@ def bootstrap_admin(
     database = DatabaseClient.from_settings(
         DatabaseSettings(application_name=DatabaseApplicationName.Admin)
     )
+    storage_client = S3ObjectStoreClient.from_settings(S3ObjectStoreSettings())
     try:
         service = AuthService(IdentityDatabaseContext(database))
         if configured_token is not None:
@@ -88,7 +93,10 @@ def bootstrap_admin(
                 ),
             )
         service.mark_admin_token_published(request_id=request_id, recovery=False)
+        # After the token, because this is the call that creates the workspace.
+        storage = _provision_workspace_storage(database, storage_client, result.record.workspace_id)
     finally:
+        storage_client.close()
         database.dispose()
     print_payload(
         ctx,
@@ -100,8 +108,29 @@ def bootstrap_admin(
             "credential_source": "configured_file" if configured_token is not None else "generated",
             "output": str(publication.resolved_output) if publication is not None else None,
             "mode": "0600" if publication is not None else None,
+            "workspace_storage_bucket": storage.bucket,
+            "workspace_storage_backend": storage.backend,
         },
     )
+
+
+def _provision_workspace_storage(
+    database: DatabaseClient,
+    storage_client: S3ObjectStoreClient,
+    workspace: str,
+) -> WorkspaceStorageConfig:
+    """Give the bootstrap workspace its storage before anyone can use it.
+
+    This is the one workspace not created through `create_workspace`, so it is
+    the one that would otherwise exist without a bucket. Doing it here, in the
+    one-shot job the control plane already waits on, keeps the API's own start
+    free of object-store I/O: a process that cannot reach storage should fail
+    at the operation that needs it, not refuse to serve the routes that do not.
+    """
+    context = ServiceContext.create(database, create_schema=False)
+    service = ControlPlaneService(context, workspace_storage_client=storage_client)
+    record = service.ensure_workspace_storage(workspace)
+    return record.storage
 
 
 @auth_app.command("recover")

@@ -5,7 +5,7 @@ from contextlib import ExitStack
 from pathlib import Path
 
 import pytest
-from agent.artifacts import AgentArtifactSettings
+from agent.binary import AgentBinarySettings
 from api.server.services import ApiServices
 from control.service import ControlPlaneService
 from coordination.redis_client import RedisClient
@@ -44,15 +44,15 @@ def isolated_services(tmp_path: Path) -> Iterator[ApiServices]:
         binary_redis_client=binary_redis,
         owns_redis_client=False,
         owns_binary_redis_client=False,
-        agent_artifact_settings=AgentArtifactSettings(
+        agent_binary_settings=AgentBinarySettings(
             binary_dir=tmp_path,
             artifact_version="test",
-            artifact_sha256_by_arch={"amd64": "0" * 64},
+            sha256_by_arch={"amd64": "0" * 64},
         ),
         aws_account_connection_settings=AwsAccountConnectionSettings(enabled=False),
         aws_capacity_settings=AwsCapacitySettings(
             worker_image_digest=f"worker@sha256:{'0' * 64}",
-            agent_artifact_url=(
+            agent_binary_url=(
                 f"https://s3.us-east-1.amazonaws.com/releases/agents/test/{'0' * 64}/"
                 "lazycloud-agent-linux-amd64"
             ),

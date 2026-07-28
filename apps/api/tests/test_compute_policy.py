@@ -7,7 +7,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from agent.artifacts import AgentArtifactSettings
+from agent.binary import AgentBinarySettings
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from compute.agent_control import agent_machine_worker_id
@@ -84,16 +84,16 @@ def _client(
 
 @dataclass(frozen=True, slots=True)
 class _AwsCatalogConfiguration:
-    agent_artifacts: AgentArtifactSettings
+    agent_binaries: AgentBinarySettings
     connection: AwsAccountConnectionSettings
     capacity: AwsCapacitySettings
 
 
 def _aws_catalog_configuration() -> _AwsCatalogConfiguration:
-    agent_artifact_settings = AgentArtifactSettings(
-        binary_dir=Path("/tmp/agent-artifacts"),
+    agent_binary_settings = AgentBinarySettings(
+        binary_dir=Path("/tmp/agent-binarys"),
         artifact_version="0.1.0",
-        artifact_sha256_by_arch={"amd64": "a" * 64},
+        sha256_by_arch={"amd64": "a" * 64},
     )
     template_identity = aws_account_connection_template_identity()
     aws_account_connection_settings = AwsAccountConnectionSettings(
@@ -105,7 +105,7 @@ def _aws_catalog_configuration() -> _AwsCatalogConfiguration:
     )
     aws_capacity_settings = AwsCapacitySettings(
         worker_image_digest=f"worker@sha256:{'b' * 64}",
-        agent_artifact_url=(
+        agent_binary_url=(
             f"https://s3.us-east-1.amazonaws.com/releases/agents/0.1.0/{'b' * 64}/"
             "lazycloud-agent-linux-amd64"
         ),
@@ -122,7 +122,7 @@ def _aws_catalog_configuration() -> _AwsCatalogConfiguration:
         },
     )
     return _AwsCatalogConfiguration(
-        agent_artifacts=agent_artifact_settings,
+        agent_binaries=agent_binary_settings,
         connection=aws_account_connection_settings,
         capacity=aws_capacity_settings,
     )
@@ -149,7 +149,7 @@ def _configured_aws_services(
             public_http_url=EXAMPLE_COM_URL,
             runtime_callback_http_url=EXAMPLE_COM_URL,
         ),
-        agent_artifact_settings=configuration.agent_artifacts,
+        agent_binary_settings=configuration.agent_binaries,
         aws_account_connection_settings=configuration.connection,
         aws_capacity_settings=configuration.capacity,
         tailnet_runtime_settings=tailnet_runtime_settings,
@@ -372,7 +372,7 @@ def test_policy_accepts_placement_during_authorization_replacement(
         available_catalog=configured_aws_compute_catalog(
             configuration.connection,
             configuration.capacity,
-            configuration.agent_artifacts,
+            configuration.agent_binaries,
         ),
     )
     current = policies.get_policy(workspace="default")
@@ -525,7 +525,7 @@ def test_deployment_placement_is_pinned_when_workspace_default_changes(
         available_catalog=configured_aws_compute_catalog(
             configuration.connection,
             configuration.capacity,
-            configuration.agent_artifacts,
+            configuration.agent_binaries,
         ),
     )
     workspace_id = _workspace_id(isolated_services)

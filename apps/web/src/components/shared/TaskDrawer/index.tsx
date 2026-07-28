@@ -24,6 +24,7 @@ import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/lib/workspace-context";
 
+import { ArtifactsTab } from "@/components/shared/TaskDrawer/ArtifactsTab";
 import { ContainerTab } from "@/components/shared/TaskDrawer/ContainerTab";
 import { LogViewer } from "@/components/shared/TaskDrawer/LogViewer";
 import { ResultBody } from "@/components/shared/TaskDrawer/ResultBody";
@@ -350,7 +351,8 @@ function TaskDrawerBody({
             className="shrink-0 bg-card px-2"
           >
             <LinearTab value="logs">Logs</LinearTab>
-            <LinearTab value="result">Output</LinearTab>
+            <LinearTab value="result">Result</LinearTab>
+            <LinearTab value="artifacts">Artifacts</LinearTab>
             <LinearTab value="trace">Trace</LinearTab>
             <LinearTab value="container">Container</LinearTab>
           </LinearTabsList>
@@ -365,8 +367,13 @@ function TaskDrawerBody({
             </PanelErrorBoundary>
           </TabsContent>
           <TabsContent value="result" className="m-0 min-h-0 flex-1 overflow-auto">
-            <PanelErrorBoundary key={taskId} title="Output could not be displayed">
+            <PanelErrorBoundary key={taskId} title="Result could not be displayed">
               <ResultBody error={record.error} result={record.result} />
+            </PanelErrorBoundary>
+          </TabsContent>
+          <TabsContent value="artifacts" className="m-0 min-h-0 flex-1 overflow-auto">
+            <PanelErrorBoundary key={taskId} title="Artifacts could not be displayed">
+              <ArtifactsTab workspaceId={workspace.id} taskId={taskId} />
             </PanelErrorBoundary>
           </TabsContent>
           <TabsContent value="trace" className="m-0 min-h-0 flex-1 overflow-auto">

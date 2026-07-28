@@ -483,9 +483,9 @@ lazycloud.io/external-secret-revision: {{ . | quote }}
 {{- end }}
 - name: LAZYCLOUD_AGENT_BINARY_DIR
   value: {{ .Values.agentArtifact.volume.mountPath | required "agentArtifact.volume.mountPath is required" | quote }}
-- name: LAZYCLOUD_AGENT_ARTIFACT_VERSION
+- name: LAZYCLOUD_AGENT_BINARY_VERSION
   value: {{ .Values.agentArtifact.version | quote }}
-- name: LAZYCLOUD_AGENT_ARTIFACT_SHA256_BY_ARCH
+- name: LAZYCLOUD_AGENT_BINARY_SHA256_BY_ARCH
   value: {{ dict "amd64" .Values.agentArtifact.sha256ByArch.amd64 | toJson | quote }}
 {{- end }}
 {{- if .Values.awsCapacity.enabled }}
@@ -504,7 +504,7 @@ lazycloud.io/external-secret-revision: {{ . | quote }}
   value: {{ .Values.awsCapacity.connectionTemplateUrl | required "awsCapacity.connectionTemplateUrl is required" | quote }}
 - name: LAZYCLOUD_AWS_CAPACITY_WORKER_IMAGE_DIGEST
   value: {{ .Values.awsCapacity.workerImageDigest | required "awsCapacity.workerImageDigest is required" | quote }}
-- name: LAZYCLOUD_AWS_CAPACITY_AGENT_ARTIFACT_URL
+- name: LAZYCLOUD_AWS_CAPACITY_AGENT_BINARY_URL
   value: {{ .Values.awsCapacity.agentArtifactUrl | required "awsCapacity.agentArtifactUrl is required" | quote }}
 - name: LAZYCLOUD_AWS_CAPACITY_CPU_AMI_IDS
   value: {{ .Values.awsCapacity.cpuAmiIds | required "awsCapacity.cpuAmiIds is required" | toJson | quote }}
@@ -604,26 +604,26 @@ lazycloud.io/external-secret-revision: {{ . | quote }}
   value: {{ .Values.imageBuild.container.addressWaitTimeoutSeconds | quote }}
 - name: LAZYCLOUD_IMAGE_BUILD_CONTAINER_ADDRESS_POLL_INTERVAL_SECONDS
   value: {{ .Values.imageBuild.container.addressPollIntervalSeconds | quote }}
-- name: LAZYCLOUD_ARTIFACT_RETENTION_ENABLED
-  value: {{ .Values.scheduler.artifactRetention.enabled | quote }}
-- name: LAZYCLOUD_ARTIFACT_RETENTION_INTERVAL_SECONDS
-  value: {{ .Values.scheduler.artifactRetention.intervalSeconds | quote }}
-- name: LAZYCLOUD_ARTIFACT_RETENTION_RETRY_INITIAL_SECONDS
-  value: {{ .Values.scheduler.artifactRetention.retryInitialSeconds | quote }}
-- name: LAZYCLOUD_ARTIFACT_RETENTION_RETRY_MAX_SECONDS
-  value: {{ .Values.scheduler.artifactRetention.retryMaxSeconds | quote }}
-- name: LAZYCLOUD_ARTIFACT_RETENTION_RECENT_STUB_TTL_SECONDS
-  value: {{ .Values.scheduler.artifactRetention.recentStubTtlSeconds | quote }}
-- name: LAZYCLOUD_ARTIFACT_RETENTION_SOURCE_GRACE_SECONDS
-  value: {{ .Values.scheduler.artifactRetention.sourceGraceSeconds | quote }}
-- name: LAZYCLOUD_ARTIFACT_RETENTION_CHECKPOINT_SECONDS
-  value: {{ .Values.scheduler.artifactRetention.checkpointSeconds | quote }}
-- name: LAZYCLOUD_ARTIFACT_RETENTION_BUILD_SECONDS
-  value: {{ .Values.scheduler.artifactRetention.buildSeconds | quote }}
-- name: LAZYCLOUD_ARTIFACT_RETENTION_IMAGE_SECONDS
-  value: {{ .Values.scheduler.artifactRetention.imageSeconds | quote }}
-- name: LAZYCLOUD_ARTIFACT_RETENTION_MAX_ITEMS_PER_CYCLE
-  value: {{ .Values.scheduler.artifactRetention.maxItemsPerCycle | quote }}
+- name: LAZYCLOUD_RETENTION_ENABLED
+  value: {{ .Values.scheduler.retention.enabled | quote }}
+- name: LAZYCLOUD_RETENTION_INTERVAL_SECONDS
+  value: {{ .Values.scheduler.retention.intervalSeconds | quote }}
+- name: LAZYCLOUD_RETENTION_RETRY_INITIAL_SECONDS
+  value: {{ .Values.scheduler.retention.retryInitialSeconds | quote }}
+- name: LAZYCLOUD_RETENTION_RETRY_MAX_SECONDS
+  value: {{ .Values.scheduler.retention.retryMaxSeconds | quote }}
+- name: LAZYCLOUD_RETENTION_RECENT_STUB_TTL_SECONDS
+  value: {{ .Values.scheduler.retention.recentStubTtlSeconds | quote }}
+- name: LAZYCLOUD_RETENTION_SOURCE_GRACE_SECONDS
+  value: {{ .Values.scheduler.retention.sourceGraceSeconds | quote }}
+- name: LAZYCLOUD_RETENTION_CHECKPOINT_SECONDS
+  value: {{ .Values.scheduler.retention.checkpointSeconds | quote }}
+- name: LAZYCLOUD_RETENTION_BUILD_SECONDS
+  value: {{ .Values.scheduler.retention.buildSeconds | quote }}
+- name: LAZYCLOUD_RETENTION_IMAGE_SECONDS
+  value: {{ .Values.scheduler.retention.imageSeconds | quote }}
+- name: LAZYCLOUD_RETENTION_MAX_ITEMS_PER_CYCLE
+  value: {{ .Values.scheduler.retention.maxItemsPerCycle | quote }}
 - name: LAZYCLOUD_USAGE_BILLING_CURRENCY
   value: {{ .Values.usage.billingCurrency | quote }}
 {{- if .Values.usage.priceCatalog }}
@@ -714,9 +714,9 @@ lazycloud.io/external-secret-revision: {{ . | quote }}
 {{- if .Values.agentArtifact.version }}
 - name: LAZYCLOUD_AGENT_BINARY_DIR
   value: {{ .Values.agentArtifact.volume.mountPath | required "agentArtifact.volume.mountPath is required" | quote }}
-- name: LAZYCLOUD_AGENT_ARTIFACT_VERSION
+- name: LAZYCLOUD_AGENT_BINARY_VERSION
   value: {{ .Values.agentArtifact.version | quote }}
-- name: LAZYCLOUD_AGENT_ARTIFACT_SHA256_BY_ARCH
+- name: LAZYCLOUD_AGENT_BINARY_SHA256_BY_ARCH
   value: {{ dict "amd64" .Values.agentArtifact.sha256ByArch.amd64 | toJson | quote }}
 {{- end }}
 {{- if .Values.awsCapacity.enabled }}
@@ -783,26 +783,26 @@ lazycloud.io/external-secret-revision: {{ . | quote }}
 - name: LAZYCLOUD_IMAGE_ARCHIVE_BACKEND__TRANSFER_MAX_CONCURRENCY
   value: {{ .Values.imageBuild.archive.backend.transferMaxConcurrency | quote }}
 {{- end }}
-- name: LAZYCLOUD_ARTIFACT_RETENTION_ENABLED
-  value: {{ .Values.scheduler.artifactRetention.enabled | quote }}
-- name: LAZYCLOUD_ARTIFACT_RETENTION_INTERVAL_SECONDS
-  value: {{ .Values.scheduler.artifactRetention.intervalSeconds | quote }}
-- name: LAZYCLOUD_ARTIFACT_RETENTION_RETRY_INITIAL_SECONDS
-  value: {{ .Values.scheduler.artifactRetention.retryInitialSeconds | quote }}
-- name: LAZYCLOUD_ARTIFACT_RETENTION_RETRY_MAX_SECONDS
-  value: {{ .Values.scheduler.artifactRetention.retryMaxSeconds | quote }}
-- name: LAZYCLOUD_ARTIFACT_RETENTION_RECENT_STUB_TTL_SECONDS
-  value: {{ .Values.scheduler.artifactRetention.recentStubTtlSeconds | quote }}
-- name: LAZYCLOUD_ARTIFACT_RETENTION_SOURCE_GRACE_SECONDS
-  value: {{ .Values.scheduler.artifactRetention.sourceGraceSeconds | quote }}
-- name: LAZYCLOUD_ARTIFACT_RETENTION_CHECKPOINT_SECONDS
-  value: {{ .Values.scheduler.artifactRetention.checkpointSeconds | quote }}
-- name: LAZYCLOUD_ARTIFACT_RETENTION_BUILD_SECONDS
-  value: {{ .Values.scheduler.artifactRetention.buildSeconds | quote }}
-- name: LAZYCLOUD_ARTIFACT_RETENTION_IMAGE_SECONDS
-  value: {{ .Values.scheduler.artifactRetention.imageSeconds | quote }}
-- name: LAZYCLOUD_ARTIFACT_RETENTION_MAX_ITEMS_PER_CYCLE
-  value: {{ .Values.scheduler.artifactRetention.maxItemsPerCycle | quote }}
+- name: LAZYCLOUD_RETENTION_ENABLED
+  value: {{ .Values.scheduler.retention.enabled | quote }}
+- name: LAZYCLOUD_RETENTION_INTERVAL_SECONDS
+  value: {{ .Values.scheduler.retention.intervalSeconds | quote }}
+- name: LAZYCLOUD_RETENTION_RETRY_INITIAL_SECONDS
+  value: {{ .Values.scheduler.retention.retryInitialSeconds | quote }}
+- name: LAZYCLOUD_RETENTION_RETRY_MAX_SECONDS
+  value: {{ .Values.scheduler.retention.retryMaxSeconds | quote }}
+- name: LAZYCLOUD_RETENTION_RECENT_STUB_TTL_SECONDS
+  value: {{ .Values.scheduler.retention.recentStubTtlSeconds | quote }}
+- name: LAZYCLOUD_RETENTION_SOURCE_GRACE_SECONDS
+  value: {{ .Values.scheduler.retention.sourceGraceSeconds | quote }}
+- name: LAZYCLOUD_RETENTION_CHECKPOINT_SECONDS
+  value: {{ .Values.scheduler.retention.checkpointSeconds | quote }}
+- name: LAZYCLOUD_RETENTION_BUILD_SECONDS
+  value: {{ .Values.scheduler.retention.buildSeconds | quote }}
+- name: LAZYCLOUD_RETENTION_IMAGE_SECONDS
+  value: {{ .Values.scheduler.retention.imageSeconds | quote }}
+- name: LAZYCLOUD_RETENTION_MAX_ITEMS_PER_CYCLE
+  value: {{ .Values.scheduler.retention.maxItemsPerCycle | quote }}
 - name: LAZYCLOUD_USAGE_BILLING_CURRENCY
   value: {{ .Values.usage.billingCurrency | quote }}
 {{- if .Values.usage.priceCatalog }}

@@ -8,9 +8,9 @@ from shared.tasks import RetryBackoff, RetryPolicy, TaskPolicy
 from lazycloud import env, schema
 from lazycloud.abstractions import experimental
 from lazycloud.abstractions.app import App
+from lazycloud.abstractions.artifact import Artifact
 from lazycloud.abstractions.image import Image
 from lazycloud.abstractions.map import Map
-from lazycloud.abstractions.output import Output
 from lazycloud.abstractions.pod import Container
 from lazycloud.abstractions.queue import Queue
 from lazycloud.abstractions.sandbox import (
@@ -38,6 +38,7 @@ from lazycloud.session.task import FunctionCall, Task
 
 __all__ = [
     "App",
+    "Artifact",
     "Client",
     "CloudBucket",
     "CloudBucketConfig",
@@ -49,7 +50,6 @@ __all__ = [
     "Image",
     "LinuxArchitecture",
     "Map",
-    "Output",
     "Pool",
     "PythonVersion",
     "Queue",

@@ -16,7 +16,7 @@ from provider_aws.managed_pool import (
 )
 
 _AGENT_SHA256 = "a" * 64
-_AGENT_ARTIFACT_URL = (
+_AGENT_BINARY_URL = (
     f"https://s3.us-east-1.amazonaws.com/releases/agents/0.1.0/{_AGENT_SHA256}/"
     "lazycloud-agent-linux-amd64"
 )
@@ -44,7 +44,7 @@ def _spec() -> AwsManagedPoolSpec:
             enrollment_request_id="12345678-1234-4123-8123-123456789abc",
             agent_version="0.1.0",
             agent_sha256=_AGENT_SHA256,
-            agent_artifact_url=_AGENT_ARTIFACT_URL,
+            agent_binary_url=_AGENT_BINARY_URL,
             worker_image_digest=f"registry.example.com/worker@sha256:{'b' * 64}",
         ),
     )
@@ -70,8 +70,8 @@ def test_bootstrap_script_reports_phases_and_bounded_failures_without_gateway_in
     # The gateway install route is never used: the agent binary comes from the
     # release artifact URL and is digest-verified before it runs.
     assert "/install/agent" not in script
-    assert _AGENT_ARTIFACT_URL in script
-    assert 'curl -fsSL --retry 5 --retry-delay 2 "$AGENT_ARTIFACT_URL" -o "$agent_download"' in (
+    assert _AGENT_BINARY_URL in script
+    assert 'curl -fsSL --retry 5 --retry-delay 2 "$AGENT_BINARY_URL" -o "$agent_download"' in (
         script
     )
     assert '[ "$(sha256sum "$agent_download" | awk \'{print $1}\')" != "$AGENT_SHA256" ]' in script

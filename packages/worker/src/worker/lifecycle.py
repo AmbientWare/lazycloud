@@ -7,13 +7,13 @@ from pathlib import Path
 
 from pydantic import Field, JsonValue, TypeAdapter, ValidationError, field_validator
 from shared.container_requests import (
-    DEFAULT_OUTPUTS_PATH,
-    DEFAULT_OUTPUTS_PREFIX,
+    DEFAULT_ARTIFACTS_PATH,
+    DEFAULT_ARTIFACTS_PREFIX,
     DEFAULT_VOLUMES_PATH,
     DEFAULT_VOLUMES_PREFIX,
     DEFAULT_WORKSPACE_STORAGE_BASE_MOUNT_PATH,
     WORKER_CONTAINER_VOLUME_PATH,
-    WORKER_USER_OUTPUT_VOLUME,
+    WORKER_USER_ARTIFACT_VOLUME,
     RequestMount,
     RequestMountType,
     WorkerStartupKind,
@@ -606,8 +606,8 @@ def adjust_mount_for_workspace_storage(
             }
         )
     mount_path = mount.mount_path.rstrip("/")
-    if mount_path != WORKER_USER_OUTPUT_VOLUME and not mount_path.startswith(
-        WORKER_USER_OUTPUT_VOLUME + "/"
+    if mount_path != WORKER_USER_ARTIFACT_VOLUME and not mount_path.startswith(
+        WORKER_USER_ARTIFACT_VOLUME + "/"
     ):
         return mount
     return mount.model_copy(
@@ -615,8 +615,8 @@ def adjust_mount_for_workspace_storage(
             "local_path": rewrite_workspace_storage_local_path(
                 mount.local_path,
                 workspace_name=workspace_name,
-                source_root=DEFAULT_OUTPUTS_PATH,
-                target_prefix=DEFAULT_OUTPUTS_PREFIX,
+                source_root=DEFAULT_ARTIFACTS_PATH,
+                target_prefix=DEFAULT_ARTIFACTS_PREFIX,
                 base_mount_path=base_mount_path,
             )
         }

@@ -21,9 +21,9 @@ from the server, never browser joins over unrelated workspace lists.
   telemetry, or actions.
 - `/tasks` is the server-filtered, cursor-paginated workspace feed. `TaskDrawer`
   is shared across global/app/workload routes and owns authorized actions,
-  timing/lifecycle, logs, output, trace, and container inspection. Lifecycle
-  shows Queued, Container preparation, and Execution; internal preparation
-  events do not become extra customer phases.
+  timing/lifecycle, and its Logs, Result, Artifacts, Trace, and Container tabs.
+  Lifecycle shows Queued, Container preparation, and Execution; internal
+  preparation events do not become extra customer phases.
 - Execution containers are inspected through their Task, not a standalone
   customer route or search result. Sandbox detail owns Terminal, Files,
   Processes, and Network. Shell uses the authenticated WebSocket proxy and

@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
-from agent.artifacts import AgentArtifactSettings
+from agent.binary import AgentBinarySettings
 from api.server.services import ApiServices
 from coordination.redis_client import RedisClient
 from execution.collections.redis import (
@@ -71,10 +71,10 @@ def isolated_services(tmp_path: Path) -> Iterator[ApiServices]:
         simple_queue_service=simple_queues,
         volume_filesystem=volume_filesystem,
         workspace_storage_client=_InMemoryWorkspaceBuckets(),
-        agent_artifact_settings=AgentArtifactSettings(
+        agent_binary_settings=AgentBinarySettings(
             binary_dir=tmp_path,
             artifact_version="test",
-            artifact_sha256_by_arch={"amd64": "a" * 64},
+            sha256_by_arch={"amd64": "a" * 64},
         ),
     )
     services.control_plane_service.upsert_workspace("default")

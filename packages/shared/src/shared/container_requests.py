@@ -7,13 +7,13 @@ from shared.enums import StringEnum
 from shared.mounts import MountAuthMode, normalize_mount_prefix, validate_mount_auth
 
 WORKER_USER_CODE_VOLUME = "/mnt/code"
-WORKER_USER_OUTPUT_VOLUME = "/outputs"
+WORKER_USER_ARTIFACT_VOLUME = "/artifacts"
 WORKER_CONTAINER_VOLUME_PATH = "/volumes"
 DEFAULT_VOLUMES_PATH = "/data/volumes"
 DEFAULT_OBJECTS_PATH = "/data/objects"
-DEFAULT_OUTPUTS_PATH = "/data/outputs"
+DEFAULT_ARTIFACTS_PATH = "/data/artifacts"
 DEFAULT_VOLUMES_PREFIX = "volumes"
-DEFAULT_OUTPUTS_PREFIX = "outputs"
+DEFAULT_ARTIFACTS_PREFIX = "artifacts"
 DEFAULT_WORKSPACE_STORAGE_BASE_MOUNT_PATH = "/workspace"
 CONTAINER_INNER_PORT = 8001
 
@@ -156,15 +156,15 @@ class WorkerContainerRequestPayload(ContractModel):
 
 __all__ = [
     "CONTAINER_INNER_PORT",
+    "DEFAULT_ARTIFACTS_PATH",
+    "DEFAULT_ARTIFACTS_PREFIX",
     "DEFAULT_OBJECTS_PATH",
-    "DEFAULT_OUTPUTS_PATH",
-    "DEFAULT_OUTPUTS_PREFIX",
     "DEFAULT_VOLUMES_PATH",
     "DEFAULT_VOLUMES_PREFIX",
     "DEFAULT_WORKSPACE_STORAGE_BASE_MOUNT_PATH",
     "WORKER_CONTAINER_VOLUME_PATH",
+    "WORKER_USER_ARTIFACT_VOLUME",
     "WORKER_USER_CODE_VOLUME",
-    "WORKER_USER_OUTPUT_VOLUME",
     "ContainerShutdownTarget",
     "OciRuntimeName",
     "RequestMount",

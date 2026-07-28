@@ -5,10 +5,10 @@ from contextlib import ExitStack
 from dataclasses import dataclass, field
 from threading import Lock
 
-from agent.artifacts import AgentArtifactSettings
+from agent.binary import AgentBinarySettings
 from coordination.redis_client import RedisClient, RedisSettings
+from execution.artifacts.service import ArtifactStorageService
 from execution.collections.redis import RedisMapService, RedisSimpleQueueService
-from execution.outputs.service import OutputStorageService
 from execution.pods.service import PodControlService
 from execution.shells.service import ShellControlService
 from execution.signals.redis import RedisSignalService
@@ -46,7 +46,7 @@ from provider_clients.settings import (
 from shared.app_identity import CONTROL_PLANE_SERVICE_NAME
 from shared.enums import StringEnum
 from storage.image_archive import ImageArchiveSettings
-from storage.retention_settings import ArtifactRetentionSettings
+from storage.retention_settings import RetentionSettings
 from storage_client.s3 import S3ObjectStoreClient, S3ObjectStoreSettings
 from worker.settings import ContainerServiceSettings
 
@@ -107,7 +107,7 @@ class ControlPlaneRuntime:
         signal_service: RedisSignalService | None = None,
         map_service: RedisMapService | None = None,
         simple_queue_service: RedisSimpleQueueService | None = None,
-        output_service: OutputStorageService | None = None,
+        artifact_service: ArtifactStorageService | None = None,
         endpoint_service: EndpointApiService | None = None,
         function_service: FunctionApiService | None = None,
         gateway_service: GatewayControlService | None = None,
@@ -122,7 +122,7 @@ class ControlPlaneRuntime:
             signal_service,
             map_service,
             simple_queue_service,
-            output_service,
+            artifact_service,
             endpoint_service,
             function_service,
             gateway_service,
@@ -138,7 +138,7 @@ class ControlPlaneRuntime:
                 signal_service=signal_service,
                 map_service=map_service,
                 simple_queue_service=simple_queue_service,
-                output_service=output_service,
+                artifact_service=artifact_service,
                 endpoint_service=endpoint_service,
                 function_service=function_service,
                 gateway_service=gateway_service,
@@ -216,7 +216,7 @@ def _production_api_services() -> ApiServices:
     capacity_bootstrap_settings = CapacityBootstrapSettings()
     gateway_settings = GatewaySettings()
     workspace_change_stream_settings = WorkspaceChangeStreamSettings()
-    agent_artifact_settings = AgentArtifactSettings()
+    agent_binary_settings = AgentBinarySettings()
     aws_account_connection_settings = AwsAccountConnectionSettings()
     aws_capacity_settings = AwsCapacitySettings()
     aws_capacity_reconciliation_settings = AwsCapacityReconciliationSettings()
@@ -227,7 +227,7 @@ def _production_api_services() -> ApiServices:
     image_build_registry_settings = ImageBuildRegistrySettings()
     image_build_container_settings = ImageBuildContainerSettings()
     container_service_settings = ContainerServiceSettings()
-    artifact_retention_settings = ArtifactRetentionSettings()
+    retention_settings = RetentionSettings()
     usage_metrics_settings = UsageMetricsSettings()
     usage_pricing_settings = UsagePricingSettings()
     managed_billing_settings = ManagedBillingClientSettings()
@@ -269,7 +269,7 @@ def _production_api_services() -> ApiServices:
             agent_route_reconciliation_settings=agent_route_reconciliation_settings,
             gateway_settings=gateway_settings,
             workspace_change_stream_settings=workspace_change_stream_settings,
-            agent_artifact_settings=agent_artifact_settings,
+            agent_binary_settings=agent_binary_settings,
             aws_account_connection_settings=aws_account_connection_settings,
             aws_capacity_settings=aws_capacity_settings,
             aws_capacity_reconciliation_settings=aws_capacity_reconciliation_settings,
@@ -284,7 +284,7 @@ def _production_api_services() -> ApiServices:
             image_build_registry_settings=image_build_registry_settings,
             image_build_container_settings=image_build_container_settings,
             container_service_settings=container_service_settings,
-            artifact_retention_settings=artifact_retention_settings,
+            retention_settings=retention_settings,
             usage_metrics_settings=usage_metrics_settings,
             usage_pricing_settings=usage_pricing_settings,
             managed_billing_settings=managed_billing_settings,

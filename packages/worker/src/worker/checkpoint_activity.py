@@ -8,7 +8,7 @@ from types import TracebackType
 
 
 @dataclass(slots=True)
-class CheckpointArtifactLeaseRegistry:
+class CheckpointLeaseRegistry:
     _active: dict[str, int] = field(default_factory=dict, init=False)
     _materializations: dict[str, _CheckpointMaterializationState] = field(
         default_factory=dict,
@@ -28,7 +28,7 @@ class CheckpointArtifactLeaseRegistry:
             return set(self._active)
 
     def acquire_materialization(self, checkpoint_id: str) -> CheckpointMaterializationLease:
-        artifact_lease = self.acquire(checkpoint_id)
+        checkpoint_lease = self.acquire(checkpoint_id)
         with self._lock:
             state = self._materializations.get(checkpoint_id)
             if state is None:
@@ -39,13 +39,13 @@ class CheckpointArtifactLeaseRegistry:
             state.token.acquire()
         except BaseException:
             self._release_materialization_reference(checkpoint_id, state)
-            artifact_lease.close()
+            checkpoint_lease.close()
             raise
         return CheckpointMaterializationLease(
             registry=self,
             checkpoint_id=checkpoint_id,
             state=state,
-            artifact_lease=artifact_lease,
+            checkpoint_lease=checkpoint_lease,
         )
 
     @contextmanager
@@ -101,7 +101,7 @@ class _CheckpointMaterializationState:
 
 @dataclass(slots=True)
 class CheckpointArtifactLease:
-    registry: CheckpointArtifactLeaseRegistry
+    registry: CheckpointLeaseRegistry
     checkpoint_id: str
     _closed: bool = field(default=False, init=False)
 
@@ -126,10 +126,10 @@ class CheckpointArtifactLease:
 
 @dataclass(slots=True)
 class CheckpointMaterializationLease:
-    registry: CheckpointArtifactLeaseRegistry
+    registry: CheckpointLeaseRegistry
     checkpoint_id: str
     state: _CheckpointMaterializationState
-    artifact_lease: CheckpointArtifactLease
+    checkpoint_lease: CheckpointArtifactLease
     _closed: bool = field(default=False, init=False)
 
     def close(self) -> None:
@@ -138,7 +138,7 @@ class CheckpointMaterializationLease:
         try:
             self.registry.release_materialization(self.checkpoint_id, self.state)
         finally:
-            self.artifact_lease.close()
+            self.checkpoint_lease.close()
             self._closed = True
 
     def __enter__(self) -> CheckpointMaterializationLease:

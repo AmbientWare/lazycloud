@@ -57,7 +57,7 @@ from worker.configuration import (
 from worker.events import WorkerPoolMode
 from worker.runtime_config import OciRuntimeName
 
-from agent.artifacts import normalize_agent_artifact_config, normalize_agent_binary_name
+from agent.binary import normalize_agent_artifact_config, normalize_agent_binary_name
 from agent.service_manager import (
     DEFAULT_AGENT_STATE_DIR,
     AgentServiceRuntimeStatus,
@@ -202,12 +202,12 @@ def build_agent_install_script(
     *,
     binary_name: str = AGENT_NAME,
     artifact_version: str = "",
-    artifact_sha256_by_arch: Mapping[str, str] | None = None,
+    sha256_by_arch: Mapping[str, str] | None = None,
 ) -> str:
     name = normalize_agent_binary_name(binary_name)
     version, digests = normalize_agent_artifact_config(
         artifact_version,
-        artifact_sha256_by_arch or {},
+        sha256_by_arch or {},
     )
     amd64_sha256 = digests.get("amd64", "")
     arm64_sha256 = digests.get("arm64", "")

@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from images.managed_runtime_artifacts import ManagedRuntimeCatalogManifest
+from images.managed_runtime import ManagedRuntimeCatalogManifest
 from tests.managed_runtime_fakes import managed_runtime_catalog_root
 from worker.managed_runtime import (
     MANAGED_RUNTIME_CATALOG_DIGEST_ENV,

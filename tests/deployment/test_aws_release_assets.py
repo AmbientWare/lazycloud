@@ -18,7 +18,7 @@ def _agent_version_dir(
     version: str,
     payload: bytes = b"\x7fELFstandalone-agent",
 ) -> Path:
-    version_root = root / "agent-artifacts" / version
+    version_root = root / "agent-binarys" / version
     version_root.mkdir(parents=True)
     agent = version_root / "lazycloud-agent-linux-amd64"
     agent.write_bytes(payload)
@@ -65,13 +65,13 @@ def test_stage_release_binds_exact_immutable_runtime_assets(tmp_path: Path) -> N
     assert manifest.agent_artifact_version == "release-123"
     assert manifest.container_worker_image.endswith(f"@sha256:{'c' * 64}")
     assert manifest.deployment_environment == {
-        "LAZYCLOUD_AGENT_ARTIFACT_SHA256_BY_ARCH": json.dumps(
+        "LAZYCLOUD_AGENT_BINARY_SHA256_BY_ARCH": json.dumps(
             {"amd64": manifest.agent_artifact_sha256},
             sort_keys=True,
             separators=(",", ":"),
         ),
-        "LAZYCLOUD_AGENT_ARTIFACT_VERSION": "release-123",
-        "LAZYCLOUD_AWS_CAPACITY_AGENT_ARTIFACT_URL": next(
+        "LAZYCLOUD_AGENT_BINARY_VERSION": "release-123",
+        "LAZYCLOUD_AWS_CAPACITY_AGENT_BINARY_URL": next(
             item.public_url
             for item in manifest.objects
             if item.object_key.endswith(
@@ -91,7 +91,7 @@ def test_stage_release_binds_exact_immutable_runtime_assets(tmp_path: Path) -> N
         tmp_path / "release" / "release-123" / "manifest.json",
         manifest,
     )
-    assert retained == (tmp_path / "release" / "release-123" / "agent-artifacts").resolve()
+    assert retained == (tmp_path / "release" / "release-123" / "agent-binarys").resolve()
     assert (
         aws_release_assets.validate_local_release(
             tmp_path / "release" / "release-123" / "manifest.json",
@@ -165,9 +165,9 @@ def test_stage_release_rejects_non_elf_agent(tmp_path: Path) -> None:
 
 def test_stage_release_rejects_mutating_an_existing_version(tmp_path: Path) -> None:
     _stage(tmp_path, version="same-version")
-    agent = tmp_path / "agent-artifacts" / "same-version" / "lazycloud-agent-linux-amd64"
+    agent = tmp_path / "agent-binarys" / "same-version" / "lazycloud-agent-linux-amd64"
     agent.write_bytes(b"\x7fELFchanged-agent")
-    manifest_path = tmp_path / "agent-artifacts" / "same-version" / "manifest.json"
+    manifest_path = tmp_path / "agent-binarys" / "same-version" / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["artifacts"][0]["sha256"] = aws_release_assets._sha256(agent)
     manifest["artifacts"][0]["size_bytes"] = agent.stat().st_size

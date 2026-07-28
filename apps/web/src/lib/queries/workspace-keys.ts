@@ -57,6 +57,8 @@ export const workspaceQueryKeys = {
       [...workspaceRoot(workspaceId), "tasks", "detail"] as const,
     detail: (workspaceId: string, taskId: string) =>
       [...workspaceRoot(workspaceId), "tasks", "detail", taskId] as const,
+    artifacts: (workspaceId: string, taskId: string) =>
+      [...workspaceRoot(workspaceId), "tasks", "artifacts", taskId] as const,
     callGraphs: (workspaceId: string) =>
       [...workspaceRoot(workspaceId), "tasks", "call-graph"] as const,
     callGraph: (workspaceId: string, rootTaskId: string) =>

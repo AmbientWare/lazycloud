@@ -910,11 +910,24 @@ class S3ObjectStoreClient(Generic[S3ClientT]):
         return client
 
 
+# A connect to a reachable store is milliseconds; the read timeout is per socket
+# read rather than a whole-transfer deadline, so it does not cap large uploads.
+OBJECT_STORE_CONNECT_TIMEOUT_SECONDS = 5
+OBJECT_STORE_READ_TIMEOUT_SECONDS = 60
+OBJECT_STORE_MAX_ATTEMPTS = 3
+
+
 def _new_s3_client(settings: S3ObjectStoreSettings, endpoint_url: str | None) -> _FullS3Client:
     s3_config = Config(
         region_name=settings.region_name,
         signature_version="s3v4",
         s3={"addressing_style": "path" if settings.force_path_style else "virtual"},
+        # Unbounded by default, which turns an unreachable object store into a
+        # parked thread rather than an error. Sync routes run on a bounded
+        # worker pool, so that is how one outage becomes a stalled API.
+        connect_timeout=OBJECT_STORE_CONNECT_TIMEOUT_SECONDS,
+        read_timeout=OBJECT_STORE_READ_TIMEOUT_SECONDS,
+        retries={"mode": "standard", "max_attempts": OBJECT_STORE_MAX_ATTEMPTS},
     )
     boto3_module: ModuleType = boto3
     if not _is_boto3_s3_client_factory(boto3_module):

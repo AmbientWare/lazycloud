@@ -18,7 +18,7 @@ SDK_OBJECTS: tuple[type[Any], ...] = (
     lazycloud.Secret,
     lazycloud.Volume,
     lazycloud.Container,
-    lazycloud.Output,
+    lazycloud.Artifact,
     lazycloud.Client,
     lazycloud.Task,
     lazycloud.Deployment,
