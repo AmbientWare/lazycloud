@@ -41,10 +41,10 @@ class _InMemoryWorkspaceBuckets:
     )
     created: list[str] = field(default_factory=list)
 
-    def create_bucket(self, bucket: str) -> None:
-        self.created.append(bucket)
+    def create_bucket(self, bucket: str | None = None) -> None:
+        self.created.append(bucket or self.settings.bucket)
 
-    def validate_bucket_access(self, bucket: str) -> None:
+    def validate_bucket_access(self, bucket: str | None = None) -> None:
         del bucket
 
 
