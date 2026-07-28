@@ -60,18 +60,12 @@ function WorkspaceDeletionRecovery({ workspace }: { workspace: Workspace }) {
     <main className="flex min-h-screen items-center justify-center bg-background p-4">
       <section className="panel w-full max-w-lg rounded-md p-5">
         <div className="flex items-start gap-3">
-          <TriangleAlert
-            className="mt-0.5 size-5 shrink-0 text-destructive"
-            aria-hidden="true"
-          />
+          <TriangleAlert className="mt-0.5 size-5 shrink-0 text-destructive" aria-hidden="true" />
           <div className="min-w-0 flex-1">
-            <h1 className="text-lg font-semibold">
-              Deletion is incomplete for {workspace.name}
-            </h1>
+            <h1 className="text-lg font-semibold">Deletion is incomplete for {workspace.name}</h1>
             <p className="mt-1 text-sm leading-6 text-muted-foreground">
-              Normal workspace operations are paused while cleanup is in
-              progress. Resume the idempotent deletion to finish cleanup, or
-              switch to another workspace.
+              Normal workspace operations are paused while cleanup is in progress. Resume the
+              idempotent deletion to finish cleanup, or switch to another workspace.
             </p>
             {deletion.canManage ? (
               <Button

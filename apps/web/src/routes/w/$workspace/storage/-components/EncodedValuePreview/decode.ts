@@ -1,7 +1,5 @@
 export type DecodedValue =
-  | { kind: "empty" }
-  | { kind: "binary"; size: number }
-  | { kind: "text"; value: string };
+  { kind: "empty" } | { kind: "binary"; size: number } | { kind: "text"; value: string };
 
 export function decodeEncodedValue(valueBase64: string): DecodedValue {
   if (!valueBase64) return { kind: "empty" };

@@ -36,8 +36,7 @@ export function useWorkspaceDeletionController({
   const [confirmation, setConfirmation] = useState("");
 
   const remove = useMutation({
-    mutationFn: (requested: WorkspaceDeletionTarget) =>
-      deleteCommand(requested.workspace.id),
+    mutationFn: (requested: WorkspaceDeletionTarget) => deleteCommand(requested.workspace.id),
     onSuccess: async (_result, requested) => {
       const workspaceId = requested.workspace.id;
       const rootKey = workspaceQueryKeys.root(workspaceId);
@@ -46,23 +45,16 @@ export function useWorkspaceDeletionController({
       await queryClient.cancelQueries({ queryKey: rootKey });
       queryClient.removeQueries({ queryKey: rootKey });
 
-      const latestDirectory =
-        queryClient.getQueryData<Workspace[]>(directoryKey) ?? workspaces;
+      const latestDirectory = queryClient.getQueryData<Workspace[]>(directoryKey) ?? workspaces;
       const remaining = latestDirectory.filter((item) => item.id !== workspaceId);
       queryClient.setQueryData(directoryKey, remaining);
 
-      const nextWorkspace =
-        remaining.find((item) => item.status === "active") ?? remaining[0];
-      if (
-        nextWorkspace &&
-        (requested.selected || lastWorkspaceName === requested.workspace.name)
-      ) {
+      const nextWorkspace = remaining.find((item) => item.status === "active") ?? remaining[0];
+      if (nextWorkspace && (requested.selected || lastWorkspaceName === requested.workspace.name)) {
         rememberWorkspaceName(nextWorkspace.name);
       }
       if (requested.selected && nextWorkspace) {
-        replacePath(
-          `/w/${encodeURIComponent(nextWorkspace.name)}/apps`,
-        );
+        replacePath(`/w/${encodeURIComponent(nextWorkspace.name)}/apps`);
       }
 
       setTarget(null);
@@ -87,14 +79,8 @@ export function useWorkspaceDeletionController({
     if (workspace.status === "deleting") {
       return { allowed: true as const };
     }
-    const activeWorkspaceCount = workspaces.filter(
-      (item) => item.status === "active",
-    ).length;
-    return workspaceDeleteAvailability(
-      workspace,
-      currentWorkspaceId,
-      activeWorkspaceCount,
-    );
+    const activeWorkspaceCount = workspaces.filter((item) => item.status === "active").length;
+    return workspaceDeleteAvailability(workspace, currentWorkspaceId, activeWorkspaceCount);
   };
 
   const begin = (workspace: Workspace, selected: boolean) => {
@@ -138,6 +124,4 @@ export function useWorkspaceDeletionController({
   };
 }
 
-export type WorkspaceDeletionController = ReturnType<
-  typeof useWorkspaceDeletionController
->;
+export type WorkspaceDeletionController = ReturnType<typeof useWorkspaceDeletionController>;

@@ -4,7 +4,14 @@ import { Link, type LinkProps } from "@tanstack/react-router";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { StubKindIcon } from "@/components/shared/StubKindIcon";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import type { Task } from "@/lib/api/schemas";
 import { durationBetween, relativeTime, startupBetween } from "@/lib/format";
 import { cn } from "@/lib/utils";

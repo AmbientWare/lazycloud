@@ -166,18 +166,14 @@ export const customerComputeCatalogSchema = z
   })
   .strict();
 
-export const poolJoinCommandResponseSchema = z.object({
-  command: z.string(),
-  expires_at: z.string(),
-}).strict();
+export const poolJoinCommandResponseSchema = z
+  .object({
+    command: z.string(),
+    expires_at: z.string(),
+  })
+  .strict();
 
-const machineReadinessPhaseSchema = z.enum([
-  "joining",
-  "ready",
-  "blocked",
-  "offline",
-  "revoked",
-]);
+const machineReadinessPhaseSchema = z.enum(["joining", "ready", "blocked", "offline", "revoked"]);
 
 const machinePreflightSeveritySchema = z.enum(["info", "warning", "error"]);
 const agentCapacityStateSchema = z.enum(["available", "preempting", "cordoned"]);

@@ -187,9 +187,7 @@ const LANES: Lane[] = [
 
 function activeAt(slot: Slot, clock: number): Assignment | undefined {
   return slot.assignments.find(
-    (assignment) =>
-      clock >= assignment.start &&
-      clock < assignment.start + assignment.duration,
+    (assignment) => clock >= assignment.start && clock < assignment.start + assignment.duration,
   );
 }
 
@@ -233,25 +231,19 @@ export function LiveComputePreview() {
   const clock = (START_SECONDS + ticks * TICK_SECONDS) % LOOP_SECONDS;
   const uptime = BASE_UPTIME_SECONDS + START_SECONDS + ticks * TICK_SECONDS;
 
-  const active = LANES.map((lane) =>
-    lane.slots.map((slot) => activeAt(slot, clock)),
-  );
+  const active = LANES.map((lane) => lane.slots.map((slot) => activeAt(slot, clock)));
   const laneCounts = active.map(
     (slots) => slots.filter((assignment) => assignment !== undefined).length,
   );
   const running = laneCounts.reduce((total, count) => total + count, 0);
-  const volumeMounts = active
-    .flat()
-    .filter((assignment) => assignment?.volume).length;
+  const volumeMounts = active.flat().filter((assignment) => assignment?.volume).length;
 
   return (
     <div
       role="group"
       aria-label="Live placement map of workloads on managed serverless capacity, connected AWS, and self-hosted Linux machines"
       className="marketing-compute-preview flex min-h-0 flex-1 flex-col gap-2 p-3"
-      data-animation-state={
-        reducedMotion ? "settled" : previewActive ? "running" : "paused"
-      }
+      data-animation-state={reducedMotion ? "settled" : previewActive ? "running" : "paused"}
       ref={previewRef}
     >
       <div className="compute-overview grid grid-cols-4 gap-1.5">
@@ -283,14 +275,9 @@ export function LiveComputePreview() {
           <div className="compute-lane-heading flex items-baseline justify-between gap-2 font-mono text-[8px]">
             <span className="truncate text-[var(--foreground)]">
               {lane.name}
-              <span className="text-[var(--muted-foreground)]">
-                {" "}
-                · {lane.meta}
-              </span>
+              <span className="text-[var(--muted-foreground)]"> · {lane.meta}</span>
             </span>
-            <code className="shrink-0 text-[var(--positive)]">
-              {laneCounts[laneIndex]} running
-            </code>
+            <code className="shrink-0 text-[var(--positive)]">{laneCounts[laneIndex]} running</code>
           </div>
           <div className="compute-slots grid min-h-0 flex-1 grid-cols-2 gap-1.5">
             {lane.slots.map((slot, slotIndex) => {
@@ -312,8 +299,7 @@ export function LiveComputePreview() {
               }
 
               const elapsed = clock - assignment.start;
-              const placing =
-                !assignment.persistent && elapsed < PLACING_SECONDS;
+              const placing = !assignment.persistent && elapsed < PLACING_SECONDS;
               const elapsedText = assignment.persistent
                 ? `up ${formatUptime(uptime)}`
                 : `${elapsed.toFixed(1)}s`;
@@ -348,11 +334,7 @@ export function LiveComputePreview() {
                       {slot.machine ? `${slot.machine} · ` : ""}
                       {assignment.kind} · {assignment.resource}
                     </span>
-                    <code
-                      className={
-                        placing ? "shrink-0 text-[var(--warning)]" : "shrink-0"
-                      }
-                    >
+                    <code className={placing ? "shrink-0 text-[var(--warning)]" : "shrink-0"}>
                       {placing ? "placing" : elapsedText}
                     </code>
                   </span>
@@ -371,9 +353,8 @@ export function LiveComputePreview() {
           {'Volume("artifacts")'} · /artifacts
         </span>
         <span className="shrink-0 text-[var(--muted-foreground)]">
-          mounted in{" "}
-          <strong className="text-[var(--foreground)]">{volumeMounts}</strong>{" "}
-          running containers
+          mounted in <strong className="text-[var(--foreground)]">{volumeMounts}</strong> running
+          containers
         </span>
       </div>
 
@@ -381,12 +362,9 @@ export function LiveComputePreview() {
         {recentPlacements(clock).map((event) => (
           <span key={event.assignment.name} className="truncate">
             <span className="text-[var(--positive)]">↳</span> placed{" "}
-            <span className="text-[var(--foreground)]">
-              {event.assignment.name}
-            </span>
+            <span className="text-[var(--foreground)]">{event.assignment.name}</span>
             {" → "}
-            {event.target} · {event.assignment.resource} ·{" "}
-            {Math.max(1, Math.floor(event.ago))}s ago
+            {event.target} · {event.assignment.resource} · {Math.max(1, Math.floor(event.ago))}s ago
           </span>
         ))}
       </div>

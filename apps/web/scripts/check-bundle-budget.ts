@@ -26,7 +26,8 @@ type AssetSize = {
 };
 
 const files = await filesUnder(DIST_DIR);
-if (!files.length) throw new Error("Production client build is missing; run `bun run build` first.");
+if (!files.length)
+  throw new Error("Production client build is missing; run `bun run build` first.");
 
 const assets = await Promise.all(files.map(assetSize));
 const javascript = assets.filter((asset) => asset.extension === ".js");

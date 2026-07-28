@@ -155,18 +155,11 @@ function StateCell({
   return (
     <div className="min-w-0 rounded-md border border-border bg-background/40 px-2.5 py-2">
       <div className="flex items-center gap-1.5 text-[9px] uppercase tracking-[0.14em] text-muted-foreground">
-        <i
-          aria-hidden="true"
-          className={`h-1.5 w-1.5 rounded-full ${dotClass}`}
-        />
+        <i aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${dotClass}`} />
         {label}
       </div>
-      <div className="mt-1 truncate text-[11px] text-foreground">
-        {state.value}
-      </div>
-      <div className="truncate text-[10px] text-muted-foreground">
-        {state.sub}
-      </div>
+      <div className="mt-1 truncate text-[11px] text-foreground">{state.value}</div>
+      <div className="truncate text-[10px] text-muted-foreground">{state.sub}</div>
     </div>
   );
 }
@@ -182,9 +175,7 @@ export function LiveSandboxPreview() {
     /* The terminal begins empty on activation. Inactive panels unmount, so
        their clocks and timers are discarded instead of pausing mid-session. */
     const timer = window.setInterval(() => {
-      setClock((current) =>
-        current >= TOTAL_TICKS + HOLD_TICKS ? 0 : current + 1,
-      );
+      setClock((current) => (current >= TOTAL_TICKS + HOLD_TICKS ? 0 : current + 1));
     }, TICK_MS);
     return () => window.clearInterval(timer);
   }, [active, reducedMotion]);
@@ -199,9 +190,7 @@ export function LiveSandboxPreview() {
   return (
     <div
       className="marketing-sandbox-preview flex min-h-0 flex-1 flex-col gap-2.5 px-4 pt-3 pb-4 font-mono"
-      data-animation-state={
-        reducedMotion ? "settled" : active ? "running" : "paused"
-      }
+      data-animation-state={reducedMotion ? "settled" : active ? "running" : "paused"}
       ref={previewRef}
     >
       <div
@@ -230,11 +219,7 @@ export function LiveSandboxPreview() {
       >
         {visible.map((line) => (
           <div
-            className={
-              line.sandbox
-                ? "border-l border-brand/40 pl-2.5"
-                : "pl-[calc(0.625rem+1px)]"
-            }
+            className={line.sandbox ? "border-l border-brand/40 pl-2.5" : "pl-[calc(0.625rem+1px)]"}
             key={line.at}
           >
             <LineText clock={visibleClock} line={line} />
@@ -243,11 +228,7 @@ export function LiveSandboxPreview() {
       </div>
       <div className="grid grid-cols-3 gap-2">
         <StateCell
-          dotClass={
-            processes.value.startsWith("0")
-              ? "bg-muted-foreground"
-              : "bg-positive"
-          }
+          dotClass={processes.value.startsWith("0") ? "bg-muted-foreground" : "bg-positive"}
           label="Processes"
           state={processes}
         />

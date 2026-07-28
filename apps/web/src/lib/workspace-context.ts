@@ -14,8 +14,9 @@ export type WorkspaceLiveUpdatesContextValue = {
   status: EventStreamStatus;
 };
 
-export const WorkspaceLiveUpdatesContext =
-  createContext<WorkspaceLiveUpdatesContextValue | null>(null);
+export const WorkspaceLiveUpdatesContext = createContext<WorkspaceLiveUpdatesContextValue | null>(
+  null,
+);
 
 /** Active workspace resolved from the `/w/$workspace` route param. */
 export function useWorkspace(): WorkspaceContextValue {

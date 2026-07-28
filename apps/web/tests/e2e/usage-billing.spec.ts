@@ -1,13 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import {
-  usageBillingOverviewFixture,
-  usageBillingWorkloadsFixture,
-} from "./usage-fixtures";
+import { usageBillingOverviewFixture, usageBillingWorkloadsFixture } from "./usage-fixtures";
 import { activeWorkspace } from "./fixtures/workspaces";
 
 const workspace = activeWorkspace("workspace-test", "acme");
-
 
 test("current period is resolved by the backend and keeps detail and export on its snapshot", async ({
   page,

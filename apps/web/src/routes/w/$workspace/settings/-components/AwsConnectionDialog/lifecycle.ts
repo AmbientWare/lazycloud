@@ -22,9 +22,7 @@ export type AwsConnectionDialogActionPlan = {
   destructive: "remove" | null;
 };
 
-export function awsConnectionPresentation(
-  connection: AwsConnection,
-): AwsConnectionPresentation {
+export function awsConnectionPresentation(connection: AwsConnection): AwsConnectionPresentation {
   switch (connection.phase) {
     case "awaiting_authorization":
       return { label: "Authorization required", live: false };
@@ -102,8 +100,7 @@ export function awsConnectionDialogActionPlan(
           : null;
       return {
         primary,
-        secondary:
-          primary === "validate" && supports("reconnect") ? "reconnect" : null,
+        secondary: primary === "validate" && supports("reconnect") ? "reconnect" : null,
         destructive: supports("remove") ? "remove" : null,
       };
     }
@@ -144,8 +141,7 @@ export function awsRemovalConfirmation(connection: AwsConnection): {
   if (!connection.active_authorization) {
     return {
       title: "Cancel AWS setup?",
-      description:
-        "This unfinished connection will be removed. No AWS compute has been activated.",
+      description: "This unfinished connection will be removed. No AWS compute has been activated.",
       cancelLabel: "Keep setup",
       confirmLabel: "Cancel setup",
     };

@@ -18,9 +18,7 @@ describe("deployment pagination", () => {
     const selected = selectDeploymentList({ pages }, false);
 
     expect(selected.items).toHaveLength(205);
-    expect(selected.items.map((item) => item.id)).toEqual(
-      deployments.map((item) => item.id),
-    );
+    expect(selected.items.map((item) => item.id)).toEqual(deployments.map((item) => item.id));
     expect(selected.nextCursor).toBeUndefined();
   });
 
@@ -32,9 +30,7 @@ describe("deployment pagination", () => {
     );
 
     expect(
-      selectDeploymentList({ pages: [first, repeated] }, true).items.map(
-        (item) => item.id,
-      ),
+      selectDeploymentList({ pages: [first, repeated] }, true).items.map((item) => item.id),
     ).toEqual(["deployment-2", "deployment-1"]);
     expect(nextDeploymentCursor(first, [first])).toBe("cursor-2");
     expect(nextDeploymentCursor(repeated, [first, repeated])).toBeUndefined();

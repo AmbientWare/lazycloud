@@ -46,7 +46,9 @@ export function AppDetailHeader({
         </div>
         <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
           <StatusChip
-            status={activeWorkloads > 0 ? "deployed" : latestDeployment ? "inactive" : "not deployed"}
+            status={
+              activeWorkloads > 0 ? "deployed" : latestDeployment ? "inactive" : "not deployed"
+            }
             live={activeWorkloads > 0}
           />
           {actions}

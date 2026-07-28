@@ -36,5 +36,4 @@ describe("selectInfiniteList", () => {
     expect(selection.items.map((item) => item.id)).toEqual(["container-2", "container-1"]);
     expect(selection.nextCursor).toBeUndefined();
   });
-
 });

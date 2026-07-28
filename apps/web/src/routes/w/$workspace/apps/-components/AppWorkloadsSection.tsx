@@ -91,7 +91,9 @@ export function AppWorkloadsSection({
         {pending ? (
           <WorkloadsSkeleton />
         ) : error ? (
-          <div className="flex min-h-48 items-center justify-center px-4 text-sm text-destructive">{error}</div>
+          <div className="flex min-h-48 items-center justify-center px-4 text-sm text-destructive">
+            {error}
+          </div>
         ) : groups.length === 0 ? (
           <div className="flex min-h-48 items-center justify-center px-4 text-center text-sm text-muted-foreground">
             No deployed workloads for this app
@@ -121,7 +123,9 @@ export function AppWorkloadsSection({
                 const groupContainers = (containers ?? []).filter(
                   (container) => container.stub_id && group.stubIds.includes(container.stub_id),
                 );
-                const running = groupContainers.filter((container) => container.status === "running").length;
+                const running = groupContainers.filter(
+                  (container) => container.status === "running",
+                ).length;
                 return (
                   <Link
                     key={group.name}
@@ -148,7 +152,10 @@ export function AppWorkloadsSection({
                       <span className="mono block text-foreground">{running} running</span>
                     </span>
                     <span className="hidden xl:block">
-                      <StatusChip status={group.active ? "deployed" : "inactive"} live={group.active} />
+                      <StatusChip
+                        status={group.active ? "deployed" : "inactive"}
+                        live={group.active}
+                      />
                     </span>
                     <time
                       dateTime={group.latest.created_at}
@@ -163,10 +170,16 @@ export function AppWorkloadsSection({
                       <span aria-hidden="true">·</span>
                       <span>{running} running</span>
                       <span aria-hidden="true">·</span>
-                      <time dateTime={group.latest.created_at} title={exactTime(group.latest.created_at)}>
+                      <time
+                        dateTime={group.latest.created_at}
+                        title={exactTime(group.latest.created_at)}
+                      >
                         {relativeTime(group.latest.created_at)}
                       </time>
-                      <StatusChip status={group.active ? "deployed" : "inactive"} live={group.active} />
+                      <StatusChip
+                        status={group.active ? "deployed" : "inactive"}
+                        live={group.active}
+                      />
                     </span>
                     <ChevronRight
                       className="interactive-row-indicator hidden size-3.5 text-muted-foreground transition-colors xl:block"

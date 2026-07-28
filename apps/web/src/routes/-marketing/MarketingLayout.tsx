@@ -4,12 +4,7 @@ import { Menu, X } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
-import {
-  Glyph,
-  PendingLink,
-  PendingMarketingButton,
-  shell,
-} from "./MarketingPrimitives";
+import { Glyph, PendingLink, PendingMarketingButton, shell } from "./MarketingPrimitives";
 
 import "./marketing.css";
 
@@ -74,10 +69,7 @@ export function MarketingLayout({ children }: { children: ReactNode }) {
             <span>LazyCloud</span>
           </Link>
 
-          <nav
-            className="flex items-center gap-1 max-md:hidden"
-            aria-label="Primary navigation"
-          >
+          <nav className="flex items-center gap-1 max-md:hidden" aria-label="Primary navigation">
             {navigation.map((label) => (
               <PendingLink className={navLink} key={label}>
                 {label}
@@ -113,8 +105,7 @@ export function MarketingLayout({ children }: { children: ReactNode }) {
               <span>LazyCloud</span>
             </Link>
             <p className="mt-4.5 max-w-[310px] text-[13px] text-muted-foreground">
-              A complete cloud platform for developers and agents building at AI
-              speed.
+              A complete cloud platform for developers and agents building at AI speed.
             </p>
           </div>
           <nav
@@ -129,18 +120,14 @@ export function MarketingLayout({ children }: { children: ReactNode }) {
               <PendingLink className={footerLink}>Docs</PendingLink>
             </FooterColumn>
             <FooterColumn title="Workloads">
-              <PendingLink className={footerLink}>
-                Applications + APIs
-              </PendingLink>
+              <PendingLink className={footerLink}>Applications + APIs</PendingLink>
               <PendingLink className={footerLink}>Background work</PendingLink>
               <PendingLink className={footerLink}>Agent sandboxes</PendingLink>
             </FooterColumn>
             <FooterColumn title="Platform">
               <PendingLink className={footerLink}>Functions</PendingLink>
               <PendingLink className={footerLink}>Typed clients</PendingLink>
-              <PendingLink className={footerLink}>
-                Connected compute
-              </PendingLink>
+              <PendingLink className={footerLink}>Connected compute</PendingLink>
             </FooterColumn>
           </nav>
         </div>
@@ -171,17 +158,12 @@ function MobileNavigation() {
 
     const focusFrame = window.requestAnimationFrame(() => {
       navigationRef.current
-        ?.querySelector<HTMLElement>(
-          "a:not([aria-disabled='true']), button:not(:disabled)",
-        )
+        ?.querySelector<HTMLElement>("a:not([aria-disabled='true']), button:not(:disabled)")
         ?.focus();
     });
 
     function handlePointerDown(event: PointerEvent) {
-      if (
-        event.target instanceof Node &&
-        !rootRef.current?.contains(event.target)
-      ) {
+      if (event.target instanceof Node && !rootRef.current?.contains(event.target)) {
         setOpen(false);
       }
     }
@@ -243,13 +225,7 @@ function MobileNavigation() {
   );
 }
 
-function FooterColumn({
-  title,
-  children,
-}: {
-  title: string;
-  children: ReactNode;
-}) {
+function FooterColumn({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className="flex flex-col gap-2.5">
       <span className="mb-1 font-mono text-[9px] tracking-[0.1em] text-muted-foreground uppercase">

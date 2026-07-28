@@ -83,7 +83,9 @@ function VersionRow({
   const refresh = async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.deployments.root(workspaceId) }),
-      queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.apps.detail(workspaceId, appId) }),
+      queryClient.invalidateQueries({
+        queryKey: workspaceQueryKeys.apps.detail(workspaceId, appId),
+      }),
       queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.apps.summaries(workspaceId) }),
       queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.containers.root(workspaceId) }),
     ]);
@@ -111,9 +113,7 @@ function VersionRow({
   const pending = start.isPending || stop.isPending || remove.isPending;
   const error = start.error ?? stop.error ?? remove.error;
   const hasActions =
-    deployment.actions.can_start ||
-    deployment.actions.can_stop ||
-    deployment.actions.can_delete;
+    deployment.actions.can_start || deployment.actions.can_stop || deployment.actions.can_delete;
 
   return (
     <div className="flex min-h-11 flex-wrap items-center gap-2 py-2 text-sm">

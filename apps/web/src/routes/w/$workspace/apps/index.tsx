@@ -31,21 +31,17 @@ function AppsPage() {
       description="Deployed compute and recent execution health"
       contentClassName="mx-auto w-full max-w-[1600px] overflow-y-auto pr-1"
     >
-          {apps.isPending ? (
-            <AppCardsSkeleton />
-          ) : apps.isError ? (
-            <div className="panel flex min-h-48 items-center justify-center rounded-md p-4 text-sm text-destructive">
-              {apps.error.message}
-            </div>
-          ) : items.length === 0 ? (
-            <QuickstartEmptyState />
-          ) : (
-            <AppsGrid
-              items={items}
-              workspaceId={workspace.id}
-              workspaceName={workspace.name}
-            />
-          )}
+      {apps.isPending ? (
+        <AppCardsSkeleton />
+      ) : apps.isError ? (
+        <div className="panel flex min-h-48 items-center justify-center rounded-md p-4 text-sm text-destructive">
+          {apps.error.message}
+        </div>
+      ) : items.length === 0 ? (
+        <QuickstartEmptyState />
+      ) : (
+        <AppsGrid items={items} workspaceId={workspace.id} workspaceName={workspace.name} />
+      )}
     </WorkspacePage>
   );
 }
@@ -144,7 +140,10 @@ function AppCard({
                 </span>
               </div>
             </div>
-            <div className="flex items-center gap-3 text-[10px] text-muted-foreground" aria-hidden="true">
+            <div
+              className="flex items-center gap-3 text-[10px] text-muted-foreground"
+              aria-hidden="true"
+            >
               <span className="flex items-center gap-1.5">
                 <span className="size-1.5 bg-positive/75" />
                 Successful
@@ -161,14 +160,19 @@ function AppCard({
             label={`${item.app.name} task and failure activity over the last 24 hours`}
             className="mt-3 h-14 min-w-0"
           />
-          <div className="mt-1.5 flex justify-between text-[10px] text-muted-foreground" aria-hidden="true">
+          <div
+            className="mt-1.5 flex justify-between text-[10px] text-muted-foreground"
+            aria-hidden="true"
+          >
             <span>24h ago</span>
             <span>Now</span>
           </div>
         </section>
 
         <div className="mt-5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-          <span>{formatCount(item.running_containers, "running container", "running containers")}</span>
+          <span>
+            {formatCount(item.running_containers, "running container", "running containers")}
+          </span>
           <span aria-hidden="true">·</span>
           <span className="shrink-0" title={exactTime(lastDeployedAt)}>
             Deployed <time dateTime={lastDeployedAt}>{relativeTime(lastDeployedAt)}</time>
@@ -192,10 +196,7 @@ function AppCard({
         </div>
       </Link>
       <div className="absolute right-3 top-3 z-10">
-        <AppCardActionsTrigger
-          app={item.app}
-          workspaceId={workspaceId}
-        />
+        <AppCardActionsTrigger app={item.app} workspaceId={workspaceId} />
       </div>
     </article>
   );

@@ -34,6 +34,33 @@ permissions:
   contents: read
 
 jobs:
+  lint:
+    name: Repository lint and format
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+          version: "0.11.21"
+
+      - name: Sync workspace
+        run: uv sync --locked --group dev
+
+      - name: Ruff lint
+        run: uv run --group dev ruff check .
+
+      - name: Ruff format
+        run: uv run --group dev ruff format --check .
+
   validate:
     name: Changed Python owners
     runs-on: ubuntu-latest

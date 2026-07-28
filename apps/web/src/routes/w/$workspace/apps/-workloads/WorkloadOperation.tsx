@@ -40,17 +40,10 @@ export function WorkloadOperation({
             This version is stopped and is not accepting requests.
           </div>
         ) : null}
-        {kind === "cron-job" ? (
-          <ScheduleFacts workspaceId={workspaceId} group={group} />
-        ) : null}
-        {kind === "pod" ? (
-          <PodFacts deployment={deployment} />
-        ) : null}
+        {kind === "cron-job" ? <ScheduleFacts workspaceId={workspaceId} group={group} /> : null}
+        {kind === "pod" ? <PodFacts deployment={deployment} /> : null}
         {kind === "task-queue" && stub ? (
-          <QueueFacts
-            workspaceId={workspaceId}
-            stubId={stub.id}
-          />
+          <QueueFacts workspaceId={workspaceId} stubId={stub.id} />
         ) : null}
         {(kind === "endpoint" || kind === "asgi") && (
           <HttpFacts deployment={deployment} isPublic={isPublic} />
@@ -68,7 +61,13 @@ export function WorkloadOperation({
   );
 }
 
-function InvokeTarget({ workspaceId, deploymentId }: { workspaceId: string; deploymentId: string }) {
+function InvokeTarget({
+  workspaceId,
+  deploymentId,
+}: {
+  workspaceId: string;
+  deploymentId: string;
+}) {
   const query = useQuery(deploymentUrlQueryOptions(workspaceId, deploymentId));
   const [copied, setCopied] = useState(false);
 
@@ -117,12 +116,16 @@ function RuntimeFacts({
     <div className="grid grid-cols-2 content-start gap-x-4 gap-y-4 p-4 lg:grid-cols-5">
       <Fact label="Version" value={`v${deployment.version}`} />
       <Fact label="Placement" value={placementLabel(deployment)} />
-      {showRunning ? <Fact label="Running" value={Intl.NumberFormat().format(runningContainers)} /> : null}
+      {showRunning ? (
+        <Fact label="Running" value={Intl.NumberFormat().format(runningContainers)} />
+      ) : null}
       {showExecutionLimits ? (
         <Fact label="Concurrency" value={Intl.NumberFormat().format(resources.concurrency)} />
       ) : null}
       <Fact label="Warm retention" value={retentionLabel(resources.keep_warm)} />
-      {showExecutionLimits ? <Fact label="Timeout" value={durationLabel(resources.timeout_seconds)} /> : null}
+      {showExecutionLimits ? (
+        <Fact label="Timeout" value={durationLabel(resources.timeout_seconds)} />
+      ) : null}
       {showAccess ? <Fact label="Access" value={isPublic ? "Public" : "Token required"} /> : null}
       <Fact label="CPU" value={resources.cpu == null ? "Default" : `${resources.cpu} cores`} />
       <Fact label="Memory" value={resources.memory ?? "Default"} />
@@ -149,7 +152,9 @@ function HttpFacts({ deployment, isPublic }: { deployment: Deployment; isPublic:
       <Fact label="Route" value={deployment.spec.route || "/"} mono />
       <Fact
         label="Methods"
-        value={deployment.kind === "asgi" ? "All" : deployment.spec.methods.join(", ") || "GET, POST"}
+        value={
+          deployment.kind === "asgi" ? "All" : deployment.spec.methods.join(", ") || "GET, POST"
+        }
         mono
       />
       <Fact label="Authentication" value={isPublic ? "Public" : "Bearer token"} />
@@ -157,13 +162,7 @@ function HttpFacts({ deployment, isPublic }: { deployment: Deployment; isPublic:
   );
 }
 
-function QueueFacts({
-  workspaceId,
-  stubId,
-}: {
-  workspaceId: string;
-  stubId: string;
-}) {
+function QueueFacts({ workspaceId, stubId }: { workspaceId: string; stubId: string }) {
   const state = useQuery(taskQueueStateQueryOptions(workspaceId, stubId));
   if (state.isPending) return <Skeleton className="h-24 w-full" />;
   if (state.isError) {
@@ -187,11 +186,7 @@ function QueueFacts({
   );
 }
 
-function PodFacts({
-  deployment,
-}: {
-  deployment: Deployment;
-}) {
+function PodFacts({ deployment }: { deployment: Deployment }) {
   const ports = Object.entries(deployment.spec.ports);
   return (
     <div className="grid grid-cols-2 gap-x-6 gap-y-4">

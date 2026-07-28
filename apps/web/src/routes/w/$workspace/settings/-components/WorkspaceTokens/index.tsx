@@ -74,9 +74,7 @@ function WorkspaceTokensForWorkspace({ workspaceId }: { workspaceId: string }) {
       headerClassName="flex-wrap"
       contentClassName="flex flex-col overflow-visible lg:overflow-hidden"
     >
-      {controller.createMode !== "closed" ? (
-        <CreateTokenForm controller={controller} />
-      ) : null}
+      {controller.createMode !== "closed" ? <CreateTokenForm controller={controller} /> : null}
 
       <div className="min-h-0 flex-1 lg:overflow-y-auto">
         {controller.isLoading ? (
@@ -87,16 +85,11 @@ function WorkspaceTokensForWorkspace({ workspaceId }: { workspaceId: string }) {
           </div>
         ) : visibleTokens.length === 0 ? (
           <div className="flex min-h-32 flex-col items-center justify-center gap-3 p-8 text-sm text-muted-foreground">
-            <span>
-              {managedCount > 0 ? "No user-managed tokens" : "No access tokens"}
-            </span>
+            <span>{managedCount > 0 ? "No user-managed tokens" : "No access tokens"}</span>
             <CliHint command="lazycloud token create dashboard" />
           </div>
         ) : (
-          <TokenTable
-            controller={controller}
-            tokens={visibleTokens}
-          />
+          <TokenTable controller={controller} tokens={visibleTokens} />
         )}
       </div>
     </Panel>
@@ -151,8 +144,7 @@ function TokenRow({
   const toggling = actionOwned && controller.actionMode === "toggling";
   const deleting = actionOwned && controller.actionMode === "deleting";
   const actionFailed = actionOwned && controller.actionMode === "error";
-  const actionsDisabled =
-    controller.isCommandPending || controller.createMode !== "closed";
+  const actionsDisabled = controller.isCommandPending || controller.createMode !== "closed";
 
   return (
     <li className="interactive-row grid grid-cols-2 gap-x-6 gap-y-4 border-b border-border px-4 py-3 last:border-b-0 lg:grid-cols-12 lg:items-center lg:gap-3 lg:px-3 lg:py-2">
@@ -187,10 +179,7 @@ function TokenRow({
       <div className="min-w-0 text-xs text-muted-foreground lg:col-span-2">
         <div className="micro-label mb-1 lg:hidden">Expires</div>
         {token.expires_at ? (
-          <time
-            dateTime={token.expires_at}
-            title={new Date(token.expires_at).toLocaleString()}
-          >
+          <time dateTime={token.expires_at} title={new Date(token.expires_at).toLocaleString()}>
             {relativeTime(token.expires_at)}
           </time>
         ) : (
@@ -200,10 +189,7 @@ function TokenRow({
       <div className="min-w-0 text-xs text-muted-foreground lg:col-span-2">
         <div className="micro-label mb-1 lg:hidden">Last used</div>
         {token.last_used_at ? (
-          <time
-            dateTime={token.last_used_at}
-            title={new Date(token.last_used_at).toLocaleString()}
-          >
+          <time dateTime={token.last_used_at} title={new Date(token.last_used_at).toLocaleString()}>
             {relativeTime(token.last_used_at)}
           </time>
         ) : (
@@ -223,12 +209,7 @@ function TokenRow({
             >
               Delete
             </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={deleting}
-              onClick={controller.cancelDelete}
-            >
+            <Button variant="ghost" size="sm" disabled={deleting} onClick={controller.cancelDelete}>
               Keep
             </Button>
           </span>
@@ -270,11 +251,7 @@ function TokenRow({
   );
 }
 
-function CreateTokenForm({
-  controller,
-}: {
-  controller: WorkspaceTokensController;
-}) {
+function CreateTokenForm({ controller }: { controller: WorkspaceTokensController }) {
   const [name, setName] = useState("");
   const [access, setAccess] = useState<AccessLevel>("read");
   const [expiry, setExpiry] = useState<Expiry>("2592000");
@@ -340,11 +317,7 @@ function CreateTokenForm({
             if (value === "read" || value === "write") setAccess(value);
           }}
         >
-          <SelectTrigger
-            size="sm"
-            className="w-full text-foreground"
-            aria-label="Token access"
-          >
+          <SelectTrigger size="sm" className="w-full text-foreground" aria-label="Token access">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -362,11 +335,7 @@ function CreateTokenForm({
             if (isExpiry(value)) setExpiry(value);
           }}
         >
-          <SelectTrigger
-            size="sm"
-            className="w-full text-foreground"
-            aria-label="Token expiry"
-          >
+          <SelectTrigger size="sm" className="w-full text-foreground" aria-label="Token expiry">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -393,11 +362,7 @@ function CreateTokenForm({
           size="sm"
           disabled={controller.createMode === "creating" || !name.trim()}
         >
-          {controller.createMode === "creating" ? (
-            <Loader2 className="animate-spin" />
-          ) : (
-            "Create"
-          )}
+          {controller.createMode === "creating" ? <Loader2 className="animate-spin" /> : "Create"}
         </Button>
       </div>
       {controller.createError ? (
@@ -410,16 +375,10 @@ function CreateTokenForm({
 }
 
 function isExpiry(value: string): value is Expiry {
-  return ["86400", "604800", "2592000", "7776000", "never"].includes(
-    value,
-  );
+  return ["86400", "604800", "2592000", "7776000", "never"].includes(value);
 }
 
-function tokenInput(
-  name: string,
-  access: AccessLevel,
-  expiry: Expiry,
-): CreateTokenInput {
+function tokenInput(name: string, access: AccessLevel, expiry: Expiry): CreateTokenInput {
   return {
     name,
     scopes: access === "write" ? ["read", "write"] : ["read"],
@@ -429,9 +388,7 @@ function tokenInput(
 
 function formatScopes(scopes: string[]): string {
   if (scopes.includes("*")) return "Full access";
-  const visible = scopes.filter(
-    (scope) => scope === "read" || scope === "write",
-  );
+  const visible = scopes.filter((scope) => scope === "read" || scope === "write");
   return visible.length ? visible.join(" + ") : "Custom";
 }
 

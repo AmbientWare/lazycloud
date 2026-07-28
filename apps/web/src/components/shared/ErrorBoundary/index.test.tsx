@@ -66,8 +66,6 @@ describe("PanelErrorBoundary", () => {
       </PanelErrorBoundary>,
     );
 
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "An unexpected rendering error occurred.",
-    );
+    expect(screen.getByRole("alert")).toHaveTextContent("An unexpected rendering error occurred.");
   });
 });

@@ -37,10 +37,7 @@ export type TaskListOptions = {
   live?: boolean;
 };
 
-export function tasksQueryOptions(
-  workspaceId: string,
-  options: TaskListOptions = {},
-) {
+export function tasksQueryOptions(workspaceId: string, options: TaskListOptions = {}) {
   const params = taskListParams(options);
 
   return queryOptions({
@@ -118,8 +115,7 @@ function taskListKey(
 export function taskQueryOptions(workspaceId: string, taskId: string) {
   return queryOptions({
     queryKey: workspaceQueryKeys.tasks.detail(workspaceId, taskId),
-    queryFn: () =>
-      apiRequest(withWorkspace(`/api/v1/tasks/${taskId}`, workspaceId), taskSchema),
+    queryFn: () => apiRequest(withWorkspace(`/api/v1/tasks/${taskId}`, workspaceId), taskSchema),
     // Rate-limited drawer reads preserve their explicit Retry-After recovery
     // instead of being retried by an unrelated workspace reconnect.
     retry: false,
@@ -131,10 +127,7 @@ export function callGraphQueryOptions(workspaceId: string, taskId: string) {
   return queryOptions({
     queryKey: workspaceQueryKeys.tasks.callGraph(workspaceId, taskId),
     queryFn: () =>
-      apiRequest(
-        withWorkspace(`/api/v1/tasks/${taskId}/call-graph`, workspaceId),
-        callGraphSchema,
-      ),
+      apiRequest(withWorkspace(`/api/v1/tasks/${taskId}/call-graph`, workspaceId), callGraphSchema),
     meta: workspaceLiveQueryMeta(true),
   });
 }

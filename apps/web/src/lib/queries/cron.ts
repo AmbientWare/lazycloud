@@ -9,8 +9,7 @@ import { workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
 export function cronJobsQueryOptions(workspaceId: string) {
   return queryOptions({
     queryKey: workspaceQueryKeys.workloads.cron(workspaceId),
-    queryFn: () =>
-      apiRequest(withWorkspace("/api/v1/cron-jobs", workspaceId), cronJobListSchema),
+    queryFn: () => apiRequest(withWorkspace("/api/v1/cron-jobs", workspaceId), cronJobListSchema),
     meta: workspaceLiveQueryMeta(true),
   });
 }

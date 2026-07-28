@@ -110,8 +110,7 @@ function LoginScreen({
   const [tokenValue, setTokenValue] = useState("");
   // Arriving on the device-approval URL while signed out: after sign-in the
   // route renders in place, so tell the user why they are seeing this first.
-  const approvingDevice =
-    typeof window !== "undefined" && window.location.pathname === "/activate";
+  const approvingDevice = typeof window !== "undefined" && window.location.pathname === "/activate";
   return (
     <main className="flex min-h-screen items-center justify-center bg-background p-4">
       <section className="panel w-full max-w-md rounded-md p-5">
@@ -133,7 +132,11 @@ function LoginScreen({
           </div>
         ) : null}
 
-        {error ? <div className="mb-3 rounded border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive">{error}</div> : null}
+        {error ? (
+          <div className="mb-3 rounded border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive">
+            {error}
+          </div>
+        ) : null}
 
         <form
           className="space-y-3"
@@ -152,7 +155,9 @@ function LoginScreen({
               autoComplete="current-password"
             />
           </label>
-          <Button type="submit" className="w-full">Continue</Button>
+          <Button type="submit" className="w-full">
+            Continue
+          </Button>
           <CliHint command="lazycloud-admin auth bootstrap --output ./lazycloud-admin-token" />
         </form>
       </section>

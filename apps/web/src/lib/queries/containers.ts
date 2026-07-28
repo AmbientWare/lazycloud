@@ -23,10 +23,7 @@ export type ContainerListStatus = "pending" | "running" | "exited" | "failed" | 
 
 const INITIAL_CONTAINER_CURSOR: string = "";
 
-export function containersQueryOptions(
-  workspaceId: string,
-  options: ContainerListOptions = {},
-) {
+export function containersQueryOptions(workspaceId: string, options: ContainerListOptions = {}) {
   return infiniteQueryOptions({
     queryKey: workspaceQueryKeys.containers.list(workspaceId, {
       appId: options.appId ?? null,
@@ -56,9 +53,7 @@ export function nextContainerCursor(
   pages: ContainerWithAppPage[],
 ): string | undefined {
   if (!lastPage.next) return undefined;
-  const cursorAlreadySeen = pages
-    .slice(0, -1)
-    .some((page) => page.next === lastPage.next);
+  const cursorAlreadySeen = pages.slice(0, -1).some((page) => page.next === lastPage.next);
   return cursorAlreadySeen ? undefined : lastPage.next;
 }
 

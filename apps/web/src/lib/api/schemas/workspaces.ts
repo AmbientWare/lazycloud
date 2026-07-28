@@ -4,12 +4,7 @@ import { jsonValueSchema } from "./json";
 
 const timestampSchema = z.string().datetime({ offset: true });
 
-export const workspaceStatusSchema = z.enum([
-  "active",
-  "disabled",
-  "deleting",
-  "deleted",
-]);
+export const workspaceStatusSchema = z.enum(["active", "disabled", "deleting", "deleted"]);
 
 export const workspaceStorageSchema = z
   .object({

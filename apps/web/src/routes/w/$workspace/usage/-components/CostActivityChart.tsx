@@ -39,7 +39,10 @@ export function CostActivityChart({ report }: { report: UsageBillingOverview }) 
     const totals = new Map(chartSeries.map((series) => [series.metric, 0]));
     const rows = report.activity.map((bucket) => {
       const row: Record<string, number | string> = {
-        label: format(new Date(bucket.start), report.activity.length > 32 ? "MMM d" : "MMM d HH:mm"),
+        label: format(
+          new Date(bucket.start),
+          report.activity.length > 32 ? "MMM d" : "MMM d HH:mm",
+        ),
       };
       for (const series of chartSeries) row[series.metric] = 0;
       for (const line of bucket.lines) {
@@ -86,10 +89,7 @@ export function CostActivityChart({ report }: { report: UsageBillingOverview }) 
               formatter={(value, name, item) => (
                 <div className="flex flex-1 items-center justify-between gap-4 leading-none">
                   <span className="flex items-center gap-1.5 text-muted-foreground">
-                    <span
-                      className="size-2.5 shrink-0"
-                      style={{ backgroundColor: item.color }}
-                    />
+                    <span className="size-2.5 shrink-0" style={{ backgroundColor: item.color }} />
                     {config[String(name)]?.label ?? name}
                   </span>
                   <span className="font-mono font-medium tabular-nums text-foreground">

@@ -44,8 +44,12 @@ export function AppCardActions({
       });
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.apps.summaries(workspaceId) }),
-        queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.deployments.root(workspaceId) }),
-        queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.containers.root(workspaceId) }),
+        queryClient.invalidateQueries({
+          queryKey: workspaceQueryKeys.deployments.root(workspaceId),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: workspaceQueryKeys.containers.root(workspaceId),
+        }),
       ]);
     },
   });
@@ -67,10 +71,7 @@ export function AppCardActions({
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-44">
           {app.actions.can_delete ? (
-            <DropdownMenuItem
-              variant="destructive"
-              onSelect={() => setConfirmingDelete(true)}
-            >
+            <DropdownMenuItem variant="destructive" onSelect={() => setConfirmingDelete(true)}>
               <Trash2 />
               Delete app
             </DropdownMenuItem>

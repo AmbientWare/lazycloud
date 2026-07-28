@@ -59,7 +59,9 @@ export function PodInstances({
 }) {
   const instances = useMemo(() => orderInstances(containers), [containers]);
   const running = instances.filter((container) => container.status === "running").length;
-  const active = instances.filter((container) => ACTIVE_CONTAINER_STATUSES.has(container.status)).length;
+  const active = instances.filter((container) =>
+    ACTIVE_CONTAINER_STATUSES.has(container.status),
+  ).length;
   const configured = configuredReplicaLabel(deployment);
 
   return (
@@ -184,12 +186,16 @@ function ReplicaControl({
     ...scaleDeploymentMutationOptions(workspaceId, deployment.id, replicas),
     onSuccess: async () => {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.deployments.root(workspaceId) }),
+        queryClient.invalidateQueries({
+          queryKey: workspaceQueryKeys.deployments.root(workspaceId),
+        }),
         queryClient.invalidateQueries({
           queryKey: workspaceQueryKeys.containers.root(workspaceId),
           refetchType: "active",
         }),
-        queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.apps.detail(workspaceId, appId) }),
+        queryClient.invalidateQueries({
+          queryKey: workspaceQueryKeys.apps.detail(workspaceId, appId),
+        }),
       ]);
       setDraft(null);
       toast.success(`Configured ${replicas} ${replicas === 1 ? "replica" : "replicas"}`);
@@ -200,7 +206,8 @@ function ReplicaControl({
   if (!deployment.actions.can_scale) {
     return (
       <div className="text-right text-xs text-muted-foreground">
-        <span className="mono text-foreground">{configuredReplicaLabel(deployment)}</span> configured
+        <span className="mono text-foreground">{configuredReplicaLabel(deployment)}</span>{" "}
+        configured
       </div>
     );
   }
@@ -248,7 +255,11 @@ function ReplicaControl({
         disabled={!changed || scale.isPending}
         onClick={() => scale.mutate()}
       >
-        {scale.isPending ? <Loader2 className="animate-spin" /> : scale.isSuccess ? <Check /> : null}
+        {scale.isPending ? (
+          <Loader2 className="animate-spin" />
+        ) : scale.isSuccess ? (
+          <Check />
+        ) : null}
         Apply
       </Button>
     </div>
@@ -345,7 +356,10 @@ function InstanceListSkeleton() {
   return (
     <div aria-hidden="true">
       {Array.from({ length: 3 }, (_, index) => (
-        <div key={index} className="flex min-h-12 items-center gap-3 border-b border-border/70 px-3">
+        <div
+          key={index}
+          className="flex min-h-12 items-center gap-3 border-b border-border/70 px-3"
+        >
           <div className="min-w-0 flex-1 space-y-2">
             <Skeleton className="h-3.5 w-24" />
             <Skeleton className="h-3 w-16" />

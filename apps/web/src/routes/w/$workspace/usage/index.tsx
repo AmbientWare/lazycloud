@@ -1,28 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import {
-  Download,
-  LoaderCircle,
-  RefreshCw,
-  TriangleAlert,
-} from "lucide-react";
+import { Download, LoaderCircle, RefreshCw, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 import { z } from "zod";
 
 import { PanelErrorBoundary, RouteErrorFallback } from "@/components/shared/ErrorBoundary";
 import { Panel } from "@/components/shared/Panel";
-import {
-  LinearSelect,
-  LinearSelectItem,
-} from "@/components/shared/LinearSelect";
+import { LinearSelect, LinearSelectItem } from "@/components/shared/LinearSelect";
 import { WorkspacePage } from "@/components/shared/WorkspacePage";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import type {
-  ConcurrencyLimitList,
-  UsageBillingOverview,
-} from "@/lib/api/schemas";
+import type { ConcurrencyLimitList, UsageBillingOverview } from "@/lib/api/schemas";
 import { concurrencyLimitsQueryOptions } from "@/lib/queries/concurrency";
 import {
   downloadUsageBillingCsv,
@@ -34,11 +23,7 @@ import { useWorkspace } from "@/lib/workspace-context";
 import { cn } from "@/lib/utils";
 import { CostActivityChart } from "./-components/CostActivityChart";
 import { UsageByAppList } from "./-components/UsageByAppList";
-import {
-  billingLabel,
-  formatCostNanos,
-  formatUsageQuantity,
-} from "./-components/usage-report";
+import { billingLabel, formatCostNanos, formatUsageQuantity } from "./-components/usage-report";
 
 const usageRanges = ["current", "24h", "7d", "30d"] as const;
 type UsageRange = (typeof usageRanges)[number];
@@ -170,10 +155,7 @@ function UsagePageContent({
             </PanelErrorBoundary>
           </Panel>
 
-          <Panel
-            title="Apps"
-            className="min-h-[22rem] lg:col-span-12 lg:min-h-0"
-          >
+          <Panel title="Apps" className="min-h-[22rem] lg:col-span-12 lg:min-h-0">
             <UsageByAppList
               apps={billing.data.apps}
               workspaceId={workspace.id}
@@ -281,13 +263,7 @@ function SpendSummary({
   );
 }
 
-function UsageReadout({
-  label,
-  value,
-}: {
-  label: string;
-  value: string;
-}) {
+function UsageReadout({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0">
       <div className="micro-label mb-1 truncate">{label}</div>
@@ -304,11 +280,7 @@ function readoutLabel(metric: string): string {
 
 function RangeSelector({ workspaceName, active }: { workspaceName: string; active: UsageRange }) {
   return (
-    <LinearSelect
-      ariaLabel="Usage period"
-      className="max-w-full"
-      listClassName="flex-none"
-    >
+    <LinearSelect ariaLabel="Usage period" className="max-w-full" listClassName="flex-none">
       {usageRanges.map((option) => (
         <LinearSelectItem key={option} selected={active === option}>
           <Link
@@ -333,10 +305,7 @@ function UsageLoading() {
       <Panel title="Cost activity" className="min-h-[16rem] lg:col-span-8 lg:min-h-0">
         <Skeleton className="m-4 h-48" />
       </Panel>
-      <Panel
-        title="Apps"
-        className="min-h-[22rem] lg:col-span-12 lg:min-h-0"
-      >
+      <Panel title="Apps" className="min-h-[22rem] lg:col-span-12 lg:min-h-0">
         <TableSkeleton />
       </Panel>
     </div>
@@ -376,7 +345,13 @@ function LoadFailure({ onRetry, isRetrying }: { onRetry: () => void; isRetrying:
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
             The usage service did not return this window. Retry without changing the selected range.
           </p>
-          <Button className="mt-4" variant="outline" size="sm" onClick={onRetry} disabled={isRetrying}>
+          <Button
+            className="mt-4"
+            variant="outline"
+            size="sm"
+            onClick={onRetry}
+            disabled={isRetrying}
+          >
             <RefreshCw className={cn(isRetrying && "animate-spin")} />
             {isRetrying ? "Retrying" : "Retry"}
           </Button>

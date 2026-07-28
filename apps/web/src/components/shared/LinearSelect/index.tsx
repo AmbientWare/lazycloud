@@ -1,17 +1,11 @@
 import { Slot } from "@radix-ui/react-slot";
 import type { ComponentProps, ReactNode } from "react";
 
-import {
-  TabsList,
-  TabsTrigger,
-  tabTriggerClassName,
-} from "@/components/ui/tabs";
+import { TabsList, TabsTrigger, tabTriggerClassName } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 
-const frameClassName =
-  "flex min-w-0 shrink-0 items-center gap-2 border-b border-border/80";
-const listClassName =
-  "flex h-9 min-w-0 flex-1 items-stretch overflow-x-auto overflow-y-hidden";
+const frameClassName = "flex min-w-0 shrink-0 items-center gap-2 border-b border-border/80";
+const listClassName = "flex h-9 min-w-0 flex-1 items-stretch overflow-x-auto overflow-y-hidden";
 const optionClassName =
   "flex h-9 shrink-0 items-center justify-center whitespace-nowrap rounded-none";
 
@@ -28,10 +22,7 @@ export function LinearSelect({
 }) {
   return (
     <div className={cn(frameClassName, className)}>
-      <nav
-        aria-label={ariaLabel}
-        className={cn(listClassName, listClassNameOverride)}
-      >
+      <nav aria-label={ariaLabel} className={cn(listClassName, listClassNameOverride)}>
         {children}
       </nav>
     </div>
@@ -84,11 +75,7 @@ export function LinearTabsList({
   );
 }
 
-export function LinearTab({
-  children,
-  className,
-  ...props
-}: ComponentProps<typeof TabsTrigger>) {
+export function LinearTab({ children, className, ...props }: ComponentProps<typeof TabsTrigger>) {
   return (
     <TabsTrigger className={cn(optionClassName, className)} {...props}>
       {children}

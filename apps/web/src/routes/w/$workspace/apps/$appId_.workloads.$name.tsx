@@ -11,10 +11,7 @@ import { WorkspacePage } from "@/components/shared/WorkspacePage";
 import { Skeleton } from "@/components/ui/skeleton";
 import { appQueryOptions } from "@/lib/queries/apps";
 import { containersQueryOptions, selectContainerList } from "@/lib/queries/containers";
-import {
-  deploymentsInfiniteQueryOptions,
-  selectDeploymentList,
-} from "@/lib/queries/deployments";
+import { deploymentsInfiniteQueryOptions, selectDeploymentList } from "@/lib/queries/deployments";
 import { stubsQueryOptions } from "@/lib/queries/stubs";
 import { useWorkspace } from "@/lib/workspace-context";
 
@@ -95,7 +92,9 @@ function WorkloadDetailPage() {
   const workloadContainers = containerList.items
     .map((item) => item.container)
     .sort((left, right) => right.created_at.localeCompare(left.created_at));
-  const runningContainers = workloadContainers.filter((container) => container.status === "running");
+  const runningContainers = workloadContainers.filter(
+    (container) => container.status === "running",
+  );
   const isPublic = Boolean(app.data?.public || currentStub?.public);
   const showsInvoke = group.active && PLAYGROUND_KINDS.has(group.kind);
   const showsPerformance = OBSERVABLE_KINDS.has(group.kind);
@@ -199,7 +198,11 @@ function WorkloadDetailPage() {
               className="min-h-[18rem] lg:h-full lg:min-h-0"
             >
               <PanelErrorBoundary title="Performance could not be displayed">
-                <LatencyPanel workspaceId={workspace.id} stubIds={group.stubIds} kind={group.kind} />
+                <LatencyPanel
+                  workspaceId={workspace.id}
+                  stubIds={group.stubIds}
+                  kind={group.kind}
+                />
               </PanelErrorBoundary>
             </Panel>
           ) : null}
@@ -285,10 +288,7 @@ function WorkloadSkeleton() {
         gridTemplateRows: "max-content minmax(0, 1.25fr) minmax(0, 0.75fr)",
       }}
     >
-      <div
-        className="grid min-h-0 gap-3 lg:h-48 lg:grid-cols-3"
-        aria-hidden="true"
-      >
+      <div className="grid min-h-0 gap-3 lg:h-48 lg:grid-cols-3" aria-hidden="true">
         <Skeleton className="h-72 w-full lg:col-span-2 lg:h-full" />
         <Skeleton className="h-72 w-full lg:h-full" />
       </div>

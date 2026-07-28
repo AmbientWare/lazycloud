@@ -13,11 +13,7 @@ export function EncodedValuePreview({
 }) {
   const preview = decodeEncodedValue(valueBase64 ?? "");
   if (preview.kind === "empty") {
-    return (
-      <p className={cn("text-xs text-muted-foreground", className)}>
-        {emptyLabel}
-      </p>
-    );
+    return <p className={cn("text-xs text-muted-foreground", className)}>{emptyLabel}</p>;
   }
   if (preview.kind === "binary") {
     return (

@@ -58,11 +58,7 @@ export const billableMetrics = [
   "customer_cloud_management_seconds",
 ] as const;
 
-export const billingCostBases = [
-  "catalog_estimate",
-  "recorded_allocation",
-  "recorded",
-] as const;
+export const billingCostBases = ["catalog_estimate", "recorded_allocation", "recorded"] as const;
 
 const currencySchema = z.string().regex(/^[A-Z]{3}$/);
 

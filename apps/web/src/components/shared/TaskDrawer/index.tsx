@@ -5,10 +5,7 @@ import { Ban, Loader2, RotateCcw } from "lucide-react";
 
 import { ApiErrorNotice } from "@/components/shared/ApiErrorNotice";
 import { PanelErrorBoundary } from "@/components/shared/ErrorBoundary";
-import {
-  LinearTab,
-  LinearTabsList,
-} from "@/components/shared/LinearSelect";
+import { LinearTab, LinearTabsList } from "@/components/shared/LinearSelect";
 import { ShellButton } from "@/components/shared/ShellDialog";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { StubKindIcon } from "@/components/shared/StubKindIcon";
@@ -239,7 +236,11 @@ function TaskDrawerBody({
                 aria-busy={cancelPending}
                 onClick={onCancel}
               >
-                {cancelPending ? <Loader2 className="size-3 animate-spin" /> : <Ban className="size-3" />}
+                {cancelPending ? (
+                  <Loader2 className="size-3 animate-spin" />
+                ) : (
+                  <Ban className="size-3" />
+                )}
                 {cancelPending ? "Cancelling" : "Cancel"}
               </Button>
             ) : null}
@@ -346,10 +347,7 @@ function TaskDrawerBody({
           }
           className="panel flex min-h-0 flex-1 flex-col overflow-hidden rounded-md"
         >
-          <LinearTabsList
-            ariaLabel="Task inspector views"
-            className="shrink-0 bg-card px-2"
-          >
+          <LinearTabsList ariaLabel="Task inspector views" className="shrink-0 bg-card px-2">
             <LinearTab value="logs">Logs</LinearTab>
             <LinearTab value="result">Result</LinearTab>
             <LinearTab value="artifacts">Artifacts</LinearTab>

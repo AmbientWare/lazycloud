@@ -118,7 +118,13 @@ function DeviceCodePanel({ userCode }: { userCode: string }) {
   return <DeviceCodeDecision userCode={userCode} deviceCode={deviceCode.data} />;
 }
 
-function DeviceCodeDecision({ userCode, deviceCode }: { userCode: string; deviceCode: DeviceCode }) {
+function DeviceCodeDecision({
+  userCode,
+  deviceCode,
+}: {
+  userCode: string;
+  deviceCode: DeviceCode;
+}) {
   const { workspaces } = useSession();
   const activeWorkspaces = workspaces.filter((item) => item.status === "active");
   const [workspace, setWorkspace] = useState(activeWorkspaces[0]?.name ?? "");

@@ -28,11 +28,7 @@ export function usageBillingOverviewQueryOptions(
   bucketSeconds: number,
 ) {
   return queryOptions({
-    queryKey: workspaceQueryKeys.usage.overview(
-      workspaceId,
-      usageWindowKey(window),
-      bucketSeconds,
-    ),
+    queryKey: workspaceQueryKeys.usage.overview(workspaceId, usageWindowKey(window), bucketSeconds),
     queryFn: () => {
       const params = usageWindowSearchParams(window, bucketSeconds);
       return apiRequest(

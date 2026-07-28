@@ -92,7 +92,9 @@ function RecentRunsList({
                   >
                     {task.workload.name}
                   </Link>
-                  {task.deployment ? <span className="mono shrink-0">v{task.deployment.version}</span> : null}
+                  {task.deployment ? (
+                    <span className="mono shrink-0">v{task.deployment.version}</span>
+                  ) : null}
                 </>
               ) : (
                 <span>Workload unavailable</span>

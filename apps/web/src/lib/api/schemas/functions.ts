@@ -18,7 +18,11 @@ const functionCloudpickleResultSchema = z
     version: z.literal(1).default(1),
     encoding: z.literal("cloudpickle"),
     value_base64: z.string().default(""),
-    size_bytes: z.number().int().min(0).max(16 * 1024 * 1024),
+    size_bytes: z
+      .number()
+      .int()
+      .min(0)
+      .max(16 * 1024 * 1024),
     sha256: z.string().regex(/^[0-9a-f]{64}$/),
   })
   .strict();

@@ -22,10 +22,9 @@ test("authenticated production shell renders live control-plane data", async ({ 
     }
   });
 
-  const workspaces = await page.request.get(
-    "/api/v1/workspaces?include_deleting=true",
-    { headers: { Authorization: `Bearer ${token}` } },
-  );
+  const workspaces = await page.request.get("/api/v1/workspaces?include_deleting=true", {
+    headers: { Authorization: `Bearer ${token}` },
+  });
   expect(workspaces.ok()).toBe(true);
   const payload = (await workspaces.json()) as {
     workspaces: Array<{ name: string }>;

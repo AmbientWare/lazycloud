@@ -4,10 +4,7 @@ import { Archive, Camera, Loader2, Square } from "lucide-react";
 
 import { CopyId } from "@/components/shared/CopyId";
 import { PanelErrorBoundary, RouteErrorFallback } from "@/components/shared/ErrorBoundary";
-import {
-  LinearTab,
-  LinearTabsList,
-} from "@/components/shared/LinearSelect";
+import { LinearTab, LinearTabsList } from "@/components/shared/LinearSelect";
 import { Panel } from "@/components/shared/Panel";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { WorkspacePage } from "@/components/shared/WorkspacePage";
@@ -16,10 +13,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import type { ContainerDetail } from "@/lib/api/schemas";
 import { durationBetween, relativeTime } from "@/lib/format";
-import {
-  containerQueryOptions,
-  stopContainerMutationOptions,
-} from "@/lib/queries/containers";
+import { containerQueryOptions, stopContainerMutationOptions } from "@/lib/queries/containers";
 import {
   createSandboxImageMutationOptions,
   sandboxUrlsQueryOptions,
@@ -109,10 +103,15 @@ function SandboxDetailPage() {
           <TabsContent value="terminal" className="m-0 min-h-0 flex-1 overflow-hidden p-3">
             {record.actions.can_shell ? (
               <PanelErrorBoundary key={containerId} title="Terminal could not be displayed">
-                <SandboxTerminal containerId={containerId} className="h-full min-h-[28rem] lg:min-h-0" />
+                <SandboxTerminal
+                  containerId={containerId}
+                  className="h-full min-h-[28rem] lg:min-h-0"
+                />
               </PanelErrorBoundary>
             ) : (
-              <EmptyOperation message={running ? "Shell access is unavailable" : "Sandbox is not running"} />
+              <EmptyOperation
+                message={running ? "Shell access is unavailable" : "Sandbox is not running"}
+              />
             )}
           </TabsContent>
           <TabsContent value="files" className="m-0 min-h-0 flex-1 overflow-hidden p-3">
@@ -201,7 +200,9 @@ function SandboxActions({
         </span>
       ) : null}
       {actionError ? (
-        <span className="basis-full text-right text-xs text-destructive">{actionError.message}</span>
+        <span className="basis-full text-right text-xs text-destructive">
+          {actionError.message}
+        </span>
       ) : null}
     </div>
   );
@@ -211,9 +212,19 @@ function SandboxFacts({ record }: { record: ContainerDetail }) {
   return (
     <dl className="grid grid-cols-2 gap-x-5 gap-y-3 text-xs">
       <Fact label="Image" value={record.image} mono />
-      <Fact label="Uptime" value={durationBetween(record.started_at, record.finished_at) ?? "None"} />
-      <Fact label="Expires" value={record.expires_at ? relativeTime(record.expires_at) : "No expiry"} />
-      <Fact label="Version" value={record.deployment ? `v${record.deployment.version}` : "None"} mono />
+      <Fact
+        label="Uptime"
+        value={durationBetween(record.started_at, record.finished_at) ?? "None"}
+      />
+      <Fact
+        label="Expires"
+        value={record.expires_at ? relativeTime(record.expires_at) : "No expiry"}
+      />
+      <Fact
+        label="Version"
+        value={record.deployment ? `v${record.deployment.version}` : "None"}
+        mono
+      />
       <Fact label="Created" value={relativeTime(record.created_at)} />
       <div>
         <dt className="micro-label mb-1">Container</dt>
@@ -257,7 +268,10 @@ function SandboxNetwork({ record, workspaceId }: { record: ContainerDetail; work
       </div>
       {exposed.length ? (
         exposed.map(([port, url]) => (
-          <div key={port} className="grid grid-cols-[5rem_minmax(0,1fr)] border-b border-border/60 px-3 py-2 text-xs last:border-0 sm:grid-cols-[7rem_minmax(0,1fr)]">
+          <div
+            key={port}
+            className="grid grid-cols-[5rem_minmax(0,1fr)] border-b border-border/60 px-3 py-2 text-xs last:border-0 sm:grid-cols-[7rem_minmax(0,1fr)]"
+          >
             <span className="mono">{port}</span>
             <a
               href={url}
@@ -271,7 +285,10 @@ function SandboxNetwork({ record, workspaceId }: { record: ContainerDetail; work
         ))
       ) : configuredPorts.length ? (
         configuredPorts.map((port) => (
-          <div key={port} className="grid grid-cols-[5rem_minmax(0,1fr)] border-b border-border/60 px-3 py-2 text-xs last:border-0 sm:grid-cols-[7rem_minmax(0,1fr)]">
+          <div
+            key={port}
+            className="grid grid-cols-[5rem_minmax(0,1fr)] border-b border-border/60 px-3 py-2 text-xs last:border-0 sm:grid-cols-[7rem_minmax(0,1fr)]"
+          >
             <span className="mono">{port}</span>
             <span className="text-muted-foreground">Not published</span>
           </div>
@@ -294,7 +311,10 @@ function EmptyOperation({ message }: { message: string }) {
 function SandboxSkeleton() {
   return (
     <WorkspacePage title={<Skeleton className="h-7 w-72" />} className="mx-auto max-w-7xl">
-      <div className="grid h-full min-h-0 gap-4 lg:grid-rows-[8rem_minmax(0,1fr)]" aria-hidden="true">
+      <div
+        className="grid h-full min-h-0 gap-4 lg:grid-rows-[8rem_minmax(0,1fr)]"
+        aria-hidden="true"
+      >
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1.3fr)_minmax(20rem,0.7fr)]">
           <Skeleton className="h-full min-h-32 w-full" />
           <Skeleton className="h-full min-h-32 w-full" />

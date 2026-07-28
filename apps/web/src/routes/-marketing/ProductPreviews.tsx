@@ -22,10 +22,7 @@ export function ProductFrame({
   className?: string;
 }) {
   return (
-    <div
-      className={`marketing-product-frame ${className}`.trim()}
-      data-product-preview=""
-    >
+    <div className={`marketing-product-frame ${className}`.trim()} data-product-preview="">
       <div className="marketing-product-bar">
         <div>
           <strong>{title}</strong>

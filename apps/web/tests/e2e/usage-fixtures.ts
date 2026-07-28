@@ -71,9 +71,33 @@ export function emptyUsageBillingOverviewFixture(workspaceId: string) {
 
 function billingLines(scale = 1) {
   return [
-    line("cpu_seconds", "CPU", 3600 * scale, "seconds", 11_244, 36_000_000 * scale, "recorded_allocation"),
-    line("memory_gib_seconds", "Memory", 7200 * scale, "gib_seconds", 1_235, 4_000_000 * scale, "recorded_allocation"),
-    line("gpu_seconds", "GPU", 3600 * scale, "seconds", 146_111, 486_000_000 * scale, "recorded_allocation"),
+    line(
+      "cpu_seconds",
+      "CPU",
+      3600 * scale,
+      "seconds",
+      11_244,
+      36_000_000 * scale,
+      "recorded_allocation",
+    ),
+    line(
+      "memory_gib_seconds",
+      "Memory",
+      7200 * scale,
+      "gib_seconds",
+      1_235,
+      4_000_000 * scale,
+      "recorded_allocation",
+    ),
+    line(
+      "gpu_seconds",
+      "GPU",
+      3600 * scale,
+      "seconds",
+      146_111,
+      486_000_000 * scale,
+      "recorded_allocation",
+    ),
   ];
 }
 
