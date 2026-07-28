@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import datetime
 from uuid import uuid4
 
 from database.repositories.execution import TaskRepository
@@ -15,16 +17,27 @@ from execution.artifacts.planning import (
     ArtifactPublicUrlPlan,
     ArtifactStatPlan,
     ArtifactStorageMode,
+    artifact_storage_prefix,
     plan_artifact_path,
     plan_artifact_public_url,
 )
 from execution.context import ExecutionContext
 
-OUTPUT_METADATA_ID = "artifact_id"
-OUTPUT_METADATA_TASK_ID = "task_id"
-OUTPUT_METADATA_WORKSPACE_ID = "workspace_id"
-OUTPUT_METADATA_FILENAME = "filename"
-OUTPUT_METADATA_STUB_ID = "stub_external_id"
+ARTIFACT_METADATA_ID = "artifact_id"
+ARTIFACT_METADATA_TASK_ID = "task_id"
+ARTIFACT_METADATA_WORKSPACE_ID = "workspace_id"
+ARTIFACT_METADATA_FILENAME = "filename"
+ARTIFACT_METADATA_STUB_ID = "stub_external_id"
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactListing:
+    artifact_id: str
+    task_id: str
+    filename: str
+    content_type: str
+    size: int
+    created_at: datetime
 
 
 class ArtifactStorageService:
@@ -66,14 +79,47 @@ class ArtifactStorageService:
             object_id=artifact_id,
             content_type=content_type,
             metadata={
-                OUTPUT_METADATA_ID: artifact_id,
-                OUTPUT_METADATA_TASK_ID: task.id,
-                OUTPUT_METADATA_WORKSPACE_ID: workspace_id,
-                OUTPUT_METADATA_FILENAME: path.filename,
-                OUTPUT_METADATA_STUB_ID: stub_external_id,
+                ARTIFACT_METADATA_ID: artifact_id,
+                ARTIFACT_METADATA_TASK_ID: task.id,
+                ARTIFACT_METADATA_WORKSPACE_ID: workspace_id,
+                ARTIFACT_METADATA_FILENAME: path.filename,
+                ARTIFACT_METADATA_STUB_ID: stub_external_id,
             },
         )
         return artifact_id
+
+    def list_for_task(
+        self,
+        *,
+        workspace_id: str,
+        task_id: str,
+    ) -> list[ArtifactListing]:
+        """Every artifact a task saved, newest first.
+
+        Artifacts are records in object storage rather than rows of their own,
+        so the task's own prefix is what scopes the listing.
+        """
+        task = self._task(task_id, workspace_id=workspace_id)
+        prefix = artifact_storage_prefix(self._stub_external_id(task), task.id)
+        records = self.object_storage.list_for_workspace(
+            workspace_id=workspace_id,
+            bucket=self.bucket,
+            prefix=prefix,
+        )
+        listings = [
+            ArtifactListing(
+                artifact_id=record.metadata.get(ARTIFACT_METADATA_ID, record.id),
+                task_id=task.id,
+                filename=record.metadata.get(ARTIFACT_METADATA_FILENAME, "")
+                or record.key.rsplit("/", 1)[-1],
+                content_type=record.content_type or "application/octet-stream",
+                size=record.size or 0,
+                created_at=record.created_at,
+            )
+            for record in records
+        ]
+        listings.sort(key=lambda item: item.created_at, reverse=True)
+        return listings
 
     def stat(
         self,

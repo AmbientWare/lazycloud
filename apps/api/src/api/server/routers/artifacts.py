@@ -3,6 +3,7 @@ from __future__ import annotations
 from execution.artifacts.service import ArtifactStorageService
 from fastapi import APIRouter, Depends
 from shared.http.artifacts import (
+    ArtifactListResponse,
     ArtifactPublicUrlRequest,
     ArtifactPublicUrlResponse,
     ArtifactSaveBody,
@@ -10,6 +11,7 @@ from shared.http.artifacts import (
     ArtifactStat,
     ArtifactStatRequest,
     ArtifactStatResponse,
+    ArtifactSummary,
 )
 
 from api.server.auth import read_workspace, write_workspace
@@ -32,6 +34,28 @@ def save_artifact(
         content_type=request.content_type,
     )
     return ArtifactSaveResponse(id=artifact_id)
+
+
+@router.get("", response_model=ArtifactListResponse, operation_id="list_artifacts")
+def list_artifacts(
+    task_id: str,
+    workspace_id: read_workspace,
+    service: ArtifactStorageService = Depends(artifact_service),
+) -> ArtifactListResponse:
+    listings = service.list_for_task(workspace_id=workspace_id, task_id=task_id)
+    return ArtifactListResponse(
+        data=[
+            ArtifactSummary(
+                id=item.artifact_id,
+                task_id=item.task_id,
+                filename=item.filename,
+                content_type=item.content_type,
+                size=item.size,
+                created_at=item.created_at,
+            )
+            for item in listings
+        ]
+    )
 
 
 @router.post("/stat", response_model=ArtifactStatResponse)

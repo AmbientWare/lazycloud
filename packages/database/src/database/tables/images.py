@@ -92,7 +92,7 @@ class ImageBuildTable(IdPayloadTable, DatabaseBase):
             "status",
             "created_at",
         ),
-        Index("ix_image_builds_runtime_path_digest", "runtime_path_digest"),
+        Index("ix_image_builds_archive_path_digest", "archive_path_digest"),
         Index("ix_image_builds_manifest_path_digest", "manifest_path_digest"),
         Index("ix_image_builds_dockerfile_path_digest", "dockerfile_path_digest"),
         Index("ix_image_builds_cache_manifest_path_digest", "cache_manifest_path_digest"),
@@ -115,8 +115,8 @@ class ImageBuildTable(IdPayloadTable, DatabaseBase):
     )
     image_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     cache_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    artifact_path_value: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    runtime_path_digest: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    archive_path_value: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    archive_path_digest: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     manifest_path_value: Mapped[str] = mapped_column(Text, nullable=False, default="")
     manifest_path_digest: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     dockerfile_path_value: Mapped[str] = mapped_column(Text, nullable=False, default="")

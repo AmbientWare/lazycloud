@@ -49,8 +49,25 @@ class ArtifactPublicUrlResponse(HttpModel):
     public_url: str = ""
 
 
+class ArtifactSummary(HttpModel):
+    """One saved artifact, enough for a reader to list and render it."""
+
+    id: str
+    task_id: str
+    filename: str
+    content_type: str = "application/octet-stream"
+    size: int = Field(default=0, ge=0)
+    created_at: datetime | None = None
+
+
+class ArtifactListResponse(HttpModel):
+    data: list[ArtifactSummary] = Field(default_factory=list)
+    next: str = ""
+
+
 __all__ = [
     "DEFAULT_ARTIFACT_PUBLIC_URL_EXPIRES_SECONDS",
+    "ArtifactListResponse",
     "ArtifactPublicUrlRequest",
     "ArtifactPublicUrlResponse",
     "ArtifactSaveBody",
@@ -58,4 +75,5 @@ __all__ = [
     "ArtifactStat",
     "ArtifactStatRequest",
     "ArtifactStatResponse",
+    "ArtifactSummary",
 ]

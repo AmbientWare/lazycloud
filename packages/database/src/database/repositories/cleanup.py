@@ -13,7 +13,7 @@ from shared.checkpoints import CheckpointRecord
 from shared.errors import ConflictError
 from shared.image_building.records import ImageBuildRecord, ImageRecord
 from shared.objects import ObjectRecord
-from shared.runtime_paths import normalize_runtime_path, runtime_path_digest
+from shared.runtime_paths import archive_path_digest, normalize_runtime_path
 from shared.workload_config import StubConfig
 from sqlalchemy import or_, select, text
 from sqlalchemy.orm import Session
@@ -203,11 +203,11 @@ class CleanupRepository:
         cache_publish_key = build.cache_metadata.get("cache_publish_key", "")
         resource_clauses: list[ColumnElement[bool]] = []
         if paths:
-            path_digests = {runtime_path_digest(path) for path in paths}
+            path_digests = {archive_path_digest(path) for path in paths}
             resource_clauses.append(
                 or_(
-                    (ImageBuildTable.runtime_path_digest.in_(path_digests))
-                    & (ImageBuildTable.artifact_path_value.in_(paths)),
+                    (ImageBuildTable.archive_path_digest.in_(path_digests))
+                    & (ImageBuildTable.archive_path_value.in_(paths)),
                     (ImageBuildTable.manifest_path_digest.in_(path_digests))
                     & (ImageBuildTable.manifest_path_value.in_(paths)),
                     (ImageBuildTable.dockerfile_path_digest.in_(path_digests))

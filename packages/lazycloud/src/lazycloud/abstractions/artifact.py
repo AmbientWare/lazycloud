@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import mimetypes
 import os
 import shutil
 import tempfile
@@ -361,7 +362,7 @@ class Artifact:
                 task_id,
                 packaged.name,
                 _file_chunks(packaged, chunk_size=chunk_size),
-                content_type=self.content_type or "application/octet-stream",
+                content_type=self.content_type or guess_content_type(packaged),
             )
         except HttpApiError as exc:
             raise ArtifactSaveError(exc.detail or "failed to save artifact") from exc
@@ -466,6 +467,17 @@ def _remote_stat(stat: artifacts.ArtifactStat) -> Stat:
         atime=stat.atime,
         mtime=stat.mtime,
     )
+
+
+def guess_content_type(path: Path) -> str:
+    """Name the type from the filename when the caller did not give one.
+
+    Without this every artifact is stored as application/octet-stream, so a
+    reader has nothing to decide with and an image or PDF cannot be rendered.
+    A zipped directory is always an archive regardless of what it contains.
+    """
+    guessed, _ = mimetypes.guess_type(path.name)
+    return guessed or "application/octet-stream"
 
 
 def _file_chunks(path: Path, *, chunk_size: int) -> Iterable[bytes]:
