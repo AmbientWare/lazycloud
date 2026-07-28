@@ -13,8 +13,7 @@
     "format:check": "prettier --check .",
     "typecheck": "bun run routegen && tsc --noEmit",
     "test": "vitest run",
-    "test:e2e": "playwright test",
-    "quality:bundle": "bun run scripts/check-bundle-budget.ts"
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@fontsource-variable/instrument-sans": "^5.2.8",
