@@ -258,14 +258,6 @@ does not reduce the number of things you are responsible for finishing. Agents
 stay within assigned files, preserve concurrent changes, surface real blockers,
 and report changed paths, evidence, gaps, and conflicts.
 
-A task's scope is fixed when it starts. Work discovered along the way—a defect,
-a stale contract, a better design—is recorded on the owning ticket and left
-there. Absorb it only when it blocks the requested outcome or prevents a
-security, data-loss, paid-resource, concurrency, or cleanup failure, and say so
-when you do. Three reasonable-looking widenings in a row still end somewhere the
-owner never agreed to go, so when scope grows, stop and get agreement rather
-than proceeding under an assumption.
-
 Finish the current task before starting the next. A task that reveals a larger
 problem is still the task you finish; the larger problem gets a ticket. Leaving
 a tree that does not build or a change half-migrated across owners costs more
