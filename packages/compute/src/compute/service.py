@@ -7,6 +7,7 @@ import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from enum import Enum
 from math import ceil
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
@@ -15,6 +16,7 @@ from database.repositories.compute import (
     ComputeCapacityOperationRepository,
     ComputeCapacityRequestRecord,
     ComputeCapacityRequestRepository,
+    ComputeJoinCredentialRecord,
     ComputeJoinCredentialRepository,
     ComputeLedgerRecord,
     ComputeLedgerRepository,
@@ -49,11 +51,13 @@ from shared.capacity import (
     CapacityAcquisitionResult,
     CapacityAcquisitionShape,
     CapacityAcquisitionStatus,
+    CapacityFailureCode,
     CapacityOwnerKind,
     CapacityOwnerSource,
     CapacityPoolSizingState,
     CapacityPoolSizingStateUpdate,
     CapacityReleaseRequest,
+    capacity_failure_message,
     capacity_owner_for_provider,
 )
 from shared.compute_enrollment import (
@@ -88,6 +92,7 @@ from shared.usage import UsageMetric, UsageUnit, usage_record_id
 
 from compute.agent_control import (
     ComputePrincipal,
+    JoinTokenCreationPlan,
     agent_machine_worker_id,
     plan_join_token_creation,
 )
@@ -441,7 +446,10 @@ class ComputeService:
                     request,
                     CapacityAcquisitionStatus.TemporarilyUnavailable,
                     desired_unit=max(pool.desired_machines, 1),
-                    reason=f"pooled provider reconciliation failed: {exc}",
+                    reason=capacity_failure_message(
+                        CapacityFailureCode.ProviderReconciliationFailed,
+                        exception_type=type(exc).__name__,
+                    ),
                 )
             return _plan_next_capacity_unit(
                 request,
@@ -540,7 +548,11 @@ class ComputeService:
         except Exception as exc:
             return self._record_capacity_failure(
                 request,
-                reason=f"direct provider offer discovery failed: {exc}",
+                reason=capacity_failure_message(
+                    CapacityFailureCode.ProviderUnavailable,
+                    exception_type=type(exc).__name__,
+                ),
+                failure_code=CapacityFailureCode.ProviderUnavailable,
             )
         if offer is None:
             return _capacity_result(
@@ -558,7 +570,11 @@ class ComputeService:
         except Exception as exc:
             return self._record_capacity_failure(
                 request,
-                reason=f"direct provider reconciliation failed: {exc}",
+                reason=capacity_failure_message(
+                    CapacityFailureCode.ProviderReconciliationFailed,
+                    exception_type=type(exc).__name__,
+                ),
+                failure_code=CapacityFailureCode.ProviderReconciliationFailed,
             )
         observed_by_machine = {item.machine_id: item for item in observed.observed_machines}
         if existing_operation is not None:
@@ -723,8 +739,9 @@ class ComputeService:
                     operation,
                     CapacityAcquisitionStatus.TemporarilyUnavailable,
                 )
+            target_machine_id = operation.target_machine_id
             provider_record = ComputeProviderInstanceRepository(session).get_by_machine(
-                operation.target_machine_id
+                target_machine_id
             )
             if provider_record is None:
                 raise RuntimeError("direct provider capacity intent disappeared")
@@ -735,41 +752,68 @@ class ComputeService:
                     CapacityAcquisitionStatus.TemporarilyUnavailable,
                     reason="workspace signing authority is unavailable",
                 )
-            stable_token = _capacity_join_token(
-                workspace_record.signing_key,
-                operation_id=request.operation_id,
-                machine_id=operation.target_machine_id,
-            )
-            join_token = plan_join_token_creation(
-                ComputePrincipal(workspace_id=pool.workspace_id, owner_token_id=NAME),
-                pool.name,
-                machine_id=operation.target_machine_id,
-                token=stable_token,
-            )
+            principal = ComputePrincipal(workspace_id=pool.workspace_id, owner_token_id=NAME)
             credentials = ComputeJoinCredentialRepository(session)
+            join_token = _plan_capacity_join_token(
+                workspace_record.signing_key,
+                principal=principal,
+                pool_name=pool.name,
+                operation_id=request.operation_id,
+                machine_id=target_machine_id,
+                join_attempt=operation.join_attempt,
+            )
             credential = credentials.get_by_hash(join_token.token_hash, for_update=True)
+            reuse = _capacity_join_credential_reuse(
+                credential,
+                workspace_id=pool.workspace_id,
+                pool_name=pool.name,
+                machine_id=target_machine_id,
+                now=utc_now(),
+            )
+            if reuse is _CapacityJoinReuse.Renew:
+                # The previous attempt was compensated: its authority is revoked or
+                # expired and was never used. Advance the attempt so both the join
+                # token and the provider idempotency key are new, instead of retrying
+                # forever against a hash that can only ever re-derive dead authority.
+                operation = operations.upsert(
+                    operation.model_copy(
+                        update={
+                            "join_attempt": operation.join_attempt + 1,
+                            "updated_at": utc_now(),
+                        }
+                    )
+                )
+                join_token = _plan_capacity_join_token(
+                    workspace_record.signing_key,
+                    principal=principal,
+                    pool_name=pool.name,
+                    operation_id=request.operation_id,
+                    machine_id=target_machine_id,
+                    join_attempt=operation.join_attempt,
+                )
+                credential = credentials.get_by_hash(join_token.token_hash, for_update=True)
+                reuse = _capacity_join_credential_reuse(
+                    credential,
+                    workspace_id=pool.workspace_id,
+                    pool_name=pool.name,
+                    machine_id=target_machine_id,
+                    now=utc_now(),
+                )
+            if reuse is not _CapacityJoinReuse.Usable:
+                return _operation_result(
+                    operation,
+                    CapacityAcquisitionStatus.TemporarilyUnavailable,
+                    reason="stable provider join authority is no longer usable",
+                )
             if credential is None:
                 credentials.create(
                     token_hash=join_token.token_hash,
                     workspace_id=pool.workspace_id,
                     pool_name=pool.name,
-                    machine_id=operation.target_machine_id,
+                    machine_id=target_machine_id,
                     created_by_token_id=None,
                     max_uses=join_token.state.max_uses,
                     expires_at=join_token.expires_at,
-                )
-            elif (
-                credential.workspace_id != pool.workspace_id
-                or credential.pool_name != pool.name
-                or credential.machine_id != operation.target_machine_id
-                or credential.status is not ComputeCredentialStatus.Active
-                or credential.use_count != 0
-                or credential.expires_at <= utc_now()
-            ):
-                return _operation_result(
-                    operation,
-                    CapacityAcquisitionStatus.TemporarilyUnavailable,
-                    reason="stable provider join authority is no longer usable",
                 )
             ComputeProviderInstanceRepository(session).upsert(
                 provider_record.model_copy(
@@ -787,15 +831,23 @@ class ComputeService:
                     workspace_id=pool.workspace_id,
                     pool_name=pool.name,
                     registration_token=join_token.token,
-                    machine_id=operation.target_machine_id,
+                    machine_id=target_machine_id,
                     operation_id=request.operation_id,
+                    idempotency_key=_capacity_launch_idempotency_key(
+                        operation_id=request.operation_id,
+                        join_attempt=operation.join_attempt,
+                    ),
                     offer=offer,
                 )
             )
         except Exception as exc:
             return self._record_capacity_failure(
                 request,
-                reason=f"direct provider launch failed: {exc}",
+                reason=capacity_failure_message(
+                    CapacityFailureCode.ProviderLaunchFailed,
+                    exception_type=type(exc).__name__,
+                ),
+                failure_code=CapacityFailureCode.ProviderLaunchFailed,
             )
         self._commit_direct_capacity_operation(pool, operation, remote)
         return _operation_result(
@@ -875,7 +927,11 @@ class ComputeService:
             return _capacity_result(
                 request,
                 CapacityAcquisitionStatus.TemporarilyUnavailable,
-                reason=str(exc),
+                reason=capacity_failure_message(
+                    CapacityFailureCode.Unknown,
+                    exception_type=type(exc).__name__,
+                ),
+                failure_code=CapacityFailureCode.Unknown,
             )
         if provider.pooled is None:
             return _capacity_result(
@@ -895,7 +951,11 @@ class ComputeService:
         except Exception as exc:
             return self._record_capacity_failure(
                 request,
-                reason=f"pooled provider reconciliation failed: {exc}",
+                reason=capacity_failure_message(
+                    CapacityFailureCode.ProviderReconciliationFailed,
+                    exception_type=type(exc).__name__,
+                ),
+                failure_code=CapacityFailureCode.ProviderReconciliationFailed,
             )
         with self.context.database.session() as session:
             pools = ComputePoolRepository(session)
@@ -1006,7 +1066,11 @@ class ComputeService:
         except Exception as exc:
             return self._record_capacity_failure(
                 request,
-                reason=f"pooled provider capacity request failed: {exc}",
+                reason=capacity_failure_message(
+                    CapacityFailureCode.CapacityPlanningFailed,
+                    exception_type=type(exc).__name__,
+                ),
+                failure_code=CapacityFailureCode.CapacityPlanningFailed,
             )
         with self.context.database.session() as session:
             repository = ComputeCapacityOperationRepository(session)
@@ -1116,7 +1180,11 @@ class ComputeService:
             return _operation_result(
                 operation,
                 CapacityAcquisitionStatus.TemporarilyUnavailable,
-                reason=str(exc),
+                reason=capacity_failure_message(
+                    CapacityFailureCode.Unknown,
+                    exception_type=type(exc).__name__,
+                ),
+                failure_code=CapacityFailureCode.Unknown,
             )
         if provider.pooled is None:
             return _operation_result(
@@ -1131,7 +1199,11 @@ class ComputeService:
             return _operation_result(
                 operation,
                 CapacityAcquisitionStatus.TemporarilyUnavailable,
-                reason=f"pooled provider reconciliation failed: {exc}",
+                reason=capacity_failure_message(
+                    CapacityFailureCode.ProviderReconciliationFailed,
+                    exception_type=type(exc).__name__,
+                ),
+                failure_code=CapacityFailureCode.ProviderReconciliationFailed,
             )
         with self.context.database.session() as session:
             pools = ComputePoolRepository(session)
@@ -1193,7 +1265,11 @@ class ComputeService:
                 return _operation_result(
                     current,
                     CapacityAcquisitionStatus.TemporarilyUnavailable,
-                    reason=f"pooled provider release reconciliation failed: {exc}",
+                    reason=capacity_failure_message(
+                        CapacityFailureCode.ProviderReconciliationFailed,
+                        exception_type=type(exc).__name__,
+                    ),
+                    failure_code=CapacityFailureCode.ProviderReconciliationFailed,
                 )
             with self.context.database.session() as session:
                 operations = ComputeCapacityOperationRepository(session)
@@ -1226,7 +1302,11 @@ class ComputeService:
             return _operation_result(
                 current,
                 CapacityAcquisitionStatus.TemporarilyUnavailable,
-                reason=f"pooled provider release failed: {exc}",
+                reason=capacity_failure_message(
+                    CapacityFailureCode.ProviderUnavailable,
+                    exception_type=type(exc).__name__,
+                ),
+                failure_code=CapacityFailureCode.ProviderUnavailable,
             )
         if (
             updated_snapshot.desired_machines > release_target
@@ -1258,6 +1338,7 @@ class ComputeService:
         request: CapacityAcquisitionRequest,
         *,
         reason: str,
+        failure_code: CapacityFailureCode = CapacityFailureCode.Unknown,
     ) -> CapacityAcquisitionResult:
         with self.context.database.session() as session:
             repository = ComputeCapacityOperationRepository(session)
@@ -1272,6 +1353,7 @@ class ComputeService:
                         update={
                             "status": CapacityAcquisitionStatus.TemporarilyUnavailable.value,
                             "last_error": reason,
+                            "failure_code": failure_code,
                             "updated_at": utc_now(),
                         }
                     )
@@ -1280,11 +1362,13 @@ class ComputeService:
                     operation,
                     CapacityAcquisitionStatus.TemporarilyUnavailable,
                     reason=reason,
+                    failure_code=failure_code,
                 )
         return _capacity_result(
             request,
             CapacityAcquisitionStatus.TemporarilyUnavailable,
             reason=reason,
+            failure_code=failure_code,
         )
 
     def create_pool(
@@ -2938,6 +3022,7 @@ class ComputeService:
                         offer=prepared.offer,
                         machine_id=prepared.machine.id,
                         operation_id=prepared.machine.id,
+                        idempotency_key=prepared.machine.id,
                     )
                 )
                 created_instances.append(
@@ -5123,8 +5208,80 @@ def _pool_labels_from_config(config: PoolConfig) -> dict[str, str]:
     return {key: value for key, value in labels.items() if value}
 
 
-def _capacity_join_token(signing_key: str, *, operation_id: str, machine_id: str) -> str:
-    payload = "\0".join(("capacity-provider-join-v1", operation_id, machine_id)).encode()
+class _CapacityJoinReuse(Enum):
+    """Whether an existing provider-launch credential can still serve this operation."""
+
+    Usable = "usable"
+    Renew = "renew"
+    Rejected = "rejected"
+
+
+def _capacity_join_credential_reuse(
+    credential: ComputeJoinCredentialRecord | None,
+    *,
+    workspace_id: str,
+    pool_name: str,
+    machine_id: str,
+    now: datetime,
+) -> _CapacityJoinReuse:
+    if credential is None:
+        return _CapacityJoinReuse.Usable
+    scoped_to_operation = (
+        credential.workspace_id == workspace_id
+        and credential.pool_name == pool_name
+        and credential.machine_id == machine_id
+    )
+    if not scoped_to_operation or credential.use_count != 0:
+        # A consumed credential means a machine already enrolled on this authority;
+        # minting another would admit a second enrollment for the same machine.
+        return _CapacityJoinReuse.Rejected
+    if credential.status is not ComputeCredentialStatus.Active or credential.expires_at <= now:
+        return _CapacityJoinReuse.Renew
+    return _CapacityJoinReuse.Usable
+
+
+def _capacity_launch_idempotency_key(*, operation_id: str, join_attempt: int) -> str:
+    """Provider idempotency key for one launch attempt of a capacity operation.
+
+    Separate from the operation's logical identity: retries inside an attempt reuse
+    the key so the provider treats them as replays, while a compensated attempt
+    advances it so the next launch is a genuinely new side effect.
+    """
+    return f"{operation_id}\0{join_attempt}"
+
+
+def _plan_capacity_join_token(
+    signing_key: str,
+    *,
+    principal: ComputePrincipal,
+    pool_name: str,
+    operation_id: str,
+    machine_id: str,
+    join_attempt: int,
+) -> JoinTokenCreationPlan:
+    return plan_join_token_creation(
+        principal,
+        pool_name,
+        machine_id=machine_id,
+        token=_capacity_join_token(
+            signing_key,
+            operation_id=operation_id,
+            machine_id=machine_id,
+            join_attempt=join_attempt,
+        ),
+    )
+
+
+def _capacity_join_token(
+    signing_key: str,
+    *,
+    operation_id: str,
+    machine_id: str,
+    join_attempt: int,
+) -> str:
+    payload = "\0".join(
+        ("capacity-provider-join-v1", operation_id, machine_id, str(join_attempt))
+    ).encode()
     digest = hmac.new(signing_key.encode(), payload, hashlib.sha256).digest()
     return base64.urlsafe_b64encode(digest).decode().rstrip("=")
 
@@ -5239,12 +5396,14 @@ def _capacity_result(
     status: CapacityAcquisitionStatus,
     *,
     reason: str = "",
+    failure_code: CapacityFailureCode | None = None,
 ) -> CapacityAcquisitionResult:
     return CapacityAcquisitionResult(
         status=status,
         capacity_owner_id=request.capacity_owner_id,
         reservation_id=request.reservation_id,
         desired_unit=request.desired_unit,
+        failure_code=failure_code,
         reason=reason,
     )
 
@@ -5291,6 +5450,7 @@ def _operation_result(
     status: CapacityAcquisitionStatus,
     *,
     reason: str = "",
+    failure_code: CapacityFailureCode | None = None,
 ) -> CapacityAcquisitionResult:
     return CapacityAcquisitionResult(
         status=status,
@@ -5298,6 +5458,7 @@ def _operation_result(
         reservation_id=operation.reservation_id,
         desired_unit=operation.desired_unit,
         target_machine_id=operation.target_machine_id,
+        failure_code=failure_code or operation.failure_code,
         reason=reason or operation.last_error,
     )
 

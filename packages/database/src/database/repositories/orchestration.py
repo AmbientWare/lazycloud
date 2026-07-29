@@ -28,7 +28,7 @@ from shared.autoscaler_state import (
 )
 from shared.capacity import CapacityPoolSizingState, CapacityPoolSizingStateUpdate
 from shared.compute_fleet import AgentLease, AgentRecord, Machine, Pool, ResourceStatus, Worker
-from shared.container_requests import ContainerShutdownTarget
+from shared.container_requests import ContainerShutdownTarget, StopContainerReason
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import ConflictError
 from shared.identity import WorkspaceStatus
@@ -508,6 +508,45 @@ class ContainerRepository:
         return [
             ContainerRecord.model_validate(row.payload) for row in self.session.scalars(statement)
         ]
+
+    def unsettled_preemptions_across_workspaces(self, *, limit: int) -> list[ContainerRecord]:
+        """System recovery input: preempted containers whose retry intent never settled.
+
+        A crash between the terminal commit and the settle call leaves the intent durable
+        here; oldest first so the longest-stranded task recovers first.
+        """
+        statement = (
+            select(ContainerTable)
+            .where(
+                ContainerTable.termination_reason == StopContainerReason.Preempted.value,
+                ContainerTable.preemption_settled_at.is_(None),
+            )
+            .order_by(ContainerTable.finished_at.asc(), ContainerTable.id.asc())
+            .limit(limit)
+        )
+        return [
+            ContainerRecord.model_validate(row.payload) for row in self.session.scalars(statement)
+        ]
+
+    def mark_preemption_settled(
+        self,
+        container_id: str,
+        *,
+        now: datetime,
+    ) -> ContainerRecord | None:
+        """Record that a preempted container's retry intent has been resolved."""
+        row = self.session.get(ContainerTable, container_id)
+        if row is None:
+            return None
+        record = ContainerRecord.model_validate(row.payload)
+        if record.preemption_settled_at is not None:
+            return record
+        settled = record.model_copy(update={"preemption_settled_at": now})
+        row.payload = settled.model_dump(mode="json")
+        row.preemption_settled_at = now
+        flag_modified(row, "payload")
+        self.session.flush()
+        return settled
 
     def expired_containers_across_workspaces(self, *, now: datetime) -> list[ContainerRecord]:
         """System reaper input: every live container past its expiry."""

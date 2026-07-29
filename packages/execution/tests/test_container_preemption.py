@@ -7,9 +7,11 @@ from control.service import ControlPlaneService
 from database.repositories.orchestration import ContainerRepository
 from execution.containers.preemption import PreemptedContainerService
 from execution.taskqueues.service import TaskQueuePreemptedResult
+from shared.container_requests import StopContainerReason
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.deployments import StubKind
 from shared.tasks import RetryPolicy, Task, TaskStatus
+from shared.timestamps import utc_now
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +89,50 @@ def test_function_preemption_uses_explicit_retry_policy(
     assert duplicate.status is TaskStatus.Retry
     assert not duplicate.changed
     assert not duplicate.retry_scheduled
+
+
+def test_unsettled_preemption_recovers_once_after_a_crash(
+    isolated_services: ApiServices,
+) -> None:
+    """A crash between the terminal commit and the settle call must not strand the task.
+
+    The container terminal state and the preemption intent commit together, so the
+    intent survives; recovery settles it exactly once and is a no-op thereafter.
+    """
+    task, container = _running_task(
+        isolated_services,
+        kind=StubKind.Function,
+        name="preempted-crash-recovery",
+    )
+    with isolated_services.context.database.session() as session:
+        repository = ContainerRepository(session)
+        stranded = container.model_copy(
+            update={
+                "status": ContainerStatus.Failed,
+                "exit_code": 562,
+                "termination_reason": StopContainerReason.Preempted,
+                "finished_at": utc_now(),
+                "preemption_settled_at": None,
+            }
+        )
+        repository.records.upsert(
+            stranded,
+            workspace_id=stranded.workspace_id,
+            name=stranded.name,
+            status=stranded.status.value,
+        )
+    service = PreemptedContainerService(
+        services=isolated_services,
+        stubs=isolated_services.control_plane_service,
+        task_queues=UnusedTaskQueueControl(),
+    )
+
+    recovered = service.recover_unsettled()
+    replayed = service.recover_unsettled()
+
+    assert recovered == [container.id]
+    assert isolated_services.tasks.get(task.id).status is TaskStatus.Retry
+    assert replayed == []
 
 
 def test_endpoint_preemption_fails_without_blind_replay(

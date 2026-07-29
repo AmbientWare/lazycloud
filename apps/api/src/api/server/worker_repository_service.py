@@ -2019,6 +2019,7 @@ class WorkerRepositoryService:
         updated_task: Task | None = None
         preempted = termination_reason is StopContainerReason.Preempted
         reconcile_preemption = False
+        settle_required = False
         with self.services.context.database.session() as session:
             container = ContainerRepository(session).get_across_workspaces(container_id)
             if container is None:
@@ -2030,6 +2031,7 @@ class WorkerRepositoryService:
                 container.termination_reason,
                 container.started_at,
                 container.finished_at,
+                container.preemption_settled_at,
             )
             container.termination_reason = termination_reason
             if container.status is ContainerStatus.Stopped:
@@ -2054,21 +2056,35 @@ class WorkerRepositoryService:
                         else f"container {container.id} exited with code {exit_code}",
                         finished_at=container.finished_at,
                     )
+            # The preemption retry intent must commit with the terminal state it belongs to.
+            # A container that needs no settling is marked settled here so the recovery
+            # sweep only ever sees work that is genuinely outstanding.
+            settle_required = bool(reconcile_preemption and container.task_id)
+            if preempted and not settle_required:
+                container.preemption_settled_at = container.preemption_settled_at or now
             changed = previous_state != (
                 container.status,
                 container.exit_code,
                 container.termination_reason,
                 container.started_at,
                 container.finished_at,
+                container.preemption_settled_at,
             )
             if changed:
                 container = ContainerRepository(session).upsert(container)
         if changed:
             self._publish_runtime_container_change(container)
-        if reconcile_preemption and container.task_id:
+        if settle_required:
             self.services.preempted_containers.preempted(container, exit_code=exit_code)
+            self._mark_container_preemption_settled(container.id)
         if updated_task is not None:
             self._publish_runtime_task_change(container, updated_task)
+
+    def _mark_container_preemption_settled(self, container_id: str) -> None:
+        if self.services is None:
+            return
+        with self.services.context.database.session() as session:
+            ContainerRepository(session).mark_preemption_settled(container_id, now=utc_now())
 
     def _sync_runtime_task_for_container_terminal_state(
         self,

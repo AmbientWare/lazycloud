@@ -63,6 +63,25 @@ class PreemptedContainerService:
     stubs: PreemptionStubReader
     task_queues: PreemptedTaskQueueControl
 
+    def recover_unsettled(self, *, limit: int = 100) -> list[str]:
+        """Settle preemption intents whose inline attempt never completed.
+
+        The terminal container state and this intent commit together, so anything
+        still unsettled here is work a control-plane crash left stranded. Settling is
+        replay-safe, so an intent that did in fact complete resolves to no change.
+        Returns the container ids settled.
+        """
+        recovered: list[str] = []
+        for container in self.services.containers.unsettled_preemptions(limit=limit):
+            if container.task_id:
+                self.preempted(
+                    container,
+                    exit_code=container.exit_code if container.exit_code is not None else 0,
+                )
+            self.services.containers.mark_preemption_settled(container.id)
+            recovered.append(container.id)
+        return recovered
+
     def preempted(
         self,
         container: ContainerRecord,

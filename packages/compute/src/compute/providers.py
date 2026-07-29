@@ -114,6 +114,10 @@ class DirectMachineLaunchRequest(ContractModel):
     registration_token: str
     machine_id: str
     operation_id: str
+    # Logical identity is `operation_id`; this rotates per launch attempt so a
+    # compensated attempt relaunches instead of colliding with the provider's
+    # idempotency record for the previous one.
+    idempotency_key: str
     offer: ComputeOffer
 
 

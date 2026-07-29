@@ -11,6 +11,7 @@ from sqlalchemy import (
     Integer,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql.schema import SchemaItem
@@ -173,6 +174,14 @@ class ContainerTable(IdPayloadTable, DatabaseBase):
         Index("ix_containers_stub", "stub_id"),
         Index("ix_containers_worker_status", "worker_id", "status"),
         Index("ix_containers_machine_status", "machine_id", "status"),
+        Index(
+            "ix_containers_unsettled_preemption",
+            "finished_at",
+            postgresql_where=text(
+                "termination_reason = 'PREEMPTED' AND preemption_settled_at IS NULL"
+            ),
+            sqlite_where=text("termination_reason = 'PREEMPTED' AND preemption_settled_at IS NULL"),
+        ),
         CheckConstraint(
             "termination_reason IN ('TTL', 'USER', 'SCHEDULER', 'PREEMPTED', 'ADMIN', 'UNKNOWN')",
             name="ck_containers_termination_reason",
@@ -220,6 +229,10 @@ class ContainerTable(IdPayloadTable, DatabaseBase):
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    preemption_settled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
 
 
 class RouteTable(IdPayloadTable, DatabaseBase):

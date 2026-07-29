@@ -563,8 +563,7 @@ class SchedulerContainerRequestService:
                         outcome = outcome.model_copy(
                             update={
                                 "reason": (
-                                    f"capacity reservation retry required: "
-                                    f"{type(exc).__name__}: {exc}"
+                                    f"capacity reservation retry required: {type(exc).__name__}"
                                 )
                             }
                         )
@@ -663,7 +662,7 @@ class SchedulerContainerRequestService:
                 reservation_id=request.container_id,
                 operation_id=request.container_id,
                 retry_delay_seconds=DEFAULT_PROVISIONING_HANDOFF.total_seconds(),
-                reason=f"capacity acquisition failed: {type(exc).__name__}: {exc}",
+                reason=f"capacity acquisition failed: {type(exc).__name__}",
             )
         waiting = result.status in {
             CapacityAcquisitionStatus.ExistingPending,
@@ -1013,7 +1012,7 @@ class SchedulerContainerRequestService:
             try:
                 self.failure_handler.mark_scheduling_failed(request, reason, now=now)
             except Exception as exc:  # pragma: no cover - defensive callback boundary
-                return f"{reason}; failed to sync runtime state: {type(exc).__name__}: {exc}"
+                return f"{reason}; failed to sync runtime state: {type(exc).__name__}"
         if _request_uses_quota(request):
             try:
                 self.containers.release_concurrency_reservation(
@@ -1023,8 +1022,7 @@ class SchedulerContainerRequestService:
                 )
             except Exception as exc:
                 reason = (
-                    f"{reason}; failed to release concurrency reservation: "
-                    f"{type(exc).__name__}: {exc}"
+                    f"{reason}; failed to release concurrency reservation: {type(exc).__name__}"
                 )
         self._release_capacity_reservation(request.container_id, now=now)
         return reason

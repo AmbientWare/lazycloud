@@ -22,6 +22,7 @@ from compute.reclaim import ComputeReclaimPolicy
 from database.repositories.compute import (
     ComputeCapacityOperationRepository,
     ComputeCapacityRequestRepository,
+    ComputeJoinCredentialRecord,
     ComputeJoinCredentialRepository,
     ComputeLedgerRecord,
     ComputeLedgerRepository,
@@ -38,6 +39,7 @@ from shared.capacity import (
     CapacityAcquisitionRequest,
     CapacityAcquisitionShape,
     CapacityAcquisitionStatus,
+    CapacityFailureCode,
     CapacityReleaseRequest,
 )
 from shared.compute_enrollment import (
@@ -102,7 +104,9 @@ class _DirectProvider:
             raise RuntimeError(
                 self.launch_failure_detail or f"provider {self.name} launch capacity exhausted"
             )
-        prior_token = self.operation_tokens.get(request.operation_id)
+        # Mirrors EC2 ClientToken semantics: a replay under the same idempotency key
+        # must carry an identical payload, and a new key is a new launch.
+        prior_token = self.operation_tokens.get(request.idempotency_key)
         if prior_token is not None and prior_token != request.registration_token:
             raise RuntimeError("idempotent launch payload changed")
         instance_id = self.operation_instances.get(
@@ -112,7 +116,7 @@ class _DirectProvider:
         self.registration_tokens.append(request.registration_token)
         self.launch_requests.append(request)
         self.operation_instances[request.operation_id] = instance_id
-        self.operation_tokens[request.operation_id] = request.registration_token
+        self.operation_tokens[request.idempotency_key] = request.registration_token
         self.remote[instance_id] = _RemoteMachine(
             provider_instance_id=instance_id,
             machine_id=request.machine_id,
@@ -1533,3 +1537,139 @@ def test_never_registered_machine_is_reclaimed_after_the_deadline(
     }
     assert registered_machine_id in machines
     assert machines.get(silent_machine_id, ResourceStatus.Deleted) is ResourceStatus.Deleted
+
+
+def _pool_for_capacity(
+    services: ApiServices, alpha: _DirectProvider, name: str
+) -> ComputePoolRecord:
+    _install_providers(services, {"alpha": alpha})
+    state = services.compute.launch_pool_capacity(
+        PoolConfig(name=name, providers=["alpha"], nodes=1, ttl="1h", max_spend=1.0)
+    )
+    with services.context.database.session() as session:
+        pool = ComputePoolRepository(session).get_by_name(state.workspace_id, state.name)
+    assert pool is not None
+    return pool
+
+
+def _capacity_credentials(
+    services: ApiServices,
+    pool: ComputePoolRecord,
+    machine_id: str | None,
+) -> list[ComputeJoinCredentialRecord]:
+    with services.context.database.session() as session:
+        return [
+            item
+            for item in ComputeJoinCredentialRepository(session).list_for_pool(
+                pool.workspace_id,
+                pool.name,
+            )
+            if item.machine_id == machine_id
+        ]
+
+
+def test_compensated_launch_attempt_renews_join_authority_and_idempotency_key(
+    isolated_services: ApiServices,
+) -> None:
+    """A compensated attempt must be able to relaunch under the same operation.
+
+    Both the join token and the provider idempotency key derive from the attempt, so
+    advancing it yields fresh authority and a genuinely new launch rather than a
+    permanent dead end against revoked authority.
+    """
+    alpha = _DirectProvider(name="alpha", offers=[_offer("alpha", hourly_cost_micros=100_000)])
+    pool = _pool_for_capacity(isolated_services, alpha, "renew-join-authority-pool")
+    acquisition = CapacityAcquisitionRequest(
+        capacity_owner_id=pool.capacity_owner_id,
+        reservation_id=str(uuid4()),
+        operation_id=str(uuid4()),
+        desired_unit=2,
+        shape=CapacityAcquisitionShape(cpu_millicores=4_000, memory_mib=8_192),
+    )
+
+    requested = isolated_services.compute.acquire_capacity(acquisition)
+    assert requested.status is CapacityAcquisitionStatus.Requested
+
+    # The reconciler revokes an overdue launch intent's unused credential.
+    [existing] = _capacity_credentials(isolated_services, pool, requested.target_machine_id)
+    with isolated_services.context.database.session() as session:
+        ComputeJoinCredentialRepository(session).save(existing.revoke(now=utc_now()))
+    alpha.hide_remote_reconciliations = 1
+
+    renewed = isolated_services.compute.acquire_capacity(acquisition)
+
+    assert renewed.status is CapacityAcquisitionStatus.Requested
+    assert renewed.target_machine_id == requested.target_machine_id
+    assert alpha.registration_tokens[-1] != alpha.registration_tokens[-2]
+    credentials = _capacity_credentials(isolated_services, pool, requested.target_machine_id)
+    active = [item for item in credentials if item.status is ComputeCredentialStatus.Active]
+    revoked = [item for item in credentials if item.status is not ComputeCredentialStatus.Active]
+    assert len(active) == 1
+    assert len(revoked) == 1
+    assert active[0].token_hash != revoked[0].token_hash
+    assert active[0].use_count == 0
+
+
+def test_consumed_join_authority_is_never_reminted(
+    isolated_services: ApiServices,
+) -> None:
+    """A used credential means a machine already enrolled; a second must not be minted."""
+    alpha = _DirectProvider(name="alpha", offers=[_offer("alpha", hourly_cost_micros=100_000)])
+    pool = _pool_for_capacity(isolated_services, alpha, "consumed-join-authority-pool")
+    acquisition = CapacityAcquisitionRequest(
+        capacity_owner_id=pool.capacity_owner_id,
+        reservation_id=str(uuid4()),
+        operation_id=str(uuid4()),
+        desired_unit=2,
+        shape=CapacityAcquisitionShape(cpu_millicores=4_000, memory_mib=8_192),
+    )
+
+    requested = isolated_services.compute.acquire_capacity(acquisition)
+    assert requested.status is CapacityAcquisitionStatus.Requested
+
+    [existing] = _capacity_credentials(isolated_services, pool, requested.target_machine_id)
+    with isolated_services.context.database.session() as session:
+        ComputeJoinCredentialRepository(session).save(existing.model_copy(update={"use_count": 1}))
+    alpha.hide_remote_reconciliations = 1
+
+    rejected = isolated_services.compute.acquire_capacity(acquisition)
+
+    assert rejected.status is CapacityAcquisitionStatus.TemporarilyUnavailable
+    assert len(_capacity_credentials(isolated_services, pool, requested.target_machine_id)) == 1
+
+
+def test_provider_failure_is_typed_and_never_carries_upstream_text(
+    isolated_services: ApiServices,
+) -> None:
+    """Provider exception text must not reach durable state or the returned reason.
+
+    Upstream errors routinely embed presigned URLs, tokens, and account identifiers;
+    the durable record and the caller get a typed code plus a bounded safe message.
+    """
+    secret = "ASIAEXAMPLESECRET/presigned?X-Amz-Signature=deadbeefcafe"
+    alpha = _DirectProvider(name="alpha", offers=[_offer("alpha", hourly_cost_micros=100_000)])
+    pool = _pool_for_capacity(isolated_services, alpha, "typed-provider-failure-pool")
+    # Arm the failure only after pool setup so it lands on the acquisition launch.
+    alpha.fail_after_launches = len(alpha.launch_calls)
+    alpha.launch_failure_detail = f"RunInstances denied for {secret}"
+    acquisition = CapacityAcquisitionRequest(
+        capacity_owner_id=pool.capacity_owner_id,
+        reservation_id=str(uuid4()),
+        operation_id=str(uuid4()),
+        desired_unit=2,
+        shape=CapacityAcquisitionShape(cpu_millicores=4_000, memory_mib=8_192),
+    )
+
+    result = isolated_services.compute.acquire_capacity(acquisition)
+
+    assert result.status is CapacityAcquisitionStatus.TemporarilyUnavailable
+    assert result.failure_code is CapacityFailureCode.ProviderLaunchFailed
+    assert secret not in result.reason
+    assert "RunInstances denied" not in result.reason
+    with isolated_services.context.database.session() as session:
+        [operation] = ComputeCapacityOperationRepository(session).list_for_owner(
+            pool.capacity_owner_id
+        )
+    assert operation.failure_code is CapacityFailureCode.ProviderLaunchFailed
+    assert secret not in operation.last_error
+    assert "RunInstances denied" not in operation.last_error

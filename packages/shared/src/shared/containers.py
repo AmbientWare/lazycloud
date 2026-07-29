@@ -45,6 +45,7 @@ class ContainerRecord(ContractModel):
     created_at: datetime = Field(default_factory=utc_now)
     started_at: datetime | None = None
     finished_at: datetime | None = None
+    preemption_settled_at: datetime | None = None
 
 
 __all__ = ["ContainerRecord", "ContainerStatus"]

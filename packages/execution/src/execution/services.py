@@ -51,6 +51,10 @@ class ExecutionContainerService(Protocol):
 
     def delete(self, container_id: str) -> None: ...
 
+    def unsettled_preemptions(self, *, limit: int) -> list[ContainerRecord]: ...
+
+    def mark_preemption_settled(self, container_id: str) -> None: ...
+
     def publish_lifecycle_change(
         self,
         container: ContainerRecord,

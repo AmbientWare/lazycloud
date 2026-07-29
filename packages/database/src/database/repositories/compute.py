@@ -31,6 +31,7 @@ from shared.aws_connections import (
     AwsAccountConnection,
     AwsAuthorizationCleanupTombstone,
 )
+from shared.capacity import TERMINAL_REASON_MAX_LENGTH, CapacityFailureCode
 from shared.compute_enrollment import (
     AgentCapacityState,
     ComputeCredentialStatus,
@@ -96,8 +97,10 @@ class ComputeCapacityOperationRecord(ContractModel):
     previous_desired_unit: int = Field(default=0, ge=0)
     release_desired_unit: int | None = Field(default=None, ge=0)
     owns_capacity: bool = False
+    join_attempt: int = Field(default=1, ge=1)
     shape: dict[str, JsonValue] = Field(default_factory=dict)
-    last_error: str = ""
+    failure_code: CapacityFailureCode | None = None
+    last_error: str = Field(default="", max_length=TERMINAL_REASON_MAX_LENGTH)
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 

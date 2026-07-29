@@ -399,6 +399,14 @@ class ContainerService:
             raise NotFoundError(msg)
         return record
 
+    def unsettled_preemptions(self, *, limit: int) -> list[ContainerRecord]:
+        with self.context.database.session() as session:
+            return ContainerRepository(session).unsettled_preemptions_across_workspaces(limit=limit)
+
+    def mark_preemption_settled(self, container_id: str) -> None:
+        with self.context.database.session() as session:
+            ContainerRepository(session).mark_preemption_settled(container_id, now=utc_now())
+
     def list(
         self,
         *,

@@ -367,11 +367,7 @@ def run_container_worker(
             worker_services.lifecycle.shutdown(
                 remove_worker=not resolved_settings.resolved_persistent,
                 stop_reason=(
-                    StopContainerReason.Preempted
-                    if shutdown_signal == signal.SIGTERM
-                    else StopContainerReason.Admin
-                    if shutdown_signal == signal.SIGINT
-                    else StopContainerReason.Unknown
+                    StopContainerReason.Admin if shutdown_signal else StopContainerReason.Unknown
                 ),
             )
         if container_service is not None:

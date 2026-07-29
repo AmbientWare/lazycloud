@@ -53,7 +53,7 @@ def test_worker_stops_when_repository_error_masks_signal_interrupt() -> None:
     assert processor.calls == 1
     assert lifecycle.shutdown_calls == 1
     assert lifecycle.shutdown_remove_worker == [True]
-    assert lifecycle.shutdown_reasons == [StopContainerReason.Preempted]
+    assert lifecycle.shutdown_reasons == [StopContainerReason.Admin]
 
 
 def test_worker_renews_lease_while_pickup_is_blocked(tmp_path: Path) -> None:
