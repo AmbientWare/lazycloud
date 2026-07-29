@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from enum import StrEnum
 from typing import Protocol
 
 from foundation.process import ProcessOutputSink
@@ -23,6 +22,7 @@ from storage_client.mounts import StorageMountResult
 from worker.container_logs import ContainerLogCaptureResult
 from worker.events import (
     ContainerEventPayload,
+    ContainerExecutionPhase,
     ContainerLifecyclePayload,
     ContainerRequestContext,
     StopContainerReason,
@@ -64,28 +64,6 @@ from worker.supervision import WorkerOomHandlingResult, WorkerSupervisionService
 
 CONTAINER_EXIT_EVENT_ID = "container.exited"
 CONTAINER_EXIT_MESSAGE = "container process exited"
-
-
-class ContainerExecutionPhase(StrEnum):
-    PublishWorkerAddress = "publish-worker-address"
-    HydrateCredentials = "hydrate-credentials"
-    LoadImage = "load-image"
-    AllocatePorts = "allocate-ports"
-    SetupNetwork = "setup-network"
-    PublishContainerRoutes = "publish-container-routes"
-    SetupWorkspaceStorage = "setup-workspace-storage"
-    SetupMounts = "setup-mounts"
-    AssignGpu = "assign-gpu"
-    BuildSpec = "build-spec"
-    PrepareRuntime = "prepare-runtime"
-    PrepareSandboxDocker = "prepare-sandbox-docker"
-    CompleteCheckpointStartup = "complete-checkpoint-startup"
-    MarkRunning = "mark-running"
-    RunRuntime = "run-runtime"
-    HandleOom = "handle-oom"
-    PublishExitEvent = "publish-exit-event"
-    Finalize = "finalize"
-    DelayedCleanup = "delayed-cleanup"
 
 
 class WorkerAddressPublisher(Protocol):
@@ -577,12 +555,15 @@ class WorkerContainerExecutionService:
             lambda: self._run_runtime(context, result, spec, on_started, run_result_holder),
             request=context.request,
         ):
+            failed_phase, detail = _first_phase_failure(result)
             self._finalize(
                 result,
                 context,
                 exit_code=1,
                 stop_reason=StopContainerReason.Unknown,
                 oom_killed=False,
+                failed_phase=failed_phase,
+                failure_detail=(_redact_runtime_output(detail, context.request) if detail else ""),
             )
             return result
         run_result = run_result_holder["run_result"]
@@ -918,6 +899,8 @@ class WorkerContainerExecutionService:
         exit_code: int,
         stop_reason: StopContainerReason,
         oom_killed: bool,
+        failed_phase: ContainerExecutionPhase | None = None,
+        failure_detail: str = "",
     ) -> None:
         self._phase(
             result,
@@ -928,6 +911,8 @@ class WorkerContainerExecutionService:
                 exit_code=exit_code,
                 stop_reason=stop_reason,
                 oom_killed=oom_killed,
+                failed_phase=failed_phase,
+                failure_detail=failure_detail,
             ),
             request=context.request,
         )
@@ -944,12 +929,20 @@ class WorkerContainerExecutionService:
         result: ContainerExecutionResult,
         context: ContainerExecutionContext,
     ) -> None:
+        """Finalize a container that never reached its run phase.
+
+        The reason travels with the exit code because the asynchronous lifecycle
+        event reporting it arrives after the task is already terminal.
+        """
+        failed_phase, detail = _first_phase_failure(result)
         self._finalize(
             result,
             context,
             exit_code=1,
             stop_reason=StopContainerReason.Unknown,
             oom_killed=False,
+            failed_phase=failed_phase,
+            failure_detail=_redact_runtime_output(detail, context.request) if detail else "",
         )
 
     def _set_finalization(
@@ -960,6 +953,8 @@ class WorkerContainerExecutionService:
         exit_code: int,
         stop_reason: StopContainerReason,
         oom_killed: bool,
+        failed_phase: ContainerExecutionPhase | None = None,
+        failure_detail: str = "",
     ) -> None:
         result.finalization = self.finalizer.finalize(
             ContainerFinalizationRequest(
@@ -967,6 +962,8 @@ class WorkerContainerExecutionService:
                 exit_code=exit_code,
                 stop_reason=stop_reason,
                 oom_killed=oom_killed,
+                failed_phase=failed_phase,
+                failure_detail=failure_detail,
             )
         )
 
@@ -1066,6 +1063,19 @@ class _RuntimeMonitorState:
         if self.handle is None:
             return None
         return self.handle.stop()
+
+
+def _first_phase_failure(
+    result: ContainerExecutionResult,
+) -> tuple[ContainerExecutionPhase | None, str]:
+    """Return the first phase that failed and its recorded error.
+
+    Forward order so the root cause wins rather than a later re-raise wrapper.
+    """
+    for phase in result.phases:
+        if phase.error_message:
+            return phase.phase, phase.error_message
+    return None, ""
 
 
 def _runtime_output_attrs(output: str) -> dict[str, str]:

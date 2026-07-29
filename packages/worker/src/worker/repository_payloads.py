@@ -38,6 +38,7 @@ from worker.checkpoints import CheckpointStatePayload
 from worker.credential_payloads import WorkerCredentialPrincipal
 from worker.events import (
     ContainerEventPayload,
+    ContainerExecutionPhase,
     ContainerLifecyclePayload,
 )
 from worker.origin_access import CacheOriginCredentials, ImageArchiveUploadCredentials
@@ -232,6 +233,12 @@ class SetContainerExitCodeRequest(ContractModel):
     container_id: str
     exit_code: int
     termination_reason: StopContainerReason = StopContainerReason.Unknown
+    # A container that died before or during its run phase carries the reason on the
+    # same synchronous call that makes its task terminal. The asynchronous lifecycle
+    # event also reports it, but arrives after the task is already terminal and is
+    # dropped, so it cannot be the only carrier.
+    failed_phase: ContainerExecutionPhase | None = None
+    failure_detail: str = Field(default="", max_length=2000)
     ttl_seconds: int = 86_400
 
 
