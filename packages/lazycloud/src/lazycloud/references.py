@@ -22,10 +22,52 @@ class SourceRootReference:
 
 def dotted_reference(func: Callable[..., Any]) -> str:
     module_name = getattr(func, "__module__", "") or ""
-    name = getattr(func, "__qualname__", getattr(func, "__name__", "callable"))
+    name = getattr(func, "__qualname__", None) or getattr(func, "__name__", None)
+    if name is None:
+        # An ASGI application instance (FastAPI, Starlette, or a raw callable
+        # object) carries no name of its own, and `__module__` resolves through
+        # its class to the framework package. Naming that would produce a handler
+        # that cannot import, so resolve the module the instance is bound in.
+        return _bound_instance_reference(func)
     if module_name not in {"", "__main__"}:
         return f"{module_name}:{name}"
     return f"{_module_name_from_source(func, name)}:{name}"
+
+
+def _bound_instance_reference(target: object) -> str:
+    """Name the module attribute an instance handler is bound to.
+
+    Deploying an ASGI app means deploying the object a module exposes, so the
+    reference has to be discovered from the binding rather than read off the
+    object. Candidates are ordered so the same object always yields the same
+    reference, and framework-internal bindings never win over user modules.
+    """
+    candidates: list[tuple[bool, str, str]] = []
+    for module_name, module in list(sys.modules.items()):
+        if module is None or module_name.startswith("_"):
+            continue
+        try:
+            namespace = vars(module)
+        except TypeError:
+            continue
+        for attribute, value in namespace.items():
+            if value is target and not attribute.startswith("_"):
+                candidates.append((_is_installed_module(module), module_name, attribute))
+    if not candidates:
+        raise HandlerReferenceError(
+            "cannot build a deployable handler reference for an application instance: "
+            "it is not bound to a module attribute. Assign it at module level, or "
+            "deploy the module attribute that holds it."
+        )
+    _, module_name, attribute = min(candidates)
+    return f"{module_name}:{attribute}"
+
+
+def _is_installed_module(module: Any) -> bool:
+    source = getattr(module, "__file__", None)
+    if not isinstance(source, str):
+        return True
+    return "site-packages" in source or "dist-packages" in source
 
 
 def source_root_handler_reference(

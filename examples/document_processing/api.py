@@ -133,6 +133,10 @@ async def job_result(x_job_token: str = Header(alias="X-Job-Token")) -> OcrResul
     if view.status.value != "complete":
         raise HTTPException(status_code=409, detail="OCR result is not ready")
     destination = result_path(DATA_ROOT, claims.document_id)
+    if not destination.exists():
+        # A consumed result is deleted by design, so its absence is an ordinary
+        # outcome for a still-valid token rather than a server fault.
+        raise HTTPException(status_code=404, detail="OCR result is no longer available")
     try:
         return OcrResult.model_validate_json(destination.read_text(encoding="utf-8"))
     except (OSError, ValueError, json.JSONDecodeError) as exc:

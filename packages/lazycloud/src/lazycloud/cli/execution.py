@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Annotated, Any, Protocol, runtime_checkable
+from uuid import UUID
 
 import typer
 from shared.compute_policy import ComputePlacementTarget
@@ -20,6 +21,7 @@ from lazycloud.cli.components.output import (
     print_payload,
     table,
 )
+from lazycloud.cli.control import resource_client
 from lazycloud.cli.handler_workflows import (
     HandlerLoadError,
     apply_handler_reference,
@@ -359,6 +361,26 @@ def _exit_with_shell_status(exit_code: int) -> None:
         raise typer.Exit(exit_code)
 
 
+def _resolve_app_id(app: str, *, workspace: str | None) -> str:
+    """Accept an app name or id for `--app`.
+
+    Apps are addressed by name everywhere a user can see one, and no command
+    prints an app id, so a name has to resolve here rather than reach the API as
+    a malformed identifier.
+    """
+    try:
+        UUID(app)
+    except ValueError:
+        pass
+    else:
+        return app
+    apps = resource_client(workspace=workspace).list_apps()
+    matches = [item for item in apps.data if item.name == app]
+    if not matches:
+        raise typer.BadParameter(f"no app named {app!r} in workspace {workspace or 'default'}")
+    return matches[0].id
+
+
 @deployment_app.command("list")
 def deployment_list(
     ctx: typer.Context,
@@ -366,8 +388,10 @@ def deployment_list(
     limit: Annotated[int, typer.Option("--limit", min=1)] = 100,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    deployments = DeploymentClient(workspace=current_workspace(workspace)).list(
-        filters={"app_id": [app]} if app else None,
+    selected_workspace = current_workspace(workspace)
+    app_id = _resolve_app_id(app, workspace=selected_workspace) if app else None
+    deployments = DeploymentClient(workspace=selected_workspace).list(
+        filters={"app_id": [app_id]} if app_id else None,
         limit=limit,
     )
     if json_output_enabled(ctx):

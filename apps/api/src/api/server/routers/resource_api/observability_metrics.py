@@ -16,6 +16,7 @@ from shared.realtime.streams import EventHistoryQuery
 
 from api.server.auth import read_workspace
 from api.server.dependencies import current_services
+from api.server.identifiers import identifier_filter
 from api.server.routers.resource_api.common import _management
 from api.server.services import ApiServices
 
@@ -29,7 +30,7 @@ router = APIRouter()
 )
 def api_v1_task_latency_timeseries(
     stub_id: Annotated[list[str], Query()],
-    deployment_id: str | None = None,
+    deployment_id: identifier_filter = None,
     window_seconds: int = Query(default=3600, ge=1),
     start: str | None = None,
     end: str | None = None,
