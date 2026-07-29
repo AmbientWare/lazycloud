@@ -227,12 +227,18 @@ is done when its acceptance passes and its pull request merges; move it on the
 board rather than restating the outcome in a file.
 
 Tickets live on the `Agent Development` project board and advance through
-`Todo`, `In progress`, `Under review`, `Merged`, in that order. Move the ticket
-yourself as its real state changes: `In progress` when work starts, `Under
-review` when its pull request opens, `Merged` when that pull request merges.
-Never skip a column or move a ticket backwards to make the board agree with a
-mistake; correct the work instead. Board automation is a safety net for the
-states it can observe, not a substitute for moving the ticket.
+`Backlog`, `Todo`, `In progress`, `Under review`, `Merged`, in that order. Move
+the ticket yourself as its real state changes: `In progress` when work starts,
+`Under review` when its pull request opens, `Merged` when that pull request
+merges. Board automation is a safety net for the states it can observe, not a
+substitute for moving the ticket; a pull request only closes its ticket when its
+body says so, so reference the ticket with a closing keyword when the merge
+completes it.
+
+`Backlog` holds work that is recorded but not needed yet. Deferring a ticket
+there is a scope decision and is stated as one—it is not the same as moving a
+ticket backwards to make the board agree with a mistake, which is never the fix.
+Do not start `Backlog` work without the owner asking for it.
 
 ## Working Rules
 
