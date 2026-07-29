@@ -17,8 +17,10 @@ _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 class AgentBinarySettings(BaseSettings):
     binary_dir: Path | None = None
     binary_name: str = AGENT_NAME
-    artifact_version: str = ""
-    sha256_by_arch: dict[str, str] = Field(default_factory=dict)
+    # Named to produce the documented LAZYCLOUD_AGENT_BINARY_* environment contract
+    # that release publication writes and Compose passes through.
+    binary_version: str = ""
+    binary_sha256_by_arch: dict[str, str] = Field(default_factory=dict)
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_AGENT_",
@@ -33,18 +35,18 @@ class AgentBinarySettings(BaseSettings):
     @model_validator(mode="after")
     def validate_artifact(self) -> AgentBinarySettings:
         version, digests = normalize_agent_artifact_config(
-            self.artifact_version,
-            self.sha256_by_arch,
+            self.binary_version,
+            self.binary_sha256_by_arch,
         )
         if version and self.binary_dir is None:
             raise ValueError("agent artifact binary directory is required")
-        self.artifact_version = version
-        self.sha256_by_arch = digests
+        self.binary_version = version
+        self.binary_sha256_by_arch = digests
         return self
 
     def require_amd64(self) -> tuple[str, str]:
-        version = self.artifact_version
-        digest = self.sha256_by_arch.get("amd64", "")
+        version = self.binary_version
+        digest = self.binary_sha256_by_arch.get("amd64", "")
         if not version or not digest:
             raise ValueError("AWS capacity requires an amd64 agent artifact")
         return version, digest

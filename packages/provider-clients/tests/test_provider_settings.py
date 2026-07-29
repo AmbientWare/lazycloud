@@ -17,12 +17,21 @@ def _no_connections(_workspace_id: str) -> Iterable[AwsAccountConnection]:
     return ()
 
 
-def test_aws_connection_settings_reject_invalid_enabled_authority() -> None:
+def test_aws_connection_settings_reject_invalid_control_authority() -> None:
     with pytest.raises(ValidationError, match="control principal ARN is invalid"):
+        AwsAccountConnectionSettings(
+            template_url="https://assets.example.com/template.json",
+            control_principal_arn="not-an-arn",
+        )
+
+
+def test_aws_connection_settings_reject_enabled_without_control_authority() -> None:
+    # Enabling with a template URL but no control principal would publish a customer
+    # authorization template that trusts nothing.
+    with pytest.raises(ValidationError, match="configuration is incomplete"):
         AwsAccountConnectionSettings(
             enabled=True,
             template_url="https://assets.example.com/template.json",
-            control_principal_arn="not-an-arn",
         )
 
 
@@ -48,8 +57,8 @@ def test_aws_capacity_settings_reject_partial_and_mutable_artifacts(
     )
     artifact = AgentBinarySettings(
         binary_dir=Path("/opt/lazycloud/agent"),
-        artifact_version="0.1.0",
-        sha256_by_arch={"amd64": "b" * 64},
+        binary_version="0.1.0",
+        binary_sha256_by_arch={"amd64": "b" * 64},
     )
 
     with pytest.raises(ValidationError, match="worker_image_digest"):

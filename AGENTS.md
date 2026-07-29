@@ -191,6 +191,20 @@ and cleanup proof where relevant. Stop for user direction when an irreversible
 action, public contract, security/cost posture, provider strategy, or top-level
 architecture choice is genuinely unresolved.
 
+## Reporting
+
+Answer condensed. This is a must-follow rule, not a preference.
+
+- Lead with the answer or outcome. State blockers and decisions needed in one
+  line each.
+- Omit reasoning already accepted, alternatives not taken, restated context,
+  and evidence the reader did not ask for. Link or name a file, ticket, or
+  command instead of reproducing its content.
+- No recap sections, no narration of what was just done, no tables or headings
+  unless they carry information prose cannot.
+- Expand only when asked, or when a correctness, security, cost, or data-loss
+  risk needs the detail to be actionable.
+
 ## Work And Collaboration
 
 GitHub Issues track work; the `ticket` label marks a tracked ticket. Open one

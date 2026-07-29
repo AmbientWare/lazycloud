@@ -78,8 +78,8 @@ def isolated_services(tmp_path: Path) -> Iterator[ApiServices]:
         workspace_storage_client=_InMemoryWorkspaceBuckets(),
         agent_binary_settings=AgentBinarySettings(
             binary_dir=tmp_path,
-            artifact_version="test",
-            sha256_by_arch={"amd64": "a" * 64},
+            binary_version="test",
+            binary_sha256_by_arch={"amd64": "a" * 64},
         ),
     )
     services.control_plane_service.upsert_workspace("default")

@@ -557,9 +557,7 @@ def configured_aws_account_connection_components(
     tailnet_runtime: TailnetRuntimeSettings,
     tailnet_control: TailnetControlSettings,
     backend_route: BackendRouteSettings,
-) -> AwsAccountConnectionComponents | None:
-    if not settings.enabled:
-        return None
+) -> AwsAccountConnectionComponents:
     validate_provider_network_configuration(
         ProviderNetworkClass.Remote,
         gateway_origin=gateway_origin,
