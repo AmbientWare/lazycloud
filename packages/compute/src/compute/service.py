@@ -31,7 +31,12 @@ from database.repositories.compute import (
 )
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.observability import UsageRepository
-from database.repositories.orchestration import MachineRepository, PoolRepository, WorkerRepository
+from database.repositories.orchestration import (
+    ContainerRepository,
+    MachineRepository,
+    PoolRepository,
+    WorkerRepository,
+)
 from database.types import DatabaseSession
 from foundation.ids import optional_uuid, try_uuid
 from observability.usage_exporter import UsageMetricsExporter
@@ -67,6 +72,7 @@ from shared.compute_policy import (
     ComputePoolVisibility,
     ComputeResourceRequirements,
 )
+from shared.containers import ContainerStatus
 from shared.contracts import ContractModel
 from shared.errors import (
     ConflictError,
@@ -1666,7 +1672,7 @@ class ComputeService:
     ) -> ComputePoolRecord:
         """Reconcile the permanent CPU floor for an AWS-default workspace."""
 
-        return self._prepare_pooled_capacity(
+        pool = self._prepare_pooled_capacity(
             workspace=workspace,
             requirements=ComputeResourceRequirements(),
             region=region,
@@ -1681,6 +1687,20 @@ class ComputeService:
                 min_free_cpu_millicores=min_free_cpu_millicores,
                 min_free_memory_mib=min_free_memory_mib,
             ),
+        )
+        if pool.desired_machines > 0 or pool.observed_machines == 0:
+            return pool
+        # A lowered floor that reaches zero has to run through the guarded scale
+        # owner: it is what releases open capacity operations and retires the
+        # sizing state. Writing a zero record alone leaves both behind, and the
+        # sizing reconciler raises the machine straight back. This runs after the
+        # preparing session has closed; `scale_internal_pool` takes the mutation
+        # lease and locks the same row.
+        return self.scale_internal_pool(
+            pool.workspace_id,
+            pool.name,
+            0,
+            before_mutation=_policy_owned_scale,
         )
 
     def clear_aws_default_capacity(self, *, workspace: str, release_capacity: bool) -> None:
@@ -1705,17 +1725,61 @@ class ComputeService:
             return
         with self.context.database.session() as session:
             pools = ComputePoolRepository(session).list_internal(workspace_id=workspace_id)
+            protected = {
+                pool.id: self._machines_holding_active_work(
+                    session,
+                    workspace_id=workspace_id,
+                    pool_id=pool.id,
+                )
+                for pool in pools
+            }
         for pool in pools:
             if pool.phase in {ComputePoolPhase.Deleting, ComputePoolPhase.Deleted}:
                 continue
-            if pool.desired_machines == 0:
+            floor = protected[pool.id]
+            if pool.desired_machines <= floor:
                 continue
             self.scale_internal_pool(
                 workspace_id,
                 pool.name,
-                0,
+                floor,
                 before_mutation=_policy_owned_scale,
             )
+
+    def _machines_holding_active_work(
+        self,
+        session: DatabaseSession,
+        *,
+        workspace_id: str,
+        pool_id: str,
+    ) -> int:
+        """Count this pool's machines that are running customer work.
+
+        Zeroing the policy must not destroy a running workload. The provider
+        scales in by picking its own victim, so the floor has to hold the busy
+        machines back here; the scheduler's drain owner already refuses to
+        release a machine with active containers and takes them one at a time as
+        they go idle. Lowering the policy floor is what unblocks that owner, so
+        capacity above this count is released now and the rest converges to zero
+        as the work finishes.
+        """
+
+        machine_ids = {
+            instance.machine_id
+            for instance in ComputeProviderInstanceRepository(session).list_for_pool(pool_id)
+            if instance.machine_id
+        }
+        if not machine_ids:
+            return 0
+        busy = {
+            container.machine_id or container.runtime_machine_id
+            for container in ContainerRepository(session).list(
+                workspace_id=workspace_id,
+                statuses=(ContainerStatus.Pending.value, ContainerStatus.Running.value),
+            )
+            if (container.machine_id or container.runtime_machine_id) in machine_ids
+        }
+        return len(busy)
 
     def _prepare_pooled_capacity(
         self,
@@ -1793,6 +1857,7 @@ class ComputeService:
         created = False
         with self.context.database.session() as session:
             repository = ComputePoolRepository(session)
+            scheduler_pools = PoolRepository(session)
             current = repository.get_by_identity(
                 workspace_id=workspace_id,
                 provider_ref=provider.ref,
@@ -1800,6 +1865,7 @@ class ComputeService:
                 capability_key=offer.capability_key,
                 for_update=True,
             )
+            current_policy = scheduler_pools.get(pool_name, workspace_id=workspace_id)
             other_desired = sum(
                 item.desired_machines
                 for item in repository.list_internal(workspace_id=workspace_id)
@@ -1812,10 +1878,33 @@ class ComputeService:
                 baseline.initial_machines if baseline is not None else 0,
                 baseline.min_machines if baseline is not None else 0,
             )
-            desired = min(
-                max(requested_machines, current.desired_machines if current is not None else 0),
-                remaining,
-            )
+            if baseline is None:
+                # Demand-driven placement never shrinks a pool it did not size.
+                desired = min(
+                    max(requested_machines, current.desired_machines if current is not None else 0),
+                    remaining,
+                )
+            else:
+                desired = _policy_owned_desired_machines(
+                    current_desired=current.desired_machines if current is not None else 0,
+                    previous_floor=_previous_policy_floor(current, current_policy),
+                    floor=requested_machines,
+                    ceiling=remaining,
+                )
+                if current is not None and desired < current.desired_machines:
+                    # Release only down to the machines still running work; the
+                    # drain owner takes the rest as they go idle.
+                    desired = max(
+                        desired,
+                        min(
+                            self._machines_holding_active_work(
+                                session,
+                                workspace_id=workspace_id,
+                                pool_id=current.id,
+                            ),
+                            current.desired_machines,
+                        ),
+                    )
             if requested_machines > 0 and desired < requested_machines:
                 raise ManagedComputeLaunchError(
                     "workspace pooled compute capacity limit reached",
@@ -1888,11 +1977,6 @@ class ComputeService:
                     }
                 )
                 current = repository.upsert(ComputePoolRecord.model_validate(current))
-            scheduler_pools = PoolRepository(session)
-            current_policy = scheduler_pools.get(
-                current.name,
-                workspace_id=workspace_id,
-            )
             scheduler_pools.upsert(
                 Pool(
                     capacity_owner_id=current.capacity_owner_id,
@@ -5418,6 +5502,44 @@ def _recorded_pool_spend_micros(
 def _policy_owned_scale(pool: ComputePoolRecord) -> None:
     """Workspace policy owns the zero-capacity intent; no extra scale guard applies."""
     del pool
+
+
+def _previous_policy_floor(
+    current: ComputePoolRecord | None,
+    current_policy: Pool | None,
+) -> int:
+    """The floor the stored pool was already holding.
+
+    ``initial_workers`` matters as well as ``min_machines``: a policy whose
+    initial exceeds its minimum holds that capacity durably, so reading only the
+    minimum would under-release it and leave paid machines behind.
+    """
+
+    if current is None:
+        return 0
+    initial = current_policy.initial_workers if current_policy is not None else 0
+    return max(current.min_machines, initial, 0)
+
+
+def _policy_owned_desired_machines(
+    *,
+    current_desired: int,
+    previous_floor: int,
+    floor: int,
+    ceiling: int,
+) -> int:
+    """Resolve policy-owned desired capacity within the policy's own bounds.
+
+    The workspace policy owns the floor and the ceiling; growth above the floor
+    belongs to the scheduler's autoscaling and drain owners. Releasing exactly
+    the capacity a lowered floor was holding keeps this idempotent under an
+    unchanged policy, which control-plane startup depends on: it reconciles every
+    active workspace through this path on every boot, and a plain clamp to the
+    floor would discard demand-grown capacity each time.
+    """
+
+    released = max(previous_floor - floor, 0)
+    return min(max(current_desired - released, floor), ceiling)
 
 
 def _reservation_open(status: str) -> bool:
