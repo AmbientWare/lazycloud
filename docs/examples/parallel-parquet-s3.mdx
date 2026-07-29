@@ -76,6 +76,31 @@ lazycloud deploy examples.parallel_parquet.app:app
 An endpoint URL cannot contain embedded credentials, a query, or a fragment.
 Use TLS for any service reached over an untrusted network.
 
+### Against a local object store
+
+Workers run on the host network, so they cannot resolve a container-network
+service name. Point the endpoint at the published host port instead, create the
+bucket, and grant the key that the injected secrets carry:
+
+```bash
+docker compose exec object-store /garage bucket create lazycloud-examples
+docker compose exec object-store /garage bucket allow \
+  --read --write --owner lazycloud-examples --key lazycloud-local
+
+lazycloud secret create PARQUET_S3_ACCESS_KEY_ID "lazycloud-local"
+lazycloud secret create PARQUET_S3_SECRET_ACCESS_KEY "lazycloud-local-secret"
+
+export LAZYCLOUD_PARQUET_BUCKET="lazycloud-examples"
+export LAZYCLOUD_PARQUET_REGION="us-east-1"
+export LAZYCLOUD_PARQUET_ENDPOINT="http://object-store.localhost:9002"
+export LAZYCLOUD_PARQUET_ACCESS_KEY_SECRET="PARQUET_S3_ACCESS_KEY_ID"
+export LAZYCLOUD_PARQUET_SECRET_KEY_SECRET="PARQUET_S3_SECRET_ACCESS_KEY"
+```
+
+A bucket must already exist; a mount never creates one. If the endpoint host
+does not resolve from the worker, the mount fails immediately and names the host
+rather than timing out.
+
 ## Define the remote work
 
 Every remote resource receives the same mounted bucket and the same pinned
