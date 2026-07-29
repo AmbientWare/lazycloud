@@ -10,5 +10,4 @@ Clients use current `/api/v1` and `/gateway` contracts. Transport failures raise
 `HttpApiError`; abstractions translate them into typed operation errors. Delete
 old import paths and use explicit client injection. Accept changed public calls
 against their real HTTP/control owner, preserving serialization, targeting,
-timeouts, error mapping, and secret handling. Consult `../beta9` only when the
-task explicitly requires capability/workflow parity.
+timeouts, error mapping, and secret handling.
