@@ -514,6 +514,8 @@ class ContainerLogEntryKind(StrEnum):
     Output = "output"
     Dropped = "dropped"
     Flush = "flush"
+    # Worker-authored, never container output: why a container produced none.
+    Diagnostic = "diagnostic"
 
 
 class ContainerLogBatchEntry(ContractModel):
@@ -544,6 +546,8 @@ class ContainerLogBatchEntry(ContractModel):
     def fields_must_match_entry_kind(self) -> ContainerLogBatchEntry:
         if self.kind is ContainerLogEntryKind.Output and not self.message:
             raise ValueError("container output log message must not be empty")
+        if self.kind is ContainerLogEntryKind.Diagnostic and not self.message:
+            raise ValueError("diagnostic container log entry must include a message")
         if self.kind is ContainerLogEntryKind.Dropped and self.dropped_count <= 0:
             raise ValueError("dropped container log entry must include dropped_count")
         if self.kind is not ContainerLogEntryKind.Dropped and self.dropped_count:

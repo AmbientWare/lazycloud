@@ -169,6 +169,8 @@ class ContainerLogCaptureHandle(Protocol):
     @property
     def process_output_sink(self) -> ProcessOutputSink: ...
 
+    def record_diagnostic(self, message: str) -> None: ...
+
     def close(self, *, timeout_seconds: float | None = None) -> ContainerLogCaptureResult: ...
 
 
@@ -370,6 +372,7 @@ class WorkerContainerExecutionService:
             lambda: self.address_publisher.publish_worker_address(context.request),
             request=context.request,
         ):
+            self._finalize_startup_failure(result, context)
             return result
 
         if self.credential_hydrator is not None:
@@ -380,6 +383,7 @@ class WorkerContainerExecutionService:
                 lambda: self._hydrate_credentials(context_holder),
                 request=context.request,
             ):
+                self._finalize_startup_failure(result, context)
                 return result
             context = context_holder["context"]
 
@@ -389,6 +393,7 @@ class WorkerContainerExecutionService:
             lambda: self._set_image_result(context, result),
             request=context.request,
         ):
+            self._finalize_startup_failure(result, context)
             return result
         image_result = result.image_result or ContainerImageLoadResult(loaded=result.image_loaded)
         if not result.image_loaded:
@@ -417,6 +422,7 @@ class WorkerContainerExecutionService:
             lambda: self._allocate_ports(result, ports),
             request=context.request,
         ):
+            self._finalize_startup_failure(result, context)
             return result
         startup_bindings = plan_startup_port_bindings(
             ContainerStartupPortRequest(
@@ -437,6 +443,7 @@ class WorkerContainerExecutionService:
             skip=self.network_preparer is None,
             request=context.request,
         ):
+            self._finalize_startup_failure(result, context)
             return result
         network_result = network_result_holder.get("network_result")
         if not self._phase(
@@ -446,6 +453,7 @@ class WorkerContainerExecutionService:
             skip=self.workspace_storage_mounter is None,
             request=context.request,
         ):
+            self._finalize_startup_failure(result, context)
             return result
 
         mount_result_holder: dict[str, ContainerMountSetupResult] = {}
@@ -935,6 +943,8 @@ class WorkerContainerExecutionService:
         event reporting it arrives after the task is already terminal.
         """
         failed_phase, detail = _first_phase_failure(result)
+        safe_detail = _redact_runtime_output(detail, context.request) if detail else ""
+        self._record_startup_diagnostic(context, failed_phase, safe_detail)
         self._finalize(
             result,
             context,
@@ -942,8 +952,30 @@ class WorkerContainerExecutionService:
             stop_reason=StopContainerReason.Unknown,
             oom_killed=False,
             failed_phase=failed_phase,
-            failure_detail=_redact_runtime_output(detail, context.request) if detail else "",
+            failure_detail=safe_detail,
         )
+
+    def _record_startup_diagnostic(
+        self,
+        context: ContainerExecutionContext,
+        failed_phase: ContainerExecutionPhase | None,
+        detail: str,
+    ) -> None:
+        """Put why a container never started into its own log stream.
+
+        Log capture otherwise begins inside the run phase, so a container that dies
+        before it has no logs at all and the owner sees an empty stream.
+        """
+        if self.container_logs is None or failed_phase is None:
+            return
+        message = f"container startup failed during {failed_phase.value}"
+        if detail:
+            message = f"{message}: {detail}"
+        capture = self.container_logs.begin(context.request)
+        try:
+            capture.record_diagnostic(message)
+        finally:
+            capture.close()
 
     def _set_finalization(
         self,
