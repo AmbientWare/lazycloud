@@ -12,6 +12,7 @@ dependencies = [
     "scheduler",
     "pydantic>=2.8,<3",
     "pydantic-settings>=2.4,<3",
+    "storage",
 ]
 
 [build-system]

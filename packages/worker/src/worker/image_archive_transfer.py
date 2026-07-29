@@ -5,6 +5,7 @@ import http.client
 import os
 import socket
 import time
+from base64 import b64encode
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from urllib.parse import urlparse
@@ -267,6 +268,10 @@ def _validated_upload_headers(
     required = {
         "content-length": str(archive_size_bytes),
         "content-type": content_type,
+        # Signed by the control plane, so the store rejects any body that is not
+        # these exact bytes. A descriptor that omits or misdeclares it is refused
+        # here, before anything leaves the worker.
+        "x-amz-checksum-sha256": b64encode(bytes.fromhex(archive_sha256)).decode(),
         "x-amz-meta-artifact-sha256": archive_sha256,
     }
     for name, expected in required.items():

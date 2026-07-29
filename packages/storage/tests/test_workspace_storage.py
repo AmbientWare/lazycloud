@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -14,6 +15,7 @@ from control.service import (
     WorkspaceStorageError,
 )
 from database.repositories.identity import WorkspaceRepository
+from database.repositories.images import ImageArchiveRepository, ImageRepository
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
 from shared.app_identity import (
@@ -22,7 +24,13 @@ from shared.app_identity import (
     WORKSPACE_OBJECT_BUCKET,
 )
 from shared.errors import ConflictError, UpstreamUnavailableError
-from shared.identity import TokenKind, TokenStatus, WorkspaceStorageConfig
+from shared.identity import (
+    TokenKind,
+    TokenStatus,
+    WorkspaceStatus,
+    WorkspaceStorageConfig,
+)
+from shared.image_building.records import ImageRecord
 from storage.service import OBJECT_SHA256_METADATA_KEY, ObjectStorage
 from storage_client.s3 import S3ObjectInfo, S3ObjectStoreSettings
 from tests.fakes import FakeObjectClient
@@ -474,3 +482,65 @@ def _services_with_object_storage(
 
 def _auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
+
+
+def test_workspace_deletion_preserves_a_published_archive_a_sibling_still_uses(
+    isolated_services: ApiServices,
+) -> None:
+    """Deleting a tenant must not destroy bytes another tenant is authorized for.
+
+    Archive facts used to live on each workspace's `images` row, so deletion took
+    the shared bytes with it and then wedged on a `RESTRICT` foreign key onto
+    `objects`. The archive is global now, so deletion should reach neither.
+    """
+
+    client = MetadataObjectClient()
+    storage = ObjectStorage(
+        isolated_services.context,
+        object_client=client,
+        default_bucket="physical-objects",
+    )
+    control = ControlPlaneService(isolated_services.context)
+    leaving = control.upsert_workspace("archive-leaving-owner")
+    staying = control.upsert_workspace("archive-staying-owner")
+    image_id = "shared-image"
+    archive_key = f"image-archives/{image_id}.rclip"
+    client.put_bytes(archive_key, b"archive", bucket="image-archives")
+
+    storage.put_bytes_for_workspace(
+        workspace_id=leaving.id,
+        bucket=WORKSPACE_OBJECT_BUCKET,
+        key="models/owned.bin",
+        data=b"leaving",
+    )
+    with isolated_services.context.database.session() as session:
+        ImageArchiveRepository(session).reserve(
+            image_id,
+            bucket="image-archives",
+            object_key=archive_key,
+            size_bytes=len(b"archive"),
+            sha256=hashlib.sha256(b"archive").hexdigest(),
+        )
+        images = ImageRepository(session)
+        images.upsert(ImageRecord(workspace_id=leaving.id, image_id=image_id))
+        images.upsert(ImageRecord(workspace_id=staying.id, image_id=image_id))
+
+    with isolated_services.context.database.session() as session:
+        workspaces = WorkspaceRepository(session)
+        workspaces.mark_deleting(workspaces.lock_for_deletion(leaving.id))
+    assert storage.delete_workspace_objects_for_deletion(leaving.id) == 1
+    with isolated_services.context.database.session() as session:
+        workspaces = WorkspaceRepository(session)
+        purged = workspaces.purge_owned_records(leaving.id)
+        deleted = workspaces.tombstone(workspaces.lock_for_deletion(leaving.id))
+
+    assert purged.get("images") == 1
+    assert deleted.status is WorkspaceStatus.Deleted
+    assert client.exists(archive_key, bucket="image-archives")
+    with isolated_services.context.database.session() as session:
+        archives = ImageArchiveRepository(session)
+        assert archives.get(image_id) is not None
+        assert archives.get_authorized(image_id, workspace_id=leaving.id) is None
+        surviving = archives.get_authorized(image_id, workspace_id=staying.id)
+        assert surviving is not None
+        assert surviving.object_key == archive_key

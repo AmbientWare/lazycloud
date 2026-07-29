@@ -7,7 +7,7 @@ from database.tables import DatabaseBase
 
 # This identifier must change whenever the predeployment baseline changes so an
 # older disposable database cannot be mistaken for the current schema.
-revision = "20260727_archive_path_digest"
+revision = "20260728_global_image_archives"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None

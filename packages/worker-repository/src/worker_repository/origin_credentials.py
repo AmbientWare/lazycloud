@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+from base64 import b64encode
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
-from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from shared.app_identity import ENV_PREFIX
 from shared.contracts import ContractModel
 from shared.identity import TokenKind
-from shared.image_building.records import ImageRecord
+from shared.image_building.constants import image_archive_object_key
+from shared.image_building.records import ImageArchiveRecord
+from storage.image_archive import ResolvedImageArchiveSettings
 from worker.credential_payloads import WORKER_TOKEN_KINDS, WorkerCredentialPrincipal
 from worker.image_lifecycle import (
     DEFAULT_IMAGE_ARCHIVE_EXTENSION,
@@ -21,10 +23,7 @@ from worker.origin_access import (
     CacheOriginCredentials,
     ImageArchiveUploadCredentialRequest,
     ImageArchiveUploadCredentials,
-    image_build_archive_staging_key,
 )
-
-DEFAULT_IMAGE_ARCHIVE_PRESIGN_SECONDS = 15 * 60
 
 
 class CacheOriginCredentialConfig(BaseSettings):
@@ -35,23 +34,7 @@ class CacheOriginCredentialConfig(BaseSettings):
     )
 
     image_registry_store: ImageRegistryStore = ImageRegistryStore.Local
-    image_archive_bucket: str = ""
-    image_archive_presign_seconds: int = DEFAULT_IMAGE_ARCHIVE_PRESIGN_SECONDS
     image_archive_extension: str = DEFAULT_IMAGE_ARCHIVE_EXTENSION
-
-    @field_validator("image_archive_presign_seconds")
-    @classmethod
-    def presign_seconds_must_be_positive(cls, value: int) -> int:
-        if value <= 0:
-            msg = "image archive presign seconds must be positive"
-            raise ValueError(msg)
-        return value
-
-    @property
-    def image_archive_available(self) -> bool:
-        return (
-            self.image_registry_store is ImageRegistryStore.S3 and self.image_archive_bucket != ""
-        )
 
 
 class PresignedGetUrlClient(Protocol):
@@ -81,28 +64,17 @@ class PresignedPutClient(PresignedGetUrlClient, Protocol):
         content_length: int,
         content_type: str = "application/octet-stream",
         metadata: dict[str, str] | None = None,
+        checksum_sha256: str = "",
     ) -> PresignedUpload: ...
 
 
-class WorkspaceObjectCoordinates(Protocol):
-    def physical_key_for_workspace(
-        self,
-        workspace_id: str,
-        *,
-        bucket: str,
-        key: str,
-    ) -> str: ...
-
-    def physical_bucket(self, bucket: str) -> str: ...
-
-
 class WorkerOriginCredentialImageLookup(Protocol):
-    def get_image_metadata(
+    def get_authorized_image_archive(
         self,
         image_id: str,
         *,
         workspace_id: str,
-    ) -> ImageRecord | None: ...
+    ) -> ImageArchiveRecord | None: ...
 
 
 class WorkerOriginCredentialServices(Protocol):
@@ -115,7 +87,16 @@ class WorkerCacheOriginCredentialService:
     services: WorkerOriginCredentialServices | None = None
     config: CacheOriginCredentialConfig = field(default_factory=CacheOriginCredentialConfig)
     object_store_client: PresignedPutClient | None = None
-    object_coordinates: WorkspaceObjectCoordinates | None = None
+    archive_settings: ResolvedImageArchiveSettings | None = None
+
+    @property
+    def image_archive_available(self) -> bool:
+        settings = self.archive_settings
+        return (
+            self.config.image_registry_store is ImageRegistryStore.S3
+            and settings is not None
+            and settings.bucket != ""
+        )
 
     def vend(
         self,
@@ -126,11 +107,7 @@ class WorkerCacheOriginCredentialService:
         denial = self._authorization_denial(request, principal)
         if denial:
             return CacheOriginCredentials.denied(denial)
-        if (
-            request.image_id
-            and self.config.image_archive_available
-            and (self.object_store_client is None or self.object_coordinates is None)
-        ):
+        if request.image_id and self.image_archive_available and self.object_store_client is None:
             return CacheOriginCredentials.denied("image archive signer is unavailable")
 
         archive = self._image_archive_credentials(
@@ -140,7 +117,6 @@ class WorkerCacheOriginCredentialService:
         if archive.error:
             return CacheOriginCredentials.denied(archive.error)
         return CacheOriginCredentials(
-            archive_object_id=archive.object_id,
             image_archive_url=archive.url,
             archive_size_bytes=archive.size_bytes,
             archive_sha256=archive.sha256,
@@ -151,7 +127,8 @@ class WorkerCacheOriginCredentialService:
         request: ImageArchiveUploadCredentialRequest,
         *,
         principal: WorkerCredentialPrincipal,
-        archive_object_id: str,
+        archive: ImageArchiveRecord,
+        upload_required: bool,
     ) -> ImageArchiveUploadCredentials:
         denial = self._authorization_denial(
             CacheOriginCredentialRequest(
@@ -164,35 +141,45 @@ class WorkerCacheOriginCredentialService:
         )
         if denial:
             return ImageArchiveUploadCredentials.denied(denial)
-        if not self.config.image_archive_available:
+        settings = self.archive_settings
+        if not self.image_archive_available or settings is None:
             return ImageArchiveUploadCredentials.denied("image archive storage is not configured")
         if not request.image_id:
             return ImageArchiveUploadCredentials.denied("image id is required")
-        if not archive_object_id:
-            return ImageArchiveUploadCredentials.denied("image archive reservation is unavailable")
-        if self.object_store_client is None or self.object_coordinates is None:
+        if archive.image_id != request.image_id:
+            return ImageArchiveUploadCredentials.denied(
+                "image archive reservation does not match the requested image"
+            )
+        if not upload_required:
+            # Another build already published these bytes. The worker gets the
+            # archive's identity so it can verify what it finds, and no URL, so it
+            # cannot overwrite an archive other workspaces already resolve.
+            return ImageArchiveUploadCredentials(
+                bucket=archive.bucket,
+                object_key=archive.object_key,
+                archive_size_bytes=archive.size_bytes,
+                archive_sha256=archive.sha256,
+            )
+        if self.object_store_client is None:
             return ImageArchiveUploadCredentials.denied("image archive signer is unavailable")
 
-        _logical_bucket, object_key = self.upload_location(request)
         try:
-            physical_bucket, physical_key = self._physical_archive_location(
-                workspace_id=request.workspace_id,
-                object_key=object_key,
-            )
             upload = self.object_store_client.generate_presigned_put(
-                physical_key,
-                bucket=physical_bucket,
-                expires_seconds=self.config.image_archive_presign_seconds,
-                content_length=request.archive_size_bytes,
+                settings.physical_key(archive.object_key),
+                bucket=settings.bucket,
+                expires_seconds=settings.presign_seconds,
+                content_length=archive.size_bytes,
                 content_type=request.content_type,
-                metadata={"artifact-sha256": request.archive_sha256},
+                metadata={"artifact-sha256": archive.sha256},
+                checksum_sha256=b64encode(bytes.fromhex(archive.sha256)).decode(),
             )
         except Exception:
             return ImageArchiveUploadCredentials.denied("image archive upload URL is unavailable")
         return ImageArchiveUploadCredentials(
-            archive_object_id=archive_object_id,
-            bucket=self.config.image_archive_bucket,
-            object_key=object_key,
+            bucket=archive.bucket,
+            object_key=archive.object_key,
+            archive_size_bytes=archive.size_bytes,
+            archive_sha256=archive.sha256,
             upload_url=upload.url,
             upload_headers=upload.headers,
         )
@@ -201,11 +188,13 @@ class WorkerCacheOriginCredentialService:
         self,
         request: ImageArchiveUploadCredentialRequest,
     ) -> tuple[str, str]:
+        settings = self.archive_settings
+        if settings is None:
+            return ("", "")
         return (
-            self.config.image_archive_bucket,
-            image_build_archive_staging_key(
+            settings.bucket,
+            image_archive_object_key(
                 request.image_id,
-                request.build_id,
                 extension=self.config.image_archive_extension,
             ),
         )
@@ -234,54 +223,33 @@ class WorkerCacheOriginCredentialService:
         *,
         workspace_id: str,
     ) -> _ImageArchiveCredentials:
-        if not self.config.image_archive_available or not image_id:
+        settings = self.archive_settings
+        if not self.image_archive_available or settings is None or not image_id:
             return _ImageArchiveCredentials()
 
-        image = self._services().images.get_image_metadata(
+        # Deliberately the workspace-scoped lookup even though one row now serves
+        # every tenant: the physical key carries no tenant component, so this join
+        # is the entire download boundary.
+        archive = self._services().images.get_authorized_image_archive(
             image_id,
             workspace_id=workspace_id,
         )
-        if image is None or not image.archive_object_key:
+        if archive is None:
             return _ImageArchiveCredentials()
-        object_key = image.archive_object_key
         try:
-            if self.object_store_client is None or self.object_coordinates is None:
+            if self.object_store_client is None:
                 return _ImageArchiveCredentials()
-            physical_bucket, physical_key = self._physical_archive_location(
-                workspace_id=workspace_id,
-                object_key=object_key,
-            )
             url = self.object_store_client.generate_presigned_get_url(
-                physical_key,
-                bucket=physical_bucket,
-                expires_seconds=self.config.image_archive_presign_seconds,
+                settings.physical_key(archive.object_key),
+                bucket=settings.bucket,
+                expires_seconds=settings.presign_seconds,
             )
         except Exception:
             return _ImageArchiveCredentials(error="image archive download URL is unavailable")
         return _ImageArchiveCredentials(
-            object_id=image.archive_object_id,
             url=url,
-            size_bytes=image.archive_size_bytes,
-            sha256=image.archive_sha256,
-        )
-
-    def _physical_archive_location(
-        self,
-        *,
-        workspace_id: str,
-        object_key: str,
-    ) -> tuple[str, str]:
-        coordinates = self.object_coordinates
-        if coordinates is None:
-            raise RuntimeError("image archive object coordinates are unavailable")
-        bucket = self.config.image_archive_bucket
-        return (
-            coordinates.physical_bucket(bucket),
-            coordinates.physical_key_for_workspace(
-                workspace_id,
-                bucket=bucket,
-                key=object_key,
-            ),
+            size_bytes=archive.size_bytes,
+            sha256=archive.sha256,
         )
 
     def _services(self) -> WorkerOriginCredentialServices:
@@ -292,7 +260,6 @@ class WorkerCacheOriginCredentialService:
 
 
 class _ImageArchiveCredentials(ContractModel):
-    object_id: str = ""
     url: str = ""
     size_bytes: int = 0
     sha256: str = ""

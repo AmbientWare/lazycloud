@@ -128,7 +128,6 @@ class WorkerImageBuildContextLoadResult(ContractModel):
 class WorkerImageArchivePublishResult(ContractModel):
     ok: bool
     image_id: str
-    archive_object_id: str = ""
     object_key: str = ""
     bucket: str = ""
     size_bytes: int = 0
@@ -142,7 +141,6 @@ class WorkerImageBuildExecutionResult(ContractModel):
     image_id: str
     build_id: str
     archive_path: str = ""
-    archive_object_id: str = ""
     object_key: str = ""
     archive_size_bytes: int = 0
     archive_sha256: str = ""
@@ -325,7 +323,6 @@ class WorkerImageBuildExecutionService:
                 status=WorkerImageBuildStatus.Complete,
                 exit_code=0,
                 archive_path=build.archive_path,
-                archive_object_id=published.archive_object_id,
                 object_key=published.object_key,
                 archive_size_bytes=published.size_bytes,
                 archive_sha256=published.sha256,
@@ -401,7 +398,6 @@ class WorkerImageBuildExecutionService:
         status: WorkerImageBuildStatus,
         exit_code: int,
         archive_path: str = "",
-        archive_object_id: str = "",
         object_key: str = "",
         archive_size_bytes: int = 0,
         archive_sha256: str = "",
@@ -411,7 +407,6 @@ class WorkerImageBuildExecutionService:
         stored = self.instances.get_container_instance(instance.container_id) or instance
         stored.status = status.value
         stored.exit_code = exit_code
-        stored.build_archive_object_id = archive_object_id
         stored.build_archive_object_key = object_key
         stored.build_archive_size_bytes = archive_size_bytes
         stored.build_archive_sha256 = archive_sha256
@@ -428,7 +423,6 @@ class WorkerImageBuildExecutionService:
             image_id=payload.image_id,
             build_id=payload.build_id,
             archive_path=archive_path,
-            archive_object_id=archive_object_id,
             object_key=object_key,
             archive_size_bytes=archive_size_bytes,
             archive_sha256=archive_sha256,
@@ -985,13 +979,24 @@ class RepositoryWorkerImageArchivePublisher:
                 bucket=credentials.bucket,
                 error_message=credentials.error_msg,
             )
-        if not credentials.upload_url:
+        if not credentials.object_key:
             return WorkerImageArchivePublishResult(
                 ok=False,
                 image_id=image_id,
+                bucket=credentials.bucket,
+                error_message="image archive location was not returned",
+            )
+        if not credentials.upload_url:
+            # Another build already published this image id. Its bytes are the ones
+            # every authorized workspace resolves, so this build adopts that identity
+            # rather than uploading a second copy over it.
+            return WorkerImageArchivePublishResult(
+                ok=True,
+                image_id=image_id,
                 object_key=credentials.object_key,
                 bucket=credentials.bucket,
-                error_message="image archive upload URL was not returned",
+                size_bytes=credentials.archive_size_bytes,
+                sha256=credentials.archive_sha256,
             )
         try:
             upload_image_archive(
@@ -1014,7 +1019,6 @@ class RepositoryWorkerImageArchivePublisher:
         return WorkerImageArchivePublishResult(
             ok=True,
             image_id=image_id,
-            archive_object_id=credentials.archive_object_id,
             object_key=credentials.object_key,
             bucket=credentials.bucket,
             size_bytes=size_bytes,

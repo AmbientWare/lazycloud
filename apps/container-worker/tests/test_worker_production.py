@@ -24,7 +24,6 @@ from container_worker_app.production import (
 from pydantic import JsonValue
 from worker.checkpoints import CheckpointPersistenceAction, CheckpointPersistencePlan
 from worker.container_checkpoints import TarContainerImageArchiver
-from worker.container_service.models import WorkerContainerServiceInstance
 from worker.container_startup import (
     IMAGE_MOUNT_MANIFEST_NAME,
     ImageMountManifest,
@@ -378,7 +377,6 @@ def test_brokered_image_source_loader_downloads_presigned_archive(tmp_path: Path
                 "/worker-repository/get-cache-origin-credentials": (
                     GetCacheOriginCredentialsResponse(
                         credentials=CacheOriginCredentials(
-                            archive_object_id="object-1",
                             image_archive_url=f"{source_url}/{source.name}",
                             archive_size_bytes=len(b"archive"),
                             archive_sha256=source_sha256,
@@ -519,20 +517,6 @@ def test_checkpoint_transfer_errors_never_disclose_capability_query(
     assert sentinel not in str(download_error.value)
     assert upload_error.value.__cause__ is None
     assert download_error.value.__cause__ is None
-
-
-class _ContainerInstanceStore:
-    def __init__(self) -> None:
-        self.instances: dict[str, WorkerContainerServiceInstance] = {}
-
-    def get_container_instance(self, container_id: str) -> WorkerContainerServiceInstance | None:
-        return self.instances.get(container_id)
-
-    def save_container_instance(self, instance: WorkerContainerServiceInstance) -> None:
-        self.instances[instance.container_id] = instance
-
-    def list_container_instances(self) -> list[WorkerContainerServiceInstance]:
-        return [self.instances[key] for key in sorted(self.instances)]
 
 
 class _FakeWorkerRepositoryTransport:

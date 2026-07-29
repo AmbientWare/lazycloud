@@ -137,6 +137,9 @@ class WorkerReconnectPlan(ContractModel):
 class ContainerRequestContext(ContractModel):
     container_id: str
     image_id: str = ""
+    # Digest the control plane resolved against this request's own workspace
+    # authorization. Empty means no archive is authorized for the image.
+    archive_sha256: str = Field(default="", pattern=r"^(?:[0-9a-f]{64})?$")
     stub_id: str = ""
     stub_type: str = ""
     workspace_id: str = ""

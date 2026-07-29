@@ -94,6 +94,7 @@ from worker.container_startup import (
     WorkerImageSourceLoadResult,
     WorkerImageStartupLoader,
     WorkerRequestMountPreparer,
+    read_image_mount_manifest,
 )
 from worker.credential_hydration import WorkerCredentialHydrator
 from worker.events import WorkerPoolMode
@@ -777,6 +778,7 @@ class BrokeredImageArchiveSourceLoader:
         return WorkerImageSourceLoadResult(
             ok=True,
             archive_path=str(target),
+            archive_sha256=archive_sha256,
             bytes_written=bytes_written,
             reason="brokered image archive downloaded and verified",
         )
@@ -860,6 +862,7 @@ class TarImageArchiveMounter:
             manifest = _read_image_mount_manifest(
                 mount_point,
                 image_id=request.image_id,
+                archive_sha256=request.archive_sha256,
                 archive_path=archive_path,
             )
             if manifest is not None:
@@ -902,6 +905,7 @@ class TarImageArchiveMounter:
             manifest_path.write_text(
                 ImageMountManifest(
                     image_id=request.image_id,
+                    archive_sha256=request.archive_sha256,
                     archive_size_bytes=archive_path.stat().st_size,
                     archive_entry_count=len(members),
                 ).model_dump_json(indent=2),
@@ -912,6 +916,7 @@ class TarImageArchiveMounter:
                     existing = _read_image_mount_manifest(
                         mount_point,
                         image_id=request.image_id,
+                        archive_sha256=request.archive_sha256,
                         archive_path=archive_path,
                     )
                     if existing is not None:
@@ -932,6 +937,7 @@ class TarImageArchiveMounter:
                 concurrent = _read_image_mount_manifest(
                     mount_point,
                     image_id=request.image_id,
+                    archive_sha256=request.archive_sha256,
                     archive_path=archive_path,
                 )
                 if concurrent is None:
@@ -962,18 +968,17 @@ def _read_image_mount_manifest(
     mount_point: Path,
     *,
     image_id: str,
+    archive_sha256: str,
     archive_path: Path,
 ) -> ImageMountManifest | None:
-    if not mount_point.is_dir() or mount_point.is_symlink():
-        return None
-    manifest_path = mount_point / IMAGE_MOUNT_MANIFEST_NAME
-    if not manifest_path.is_file() or manifest_path.is_symlink():
-        return None
-    try:
-        manifest = ImageMountManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    manifest = read_image_mount_manifest(mount_point)
+    if manifest is None:
         return None
     if manifest.image_id != image_id:
+        return None
+    # Two archives for one image id can share a size, so the size check alone can
+    # leave a repaired mount serving the bytes it was supposed to replace.
+    if archive_sha256 and manifest.archive_sha256 and manifest.archive_sha256 != archive_sha256:
         return None
     if archive_path.is_file() and archive_path.stat().st_size != manifest.archive_size_bytes:
         return None

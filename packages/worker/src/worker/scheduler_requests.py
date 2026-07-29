@@ -404,6 +404,7 @@ def container_execution_context_from_scheduler_request(
         request=ContainerRequestContext(
             container_id=request.container_id,
             image_id=payload.image_id,
+            archive_sha256=payload.archive_sha256,
             stub_id=request.stub_id,
             stub_type=payload.stub_type,
             workspace_id=request.workspace_id,

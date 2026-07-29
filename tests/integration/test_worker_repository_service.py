@@ -37,7 +37,11 @@ from coordination.event_bus import (
 from coordination.redis_client import RedisClient
 from database.context import ServiceContext
 from database.repositories.execution import TaskRepository
-from database.repositories.images import CheckpointRepository, ImageRepository
+from database.repositories.images import (
+    CheckpointRepository,
+    ImageArchiveRepository,
+    ImageRepository,
+)
 from database.repositories.orchestration import (
     ContainerRepository,
     PoolRepository,
@@ -88,8 +92,8 @@ from shared.source_cache_cleanup import (
 )
 from shared.tasks import TaskStatus
 from shared.timestamps import utc_now
-from storage.service import ObjectStorage
-from storage_client.s3 import S3PresignedUpload
+from storage.image_archive import ResolvedImageArchiveSettings
+from storage_client.s3 import S3ObjectInfo, S3ObjectStoreSettings, S3PresignedUpload
 from tests.real_redis import RealRedisActors
 from tests.redis_fakes import FakeRedis
 from tests.scheduler_composition import scheduler_request_service_for_redis
@@ -387,10 +391,11 @@ def test_image_archive_upload_credentials_are_bound_and_one_time(
     )
     service.origin_credentials.config = CacheOriginCredentialConfig(
         image_registry_store=ImageRegistryStore.S3,
-        image_archive_bucket="image-archives",
     )
+    service.origin_credentials.archive_settings = _archive_settings()
     service.origin_credentials.object_store_client = archive_storage
-    service.origin_credentials.object_coordinates = archive_storage
+    isolated_services.images.archive_settings = _archive_settings()
+    isolated_services.images.archive_store = archive_storage
     request = ImageArchiveUploadCredentialRequest(
         workspace_id=workspace_id,
         build_id=build.id,
@@ -431,10 +436,8 @@ def test_image_archive_upload_credentials_are_bound_and_one_time(
     response = service.get_image_archive_upload_credentials(request, principal=principal)
     assert response.credentials is not None
     assert response.credentials.ok
-    assert response.credentials.object_key == f"image-builds/{build.id}/{build.image_id}.rclip"
-    assert response.credentials.upload_url.startswith(
-        f"memory://image-archives/workspaces/{workspace_id}/image-archives/"
-    )
+    assert response.credentials.object_key == f"image-archives/{build.image_id}.rclip"
+    assert response.credentials.upload_url.startswith("memory://image-archives/image-archives/")
     with pytest.raises(AuthorizationDeniedError, match="already consumed"):
         service.get_image_archive_upload_credentials(request, principal=principal)
 
@@ -575,39 +578,22 @@ def test_cache_origin_broker_returns_urls_without_storage_credentials(
         ),
     )
     image_id = "image-brokered"
-    archive_coordinates = ObjectStorage(
-        isolated_services.context,
-        object_client=isolated_services.object_storage.object_client,
-        default_bucket=isolated_services.object_storage.default_bucket,
-        allowed_buckets=("image-archives",),
-    )
-    archive = archive_coordinates.reserve_for_workspace(
-        workspace_id=workspace.id,
-        bucket="image-archives",
-        key=f"images/{image_id}.rclip",
-        size=1024,
-        sha256="a" * 64,
-        content_type="application/x-tar",
-    )
     with isolated_services.context.database.session() as session:
-        ImageRepository(session).upsert(
-            ImageRecord(
-                workspace_id=workspace.id,
-                image_id=image_id,
-                archive_object_id=archive.id,
-                archive_object_key=archive.key,
-                archive_size_bytes=archive.size,
-                archive_sha256=archive.sha256,
-            )
+        ImageArchiveRepository(session).reserve(
+            image_id,
+            bucket="image-archives",
+            object_key=f"image-archives/{image_id}.rclip",
+            size_bytes=1024,
+            sha256="a" * 64,
         )
+        ImageRepository(session).upsert(ImageRecord(workspace_id=workspace.id, image_id=image_id))
     service = _worker_repository_service(isolated_services, redis)
     service.origin_credentials.config = CacheOriginCredentialConfig(
         image_registry_store=ImageRegistryStore.S3,
-        image_archive_bucket="image-archives",
     )
+    service.origin_credentials.archive_settings = _archive_settings()
     archive_storage = _FakeObjectStorage()
     service.origin_credentials.object_store_client = archive_storage
-    service.origin_credentials.object_coordinates = archive_storage
     service.containers.set_container_state(
         SchedulerContainerState(
             container_id="container-brokered",
@@ -633,7 +619,7 @@ def test_cache_origin_broker_returns_urls_without_storage_credentials(
 
     assert response.credentials is not None
     assert response.credentials.image_archive_url.startswith(
-        f"memory://image-archives/workspaces/{workspace.id}/image-archives/"
+        "memory://image-archives/image-archives/"
     )
 
 
@@ -649,39 +635,24 @@ def test_cache_origin_broker_denies_other_workers_container_and_image(
     workspace_id = workspace.id
     victim_image_id = "image-victim"
     assigned_image_id = "image-assigned"
-    archive_coordinates = ObjectStorage(
-        isolated_services.context,
-        object_client=isolated_services.object_storage.object_client,
-        default_bucket=isolated_services.object_storage.default_bucket,
-        allowed_buckets=("image-archives",),
-    )
-    archive = archive_coordinates.reserve_for_workspace(
-        workspace_id=workspace_id,
-        bucket="image-archives",
-        key=f"images/{assigned_image_id}.rclip",
-        size=1024,
-        sha256="b" * 64,
-        content_type="application/x-tar",
-    )
     with isolated_services.context.database.session() as session:
+        ImageArchiveRepository(session).reserve(
+            assigned_image_id,
+            bucket="image-archives",
+            object_key=f"image-archives/{assigned_image_id}.rclip",
+            size_bytes=1024,
+            sha256="b" * 64,
+        )
         ImageRepository(session).upsert(
-            ImageRecord(
-                workspace_id=workspace_id,
-                image_id=assigned_image_id,
-                archive_object_id=archive.id,
-                archive_object_key=archive.key,
-                archive_size_bytes=archive.size,
-                archive_sha256=archive.sha256,
-            )
+            ImageRecord(workspace_id=workspace_id, image_id=assigned_image_id)
         )
     repository = _worker_repository_service(isolated_services, redis)
     repository.origin_credentials.config = CacheOriginCredentialConfig(
         image_registry_store=ImageRegistryStore.S3,
-        image_archive_bucket="image-archives",
     )
+    repository.origin_credentials.archive_settings = _archive_settings()
     archive_storage = _FakeObjectStorage()
     repository.origin_credentials.object_store_client = archive_storage
-    repository.origin_credentials.object_coordinates = archive_storage
     repository.containers.set_container_state(
         SchedulerContainerState(
             container_id="container-victim",
@@ -821,9 +792,7 @@ def test_cache_origin_broker_denies_other_workers_container_and_image(
     assert allowed.status_code == 200
     credentials = GetCacheOriginCredentialsResponse.model_validate_json(allowed.content).credentials
     assert credentials is not None
-    assert credentials.image_archive_url.startswith(
-        f"memory://image-archives/workspaces/{workspace_id}/image-archives/"
-    )
+    assert credentials.image_archive_url.startswith("memory://image-archives/image-archives/")
 
 
 def test_worker_repository_api_authenticates_and_streams_container_requests(
@@ -2523,6 +2492,14 @@ def _api_services(isolated_services: ApiServices, redis: RedisClient) -> ApiServ
     )
 
 
+def _archive_settings() -> ResolvedImageArchiveSettings:
+    return ResolvedImageArchiveSettings(
+        storage=S3ObjectStoreSettings(bucket="image-archives"),
+        prefix="",
+        presign_seconds=3600,
+    )
+
+
 class _FakeObjectStorage:
     def __init__(self) -> None:
         self.files: dict[tuple[str, str], bytes] = {}
@@ -2532,18 +2509,6 @@ class _FakeObjectStorage:
     @property
     def object_client(self) -> _FakeObjectStorage:
         return self
-
-    def physical_key_for_workspace(
-        self,
-        workspace_id: str,
-        *,
-        bucket: str,
-        key: str,
-    ) -> str:
-        return f"workspaces/{workspace_id}/{bucket}/{key}"
-
-    def physical_bucket(self, bucket: str) -> str:
-        return bucket
 
     def put_file(self, bucket: str, key: str, source: str | Path) -> ObjectRecord:
         payload = Path(source).read_bytes()
@@ -2571,6 +2536,18 @@ class _FakeObjectStorage:
     ) -> ObjectRecord:
         del object_id, workspace_id
         raise KeyError("fake object records are not configured")
+
+    def head(self, key: str, *, bucket: str | None = None) -> S3ObjectInfo:
+        resolved_bucket = bucket or "default"
+        payload = self.files.get((resolved_bucket, key))
+        if payload is None:
+            raise KeyError(f"{resolved_bucket}/{key}")
+        return S3ObjectInfo(
+            bucket=resolved_bucket,
+            key=key,
+            size=len(payload),
+            metadata={"artifact-sha256": hashlib.sha256(payload).hexdigest()},
+        )
 
     def generate_presigned_get_url(
         self,
@@ -2651,12 +2628,14 @@ class _FakeObjectStorage:
         content_length: int,
         content_type: str = "application/octet-stream",
         metadata: dict[str, str] | None = None,
+        checksum_sha256: str = "",
     ) -> S3PresignedUpload:
         return S3PresignedUpload(
             url=f"memory://{bucket or 'default'}/{key}?expires={expires_seconds}",
             headers={
                 "content-length": str(content_length),
                 "content-type": content_type,
+                **({"x-amz-checksum-sha256": checksum_sha256} if checksum_sha256 else {}),
                 **{f"x-amz-meta-{name}": value for name, value in (metadata or {}).items()},
             },
         )

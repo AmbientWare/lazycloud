@@ -1,9 +1,7 @@
 # Tests
 
-Tests are optional evidence for current production behavior. Add or retain one
-only when it is the cheapest unique proof of a material contract, failure,
-authorization boundary, durable transition, data-loss risk, concurrency
-invariant, or cleanup obligation.
+Whether a test exists at all is decided by the root test decision gate. This
+file adds where tests live and what they may assert.
 
 - Owner tests live beside their package/app. `tests/integration` owns concrete
   cross-owner workflows; architecture/deployment tests exercise real boundaries,

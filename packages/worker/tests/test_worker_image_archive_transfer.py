@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from base64 import b64encode
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -82,6 +83,7 @@ def test_image_archive_transfers_retry_transient_responses_and_preserve_signed_h
     signed_headers = {
         "content-type": "application/x-tar",
         "content-length": str(len(content)),
+        "x-amz-checksum-sha256": b64encode(bytes.fromhex(digest)).decode(),
         "x-amz-meta-artifact-sha256": digest,
         "x-amz-meta-owner": "image-build",
     }
@@ -208,6 +210,7 @@ def test_image_archive_unexpected_client_error_never_discloses_capability_query(
             headers={
                 "content-type": "application/x-tar",
                 "content-length": str(len(content)),
+                "x-amz-checksum-sha256": b64encode(bytes.fromhex(digest)).decode(),
                 "x-amz-meta-artifact-sha256": digest,
             },
             archive_size_bytes=len(content),

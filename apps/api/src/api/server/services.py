@@ -916,7 +916,7 @@ class ApiServices(ApiServiceCore):
             image_archive_config,
             image_build_execution_config,
             image_build_registry_config,
-            object_coordinates=object_storage_service,
+            context=context,
             archive_store=resolved_image_archive_store,
             archive_promotion_required=(resolved_image_build_executor.requires_archive_publication),
         )
@@ -927,6 +927,8 @@ class ApiServices(ApiServiceCore):
             events,
             resolved_image_build_executor,
             publication_composition.publisher,
+            archive_settings=image_archive_config,
+            archive_store=resolved_image_archive_store,
         )
         deployment_resources = DeploymentResourceService(context)
         cron_jobs = CronJobService(
@@ -1473,9 +1475,9 @@ def _worker_repository_service(
         ),
         origin_credentials=WorkerCacheOriginCredentialService(
             services=core,
-            config=_cache_origin_credential_config(core),
+            config=_cache_origin_credential_config(),
             object_store_client=core.image_archive_presigner,
-            object_coordinates=core.object_storage,
+            archive_settings=core.image_archive_settings,
         ),
         source_cache=WorkerSourceCacheService(core.context),
         dependencies=WorkerRepositoryDependencies(
@@ -1535,13 +1537,9 @@ def _workspace_bucket_client(client: ObjectByteClient) -> WorkspaceBucketClient 
     return None
 
 
-def _cache_origin_credential_config(core: ApiServiceCore) -> CacheOriginCredentialConfig:
-    archive = core.image_archive_settings
-    storage = archive.storage
+def _cache_origin_credential_config() -> CacheOriginCredentialConfig:
     return CacheOriginCredentialConfig(
         image_registry_store=ImageRegistryStore.S3,
-        image_archive_bucket=storage.bucket,
-        image_archive_presign_seconds=archive.presign_seconds,
         image_archive_extension=IMAGE_ARCHIVE_EXTENSION,
     )
 
@@ -1558,7 +1556,7 @@ def _image_build_publication_publisher(
     execution_settings: ImageBuildExecutionSettings,
     registry_settings: ImageBuildRegistrySettings,
     *,
-    object_coordinates: ObjectStorage,
+    context: ServiceContext,
     archive_store: ImageBuildArchiveObjectStore | None,
     archive_promotion_required: bool,
 ) -> _ImageBuildPublicationComposition:
@@ -1577,8 +1575,8 @@ def _image_build_publication_publisher(
         publishers.append(
             ArchiveImageBuildPublicationPublisher(
                 resolved_archive_store,
-                bucket=image_archive_settings.bucket,
-                object_coordinates=object_coordinates,
+                settings=image_archive_settings,
+                context=context,
             )
         )
     publishers.append(CacheImageBuildPublicationPublisher(cache_storage))

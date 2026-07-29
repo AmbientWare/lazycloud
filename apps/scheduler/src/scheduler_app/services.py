@@ -416,10 +416,9 @@ def scheduler_retention(
             object_storage=object_storage,
             cache_storage=cache_storage,
             config=settings.service_config(
-                image_archive_bucket=image_archive_settings.bucket,
                 checkpoint_bucket=object_storage.default_bucket,
-                image_archive_prefix=image_archive_settings.prefix,
             ),
+            image_archive_settings=image_archive_settings,
             image_archive_client=S3ObjectStoreClient.from_settings(image_archive_settings.storage),
         ),
         deployment_resources=DeploymentResourceService(context),

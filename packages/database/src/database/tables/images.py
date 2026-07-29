@@ -20,7 +20,48 @@ from sqlalchemy.sql.schema import SchemaItem
 from database.tables.base import DatabaseBase, IdPayloadTable, uuid_type
 
 
+class ImageArchiveTable(IdPayloadTable, DatabaseBase):
+    """The one archive for an image, owned by the system rather than a workspace.
+
+    Image identity is already global — it digests the dockerfile, build context,
+    architecture and secret versions, never a workspace — so the bytes it names are
+    the same bytes for every tenant. Holding one archive per image is what makes the
+    worker's image cache, which has always been keyed on the image id alone,
+    consistent with durable state.
+
+    Authorization is a join, not a namespace: a workspace reaches this row only
+    through its own `images` row for the same image id.
+    """
+
+    __tablename__ = "image_archives"
+    __table_args__: tuple[SchemaItem, ...] = (
+        UniqueConstraint("image_id", name="uq_image_archives_image_id"),
+        Index("ix_image_archives_cleanup_claimed_at", "cleanup_claimed_at"),
+        Index("ix_image_archives_updated_at", "updated_at"),
+        CheckConstraint("size_bytes > 0", name="ck_image_archives_size_positive"),
+        CheckConstraint("length(sha256) = 64", name="ck_image_archives_sha256_complete"),
+        CheckConstraint("object_key <> ''", name="ck_image_archives_object_key_present"),
+    )
+
+    image_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    bucket: Mapped[str] = mapped_column(String(255), nullable=False)
+    object_key: Mapped[str] = mapped_column(Text, nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    cleanup_claimed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
 class ImageTable(IdPayloadTable, DatabaseBase):
+    """A workspace's authorization to use an image, and its clip version.
+
+    Archive facts live on `image_archives`. Keeping them here made every workspace
+    carry its own digest of shared content, so deleting one tenant destroyed bytes a
+    surviving tenant referenced, and the workspace-scoped `RESTRICT` foreign key onto
+    `objects` wedged deletion after the bytes were already gone.
+    """
+
     __tablename__ = "images"
     __table_args__: tuple[SchemaItem, ...] = (
         UniqueConstraint(
@@ -29,24 +70,9 @@ class ImageTable(IdPayloadTable, DatabaseBase):
             name="uq_images_workspace_image_id",
         ),
         Index("ix_images_workspace", "workspace_id"),
-        Index(
-            "ix_images_workspace_archive_object",
-            "workspace_id",
-            "archive_object_id",
-        ),
+        Index("ix_images_image_id", "image_id"),
         Index("ix_images_cleanup_claimed_at", "cleanup_claimed_at"),
         Index("ix_images_cleanup_completed_at", "cleanup_completed_at"),
-        CheckConstraint(
-            "archive_size_bytes >= 0",
-            name="ck_images_archive_size_nonnegative",
-        ),
-        CheckConstraint(
-            "(archive_object_id IS NULL AND archive_object_key = '' "
-            "AND archive_size_bytes = 0 AND archive_sha256 = '') "
-            "OR (archive_object_id IS NOT NULL AND archive_object_key <> '' "
-            "AND archive_size_bytes > 0 AND length(archive_sha256) = 64)",
-            name="ck_images_archive_identity_complete",
-        ),
     )
 
     workspace_id: Mapped[str] = mapped_column(
@@ -56,14 +82,6 @@ class ImageTable(IdPayloadTable, DatabaseBase):
     )
     image_id: Mapped[str] = mapped_column(String(512), nullable=False)
     clip_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
-    archive_object_id: Mapped[str | None] = mapped_column(
-        uuid_type,
-        ForeignKey("objects.id", ondelete="RESTRICT"),
-        nullable=True,
-    )
-    archive_object_key: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    archive_size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
-    archive_sha256: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     cleanup_claimed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

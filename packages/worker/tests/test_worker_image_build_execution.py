@@ -220,8 +220,7 @@ def test_worker_private_build_args_are_redacted_from_results_and_instance_logs(
     status = WorkerContainerService(instances=instances).container_status(
         ContainerStatusRequest(container_id=request.container_id)
     )
-    assert status.build_archive_object_id == "object-1"
-    assert status.build_archive_object_key == "image-builds/build-1/image-1.rclip"
+    assert status.build_archive_object_key == "image-archives/image-1.rclip"
     assert status.build_archive_size_bytes == 7
     assert status.build_archive_sha256 == "a" * 64
 
@@ -280,13 +279,15 @@ def test_repository_archive_publisher_requests_and_propagates_exact_identity(
     signed_headers = {
         "content-type": "application/x-tar",
         "content-length": str(len(content)),
+        "x-amz-checksum-sha256": b64encode(bytes.fromhex(digest)).decode(),
         "x-amz-meta-artifact-sha256": digest,
     }
     repository = _FakeArchiveUploadRepository(
         ImageArchiveUploadCredentials(
-            archive_object_id="object-1",
             bucket="image-archives",
-            object_key="image-builds/build-1/image-1.rclip",
+            object_key="image-archives/image-1.rclip",
+            archive_size_bytes=len(content),
+            archive_sha256=digest,
             upload_url="https://objects.example.test/signed",
             upload_headers=signed_headers,
         )
@@ -331,8 +332,7 @@ def test_repository_archive_publisher_requests_and_propagates_exact_identity(
     assert request.archive_size_bytes == len(content)
     assert request.archive_sha256 == digest
     assert uploads[0]["headers"] == signed_headers
-    assert result.archive_object_id == "object-1"
-    assert result.object_key == "image-builds/build-1/image-1.rclip"
+    assert result.object_key == "image-archives/image-1.rclip"
     assert result.size_bytes == len(content)
     assert result.sha256 == digest
 
@@ -732,8 +732,7 @@ class _RecordingImagePublisher:
         return WorkerImageArchivePublishResult(
             ok=not self.error,
             image_id=image_id,
-            archive_object_id="object-1" if not self.error else "",
-            object_key="image-builds/build-1/image-1.rclip" if not self.error else "",
+            object_key="image-archives/image-1.rclip" if not self.error else "",
             size_bytes=7 if not self.error else 0,
             sha256="a" * 64 if not self.error else "",
             error_message=self.error,
@@ -756,12 +755,3 @@ class _FakeArchiveUploadRepository:
     ) -> _UploadCredentialsResponse:
         self.requests.append(request)
         return _UploadCredentialsResponse(credentials=self.credentials)
-
-
-@dataclass(slots=True)
-class _UploadResponse:
-    status: int
-    body: bytes
-
-    def read(self) -> bytes:
-        return self.body

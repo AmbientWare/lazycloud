@@ -14,6 +14,7 @@ from cache.protocol import (
     CacheContentStoreResult,
     CacheContentStoreStatus,
 )
+from pydantic import Field
 from shared.contracts import ContractModel
 
 from worker.image_lifecycle import (
@@ -100,6 +101,7 @@ class WorkerImageArchiveLocalState(ContractModel):
     exists: bool = False
     is_dir: bool = False
     size_bytes: int = 0
+    recorded_sha256: str = Field(default="", pattern=r"^(?:[0-9a-f]{64})?$")
     metadata_valid: bool = True
     storage_mode: ImageArchiveStorageMode = ImageArchiveStorageMode.Local
     has_image_metadata: bool = True
@@ -129,6 +131,7 @@ def load_image_archive_from_cache_or_source(
     cache_path: str,
     validator: ImageArchiveValidator,
     local_state: WorkerImageArchiveLocalState | None = None,
+    expected_sha256: str = "",
     cache_client_available: bool = True,
     metadata_hash: str = "",
     metadata_size_bytes: int = 0,
@@ -142,6 +145,8 @@ def load_image_archive_from_cache_or_source(
         exists=state.exists,
         is_dir=state.is_dir,
         size_bytes=state.size_bytes,
+        expected_sha256=expected_sha256,
+        recorded_sha256=state.recorded_sha256,
         metadata_valid=state.metadata_valid,
         storage_mode=state.storage_mode,
         has_image_metadata=state.has_image_metadata,
@@ -162,6 +167,7 @@ def load_image_archive_from_cache_or_source(
         image_id=image_id,
         cache_path=cache_path,
         cache_client_available=cache_client_available,
+        expected_sha256=expected_sha256,
         metadata_hash=metadata_hash,
         metadata_size_bytes=metadata_size_bytes,
         metadata_error=metadata_error,

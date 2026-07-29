@@ -131,7 +131,6 @@ class WorkerContainerService:
                 ok=True,
                 status=instance.status,
                 exit_code=instance.exit_code,
-                build_archive_object_id=instance.build_archive_object_id,
                 build_archive_object_key=instance.build_archive_object_key,
                 build_archive_size_bytes=instance.build_archive_size_bytes,
                 build_archive_sha256=instance.build_archive_sha256,

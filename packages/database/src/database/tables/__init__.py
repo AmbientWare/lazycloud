@@ -52,7 +52,12 @@ from database.tables.identity import (
     WorkspaceStorageTable,
     WorkspaceTable,
 )
-from database.tables.images import CheckpointTable, ImageBuildTable, ImageTable
+from database.tables.images import (
+    CheckpointTable,
+    ImageArchiveTable,
+    ImageBuildTable,
+    ImageTable,
+)
 from database.tables.observability import (
     MetricTable,
     UsageBillingContributionTable,
@@ -108,6 +113,7 @@ __all__ = [
     "IdPayloadTable",
     "IdentityAdminRecoveryRequestTable",
     "IdentityBootstrapClaimTable",
+    "ImageArchiveTable",
     "ImageBuildTable",
     "ImageTable",
     "LogTable",

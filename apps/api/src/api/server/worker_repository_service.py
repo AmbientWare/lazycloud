@@ -1233,42 +1233,23 @@ class WorkerRepositoryService:
         bucket, object_key = self.origin_credentials.upload_location(request)
         if not bucket or not object_key:
             raise UpstreamUnavailableError("image archive storage is not configured")
-        reserved = dependencies.object_storage.reserve_for_workspace(
-            workspace_id=request.workspace_id,
-            bucket=bucket,
-            key=object_key,
-            size=request.archive_size_bytes,
+        reservation = dependencies.images.reserve_image_archive(
+            request.image_id,
+            object_key=object_key,
+            size_bytes=request.archive_size_bytes,
             sha256=request.archive_sha256,
-            content_type=request.content_type,
-            metadata={
-                "kind": "image-build-staging",
-                "build_id": request.build_id,
-                "container_id": request.container_id,
-                "image_id": request.image_id,
-            },
-            overwrite=False,
         )
-        if (
-            reserved.size != request.archive_size_bytes
-            or reserved.sha256 != request.archive_sha256
-            or reserved.content_type != request.content_type
-            or reserved.metadata.get("kind") != "image-build-staging"
-            or reserved.metadata.get("build_id") != request.build_id
-            or reserved.metadata.get("container_id") != request.container_id
-            or reserved.metadata.get("image_id") != request.image_id
-        ):
-            raise ConflictError("image archive staging reservation already has different identity")
         credentials = self.origin_credentials.vend_upload(
             request,
             principal=principal.credential_principal(
                 proven_workspace_id=request.workspace_id,
             ),
-            archive_object_id=reserved.id,
+            archive=reservation.archive,
+            upload_required=reservation.upload_required,
         )
         if credentials.ok and (
-            credentials.archive_object_id != reserved.id
-            or credentials.bucket != reserved.bucket
-            or credentials.object_key != reserved.key
+            credentials.bucket != reservation.archive.bucket
+            or credentials.object_key != reservation.archive.object_key
         ):
             raise RuntimeError("image archive upload descriptor does not match reservation")
         return GetImageArchiveUploadCredentialsResponse(credentials=credentials)

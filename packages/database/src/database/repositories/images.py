@@ -9,7 +9,12 @@ from database.repositories.common import (
     WorkspaceTableRepository,
 )
 from database.repositories.identity import WorkspaceRepository
-from database.tables.images import CheckpointTable, ImageBuildTable, ImageTable
+from database.tables.images import (
+    CheckpointTable,
+    ImageArchiveTable,
+    ImageBuildTable,
+    ImageTable,
+)
 from shared.checkpoints import (
     CHECKPOINT_RETENTION_ELIGIBLE_STATUSES,
     CheckpointPruneResult,
@@ -18,6 +23,7 @@ from shared.checkpoints import (
 )
 from shared.image_building.records import (
     BuildStatus,
+    ImageArchiveRecord,
     ImageBuildPhase,
     ImageBuildRecord,
     ImageRecord,
@@ -26,6 +32,7 @@ from shared.runtime_paths import archive_path_digest, normalize_runtime_path
 from shared.timestamps import utc_now
 from sqlalchemy import case, delete, exists, func, or_, select, text, tuple_, update
 from sqlalchemy.engine import CursorResult
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 
@@ -63,17 +70,6 @@ class ImageRepository:
                 key=image.image_id,
                 name=image.image_id,
             )
-        row = self.session.scalars(
-            select(ImageTable).where(
-                ImageTable.workspace_id == image.workspace_id,
-                ImageTable.image_id == image.image_id,
-            )
-        ).one()
-        row.archive_object_id = saved.archive_object_id or None
-        row.archive_object_key = saved.archive_object_key
-        row.archive_size_bytes = saved.archive_size_bytes
-        row.archive_sha256 = saved.archive_sha256
-        self.session.flush()
         return saved
 
     def get(
@@ -94,26 +90,6 @@ class ImageRepository:
             for record in self.records.list(workspace_id=workspace_id)
             if record.cleanup_completed_at is None
         ]
-
-    def archive_object_is_referenced(
-        self,
-        archive_object_id: str,
-        *,
-        workspace_id: str,
-    ) -> bool:
-        if not archive_object_id:
-            return False
-        return bool(
-            self.session.scalar(
-                select(
-                    exists().where(
-                        ImageTable.workspace_id == workspace_id,
-                        ImageTable.archive_object_id == archive_object_id,
-                        ImageTable.cleanup_completed_at.is_(None),
-                    )
-                )
-            )
-        )
 
     def get_updated_before(
         self,
@@ -162,39 +138,224 @@ class ImageRepository:
         self.session.flush()
         return True
 
-    def detach_archive_for_cleanup(
+
+@dataclass(slots=True)
+class ImageArchiveRepository:
+    """System-authority access to the one archive per image id.
+
+    Not a `WorkspaceTableRepository`: the archive has no workspace. Tenant access
+    goes through `get_authorized`, which requires the caller's own `images` row.
+    """
+
+    session: Session
+
+    def get(self, image_id: str) -> ImageArchiveRecord | None:
+        row = self.session.scalars(
+            select(ImageArchiveTable).where(ImageArchiveTable.image_id == image_id)
+        ).first()
+        return _image_archive_record(row) if row is not None else None
+
+    def get_authorized(self, image_id: str, *, workspace_id: str) -> ImageArchiveRecord | None:
+        """The archive, only if this workspace holds a live authorization for it.
+
+        The physical key carries no tenant component, so this join is the whole of
+        the download boundary. Resolving the archive without it would hand any
+        workspace any image.
+        """
+
+        row = self.session.scalars(
+            select(ImageArchiveTable)
+            .join(ImageTable, ImageTable.image_id == ImageArchiveTable.image_id)
+            .where(
+                ImageArchiveTable.image_id == image_id,
+                ImageTable.workspace_id == workspace_id,
+                ImageTable.cleanup_completed_at.is_(None),
+            )
+        ).first()
+        return _image_archive_record(row) if row is not None else None
+
+    def reserve(
         self,
         image_id: str,
         *,
-        workspace_id: str,
-        archive_object_id: str,
-    ) -> ImageRecord:
-        row = self.session.scalars(
-            select(ImageTable).where(
-                ImageTable.workspace_id == workspace_id,
-                ImageTable.image_id == image_id,
-            )
-        ).one()
-        current = ImageRecord.model_validate(row.payload)
-        if current.cleanup_claimed_at is None:
-            raise RuntimeError(f"image cleanup claim was lost: {image_id}")
-        if current.archive_object_id != archive_object_id:
-            raise RuntimeError(f"image archive cleanup ownership changed: {image_id}")
-        detached = current.model_copy(
-            update={
-                "archive_object_id": "",
-                "archive_object_key": "",
-                "archive_size_bytes": 0,
-                "archive_sha256": "",
-            }
+        bucket: str,
+        object_key: str,
+        size_bytes: int,
+        sha256: str,
+    ) -> tuple[ImageArchiveRecord, bool]:
+        """Claim the archive for this image id, or return the one already there.
+
+        Returns ``(record, reserved)``. ``reserved`` is False when another build got
+        there first, which is the ordinary dedup path rather than an error.
+        """
+
+        existing = self.get(image_id)
+        if existing is not None:
+            return existing, False
+        row = ImageArchiveTable(
+            image_id=image_id,
+            bucket=bucket,
+            object_key=object_key,
+            size_bytes=size_bytes,
+            sha256=sha256,
+            payload={},
         )
-        row.payload = detached.model_dump(mode="json")
-        row.archive_object_id = None
-        row.archive_object_key = ""
-        row.archive_size_bytes = 0
-        row.archive_sha256 = ""
+        self.session.add(row)
+        try:
+            self.session.flush()
+        except IntegrityError:
+            # Another build inserted the same image id between the read and the
+            # flush; its bytes are as good as ours.
+            self.session.rollback()
+            conflicting = self.get(image_id)
+            if conflicting is None:
+                raise
+            return conflicting, False
+        return _image_archive_record(row), True
+
+    def take_over(
+        self,
+        image_id: str,
+        *,
+        expected_sha256: str,
+        bucket: str,
+        object_key: str,
+        size_bytes: int,
+        sha256: str,
+    ) -> ImageArchiveRecord | None:
+        """Repoint a broken archive, only if it still holds the digest we saw.
+
+        The compare-and-set is what keeps the row and the bytes moving together: the
+        recorded digest only changes in the same statement that claims the right to
+        replace the bytes, so a valid archive can never be silently overwritten with
+        different content. A row retention has already claimed is equally off limits:
+        repointing it would leave the cleanup that is mid-delete pointed at bytes a
+        build is writing.
+        """
+
+        result = self.session.execute(
+            update(ImageArchiveTable)
+            .where(
+                ImageArchiveTable.image_id == image_id,
+                ImageArchiveTable.sha256 == expected_sha256,
+                ImageArchiveTable.cleanup_claimed_at.is_(None),
+            )
+            .values(
+                bucket=bucket,
+                object_key=object_key,
+                size_bytes=size_bytes,
+                sha256=sha256,
+                updated_at=utc_now(),
+            )
+        )
+        if not _one_row_changed(result):
+            return None
         self.session.flush()
-        return detached
+        return self.get(image_id)
+
+    def list_cleanup_candidates(
+        self,
+        *,
+        updated_before: datetime,
+        recent_build_after: datetime,
+        limit: int,
+    ) -> list[ImageArchiveRecord]:
+        """Archives no live authorization or recent build still needs.
+
+        Both clauses are unscoped by workspace, which is the point: the archive
+        belongs to no tenant, so one tenant's cleanup must not free bytes another is
+        still authorized for. The build clause covers the window between reserving
+        an archive and writing the authorization row.
+        """
+
+        authorized = (
+            select(ImageTable.id)
+            .where(
+                ImageTable.image_id == ImageArchiveTable.image_id,
+                ImageTable.cleanup_completed_at.is_(None),
+            )
+            .exists()
+        )
+        building = (
+            select(ImageBuildTable.id)
+            .where(
+                ImageBuildTable.image_id == ImageArchiveTable.image_id,
+                or_(
+                    ImageBuildTable.status.in_(
+                        (BuildStatus.Pending.value, BuildStatus.Running.value)
+                    ),
+                    ImageBuildTable.finished_at.is_(None),
+                    ImageBuildTable.finished_at >= recent_build_after,
+                ),
+            )
+            .exists()
+        )
+        rows = self.session.scalars(
+            select(ImageArchiveTable)
+            .where(
+                ImageArchiveTable.updated_at < updated_before,
+                ImageArchiveTable.cleanup_claimed_at.is_(None),
+                ~authorized,
+                ~building,
+            )
+            .order_by(ImageArchiveTable.updated_at.asc())
+            .limit(limit)
+        )
+        return [_image_archive_record(row) for row in rows]
+
+    def claim_cleanup(self, image_id: str, *, claimed_at: datetime) -> ImageArchiveRecord | None:
+        result = self.session.execute(
+            update(ImageArchiveTable)
+            .where(
+                ImageArchiveTable.image_id == image_id,
+                ImageArchiveTable.cleanup_claimed_at.is_(None),
+            )
+            .values(cleanup_claimed_at=claimed_at)
+        )
+        if not _one_row_changed(result):
+            return None
+        self.session.flush()
+        return self.get(image_id)
+
+    def list_claimed(self) -> list[ImageArchiveRecord]:
+        rows = self.session.scalars(
+            select(ImageArchiveTable).where(ImageArchiveTable.cleanup_claimed_at.is_not(None))
+        )
+        return [_image_archive_record(row) for row in rows]
+
+    def release_claim(self, image_id: str) -> None:
+        self.session.execute(
+            update(ImageArchiveTable)
+            .where(ImageArchiveTable.image_id == image_id)
+            .values(cleanup_claimed_at=None)
+        )
+        self.session.flush()
+
+    def delete(self, image_id: str, *, expected_sha256: str) -> bool:
+        result = self.session.execute(
+            delete(ImageArchiveTable).where(
+                ImageArchiveTable.image_id == image_id,
+                ImageArchiveTable.sha256 == expected_sha256,
+            )
+        )
+        self.session.flush()
+        return _one_row_changed(result)
+
+
+def _one_row_changed(result: object) -> bool:
+    return int(result.rowcount) == 1 if isinstance(result, CursorResult) else False
+
+
+def _image_archive_record(row: ImageArchiveTable) -> ImageArchiveRecord:
+    return ImageArchiveRecord(
+        id=str(row.id),
+        image_id=row.image_id,
+        bucket=row.bucket,
+        object_key=row.object_key,
+        size_bytes=row.size_bytes,
+        sha256=row.sha256,
+        cleanup_claimed_at=row.cleanup_claimed_at,
+    )
 
 
 @dataclass(slots=True)
@@ -482,19 +643,8 @@ class ImageBuildRepository:
         *,
         workspace_id: str,
         claim_id: str,
-        archive_object_id: str = "",
-        archive_object_key: str = "",
-        archive_size_bytes: int = 0,
-        archive_sha256: str = "",
+        archive_published: bool = False,
     ) -> ImageBuildRecord:
-        archive_identity = (
-            bool(archive_object_id),
-            bool(archive_object_key),
-            archive_size_bytes > 0,
-            bool(archive_sha256),
-        )
-        if any(archive_identity) and not all(archive_identity):
-            raise ValueError("image build publication archive identity is incomplete")
         row = self.session.scalars(
             select(ImageBuildTable).where(
                 ImageBuildTable.id == build.id,
@@ -513,7 +663,10 @@ class ImageBuildRepository:
         row.payload = build.model_dump(mode="json")
         row.publication_claim_id = ""
         row.publication_claimed_at = None
-        if archive_object_id:
+        if archive_published:
+            # The archive itself is global and was written when the upload was
+            # reserved. What publication establishes here is this workspace's
+            # authorization to resolve it.
             images = ImageRepository(self.session)
             existing = images.get(
                 build.image_id or "",
@@ -525,10 +678,6 @@ class ImageBuildRepository:
                     workspace_id=workspace_id,
                     image_id=build.image_id or "",
                     clip_version=existing.clip_version if existing is not None else 1,
-                    archive_object_id=archive_object_id,
-                    archive_object_key=archive_object_key,
-                    archive_size_bytes=archive_size_bytes,
-                    archive_sha256=archive_sha256,
                     aliases=existing.aliases if existing is not None else [],
                 )
             )

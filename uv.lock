@@ -999,6 +999,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "scheduler" },
+    { name = "storage" },
 ]
 
 [package.metadata]
@@ -1011,6 +1012,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.8,<3" },
     { name = "pydantic-settings", specifier = ">=2.4,<3" },
     { name = "scheduler", editable = "packages/scheduler" },
+    { name = "storage", editable = "packages/storage" },
 ]
 
 [[package]]
@@ -2288,6 +2290,7 @@ dependencies = [
     { name = "lazycloud-shared" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "storage" },
     { name = "storage-client" },
     { name = "worker" },
 ]
@@ -2304,6 +2307,7 @@ requires-dist = [
     { name = "lazycloud-shared", editable = "packages/shared" },
     { name = "pydantic", specifier = ">=2.8,<3" },
     { name = "pydantic-settings", specifier = ">=2.4,<3" },
+    { name = "storage", editable = "packages/storage" },
     { name = "storage-client", editable = "packages/storage-client" },
     { name = "worker", editable = "packages/worker" },
 ]
