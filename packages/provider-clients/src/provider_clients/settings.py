@@ -18,6 +18,7 @@ _AWS_REGION_PATTERN = re.compile(r"(us-gov|us|af|ap|ca|cn|eu|il|me|mx|sa)-[a-z0-
 
 
 class AwsAccountConnectionSettings(BaseSettings):
+    enabled: bool = False
     template_url: str = ""
     control_principal_arn: str = ""
     external_id_bytes: int = Field(default=48, ge=32, le=128)
@@ -37,35 +38,41 @@ class AwsAccountConnectionSettings(BaseSettings):
 
     @property
     def configured(self) -> bool:
-        return bool(self.template_url and self.control_principal_arn)
+        return self.enabled and bool(self.template_url and self.control_principal_arn)
 
     @model_validator(mode="after")
-    def validate_atomic_configuration(self) -> AwsAccountConnectionSettings:
-        """Connected AWS is configured or it is absent; there is no half-configured shape.
+    def validate_enabled_configuration(self) -> AwsAccountConnectionSettings:
+        """Connected AWS is opted into explicitly, and opting in requires its configuration.
 
-        A deployment holding a template URL but no control principal would publish a
-        customer authorization template that trusts nothing, so the two values are one
-        unit. Both come from the outputs of ``deploy/connected-aws/control-stack.yaml``.
+        ``enabled`` is a deployment declaration, not a runtime switch: a deployment that
+        leaves it false has no connected AWS at all, and one that sets it true must supply
+        both values or fail here rather than degrade. Publishing a customer authorization
+        template with no control principal would trust nothing, so the two are one unit.
+        Both come from the outputs of ``deploy/connected-aws/control-stack.yaml``, which
+        ``deploy/connected-aws/bootstrap.py`` prints ready to paste.
         """
 
-        present = [
+        if self.control_principal_arn and (
+            _AWS_PRINCIPAL_PATTERN.fullmatch(self.control_principal_arn) is None
+        ):
+            raise ValueError("AWS account connection control principal ARN is invalid")
+        if not self.enabled:
+            return self
+        missing = [
             name
             for name, value in (
                 ("connection template URL", self.template_url),
                 ("control principal ARN", self.control_principal_arn),
             )
-            if value
+            if not value
         ]
-        if len(present) == 1:
+        if missing:
             raise ValueError(
-                "connected AWS configuration is incomplete: "
-                f"{present[0]} is set without the other. Configure both from the outputs "
-                "of deploy/connected-aws/control-stack.yaml, or neither."
+                "connected AWS is enabled but its configuration is incomplete: missing "
+                + ", ".join(missing)
+                + ". Run deploy/connected-aws/bootstrap.py to provision the control "
+                "principal and print both values."
             )
-        if self.control_principal_arn and (
-            _AWS_PRINCIPAL_PATTERN.fullmatch(self.control_principal_arn) is None
-        ):
-            raise ValueError("AWS account connection control principal ARN is invalid")
         return self
 
 

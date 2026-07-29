@@ -25,11 +25,14 @@ def test_aws_connection_settings_reject_invalid_control_authority() -> None:
         )
 
 
-def test_aws_connection_settings_reject_half_configured_authority() -> None:
-    # A template URL without a control principal would publish a customer
+def test_aws_connection_settings_reject_enabled_without_control_authority() -> None:
+    # Enabling with a template URL but no control principal would publish a customer
     # authorization template that trusts nothing.
     with pytest.raises(ValidationError, match="configuration is incomplete"):
-        AwsAccountConnectionSettings(template_url="https://assets.example.com/template.json")
+        AwsAccountConnectionSettings(
+            enabled=True,
+            template_url="https://assets.example.com/template.json",
+        )
 
 
 def test_aws_capacity_settings_reject_partial_and_mutable_artifacts(

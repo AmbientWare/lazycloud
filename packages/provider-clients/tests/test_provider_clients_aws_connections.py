@@ -73,6 +73,7 @@ def _enabled_settings() -> _AwsOwnerSettings:
     template_identity = aws_account_connection_template_identity()
     return _AwsOwnerSettings(
         connection=AwsAccountConnectionSettings(
+            enabled=True,
             template_url=(
                 "https://assets.s3.us-east-1.amazonaws.com/templates/"
                 f"{template_identity.sha256}/connection.json"
