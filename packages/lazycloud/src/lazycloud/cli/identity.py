@@ -4,7 +4,7 @@ import socket
 import time
 import urllib.error
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from time import monotonic
 from typing import Annotated
 
@@ -52,7 +52,9 @@ class DeviceLoginError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class DeviceLoginResult:
-    token: str
+    # The minted token is excluded from the repr so a traceback or a logged
+    # result never carries the credential the device flow just issued.
+    token: str = field(repr=False)
     workspace: str
 
 
