@@ -27,10 +27,23 @@ repeat this policy.
   unless it directly blocks the requested outcome or prevents a security,
   data-loss, paid-resource, concurrency, or cleanup failure.
 
-Use `../beta9` only to understand a requested capability or public workflow.
-All implementation here must be original. Match production capability,
-security, durability, operability, cost, performance, and public contracts—not
-internals or names. Bot remains out of scope.
+`../beta9` is the reference implementation and is always available to read—for a
+requested capability or public workflow, and equally for infrastructure and
+architecture shape: how a concern is scoped, what the durable model looks like,
+where ownership sits, how storage and deployment are laid out. Consult it before
+designing something substantial rather than after, and say what it does when
+proposing a design.
+
+Treat it as the baseline to judge against, in both directions. Building more
+than beta9 needs a reason named in the change—a capability we already have and
+would otherwise regress, or a security, durability, or cost property it does not
+provide. Building less needs the same. Matching it by default is the cheapest
+correct answer, and a design markedly more complex than beta9's is a signal to
+re-check the requirement, not a sign of rigor.
+
+All implementation here must be original. Match production capability, security,
+durability, operability, cost, performance, and public contracts—not internals
+or names. Bot remains out of scope.
 
 ## Ownership And Architecture
 
