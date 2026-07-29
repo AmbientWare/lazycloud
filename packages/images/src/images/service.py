@@ -9,20 +9,26 @@ from pathlib import Path
 from threading import Event, Lock, Thread
 from uuid import uuid4
 
-from database.repositories.images import ImageBuildRepository, ImageRepository
+from database.repositories.images import (
+    ImageArchiveRepository,
+    ImageBuildRepository,
+    ImageRepository,
+)
 from observability.events import EventService
 from pydantic import BaseModel, JsonValue, TypeAdapter
-from shared.errors import NotFoundError
+from shared.errors import ConflictError, NotFoundError, UpstreamUnavailableError
 from shared.events import EventLevel
 from shared.image_building.authoring import ImageSpec
 from shared.image_building.planning import ImageBuildPlan
 from shared.image_building.records import (
     BuildStatus,
+    ImageArchiveRecord,
     ImageBuildPhase,
     ImageBuildRecord,
     ImageRecord,
 )
 from shared.timestamps import utc_now
+from storage.image_archive import ResolvedImageArchiveSettings
 
 from images.building import (
     IMAGE_BUILD_CONTAINER_TTL_SECONDS,
@@ -62,6 +68,7 @@ from images.metadata import (
     merge_image_metadata_aliases,
 )
 from images.publication import (
+    ImageBuildArchiveObjectStore,
     ImageBuildPublicationPublisher,
     ImageBuildPublicationPublishStatus,
     image_build_publication_from_execution,
@@ -95,6 +102,14 @@ class ImageBuildExecution:
 class ImageBuildClaim:
     record: ImageBuildRecord
     owned: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ImageArchiveReservation:
+    """The archive this build must use, and whether it still has to write it."""
+
+    archive: ImageArchiveRecord
+    upload_required: bool
 
 
 @dataclass(slots=True)
@@ -273,6 +288,8 @@ class ImageBuildService:
     publication_publisher: ImageBuildPublicationPublisher | None = None
     cleanup_executor: ImageBuildCleanupExecutor | None = None
     container_lifecycle: ImageBuildContainerLifecycleService | None = None
+    archive_settings: ResolvedImageArchiveSettings | None = None
+    archive_store: ImageBuildArchiveObjectStore | None = None
     duplicate_wait_timeout_seconds: float = DEFAULT_IMAGE_BUILD_DUPLICATE_WAIT_TIMEOUT_SECONDS
     duplicate_wait_poll_seconds: float = DEFAULT_IMAGE_BUILD_DUPLICATE_WAIT_POLL_SECONDS
     claim_lease_seconds: float = DEFAULT_IMAGE_BUILD_CLAIM_LEASE_SECONDS
@@ -1073,37 +1090,17 @@ class ImageBuildService:
             if publish_result.status is ImageBuildPublicationPublishStatus.Error:
                 raise RuntimeError(publish_result.reason or "image build publication failed")
 
-        if self.executor.requires_archive_publication and (
-            publish_result is None
-            or publish_result.status is not ImageBuildPublicationPublishStatus.Published
-            or publish_result.cache_metadata.get("image_archive_candidate_status") != "ready"
-        ):
+        archive_published = (
+            publish_result is not None
+            and publish_result.status is ImageBuildPublicationPublishStatus.Published
+            and publish_result.cache_metadata.get("image_archive_status") == "ready"
+        )
+        if self.executor.requires_archive_publication and not archive_published:
             reason = publish_result.reason if publish_result is not None else ""
             raise RuntimeError(reason or "required image archive publication was not completed")
 
         record.published_ref = publication.published_ref
         record.artifact_path = publication.artifact_path
-        archive_object_id = publication.cache_metadata.get(
-            "image_archive_candidate_object_id",
-            "",
-        )
-        archive_object_key = publication.cache_metadata.get("image_archive_candidate_key", "")
-        archive_size_bytes = _positive_int_metadata(
-            publication.cache_metadata.get("image_archive_candidate_size_bytes", "")
-        )
-        archive_sha256 = publication.cache_metadata.get("image_archive_candidate_sha256", "")
-        if archive_object_id:
-            if (
-                not archive_object_key
-                or archive_size_bytes is None
-                or not _is_sha256_metadata(archive_sha256)
-            ):
-                raise RuntimeError("verified image archive identity is incomplete")
-            publication.cache_metadata["image_archive_object_id"] = archive_object_id
-            publication.cache_metadata["image_archive_object_key"] = archive_object_key
-            publication.cache_metadata["image_archive_size_bytes"] = str(archive_size_bytes)
-            publication.cache_metadata["image_archive_sha256"] = archive_sha256
-            publication.cache_metadata["image_archive_selection_status"] = "selected"
         record.cache_metadata = publication.cache_metadata
         completion_event = plan_image_build_complete_event(
             image_id=record.image_id or "",
@@ -1127,10 +1124,7 @@ class ImageBuildService:
                 record,
                 workspace_id=workspace_id,
                 claim_id=claim_id,
-                archive_object_id=archive_object_id,
-                archive_object_key=archive_object_key,
-                archive_size_bytes=archive_size_bytes or 0,
-                archive_sha256=archive_sha256,
+                archive_published=archive_published,
             )
 
         self._emit(
@@ -1315,10 +1309,6 @@ class ImageBuildService:
                 workspace_id=resolved_workspace_id,
                 image_id=record.image_id,
                 clip_version=clip_version,
-                archive_object_id=(existing.archive_object_id if existing is not None else ""),
-                archive_object_key=(existing.archive_object_key if existing is not None else ""),
-                archive_size_bytes=(existing.archive_size_bytes if existing is not None else 0),
-                archive_sha256=(existing.archive_sha256 if existing is not None else ""),
                 aliases=merge_image_metadata_aliases(
                     existing.aliases if existing is not None else [],
                     image_metadata_aliases_for_build(record),
@@ -1329,13 +1319,7 @@ class ImageBuildService:
             "metadata",
             record,
             workspace_id=resolved_workspace_id,
-            data={
-                "clip_version": clip_version,
-                "archive_object_id": saved.archive_object_id,
-                "archive_object_key": saved.archive_object_key,
-                "archive_size_bytes": saved.archive_size_bytes,
-                "archive_sha256": saved.archive_sha256,
-            },
+            data={"clip_version": clip_version},
         )
         return saved
 
@@ -1347,6 +1331,93 @@ class ImageBuildService:
     ) -> ImageRecord | None:
         with self.context.database.session() as session:
             return ImageRepository(session).get(
+                image_id,
+                workspace_id=workspace_id,
+            )
+
+    def reserve_image_archive(
+        self,
+        image_id: str,
+        *,
+        object_key: str,
+        size_bytes: int,
+        sha256: str,
+    ) -> ImageArchiveReservation:
+        """Claim the one archive for this image id, or defer to the one already there.
+
+        Three outcomes, and only the first two let a build write bytes:
+        nothing there, so we reserve it; something there whose bytes check out, so
+        this build skips the upload entirely; or something there whose bytes are
+        gone or wrong, which we may replace only by compare-and-set on the digest we
+        just read. The CAS is what keeps row and bytes moving together — the
+        recorded digest changes in the same statement that claims the right to
+        replace the object, so a valid archive is never silently overwritten.
+        """
+
+        settings = self.archive_settings
+        if settings is None or self.archive_store is None:
+            raise UpstreamUnavailableError("image archive storage is not configured")
+        with self.context.database.session() as session:
+            archive, reserved = ImageArchiveRepository(session).reserve(
+                image_id,
+                bucket=settings.bucket,
+                object_key=object_key,
+                size_bytes=size_bytes,
+                sha256=sha256,
+            )
+        if reserved:
+            return ImageArchiveReservation(archive=archive, upload_required=True)
+        if archive.cleanup_claimed_at is not None:
+            # Retention has claimed these bytes and may already be deleting them.
+            # Adopting the row would let this build skip an upload for content that
+            # is about to disappear, so fail retryably and let cleanup finish.
+            raise ConflictError("image archive is being reclaimed")
+        if self._archive_bytes_present(archive):
+            return ImageArchiveReservation(archive=archive, upload_required=False)
+        with self.context.database.session() as session:
+            taken = ImageArchiveRepository(session).take_over(
+                image_id,
+                expected_sha256=archive.sha256,
+                bucket=settings.bucket,
+                object_key=object_key,
+                size_bytes=size_bytes,
+                sha256=sha256,
+            )
+        if taken is None:
+            raise ConflictError("image archive was claimed by another build")
+        return ImageArchiveReservation(archive=taken, upload_required=True)
+
+    def _archive_bytes_present(self, archive: ImageArchiveRecord) -> bool:
+        settings = self.archive_settings
+        if settings is None or self.archive_store is None:
+            return False
+        try:
+            head = self.archive_store.head(
+                settings.physical_key(archive.object_key),
+                bucket=settings.bucket,
+            )
+        except Exception:
+            return False
+        return (
+            head.size == archive.size_bytes
+            and head.metadata.get("artifact-sha256") == archive.sha256
+        )
+
+    def get_authorized_image_archive(
+        self,
+        image_id: str,
+        *,
+        workspace_id: str,
+    ) -> ImageArchiveRecord | None:
+        """The global archive, only for a workspace that holds an authorization row.
+
+        Stays workspace-scoped on purpose. One archive row now serves every tenant
+        and its key carries no tenant component, so this join is the entire download
+        boundary; resolving globally here would hand any workspace any image.
+        """
+
+        with self.context.database.session() as session:
+            return ImageArchiveRepository(session).get_authorized(
                 image_id,
                 workspace_id=workspace_id,
             )
@@ -1744,18 +1815,6 @@ def _json_string_values(serialized: str) -> set[str]:
 
     collect(payload)
     return values
-
-
-def _positive_int_metadata(value: str) -> int | None:
-    try:
-        parsed = int(value)
-    except ValueError:
-        return None
-    return parsed if parsed > 0 else None
-
-
-def _is_sha256_metadata(value: str) -> bool:
-    return len(value) == 64 and all(character in "0123456789abcdef" for character in value)
 
 
 def _sanitize_image_build_diagnostic(

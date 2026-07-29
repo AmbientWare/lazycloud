@@ -305,6 +305,7 @@ def plan_embedded_image_archive_cache_copy(
     image_id: str,
     cache_path: str,
     cache_client_available: bool,
+    expected_sha256: str = "",
     metadata_hash: str = "",
     metadata_size_bytes: int = 0,
     metadata_error: str | None = None,
@@ -345,6 +346,20 @@ def plan_embedded_image_archive_cache_copy(
             image_id=image_id,
             cache_path=cache_path,
             reason="cache metadata is missing content hash",
+        )
+    if expected_sha256 and metadata_hash != expected_sha256:
+        # The content cache is keyed on the image id alone and shared by every
+        # workspace on this worker, so without this a local archive refused for
+        # holding the wrong bytes would simply be restored from the same wrong bytes
+        # again. Treat it as a miss and let the broker re-resolve the archive.
+        return EmbeddedImageArchiveCacheCopyPlan(
+            status=EmbeddedImageArchiveCacheCopyStatus.Miss,
+            archive_path=archive_path,
+            image_id=image_id,
+            cache_path=cache_path,
+            content_hash=metadata_hash,
+            size_bytes=metadata_size_bytes,
+            reason="cached image archive holds different bytes than this request authorizes",
         )
     if metadata_size_bytes > max_metadata_size_bytes:
         return EmbeddedImageArchiveCacheCopyPlan(

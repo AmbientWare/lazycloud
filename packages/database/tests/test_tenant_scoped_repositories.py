@@ -8,7 +8,7 @@ from control.service import ControlPlaneService
 from database.records.apps import AppRecord
 from database.repositories.apps import AppRepository
 from database.repositories.identity import SecretRepository, TokenRepository
-from database.repositories.images import ImageRepository
+from database.repositories.images import ImageArchiveRepository, ImageRepository
 from database.repositories.orchestration import ContainerRepository, WorkerRepository
 from database.repositories.storage import VolumeRepository
 from shared.compute_fleet import Worker
@@ -93,79 +93,63 @@ def test_cross_workspace_reads_and_deletes_are_denied_by_construction(
         assert containers.get_across_workspaces(container_id) is not None
 
 
-def test_image_archive_identity_is_exact_and_tenant_scoped(
+def test_one_global_archive_serves_every_authorized_workspace(
     isolated_services: ApiServices,
 ) -> None:
+    """Two workspaces share one archive, and losing one leaves the other resolving it.
+
+    This is the data-loss case the global archive exists to fix: the archive is
+    keyed on the image id alone, so a workspace reaches it only through its own
+    `images` row, and deleting that row must free nothing the sibling still needs.
+    """
+
     control = ControlPlaneService(isolated_services.context)
     owner = control.upsert_workspace("image-archive-owner")
     sibling = control.upsert_workspace("image-archive-sibling")
+    stranger = control.upsert_workspace("image-archive-stranger")
     image_id = "shared-image-name"
-    archive_bucket = isolated_services.object_storage.default_bucket
-    owner_archive = isolated_services.object_storage.reserve_for_workspace(
-        workspace_id=owner.id,
-        bucket=archive_bucket,
-        key=f"image-builds/{owner.id}/{image_id}.rclip",
-        size=1024,
-        sha256="a" * 64,
-        content_type="application/x-tar",
-    )
-    sibling_archive = isolated_services.object_storage.reserve_for_workspace(
-        workspace_id=sibling.id,
-        bucket=archive_bucket,
-        key=f"image-builds/{sibling.id}/{image_id}.rclip",
-        size=2048,
-        sha256="b" * 64,
-        content_type="application/x-tar",
-    )
 
     with isolated_services.context.database.session() as session:
+        archives = ImageArchiveRepository(session)
+        archive, reserved = archives.reserve(
+            image_id,
+            bucket="image-archives",
+            object_key=f"image-archives/{image_id}.rclip",
+            size_bytes=1024,
+            sha256="a" * 64,
+        )
+        assert reserved
+        again, reserved_again = archives.reserve(
+            image_id,
+            bucket="image-archives",
+            object_key=f"image-archives/{image_id}.rclip",
+            size_bytes=2048,
+            sha256="b" * 64,
+        )
+        assert not reserved_again
+        assert again.id == archive.id
+        assert again.sha256 == "a" * 64
+
         images = ImageRepository(session)
-        images.upsert(
-            ImageRecord(
-                workspace_id=owner.id,
-                image_id=image_id,
-                archive_object_id=owner_archive.id,
-                archive_object_key=owner_archive.key,
-                archive_size_bytes=owner_archive.size,
-                archive_sha256=owner_archive.sha256,
-            )
-        )
-        images.upsert(
-            ImageRecord(
-                workspace_id=sibling.id,
-                image_id=image_id,
-                archive_object_id=sibling_archive.id,
-                archive_object_key=sibling_archive.key,
-                archive_size_bytes=sibling_archive.size,
-                archive_sha256=sibling_archive.sha256,
-            )
-        )
+        images.upsert(ImageRecord(workspace_id=owner.id, image_id=image_id))
+        images.upsert(ImageRecord(workspace_id=sibling.id, image_id=image_id))
 
     with isolated_services.context.database.session() as session:
-        images = ImageRepository(session)
-        owner_image = images.get(image_id, workspace_id=owner.id)
-        sibling_image = images.get(image_id, workspace_id=sibling.id)
-        assert owner_image is not None
-        assert owner_image.archive_object_id == owner_archive.id
-        assert owner_image.archive_object_key == owner_archive.key
-        assert owner_image.archive_size_bytes == owner_archive.size
-        assert owner_image.archive_sha256 == owner_archive.sha256
-        assert sibling_image is not None
-        assert sibling_image.archive_object_id == sibling_archive.id
-        assert sibling_image.archive_object_key == sibling_archive.key
-        assert sibling_image.archive_size_bytes == sibling_archive.size
-        assert sibling_image.archive_sha256 == sibling_archive.sha256
-        assert images.archive_object_is_referenced(
-            owner_archive.id,
-            workspace_id=owner.id,
-        )
-        assert not images.archive_object_is_referenced(
-            owner_archive.id,
-            workspace_id=sibling.id,
-        )
-        assert images.delete(image_id, workspace_id=owner.id)
-        assert images.get(image_id, workspace_id=owner.id) is None
-        assert images.get(image_id, workspace_id=sibling.id) is not None
+        archives = ImageArchiveRepository(session)
+        for workspace in (owner, sibling):
+            resolved = archives.get_authorized(image_id, workspace_id=workspace.id)
+            assert resolved is not None
+            assert resolved.id == archive.id
+        assert archives.get_authorized(image_id, workspace_id=stranger.id) is None
+
+        assert ImageRepository(session).delete(image_id, workspace_id=owner.id)
+
+    with isolated_services.context.database.session() as session:
+        archives = ImageArchiveRepository(session)
+        assert archives.get_authorized(image_id, workspace_id=owner.id) is None
+        surviving = archives.get_authorized(image_id, workspace_id=sibling.id)
+        assert surviving is not None
+        assert surviving.id == archive.id
 
 
 def test_container_shutdown_targets_include_only_active_workspace_rows(

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import ipaddress
 import threading
-from base64 import b64encode
+from base64 import b64decode, b64encode
+from binascii import Error as BinasciiError
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -139,6 +140,7 @@ class _PresignParams(TypedDict):
     Key: str
     ContentType: NotRequired[str]
     ContentLength: NotRequired[int]
+    ChecksumSHA256: NotRequired[str]
     Metadata: NotRequired[dict[str, str]]
     UploadId: NotRequired[str]
     PartNumber: NotRequired[int]
@@ -623,6 +625,7 @@ class S3ObjectStoreClient(Generic[S3ClientT]):
         content_length: int,
         content_type: str = "application/octet-stream",
         metadata: dict[str, str] | None = None,
+        checksum_sha256: str = "",
     ) -> S3PresignedUpload:
         if content_length < 0:
             raise ValueError("presigned upload content length must be nonnegative")
@@ -634,12 +637,18 @@ class S3ObjectStoreClient(Generic[S3ClientT]):
         ):
             raise ValueError("presigned upload content type is invalid")
         normalized_metadata = _validated_presign_metadata(metadata)
+        normalized_checksum = _validated_presign_checksum_sha256(checksum_sha256)
         params = _PresignParams(
             Bucket=bucket or self.settings.bucket,
             Key=key,
             ContentType=normalized_content_type,
             ContentLength=content_length,
         )
+        if normalized_checksum:
+            # Signed into the URL, so the store rejects any body whose digest differs
+            # from the one the control plane recorded. Without it the integrity chain
+            # terminates at whatever digest the uploader declared about itself.
+            params["ChecksumSHA256"] = normalized_checksum
         if normalized_metadata:
             params["Metadata"] = normalized_metadata
         url = str(
@@ -652,6 +661,7 @@ class S3ObjectStoreClient(Generic[S3ClientT]):
         headers = {
             "content-length": str(content_length),
             "content-type": normalized_content_type,
+            **({"x-amz-checksum-sha256": normalized_checksum} if normalized_checksum else {}),
             **{f"x-amz-meta-{key}": value for key, value in normalized_metadata.items()},
         }
         return S3PresignedUpload(url=url, headers=headers)
@@ -1055,6 +1065,26 @@ def _validated_presign_metadata(metadata: Mapping[str, str] | None) -> dict[str,
             raise ValueError("presigned upload metadata contains duplicate keys")
         normalized[key] = value
     return normalized
+
+
+def _validated_presign_checksum_sha256(checksum_sha256: str) -> str:
+    """Base64 of the raw 32 digest bytes, which is what S3 signs.
+
+    The repository carries sha256 as lowercase hex everywhere else, so this is the
+    one boundary where the encoding changes and the one place to catch a caller
+    that forgot to convert.
+    """
+
+    value = checksum_sha256.strip()
+    if not value:
+        return ""
+    try:
+        raw = b64decode(value, validate=True)
+    except BinasciiError as exc:
+        raise ValueError("presigned upload checksum must be base64-encoded sha256") from exc
+    if len(raw) != 32 or b64encode(raw).decode() != value:
+        raise ValueError("presigned upload checksum must be base64-encoded sha256")
+    return value
 
 
 def presign_endpoint_for_storage(

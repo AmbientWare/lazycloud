@@ -13,6 +13,7 @@ from typing import Protocol
 from uuid import UUID
 
 from coordination.event_bus import EventBusEvent, EventBusEventType, EventBusSendResult
+from database.repositories.images import ImageArchiveRepository
 from database.repositories.orchestration import (
     ContainerPageCursor,
     ContainerRepository,
@@ -311,8 +312,13 @@ class ContainerService:
             readiness_path=options.checkpoint_readiness_path,
             readiness_port=options.checkpoint_readiness_port,
         )
+        image_id = options.image_id if options.image_id is not None else record.image
         payload = WorkerContainerRequestPayload(
-            image_id=options.image_id if options.image_id is not None else record.image,
+            image_id=image_id,
+            archive_sha256=self._authorized_archive_sha256(
+                image_id,
+                workspace_id=record.workspace_id,
+            ),
             app_id=options.app_id if options.app_id is not None else record.app_id or "",
             deployment_id=options.deployment_id or "",
             stub_type=options.stub_type,
@@ -366,6 +372,23 @@ class ContainerService:
             payload=payload.model_dump(mode="json"),
         )
         return self.scheduler.submit(request, ready_at=options.ready_at)
+
+    def _authorized_archive_sha256(self, image_id: str, *, workspace_id: str) -> str:
+        """Archive digest for this image, resolved through the workspace's own authorization.
+
+        Every stub type funnels its dispatch through `submit_scheduler_request`, so
+        resolving the digest here is what lets a worker treat it as an
+        authorization-checked cache key: a workspace that cannot resolve the archive
+        dispatches no digest, and the worker falls back to asking the broker.
+        """
+        if not image_id:
+            return ""
+        with self.context.database.session() as session:
+            archive = ImageArchiveRepository(session).get_authorized(
+                image_id,
+                workspace_id=workspace_id,
+            )
+        return archive.sha256 if archive is not None else ""
 
     def get(self, container_id: str) -> ContainerRecord:
         """System-authority lookup for the execution engine's own control flow."""

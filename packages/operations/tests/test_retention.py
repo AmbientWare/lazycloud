@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import threading
-from datetime import datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -11,7 +11,12 @@ from api.server.services import ApiServices
 from control.service import ControlPlaneService
 from database.repositories.cleanup import CleanupRepository
 from database.repositories.identity import WorkspaceRepository
-from database.repositories.images import CheckpointRepository, ImageBuildRepository, ImageRepository
+from database.repositories.images import (
+    CheckpointRepository,
+    ImageArchiveRepository,
+    ImageBuildRepository,
+    ImageRepository,
+)
 from database.repositories.source_cache import SourceCacheCleanupRepository
 from database.repositories.storage import (
     ObjectReferenceRepository,
@@ -34,6 +39,7 @@ from shared.timestamps import utc_now
 from shared.workload_config import StubConfig, StubImageConfig
 from sqlalchemy import event
 from storage.checkpoint_retention import DurableCheckpointRetentionService
+from storage.image_archive import ResolvedImageArchiveSettings
 from storage.retention import RetentionConfig, RetentionService
 from storage.service import (
     OBJECT_SHA256_METADATA_KEY,
@@ -42,7 +48,7 @@ from storage.service import (
     MountedCacheSettings,
     ObjectStorage,
 )
-from storage_client.s3 import S3ObjectInfo
+from storage_client.s3 import S3ObjectInfo, S3ObjectStoreSettings
 from worker.checkpoints import (
     WorkerCheckpointStatus,
     create_checkpoint_state_payload,
@@ -56,6 +62,14 @@ from worker.retention import (
     WorkerRetentionService,
 )
 from worker_repository.checkpoint_records import CheckpointService
+
+
+def _archive_settings() -> ResolvedImageArchiveSettings:
+    return ResolvedImageArchiveSettings(
+        storage=S3ObjectStoreSettings(bucket="image-archives"),
+        prefix="archives",
+        presign_seconds=900,
+    )
 
 
 class _MemoryObjectClient:
@@ -196,30 +210,6 @@ class _BlockingPutObjectClient(_MemoryObjectClient):
         )
 
 
-class _RetentionBatch:
-    def __init__(self, removed: int) -> None:
-        self.removed = removed
-
-
-class _RecordingRetention:
-    def __init__(self, removed: int) -> None:
-        self.removed = removed
-        self.calls: list[datetime | None] = []
-
-    def reconcile(self, *, now: datetime | None = None) -> _RetentionBatch:
-        self.calls.append(now)
-        return _RetentionBatch(self.removed)
-
-
-class _FailingRetention:
-    def __init__(self) -> None:
-        self.calls: list[datetime | None] = []
-
-    def reconcile(self, *, now: datetime | None = None) -> _RetentionBatch:
-        self.calls.append(now)
-        raise RuntimeError("retention unavailable")
-
-
 def test_worker_retention_bounds_caches_and_preserves_active_images(
     tmp_path: Path,
 ) -> None:
@@ -343,38 +333,33 @@ def test_durable_retention_prunes_only_unreferenced_production_artifacts(
         created_at=now,
         finished_at=now,
     )
-    live_archive = objects.put_bytes_for_workspace(
-        workspace_id=workspace.id,
-        bucket="objects",
-        key="image-live.rclip",
-        data=b"data",
-    )
-    stale_archive = objects.put_bytes_for_workspace(
-        workspace_id=workspace.id,
-        bucket="objects",
-        key="image-stale.rclip",
-        data=b"data",
-    )
-    with isolated_services.context.database.session() as session:
-        ImageRepository(session).upsert(
-            ImageRecord(
-                workspace_id=workspace.id,
-                image_id="image-live",
-                archive_object_id=live_archive.id,
-                archive_object_key=live_archive.key,
-                archive_size_bytes=live_archive.size,
-                archive_sha256=live_archive.sha256,
-            )
+    archive_settings = _archive_settings()
+    live_archive_key = "image-live.rclip"
+    stale_archive_key = "image-stale.rclip"
+    for archive_key in (live_archive_key, stale_archive_key):
+        client.put_bytes(
+            archive_settings.physical_key(archive_key),
+            b"data",
+            bucket=archive_settings.bucket,
         )
-        ImageRepository(session).upsert(
-            ImageRecord(
-                workspace_id=workspace.id,
-                image_id="image-stale",
-                archive_object_id=stale_archive.id,
-                archive_object_key=stale_archive.key,
-                archive_size_bytes=stale_archive.size,
-                archive_sha256=stale_archive.sha256,
-            )
+    with isolated_services.context.database.session() as session:
+        images = ImageRepository(session)
+        images.upsert(ImageRecord(workspace_id=workspace.id, image_id="image-live"))
+        images.upsert(ImageRecord(workspace_id=workspace.id, image_id="image-stale"))
+        archives = ImageArchiveRepository(session)
+        archives.reserve(
+            "image-live",
+            bucket=archive_settings.bucket,
+            object_key=live_archive_key,
+            size_bytes=4,
+            sha256="a" * 64,
+        )
+        archives.reserve(
+            "image-stale",
+            bucket=archive_settings.bucket,
+            object_key=stale_archive_key,
+            size_bytes=4,
+            sha256="b" * 64,
         )
         ImageBuildRepository(session).upsert(stale_build, workspace_id=workspace.id)
         CheckpointRepository(session).upsert(
@@ -413,12 +398,13 @@ def test_durable_retention_prunes_only_unreferenced_production_artifacts(
         object_storage=objects,
         cache_storage=cache,
         config=RetentionConfig(
-            image_archive_bucket="objects",
             checkpoint_bucket="objects",
             source_grace_seconds=1,
             build_retention_seconds=1,
             image_retention_seconds=1,
+            image_archive_retention_seconds=1,
         ),
+        image_archive_settings=archive_settings,
     ).reconcile(
         active_recent_stub_keys=[checkpoint_recent_stub_key(workspace.id, stub.id)],
         now=future,
@@ -427,19 +413,15 @@ def test_durable_retention_prunes_only_unreferenced_production_artifacts(
     assert objects.get_by_id(retained_source.id).id == retained_source.id
     with pytest.raises(NotFoundError, match=stale_source.id):
         objects.get_by_id(stale_source.id)
-    live_physical_key = objects.physical_key_for_workspace(
-        workspace.id,
-        bucket="objects",
-        key=live_archive.key,
-    )
-    stale_physical_key = objects.physical_key_for_workspace(
-        workspace.id,
-        bucket="objects",
-        key=stale_archive.key,
-    )
     physical_bucket = objects.physical_bucket("objects")
-    assert client.exists(live_physical_key, bucket=physical_bucket)
-    assert not client.exists(stale_physical_key, bucket=physical_bucket)
+    assert client.exists(
+        archive_settings.physical_key(live_archive_key),
+        bucket=archive_settings.bucket,
+    )
+    assert not client.exists(
+        archive_settings.physical_key(stale_archive_key),
+        bucket=archive_settings.bucket,
+    )
     assert client.exists(
         objects.physical_key_for_workspace(
             workspace.id,
@@ -460,11 +442,15 @@ def test_durable_retention_prunes_only_unreferenced_production_artifacts(
     with isolated_services.context.database.session() as session:
         assert ImageRepository(session).get("image-live", workspace_id=workspace.id) is not None
         assert ImageRepository(session).get("image-stale", workspace_id=workspace.id) is None
+        archives = ImageArchiveRepository(session)
+        assert archives.get("image-live") is not None
+        assert archives.get("image-stale") is None
         assert ImageBuildRepository(session).get_across_workspaces(stale_build.id) is None
         assert CheckpointRepository(session).get_across_workspaces("checkpoint-live") is not None
         assert CheckpointRepository(session).get_across_workspaces("checkpoint-stale") is None
     assert result.source_objects_removed == 1
     assert result.image_records_removed == 1
+    assert result.image_archives_removed == 1
     assert result.build_records_removed == 1
     assert result.checkpoints_removed == 1
 
@@ -506,10 +492,8 @@ def test_source_retention_preserves_cleanup_target_through_later_workspace_delet
             isolated_services.context,
             cache_client=MountedCacheClient(MountedCacheSettings(root=tmp_path / "cache")),
         ),
-        config=RetentionConfig(
-            image_archive_bucket="objects",
-            checkpoint_bucket="objects",
-        ),
+        config=RetentionConfig(checkpoint_bucket="objects"),
+        image_archive_settings=_archive_settings(),
     )
 
     assert (
@@ -559,80 +543,6 @@ def test_source_retention_preserves_cleanup_target_through_later_workspace_delet
         summary = SourceCacheCleanupRepository(session).summarize(workspace_id=workspace.id)
     assert summary.complete
     assert summary.completed_count == 1
-
-
-def test_retention_preserves_selected_archive_and_removes_loser(
-    isolated_services: ApiServices,
-    tmp_path: Path,
-) -> None:
-    now = utc_now()
-    client = _MemoryObjectClient()
-    objects = ObjectStorage(
-        isolated_services.context,
-        object_client=client,
-        default_bucket="objects",
-    )
-    workspace = ControlPlaneService(isolated_services.context).upsert_workspace("default")
-    image_id = "img_immutable"
-    selected_key = f"image-builds/build-winner/{image_id}.rclip"
-    stale_key = f"image-builds/build-stale/{image_id}.rclip"
-    selected_archive = objects.put_bytes_for_workspace(
-        workspace_id=workspace.id,
-        bucket="objects",
-        key=selected_key,
-        data=b"winner",
-    )
-    objects.put_bytes_for_workspace(
-        workspace_id=workspace.id,
-        bucket="objects",
-        key=stale_key,
-        data=b"stale-owner",
-    )
-    with isolated_services.context.database.session() as session:
-        ImageRepository(session).upsert(
-            ImageRecord(
-                workspace_id=workspace.id,
-                image_id=image_id,
-                archive_object_id=selected_archive.id,
-                archive_object_key=selected_archive.key,
-                archive_size_bytes=selected_archive.size,
-                archive_sha256=selected_archive.sha256,
-            )
-        )
-    service = RetentionService(
-        context=isolated_services.context,
-        object_storage=objects,
-        cache_storage=CacheStorage(
-            isolated_services.context,
-            cache_client=MountedCacheClient(MountedCacheSettings(root=tmp_path / "cache")),
-        ),
-        config=RetentionConfig(
-            image_archive_bucket="objects",
-            checkpoint_bucket="objects",
-            source_grace_seconds=1,
-        ),
-    )
-
-    result = service.reconcile(
-        active_recent_stub_keys=[],
-        now=now + timedelta(seconds=2),
-    )
-
-    assert result.source_objects_removed == 1
-    physical_bucket = objects.physical_bucket("objects")
-    selected_physical_key = objects.physical_key_for_workspace(
-        workspace.id,
-        bucket="objects",
-        key=selected_key,
-    )
-    stale_physical_key = objects.physical_key_for_workspace(
-        workspace.id,
-        bucket="objects",
-        key=stale_key,
-    )
-    assert client.exists(selected_physical_key, bucket=physical_bucket)
-    assert client.read_bytes(selected_physical_key, bucket=physical_bucket) == b"winner"
-    assert not client.exists(stale_physical_key, bucket=physical_bucket)
 
 
 def test_checkpoint_retention_survives_empty_hot_state_index(
@@ -793,10 +703,8 @@ def test_source_and_image_candidates_recheck_references_before_physical_delete(
             isolated_services.context,
             cache_client=MountedCacheClient(MountedCacheSettings(root=tmp_path / "cache")),
         ),
-        config=RetentionConfig(
-            image_archive_bucket="objects",
-            checkpoint_bucket="objects",
-        ),
+        config=RetentionConfig(checkpoint_bucket="objects"),
+        image_archive_settings=_archive_settings(),
     )
     control = ControlPlaneService(isolated_services.context)
     workspace = control.upsert_workspace("default")
@@ -811,7 +719,6 @@ def test_source_and_image_candidates_recheck_references_before_physical_delete(
         ImageRepository(session).upsert(image)
         source_candidate = ObjectRepository(session).get_owned(source.id)
     assert source_candidate is not None
-    client.put_bytes("image-race.rclip", b"image", bucket="objects")
 
     stub = control.create_stub(
         "race-reference",
@@ -832,9 +739,10 @@ def test_source_and_image_candidates_recheck_references_before_physical_delete(
         image,
         updated_before=future,
         recent_build_after=future,
-    ) == (0, 0, 0, 0, 0)
+    ) == (0, 0, 0, 0)
     assert objects.get_by_id(source.id).id == source.id
-    assert client.exists("image-race.rclip", bucket="objects")
+    with isolated_services.context.database.session() as session:
+        assert ImageRepository(session).get(image.image_id, workspace_id=workspace.id) is not None
 
 
 def test_cleaned_image_tombstone_blocks_reference_until_republication(
@@ -849,20 +757,7 @@ def test_cleaned_image_tombstone_blocks_reference_until_republication(
         default_bucket="objects",
     )
     workspace = ControlPlaneService(isolated_services.context).upsert_workspace("default")
-    archive = objects.put_bytes_for_workspace(
-        workspace_id=workspace.id,
-        bucket="objects",
-        key="image-cleaned.rclip",
-        data=b"image",
-    )
-    image = ImageRecord(
-        workspace_id=workspace.id,
-        image_id="image-cleaned",
-        archive_object_id=archive.id,
-        archive_object_key=archive.key,
-        archive_size_bytes=archive.size,
-        archive_sha256=archive.sha256,
-    )
+    image = ImageRecord(workspace_id=workspace.id, image_id="image-cleaned")
     with isolated_services.context.database.session() as session:
         ImageRepository(session).upsert(image)
     service = RetentionService(
@@ -872,10 +767,8 @@ def test_cleaned_image_tombstone_blocks_reference_until_republication(
             isolated_services.context,
             cache_client=MountedCacheClient(MountedCacheSettings(root=tmp_path / "cache")),
         ),
-        config=RetentionConfig(
-            image_archive_bucket="objects",
-            checkpoint_bucket="objects",
-        ),
+        config=RetentionConfig(checkpoint_bucket="objects"),
+        image_archive_settings=_archive_settings(),
     )
 
     removed = service._prune_image_candidate(
@@ -884,7 +777,7 @@ def test_cleaned_image_tombstone_blocks_reference_until_republication(
         recent_build_after=future,
     )
 
-    assert removed[:2] == (1, 1)
+    assert removed[0] == 1
     with isolated_services.context.database.session() as session:
         images = ImageRepository(session)
         assert images.get(image.image_id, workspace_id=workspace.id) is None
@@ -902,24 +795,10 @@ def test_cleaned_image_tombstone_blocks_reference_until_republication(
             config=StubConfig(image=StubImageConfig(image_id=image.image_id)),
         )
 
-    republished_archive = objects.put_bytes_for_workspace(
-        workspace_id=workspace.id,
-        bucket="objects",
-        key="image-cleaned-v2.rclip",
-        data=b"republished",
-    )
-    republished_image = image.model_copy(
-        update={
-            "archive_object_id": republished_archive.id,
-            "archive_object_key": republished_archive.key,
-            "archive_size_bytes": republished_archive.size,
-            "archive_sha256": republished_archive.sha256,
-        }
-    )
     republished_after = utc_now()
     with isolated_services.context.database.session() as session:
         images = ImageRepository(session)
-        republished = images.upsert(republished_image)
+        republished = images.upsert(image)
         immediately_eligible = ObjectReferenceRepository(session).list_image_cleanup_candidates(
             excluded_image_ids=frozenset(),
             updated_before=republished_after,
@@ -936,6 +815,71 @@ def test_cleaned_image_tombstone_blocks_reference_until_republication(
             )
             is not None
         )
+
+
+def test_image_archive_survives_until_the_last_authorized_workspace_is_cleaned(
+    isolated_services: ApiServices,
+    tmp_path: Path,
+) -> None:
+    future = utc_now() + timedelta(days=30)
+    client = _MemoryObjectClient()
+    objects = ObjectStorage(
+        isolated_services.context,
+        object_client=client,
+        default_bucket="objects",
+    )
+    control = ControlPlaneService(isolated_services.context)
+    first = control.upsert_workspace("default")
+    second = control.upsert_workspace("second-archive-owner")
+    archive_settings = _archive_settings()
+    image_id = "img_shared_archive"
+    object_key = f"{image_id}.clip"
+    physical_key = archive_settings.physical_key(object_key)
+    client.put_bytes(physical_key, b"shared-archive", bucket=archive_settings.bucket)
+    with isolated_services.context.database.session() as session:
+        images = ImageRepository(session)
+        images.upsert(ImageRecord(workspace_id=first.id, image_id=image_id))
+        images.upsert(ImageRecord(workspace_id=second.id, image_id=image_id))
+        ImageArchiveRepository(session).reserve(
+            image_id,
+            bucket=archive_settings.bucket,
+            object_key=object_key,
+            size_bytes=14,
+            sha256="c" * 64,
+        )
+    service = RetentionService(
+        context=isolated_services.context,
+        object_storage=objects,
+        cache_storage=CacheStorage(
+            isolated_services.context,
+            cache_client=MountedCacheClient(MountedCacheSettings(root=tmp_path / "cache")),
+        ),
+        config=RetentionConfig(
+            checkpoint_bucket="objects",
+            image_retention_seconds=1,
+            image_archive_retention_seconds=1,
+            # One authorization row per cycle, so the archive has to survive a
+            # complete cycle while the other workspace still holds it.
+            max_items_per_cycle=1,
+        ),
+        image_archive_settings=archive_settings,
+    )
+
+    partial = service.reconcile(active_recent_stub_keys=[], now=future)
+
+    assert partial.image_records_removed == 1
+    assert partial.image_archives_removed == 0
+    assert client.exists(physical_key, bucket=archive_settings.bucket)
+    with isolated_services.context.database.session() as session:
+        assert ImageArchiveRepository(session).get(image_id) is not None
+
+    final = service.reconcile(active_recent_stub_keys=[], now=future)
+
+    assert final.image_records_removed == 1
+    assert final.image_archives_removed == 1
+    assert not client.exists(physical_key, bucket=archive_settings.bucket)
+    with isolated_services.context.database.session() as session:
+        assert ImageArchiveRepository(session).get(image_id) is None
 
 
 def test_duplicate_build_cleanup_preserves_shared_path_and_cache_key(
@@ -988,10 +932,10 @@ def test_duplicate_build_cleanup_preserves_shared_path_and_cache_key(
         ),
         cache_storage=cache,
         config=RetentionConfig(
-            image_archive_bucket="objects",
             checkpoint_bucket="objects",
             build_retention_seconds=7 * 24 * 60 * 60,
         ),
+        image_archive_settings=_archive_settings(),
     ).reconcile(active_recent_stub_keys=[], now=now)
 
     with isolated_services.context.database.session() as session:
@@ -1083,10 +1027,10 @@ def test_image_cleanup_drains_high_cardinality_builds_in_bounded_batches(
             cache_client=MountedCacheClient(MountedCacheSettings(root=tmp_path / "cache")),
         ),
         config=RetentionConfig(
-            image_archive_bucket="objects",
             checkpoint_bucket="objects",
             max_items_per_cycle=7,
         ),
+        image_archive_settings=_archive_settings(),
     )
     queries = 0
 
@@ -1105,8 +1049,8 @@ def test_image_cleanup_drains_high_cardinality_builds_in_bounded_batches(
     finally:
         event.remove(engine, "before_cursor_execute", count_query)
 
-    assert first[1] == 0
-    assert first[2] == 7
+    assert first[0] == 0
+    assert first[1] == 7
     assert queries <= 30
     assert shared_path.exists()
     with isolated_services.context.database.session() as session:
@@ -1121,12 +1065,12 @@ def test_image_cleanup_drains_high_cardinality_builds_in_bounded_batches(
     assert claimed_image.cleanup_claimed_at is not None
     assert claimed_image.cleanup_completed_at is None
 
-    removed_builds = first[2]
-    removed_images = first[1]
+    removed_builds = first[1]
+    removed_images = first[0]
     while removed_images == 0:
         batch = service._delete_claimed_image(claimed_image)
-        removed_images += batch[1]
-        removed_builds += batch[2]
+        removed_images += batch[0]
+        removed_builds += batch[1]
 
     assert removed_builds == 31
     assert removed_images == 1
@@ -1192,15 +1136,15 @@ def test_resumed_image_cleanup_shares_one_build_budget_across_images(
             cache_client=MountedCacheClient(MountedCacheSettings(root=tmp_path / "cache")),
         ),
         config=RetentionConfig(
-            image_archive_bucket="objects",
             checkpoint_bucket="objects",
             max_items_per_cycle=7,
         ),
+        image_archive_settings=_archive_settings(),
     )
 
     removed = service._resume_claimed_images()
 
-    assert removed[2] == 7
+    assert removed[1] == 7
     with isolated_services.context.database.session() as session:
         builds = ImageBuildRepository(session)
         assert (
@@ -1340,10 +1284,8 @@ def test_build_candidate_rechecks_status_before_deleting_physical_data(
             isolated_services.context,
             cache_client=MountedCacheClient(MountedCacheSettings(root=tmp_path / "cache")),
         ),
-        config=RetentionConfig(
-            image_archive_bucket="objects",
-            checkpoint_bucket="objects",
-        ),
+        config=RetentionConfig(checkpoint_bucket="objects"),
+        image_archive_settings=_archive_settings(),
     )
 
     assert service._prune_build_candidate(
@@ -1394,10 +1336,10 @@ def test_source_cleanup_claim_survives_crash_and_rejects_new_reference(
             cache_client=MountedCacheClient(MountedCacheSettings(root=tmp_path / "cache")),
         ),
         config=RetentionConfig(
-            image_archive_bucket="objects",
             checkpoint_bucket="objects",
             source_grace_seconds=1,
         ),
+        image_archive_settings=_archive_settings(),
     )
 
     claimed = service._claim_source_candidate(
@@ -1463,10 +1405,8 @@ def test_slow_object_delete_does_not_block_unrelated_database_write(
             isolated_services.context,
             cache_client=MountedCacheClient(MountedCacheSettings(root=tmp_path / "cache")),
         ),
-        config=RetentionConfig(
-            image_archive_bucket="objects",
-            checkpoint_bucket="objects",
-        ),
+        config=RetentionConfig(checkpoint_bucket="objects"),
+        image_archive_settings=_archive_settings(),
     )
     cleanup_errors: list[BaseException] = []
 

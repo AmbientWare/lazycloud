@@ -6,7 +6,6 @@ from pydantic import JsonValue
 from scheduler.state import (
     SchedulerWorkerRecord,
 )
-from shared.source_cache_cleanup import WorkerCacheGenerationState
 from worker.credential_payloads import WorkerCredentialPrincipal
 from worker.origin_access import CacheOriginCredentialRequest, CacheOriginCredentials
 from worker.repository_client import (
@@ -15,10 +14,8 @@ from worker.repository_client import (
 )
 from worker.repository_payloads import (
     AddWorkerRequest,
-    ClaimSourceCacheCleanupResponse,
     GetContainerCredentialsResponse,
     WorkerCacheSession,
-    WorkerKeepAliveResponse,
     WorkerRecordResponse,
 )
 from worker.tools import (
@@ -52,7 +49,6 @@ def test_worker_repository_client_preserves_session_auth_and_scoped_credentials(
             ),
             "/worker-repository/get-cache-origin-credentials": {
                 "credentials": CacheOriginCredentials(
-                    archive_object_id="object-1",
                     image_archive_url="https://signed/image-1.rclip",
                     archive_size_bytes=7,
                     archive_sha256="a" * 64,
@@ -89,7 +85,6 @@ def test_worker_repository_client_preserves_session_auth_and_scoped_credentials(
     assert transport.bearer_token == "worker-session-token"
     assert credentials.env == ["TOKEN=value"]
     assert origin is not None
-    assert origin.archive_object_id == "object-1"
     assert origin.image_archive_url == "https://signed/image-1.rclip"
     assert origin.archive_size_bytes == 7
     assert origin.archive_sha256 == "a" * 64
@@ -131,42 +126,3 @@ class _FakeWorkerRepositoryTransport:
     ) -> Iterator[dict[str, JsonValue]]:
         self.streams.append((path, dict(payload)))
         yield from self._streams.get(path, [])
-
-
-class _KeepAliveRecoveryTransport(_FakeWorkerRepositoryTransport):
-    def __init__(self) -> None:
-        worker = SchedulerWorkerRecord(
-            worker_id="worker-1",
-            pool_name="default",
-            capacity_owner_id=_CAPACITY_OWNER_ID,
-        )
-        super().__init__(
-            posts={
-                "/worker-repository/claim-source-cache-cleanup": (
-                    ClaimSourceCacheCleanupResponse().model_dump(mode="json")
-                ),
-                "/worker-repository/toggle-worker-available": WorkerRecordResponse(
-                    worker=worker
-                ).model_dump(mode="json"),
-            }
-        )
-        self.keepalive_calls = 0
-        self.worker = worker
-
-    def post(
-        self,
-        path: str,
-        payload: Mapping[str, JsonValue],
-    ) -> dict[str, JsonValue]:
-        if path != "/worker-repository/set-worker-keep-alive":
-            return super().post(path, payload)
-        self.posts.append((path, dict(payload)))
-        self.keepalive_calls += 1
-        return WorkerKeepAliveResponse(
-            worker=self.worker if self.keepalive_calls > 1 else None,
-            source_cache_state=(
-                WorkerCacheGenerationState.Available
-                if self.keepalive_calls > 1
-                else WorkerCacheGenerationState.Draining
-            ),
-        ).model_dump(mode="json")

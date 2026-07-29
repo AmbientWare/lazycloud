@@ -49,6 +49,7 @@ class LocalImageArchiveReadyStatus(StrEnum):
     Missing = "missing"
     Directory = "directory"
     Empty = "empty"
+    DigestMismatch = "digest-mismatch"
     Invalid = "invalid"
 
 
@@ -923,12 +924,24 @@ def plan_local_image_archive_ready(
     exists: bool,
     is_dir: bool = False,
     size_bytes: int = 0,
+    expected_sha256: str = "",
+    recorded_sha256: str = "",
     metadata_valid: bool = True,
     storage_mode: str | ImageArchiveStorageMode = ImageArchiveStorageMode.Local,
     has_image_metadata: bool = False,
     layer_count: int = 0,
     decompressed_hash_count: int = 0,
 ) -> LocalImageArchiveReadyPlan:
+    """Whether the archive already on this worker can be reused for this dispatch.
+
+    `expected_sha256` is the digest the dispatch is authorized for and
+    `recorded_sha256` is what the worker recorded when it materialized these bytes.
+    Comparing the two records is what makes a stale or foreign local copy visible;
+    rehashing the archive would cost its full size on every container start, and the
+    download path already verified the bytes against the digest that produced the
+    record. Either side being empty means nothing is being claimed, so the archive is
+    judged exactly as it was before.
+    """
     if not exists:
         return LocalImageArchiveReadyPlan(
             status=LocalImageArchiveReadyStatus.Missing,
@@ -954,6 +967,15 @@ def plan_local_image_archive_ready(
             image_id=image_id,
             remove_path=True,
             reason="local image archive is empty",
+        )
+    if expected_sha256 and recorded_sha256 and expected_sha256 != recorded_sha256:
+        return LocalImageArchiveReadyPlan(
+            status=LocalImageArchiveReadyStatus.DigestMismatch,
+            ready=False,
+            archive_path=archive_path,
+            image_id=image_id,
+            remove_path=True,
+            reason="local image archive holds different bytes than this request authorizes",
         )
 
     validation = validate_restored_image_archive(
