@@ -14,7 +14,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+from pydantic import TypeAdapter
+
 _TEMPLATE = Path(__file__).with_name("control-stack.yaml")
+_STACK_OUTPUTS = TypeAdapter(list[dict[str, str]])
 _OUTPUT_ENV = {
     "ControlPrincipalArn": "LAZYCLOUD_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN",
     "ControlStackName": "LAZYCLOUD_AWS_CONTROL_STACK_NAME",
@@ -87,8 +90,12 @@ def _outputs(args: argparse.Namespace) -> dict[str, str]:
         region=args.region,
         profile=args.profile,
     )
-    entries = json.loads(described) or []
-    return {str(item["OutputKey"]): str(item["OutputValue"]) for item in entries}
+    entries = _STACK_OUTPUTS.validate_json(described or "[]")
+    return {
+        entry["OutputKey"]: entry["OutputValue"]
+        for entry in entries
+        if "OutputKey" in entry and "OutputValue" in entry
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
