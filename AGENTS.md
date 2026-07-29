@@ -191,9 +191,10 @@ The repository is predeployment until the owner declares the first persistent
 production installation. SQLAlchemy metadata plus one reviewed Alembic baseline
 define the schema. Update that baseline and use fresh PostgreSQL bootstrap; do
 not build historical revisions, upgrade/downgrade paths, previous-binary
-compatibility, or transition smokes. Recreate only databases positively
-identified as local and disposable. Never reset unknown, shared, external, or
-persistent data.
+compatibility, or transition smokes. Resetting, recreating, and re-bootstrapping
+local development state—Compose databases, volumes, and stacks—is ordinary
+development work; do it whenever a schema or baseline change calls for it. Never
+reset external, deployed, or production data.
 
 Resolve destructive targets exactly before acting. List what a delete would
 remove and confirm every item belongs to the current task; a stack, a bucket,
@@ -213,13 +214,12 @@ subtasks, contained implementation, docs/config changes, and incidental
 follow-ups proceed directly without a ticket.
 
 Work continues under the ticket that owns it until that ticket is complete. Do
-not open a new ticket for follow-up, remaining scope, or a blocker discovered
-inside tracked work—record it as a comment on the owning ticket and keep going.
-Open a separate ticket only when the work has a genuinely different owner or
-outcome and would stand alone. Comments record outcome, decisions, blockers, and
-concise evidence—not command diaries. The issue body stays the current
-description of the ticket; edit it when scope changes rather than appending
-corrections.
+not open a new ticket for follow-up, remaining scope, a blocker, or a defect
+discovered inside tracked work—fix what belongs to the same change and record
+the outcome as a comment on the owning ticket. Comments record outcome,
+decisions, blockers, and concise evidence—not command diaries. The issue body
+stays the current description of the ticket; edit it when scope changes rather
+than appending corrections.
 
 Ticket work uses a branch per ticket. Rebase, validate a clean feature tree, and
 merge through a pull request that references the ticket and closes it. A ticket
@@ -243,10 +243,10 @@ does not reduce the number of things you are responsible for finishing. Agents
 stay within assigned files, preserve concurrent changes, surface real blockers,
 and report changed paths, evidence, gaps, and conflicts.
 
-Finish the current task before starting the next. A task that reveals a larger
-problem is still the task you finish; the larger problem gets a ticket. Leaving
-a tree that does not build or a change half-migrated across owners costs more
-than the work saved.
+Finish the current task before starting the next. A defect the task reveals is
+usually cheapest to fix in the same change—take it there rather than deferring
+it to a later pass. Leaving a tree that does not build or a change half-migrated
+across owners costs more than the work saved.
 
 A returned result from a subagent, a tool, or a prior run is a claim with
 evidence attached, not an established fact. Verify anything that would change

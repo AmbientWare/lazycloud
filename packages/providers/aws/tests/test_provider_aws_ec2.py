@@ -23,13 +23,13 @@ def test_aws_ec2_provision_machine_creates_atomically_tagged_idempotent_instance
         )
     )
 
-    def plan_for(operation_id: str) -> AwsEc2MachineProvisionPlan:
+    def plan_for(idempotency_key: str) -> AwsEc2MachineProvisionPlan:
         return provider.provision_machine_plan(
             pool_name="default",
             registration_token="join-token",
             compute=AwsComputeRequest(cpu_millicores=1_000, memory_mb=1_024),
             machine_id="machine123",
-            operation_id=operation_id,
+            idempotency_key=idempotency_key,
             subnet_id="subnet-1",
         )
 

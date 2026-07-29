@@ -6,6 +6,7 @@ from types import TracebackType
 from compute.state import RedisComputeStateRepository
 from coordination.redis_client import RedisClient
 from coordination.wake_signal import RedisWakeSignal
+from execution.containers.preemption import PreemptedContainerService
 from execution.endpoints.service import EndpointControlService, EndpointDispatchStateRepository
 from execution.functions.service import FunctionControlService
 from execution.pods.service import PodControlService
@@ -179,6 +180,11 @@ class SchedulerRuntime:
             EndpointDispatchStateRepository(execution_services)
         )
         pod_control = PodControlService(execution_services)
+        preemption_recovery = PreemptedContainerService(
+            services=execution_services,
+            stubs=scheduler_services.scheduler_workloads,
+            task_queues=task_queue_control,
+        )
         capacity_controllers = SchedulerCapacityControllerProvider(
             services=scheduler_services,
             compute_states=compute_states,
@@ -222,6 +228,7 @@ class SchedulerRuntime:
                 ),
                 pod_control=pod_control,
                 functions=function_control,
+                preemption_recovery=preemption_recovery,
             ),
             states=SchedulerStateStores(
                 compute=compute_states,

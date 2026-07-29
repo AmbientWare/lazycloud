@@ -402,7 +402,7 @@ class AwsProvider:
         registration_token: str,
         compute: AwsComputeRequest,
         machine_id: str | None = None,
-        operation_id: str | None = None,
+        idempotency_key: str | None = None,
         image_id: str | None = None,
         subnet_id: str | None = None,
     ) -> AwsEc2MachineProvisionPlan:
@@ -434,7 +434,7 @@ class AwsProvider:
         )
         return AwsEc2MachineProvisionPlan(
             machine_id=resolved_machine_id,
-            operation_id=operation_id or resolved_machine_id,
+            idempotency_key=idempotency_key or resolved_machine_id,
             pool_name=pool_name,
             instance_type=selected.instance_type,
             image_id=resolved_image_id,
@@ -455,7 +455,7 @@ class AwsProvider:
                 gpu_count=request.offer.gpu_count,
             ),
             machine_id=request.machine_id,
-            operation_id=request.operation_id,
+            idempotency_key=request.idempotency_key,
         )
 
     def provision_machine(

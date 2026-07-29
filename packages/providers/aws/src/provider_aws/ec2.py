@@ -93,7 +93,7 @@ class AwsMachineUserData(AwsEc2Model):
 
 class AwsEc2MachineProvisionPlan(AwsEc2Model):
     machine_id: str
-    operation_id: str
+    idempotency_key: str
     pool_name: str
     instance_type: str
     image_id: str
@@ -111,7 +111,7 @@ class AwsEc2MachineProvisionPlan(AwsEc2Model):
             (
                 self.tags.get(AwsEc2TagKey.ClusterName.value, ""),
                 self.pool_name,
-                self.operation_id,
+                self.idempotency_key,
             )
         )
         return sha256(identity.encode()).hexdigest()

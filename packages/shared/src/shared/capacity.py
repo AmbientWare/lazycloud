@@ -13,11 +13,48 @@ from shared.timestamps import utc_now
 TERMINAL_REASON_MAX_LENGTH = 500
 
 
-def _bounded_terminal_reason(value: object) -> object:
-    """Bound provider failure text so a long reason never fails persistence.
+class CapacityFailureCode(StringEnum):
+    """Typed diagnosis for a capacity acquisition or sizing failure."""
 
-    Terminal reasons carry upstream error text of unbounded length; the sizing
-    state must record a diagnosis rather than reject it and lose the failure.
+    ProviderLaunchFailed = "provider_launch_failed"
+    ProviderReconciliationFailed = "provider_reconciliation_failed"
+    ProviderUnavailable = "provider_unavailable"
+    CapacityPlanningFailed = "capacity_planning_failed"
+    JoinAuthorityUnusable = "join_authority_unusable"
+    PlacementFailed = "placement_failed"
+    Unknown = "unknown"
+
+
+_CAPACITY_FAILURE_DESCRIPTIONS: dict[CapacityFailureCode, str] = {
+    CapacityFailureCode.ProviderLaunchFailed: "provider launch failed",
+    CapacityFailureCode.ProviderReconciliationFailed: "provider reconciliation failed",
+    CapacityFailureCode.ProviderUnavailable: "provider is unavailable",
+    CapacityFailureCode.CapacityPlanningFailed: "capacity planning failed",
+    CapacityFailureCode.JoinAuthorityUnusable: "provider join authority is no longer usable",
+    CapacityFailureCode.PlacementFailed: "no compatible capacity could be placed",
+    CapacityFailureCode.Unknown: "capacity operation failed",
+}
+
+
+def capacity_failure_message(code: CapacityFailureCode, *, exception_type: str = "") -> str:
+    """Operator-safe description of a capacity failure.
+
+    Upstream exception text can carry presigned URLs, tokens, and account
+    identifiers, and it reaches both durable records and the user-visible task
+    error. Only the typed code and the exception class name are safe to carry;
+    the original exception belongs in logs, not in persisted or returned state.
+    """
+    description = _CAPACITY_FAILURE_DESCRIPTIONS[code]
+    if exception_type:
+        return f"{description} ({exception_type})"
+    return description
+
+
+def _bounded_terminal_reason(value: object) -> object:
+    """Bound a terminal reason so an over-long diagnosis never fails persistence.
+
+    Reasons are typed and operator-safe at their source; this stays as a
+    last-resort guard on the durable column width.
     """
     if not isinstance(value, str) or len(value) <= TERMINAL_REASON_MAX_LENGTH:
         return value
@@ -93,7 +130,13 @@ class CapacityAcquisitionResult(ContractModel):
     reservation_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     desired_unit: int = Field(ge=1)
     target_machine_id: str | None = None
-    reason: str = ""
+    failure_code: CapacityFailureCode | None = None
+    reason: str = Field(default="", max_length=TERMINAL_REASON_MAX_LENGTH)
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def bound_reason(cls, value: object) -> object:
+        return _bounded_terminal_reason(value)
 
 
 _OWNER_SOURCES: dict[CapacityOwnerKind, CapacityOwnerSource] = {
