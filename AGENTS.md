@@ -249,10 +249,42 @@ merges. Never skip a column or move a ticket backwards to make the board agree
 with a mistake; correct the work instead. Board automation is a safety net for
 the states it can observe, not a substitute for moving the ticket.
 
-Parallel work is optional and only for clearly disjoint scopes. The manager
-keeps ownership explicit, reviews returned work, and runs integrated acceptance.
-Agents stay within assigned files, preserve concurrent changes, surface real
-blockers, and report changed paths, evidence, gaps, and conflicts.
+## Working Rules
+
+Default to one task at a time. Parallel work is the exception you justify, not
+the mode you assume: it requires genuinely disjoint owners and files, and the
+manager still reviews returned work and runs integrated acceptance. Delegating
+does not reduce the number of things you are responsible for finishing. Agents
+stay within assigned files, preserve concurrent changes, surface real blockers,
+and report changed paths, evidence, gaps, and conflicts.
+
+A task's scope is fixed when it starts. Work discovered along the way—a defect,
+a stale contract, a better design—is recorded on the owning ticket and left
+there. Absorb it only when it blocks the requested outcome or prevents a
+security, data-loss, paid-resource, concurrency, or cleanup failure, and say so
+when you do. Three reasonable-looking widenings in a row still end somewhere the
+owner never agreed to go, so when scope grows, stop and get agreement rather
+than proceeding under an assumption.
+
+Finish the current task before starting the next. A task that reveals a larger
+problem is still the task you finish; the larger problem gets a ticket. Leaving
+a tree that does not build or a change half-migrated across owners costs more
+than the work saved.
+
+A returned result from a subagent, a tool, or a prior run is a claim with
+evidence attached, not an established fact. Verify anything that would change
+what you build, delete, or tell the owner. Report what you actually observed and
+name what you did not.
+
+Resolve a destructive target exactly before acting on it. List what a delete
+would remove and confirm every item belongs to the current task; a stack, a
+bucket, or a prefix is not self-describing. Prefer the reversible step, and when
+an action is irreversible, say so plainly before taking it rather than after.
+
+Match the check to the change: iteration checks while editing, changed-owner
+checks after a coherent slice, and the broad gate only for a release or an
+explicit quality claim. A green narrow run is evidence for the owner it covered
+and nothing more.
 
 Finish when the requested outcome and proportionate acceptance pass. Do not
 start a new audit or broad hardening pass without a concrete in-scope reason.
