@@ -164,6 +164,10 @@ class ScheduledFunctionControl(Protocol):
     def function_invoke(self, request: FunctionInvokeBody) -> FunctionInvokeResponse: ...
 
 
+class SchedulerPreemptionRecovery(Protocol):
+    def recover_unsettled(self, *, limit: int = 100) -> list[str]: ...
+
+
 class UnavailableTailnetCleanupBatch(ContractModel):
     processed_count: int = 0
     completed_count: int = 0
@@ -217,6 +221,7 @@ class SchedulerWorkloadControls:
     pods: PodAutoscalingService | None = None
     pod_control: PodControl | None = None
     functions: ScheduledFunctionControl | None = None
+    preemption_recovery: SchedulerPreemptionRecovery | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -516,6 +521,11 @@ class Scheduler:
             if include_containers
             else []
         )
+        settled_preemptions = (
+            self._best_effort_recover_unsettled_preemptions(limit=container_limit)
+            if include_containers
+            else []
+        )
         function_retries = (
             self.schedule_function_retries(now=now, limit=container_limit)
             if include_containers
@@ -574,6 +584,7 @@ class Scheduler:
             worker_pool_drains=worker_pool_drains,
             container_dispatches=container_dispatches,
             orphaned_containers_failed=orphaned_containers_failed,
+            settled_preemptions=settled_preemptions,
             worker_cleanups=worker_cleanups,
             expired_tokens_pruned=expired_tokens_pruned,
             events_pruned=events_pruned,
@@ -772,6 +783,24 @@ class Scheduler:
             return self.reconcile_orphaned_containers(now=now)
         except Exception:
             LOGGER.exception("scheduler orphaned-container reconciliation failed")
+            return []
+
+    def recover_unsettled_preemptions(self, *, limit: int = 100) -> list[str]:
+        """Settle preemption intents a control-plane crash left stranded.
+
+        The API records the intent in the same transaction as the container's terminal
+        state, so anything still unsettled is work whose inline settle never ran.
+        """
+        recovery = self.workloads.preemption_recovery
+        if recovery is None:
+            return []
+        return recovery.recover_unsettled(limit=limit)
+
+    def _best_effort_recover_unsettled_preemptions(self, *, limit: int) -> list[str]:
+        try:
+            return self.recover_unsettled_preemptions(limit=limit)
+        except Exception:
+            LOGGER.exception("scheduler preemption recovery failed")
             return []
 
     def _best_effort_reconcile_agent_pools(
@@ -1137,6 +1166,7 @@ class SchedulerRunResult(ContractModel):
     worker_pool_drains: list[WorkerPoolDrainResult] = Field(default_factory=list)
     container_dispatches: list[SchedulerContainerDispatchResult] = Field(default_factory=list)
     orphaned_containers_failed: list[str] = Field(default_factory=list)
+    settled_preemptions: list[str] = Field(default_factory=list)
     worker_cleanups: list[WorkerRemovalResult] = Field(default_factory=list)
     expired_tokens_pruned: int = 0
     events_pruned: int = 0
