@@ -130,12 +130,16 @@ class AwsDefaultCapacityBaseline:
     capacity: AwsDefaultCapacityOwner
 
     def reconcile(self, policy: WorkspaceComputePolicy) -> ComputePoolRecord | None:
-        if policy.default_placement is not ComputePlacementTarget.Aws:
-            # A zero-capacity policy owns zero machines: clearing floors alone
-            # would leave durable desired capacity (and billing) behind.
+        zero_capacity = _aws_capacity_is_zero(policy.aws)
+        if policy.default_placement is not ComputePlacementTarget.Aws or zero_capacity:
+            # A zero-capacity policy owns zero machines whatever the placement:
+            # clearing floors alone would leave durable desired capacity (and
+            # billing) behind. Gating this release on placement instead of on the
+            # policy left an AWS-default workspace paying for the warm machine
+            # after it zeroed the only control it was given.
             self.capacity.clear_aws_default_capacity(
                 workspace=policy.workspace_id,
-                release_capacity=_aws_capacity_is_zero(policy.aws),
+                release_capacity=zero_capacity,
             )
             return None
         aws = policy.aws
