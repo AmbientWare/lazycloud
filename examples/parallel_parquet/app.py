@@ -262,7 +262,9 @@ partition_count = int(sys.argv[3])
 rows_per_partition = int(sys.argv[4])
 target_root = root / prefix
 target_root.mkdir(parents=True, exist_ok=True)
-staging = Path(tempfile.mkdtemp(prefix=".seed-", dir=target_root))
+# Staged off the mount: object mounts do not implement rename, so staging
+# inside the bucket and moving into place fails with ENOSYS.
+staging = Path(tempfile.mkdtemp(prefix="seed-"))
 try:
     for partition in range(partition_count):
         start = partition * rows_per_partition
@@ -280,7 +282,7 @@ try:
             compression="snappy",
         )
     for staged in sorted(staging.glob("*.parquet")):
-        staged.replace(target_root / staged.name)
+        shutil.copyfile(staged, target_root / staged.name)
 finally:
     shutil.rmtree(staging, ignore_errors=True)
 """

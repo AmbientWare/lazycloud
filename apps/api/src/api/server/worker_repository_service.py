@@ -76,10 +76,10 @@ from shared.source_cache_cleanup import WorkerCacheGenerationState
 from shared.tasks import Task, TaskStatus, is_terminal_task_status
 from shared.timestamps import utc_now
 from storage.service import CacheStorage, ObjectStorage
-from worker.container_execution import ContainerExecutionPhase
 from worker.event_bridge import worker_stream_event_from_bus_event
 from worker.events import (
     WORKER_EVENT_HEARTBEAT_ID,
+    ContainerExecutionPhase,
     ContainerLifecyclePayload,
     WorkerStreamEvent,
     WorkerStreamEventKind,
@@ -991,6 +991,8 @@ class WorkerRepositoryService:
         self._sync_runtime_container_exit(
             request.container_id,
             request.exit_code,
+            failed_phase=request.failed_phase,
+            failure_detail=request.failure_detail,
             termination_reason=request.termination_reason,
         )
         return SetContainerExitCodeResponse(container_id=request.container_id)
@@ -2012,6 +2014,8 @@ class WorkerRepositoryService:
         exit_code: int,
         *,
         termination_reason: StopContainerReason,
+        failed_phase: ContainerExecutionPhase | None = None,
+        failure_detail: str = "",
     ) -> None:
         if self.services is None:
             return
@@ -2053,7 +2057,12 @@ class WorkerRepositoryService:
                         exit_code=exit_code,
                         error=None
                         if exit_code == 0
-                        else f"container {container.id} exited with code {exit_code}",
+                        else _container_exit_error(
+                            container.id,
+                            exit_code,
+                            failed_phase=failed_phase,
+                            failure_detail=failure_detail,
+                        ),
                         finished_at=container.finished_at,
                     )
             # The preemption retry intent must commit with the terminal state it belongs to.
@@ -2220,6 +2229,26 @@ class WorkerRepositoryService:
             root_task_id=task.root_task_id,
             container_id=container.id,
         )
+
+
+def _container_exit_error(
+    container_id: str,
+    exit_code: int,
+    *,
+    failed_phase: ContainerExecutionPhase | None,
+    failure_detail: str,
+) -> str:
+    """Describe why a container reached a terminal state.
+
+    The asynchronous startup-failure lifecycle event reports the same thing, but
+    arrives after this call has already made the task terminal and is dropped, so
+    the reason has to travel with the exit code to reach the task owner.
+    """
+    if failed_phase is None:
+        return f"container {container_id} exited with code {exit_code}"
+    if failure_detail:
+        return f"container startup failed during {failed_phase.value}: {failure_detail}"
+    return f"container startup failed during {failed_phase.value}"
 
 
 def _container_startup_failure_error(payload: ContainerLifecyclePayload) -> str:
