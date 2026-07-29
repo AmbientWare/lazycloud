@@ -884,7 +884,12 @@ class RemoteSchedulerWorkerRepository:
         _ = ttl_seconds
         result = self.reconcile_source_cache()
         if result.failed_count:
-            raise WorkerRepositoryClientError("source cache cleanup failed")
+            detail = result.failure_detail or "no cause was recorded"
+            msg = (
+                f"source cache cleanup failed for {result.failed_count} target(s); "
+                f"this worker stays unavailable until it succeeds: {detail}"
+            )
+            raise WorkerRepositoryClientError(msg)
         worker = self._available_worker
         if worker is None:
             msg = f"worker {worker_id!r} was not returned by repository"
