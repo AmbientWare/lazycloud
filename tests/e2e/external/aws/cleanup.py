@@ -22,7 +22,7 @@ from shared.aws_connections import (
     AwsAccountConnectionAvailableAction,
     AwsAccountConnectionPhase,
 )
-from shared.compute_policy import AwsWorkspaceComputePolicy, ComputePlacementTarget
+from shared.compute_policy import AwsWorkspaceComputePolicy
 from shared.http.aws_connections import AwsConnectionResponse
 from shared.http.compute_policy import WorkspaceComputePolicyUpdateRequest
 from tests.e2e.external import _support
@@ -62,11 +62,14 @@ def _zero_policy(client: ComputeClient) -> AwsWorkspaceComputePolicy:
         idle_timeout_seconds=aws.idle_timeout_seconds,
         root_volume_gib=aws.root_volume_gib,
     )
-    if current.default_placement is not ComputePlacementTarget.Managed or current.aws != zero:
+    # Zero under the placement the workspace already has. Flipping to Managed
+    # first would release capacity through a different branch than the one a user
+    # takes, and zeroing the policy is the only control they are given.
+    if current.aws != zero:
         client.update_policy(
             WorkspaceComputePolicyUpdateRequest(
                 expected_revision=current.revision,
-                default_placement=ComputePlacementTarget.Managed,
+                default_placement=current.default_placement,
                 aws=zero,
             )
         )
