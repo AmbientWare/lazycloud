@@ -93,7 +93,6 @@ class ContainerStatusResponse(ContractModel):
     ok: bool = True
     status: str = ""
     exit_code: int = 0
-    build_archive_object_id: str = ""
     build_archive_object_key: str = ""
     build_archive_size_bytes: int = 0
     build_archive_sha256: str = ""

@@ -1,8 +1,8 @@
 # Repository Guidance
 
-Python 3.12 application. Read this file and the nearest nested `AGENTS.md` before
-changing a file; nested guidance adds owner-specific constraints and does not
-repeat this policy.
+Every `AGENTS.md` has a `CLAUDE.md` symlinked to it. Edit the `AGENTS.md`; never
+write through the symlink or replace it with a regular file. A new `AGENTS.md`
+gets its `CLAUDE.md` symlink in the same change.
 
 ## Core Rules
 
@@ -23,27 +23,23 @@ repeat this policy.
 - Protect secrets and user work. Never expose secrets in output, URLs, logs,
   tests, comments, docs, or durable records. Inspect the dirty tree, preserve
   unrelated changes, and stage only intentional files.
-- Prefer the complete long-term fix within scope. Do not absorb adjacent cleanup
-  unless it directly blocks the requested outcome or prevents a security,
-  data-loss, paid-resource, concurrency, or cleanup failure.
+- All implementation here is original. Match the capability, security,
+  durability, operability, cost, performance, and public contracts production
+  requires—never another codebase's internals or names.
 
-`../beta9` is the reference implementation and is always available to read—for a
-requested capability or public workflow, and equally for infrastructure and
-architecture shape: how a concern is scoped, what the durable model looks like,
-where ownership sits, how storage and deployment are laid out. Consult it before
-designing something substantial rather than after, and say what it does when
-proposing a design.
+## Reporting and Responding to the User
 
-Treat it as the baseline to judge against, in both directions. Building more
-than beta9 needs a reason named in the change—a capability we already have and
-would otherwise regress, or a security, durability, or cost property it does not
-provide. Building less needs the same. Matching it by default is the cheapest
-correct answer, and a design markedly more complex than beta9's is a signal to
-re-check the requirement, not a sign of rigor.
+Answer condensed. This is a must-follow rule, not a preference.
 
-All implementation here must be original. Match production capability, security,
-durability, operability, cost, performance, and public contracts—not internals
-or names. Bot remains out of scope.
+- Lead with the answer or outcome. State blockers and decisions needed in one
+  line each.
+- Omit reasoning already accepted, alternatives not taken, restated context,
+  and evidence the reader did not ask for. Link or name a file, ticket, or
+  command instead of reproducing its content.
+- No recap sections, no narration of what was just done, no tables or headings
+  unless they carry information prose cannot.
+- Expand only when asked, or when a correctness, security, cost, or data-loss
+  risk needs the detail to be actionable.
 
 ## Ownership And Architecture
 
@@ -65,10 +61,15 @@ or names. Bot remains out of scope.
   mounted filesystems own object/file data. Do not add duplicate stores or
   backend switches.
 
+## Style And Tooling
+
 Keep dependencies explicit and owner-directed. Use Python 3.12 types, Pydantic
 v2 at runtime boundaries, precise domain enums/dataclasses/protocols, and
 selective exports. Production defaults belong in shared contracts or backend
 normalization; preserve meaningful distinctions such as omitted versus `0`.
+
+Work from the repository root with `uv`; Bun is the only web package manager.
+Use `apply_patch` for manual edits and Ruff for Python formatting/imports.
 
 ## Public Boundaries
 
@@ -90,29 +91,29 @@ normalization; preserve meaningful distinctions such as omitted versus `0`.
 
 Define the user-visible outcome and cheapest authoritative evidence before
 implementation. Complete the coherent owner or cross-owner slice before
-validation, then run the narrowest changed-file/owner checks once. Expand to a
-real local service, public workflow, container image, deployment, or provider
-only when that boundary changed. Reuse healthy infrastructure and clean up
-every process, port, and resource created for acceptance.
+validating it. Match the check to the change: iteration checks while editing,
+the narrowest changed-file/owner checks once per slice, a real local service,
+public workflow, container image, deployment, or provider only when that
+boundary changed, and the broad repository/release gate only for a release or
+an explicit broad quality claim—never as routine feature acceptance. A green
+narrow run is evidence for the owner it covered and nothing more. Reuse healthy
+infrastructure and clean up every process, port, and resource created for
+acceptance.
 
 Give a test run a short timeout and extend it only when a real result needs the
-time. Unit suites finish in seconds, so a long timeout does not make a slow run
-succeed—it hides why it was slow. A generous limit turns a test that blocks on
-an unreachable dependency into a wait instead of a finding, and discards the
-signal that something reaches outside its owner at all. Keep the output
-observable rather than piping a long run to `tail`, and prefer fail-fast
-(`pytest -x`) with narrow owner scopes so the first real failure surfaces
-immediately.
+time. Unit suites finish in seconds, so a generous limit does not make a slow
+run succeed—it turns a test blocked on an unreachable dependency into a wait
+instead of a finding, and hides that the test reached outside its owner at all.
+Keep the output observable rather than piping a long run to `tail`, and prefer
+fail-fast (`pytest -x`) with narrow owner scopes so the first real failure
+surfaces immediately.
 
 Tests are optional evidence, not a completion ritual or count target. Add one
 only when it is the cheapest unique proof of a material contract, failure,
 authorization boundary, durable transition, data-loss risk, concurrency
 invariant, or cleanup obligation. Existing authoritative coverage or a
-production-representative execution can be sufficient. Do not test repository
-instructions, source/import/export/route inventories, implementation shape,
-mock transcripts, plans or generated commands as acceptance, compatibility,
-literal presentation values, or behavior already proven elsewhere. Preserve
-focused matrices only when rows protect distinct high-risk transitions.
+production-representative execution can be sufficient. Preserve focused
+matrices only when rows protect distinct high-risk transitions.
 
 ### Test Decision Gate
 
@@ -163,16 +164,12 @@ production decisions, move those decisions to their proper production owner
 and test that owner instead. Never import `tests.e2e` internals into pytest
 tests.
 
-Work from the repository root with `uv`; Bun is the only web package manager.
-Use `apply_patch` for manual edits and Ruff for Python formatting/imports.
 Owner tests live beside their package/app; root `tests/` is for concrete
 cross-owner or deployment behavior. Opt-in live scenarios live under
 `tests/e2e/`, are excluded from ordinary test discovery, and run only through
 an exact named module (`python -m tests.e2e...`) or browser node after cheaper
-owner evidence passes. Do not execute Python E2E files by path or add import-path
-bootstrap code.
-Run the broad repository/release gate only for a release or explicit broad
-quality claim, never as routine feature acceptance.
+owner evidence passes. Do not execute Python E2E files by path or add
+import-path bootstrap code.
 
 An unavailable credential or external service is an acceptance gap. Report it
 after exhausting meaningful local evidence; never replace it with a mock or
@@ -198,25 +195,14 @@ compatibility, or transition smokes. Recreate only databases positively
 identified as local and disposable. Never reset unknown, shared, external, or
 persistent data.
 
-Resolve destructive targets exactly before acting. Preserve tenant/workspace
-scope, sibling resources, retries, idempotency, fencing, partial-failure state,
-and cleanup proof where relevant. Stop for user direction when an irreversible
-action, public contract, security/cost posture, provider strategy, or top-level
-architecture choice is genuinely unresolved.
-
-## Reporting
-
-Answer condensed. This is a must-follow rule, not a preference.
-
-- Lead with the answer or outcome. State blockers and decisions needed in one
-  line each.
-- Omit reasoning already accepted, alternatives not taken, restated context,
-  and evidence the reader did not ask for. Link or name a file, ticket, or
-  command instead of reproducing its content.
-- No recap sections, no narration of what was just done, no tables or headings
-  unless they carry information prose cannot.
-- Expand only when asked, or when a correctness, security, cost, or data-loss
-  risk needs the detail to be actionable.
+Resolve destructive targets exactly before acting. List what a delete would
+remove and confirm every item belongs to the current task; a stack, a bucket,
+or a prefix is not self-describing. Preserve tenant/workspace scope, sibling
+resources, retries, idempotency, fencing, partial-failure state, and cleanup
+proof where relevant. Prefer the reversible step, and when an action is
+irreversible, say so plainly before taking it rather than after. Stop for user
+direction when an irreversible action, public contract, security/cost posture,
+provider strategy, or top-level architecture choice is genuinely unresolved.
 
 ## Work And Collaboration
 
@@ -224,8 +210,7 @@ GitHub Issues track work; the `ticket` label marks a tracked ticket. Open one
 only for substantial big-ticket work that genuinely needs tracked design,
 ownership, dependencies, or multiple acceptance checkpoints. Small fixes,
 subtasks, contained implementation, docs/config changes, and incidental
-follow-ups proceed directly without a ticket, even when discovered during
-tracked work.
+follow-ups proceed directly without a ticket.
 
 Work continues under the ticket that owns it until that ticket is complete. Do
 not open a new ticket for follow-up, remaining scope, or a blocker discovered
@@ -243,11 +228,11 @@ board rather than restating the outcome in a file.
 
 Tickets live on the `Agent Development` project board and advance through
 `Todo`, `In progress`, `Under review`, `Merged`, in that order. Move the ticket
-yourself as its real state changes—to `In progress` when work starts, to
-`Under review` when its pull request opens, to `Merged` when that pull request
-merges. Never skip a column or move a ticket backwards to make the board agree
-with a mistake; correct the work instead. Board automation is a safety net for
-the states it can observe, not a substitute for moving the ticket.
+yourself as its real state changes: `In progress` when work starts, `Under
+review` when its pull request opens, `Merged` when that pull request merges.
+Never skip a column or move a ticket backwards to make the board agree with a
+mistake; correct the work instead. Board automation is a safety net for the
+states it can observe, not a substitute for moving the ticket.
 
 ## Working Rules
 
@@ -267,16 +252,6 @@ A returned result from a subagent, a tool, or a prior run is a claim with
 evidence attached, not an established fact. Verify anything that would change
 what you build, delete, or tell the owner. Report what you actually observed and
 name what you did not.
-
-Resolve a destructive target exactly before acting on it. List what a delete
-would remove and confirm every item belongs to the current task; a stack, a
-bucket, or a prefix is not self-describing. Prefer the reversible step, and when
-an action is irreversible, say so plainly before taking it rather than after.
-
-Match the check to the change: iteration checks while editing, changed-owner
-checks after a coherent slice, and the broad gate only for a release or an
-explicit quality claim. A green narrow run is evidence for the owner it covered
-and nothing more.
 
 Finish when the requested outcome and proportionate acceptance pass. Do not
 start a new audit or broad hardening pass without a concrete in-scope reason.

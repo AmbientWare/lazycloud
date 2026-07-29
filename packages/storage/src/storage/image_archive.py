@@ -9,7 +9,6 @@ from shared.contracts import ContractModel
 from storage_client.s3 import S3ObjectStoreSettings
 
 IMAGE_ARCHIVE_EXTENSION = "rclip"
-IMAGE_ARCHIVE_DATA_EXTENSION = "clip"
 DEFAULT_IMAGE_ARCHIVE_PRESIGN_SECONDS = 15 * 60
 
 
@@ -51,6 +50,19 @@ class ResolvedImageArchiveSettings:
     @property
     def bucket(self) -> str:
         return self.storage.bucket
+
+    def physical_key(self, object_key: str) -> str:
+        """Where an archive's bytes live.
+
+        Deliberately not `workspaces/{id}/…`: one archive serves every workspace
+        authorized for its image, so a tenant prefix would force a full copy per
+        tenant and make the shared row describe bytes that do not exist. Tenant
+        access is enforced by the authorization join, not by the key.
+        """
+
+        if not object_key:
+            raise ValueError("image archive physical key requires an object key")
+        return f"{self.prefix}/{object_key}" if self.prefix else object_key
 
 
 class ImageArchiveSettings(BaseSettings):

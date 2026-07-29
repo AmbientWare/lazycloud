@@ -161,7 +161,6 @@ class ContainerServiceImageBuildExecutor:
     client: ImageBuildContainerRuntimeClient
     poll_interval_seconds: float = 0.1
     log_stream_drain_wait_seconds: float = 1.0
-    last_archive_object_id: str = ""
     last_archive_object_key: str = ""
     last_archive_size_bytes: int = 0
     last_archive_sha256: str = ""
@@ -213,10 +212,9 @@ class ContainerServiceImageBuildExecutor:
                     wait.status,
                     events,
                     reason=wait.reason,
-                    staging_archive_object_id=self.last_archive_object_id,
-                    staging_archive_object_key=self.last_archive_object_key,
-                    staging_archive_size_bytes=self.last_archive_size_bytes,
-                    staging_archive_sha256=self.last_archive_sha256,
+                    published_archive_object_key=self.last_archive_object_key,
+                    published_archive_size_bytes=self.last_archive_size_bytes,
+                    published_archive_sha256=self.last_archive_sha256,
                 )
             else:
                 result = self._execute_v1(request, events, log_stream)
@@ -279,10 +277,9 @@ class ContainerServiceImageBuildExecutor:
             BuildStatus.Complete,
             events,
             reason=complete.message,
-            staging_archive_object_id=self.last_archive_object_id,
-            staging_archive_object_key=self.last_archive_object_key,
-            staging_archive_size_bytes=self.last_archive_size_bytes,
-            staging_archive_sha256=self.last_archive_sha256,
+            published_archive_object_key=self.last_archive_object_key,
+            published_archive_size_bytes=self.last_archive_size_bytes,
+            published_archive_sha256=self.last_archive_sha256,
         )
 
     def wait_for_container(self, request: ImageBuildExecutionRequest) -> ImageBuildWaitPlan:
@@ -306,8 +303,6 @@ class ContainerServiceImageBuildExecutor:
             time.sleep(max(self.poll_interval_seconds, 0.0))
 
     def _capture_archive_identity(self, response: ContainerStatusResponse) -> None:
-        if response.build_archive_object_id:
-            self.last_archive_object_id = response.build_archive_object_id
         if response.build_archive_object_key:
             self.last_archive_object_key = response.build_archive_object_key
         if response.build_archive_size_bytes > 0:
@@ -603,10 +598,9 @@ def _execution_result(
     events: list[ImageBuildStreamEventPlan],
     *,
     reason: str = "",
-    staging_archive_object_id: str = "",
-    staging_archive_object_key: str = "",
-    staging_archive_size_bytes: int = 0,
-    staging_archive_sha256: str = "",
+    published_archive_object_key: str = "",
+    published_archive_size_bytes: int = 0,
+    published_archive_sha256: str = "",
 ) -> ImageBuildExecutionResult:
     complete = status is BuildStatus.Complete
     return ImageBuildExecutionResult(
@@ -620,12 +614,11 @@ def _execution_result(
             "clip_version": str(request.session.clip_version),
             **(
                 {
-                    "staging_archive_object_id": staging_archive_object_id,
-                    "staging_archive_object_key": staging_archive_object_key,
-                    "staging_archive_size_bytes": str(staging_archive_size_bytes),
-                    "staging_archive_sha256": staging_archive_sha256,
+                    "published_archive_object_key": published_archive_object_key,
+                    "published_archive_size_bytes": str(published_archive_size_bytes),
+                    "published_archive_sha256": published_archive_sha256,
                 }
-                if staging_archive_object_id
+                if published_archive_object_key
                 else {}
             ),
         }

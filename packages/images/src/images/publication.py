@@ -6,12 +6,14 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
+from database.repositories.images import ImageArchiveRepository
 from pydantic import Field
 from shared.cache_records import CacheEntry
 from shared.contracts import ContractModel
 from shared.image_building.records import ImageBuildRecord
-from shared.objects import ObjectRecord
+from storage.image_archive import ResolvedImageArchiveSettings
 
+from images.context import ImageContext
 from images.execution import ImageBuildExecutionResult
 
 
@@ -75,25 +77,6 @@ class ImageBuildArchiveObjectStore(Protocol):
 class ImageBuildArchiveObjectInfo(Protocol):
     size: int | None
     metadata: dict[str, str]
-
-
-class ImageBuildArchiveCoordinates(Protocol):
-    def get_by_id_for_workspace(
-        self,
-        object_id: str,
-        *,
-        workspace_id: str,
-    ) -> ObjectRecord: ...
-
-    def physical_key_for_workspace(
-        self,
-        workspace_id: str,
-        *,
-        bucket: str,
-        key: str,
-    ) -> str: ...
-
-    def physical_bucket(self, bucket: str) -> str: ...
 
 
 class ImageBuildPublicationTarget(ContractModel):
@@ -182,99 +165,83 @@ class CompositeImageBuildPublicationPublisher:
 
 @dataclass(slots=True)
 class ArchiveImageBuildPublicationPublisher:
+    """Verifies that the global archive for this image id really holds its bytes.
+
+    The archive row is written when the upload is reserved, so publication no longer
+    promotes anything. What it still owes is proof that the object the row describes
+    exists at the recorded size and digest before a workspace is authorized for it.
+    """
+
     object_store: ImageBuildArchiveObjectStore
-    bucket: str
-    object_coordinates: ImageBuildArchiveCoordinates | None = None
+    settings: ResolvedImageArchiveSettings
+    context: ImageContext
 
     def publish(
         self,
         build: ImageBuildRecord,
         publication: ImageBuildPublication,
     ) -> ImageBuildPublicationPublishResult:
-        staging_object_id = publication.cache_metadata.get(
-            "staging_archive_object_id",
-            "",
+        published_key = publication.cache_metadata.get("published_archive_object_key", "")
+        published_size = _positive_int(
+            publication.cache_metadata.get("published_archive_size_bytes", "")
         )
-        staging_key = publication.cache_metadata.get("staging_archive_object_key", "")
-        staging_size = _positive_int(
-            publication.cache_metadata.get("staging_archive_size_bytes", "")
-        )
-        staging_sha256 = publication.cache_metadata.get("staging_archive_sha256", "")
-        if (
-            not staging_object_id
-            or not staging_key
-            or staging_size is None
-            or not _is_sha256(staging_sha256)
-        ):
+        published_sha256 = publication.cache_metadata.get("published_archive_sha256", "")
+        if not published_key or published_size is None or not _is_sha256(published_sha256):
             return ImageBuildPublicationPublishResult(
                 status=ImageBuildPublicationPublishStatus.Error,
-                reason="image build staged archive identity is incomplete",
+                reason="image build published archive identity is incomplete",
             )
         if not build.image_id:
             return ImageBuildPublicationPublishResult(
                 status=ImageBuildPublicationPublishStatus.Error,
-                reason="image build has no image id for archive promotion",
+                reason="image build has no image id for archive publication",
             )
         if not publication.workspace_id:
             return ImageBuildPublicationPublishResult(
                 status=ImageBuildPublicationPublishStatus.Error,
                 reason="image build publication workspace is unavailable",
             )
-        if self.object_coordinates is None:
-            return ImageBuildPublicationPublishResult(
-                status=ImageBuildPublicationPublishStatus.Error,
-                reason="image build archive coordinates are unavailable",
-            )
         try:
-            reserved = self.object_coordinates.get_by_id_for_workspace(
-                staging_object_id,
-                workspace_id=publication.workspace_id,
-            )
+            with self.context.database.session() as session:
+                archive = ImageArchiveRepository(session).get(build.image_id)
+            if archive is None:
+                return ImageBuildPublicationPublishResult(
+                    status=ImageBuildPublicationPublishStatus.Error,
+                    reason="image build archive was not reserved",
+                )
             if (
-                reserved.bucket != self.bucket
-                or reserved.key != staging_key
-                or reserved.size != staging_size
-                or reserved.sha256 != staging_sha256
-                or reserved.metadata.get("kind") != "image-build-staging"
-                or reserved.metadata.get("build_id") != build.id
-                or reserved.metadata.get("container_id")
-                != publication.cache_metadata.get("container_id")
-                or reserved.metadata.get("image_id") != build.image_id
+                archive.bucket != self.settings.bucket
+                or archive.object_key != published_key
+                or archive.size_bytes != published_size
+                or archive.sha256 != published_sha256
             ):
                 return ImageBuildPublicationPublishResult(
                     status=ImageBuildPublicationPublishStatus.Error,
-                    reason="image build archive reservation does not match publication",
+                    reason="image build archive record does not match publication",
                 )
-            physical_key = self.object_coordinates.physical_key_for_workspace(
-                publication.workspace_id,
-                bucket=self.bucket,
-                key=staging_key,
-            )
-            physical_bucket = self.object_coordinates.physical_bucket(self.bucket)
             head = self.object_store.head(
-                physical_key,
-                bucket=physical_bucket,
+                self.settings.physical_key(archive.object_key),
+                bucket=self.settings.bucket,
             )
         except Exception as exc:
             return ImageBuildPublicationPublishResult(
                 status=ImageBuildPublicationPublishStatus.Error,
                 reason=f"image archive verification failed: {type(exc).__name__}",
             )
-        if head.size != staging_size or head.metadata.get("artifact-sha256") != staging_sha256:
+        if head.size != published_size or head.metadata.get("artifact-sha256") != published_sha256:
             return ImageBuildPublicationPublishResult(
                 status=ImageBuildPublicationPublishStatus.Error,
-                reason="image build archive candidate failed size or sha256 verification",
+                reason="image build archive failed size or sha256 verification",
             )
         return ImageBuildPublicationPublishResult(
             status=ImageBuildPublicationPublishStatus.Published,
             cache_metadata={
-                "image_archive_candidate_object_id": staging_object_id,
-                "image_archive_candidate_key": staging_key,
-                "image_archive_candidate_size_bytes": str(staging_size),
-                "image_archive_candidate_sha256": staging_sha256,
-                "image_archive_candidate_status": "ready",
+                "image_archive_key": published_key,
+                "image_archive_size_bytes": str(published_size),
+                "image_archive_sha256": published_sha256,
+                "image_archive_status": "ready",
             },
-            reason="image build archive candidate verified",
+            reason="image build archive verified",
         )
 
 

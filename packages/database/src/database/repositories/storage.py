@@ -644,10 +644,7 @@ class ObjectReferenceRepository:
             ObjectTable.created_at < created_before,
             ObjectTable.cleanup_claimed_at.is_(None),
             ObjectTable.write_claimed_at.is_(None),
-            or_(
-                (ObjectTable.bucket == source_bucket) & ObjectTable.key.startswith("sources/"),
-                ObjectTable.key.startswith("image-builds/"),
-            ),
+            (ObjectTable.bucket == source_bucket) & ObjectTable.key.startswith("sources/"),
             ~_source_object_reference_exists(
                 self.session,
                 recent_build_after=recent_build_after,
@@ -1242,16 +1239,10 @@ def _source_object_reference_exists(
         )
         .correlate(ObjectTable)
     )
-    archive_reference = (
-        exists()
-        .where(
-            ImageTable.workspace_id == ObjectTable.workspace_id,
-            ImageTable.archive_object_id == ObjectTable.id,
-            ImageTable.cleanup_completed_at.is_(None),
-        )
-        .correlate(ObjectTable)
-    )
-    return or_(stub_reference, build_reference, archive_reference)
+    # No archive arm: image archives are not objects. They live in `image_archives`
+    # with their own reference predicate, because an object reference correlated on
+    # workspace cannot answer a question about bytes no workspace owns.
+    return or_(stub_reference, build_reference)
 
 
 def _image_reference_exists(

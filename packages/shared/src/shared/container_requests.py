@@ -111,6 +111,12 @@ class RequestMount(ContractModel):
 
 class WorkerContainerRequestPayload(ContractModel):
     image_id: str = ""
+    # Digest of the image archive this dispatch is authorized to read. The archive
+    # object is global and carries no workspace component, so the control plane
+    # resolving it against the requesting workspace is what makes the digest safe
+    # for a worker to trust as a local cache key. Empty means no archive is
+    # authorized for this image, which is the local registry-store case.
+    archive_sha256: str = Field(default="", pattern=r"^(?:[0-9a-f]{64})?$")
     app_id: str = ""
     deployment_id: str = ""
     stub_type: str = ""

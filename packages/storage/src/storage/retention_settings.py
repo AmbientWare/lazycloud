@@ -6,6 +6,7 @@ from shared.app_identity import ENV_PREFIX
 
 from storage.retention import (
     DEFAULT_RETENTION_BUILD_SECONDS,
+    DEFAULT_RETENTION_IMAGE_ARCHIVE_SECONDS,
     DEFAULT_RETENTION_IMAGE_SECONDS,
     DEFAULT_RETENTION_INTERVAL_SECONDS,
     DEFAULT_RETENTION_MAX_ITEMS_PER_CYCLE,
@@ -53,6 +54,10 @@ class RetentionSettings(BaseSettings):
         default=DEFAULT_RETENTION_IMAGE_SECONDS,
         gt=0,
     )
+    image_archive_seconds: int = Field(
+        default=DEFAULT_RETENTION_IMAGE_ARCHIVE_SECONDS,
+        gt=0,
+    )
     max_items_per_cycle: int = Field(
         default=DEFAULT_RETENTION_MAX_ITEMS_PER_CYCLE,
         gt=0,
@@ -71,20 +76,13 @@ class RetentionSettings(BaseSettings):
             )
         return self
 
-    def service_config(
-        self,
-        *,
-        image_archive_bucket: str,
-        checkpoint_bucket: str,
-        image_archive_prefix: str = "",
-    ) -> RetentionConfig:
+    def service_config(self, *, checkpoint_bucket: str) -> RetentionConfig:
         return RetentionConfig(
-            image_archive_bucket=image_archive_bucket,
             checkpoint_bucket=checkpoint_bucket,
-            image_archive_prefix=image_archive_prefix,
             source_grace_seconds=self.source_grace_seconds,
             build_retention_seconds=self.build_seconds,
             image_retention_seconds=self.image_seconds,
+            image_archive_retention_seconds=self.image_archive_seconds,
             max_items_per_cycle=self.max_items_per_cycle,
         )
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import Field, model_validator
+from pydantic import Field
 
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
@@ -53,39 +53,32 @@ class ImageBuildRecord(ContractModel):
 
 
 class ImageRecord(ContractModel):
+    """A workspace's authorization to use an image. Archive bytes are global."""
+
     id: str = ""
     workspace_id: str = Field(min_length=1)
     image_id: str
     clip_version: int = 1
-    archive_object_id: str = ""
-    archive_object_key: str = ""
-    archive_size_bytes: int = Field(default=0, ge=0)
-    archive_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     aliases: list[str] = Field(default_factory=list)
     cleanup_claimed_at: datetime | None = None
     cleanup_completed_at: datetime | None = None
 
-    @model_validator(mode="after")
-    def require_complete_archive_identity(self) -> ImageRecord:
-        archive_fields = (
-            bool(self.archive_object_id),
-            bool(self.archive_object_key),
-            self.archive_size_bytes > 0,
-            bool(self.archive_sha256),
-        )
-        if any(archive_fields) and not all(archive_fields):
-            raise ValueError(
-                "image archive identity requires object id, object key, positive size, and sha256"
-            )
-        return self
 
-    @property
-    def has_archive(self) -> bool:
-        return bool(self.archive_object_id)
+class ImageArchiveRecord(ContractModel):
+    """The one archive for an image id, shared by every workspace authorized for it."""
+
+    id: str = ""
+    image_id: str = Field(min_length=1)
+    bucket: str = Field(min_length=1)
+    object_key: str = Field(min_length=1)
+    size_bytes: int = Field(gt=0)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    cleanup_claimed_at: datetime | None = None
 
 
 __all__ = [
     "BuildStatus",
+    "ImageArchiveRecord",
     "ImageBuildPhase",
     "ImageBuildRecord",
     "ImageRecord",

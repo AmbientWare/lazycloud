@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+from base64 import b64encode
+
 from api.server.services import ApiServices
 from control.service import ControlPlaneService
-from database.repositories.images import ImageRepository
-from shared.identity import TokenKind, WorkspaceStorageConfig
-from shared.image_building.records import ImageRecord
-from storage.service import ObjectStorage
-from storage_client.s3 import S3PresignedUpload
+from database.repositories.images import ImageArchiveRepository, ImageRepository
+from shared.identity import TokenKind
+from shared.image_building.records import ImageArchiveRecord, ImageRecord
+from storage.image_archive import ResolvedImageArchiveSettings
+from storage_client.s3 import S3ObjectStoreSettings, S3PresignedUpload
 from worker.credential_payloads import WorkerCredentialPrincipal
 from worker.image_lifecycle import ImageRegistryStore
 from worker.origin_access import (
@@ -18,62 +20,54 @@ from worker_repository.origin_credentials import (
     WorkerCacheOriginCredentialService,
 )
 
+ARCHIVE_SHA256 = "a" * 64
+ARCHIVE_KEY = "image-archives/image-123.rclip"
 
-def test_cache_origin_credentials_vend_only_archive_url(
+
+def _archive_settings() -> ResolvedImageArchiveSettings:
+    return ResolvedImageArchiveSettings(
+        storage=S3ObjectStoreSettings(bucket="archive-bucket"),
+        prefix="archives",
+        presign_seconds=900,
+    )
+
+
+def _s3_config() -> CacheOriginCredentialConfig:
+    return CacheOriginCredentialConfig(image_registry_store=ImageRegistryStore.S3)
+
+
+def _publish_archive(services: ApiServices, *, workspace_id: str) -> ImageArchiveRecord:
+    with services.context.database.session() as session:
+        archive, _ = ImageArchiveRepository(session).reserve(
+            "image-123",
+            bucket="archive-bucket",
+            object_key=ARCHIVE_KEY,
+            size_bytes=1024,
+            sha256=ARCHIVE_SHA256,
+        )
+        ImageRepository(session).upsert(
+            ImageRecord(workspace_id=workspace_id, image_id="image-123")
+        )
+    return archive
+
+
+def test_archive_download_is_signed_only_for_an_authorized_workspace(
     isolated_services: ApiServices,
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
-    workspace = control.upsert_workspace(
-        "workspace-a",
-        storage=WorkspaceStorageConfig(
-            backend="s3",
-            bucket="workspace-bucket",
-            config={
-                "endpoint_url": "https://workspace-storage.local",
-                "region": "us-test-1",
-                "access_key": "workspace-ak",
-                "secret_key": "workspace-sk",
-                "force_path_style": True,
-            },
-        ),
-    )
+    workspace = control.upsert_workspace("workspace-a")
+    sibling = control.upsert_workspace("workspace-b")
+    archive = _publish_archive(isolated_services, workspace_id=workspace.id)
     signer = _FakePresigner()
-    coordinates = ObjectStorage(
-        isolated_services.context,
-        object_client=isolated_services.object_storage.object_client,
-        default_bucket=isolated_services.object_storage.default_bucket,
-        allowed_buckets=("archive-bucket",),
-    )
-    archive_sha256 = "a" * 64
-    archive = coordinates.reserve_for_workspace(
-        workspace_id=workspace.id,
-        bucket="archive-bucket",
-        key="image-123.rclip",
-        size=1024,
-        sha256=archive_sha256,
-        content_type="application/x-tar",
-        metadata={"kind": "image-build-staging"},
-    )
-    with isolated_services.context.database.session() as session:
-        ImageRepository(session).upsert(
-            ImageRecord(
-                workspace_id=workspace.id,
-                image_id="image-123",
-                archive_object_id=archive.id,
-                archive_object_key=archive.key,
-                archive_size_bytes=archive.size,
-                archive_sha256=archive.sha256,
-            )
-        )
     service = WorkerCacheOriginCredentialService(
         isolated_services,
-        config=CacheOriginCredentialConfig(
-            image_registry_store=ImageRegistryStore.S3,
-            image_archive_bucket="archive-bucket",
-            image_archive_presign_seconds=900,
-        ),
+        config=_s3_config(),
         object_store_client=signer,
-        object_coordinates=coordinates,
+        archive_settings=_archive_settings(),
+    )
+    principal = WorkerCredentialPrincipal(
+        workspace_id="infrastructure-worker",
+        token_kind=TokenKind.Worker,
     )
 
     credentials = service.vend(
@@ -82,66 +76,90 @@ def test_cache_origin_credentials_vend_only_archive_url(
             container_id="container-123",
             image_id="image-123",
         ),
-        principal=WorkerCredentialPrincipal(
-            workspace_id="infrastructure-worker",
-            token_kind=TokenKind.Worker,
-        ),
+        principal=principal,
     )
 
     assert credentials.ok
-    physical_download_key = f"workspaces/{workspace.id}/archive-bucket/image-123.rclip"
-    physical_bucket = coordinates.physical_bucket("archive-bucket")
-    assert credentials.image_archive_url == (
-        f"https://signed/{physical_bucket}/{physical_download_key}?ttl=900"
-    )
-    assert credentials.archive_object_id == archive.id
-    assert credentials.archive_size_bytes == 1024
-    assert credentials.archive_sha256 == archive_sha256
-    assert signer.calls == [(physical_bucket, physical_download_key, 900)]
+    physical_key = f"archives/{ARCHIVE_KEY}"
+    assert credentials.image_archive_url == f"https://signed/archive-bucket/{physical_key}?ttl=900"
+    assert credentials.archive_size_bytes == archive.size_bytes
+    assert credentials.archive_sha256 == ARCHIVE_SHA256
+    assert signer.calls == [("archive-bucket", physical_key, 900)]
 
-    upload = service.vend_upload(
-        ImageArchiveUploadCredentialRequest(
-            workspace_id=workspace.id,
-            build_id="build-1",
-            container_id="build-container-1",
-            image_id="image-123",
-            upload_capability="a" * 32,
-            archive_size_bytes=1024,
-            archive_sha256=archive_sha256,
-        ),
-        principal=WorkerCredentialPrincipal(
-            workspace_id="infrastructure-worker",
-            token_kind=TokenKind.Worker,
-        ),
-        archive_object_id="reserved-upload-object",
-    )
-
-    assert upload.ok
-    assert upload.archive_object_id == "reserved-upload-object"
-    assert upload.object_key == "image-builds/build-1/image-123.rclip"
-    assert upload.upload_url
-    assert upload.upload_headers["x-amz-meta-artifact-sha256"] == archive_sha256
-    assert signer.calls[-1] == (
-        physical_bucket,
-        f"workspaces/{workspace.id}/archive-bucket/{upload.object_key}",
-        900,
-    )
-
+    # The archive row is global and its key carries no tenant component, so this
+    # join is the entire download boundary.
     other = service.vend(
         CacheOriginCredentialRequest(
-            workspace_id="workspace-b",
+            workspace_id=sibling.id,
             container_id="container-456",
             image_id="image-123",
         ),
-        principal=WorkerCredentialPrincipal(
-            workspace_id="infrastructure-worker",
-            token_kind=TokenKind.Worker,
-        ),
+        principal=principal,
     )
 
     assert other.ok
     assert not other.image_archive_url
-    assert not other.archive_object_id
+    assert signer.calls == [("archive-bucket", physical_key, 900)]
+
+
+def test_archive_upload_binds_the_reserved_digest_and_skips_a_published_archive(
+    isolated_services: ApiServices,
+) -> None:
+    workspace = ControlPlaneService(isolated_services.context).upsert_workspace("workspace-a")
+    archive = _publish_archive(isolated_services, workspace_id=workspace.id)
+    signer = _FakePresigner()
+    service = WorkerCacheOriginCredentialService(
+        isolated_services,
+        config=_s3_config(),
+        object_store_client=signer,
+        archive_settings=_archive_settings(),
+    )
+    request = ImageArchiveUploadCredentialRequest(
+        workspace_id=workspace.id,
+        build_id="build-1",
+        container_id="build-container-1",
+        image_id="image-123",
+        upload_capability="a" * 32,
+        archive_size_bytes=1024,
+        archive_sha256=ARCHIVE_SHA256,
+    )
+    principal = WorkerCredentialPrincipal(
+        workspace_id="infrastructure-worker",
+        token_kind=TokenKind.Worker,
+    )
+
+    upload = service.vend_upload(
+        request,
+        principal=principal,
+        archive=archive,
+        upload_required=True,
+    )
+
+    assert upload.ok
+    assert upload.object_key == ARCHIVE_KEY
+    assert upload.upload_url
+    assert upload.upload_headers["x-amz-meta-artifact-sha256"] == ARCHIVE_SHA256
+    # Signed into the URL, so a compromised build container cannot poison the one
+    # archive every tenant resolving this image id shares.
+    assert (
+        upload.upload_headers["x-amz-checksum-sha256"]
+        == b64encode(bytes.fromhex(ARCHIVE_SHA256)).decode()
+    )
+    assert signer.calls[-1] == ("archive-bucket", f"archives/{ARCHIVE_KEY}", 900)
+
+    published = service.vend_upload(
+        request,
+        principal=principal,
+        archive=archive,
+        upload_required=False,
+    )
+
+    assert published.ok
+    assert not published.upload_url
+    assert not published.upload_headers
+    assert published.object_key == ARCHIVE_KEY
+    assert published.archive_size_bytes == archive.size_bytes
+    assert published.archive_sha256 == ARCHIVE_SHA256
 
 
 def test_image_archive_vending_requires_injected_lifespan_signer(
@@ -149,10 +167,8 @@ def test_image_archive_vending_requires_injected_lifespan_signer(
 ) -> None:
     service = WorkerCacheOriginCredentialService(
         isolated_services,
-        config=CacheOriginCredentialConfig(
-            image_registry_store=ImageRegistryStore.S3,
-            image_archive_bucket="archive-bucket",
-        ),
+        config=_s3_config(),
+        archive_settings=_archive_settings(),
     )
 
     credentials = service.vend(
@@ -175,39 +191,12 @@ def test_image_archive_presign_failures_are_sanitized(
     isolated_services: ApiServices,
 ) -> None:
     workspace = ControlPlaneService(isolated_services.context).upsert_workspace("workspace-1")
-    coordinates = ObjectStorage(
-        isolated_services.context,
-        object_client=isolated_services.object_storage.object_client,
-        default_bucket=isolated_services.object_storage.default_bucket,
-        allowed_buckets=("archive-bucket",),
-    )
-    archive = coordinates.reserve_for_workspace(
-        workspace_id=workspace.id,
-        bucket="archive-bucket",
-        key="image-123.rclip",
-        size=1024,
-        sha256="a" * 64,
-        content_type="application/x-tar",
-    )
-    with isolated_services.context.database.session() as session:
-        ImageRepository(session).upsert(
-            ImageRecord(
-                workspace_id=workspace.id,
-                image_id="image-123",
-                archive_object_id=archive.id,
-                archive_object_key=archive.key,
-                archive_size_bytes=archive.size,
-                archive_sha256=archive.sha256,
-            )
-        )
+    archive = _publish_archive(isolated_services, workspace_id=workspace.id)
     service = WorkerCacheOriginCredentialService(
         isolated_services,
-        config=CacheOriginCredentialConfig(
-            image_registry_store=ImageRegistryStore.S3,
-            image_archive_bucket="archive-bucket",
-        ),
+        config=_s3_config(),
         object_store_client=_FailingPresigner(),
-        object_coordinates=_FailingPresigner(),
+        archive_settings=_archive_settings(),
     )
     principal = WorkerCredentialPrincipal(
         workspace_id=workspace.id,
@@ -230,10 +219,11 @@ def test_image_archive_presign_failures_are_sanitized(
             image_id="image-123",
             upload_capability="a" * 32,
             archive_size_bytes=1024,
-            archive_sha256="a" * 64,
+            archive_sha256=ARCHIVE_SHA256,
         ),
         principal=principal,
-        archive_object_id="reserved-upload-object",
+        archive=archive,
+        upload_required=True,
     )
 
     assert not download.ok
@@ -303,6 +293,7 @@ class _FakePresigner:
         content_length: int,
         content_type: str = "application/octet-stream",
         metadata: dict[str, str] | None = None,
+        checksum_sha256: str = "",
     ) -> S3PresignedUpload:
         self.calls.append((bucket, key, expires_seconds))
         return S3PresignedUpload(
@@ -310,21 +301,10 @@ class _FakePresigner:
             headers={
                 "content-length": str(content_length),
                 "content-type": content_type,
+                **({"x-amz-checksum-sha256": checksum_sha256} if checksum_sha256 else {}),
                 **{f"x-amz-meta-{name}": value for name, value in (metadata or {}).items()},
             },
         )
-
-    def physical_key_for_workspace(
-        self,
-        workspace_id: str,
-        *,
-        bucket: str,
-        key: str,
-    ) -> str:
-        return f"workspaces/{workspace_id}/{bucket}/{key}"
-
-    def physical_bucket(self, bucket: str) -> str:
-        return bucket
 
 
 class _FailingPresigner:
@@ -347,18 +327,7 @@ class _FailingPresigner:
         content_length: int,
         content_type: str = "application/octet-stream",
         metadata: dict[str, str] | None = None,
+        checksum_sha256: str = "",
     ) -> S3PresignedUpload:
-        del key, bucket, expires_seconds, content_length, content_type, metadata
+        del key, bucket, expires_seconds, content_length, content_type, metadata, checksum_sha256
         raise RuntimeError("sensitive endpoint and request details")
-
-    def physical_key_for_workspace(
-        self,
-        workspace_id: str,
-        *,
-        bucket: str,
-        key: str,
-    ) -> str:
-        return f"workspaces/{workspace_id}/{bucket}/{key}"
-
-    def physical_bucket(self, bucket: str) -> str:
-        return bucket

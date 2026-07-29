@@ -11,7 +11,11 @@ from database.repositories.cleanup import (
     object_location_lock_key,
 )
 from database.repositories.identity import WorkspaceRepository
-from database.repositories.images import ImageBuildRepository, ImageRepository
+from database.repositories.images import (
+    ImageArchiveRepository,
+    ImageBuildRepository,
+    ImageRepository,
+)
 from database.repositories.source_cache import SourceCacheCleanupRepository
 from database.repositories.storage import (
     CacheEntryRepository,
@@ -23,30 +27,38 @@ from pydantic import field_validator
 from shared.app_identity import SOURCE_PACKAGE_BUCKET
 from shared.contracts import ContractModel
 from shared.identity import WorkspaceStatus
-from shared.image_building.records import BuildStatus, ImageBuildRecord, ImageRecord
+from shared.image_building.records import (
+    BuildStatus,
+    ImageArchiveRecord,
+    ImageBuildRecord,
+    ImageRecord,
+)
 from shared.objects import ObjectRecord
 from shared.runtime_paths import normalize_runtime_path
 from shared.timestamps import utc_now
 
 from storage.checkpoint_retention import DurableCheckpointRetentionService
 from storage.context import StorageContext
+from storage.image_archive import ResolvedImageArchiveSettings
 from storage.service import CacheStorage, ObjectByteClient, ObjectStorage
 
 DEFAULT_RETENTION_INTERVAL_SECONDS = 60 * 60
 DEFAULT_RETENTION_SOURCE_GRACE_SECONDS = 24 * 60 * 60
 DEFAULT_RETENTION_BUILD_SECONDS = 7 * 24 * 60 * 60
 DEFAULT_RETENTION_IMAGE_SECONDS = 7 * 24 * 60 * 60
+DEFAULT_RETENTION_IMAGE_ARCHIVE_SECONDS = 7 * 24 * 60 * 60
 DEFAULT_RETENTION_MAX_ITEMS_PER_CYCLE = 100
-OBJECT_CLEANUP_IMAGE_ARCHIVE = "image-archive-retention"
 
 
 class RetentionConfig(ContractModel):
-    image_archive_bucket: str
     checkpoint_bucket: str
-    image_archive_prefix: str = ""
     source_grace_seconds: int = DEFAULT_RETENTION_SOURCE_GRACE_SECONDS
     build_retention_seconds: int = DEFAULT_RETENTION_BUILD_SECONDS
     image_retention_seconds: int = DEFAULT_RETENTION_IMAGE_SECONDS
+    # Archives are their own durable owner now, so they need their own age. They
+    # used to disappear only as a side effect of pruning the one workspace image
+    # row that named them; a global archive outlives every such row.
+    image_archive_retention_seconds: int = DEFAULT_RETENTION_IMAGE_ARCHIVE_SECONDS
     max_items_per_cycle: int = DEFAULT_RETENTION_MAX_ITEMS_PER_CYCLE
     object_operation_lease_seconds: int = 2 * 60 * 60
 
@@ -54,6 +66,7 @@ class RetentionConfig(ContractModel):
         "source_grace_seconds",
         "build_retention_seconds",
         "image_retention_seconds",
+        "image_archive_retention_seconds",
         "max_items_per_cycle",
         "object_operation_lease_seconds",
     )
@@ -95,6 +108,7 @@ class RetentionService:
     object_storage: ObjectStorage
     cache_storage: CacheStorage
     config: RetentionConfig
+    image_archive_settings: ResolvedImageArchiveSettings
     image_archive_client: ObjectByteClient | None = None
 
     def reconcile(
@@ -118,7 +132,6 @@ class RetentionService:
         checkpoint_removed = self._prune_checkpoints(active_recent_stub_keys, now=current)
         cache_removed = self._prune_expired_cache(current)
         (
-            image_archives_removed,
             image_records_removed,
             image_builds_removed,
             image_build_paths_removed,
@@ -126,6 +139,10 @@ class RetentionService:
         ) = self._prune_images(
             frozenset(),
             updated_before=current - timedelta(seconds=self.config.image_retention_seconds),
+            recent_build_after=build_cutoff,
+        )
+        image_archives_removed = self._prune_image_archives(
+            updated_before=current - timedelta(seconds=self.config.image_archive_retention_seconds),
             recent_build_after=build_cutoff,
         )
         build_records_removed, build_paths_removed, build_cache_removed = self._prune_builds(
@@ -223,10 +240,6 @@ class RetentionService:
                     workspace_id=current.workspace_id,
                     recent_build_after=recent_build_after,
                 )
-                or ImageRepository(session).archive_object_is_referenced(
-                    current.record.id,
-                    workspace_id=current.workspace_id,
-                )
                 or not _generated_source_object(current.record.bucket, current.record.key)
             ):
                 return None
@@ -309,7 +322,7 @@ class RetentionService:
         *,
         updated_before: datetime,
         recent_build_after: datetime,
-    ) -> tuple[int, int, int, int, int]:
+    ) -> tuple[int, int, int, int]:
         resumed = self._resume_claimed_images()
         with self.context.database.session() as session:
             candidates = [
@@ -321,8 +334,8 @@ class RetentionService:
                     limit=self.config.max_items_per_cycle,
                 )
                 if image.cleanup_claimed_at is None
-            ][: max(self.config.max_items_per_cycle - resumed[1], 0)]
-        archives_removed, records_removed, builds_removed, paths_removed, cache_removed = resumed
+            ][: max(self.config.max_items_per_cycle - resumed[0], 0)]
+        records_removed, builds_removed, paths_removed, cache_removed = resumed
         remaining_build_budget = max(self.config.max_items_per_cycle - builds_removed, 0)
         for image in candidates:
             if remaining_build_budget <= 0:
@@ -333,14 +346,12 @@ class RetentionService:
                 recent_build_after=recent_build_after,
                 build_limit=remaining_build_budget,
             )
-            archives_removed += removed[0]
-            records_removed += removed[1]
-            builds_removed += removed[2]
-            paths_removed += removed[3]
-            cache_removed += removed[4]
-            remaining_build_budget -= removed[2]
+            records_removed += removed[0]
+            builds_removed += removed[1]
+            paths_removed += removed[2]
+            cache_removed += removed[3]
+            remaining_build_budget -= removed[1]
         return (
-            archives_removed,
             records_removed,
             builds_removed,
             paths_removed,
@@ -385,7 +396,7 @@ class RetentionService:
         updated_before: datetime,
         recent_build_after: datetime,
         build_limit: int | None = None,
-    ) -> tuple[int, int, int, int, int]:
+    ) -> tuple[int, int, int, int]:
         claimed = self._claim_image_candidate(
             candidate,
             updated_before=updated_before,
@@ -394,7 +405,7 @@ class RetentionService:
         return (
             self._delete_claimed_image(claimed, build_limit=build_limit)
             if claimed is not None
-            else (0, 0, 0, 0, 0)
+            else (0, 0, 0, 0)
         )
 
     def _claim_image_candidate(
@@ -474,12 +485,12 @@ class RetentionService:
                 claimed_at=utc_now(),
             )
 
-    def _resume_claimed_images(self) -> tuple[int, int, int, int, int]:
+    def _resume_claimed_images(self) -> tuple[int, int, int, int]:
         with self.context.database.session() as session:
             claimed = CleanupRepository(session).list_claimed_images(
                 limit=self.config.max_items_per_cycle
             )
-        total = [0, 0, 0, 0, 0]
+        total = [0, 0, 0, 0]
         remaining_build_budget = self.config.max_items_per_cycle
         for image in claimed:
             if remaining_build_budget <= 0:
@@ -489,15 +500,15 @@ class RetentionService:
                 build_limit=remaining_build_budget,
             )
             total = [current + item for current, item in zip(total, removed, strict=True)]
-            remaining_build_budget -= removed[2]
-        return (total[0], total[1], total[2], total[3], total[4])
+            remaining_build_budget -= removed[1]
+        return (total[0], total[1], total[2], total[3])
 
     def _delete_claimed_image(
         self,
         image: ImageRecord,
         *,
         build_limit: int | None = None,
-    ) -> tuple[int, int, int, int, int]:
+    ) -> tuple[int, int, int, int]:
         image_builds = self._claim_image_build_batch(
             image.image_id,
             workspace_id=image.workspace_id,
@@ -509,8 +520,6 @@ class RetentionService:
                 builds,
                 deleting_builds=image_builds,
             )
-        archives_removed = self._delete_claimed_image_archive(image)
-
         paths_removed = 0
         cache_removed = 0
         for build in image_builds:
@@ -536,7 +545,7 @@ class RetentionService:
             images = ImageRepository(session)
             current = images.get(image.image_id, workspace_id=image.workspace_id)
             if current is None:
-                return (archives_removed, 0, 0, paths_removed, cache_removed)
+                return (0, 0, paths_removed, cache_removed)
             if current.cleanup_claimed_at is None:
                 raise RuntimeError(f"image cleanup claim was lost: {image.image_id}")
             builds = ImageBuildRepository(session)
@@ -550,14 +559,12 @@ class RetentionService:
                 workspace_id=current.workspace_id,
             ):
                 return (
-                    archives_removed,
                     0,
                     builds_removed,
                     paths_removed,
                     cache_removed,
                 )
             return (
-                archives_removed,
                 int(
                     images.finalize_cleanup(
                         current.image_id,
@@ -570,84 +577,79 @@ class RetentionService:
                 cache_removed,
             )
 
-    def _delete_claimed_image_archive(self, image: ImageRecord) -> int:
-        if not image.has_archive:
-            return 0
+    def _prune_image_archives(
+        self,
+        *,
+        updated_before: datetime,
+        recent_build_after: datetime,
+    ) -> int:
+        removed = self._resume_claimed_image_archives()
         with self.context.database.session() as session:
-            current_image = ImageRepository(session).get(
-                image.image_id,
-                workspace_id=image.workspace_id,
+            candidates = ImageArchiveRepository(session).list_cleanup_candidates(
+                updated_before=updated_before,
+                recent_build_after=recent_build_after,
+                limit=max(self.config.max_items_per_cycle - removed, 0),
             )
-            if current_image is None or current_image.cleanup_claimed_at is None:
-                raise RuntimeError(f"image cleanup claim was lost: {image.image_id}")
-            _assert_same_archive_identity(image, current_image)
-            objects = ObjectRepository(session)
-            owned = objects.get_owned(image.archive_object_id, include_operations=True)
-            if owned is None:
-                return 0
-            _assert_archive_object_identity(
-                image,
-                owned,
-                expected_bucket=self.config.image_archive_bucket,
-            )
-            archive = objects.claim_delete(
-                image.archive_object_id,
-                cleanup_kind=OBJECT_CLEANUP_IMAGE_ARCHIVE,
-                claimed_at=utc_now(),
-            )
+        for candidate in candidates:
+            claimed = self._claim_image_archive(candidate)
+            if claimed is not None:
+                removed += self._delete_claimed_image_archive(claimed)
+        return removed
 
-        physical_bucket = self.object_storage.physical_bucket(archive.bucket)
-        physical_key = self.object_storage.physical_key_for_workspace(
-            image.workspace_id,
-            bucket=archive.bucket,
-            key=archive.key,
+    def _claim_image_archive(self, candidate: ImageArchiveRecord) -> ImageArchiveRecord | None:
+        with self.context.database.session() as session:
+            # The archive belongs to no workspace, so the claim is fenced on the
+            # image id alone. A workspace lock would be both too narrow to exclude
+            # another tenant and, through `lock_active_owner`, able to refuse
+            # cleanup for bytes that tenant no longer owns.
+            CleanupRepository(session).lock_keys({f"image-archive:{candidate.image_id}"})
+            archives = ImageArchiveRepository(session)
+            current = archives.get(candidate.image_id)
+            if (
+                current is None
+                or current.cleanup_claimed_at is not None
+                or current.sha256 != candidate.sha256
+                or current.object_key != candidate.object_key
+            ):
+                return None
+            return archives.claim_cleanup(candidate.image_id, claimed_at=utc_now())
+
+    def _resume_claimed_image_archives(self) -> int:
+        with self.context.database.session() as session:
+            claimed = ImageArchiveRepository(session).list_claimed()
+        return sum(
+            self._delete_claimed_image_archive(archive)
+            for archive in claimed[: self.config.max_items_per_cycle]
         )
-        archive_client = self.image_archive_client or self.object_storage.object_client
-        existed = archive_client.exists(physical_key, bucket=physical_bucket)
-        archive_client.delete(physical_key, bucket=physical_bucket)
-        if archive_client.exists(physical_key, bucket=physical_bucket):
-            raise RuntimeError(
-                f"image archive deletion was not confirmed: {archive.bucket}/{archive.key}"
-            )
 
+    def _delete_claimed_image_archive(self, archive: ImageArchiveRecord) -> int:
+        bucket = self.image_archive_settings.bucket
+        if archive.bucket != bucket:
+            raise RuntimeError(
+                f"image archive is not in the configured archive store: {archive.image_id}"
+            )
+        physical_key = self.image_archive_settings.physical_key(archive.object_key)
+        client = self.image_archive_client or self.object_storage.object_client
+        client.delete(physical_key, bucket=bucket)
+        if client.exists(physical_key, bucket=bucket):
+            raise RuntimeError(
+                f"image archive deletion was not confirmed: {bucket}/{archive.object_key}"
+            )
         with self.context.database.session() as session:
-            claims = CleanupRepository(session)
-            claims.lock_keys(
-                {
-                    f"image:{image.workspace_id}:{image.image_id}",
-                    f"object:{archive.id}",
-                    object_location_lock_key(
-                        image.workspace_id,
-                        archive.bucket,
-                        archive.key,
-                    ),
-                }
-            )
-            current_image = ImageRepository(session).get(
-                image.image_id,
-                workspace_id=image.workspace_id,
-            )
-            if current_image is None or current_image.cleanup_claimed_at is None:
-                raise RuntimeError(f"image cleanup claim was lost: {image.image_id}")
-            _assert_same_archive_identity(image, current_image)
-            objects = ObjectRepository(session)
-            owned = objects.get_owned(archive.id, include_operations=True)
-            if owned is None:
-                return int(existed)
-            _assert_archive_object_identity(
-                image,
-                owned,
-                expected_bucket=self.config.image_archive_bucket,
-            )
-            if owned.record.cleanup_kind != OBJECT_CLEANUP_IMAGE_ARCHIVE:
-                raise RuntimeError(f"image archive cleanup claim was lost: {archive.id}")
-            ImageRepository(session).detach_archive_for_cleanup(
-                image.image_id,
-                workspace_id=image.workspace_id,
-                archive_object_id=archive.id,
-            )
-            objects.delete_across_workspaces(archive.id)
-        return int(existed)
+            CleanupRepository(session).lock_keys({f"image-archive:{archive.image_id}"})
+            archives = ImageArchiveRepository(session)
+            current = archives.get(archive.image_id)
+            if current is None:
+                return 0
+            if current.cleanup_claimed_at is None:
+                raise RuntimeError(f"image archive cleanup claim was lost: {archive.image_id}")
+            if current.sha256 != archive.sha256 or current.object_key != archive.object_key:
+                # A repair repointed the archive at different bytes while we were
+                # removing the ones we claimed. Drop the claim so the replacement
+                # is judged on its own age instead of inheriting our deletion.
+                archives.release_claim(archive.image_id)
+                return 0
+            return int(archives.delete(archive.image_id, expected_sha256=archive.sha256))
 
     def _prune_build_candidate(
         self,
@@ -794,39 +796,14 @@ class RetentionService:
 
 
 def _generated_source_object(bucket: str, key: str) -> bool:
-    return (bucket == SOURCE_PACKAGE_BUCKET and key.startswith("sources/")) or key.startswith(
-        "image-builds/"
-    )
+    """Only the source packages retention is allowed to reclaim.
 
+    Image archives used to live under `image-builds/` in this same table and were
+    matched here too. They are their own global owner now, and a workspace-scoped
+    source sweep must never reach bytes another workspace is authorized for.
+    """
 
-def _assert_same_archive_identity(expected: ImageRecord, current: ImageRecord) -> None:
-    if (
-        current.workspace_id != expected.workspace_id
-        or current.image_id != expected.image_id
-        or current.archive_object_id != expected.archive_object_id
-        or current.archive_object_key != expected.archive_object_key
-        or current.archive_size_bytes != expected.archive_size_bytes
-        or current.archive_sha256 != expected.archive_sha256
-    ):
-        raise RuntimeError(f"image archive identity changed during cleanup: {expected.image_id}")
-
-
-def _assert_archive_object_identity(
-    image: ImageRecord,
-    owned: OwnedObjectRecord,
-    *,
-    expected_bucket: str,
-) -> None:
-    record = owned.record
-    if (
-        owned.workspace_id != image.workspace_id
-        or record.id != image.archive_object_id
-        or record.bucket != expected_bucket
-        or record.key != image.archive_object_key
-        or record.size != image.archive_size_bytes
-        or record.sha256 != image.archive_sha256
-    ):
-        raise RuntimeError(f"image archive object identity is invalid: {image.image_id}")
+    return bucket == SOURCE_PACKAGE_BUCKET and key.startswith("sources/")
 
 
 @dataclass(frozen=True, slots=True)

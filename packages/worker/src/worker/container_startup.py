@@ -83,6 +83,9 @@ class WorkerImageSourceLoadRequest(ContractModel):
 class WorkerImageSourceLoadResult(ContractModel):
     ok: bool
     archive_path: str
+    # Digest the loader verified the downloaded bytes against, so the mount records
+    # what this worker actually holds rather than what the dispatch expected.
+    archive_sha256: str = Field(default="", pattern=r"^(?:[0-9a-f]{64})?$")
     bytes_written: int = 0
     reason: str = ""
 
@@ -90,6 +93,7 @@ class WorkerImageSourceLoadResult(ContractModel):
 class WorkerImageMountRequest(ContractModel):
     container_id: str
     image_id: str
+    archive_sha256: str = Field(default="", pattern=r"^(?:[0-9a-f]{64})?$")
     archive_path: str
     mount_point: str
     repair_incomplete: bool = False
@@ -99,10 +103,37 @@ IMAGE_MOUNT_MANIFEST_NAME = ".image-mount-manifest.json"
 
 
 class ImageMountManifest(ContractModel):
+    """What a completed mount records about the archive it was materialized from.
+
+    This is the worker's only durable local record of the image it holds, so it
+    carries the archive digest as well as its size: the size distinguishes a mount
+    from a changed archive, and the digest distinguishes archive bytes a request is
+    authorized for from bytes it is not.
+    """
+
     schema_version: Literal[1] = 1
     image_id: str = Field(min_length=1)
+    archive_sha256: str = Field(default="", pattern=r"^(?:[0-9a-f]{64})?$")
     archive_size_bytes: int = Field(gt=0)
     archive_entry_count: int = Field(gt=0)
+
+
+def _file_size_bytes(path: str) -> int:
+    file_path = Path(path)
+    return file_path.stat().st_size if file_path.is_file() else 0
+
+
+def read_image_mount_manifest(mount_point: Path) -> ImageMountManifest | None:
+    """The identity a completed mount recorded for itself, or None when there is none."""
+    if not mount_point.is_dir() or mount_point.is_symlink():
+        return None
+    manifest_path = mount_point / IMAGE_MOUNT_MANIFEST_NAME
+    if not manifest_path.is_file() or manifest_path.is_symlink():
+        return None
+    try:
+        return ImageMountManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
 
 
 class WorkerImageMountStatus(StrEnum):
@@ -228,6 +259,7 @@ class WorkerImageStartupLoader:
             WorkerImageMountRequest(
                 container_id=request.container_id,
                 image_id=request.image_id,
+                archive_sha256=self._materialized_archive_sha256(paths, cache_load, source_load),
                 archive_path=paths.local_archive_path,
                 mount_point=paths.mount_point,
                 repair_incomplete=True,
@@ -262,11 +294,14 @@ class WorkerImageStartupLoader:
         mount_path = Path(paths.mount_point)
         if not mount_path.exists() and not mount_path.is_symlink():
             return None
+        if self._mount_holds_other_archive(request, mount_path):
+            return None
 
         mount = self.mounter.mount_image_archive(
             WorkerImageMountRequest(
                 container_id=request.container_id,
                 image_id=request.image_id,
+                archive_sha256=request.archive_sha256,
                 archive_path=paths.local_archive_path,
                 mount_point=paths.mount_point,
             )
@@ -290,6 +325,48 @@ class WorkerImageStartupLoader:
         )
         return ContainerImageLoadResult(loaded=True, reason=reason)
 
+    def _materialized_archive_sha256(
+        self,
+        paths: WorkerImagePaths,
+        cache_load: WorkerImageArchiveLoadResult,
+        source_load: WorkerImageSourceLoadResult | None,
+    ) -> str:
+        """The digest this worker verified for the archive it is about to mount.
+
+        Recording the dispatched digest instead would let a mount vouch for bytes
+        nobody checked: the broker resolves the archive again at download time, so an
+        archive repointed between dispatch and download would be recorded under the
+        digest of the copy it replaced, and the next request for that digest would be
+        served the wrong bytes from cache.
+        """
+        if source_load is not None:
+            return source_load.archive_sha256
+        restore = cache_load.restore
+        if restore is not None and restore.complete:
+            return restore.actual_hash
+        return self._recorded_archive_sha256(paths, _file_size_bytes(paths.local_archive_path))
+
+    def _mount_holds_other_archive(
+        self,
+        request: ContainerRequestContext,
+        mount_path: Path,
+    ) -> bool:
+        """Whether an existing mount was materialized from archive bytes this request cannot use.
+
+        The image id alone decides nothing here: the local cache is shared by every
+        workspace this worker runs, and the dispatched digest is the only part of the
+        request whose authorization the control plane already resolved. A mount
+        recording other bytes is stale or belongs to an image this request never
+        proved access to, so the caller falls through to the broker, which rechecks
+        that access before anything is mounted.
+        """
+        if not request.archive_sha256:
+            return False
+        manifest = read_image_mount_manifest(mount_path)
+        if manifest is None or not manifest.archive_sha256:
+            return False
+        return manifest.archive_sha256 != request.archive_sha256
+
     def _load_local_or_cache(
         self,
         request: ContainerRequestContext,
@@ -310,7 +387,8 @@ class WorkerImageStartupLoader:
             image_id=request.image_id,
             cache_path=cache_path,
             validator=lambda path, _plan: self._validate_archive(request.image_id, path),
-            local_state=self._local_state(paths.local_archive_path),
+            local_state=self._local_state(paths),
+            expected_sha256=request.archive_sha256,
             metadata_hash=metadata.content_hash,
             metadata_size_bytes=metadata.size_bytes,
             metadata_error=metadata.error or None,
@@ -350,15 +428,33 @@ class WorkerImageStartupLoader:
             return WorkerImageArchiveCacheMetadata(error="cache metadata provider is unavailable")
         return self.cache_metadata.image_archive_metadata(cache_path)
 
-    def _local_state(self, archive_path: str) -> WorkerImageArchiveLocalState:
-        path = Path(archive_path)
+    def _local_state(self, paths: WorkerImagePaths) -> WorkerImageArchiveLocalState:
+        path = Path(paths.local_archive_path)
         exists = path.exists()
+        size_bytes = _file_size_bytes(paths.local_archive_path)
         return WorkerImageArchiveLocalState(
             exists=exists,
             is_dir=path.is_dir() if exists else False,
-            size_bytes=path.stat().st_size if exists and path.is_file() else 0,
+            size_bytes=size_bytes,
+            recorded_sha256=self._recorded_archive_sha256(paths, size_bytes),
             storage_mode=self.storage_mode,
         )
+
+    def _recorded_archive_sha256(self, paths: WorkerImagePaths, size_bytes: int) -> str:
+        """Digest recorded when the archive now on disk was materialized.
+
+        The mount this worker built from the archive is where that record lives, and
+        it only speaks for the archive while the archive still has the size the mount
+        was built from — the same correspondence the mounter uses to decide whether a
+        mount still matches its archive. No record means nothing is claimed, not that
+        the archive is wrong.
+        """
+        manifest = read_image_mount_manifest(Path(paths.mount_point))
+        if manifest is None or manifest.image_id != paths.image_id:
+            return ""
+        if manifest.archive_size_bytes != size_bytes:
+            return ""
+        return manifest.archive_sha256
 
     def _validate_archive(self, image_id: str, path: Path) -> RestoredImageArchiveValidation:
         return validate_restored_image_archive(

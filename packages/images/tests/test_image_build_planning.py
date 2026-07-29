@@ -1,18 +1,17 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import threading
 import time
 from collections.abc import Callable, Generator, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
 
 import pytest
 from api.server.services import ApiServices
-from database.repositories.images import ImageBuildRepository
+from database.repositories.images import ImageArchiveRepository, ImageBuildRepository
 from images.building import (
     ImageBuildCredentialPlan,
     ImageBuildStreamEventKind,
@@ -49,11 +48,19 @@ from shared.http.images import (
 )
 from shared.image_building.authoring import ImageSpec
 from shared.image_building.records import BuildStatus, ImageBuildPhase, ImageBuildRecord
-from storage.service import ObjectStorage
-from storage_client.s3 import S3ObjectInfo
+from storage.image_archive import ResolvedImageArchiveSettings
+from storage_client.s3 import S3ObjectInfo, S3ObjectStoreSettings
 
 _TEST_BASE_IMAGE_DIGEST = f"sha256:{'a' * 64}"
 _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
+
+
+def _archive_settings() -> ResolvedImageArchiveSettings:
+    return ResolvedImageArchiveSettings(
+        storage=S3ObjectStoreSettings(bucket="image-archives"),
+        prefix="",
+        presign_seconds=900,
+    )
 
 
 def _image_control_service(services: ApiServices) -> ImageControlService:
@@ -256,8 +263,8 @@ def test_stale_owner_cannot_publish_after_claim_takeover(isolated_services: ApiS
                 update={
                     "cache_metadata": {
                         **result.cache_metadata,
-                        "staging_archive_object_key": (
-                            f"image-builds/{request.build_id}/{request.image_id}.rclip"
+                        "published_archive_object_key": (
+                            f"image-archives/{request.image_id}.rclip"
                         ),
                     }
                 }
@@ -269,7 +276,8 @@ def test_stale_owner_cannot_publish_after_claim_takeover(isolated_services: ApiS
     service.executor = executor
     service.publication_publisher = ArchiveImageBuildPublicationPublisher(
         object_store=archive_store,
-        bucket="image-archives",
+        settings=_archive_settings(),
+        context=isolated_services.context,
     )
     service.claim_heartbeat_seconds = 30
     service.claim_lease_seconds = 300
@@ -292,169 +300,6 @@ def test_stale_owner_cannot_publish_after_claim_takeover(isolated_services: ApiS
     assert archive_store.checks == []
 
 
-def test_stale_archive_candidate_cannot_replace_selected_winner(
-    isolated_services: ApiServices,
-) -> None:
-    delegate = ManifestImageBuildExecutor()
-    archive_coordinates = ObjectStorage(
-        isolated_services.context,
-        object_client=isolated_services.object_storage.object_client,
-        default_bucket=isolated_services.object_storage.default_bucket,
-        allowed_buckets=("image-archives",),
-    )
-
-    class ArchiveRequiredExecutor:
-        cache_markers: ClassVar[frozenset[str]] = frozenset({ImageBuildExecutorKind.Manifest.value})
-        requires_archive_publication: ClassVar[bool] = True
-
-        def __init__(self, store: BlockingArchiveStore, content: bytes) -> None:
-            self.store = store
-            self.content = content
-
-        def execute(self, request: ImageBuildExecutionRequest) -> ImageBuildExecutionResult:
-            result = delegate.execute(request)
-            key = f"image-builds/{request.build_id}/{request.image_id}.rclip"
-            digest = hashlib.sha256(self.content).hexdigest()
-            reserved = archive_coordinates.reserve_for_workspace(
-                workspace_id=request.workspace_id,
-                bucket="image-archives",
-                key=key,
-                size=len(self.content),
-                sha256=digest,
-                content_type="application/x-tar",
-                metadata={
-                    "kind": "image-build-staging",
-                    "build_id": request.build_id,
-                    "container_id": request.session.container_id,
-                    "image_id": request.image_id,
-                },
-            )
-            physical_bucket = archive_coordinates.physical_bucket("image-archives")
-            physical_key = archive_coordinates.physical_key_for_workspace(
-                request.workspace_id,
-                bucket="image-archives",
-                key=key,
-            )
-            self.store.objects[(physical_bucket, physical_key)] = self.content
-            return result.model_copy(
-                update={
-                    "cache_metadata": {
-                        **result.cache_metadata,
-                        "container_id": request.session.container_id,
-                        "staging_archive_object_id": reserved.id,
-                        "staging_archive_object_key": key,
-                        "staging_archive_size_bytes": str(len(self.content)),
-                        "staging_archive_sha256": digest,
-                    }
-                }
-            )
-
-    class BlockingArchiveStore:
-        def __init__(self) -> None:
-            self.started = threading.Event()
-            self.release = threading.Event()
-            self.objects: dict[tuple[str, str], bytes] = {}
-            self.old_key = ""
-
-        def head(
-            self,
-            key: str,
-            *,
-            bucket: str | None = None,
-        ) -> S3ObjectInfo:
-            resolved_bucket = bucket or "image-archives"
-            content = self.objects[(resolved_bucket, key)]
-            if content == b"stale-owner":
-                self.old_key = key
-                self.started.set()
-                assert self.release.wait(timeout=5)
-            return S3ObjectInfo(
-                bucket=resolved_bucket,
-                key=key,
-                size=len(content),
-                metadata={"artifact-sha256": hashlib.sha256(content).hexdigest()},
-            )
-
-    archive_store = BlockingArchiveStore()
-    publisher = ArchiveImageBuildPublicationPublisher(
-        object_store=archive_store,
-        bucket="image-archives",
-        object_coordinates=archive_coordinates,
-    )
-    old_service = replace(
-        isolated_services.images,
-        executor=ArchiveRequiredExecutor(archive_store, b"stale-owner"),
-        publication_publisher=publisher,
-        claim_lease_seconds=0,
-        claim_heartbeat_seconds=60,
-        publication_claim_lease_seconds=0.05,
-    )
-    replacement_service = replace(
-        isolated_services.images,
-        executor=ArchiveRequiredExecutor(archive_store, b"winner"),
-        publication_publisher=publisher,
-        claim_lease_seconds=0,
-        claim_heartbeat_seconds=0.01,
-        publication_claim_lease_seconds=0.05,
-    )
-    spec = ImageSpec(ignore_python=True, commands=["echo fenced-promotion"])
-    original: list[ImageBuildRecord] = []
-
-    build_thread = threading.Thread(
-        target=lambda: original.append(old_service.execute(spec).record)
-    )
-    build_thread.start()
-    assert archive_store.started.wait(timeout=5), [
-        (record.status, record.error) for record in original
-    ]
-    time.sleep(0.1)
-
-    winner = replacement_service.execute(spec).record
-    workspace_id = _default_workspace_id(isolated_services)
-    selected = replacement_service.get_image_metadata(
-        winner.image_id or "",
-        workspace_id=workspace_id,
-    )
-    assert selected is not None
-    selected_physical_key = archive_coordinates.physical_key_for_workspace(
-        workspace_id,
-        bucket="image-archives",
-        key=selected.archive_object_key,
-    )
-    assert selected_physical_key != archive_store.old_key
-    assert (
-        archive_store.objects[
-            (
-                archive_coordinates.physical_bucket("image-archives"),
-                selected_physical_key,
-            )
-        ]
-        == b"winner"
-    )
-
-    archive_store.release.set()
-    build_thread.join(timeout=5)
-
-    assert len(original) == 1
-    assert original[0].status is BuildStatus.Failed
-    assert winner.status is BuildStatus.Complete
-    after_stale_resume = replacement_service.get_image_metadata(
-        winner.image_id or "",
-        workspace_id=workspace_id,
-    )
-    assert after_stale_resume is not None
-    assert after_stale_resume.archive_object_key == selected.archive_object_key
-    assert (
-        archive_store.objects[
-            (
-                archive_coordinates.physical_bucket("image-archives"),
-                archive_store.old_key,
-            )
-        ]
-        == b"stale-owner"
-    )
-
-
 @pytest.mark.parametrize(
     ("head_size", "head_sha256"),
     [
@@ -470,29 +315,16 @@ def test_archive_publication_rejects_head_integrity_mismatch(
     workspace_id = _default_workspace_id(isolated_services)
     image_id = "image-integrity"
     build_id = "build-integrity"
-    container_id = "container-integrity"
     archive_sha256 = "a" * 64
-    archive_key = f"image-builds/{build_id}/{image_id}.rclip"
-    coordinates = ObjectStorage(
-        isolated_services.context,
-        object_client=isolated_services.object_storage.object_client,
-        default_bucket=isolated_services.object_storage.default_bucket,
-        allowed_buckets=("image-archives",),
-    )
-    reserved = coordinates.reserve_for_workspace(
-        workspace_id=workspace_id,
-        bucket="image-archives",
-        key=archive_key,
-        size=1024,
-        sha256=archive_sha256,
-        content_type="application/x-tar",
-        metadata={
-            "kind": "image-build-staging",
-            "build_id": build_id,
-            "container_id": container_id,
-            "image_id": image_id,
-        },
-    )
+    archive_key = f"image-archives/{image_id}.rclip"
+    with isolated_services.context.database.session() as session:
+        archive, _ = ImageArchiveRepository(session).reserve(
+            image_id,
+            bucket="image-archives",
+            object_key=archive_key,
+            size_bytes=1024,
+            sha256=archive_sha256,
+        )
 
     class IntegrityMismatchStore:
         def head(self, key: str, *, bucket: str | None = None) -> S3ObjectInfo:
@@ -505,8 +337,8 @@ def test_archive_publication_rejects_head_integrity_mismatch(
 
     result = ArchiveImageBuildPublicationPublisher(
         object_store=IntegrityMismatchStore(),
-        bucket="image-archives",
-        object_coordinates=coordinates,
+        settings=_archive_settings(),
+        context=isolated_services.context,
     ).publish(
         ImageBuildRecord(
             id=build_id,
@@ -518,17 +350,15 @@ def test_archive_publication_rejects_head_integrity_mismatch(
             status=ImageBuildPublicationStatus.Published,
             workspace_id=workspace_id,
             cache_metadata={
-                "container_id": container_id,
-                "staging_archive_object_id": reserved.id,
-                "staging_archive_object_key": reserved.key,
-                "staging_archive_size_bytes": str(reserved.size),
-                "staging_archive_sha256": reserved.sha256,
+                "published_archive_object_key": archive.object_key,
+                "published_archive_size_bytes": str(archive.size_bytes),
+                "published_archive_sha256": archive.sha256,
             },
         ),
     )
 
     assert result.status is ImageBuildPublicationPublishStatus.Error
-    assert result.reason == "image build archive candidate failed size or sha256 verification"
+    assert result.reason == "image build archive failed size or sha256 verification"
 
 
 def test_image_build_cleanup_plans_and_removes_build_directory(
