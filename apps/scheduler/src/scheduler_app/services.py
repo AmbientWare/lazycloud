@@ -227,15 +227,20 @@ class SchedulerAppServices:
             workspace_changes=workspace_changes,
         )
         billing = managed_billing_client(observability.managed_billing.to_runtime_settings())
-        provider_resolver = workspace_compute_provider_resolver(
-            capacity.aws_connections,
-            capacity.aws_capacity,
-            capacity.agent_binaries,
-            connections=AwsAccountConnectionDirectory(context).list_for_workspace,
-            gateway_origin=gateway_origin,
-            tailnet_runtime=network.tailnet_runtime,
-            tailnet_control=network.tailnet_control,
-            backend_route=network.backend_routes,
+        # See the API composition: the resolver exists only where connected AWS is
+        # configured, and a half-configured deployment is rejected by settings.
+        provider_resolver = (
+            workspace_compute_provider_resolver(
+                capacity.aws_capacity,
+                capacity.agent_binaries,
+                connections=AwsAccountConnectionDirectory(context).list_for_workspace,
+                gateway_origin=gateway_origin,
+                tailnet_runtime=network.tailnet_runtime,
+                tailnet_control=network.tailnet_control,
+                backend_route=network.backend_routes,
+            )
+            if capacity.aws_connections.configured
+            else None
         )
         agent_version, agent_sha256 = (
             capacity.agent_binaries.require_amd64() if provider_resolver is not None else ("", "")

@@ -18,7 +18,6 @@ _AWS_REGION_PATTERN = re.compile(r"(us-gov|us|af|ap|ca|cn|eu|il|me|mx|sa)-[a-z0-
 
 
 class AwsAccountConnectionSettings(BaseSettings):
-    enabled: bool = False
     template_url: str = ""
     control_principal_arn: str = ""
     external_id_bytes: int = Field(default=48, ge=32, le=128)
@@ -36,23 +35,36 @@ class AwsAccountConnectionSettings(BaseSettings):
     def normalize_text(cls, value: str) -> str:
         return value.strip()
 
+    @property
+    def configured(self) -> bool:
+        return bool(self.template_url and self.control_principal_arn)
+
     @model_validator(mode="after")
-    def validate_enabled_configuration(self) -> AwsAccountConnectionSettings:
-        if not self.enabled:
-            return self
-        missing = [
+    def validate_atomic_configuration(self) -> AwsAccountConnectionSettings:
+        """Connected AWS is configured or it is absent; there is no half-configured shape.
+
+        A deployment holding a template URL but no control principal would publish a
+        customer authorization template that trusts nothing, so the two values are one
+        unit. Both come from the outputs of ``deploy/connected-aws/control-stack.yaml``.
+        """
+
+        present = [
             name
             for name, value in (
                 ("connection template URL", self.template_url),
                 ("control principal ARN", self.control_principal_arn),
             )
-            if not value
+            if value
         ]
-        if missing:
+        if len(present) == 1:
             raise ValueError(
-                "AWS account connection configuration is incomplete: missing " + ", ".join(missing)
+                "connected AWS configuration is incomplete: "
+                f"{present[0]} is set without the other. Configure both from the outputs "
+                "of deploy/connected-aws/control-stack.yaml, or neither."
             )
-        if _AWS_PRINCIPAL_PATTERN.fullmatch(self.control_principal_arn) is None:
+        if self.control_principal_arn and (
+            _AWS_PRINCIPAL_PATTERN.fullmatch(self.control_principal_arn) is None
+        ):
             raise ValueError("AWS account connection control principal ARN is invalid")
         return self
 
@@ -119,6 +131,16 @@ class AwsCapacitySettings(BaseSettings):
                 raise ValueError("AWS capacity instance prices cannot be negative")
             normalized[instance_type] = hourly_micros
         return normalized
+
+    @property
+    def configured(self) -> bool:
+        return bool(
+            self.worker_image_digest
+            and self.agent_binary_url
+            and self.cpu_ami_ids
+            and self.gpu_ami_ids
+            and self.instance_hourly_micros
+        )
 
     @model_validator(mode="after")
     def validate_atomic_configuration(self) -> AwsCapacitySettings:

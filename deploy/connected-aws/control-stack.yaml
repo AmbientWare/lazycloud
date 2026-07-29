@@ -1,0 +1,225 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Platform control principal used by connected AWS capacity and account connections.
+
+Parameters:
+  TrustedPrincipalArns:
+    Type: CommaDelimitedList
+    Description: >-
+      IAM principals permitted to assume these roles: the deployment identity the control
+      plane and scheduler run as. Supply exact principals; an account root here would let
+      any principal in the account assume the platform identity.
+  CreateAcceptanceOperator:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      Also create the acceptance operator role and the customer-stack execution role it
+      passes to CloudFormation. Only for an account used to run the live acceptance
+      scenarios; leave false for a production deployment.
+  ControlRoleName:
+    Type: String
+    Default: lazycloud-compose-control
+    AllowedPattern: "^[A-Za-z0-9_+=,.@-]{1,64}$"
+    Description: >-
+      The customer account-authorization template writes this role's ARN into every
+      connection role's trust policy, so the name is part of a durable external contract.
+      Change it only for a deployment that has no existing customer connections.
+  OperatorRoleName:
+    Type: String
+    Default: lazycloud-default-test-operator
+    AllowedPattern: "^[A-Za-z0-9_+=,.@-]{1,64}$"
+    Description: >-
+      Fixed rather than generated: the acceptance profile chain and the source identity's
+      own AssumeRole policy both name this role, so a generated name would break both on
+      every redeploy.
+  ExecutionRoleName:
+    Type: String
+    Default: lazycloud-customer-connection-stack
+    AllowedPattern: "^[A-Za-z0-9_+=,.@-]{1,64}$"
+
+Conditions:
+  AcceptanceOperator: !Equals [!Ref CreateAcceptanceOperator, "true"]
+
+Resources:
+  # Retained on delete and on replace. Deleting this role is irreversible for existing
+  # customers: AWS rewrites a role-ARN principal in their connection role's trust policy
+  # to this role's unique ID, and recreating the same name does not restore that trust.
+  # Every live connection would need a new authorization generation.
+  ControlRole:
+    Type: AWS::IAM::Role
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RoleName: !Ref ControlRoleName
+      Description: LazyCloud platform control principal for connected AWS.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Ref TrustedPrincipalArns
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: connected-aws-control
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Every EC2, Auto Scaling, IAM and CloudFormation call in the connection
+              # and capacity lifecycle runs inside an assumed customer session, so this
+              # is the platform's only broad grant.
+              #
+              # Deliberately not scoped to role/compute-connection-* and deliberately
+              # carrying no sts:ExternalId condition: the public connection contract
+              # lets a customer name an arbitrary role for ExistingRole mode, and the
+              # external-ID enforcement probe proves the customer enforces it by
+              # expecting AccessDenied from their side. A platform-side condition would
+              # deny that call first and make the probe pass without proving anything.
+              - Sid: AssumeCustomerConnectionRoles
+                Effect: Allow
+                Action: sts:AssumeRole
+                Resource: arn:aws:iam::*:role/*
+              # No call site targets a role in the platform account. Blocking it keeps
+              # the wildcard above from becoming lateral movement inside this account.
+              - Sid: DenyPlatformAccountAssumption
+                Effect: Deny
+                Action: sts:AssumeRole
+                Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/*
+              # EC2 image describes do not support resource-level authorization.
+              - Sid: InspectCapacityImages
+                Effect: Allow
+                Action: ec2:DescribeImages
+                Resource: "*"
+              - Sid: ShareOwnedCapacityImages
+                Effect: Allow
+                Action: ec2:ModifyImageAttribute
+                Resource: arn:aws:ec2:*::image/*
+                Condition:
+                  StringEquals:
+                    ec2:ResourceTag/cloud-pool:managed-by: control-plane
+              # Read back only this stack, so activation can verify the control identity
+              # it just assumed was provisioned by this template.
+              - Sid: VerifyOwnControlStack
+                Effect: Allow
+                Action: cloudformation:DescribeStacks
+                Resource: !Ref AWS::StackId
+
+  # Executes customer connection stack create/delete on CloudFormation's behalf, so the
+  # operator role below never holds IAM write authority itself.
+  CustomerStackExecutionRole:
+    Type: AWS::IAM::Role
+    Condition: AcceptanceOperator
+    Properties:
+      RoleName: !Ref ExecutionRoleName
+      Description: CloudFormation service role for LazyCloud customer connection stacks.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      Policies:
+        - PolicyName: customer-connection-stack
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: CreateTaggedCustomerConnectionRole
+                Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:TagRole
+                Resource: arn:aws:iam::*:role/compute-connection-*
+                Condition:
+                  StringEquals:
+                    aws:RequestTag/cloud-pool:managed-by: control-plane
+              - Sid: ManageCustomerConnectionRole
+                Effect: Allow
+                Action:
+                  - iam:DeleteRole
+                  - iam:DeleteRolePolicy
+                  - iam:GetRole
+                  - iam:GetRolePolicy
+                  - iam:ListAttachedRolePolicies
+                  - iam:ListInstanceProfilesForRole
+                  - iam:ListRolePolicies
+                  - iam:ListRoleTags
+                  - iam:PutRolePolicy
+                  - iam:UntagRole
+                  - iam:UpdateAssumeRolePolicy
+                Resource: arn:aws:iam::*:role/compute-connection-*
+
+  OperatorRole:
+    Type: AWS::IAM::Role
+    Condition: AcceptanceOperator
+    Properties:
+      RoleName: !Ref OperatorRoleName
+      Description: LazyCloud connected AWS acceptance operator.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Ref TrustedPrincipalArns
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: connected-aws-acceptance
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Scenario corroboration filters by tag at the query, but EC2 and Auto
+              # Scaling describes do not support resource-level authorization.
+              - Sid: CorroborateScopedCapacity
+                Effect: Allow
+                Action:
+                  - autoscaling:DescribeAutoScalingGroups
+                  - ec2:DescribeInstances
+                  - ec2:DescribeVolumes
+                Resource: "*"
+              # Enough to diagnose a failed run without escalating. Mutation stays with
+              # the execution role.
+              - Sid: InspectStacks
+                Effect: Allow
+                Action:
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStackResources
+                  - cloudformation:DescribeStacks
+                  - cloudformation:ListStacks
+                  - cloudformation:ValidateTemplate
+                Resource: "*"
+              - Sid: ManageCustomerConnectionStacks
+                Effect: Allow
+                Action:
+                  - cloudformation:CreateStack
+                  - cloudformation:DeleteStack
+                Resource: !Sub arn:aws:cloudformation:*:${AWS::AccountId}:stack/compute-connection-*
+              - Sid: PassCustomerStackExecutionRole
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt CustomerStackExecutionRole.Arn
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: cloudformation.amazonaws.com
+              # The acceptance profile chain hops through this role into the control role.
+              - Sid: AssumeControlPrincipal
+                Effect: Allow
+                Action: sts:AssumeRole
+                Resource: !GetAtt ControlRole.Arn
+
+Outputs:
+  ControlPrincipalArn:
+    Description: LAZYCLOUD_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN
+    Value: !GetAtt ControlRole.Arn
+  ControlStackName:
+    Description: LAZYCLOUD_AWS_CONTROL_STACK_NAME
+    Value: !Ref AWS::StackName
+  OperatorRoleArn:
+    Condition: AcceptanceOperator
+    Description: LAZYCLOUD_E2E_AWS_OPERATOR_ROLE_ARN
+    Value: !GetAtt OperatorRole.Arn
+  CustomerStackExecutionRoleArn:
+    Condition: AcceptanceOperator
+    Description: LAZYCLOUD_E2E_AWS_CUSTOMER_STACK_EXECUTION_ROLE_ARN
+    Value: !GetAtt CustomerStackExecutionRole.Arn

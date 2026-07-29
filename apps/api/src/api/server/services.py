@@ -664,7 +664,6 @@ class ApiServices(ApiServiceCore):
         compute_policies = WorkspaceComputePolicyService(
             context,
             available_catalog=configured_aws_compute_catalog(
-                aws_account_connection_config,
                 aws_capacity_config,
                 agent_artifact_config,
             ),
@@ -759,15 +758,22 @@ class ApiServices(ApiServiceCore):
             workspace_changes=workspace_changes,
         )
         aws_connection_directory = AwsAccountConnectionDirectory(context)
-        provider_resolver = workspace_compute_provider_resolver(
-            aws_account_connection_config,
-            aws_capacity_config,
-            agent_artifact_config,
-            connections=aws_connection_directory.list_for_workspace,
-            gateway_origin=gateway_config.public_http_url,
-            tailnet_runtime=resolved_tailnet_runtime_settings,
-            tailnet_control=resolved_tailnet_control_settings,
-            backend_route=resolved_backend_route_settings,
+        # Connected AWS is an optional deployment shape. When it is unconfigured there is
+        # no connection to resolve, and building the resolver would demand the remote
+        # network configuration a local stack has no reason to hold. A half-configured
+        # deployment never reaches here: the settings validator rejects it.
+        provider_resolver = (
+            workspace_compute_provider_resolver(
+                aws_capacity_config,
+                agent_artifact_config,
+                connections=aws_connection_directory.list_for_workspace,
+                gateway_origin=gateway_config.public_http_url,
+                tailnet_runtime=resolved_tailnet_runtime_settings,
+                tailnet_control=resolved_tailnet_control_settings,
+                backend_route=resolved_backend_route_settings,
+            )
+            if aws_account_connection_config.configured
+            else None
         )
 
         def pool_bootstrap(

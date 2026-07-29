@@ -49,7 +49,7 @@ def isolated_services(tmp_path: Path) -> Iterator[ApiServices]:
             artifact_version="test",
             sha256_by_arch={"amd64": "0" * 64},
         ),
-        aws_account_connection_settings=AwsAccountConnectionSettings(enabled=False),
+        aws_account_connection_settings=AwsAccountConnectionSettings(),
         aws_capacity_settings=AwsCapacitySettings(
             worker_image_digest=f"worker@sha256:{'0' * 64}",
             agent_binary_url=(
