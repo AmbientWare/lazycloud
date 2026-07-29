@@ -50,6 +50,28 @@ class WorkerBuildCancelAction(StrEnum):
     Cancel = "cancel"
 
 
+class ContainerExecutionPhase(StrEnum):
+    PublishWorkerAddress = "publish-worker-address"
+    HydrateCredentials = "hydrate-credentials"
+    LoadImage = "load-image"
+    AllocatePorts = "allocate-ports"
+    SetupNetwork = "setup-network"
+    PublishContainerRoutes = "publish-container-routes"
+    SetupWorkspaceStorage = "setup-workspace-storage"
+    SetupMounts = "setup-mounts"
+    AssignGpu = "assign-gpu"
+    BuildSpec = "build-spec"
+    PrepareRuntime = "prepare-runtime"
+    PrepareSandboxDocker = "prepare-sandbox-docker"
+    CompleteCheckpointStartup = "complete-checkpoint-startup"
+    MarkRunning = "mark-running"
+    RunRuntime = "run-runtime"
+    HandleOom = "handle-oom"
+    PublishExitEvent = "publish-exit-event"
+    Finalize = "finalize"
+    DelayedCleanup = "delayed-cleanup"
+
+
 class ContainerExitCode(IntEnum):
     UnknownError = 1
     Success = 0

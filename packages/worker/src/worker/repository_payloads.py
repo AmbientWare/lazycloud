@@ -38,6 +38,7 @@ from worker.checkpoints import CheckpointStatePayload
 from worker.credential_payloads import WorkerCredentialPrincipal
 from worker.events import (
     ContainerEventPayload,
+    ContainerExecutionPhase,
     ContainerLifecyclePayload,
 )
 from worker.origin_access import CacheOriginCredentials, ImageArchiveUploadCredentials
@@ -232,6 +233,12 @@ class SetContainerExitCodeRequest(ContractModel):
     container_id: str
     exit_code: int
     termination_reason: StopContainerReason = StopContainerReason.Unknown
+    # A container that died before or during its run phase carries the reason on the
+    # same synchronous call that makes its task terminal. The asynchronous lifecycle
+    # event also reports it, but arrives after the task is already terminal and is
+    # dropped, so it cannot be the only carrier.
+    failed_phase: ContainerExecutionPhase | None = None
+    failure_detail: str = Field(default="", max_length=2000)
     ttl_seconds: int = 86_400
 
 
@@ -507,6 +514,8 @@ class ContainerLogEntryKind(StrEnum):
     Output = "output"
     Dropped = "dropped"
     Flush = "flush"
+    # Worker-authored, never container output: why a container produced none.
+    Diagnostic = "diagnostic"
 
 
 class ContainerLogBatchEntry(ContractModel):
@@ -537,6 +546,8 @@ class ContainerLogBatchEntry(ContractModel):
     def fields_must_match_entry_kind(self) -> ContainerLogBatchEntry:
         if self.kind is ContainerLogEntryKind.Output and not self.message:
             raise ValueError("container output log message must not be empty")
+        if self.kind is ContainerLogEntryKind.Diagnostic and not self.message:
+            raise ValueError("diagnostic container log entry must include a message")
         if self.kind is ContainerLogEntryKind.Dropped and self.dropped_count <= 0:
             raise ValueError("dropped container log entry must include dropped_count")
         if self.kind is not ContainerLogEntryKind.Dropped and self.dropped_count:

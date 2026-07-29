@@ -415,6 +415,7 @@ class CredentialHydrator:
 @dataclass(slots=True)
 class FinalizationRepository:
     exit_codes: list[tuple[str, int, StopContainerReason]] = field(default_factory=list)
+    failure_details: list[tuple[ContainerExecutionPhase | None, str]] = field(default_factory=list)
     status_updates: list[tuple[str, SchedulerContainerStatus, int]] = field(default_factory=list)
     deleted: list[str] = field(default_factory=list)
     running_error: RuntimeError | None = None
@@ -426,8 +427,11 @@ class FinalizationRepository:
         exit_code: int,
         *,
         termination_reason: StopContainerReason,
+        failed_phase: ContainerExecutionPhase | None = None,
+        failure_detail: str = "",
     ) -> None:
         self.exit_codes.append((container_id, exit_code, termination_reason))
+        self.failure_details.append((failed_phase, failure_detail))
 
     def update_container_status(
         self,

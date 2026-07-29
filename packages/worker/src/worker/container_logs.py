@@ -223,6 +223,29 @@ class ContainerLogCaptureHandle:
             )
             self._thread.start()
 
+    def record_diagnostic(self, message: str) -> None:
+        """Record why a container produced no output of its own.
+
+        Typed as a diagnostic rather than output so a worker-authored explanation
+        is never presented as something the container printed.
+        """
+        text = message.strip()
+        if not text:
+            return
+        with self._condition:
+            if not self._accepting:
+                return
+            self._pending.append(
+                ContainerLogBatchEntry(
+                    sequence=self._claim_sequence(),
+                    stream=ContainerLogStream.Stderr,
+                    message=text[:4000],
+                    timestamp=datetime.now(UTC),
+                    kind=ContainerLogEntryKind.Diagnostic,
+                )
+            )
+            self._condition.notify_all()
+
     def capture(self, chunk: ProcessOutputChunk) -> None:
         stream = _container_log_stream(chunk.stream)
         with self._condition:

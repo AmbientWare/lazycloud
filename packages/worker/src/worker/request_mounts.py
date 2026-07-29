@@ -100,7 +100,7 @@ class WorkerRequestMountManager:
             if not mounted.ok:
                 return self._failed(
                     mount,
-                    mounted.reason or mounted.output or "S3 mount failed",
+                    _mount_failure_detail(mounted.reason, mounted.output),
                     local_path=local_path,
                 )
             records[local_path] = _RequestMountRecord(mount=mount, manager=manager)
@@ -205,3 +205,16 @@ __all__ = [
     "WorkerRequestMountLifecycle",
     "WorkerRequestMountManager",
 ]
+
+
+def _mount_failure_detail(reason: str, output: str) -> str:
+    """Combine the mount diagnosis with the tool's own stderr.
+
+    The reason names what went wrong; the subprocess output is where the
+    actionable endpoint, credential, and bucket detail lives, so keeping only the
+    reason discards the part an operator needs.
+    """
+    parts = [part.strip() for part in (reason, output) if part.strip()]
+    if not parts:
+        return "S3 mount failed"
+    return ": ".join(parts)

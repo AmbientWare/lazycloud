@@ -20,7 +20,9 @@ bucket = CloudBucket(
     str(ROOT),
     CloudBucketConfig(
         prefix=BUCKET_PREFIX,
-        endpoint=os.getenv("LAZYCLOUD_E2E_BUCKET_INTERNAL_ENDPOINT", "http://object-store:9000"),
+        # No default: workers run on the host network and cannot resolve the
+        # Compose service name, so the caller must supply a reachable endpoint.
+        endpoint=os.environ["LAZYCLOUD_E2E_BUCKET_INTERNAL_ENDPOINT"],
         region=os.getenv("LAZYCLOUD_E2E_BUCKET_REGION", "us-east-1"),
         access_key=ACCESS_KEY_SECRET,
         secret_key=SECRET_KEY_SECRET,

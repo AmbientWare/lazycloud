@@ -10,6 +10,7 @@ from shared.contracts import ContractModel
 from shared.scheduling import ContainerStatusUpdatePlan, SchedulerContainerStatus
 
 from worker.events import (
+    ContainerExecutionPhase,
     ContainerExitCode,
     ContainerRequestContext,
     StopContainerReason,
@@ -49,6 +50,8 @@ class ContainerFinalizationRepository(ContainerStatusUpdater, Protocol):
         exit_code: int,
         *,
         termination_reason: StopContainerReason,
+        failed_phase: ContainerExecutionPhase | None = None,
+        failure_detail: str = "",
     ) -> None: ...
 
     def delete_container_state(self, container_id: str) -> bool: ...
@@ -77,6 +80,8 @@ class ContainerFinalizationRequest(ContractModel):
     exit_code: int
     stop_reason: StopContainerReason = StopContainerReason.Unknown
     oom_killed: bool = False
+    failed_phase: ContainerExecutionPhase | None = None
+    failure_detail: str = ""
     stopping_ttl_seconds: int = CONTAINER_STATE_TTL_WHILE_PENDING_SECONDS
 
 
@@ -84,6 +89,8 @@ class ContainerFinalizationPlan(ContractModel):
     container_id: str
     normalized_exit_code: int
     stop_reason: StopContainerReason
+    failed_phase: ContainerExecutionPhase | None = None
+    failure_detail: str = ""
     release_gpu: bool = False
     mark_stopping: bool = True
     remove_uploads: bool = True
@@ -133,6 +140,8 @@ class WorkerContainerFinalizationService:
                     plan.container_id,
                     plan.normalized_exit_code,
                     termination_reason=plan.stop_reason,
+                    failed_phase=plan.failed_phase,
+                    failure_detail=plan.failure_detail,
                 ),
             ),
             self._run_step(
@@ -235,6 +244,8 @@ def plan_container_finalization(
         container_id=request.request.container_id,
         normalized_exit_code=normalized,
         stop_reason=request.stop_reason,
+        failed_phase=request.failed_phase,
+        failure_detail=request.failure_detail,
         release_gpu=bool(request.request.gpu or request.request.gpu_count),
         stopping_ttl_seconds=request.stopping_ttl_seconds,
     )

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import socket
 import time
 from collections.abc import Callable, Iterable
 from contextlib import suppress
@@ -9,6 +10,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
+from urllib.parse import urlsplit
 
 from foundation.process import (
     ManagedCommandResult,
@@ -159,6 +161,16 @@ class GeeseFsMountManager(StorageMountManager):
     mode: StorageMountMode = StorageMountMode.GeeseFs
 
     def mount(self, local_path: str) -> StorageMountResult:
+        unresolved = unresolvable_endpoint_host(self.config.endpoint_url)
+        if unresolved:
+            return _status_result(
+                self.mode,
+                local_path,
+                StorageMountStatus.Failed,
+                reason=(
+                    f"storage mount endpoint host {unresolved!r} does not resolve from this worker"
+                ),
+            )
         Path(local_path).mkdir(parents=True, exist_ok=True)
         if self.system.mount_checker(local_path):
             return _status_result(self.mode, local_path, StorageMountStatus.AlreadyMounted)
@@ -267,6 +279,16 @@ class MountPointMountManager(StorageMountManager):
     mode: StorageMountMode = StorageMountMode.MountPoint
 
     def mount(self, local_path: str) -> StorageMountResult:
+        unresolved = unresolvable_endpoint_host(self.config.endpoint_url)
+        if unresolved:
+            return _status_result(
+                self.mode,
+                local_path,
+                StorageMountStatus.Failed,
+                reason=(
+                    f"storage mount endpoint host {unresolved!r} does not resolve from this worker"
+                ),
+            )
         self.unmount(local_path)
         Path(local_path).mkdir(parents=True, exist_ok=True)
         command = mountpoint_command(self.config, local_path)
@@ -399,6 +421,26 @@ def mount_info_contains(text: str, mount_point: str) -> bool:
         if _unescape_mountinfo_path(fields[4]) == target:
             return True
     return False
+
+
+def unresolvable_endpoint_host(endpoint_url: str) -> str:
+    """Return the endpoint host when this machine cannot resolve it.
+
+    A mount tool given an unresolvable host neither connects nor exits: it retries
+    until the mount times out, and the only text it produces is unrelated startup
+    noise. Checking first turns a silent timeout into a named failure that says
+    which host could not be reached.
+    """
+    if not endpoint_url:
+        return ""
+    host = urlsplit(endpoint_url).hostname or ""
+    if not host:
+        return ""
+    try:
+        socket.getaddrinfo(host, None)
+    except OSError:
+        return host
+    return ""
 
 
 def _wait_for_mount(

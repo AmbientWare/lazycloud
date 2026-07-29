@@ -41,6 +41,7 @@ from shared.worker_events import WorkerEventRecord
 from worker.checkpoints import CheckpointStatePayload
 from worker.credential_payloads import WorkerCredentialPrincipal
 from worker.events import (
+    ContainerExecutionPhase,
     ContainerLifecyclePayload,
     WorkerStreamEvent,
 )
@@ -1061,12 +1062,16 @@ class RemoteSchedulerContainerRepository:
         exit_code: int,
         *,
         termination_reason: StopContainerReason = StopContainerReason.Unknown,
+        failed_phase: ContainerExecutionPhase | None = None,
+        failure_detail: str = "",
     ) -> None:
         self.client.set_container_exit_code(
             SetContainerExitCodeRequest(
                 container_id=container_id,
                 exit_code=exit_code,
                 termination_reason=termination_reason,
+                failed_phase=failed_phase,
+                failure_detail=failure_detail,
             )
         )
 

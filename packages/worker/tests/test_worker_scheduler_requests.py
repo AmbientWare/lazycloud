@@ -393,8 +393,10 @@ class _ContainerRepository:
         exit_code: int,
         *,
         termination_reason: StopContainerReason = StopContainerReason.Unknown,
+        failed_phase: ContainerExecutionPhase | None = None,
+        failure_detail: str = "",
     ) -> None:
-        del termination_reason
+        del termination_reason, failed_phase, failure_detail
         self.exit_codes.append((container_id, exit_code))
 
     def delete_container_state(self, container_id: str) -> bool:
