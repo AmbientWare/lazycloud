@@ -57,8 +57,8 @@ def test_aws_capacity_settings_reject_partial_and_mutable_artifacts(
     )
     artifact = AgentBinarySettings(
         binary_dir=Path("/opt/lazycloud/agent"),
-        artifact_version="0.1.0",
-        sha256_by_arch={"amd64": "b" * 64},
+        binary_version="0.1.0",
+        binary_sha256_by_arch={"amd64": "b" * 64},
     )
 
     with pytest.raises(ValidationError, match="worker_image_digest"):

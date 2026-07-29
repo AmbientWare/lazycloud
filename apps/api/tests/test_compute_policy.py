@@ -92,8 +92,8 @@ class _AwsCatalogConfiguration:
 def _aws_catalog_configuration() -> _AwsCatalogConfiguration:
     agent_binary_settings = AgentBinarySettings(
         binary_dir=Path("/tmp/agent-binarys"),
-        artifact_version="0.1.0",
-        sha256_by_arch={"amd64": "a" * 64},
+        binary_version="0.1.0",
+        binary_sha256_by_arch={"amd64": "a" * 64},
     )
     template_identity = aws_account_connection_template_identity()
     aws_account_connection_settings = AwsAccountConnectionSettings(

@@ -46,8 +46,8 @@ def isolated_services(tmp_path: Path) -> Iterator[ApiServices]:
         owns_binary_redis_client=False,
         agent_binary_settings=AgentBinarySettings(
             binary_dir=tmp_path,
-            artifact_version="test",
-            sha256_by_arch={"amd64": "0" * 64},
+            binary_version="test",
+            binary_sha256_by_arch={"amd64": "0" * 64},
         ),
         aws_account_connection_settings=AwsAccountConnectionSettings(),
         aws_capacity_settings=AwsCapacitySettings(

@@ -78,12 +78,14 @@ Resources:
                 Effect: Allow
                 Action: sts:AssumeRole
                 Resource: arn:aws:iam::*:role/*
-              # No call site targets a role in the platform account. Blocking it keeps
-              # the wildcard above from becoming lateral movement inside this account.
-              - Sid: DenyPlatformAccountAssumption
-                Effect: Deny
-                Action: sts:AssumeRole
-                Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/*
+              # No account-scoped deny sits under that wildcard. A customer account can
+              # be this account — the acceptance environment connects the platform
+              # account to itself — so denying assumption of local roles blocks the
+              # customer connection role the control plane must assume. Nor can the
+              # wildcard be narrowed by role name: managed authorization always creates
+              # compute-connection-*, but ExistingRole mode lets a customer nominate any
+              # role, and that role is the one the connection then uses.
+              #
               # EC2 image describes do not support resource-level authorization.
               - Sid: InspectCapacityImages
                 Effect: Allow
@@ -124,32 +126,93 @@ Resources:
       Policies:
         - PolicyName: customer-connection-stack
           PolicyDocument:
-            Version: "2012-10-17"
+            Version: '2012-10-17'
             Statement:
-              - Sid: CreateTaggedCustomerConnectionRole
-                Effect: Allow
-                Action:
-                  - iam:CreateRole
-                  - iam:TagRole
-                Resource: arn:aws:iam::*:role/compute-connection-*
-                Condition:
-                  StringEquals:
-                    aws:RequestTag/cloud-pool:managed-by: control-plane
-              - Sid: ManageCustomerConnectionRole
-                Effect: Allow
-                Action:
-                  - iam:DeleteRole
-                  - iam:DeleteRolePolicy
-                  - iam:GetRole
-                  - iam:GetRolePolicy
-                  - iam:ListAttachedRolePolicies
-                  - iam:ListInstanceProfilesForRole
-                  - iam:ListRolePolicies
-                  - iam:ListRoleTags
-                  - iam:PutRolePolicy
-                  - iam:UntagRole
-                  - iam:UpdateAssumeRolePolicy
-                Resource: arn:aws:iam::*:role/compute-connection-*
+            - Sid: CreateTaggedCustomerConnectionRole
+              Effect: Allow
+              Action:
+              - iam:CreateRole
+              - iam:TagRole
+              Resource: arn:aws:iam::*:role/compute-connection-*
+              Condition:
+                StringEquals:
+                  aws:RequestTag/cloud-pool:managed-by: control-plane
+            - Sid: ManageCustomerConnectionRole
+              Effect: Allow
+              Action:
+              - iam:DeleteRole
+              - iam:DeleteRolePolicy
+              - iam:GetRole
+              - iam:GetRolePolicy
+              - iam:ListAttachedRolePolicies
+              - iam:ListInstanceProfilesForRole
+              - iam:ListRolePolicies
+              - iam:ListRoleTags
+              - iam:PutRolePolicy
+              - iam:UntagRole
+              - iam:UpdateAssumeRolePolicy
+              Resource: arn:aws:iam::*:role/compute-connection-*
+            - Sid: InspectConnectionNetwork
+              Effect: Allow
+              Action:
+              - ec2:DescribeAvailabilityZones
+              - ec2:DescribeInternetGateways
+              - ec2:DescribeNetworkAcls
+              - ec2:DescribeRouteTables
+              - ec2:DescribeSecurityGroupRules
+              - ec2:DescribeSecurityGroups
+              - ec2:DescribeSubnets
+              - ec2:DescribeVpcAttribute
+              - ec2:DescribeVpcs
+              Resource: '*'
+            - Sid: CreateConnectionNetwork
+              Effect: Allow
+              Action:
+              - ec2:CreateInternetGateway
+              - ec2:CreateRouteTable
+              - ec2:CreateSecurityGroup
+              - ec2:CreateSubnet
+              - ec2:CreateVpc
+              Resource: '*'
+            - Sid: TagOnlyDuringOwnedCreate
+              Effect: Allow
+              Action:
+              - ec2:CreateTags
+              Resource: '*'
+              Condition:
+                StringEquals:
+                  ec2:CreateAction:
+                  - CreateInternetGateway
+                  - CreateRouteTable
+                  - CreateSecurityGroup
+                  - CreateSubnet
+                  - CreateVpc
+            - Sid: ManageOwnedConnectionNetwork
+              Effect: Allow
+              Action:
+              - ec2:AssociateRouteTable
+              - ec2:AttachInternetGateway
+              - ec2:AuthorizeSecurityGroupEgress
+              - ec2:AuthorizeSecurityGroupIngress
+              - ec2:CreateRoute
+              - ec2:CreateTags
+              - ec2:DeleteInternetGateway
+              - ec2:DeleteRoute
+              - ec2:DeleteRouteTable
+              - ec2:DeleteSecurityGroup
+              - ec2:DeleteSubnet
+              - ec2:DeleteTags
+              - ec2:DeleteVpc
+              - ec2:DetachInternetGateway
+              - ec2:DisassociateRouteTable
+              - ec2:ModifySubnetAttribute
+              - ec2:ModifyVpcAttribute
+              - ec2:RevokeSecurityGroupEgress
+              - ec2:RevokeSecurityGroupIngress
+              Resource: '*'
+              Condition:
+                StringEquals:
+                  ec2:ResourceTag/cloud-pool:managed-by: control-plane
 
   OperatorRole:
     Type: AWS::IAM::Role
