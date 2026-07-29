@@ -37,4 +37,3 @@ benchmarks/
 e2e/
 deploy/
 manifests/
-static/

@@ -275,20 +275,29 @@ class DeploymentClient(ControlClientConfigMixin):
         selected_workspace = workspace or self._config().workspace
         selected_root = source_root or self.source_root
         archive_prefix: tuple[str, ...] = ()
-        if selected_root is not None:
-            selected_root = Path(selected_root).expanduser().resolve()
-            if spec.handler:
-                try:
-                    source_reference = source_root_handler_reference(
-                        spec.handler,
-                        selected_root,
-                    )
-                except HandlerReferenceError as exc:
-                    raise DeploymentOperationError(str(exc)) from exc
+        # The source archive falls back to the working directory, so the handler is
+        # checked against that same root even when no root was named. Validating only
+        # on an explicit root let an unimportable handler deploy successfully and fail
+        # at request time, where the failure carries no diagnosis.
+        selected_sync = self.sync_source if sync_source is None else sync_source
+        validation_root = (
+            selected_root if selected_root is not None else ("." if selected_sync else None)
+        )
+        if validation_root is not None and spec.handler:
+            try:
+                source_reference = source_root_handler_reference(
+                    spec.handler,
+                    Path(validation_root).expanduser().resolve(),
+                )
+            except HandlerReferenceError as exc:
+                raise DeploymentOperationError(str(exc)) from exc
+            archive_prefix = source_reference.archive_prefix
+            spec = spec.model_copy(update={"handler": source_reference.handler})
+            if selected_root is not None:
                 selected_root = source_reference.root
-                archive_prefix = source_reference.archive_prefix
-                spec = spec.model_copy(update={"handler": source_reference.handler})
-            elif not selected_root.is_dir():
+        elif selected_root is not None:
+            selected_root = Path(selected_root).expanduser().resolve()
+            if not selected_root.is_dir():
                 msg = f"deployment source root is not a directory: {selected_root}"
                 raise RuntimeError(msg)
         self._progress(f"Preparing image for <{spec.name}>")

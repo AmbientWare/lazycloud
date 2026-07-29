@@ -17,6 +17,7 @@ from shared.identity import AuthScope
 
 from api.server.auth import admin_access, read_token, read_workspace, write_workspace
 from api.server.dependencies import current_services
+from api.server.identifiers import identifier_filter
 from api.server.routers.resource_api.common import _management
 from api.server.services import ApiServices
 
@@ -31,7 +32,7 @@ router = APIRouter()
 def list_containers(
     stub_ids: Annotated[list[str], Query(default_factory=list, alias="stub_id")],
     statuses: Annotated[list[ContainerStatus], Query(default_factory=list, alias="status")],
-    app_id: str | None = None,
+    app_id: identifier_filter = None,
     limit: int = Query(default=100, ge=1, le=100),
     cursor: str | None = Query(default=None, max_length=1024),
     *,

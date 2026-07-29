@@ -23,6 +23,7 @@ from shared.urls import InvokeUrlMode
 
 from api.server.auth import read_token, read_workspace, write_token, write_workspace
 from api.server.dependencies import current_services
+from api.server.identifiers import identifier_filter
 from api.server.response_mapping import deployment_response
 from api.server.routers.resource_api.common import STUB_TYPE_ALIASES, _management
 from api.server.services import ApiServices
@@ -133,7 +134,7 @@ def _deployment_list_response(
 )
 def list_deployments(
     active: bool | None = None,
-    app_id: str | None = None,
+    app_id: identifier_filter = None,
     name: str | None = None,
     latest: bool = False,
     limit: int = 100,

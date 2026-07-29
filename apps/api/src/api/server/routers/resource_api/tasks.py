@@ -30,6 +30,7 @@ from shared.tasks import Task, TaskStatus
 
 from api.server.auth import read_token, read_workspace, write_workspace
 from api.server.dependencies import current_services
+from api.server.identifiers import identifier_filter
 from api.server.response_mapping import deployment_response
 from api.server.routers.resource_api.common import _management
 from api.server.service_dependencies import task_rerun_service
@@ -55,8 +56,8 @@ def _task_view_response(task: TaskView) -> TaskResponse:
 def list_tasks(
     stub_ids: Annotated[list[str], Query(default_factory=list, alias="stub_id")],
     status_filter: TaskStatus | None = Query(default=None, alias="status"),
-    deployment_id: str | None = None,
-    app_id: str | None = None,
+    deployment_id: identifier_filter = None,
+    app_id: identifier_filter = None,
     kind: StubKind | None = None,
     created_after: datetime | None = None,
     created_before: datetime | None = None,
@@ -105,7 +106,7 @@ def list_tasks(
 def task_metrics(
     started_at: int,
     ended_at: int,
-    app_id: str | None = None,
+    app_id: identifier_filter = None,
     *,
     workspace_id: read_workspace,
     services: ApiServices = Depends(current_services),
@@ -144,8 +145,8 @@ def task_count_by_deployment(
 )
 def aggregate_tasks_by_time_window(
     window_seconds: int = 3600,
-    app_id: str | None = None,
-    stub_id: str | None = None,
+    app_id: identifier_filter = None,
+    stub_id: identifier_filter = None,
     *,
     workspace_id: read_workspace,
     services: ApiServices = Depends(current_services),

@@ -52,6 +52,7 @@ from api.server.dependencies import (
     authorize_token_workspace,
     current_services,
 )
+from api.server.identifiers import identifier_filter
 from api.server.service_dependencies import autoscaler_operations_service
 from api.server.services import ApiServices
 
@@ -153,7 +154,7 @@ def dispatch_scheduler_containers(
 def list_autoscalers(
     workspace: str | None = None,
     target_kind: AutoscalerTargetKind | None = None,
-    target_id: str | None = None,
+    target_id: identifier_filter = None,
     *,
     token: read_token,
     services: ApiServices = Depends(current_services),
@@ -181,7 +182,7 @@ def list_autoscalers(
 )
 def list_autoscaler_history(
     workspace: str | None = None,
-    target_id: str | None = None,
+    target_id: identifier_filter = None,
     limit: int = 100,
     *,
     token: read_token,
@@ -207,7 +208,7 @@ def list_autoscaler_history(
 def reconcile_autoscalers(
     workspace: str = "default",
     target_kind: AutoscalerTargetKind | None = None,
-    stub_id: str | None = None,
+    stub_id: identifier_filter = None,
     *,
     token: write_token,
     services: ApiServices = Depends(current_services),
