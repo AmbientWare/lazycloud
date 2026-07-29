@@ -133,6 +133,10 @@ def aws_account_connection_composition_from_settings(
     backend_route: BackendRouteSettings,
     workspace_changes: WorkspaceChangePublisher,
 ) -> AwsAccountConnectionComposition | None:
+    # Connected AWS is an optional deployment shape, but a half-configured one is not:
+    # the settings validator already rejected that, so absence here is genuine absence.
+    if not connection_settings.configured:
+        return None
     components = configured_aws_account_connection_components(
         connection_settings,
         capacity=capacity_settings,
@@ -141,8 +145,6 @@ def aws_account_connection_composition_from_settings(
         tailnet_control=tailnet_control,
         backend_route=backend_route,
     )
-    if components is None:
-        return None
     bucket_access = AwsDeploymentBucketAccessService(
         context=context,
         controller=components.bucket_access,

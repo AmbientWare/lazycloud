@@ -92,8 +92,8 @@ def _enabled_settings() -> _AwsOwnerSettings:
         ),
         artifact=AgentBinarySettings(
             binary_dir=Path("/tmp/agent-binarys"),
-            artifact_version="0.1.0",
-            sha256_by_arch={"amd64": "b" * 64},
+            binary_version="0.1.0",
+            binary_sha256_by_arch={"amd64": "b" * 64},
         ),
         runtime=TailnetRuntimeSettings(),
         control=TailnetControlSettings(
@@ -151,7 +151,6 @@ def test_aws_compute_catalog_only_includes_launchable_priced_region_types() -> N
     )
 
     catalog = configured_aws_compute_catalog(
-        settings.connection,
         capacity,
         settings.artifact,
     )

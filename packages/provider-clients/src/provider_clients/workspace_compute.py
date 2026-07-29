@@ -28,17 +28,19 @@ from shared.aws_connections import (
 )
 from shared.compute_policy import ComputeCapacityMode
 
-from provider_clients.settings import AwsAccountConnectionSettings, AwsCapacitySettings
+from provider_clients.settings import AwsCapacitySettings
 
 AwsConnectionLoader = Callable[[str], Iterable[AwsAccountConnection]]
 
 
 def configured_aws_compute_catalog(
-    connection_settings: AwsAccountConnectionSettings,
     capacity_settings: AwsCapacitySettings,
     agent_binary_settings: AgentBinarySettings,
 ) -> tuple[ComputeCatalogRegion, ...]:
-    if not connection_settings.enabled:
+    # A deployment without AWS capacity has no AWS catalog to advertise. The settings
+    # validator has already rejected a partially configured one, so this is absence
+    # rather than a switch.
+    if not capacity_settings.configured:
         return ()
     capacity_settings.binaries_by_region(agent_binary_settings)
 
@@ -130,7 +132,6 @@ class WorkspaceComputeProviderResolver(ComputeProviderResolver):
 
 
 def workspace_compute_provider_resolver(
-    connection_settings: AwsAccountConnectionSettings,
     capacity_settings: AwsCapacitySettings,
     agent_binary_settings: AgentBinarySettings,
     *,
@@ -139,9 +140,7 @@ def workspace_compute_provider_resolver(
     tailnet_runtime: TailnetRuntimeSettings,
     tailnet_control: TailnetControlSettings,
     backend_route: BackendRouteSettings,
-) -> WorkspaceComputeProviderResolver | None:
-    if not connection_settings.enabled:
-        return None
+) -> WorkspaceComputeProviderResolver:
     validate_provider_network_configuration(
         ProviderNetworkClass.Remote,
         gateway_origin=gateway_origin,

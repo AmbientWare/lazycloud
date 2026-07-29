@@ -663,10 +663,16 @@ class ApiServices(ApiServiceCore):
         secrets = SecretService(context, events, workspace_changes=workspace_changes)
         compute_policies = WorkspaceComputePolicyService(
             context,
-            available_catalog=configured_aws_compute_catalog(
-                aws_account_connection_config,
-                aws_capacity_config,
-                agent_artifact_config,
+            # Same decision as the provider resolver below: a deployment without
+            # connected AWS advertises no AWS catalog, and building one would demand
+            # the capacity and agent-artifact configuration it has no reason to hold.
+            available_catalog=(
+                configured_aws_compute_catalog(
+                    aws_capacity_config,
+                    agent_artifact_config,
+                )
+                if aws_account_connection_config.configured
+                else ()
             ),
         )
         routes = RouteService(context)
@@ -759,15 +765,22 @@ class ApiServices(ApiServiceCore):
             workspace_changes=workspace_changes,
         )
         aws_connection_directory = AwsAccountConnectionDirectory(context)
-        provider_resolver = workspace_compute_provider_resolver(
-            aws_account_connection_config,
-            aws_capacity_config,
-            agent_artifact_config,
-            connections=aws_connection_directory.list_for_workspace,
-            gateway_origin=gateway_config.public_http_url,
-            tailnet_runtime=resolved_tailnet_runtime_settings,
-            tailnet_control=resolved_tailnet_control_settings,
-            backend_route=resolved_backend_route_settings,
+        # Connected AWS is an optional deployment shape. When it is unconfigured there is
+        # no connection to resolve, and building the resolver would demand the remote
+        # network configuration a local stack has no reason to hold. A half-configured
+        # deployment never reaches here: the settings validator rejects it.
+        provider_resolver = (
+            workspace_compute_provider_resolver(
+                aws_capacity_config,
+                agent_artifact_config,
+                connections=aws_connection_directory.list_for_workspace,
+                gateway_origin=gateway_config.public_http_url,
+                tailnet_runtime=resolved_tailnet_runtime_settings,
+                tailnet_control=resolved_tailnet_control_settings,
+                backend_route=resolved_backend_route_settings,
+            )
+            if aws_account_connection_config.configured
+            else None
         )
 
         def pool_bootstrap(
@@ -1395,8 +1408,8 @@ def _gateway_control_service(
         ),
         route_authenticator=core.backend_route_settings.to_authenticator(),
         gateway_endpoint=GatewayEndpointConfig(http_url=core.gateway_settings.public_http_url),
-        agent_artifact_version=core.agent_binary_settings.artifact_version,
-        agent_sha256_by_arch=core.agent_binary_settings.sha256_by_arch,
+        agent_artifact_version=core.agent_binary_settings.binary_version,
+        agent_sha256_by_arch=core.agent_binary_settings.binary_sha256_by_arch,
         runtime_callback_http_url=core.gateway_settings.runtime_callback_http_url,
         capacity_interruption_sink=SchedulerAgentCapacityInterruptionSink(
             SchedulerCapacityInterruptionService(

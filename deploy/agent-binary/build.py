@@ -159,7 +159,7 @@ def docker_build_command(
         "--file",
         str(dockerfile),
         "--target",
-        "agent-binary",
+        "agent-artifact",
         "--output",
         f"type=local,dest={export_root}",
         str(context),

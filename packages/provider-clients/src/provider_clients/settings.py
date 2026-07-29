@@ -36,8 +36,26 @@ class AwsAccountConnectionSettings(BaseSettings):
     def normalize_text(cls, value: str) -> str:
         return value.strip()
 
+    @property
+    def configured(self) -> bool:
+        return self.enabled and bool(self.template_url and self.control_principal_arn)
+
     @model_validator(mode="after")
     def validate_enabled_configuration(self) -> AwsAccountConnectionSettings:
+        """Connected AWS is opted into explicitly, and opting in requires its configuration.
+
+        ``enabled`` is a deployment declaration, not a runtime switch: a deployment that
+        leaves it false has no connected AWS at all, and one that sets it true must supply
+        both values or fail here rather than degrade. Publishing a customer authorization
+        template with no control principal would trust nothing, so the two are one unit.
+        Both come from the outputs of ``deploy/connected-aws/control-stack.yaml``, which
+        ``deploy/connected-aws/bootstrap.py`` prints ready to paste.
+        """
+
+        if self.control_principal_arn and (
+            _AWS_PRINCIPAL_PATTERN.fullmatch(self.control_principal_arn) is None
+        ):
+            raise ValueError("AWS account connection control principal ARN is invalid")
         if not self.enabled:
             return self
         missing = [
@@ -50,10 +68,11 @@ class AwsAccountConnectionSettings(BaseSettings):
         ]
         if missing:
             raise ValueError(
-                "AWS account connection configuration is incomplete: missing " + ", ".join(missing)
+                "connected AWS is enabled but its configuration is incomplete: missing "
+                + ", ".join(missing)
+                + ". Run deploy/connected-aws/bootstrap.py to provision the control "
+                "principal and print both values."
             )
-        if _AWS_PRINCIPAL_PATTERN.fullmatch(self.control_principal_arn) is None:
-            raise ValueError("AWS account connection control principal ARN is invalid")
         return self
 
 
@@ -119,6 +138,16 @@ class AwsCapacitySettings(BaseSettings):
                 raise ValueError("AWS capacity instance prices cannot be negative")
             normalized[instance_type] = hourly_micros
         return normalized
+
+    @property
+    def configured(self) -> bool:
+        return bool(
+            self.worker_image_digest
+            and self.agent_binary_url
+            and self.cpu_ami_ids
+            and self.gpu_ami_ids
+            and self.instance_hourly_micros
+        )
 
     @model_validator(mode="after")
     def validate_atomic_configuration(self) -> AwsCapacitySettings:
