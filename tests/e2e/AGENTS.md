@@ -7,6 +7,14 @@ build, deploy, migrate, reset, or inventory the platform.
 - `local/` targets the healthy canonical root Compose stack.
 - `external/` targets an explicitly authorized provider, cluster, Tailnet, or
   other external system.
+- Know that the stack is running the code under test before trusting a `local/`
+  result. `docker compose up` reuses existing images, and the agent runs workers
+  from `container-worker:local`, so a stack left up from earlier work can be
+  serving stale control-plane, scheduler, and worker images while every service
+  reports healthy. A pass then proves nothing and a failure sends you after the
+  wrong defect. If currency is already established, do not re-check; if it is
+  not, confirm it before running anything — image timestamps against the change
+  under test, and no worker container still running a superseded image.
 - Ordinary `pytest` and changed-scope validation must not execute this tree.
   Run Python scenarios as exact modules from the repository root
   (`uv run python -m tests.e2e...`) and browser scenarios as exact nodes. Do
