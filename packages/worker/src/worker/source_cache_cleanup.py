@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import stat
@@ -17,6 +18,8 @@ from shared.source_cache_cleanup import (
 )
 
 from worker.source_code import SourceCodePackageMaterializer
+
+LOGGER = logging.getLogger(__name__)
 
 SOURCE_CACHE_GENERATION_MARKER = ".lazycloud-cache-generation"
 SOURCE_CACHE_SESSION_MARKER = ".lazycloud-cache-session"
@@ -143,6 +146,9 @@ class WorkerSourceCacheReconcileResult(ContractModel):
     claimed_count: int = 0
     completed_count: int = 0
     failed_count: int = 0
+    # Why the first purge failed, so a worker held out of service names its cause
+    # instead of reporting an opaque cleanup failure.
+    failure_detail: str = Field(default="", max_length=500)
 
 
 class WorkerSourceCacheRepository(Protocol):
@@ -175,6 +181,7 @@ class WorkerSourceCacheReconciler:
         claimed_count = 0
         completed_count = 0
         failed_count = 0
+        failure_detail = ""
         while True:
             claimed = self.repository.claim_source_cache_cleanup(limit=self.claim_limit).targets
             if not claimed:
@@ -188,15 +195,29 @@ class WorkerSourceCacheReconciler:
                     )
                     self.repository.complete_source_cache_cleanup(target)
                     completed_count += 1
-                except Exception:
+                except Exception as exc:
+                    # A purge that cannot succeed holds this worker out of service
+                    # until an operator intervenes, so the cause is logged and
+                    # carried rather than discarded.
+                    LOGGER.exception(
+                        "source cache cleanup purge failed",
+                        extra={
+                            "workspace_id": target.workspace_id,
+                            "source_object_id": target.source_object_id,
+                            "cache_generation_id": target.cache_generation_id,
+                        },
+                    )
                     self.repository.fail_source_cache_cleanup(target)
                     failed_count += 1
+                    if not failure_detail:
+                        failure_detail = f"{type(exc).__name__}: {exc}"[:500]
         if failed_count == 0:
             self.repository.activate_source_cache()
         return WorkerSourceCacheReconcileResult(
             claimed_count=claimed_count,
             completed_count=completed_count,
             failed_count=failed_count,
+            failure_detail=failure_detail,
         )
 
 

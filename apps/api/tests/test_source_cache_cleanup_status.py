@@ -71,6 +71,8 @@ def test_source_cache_cleanup_status_is_admin_only_and_bounded(
         "claimed_count",
         "completed_count",
         "generations_pending",
+        "failing_count",
+        "last_error_code",
         "oldest_pending_age_seconds",
         "complete",
     }
