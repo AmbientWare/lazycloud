@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
+from cache.protocol import CacheContentReadRequest, CacheContentReadStatus
 from foundation.process import ProcessOutputSink
 from pydantic import BaseModel, ConfigDict
 from shared.checkpoints import CheckpointRecord
@@ -31,8 +32,11 @@ from worker.checkpoints import (
 )
 from worker.container_execution import ContainerExecutionContext, ContainerRuntimeRunResult
 from worker.execution import CHECKPOINT_FILESYSTEM_DIR
+from worker.image_archive_cache import WorkerContentCache
 from worker.oci_spec import OciRuntimeContainerSpec
 from worker.runtime_config import runtime_capabilities
+
+CHECKPOINT_CACHE_READ_CHUNK_BYTES = 8 * 1024 * 1024
 
 
 class _OciRootConfig(BaseModel):
@@ -92,6 +96,7 @@ class RuntimeCheckpointRestorer:
     runtime: CheckpointRuntimeController
     checkpoint_root: str
     checkpoint_activity: CheckpointLeaseRegistry = field(default_factory=CheckpointLeaseRegistry)
+    cache: WorkerContentCache | None = None
 
     def restore(
         self,
@@ -213,7 +218,7 @@ class RuntimeCheckpointRestorer:
                 cache_size_bytes=checkpoint.cache_size_bytes,
                 origin_key=checkpoint.origin_key,
                 materialized=False,
-                cache_available=False,
+                cache_available=self.cache is not None,
                 origin_storage_available=True,
                 locality=checkpoint.locality,
                 accelerator=checkpoint.accelerator,
@@ -224,7 +229,11 @@ class RuntimeCheckpointRestorer:
         archive_path = Path(plan.archive_path)
         archive_path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            self.source.download_checkpoint(checkpoint, archive_path)
+            # The plan orders the cache ahead of origin storage. A cache miss is
+            # not a failure: fall through and pay for the download instead.
+            from_cache = self._assemble_from_cache(checkpoint, archive_path)
+            if not from_cache:
+                self.source.download_checkpoint(checkpoint, archive_path)
             actual_hash, actual_size = _file_hash_and_size(archive_path)
             validation = validate_checkpoint_archive(
                 expected_hash=checkpoint.cache_hash,
@@ -234,6 +243,8 @@ class RuntimeCheckpointRestorer:
             )
             if not validation.ok:
                 raise RuntimeError(validation.reason)
+            if not from_cache and plan.store_download_in_cache:
+                self._store_in_cache(checkpoint, archive_path)
             _extract_checkpoint_archive(
                 archive_path,
                 checkpoint_path=Path(plan.checkpoint_path),
@@ -242,6 +253,50 @@ class RuntimeCheckpointRestorer:
             )
         finally:
             archive_path.unlink(missing_ok=True)
+
+    def _assemble_from_cache(self, checkpoint: CheckpointRecord, archive_path: Path) -> bool:
+        """Rebuild the archive from the content cache, or report a miss.
+
+        The digest is verified by the caller against the checkpoint record, so a
+        partial or corrupt cache read is caught there rather than trusted here.
+        """
+        cache = self.cache
+        if cache is None or not checkpoint.cache_hash or checkpoint.cache_size_bytes <= 0:
+            return False
+        remaining = checkpoint.cache_size_bytes
+        offset = 0
+        try:
+            with archive_path.open("wb") as handle:
+                while remaining > 0:
+                    length = min(CHECKPOINT_CACHE_READ_CHUNK_BYTES, remaining)
+                    result = cache.read_content(
+                        CacheContentReadRequest(
+                            content_hash=checkpoint.cache_hash,
+                            offset=offset,
+                            length=length,
+                            routing_key=checkpoint.cache_hash,
+                        )
+                    )
+                    if result.status is not CacheContentReadStatus.Hit or not result.data:
+                        return False
+                    handle.write(result.data)
+                    offset += len(result.data)
+                    remaining -= len(result.data)
+        except OSError:
+            return False
+        return remaining == 0
+
+    def _store_in_cache(self, checkpoint: CheckpointRecord, archive_path: Path) -> None:
+        cache = self.cache
+        if cache is None or not checkpoint.cache_hash:
+            return
+        # Best effort: a cache that refuses the archive costs the next worker a
+        # download, it does not make this restore wrong.
+        cache.store_content_from_local_file(
+            archive_path,
+            expected_hash=checkpoint.cache_hash,
+            cache_path=checkpoint.origin_key,
+        )
 
     def _restore_filesystem(
         self,

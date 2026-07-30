@@ -112,6 +112,7 @@ from worker.gpu import (
     NvidiaGpuIndexProvider,
     WorkerGpuRuntimeAssigner,
 )
+from worker.image_archive_cache import WorkerContentCache
 from worker.image_archive_transfer import download_image_archive
 from worker.image_build_execution import (
     BuildahWorkerImageBuilder,
@@ -998,6 +999,7 @@ class RemoteCheckpointPersister:
     repository: WorkerRepositoryHttpClient
     checkpoint_bucket: str
     cache_namespace: str = DEFAULT_CHECKPOINT_CACHE_NAMESPACE
+    cache: WorkerContentCache | None = None
 
     def persist_checkpoint(
         self,
@@ -1033,6 +1035,14 @@ class RemoteCheckpointPersister:
                 archive_path,
                 content_length=size_bytes,
             )
+            # Also seed the content cache so the next worker to restore this
+            # checkpoint reads it locally instead of downloading it again.
+            if self.cache is not None:
+                self.cache.store_content_from_local_file(
+                    archive_path,
+                    expected_hash=cache_hash,
+                    cache_path=plan.origin_key,
+                )
             response = self.repository.persist_checkpoint_archive(
                 PersistCheckpointArchiveRequest(
                     checkpoint_id=plan.checkpoint_id,
@@ -1293,6 +1303,7 @@ def build_production_worker_process_services(
     usage_recorder = RemoteWorkerUsageRecorder(repository)
     log_sink = RemoteSandboxProcessLogSink(repository)
     container_log_capture = WorkerContainerLogCaptureService(RemoteContainerLogSink(repository))
+    cache_server = _worker_content_cache(config)
     checkpoint_state_sink = RemoteCheckpointStateSink(repository)
     automatic_checkpoint_leases = RemoteAutomaticCheckpointCreationLeaseCoordinator(repository)
     checkpoint_restore_source = RemoteCheckpointRestoreSource(
@@ -1306,6 +1317,7 @@ def build_production_worker_process_services(
             repository,
             checkpoint_bucket=config.checkpoint_bucket,
             cache_namespace=config.checkpoint_cache_namespace,
+            cache=cache_server,
         ),
         checkpoint_root=config.resolved_checkpoint_root,
         origin_storage_available=bool(config.checkpoint_bucket),
@@ -1339,7 +1351,6 @@ def build_production_worker_process_services(
         ),
     )
     image_build_credential_loader = RemoteImageBuildCredentialLoader(repository)
-    cache_server = _worker_content_cache(config)
     archive_source_loader = image_source_loader or BrokeredImageArchiveSourceLoader(repository)
     cache_metadata = (
         CacheServerImageArchiveMetadataProvider(cache_server) if cache_server is not None else None
@@ -1414,6 +1425,7 @@ def build_production_worker_process_services(
             runtime=runtime,
             checkpoint_root=config.resolved_checkpoint_root,
             checkpoint_activity=checkpoint_activity,
+            cache=cache_server,
         ),
         automatic_checkpoints=WorkerAutomaticCheckpointService(
             instances=instance_store,
