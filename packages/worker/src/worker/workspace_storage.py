@@ -20,6 +20,7 @@ from storage_client.mounts import (
     StorageMountResult,
     StorageMountStatus,
     StorageMountSystem,
+    geesefs_memory_limit_mb,
 )
 
 from worker import cache_assets
@@ -193,7 +194,10 @@ class WorkerWorkspaceStorageManager:
                 secret_key=complete.secret_key,
                 force_path_style=complete.force_path_style,
                 cache_dir=posixpath.join(geesefs.cache_root, workspace_name),
-                memory_limit_mb=geesefs.memory_limit_mb,
+                memory_limit_mb=geesefs_memory_limit_mb(
+                    configured_mb=geesefs.memory_limit_mb,
+                    worker_memory_mib=geesefs.worker_memory_mib,
+                ),
                 max_flushers=geesefs.max_flushers,
                 stat_cache_ttl_seconds=geesefs.stat_cache_ttl_seconds,
                 binary=geesefs.binary,

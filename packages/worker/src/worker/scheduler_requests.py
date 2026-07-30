@@ -420,6 +420,7 @@ def container_execution_context_from_scheduler_request(
             workspace_storage_base_mount_path=payload.workspace_storage_base_mount_path,
             cpu_millicores=request.cpu_millicores,
             memory_mib=request.memory_mib,
+            disk_limit_bytes=payload.disk_limit_bytes or 0,
             gpu=request.gpu_type,
             gpu_count=gpu_count_for_capacity(
                 request.gpu_type,

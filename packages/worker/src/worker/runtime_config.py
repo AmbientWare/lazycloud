@@ -16,6 +16,9 @@ DEFAULT_GVISOR_OOM_THRESHOLD_PERCENT = 95.0
 DEFAULT_OCI_NAMESPACES = ("mount", "pid", "ipc", "uts", "cgroup")
 DEFAULT_CONTAINER_CLI_SOURCE = f"/app/.venv/bin/{CLI_NAME}"
 DEFAULT_CONTAINER_CLI_PATH = f"/usr/bin/{CLI_NAME}"
+# Sized from the container's memory request by the spec builder. The fallback
+# applies only where no request is known, and is deliberately small.
+DEFAULT_CONTAINER_TMPFS_SIZE_MIB = 64
 
 type JsonObject = dict[str, JsonValue]
 type JsonArray = list[JsonValue]
@@ -280,6 +283,7 @@ def build_base_oci_config(
     readonly_rootfs: bool = True,
     container_cli_source: str | None = None,
     container_cli_path: str = DEFAULT_CONTAINER_CLI_PATH,
+    tmpfs_size_mib: int = DEFAULT_CONTAINER_TMPFS_SIZE_MIB,
 ) -> JsonObject:
     selected = normalize_oci_runtime(runtime)
     capabilities = _base_capabilities()
@@ -302,7 +306,15 @@ def build_base_oci_config(
     process_env_values: JsonArray = [f"{key}={value}" for key, value in sorted(process_env.items())]
     mounts: JsonArray = [
         _mount("/proc", "proc", "proc", ["rw", "nosuid", "noexec", "nodev"]),
-        _mount("/volumes", "tmpfs", "tmpfs", ["nosuid", "strictatime", "mode=755"]),
+        # tmpfs pages are charged to the container's memory cgroup, so an
+        # unsized tmpfs lets a container consume its whole memory ceiling here
+        # and, with no ceiling at all, the worker's RAM.
+        _mount(
+            "/volumes",
+            "tmpfs",
+            "tmpfs",
+            ["nosuid", "strictatime", "mode=755", f"size={tmpfs_size_mib}m"],
+        ),
         _mount(
             "/dev",
             "tmpfs",
@@ -310,7 +322,12 @@ def build_base_oci_config(
             ["rw", "nosuid", "strictatime", "mode=755", "size=65536k"],
         ),
         _mount("/dev/pts", "devpts", "devpts", ["nosuid", "noexec", "newinstance"]),
-        _mount("/dev/shm", "tmpfs", "shm", ["nosuid", "noexec", "nodev", "mode=1777"]),
+        _mount(
+            "/dev/shm",
+            "tmpfs",
+            "shm",
+            ["nosuid", "noexec", "nodev", "mode=1777", f"size={tmpfs_size_mib}m"],
+        ),
         _mount("/dev/mqueue", "mqueue", "mqueue", ["nosuid", "noexec", "nodev"]),
         _mount("/sys", "sysfs", "sysfs", ["rw", "nosuid", "noexec", "nodev"]),
     ]

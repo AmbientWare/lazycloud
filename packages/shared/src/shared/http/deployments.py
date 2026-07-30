@@ -13,6 +13,7 @@ from shared.http.stubs import StubResponse
 class DeploymentResourcesResponse(HttpModel):
     cpu: float | None = None
     memory: str | None = None
+    disk: str | None = None
     gpu: str | None = None
     gpu_count: int = 0
     timeout_seconds: int | None = None

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import queue
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from time import monotonic
 from typing import Protocol
@@ -109,12 +109,11 @@ class WorkerContainerRuntimeMonitor:
             if self.metrics is not None and self.metrics_source_factory is not None
             else None
         )
+        # Rebind the configured service to this container's source rather than
+        # rebuilding it: listing fields by hand silently dropped the disk usage
+        # reader, so occupancy read as zero for every container.
         metrics = (
-            WorkerContainerMetricsService(
-                worker_id=self.metrics.worker_id,
-                sink=self.metrics.sink,
-                source=source,
-            )
+            replace(self.metrics, source=source)
             if self.metrics is not None and source is not None
             else None
         )
@@ -324,6 +323,7 @@ def _usage_evidence_from_metrics(metrics: ContainerMetricsData) -> WorkerUsageEv
         cpu_used_core_seconds=metrics.cpu_used / 1_000 * interval_seconds,
         memory_rss_byte_seconds=metrics.memory_rss_bytes * interval_seconds,
         memory_swap_byte_seconds=metrics.memory_swap_bytes * interval_seconds,
+        disk_used_byte_seconds=metrics.disk_used_bytes * interval_seconds,
         gpu_memory_byte_seconds=metrics.gpu_memory_used_bytes * interval_seconds,
         network_ingress_bytes=metrics.network_recv_bytes,
         network_egress_bytes=metrics.network_sent_bytes,

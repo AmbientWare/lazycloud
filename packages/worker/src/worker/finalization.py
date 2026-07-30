@@ -29,6 +29,7 @@ class ContainerFinalizationStep(StrEnum):
     ForceKillIfRunning = "force-kill-if-running"
     StopOomWatcher = "stop-oom-watcher"
     UnmountRequestMounts = "unmount-request-mounts"
+    ReleaseContainerRootfs = "release-container-rootfs"
     DeleteLocalState = "delete-local-state"
     DeleteRemoteState = "delete-remote-state"
 
@@ -72,6 +73,8 @@ class ContainerFinalizationCleanup(Protocol):
 
     def unmount_request_mounts(self, container_id: str) -> None: ...
 
+    def release_container_rootfs(self, container_id: str) -> None: ...
+
     def delete_local_state(self, container_id: str) -> None: ...
 
 
@@ -98,6 +101,7 @@ class ContainerFinalizationPlan(ContractModel):
     teardown_network: bool = True
     force_kill_after_grace: bool = True
     stop_oom_watcher: bool = True
+    release_container_rootfs: bool = True
     delete_local_state: bool = True
     delete_remote_state: bool = True
     stopping_ttl_seconds: int = CONTAINER_STATE_TTL_WHILE_PENDING_SECONDS
@@ -194,6 +198,14 @@ class WorkerContainerFinalizationService:
             self._run_step(
                 ContainerFinalizationStep.UnmountRequestMounts,
                 lambda: self.cleanup.unmount_request_mounts(plan.container_id),
+            ),
+            # After the request mounts and before local state: the overlay must be
+            # unmounted before anything removes paths beneath it, or the removal
+            # would delete through the mount into the shared image directory.
+            self._run_step(
+                ContainerFinalizationStep.ReleaseContainerRootfs,
+                lambda: self.cleanup.release_container_rootfs(plan.container_id),
+                skip=not plan.release_container_rootfs,
             ),
             self._run_step(
                 ContainerFinalizationStep.DeleteLocalState,

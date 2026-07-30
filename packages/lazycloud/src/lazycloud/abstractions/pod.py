@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol, TypedDict
 
-from shared.deployment_records import DeploymentSpec, Resources, VolumeMount
+from shared.deployment_records import DEFAULT_DISK, DeploymentSpec, Resources, VolumeMount
 from shared.deployments import DeploymentKind
 from shared.http.compute import ContainerResponse
 from shared.http.deployments import DeploymentResponse
@@ -71,6 +71,7 @@ class PodOptions(TypedDict, total=False):
     env: dict[str, str]
     cpu: float | None
     memory: str | None
+    disk: str | None
     gpu: str | None
     gpu_count: int
     keep_warm: int
@@ -178,6 +179,7 @@ class Pod(ControlClientConfigMixin):
     env: dict[str, str] = field(default_factory=dict)
     cpu: float | None = 1.0
     memory: str | None = "128Mi"
+    disk: str | None = None
     gpu: str | None = None
     gpu_count: int = 0
     keep_warm: int = 600
@@ -256,6 +258,7 @@ class Pod(ControlClientConfigMixin):
             resources=Resources(
                 cpu=self.cpu,
                 memory=self.memory,
+                disk=self.disk or DEFAULT_DISK,
                 gpu=self.gpu,
                 gpu_count=self.gpu_count,
                 keep_warm=self.keep_warm,
@@ -300,6 +303,7 @@ class Pod(ControlClientConfigMixin):
         env: dict[str, str] | None = None,
         cpu: float | None = None,
         memory: str | None = None,
+        disk: str | None = None,
         gpu: str | None = None,
         gpu_count: int | None = None,
         keep_warm: int | None = None,
@@ -322,6 +326,8 @@ class Pod(ControlClientConfigMixin):
             self.cpu = cpu
         if memory is not None:
             self.memory = memory
+        if disk is not None:
+            self.disk = disk
         if gpu is not None:
             self.gpu = gpu
         if gpu_count is not None:

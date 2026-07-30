@@ -177,6 +177,7 @@ class GetOrCreateStubRequest(HttpModel):
     image_ignore_python: bool = False
     cpu: float | None = None
     memory: str | int | None = None
+    disk: str | int | None = None
     gpu: str = ""
     handler: str = ""
     route: str | None = None

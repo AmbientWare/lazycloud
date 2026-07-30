@@ -42,6 +42,7 @@ def test_deployment_response_exposes_safe_workload_configuration() -> None:
         "resources": {
             "cpu": 2.0,
             "memory": "2Gi",
+            "disk": "100Gi",
             "gpu": None,
             "gpu_count": 0,
             "timeout_seconds": 180,

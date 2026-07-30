@@ -9,6 +9,7 @@ from shared.app_identity import NAME, WORKER_CHECKPOINT_ROOT
 from shared.contracts import ContractModel
 from shared.routing import BackendRouteTransport
 
+from worker.container_rootfs import DEFAULT_CONTAINER_ROOTFS_ROOT
 from worker.events import WorkerPoolMode
 from worker.image_build_scratch import (
     DEFAULT_IMAGE_BUILD_MIN_FREE_BYTES,
@@ -80,6 +81,7 @@ class WorkerPathConfiguration(ContractModel):
     cache_root: Path | None = None
     source_cache_root: Path | None = None
     checkpoint_root: str = WORKER_CHECKPOINT_ROOT
+    container_rootfs_root: Path = Path(DEFAULT_CONTAINER_ROOTFS_ROOT)
 
     @model_validator(mode="after")
     def image_build_root_is_dedicated_disk_storage(self) -> Self:
@@ -91,6 +93,7 @@ class WorkerPathConfiguration(ContractModel):
             Path(self.image_cache_path).expanduser().resolve(),
             Path(self.image_mount_root).expanduser().resolve(),
             Path(self.checkpoint_root).expanduser().resolve(),
+            self.container_rootfs_root.expanduser().resolve(),
         }
         if self.source_cache_root is not None:
             managed_roots.add(self.source_cache_root.expanduser().resolve())

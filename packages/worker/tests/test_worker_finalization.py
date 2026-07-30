@@ -84,6 +84,9 @@ class FinalizationCleanup:
     def unmount_request_mounts(self, container_id: str) -> None:
         self._record(ContainerFinalizationStep.UnmountRequestMounts, container_id)
 
+    def release_container_rootfs(self, container_id: str) -> None:
+        self._record(ContainerFinalizationStep.ReleaseContainerRootfs, container_id)
+
     def delete_local_state(self, container_id: str) -> None:
         self._record(ContainerFinalizationStep.DeleteLocalState, container_id)
 
@@ -140,6 +143,7 @@ def test_worker_container_finalizer_delayed_cleanup_forces_and_deletes_state() -
         (ContainerFinalizationStep.ForceKillIfRunning, "ctr-1"),
         (ContainerFinalizationStep.StopOomWatcher, "ctr-1"),
         (ContainerFinalizationStep.UnmountRequestMounts, "ctr-1"),
+        (ContainerFinalizationStep.ReleaseContainerRootfs, "ctr-1"),
         (ContainerFinalizationStep.DeleteLocalState, "ctr-1"),
     ]
     assert repo.deleted == ["ctr-1"]

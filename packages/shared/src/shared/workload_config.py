@@ -41,6 +41,7 @@ class StubRuntimeConfig(ContractModel):
     cpu: int | float | None = Field(default=None, ge=0)
     cpu_millicores: int = Field(default=0, ge=0)
     memory: str | int | None = None
+    disk: str | int | None = None
     memory_mib: int = Field(default=0, ge=0)
     gpu: str | None = None
     gpu_type: str | None = None

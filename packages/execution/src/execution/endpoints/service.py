@@ -203,6 +203,7 @@ class EndpointControlService:
                 checkpoint_enabled=config.runtime.checkpoint_enabled,
                 cpu_millicores=config.runtime.requested_cpu_millicores,
                 memory_mib=config.runtime.requested_memory_mib,
+                disk_mib=config.runtime.requested_disk_mib,
                 gpu_type=config.runtime.requested_gpu_type,
                 gpu_count=config.runtime.gpu_count,
                 pool_selector=config.effective_pool_selector,

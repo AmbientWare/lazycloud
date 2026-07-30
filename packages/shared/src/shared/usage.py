@@ -43,6 +43,7 @@ class UsageMetric(StringEnum):
     NetworkEgressBytes = "network_egress_bytes"
     NetworkIngressPackets = "network_ingress_packets"
     NetworkEgressPackets = "network_egress_packets"
+    ContainerDiskByteSeconds = "container_disk_byte_seconds"
     DiskReadBytes = "disk_read_bytes"
     DiskWriteBytes = "disk_write_bytes"
     ManagedComputeReservationSeconds = "managed_compute_reservation_seconds"

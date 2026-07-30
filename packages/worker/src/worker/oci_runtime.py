@@ -34,6 +34,7 @@ from worker.container_execution import (
     ContainerRuntimeRunResult,
     ContainerRuntimeStartError,
 )
+from worker.container_rootfs import ContainerRootfsSetupResult
 from worker.execution import (
     CONTAINER_INNER_PORT,
     ContainerEnvironmentRequest,
@@ -67,6 +68,7 @@ from worker.managed_runtime_catalog import (
 from worker.runtime_config import (
     DEFAULT_CONTAINER_CLI_PATH,
     DEFAULT_CONTAINER_CLI_SOURCE,
+    DEFAULT_CONTAINER_TMPFS_SIZE_MIB,
     OciRuntimeName,
     RuntimeAvailability,
     RuntimeAvailabilityStatus,
@@ -268,11 +270,12 @@ class OciRuntimeSpecBuilder:
         mount_result: ContainerMountSetupResult | None = None,
         network_result: ContainerNetworkSetupResult | None = None,
         gpu_result: ContainerGpuAssignmentResult | None = None,
+        rootfs_result: ContainerRootfsSetupResult | None = None,
     ) -> worker.oci_spec.OciRuntimeContainerSpec:
         _ = bind_ports
         runtime_config = _select_runtime_config(context.runtime, self.runtime_configs)
         bundle_path = self.bundle_root / context.request.container_id
-        root_path = self._root_path(context)
+        root_path = self._root_path(context, rootfs_result)
         env = self._runtime_env(
             context,
             bind_ports=bind_ports,
@@ -310,6 +313,7 @@ class OciRuntimeSpecBuilder:
             readonly_rootfs=self.readonly_rootfs,
             container_cli_source=self._container_cli_source(),
             container_cli_path=self.container_cli_path,
+            tmpfs_size_mib=_container_tmpfs_size_mib(context.request.memory_mib),
         )
         supervisor_token_path = self._apply_sandbox_supervisor(context, spec, bundle_path)
         self._apply_sandbox_upload_mount(context, spec)
@@ -428,9 +432,23 @@ class OciRuntimeSpecBuilder:
             ],
         )
 
-    def _root_path(self, context: ContainerExecutionContext) -> str:
+    def _root_path(
+        self,
+        context: ContainerExecutionContext,
+        rootfs_result: ContainerRootfsSetupResult | None = None,
+    ) -> str:
+        # The per-container overlay merged view is the only correct writable root:
+        # the image mount root is shared by every container running that image.
+        if rootfs_result is not None and rootfs_result.prepared and rootfs_result.root_path:
+            return rootfs_result.root_path
         if context.request.image_id:
-            return str(self.image_mount_root / context.request.image_id)
+            msg = (
+                "container "
+                f"{context.request.container_id} has image "
+                f"{context.request.image_id} but no prepared root filesystem; refusing to "
+                "share the image directory as a writable root"
+            )
+            raise RuntimeError(msg)
         return "rootfs"
 
     def _container_cli_source(self) -> str | None:
@@ -619,6 +637,18 @@ def _readonly_file_mount(source: Path, destination: str) -> OciMount:
         destination=destination,
         options=["ro", "rbind", "rprivate", "nosuid", "noexec", "nodev"],
     )
+
+
+def _container_tmpfs_size_mib(memory_mib: int) -> int:
+    """Bound in-container tmpfs by the container's own memory request.
+
+    tmpfs pages are charged to the allocating memory cgroup, so sizing these from
+    the request keeps a container's tmpfs use inside the budget it asked for
+    instead of letting it reach the whole memory ceiling.
+    """
+    if memory_mib <= 0:
+        return DEFAULT_CONTAINER_TMPFS_SIZE_MIB
+    return max(DEFAULT_CONTAINER_TMPFS_SIZE_MIB, memory_mib // 2)
 
 
 def _mount_destination_exists(spec: dict[str, JsonValue], destination: str) -> bool:

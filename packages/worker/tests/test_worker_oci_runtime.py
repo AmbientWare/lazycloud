@@ -19,6 +19,10 @@ from worker.container_execution import (
     ContainerExecutionContext,
     ContainerMountSetupResult,
 )
+from worker.container_rootfs import (
+    ContainerRootfsSetupResult,
+    ContainerRootfsStatus,
+)
 from worker.events import ContainerRequestContext
 from worker.oci_runtime import (
     OciRuntimeCommandController,
@@ -26,7 +30,7 @@ from worker.oci_runtime import (
     OciRuntimeCommandTimeouts,
     OciRuntimeSpecBuilder,
 )
-from worker.runtime_config import OciRuntimeName, RuntimeBinaryConfig
+from worker.runtime_config import OciRuntimeName, RuntimeBinaryConfig, build_base_oci_config
 
 type JsonObject = dict[str, JsonValue]
 
@@ -91,6 +95,17 @@ def _context(tmp_path: Path) -> ContainerExecutionContext:
             memory_mib=512,
         ),
         runtime=OciRuntimeName.Runsc,
+    )
+
+
+def _prepared_rootfs(tmp_path: Path, container_id: str = "ctr-1") -> ContainerRootfsSetupResult:
+    merged = tmp_path / "container-rootfs" / container_id / "merged"
+    merged.mkdir(parents=True, exist_ok=True)
+    return ContainerRootfsSetupResult(
+        container_id=container_id,
+        status=ContainerRootfsStatus.Mounted,
+        root_path=str(merged),
+        upper_path=str(tmp_path / "container-rootfs" / container_id / "upper"),
     )
 
 
@@ -290,6 +305,7 @@ def test_oci_runtime_aborts_inflight_run_when_started_callback_rejects(
         port_bindings=[],
         mount_result=ContainerMountSetupResult(),
         network_result=None,
+        rootfs_result=_prepared_rootfs(tmp_path),
     )
     controller = OciRuntimeCommandController(
         run_command=runner.run,
@@ -361,6 +377,7 @@ def test_oci_runtime_bounds_hung_runsc_delete_during_start_abort(tmp_path: Path)
         bind_ports=[],
         port_bindings=[],
         mount_result=ContainerMountSetupResult(),
+        rootfs_result=_prepared_rootfs(tmp_path),
     )
     controller = OciRuntimeCommandController(
         runtime_config=runtime_config,
@@ -409,3 +426,21 @@ def _resolv_conf(tmp_path: Path) -> Path:
     source = tmp_path / "worker-resolv.conf"
     source.write_text("nameserver 1.1.1.1\n", encoding="utf-8")
     return source
+
+
+def test_container_tmpfs_mounts_are_bounded_by_the_memory_request() -> None:
+    """An unsized tmpfs lets a container reach its whole memory ceiling through it."""
+    config = build_base_oci_config(tmpfs_size_mib=512)
+
+    mounts = config["mounts"]
+    assert isinstance(mounts, list)
+    sized: dict[str, list[str]] = {}
+    for mount in mounts:
+        assert isinstance(mount, dict)
+        destination = mount.get("destination")
+        options = mount.get("options")
+        if destination in {"/volumes", "/dev/shm"} and isinstance(options, list):
+            sized[str(destination)] = [str(opt) for opt in options if str(opt).startswith("size=")]
+
+    assert sized["/volumes"] == ["size=512m"]
+    assert sized["/dev/shm"] == ["size=512m"]

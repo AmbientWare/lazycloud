@@ -37,6 +37,7 @@ export const deploymentSchema = z.object({
         .object({
           cpu: z.number().nullish(),
           memory: z.string().nullish(),
+          disk: z.string().nullish(),
           gpu: z.string().nullish(),
           gpu_count: z.number().default(0),
           timeout_seconds: z.number().nullish(),

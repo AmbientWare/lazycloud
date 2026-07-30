@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from foundation.resources import parse_memory_mib
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from shared.deployment_records import DEFAULT_DISK
 from shared.mounts import MountAuthMode, validate_mount_auth
 
 
@@ -19,6 +20,7 @@ class PodRuntimeConfig(BaseModel):
     cpu_millicores: int = Field(default=0, ge=0)
     memory: str | int | None = None
     memory_mib: int = Field(default=0, ge=0)
+    disk: str | int = DEFAULT_DISK
     gpu: str | None = None
     gpu_type: str | None = None
     gpu_count: int = Field(default=0, ge=0)
@@ -41,6 +43,15 @@ class PodRuntimeConfig(BaseModel):
     gpu_limit: int = Field(default=0, ge=0)
     cpu_limit_millicores: int = Field(default=0, ge=0)
 
+    @field_validator("disk", mode="before")
+    @classmethod
+    def disk_defaults_to_the_platform_ceiling(cls, value: object) -> object:
+        # Every container has a ceiling, so an absent value is the default
+        # rather than 'unlimited'.
+        if value is None or value == "":
+            return DEFAULT_DISK
+        return value
+
     @field_validator("memory")
     @classmethod
     def memory_must_be_valid(cls, value: str | int | None) -> str | int | None:
@@ -61,6 +72,12 @@ class PodRuntimeConfig(BaseModel):
         if self.memory_mib:
             return self.memory_mib
         return parse_memory_mib(self.memory) or 0
+
+    @property
+    def requested_disk_mib(self) -> int:
+        # Reuses the memory parser: the units are the same and disk accepts the
+        # same "10Gi" strings users already write for memory.
+        return parse_memory_mib(self.disk) or 0
 
     @property
     def requested_gpu_type(self) -> str:
