@@ -44,7 +44,9 @@ QUOTA_CAPABLE_FILESYSTEMS = frozenset({"xfs"})
 # launch-spec or AMI difference between them.
 CONTAINER_ROOTFS_BACKING_IMAGE_NAME = "container-rootfs.xfs"
 DEFAULT_CONTAINER_ROOTFS_BACKING_BYTES = 100 * 1024**3
-CONTAINER_ROOTFS_MOUNT_OPTIONS = "loop,prjquota"
+# No `loop` option: the image is attached to a loop device explicitly, so mount
+# is handed a block device and must not try to wrap it in another one.
+CONTAINER_ROOTFS_MOUNT_OPTIONS = "prjquota"
 # mkfs.xfs refuses anything smaller and reports it as a usage dump rather than
 # a size error, so the limit is checked here and named.
 MINIMUM_CONTAINER_ROOTFS_BACKING_BYTES = 320 * 1024**2
@@ -286,9 +288,19 @@ def path_filesystem_type(path: Path, *, mountinfo_text: str = "") -> str:
     return best_type
 
 
+def _read_device_numbers(device: str) -> str:
+    """The `major:minor` sysfs records for a block device, empty when it has none."""
+    try:
+        return (Path("/sys/block") / Path(device).name / "dev").read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
 type RootfsMountChecker = Callable[[str], bool]
 type RootfsCommandRunner = Callable[[float, list[str]], ProcessResult]
 type RootfsMountInfoReader = Callable[[], str]
+type RootfsDevicePresenceChecker = Callable[[str], bool]
+type RootfsDeviceNumberReader = Callable[[str], str]
 
 
 @dataclass(slots=True)
@@ -298,6 +310,8 @@ class ContainerRootfsSystem:
     mount_checker: RootfsMountChecker = lambda path: is_mounted(path)
     run_command: RootfsCommandRunner = lambda timeout, argv: run_command_with_timeout(timeout, argv)
     read_mountinfo: RootfsMountInfoReader = lambda: _read_proc_mountinfo()
+    device_present: RootfsDevicePresenceChecker = lambda device: Path(device).exists()
+    read_device_numbers: RootfsDeviceNumberReader = lambda device: _read_device_numbers(device)
 
 
 @dataclass(slots=True)
@@ -534,9 +548,10 @@ class ContainerRootfsOverlayManager:
                 )
                 raise ContainerRootfsError(msg)
 
+        device = self._attach_backing_image(image)
         result = self.system.run_command(
             self.mount_timeout_seconds,
-            ["mount", "-o", CONTAINER_ROOTFS_MOUNT_OPTIONS, str(image), str(scratch_root)],
+            ["mount", "-o", CONTAINER_ROOTFS_MOUNT_OPTIONS, device, str(scratch_root)],
         )
         if result.exit_code != 0:
             msg = (
@@ -545,6 +560,67 @@ class ContainerRootfsOverlayManager:
             )
             raise ContainerRootfsError(msg)
         return "xfs"
+
+    def _attach_backing_image(self, image: Path) -> str:
+        """Attach the backing image to a loop device and return that device.
+
+        Attached here rather than through `mount -o loop` because that asks the
+        kernel for a device and then opens `/dev/loopN` directly. A worker runs
+        in a container whose `/dev` never gains nodes for devices created after
+        it started, so on a host with no spare loop device — an ordinary Ubuntu
+        box hands most of them to snap — the open fails even though the kernel
+        allocated one. The device outlives the worker, so an already-attached
+        one is reused instead of stacking a second onto the same image.
+        """
+        attached = self.system.run_command(
+            self.mount_timeout_seconds,
+            ["losetup", "--associated", str(image), "--noheadings", "--output", "NAME"],
+        )
+        existing = attached.stdout.strip().splitlines()
+        if attached.exit_code == 0 and existing:
+            return existing[0].strip()
+
+        found = self.system.run_command(self.mount_timeout_seconds, ["losetup", "--find"])
+        # "/dev/loop25 (lost)" when the kernel has the device but /dev does not.
+        device = found.stdout.strip().split()[0] if found.stdout.strip() else ""
+        if found.exit_code != 0 or not device:
+            msg = (
+                "no loop device is available for container rootfs storage: "
+                f"{_command_failure_detail(found)}"
+            )
+            raise ContainerRootfsError(msg)
+        self._ensure_device_node(device)
+        result = self.system.run_command(
+            self.mount_timeout_seconds,
+            ["losetup", device, str(image)],
+        )
+        if result.exit_code != 0:
+            msg = (
+                f"failed to attach container rootfs storage at {image} to "
+                f"{device}: {_command_failure_detail(result)}"
+            )
+            raise ContainerRootfsError(msg)
+        return device
+
+    def _ensure_device_node(self, device: str) -> None:
+        """Create the device node for a kernel-allocated loop device that lacks one."""
+        if self.system.device_present(device):
+            return
+        numbers = self.system.read_device_numbers(device).split(":")
+        if len(numbers) != 2 or not all(numbers):
+            msg = (
+                f"loop device {device} has no node under /dev and sysfs records no "
+                "device numbers to create one from"
+            )
+            raise ContainerRootfsError(msg)
+        major, minor = numbers
+        result = self.system.run_command(
+            self.mount_timeout_seconds,
+            ["mknod", device, "b", major, minor],
+        )
+        if result.exit_code != 0:
+            msg = f"failed to create the {device} node: {_command_failure_detail(result)}"
+            raise ContainerRootfsError(msg)
 
     def _free_space_rejection(self) -> str:
         if self.minimum_free_bytes <= 0:

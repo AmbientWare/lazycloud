@@ -20,8 +20,22 @@ from worker.oci_runtime import OciRuntimeSpecBuilder
 from worker.runtime_config import OciRuntimeName
 
 
+def _command_stdout(argv: list[str]) -> str:
+    """What the real tools print for the commands provisioning reads back."""
+    if argv[:2] == ["losetup", "--find"]:
+        # A device the kernel allocated whose /dev node does not exist yet, which
+        # is what a worker sees on a host with no spare loop device.
+        return "/dev/loop7 (lost)\n"
+    return ""
+
+
 def _result(argv: list[str], exit_code: int, stderr: str = "") -> ProcessResult:
-    return ProcessResult(args=argv, exit_code=exit_code, stdout="", stderr=stderr)
+    return ProcessResult(
+        args=argv,
+        exit_code=exit_code,
+        stdout=_command_stdout(argv),
+        stderr=stderr,
+    )
 
 
 def _ok(_timeout: float, argv: list[str]) -> ProcessResult:
@@ -52,6 +66,9 @@ def _manager(
             mount_checker=lambda _path: mounted,
             run_command=run if run is not None else _ok,
             read_mountinfo=lambda: _xfs_mountinfo(tmp_path) if mountinfo is None else mountinfo,
+            # No node under /dev, so provisioning must create one from sysfs.
+            device_present=lambda _device: False,
+            read_device_numbers=lambda _device: "7:7",
         ),
     )
 
