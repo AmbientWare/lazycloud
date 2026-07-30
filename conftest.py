@@ -16,6 +16,18 @@ TEST_ENVIRONMENT_FILE = Path(__file__).parent / "tests" / "env.test"
 # an opt-in test tier connects to, and the harness must not remove them.
 _INHERITED_PREFIXES = ("LAZYCLOUD_", "AWS_")
 _RETAINED_PREFIX = "LAZYCLOUD_TEST_"
+# Typer renders its help and errors through Rich, which colourises whenever any
+# of these is set — a developer's shell sets FORCE_COLOR, and CI sets
+# GITHUB_ACTIONS. Assertions on CLI output would then pass on a bare terminal
+# and fail everywhere else, so the suite states its own answer rather than
+# inheriting one.
+_FORCED_COLOR_VARIABLES = ("FORCE_COLOR", "PY_COLORS", "CLICOLOR_FORCE", "GITHUB_ACTIONS")
+
+# Cleared at import, not only per test: Rich decides `force_terminal` once when a
+# Console is constructed, and the CLI's console is a module-level singleton built
+# the moment a test imports it. A fixture would run too late to change it.
+for _name in _FORCED_COLOR_VARIABLES:
+    os.environ.pop(_name, None)
 
 
 def _test_environment() -> dict[str, str]:
@@ -46,6 +58,8 @@ def isolated_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Ite
     for name in tuple(os.environ):
         if name.startswith(_INHERITED_PREFIXES) and not name.startswith(_RETAINED_PREFIX):
             monkeypatch.delenv(name, raising=False)
+    for name in _FORCED_COLOR_VARIABLES:
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("LAZYCLOUD_HOME", str(tmp_path))
     # Endpoints resolve nowhere on purpose: a unit test that reaches a real
     # object store should fail loudly rather than depend on one running.
