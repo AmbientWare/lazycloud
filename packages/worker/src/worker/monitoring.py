@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import queue
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from time import monotonic
 from typing import Protocol
@@ -109,12 +109,11 @@ class WorkerContainerRuntimeMonitor:
             if self.metrics is not None and self.metrics_source_factory is not None
             else None
         )
+        # Rebind the configured service to this container's source rather than
+        # rebuilding it: listing fields by hand silently dropped the disk usage
+        # reader, so occupancy read as zero for every container.
         metrics = (
-            WorkerContainerMetricsService(
-                worker_id=self.metrics.worker_id,
-                sink=self.metrics.sink,
-                source=source,
-            )
+            replace(self.metrics, source=source)
             if self.metrics is not None and source is not None
             else None
         )
