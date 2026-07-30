@@ -29,6 +29,25 @@ CONTAINER_ROOTFS_UPPER_DIR_NAME = "upper"
 CONTAINER_ROOTFS_WORK_DIR_NAME = "work"
 CONTAINER_ROOTFS_MERGED_DIR_NAME = "merged"
 DEFAULT_CONTAINER_ROOTFS_MOUNT_TIMEOUT_SECONDS = 30.0
+# A ceiling, not a reservation: its job is to stop a runaway container, not to
+# allocate. Worker free space is the limit that actually binds, so the cap is
+# deliberately oversubscribed across containers.
+DEFAULT_CONTAINER_DISK_LIMIT_BYTES = 100 * 1024**3
+# Refuse to start another container below this much free space so a full
+# filesystem degrades into a named admission failure rather than ENOSPC in
+# arbitrary places.
+DEFAULT_CONTAINER_ROOTFS_MIN_FREE_BYTES = 5 * 1024**3
+QUOTA_CAPABLE_FILESYSTEMS = frozenset({"xfs"})
+# Provisioned once at worker start, not per container: a loopback image keeps the
+# quota-capable filesystem provider-neutral, so managed hosts, connected-cloud
+# hosts, and agent-enrolled machines all get the same enforcement without any
+# launch-spec or AMI difference between them.
+CONTAINER_ROOTFS_BACKING_IMAGE_NAME = "container-rootfs.xfs"
+DEFAULT_CONTAINER_ROOTFS_BACKING_BYTES = 100 * 1024**3
+CONTAINER_ROOTFS_MOUNT_OPTIONS = "loop,prjquota"
+# mkfs.xfs refuses anything smaller and reports it as a usage dump rather than
+# a size error, so the limit is checked here and named.
+MINIMUM_CONTAINER_ROOTFS_BACKING_BYTES = 320 * 1024**2
 
 # overlayfs refuses to use an overlay mount as its own upperdir. A scratch root
 # on overlayfs therefore fails at mount time with a message that reads like a
@@ -48,6 +67,8 @@ class ContainerRootfsSetupResult(ContractModel):
     status: ContainerRootfsStatus
     root_path: str = ""
     upper_path: str = ""
+    disk_limit_bytes: int = 0
+    quota_project_id: int = 0
     reason: str = ""
 
     @property
@@ -97,6 +118,51 @@ class ContainerRootfsOverlayPlan(ContractModel):
         return ["umount", self.merged_dir]
 
 
+class ContainerDiskQuotaPlan(ContractModel):
+    container_id: str
+    upper_dir: str
+    filesystem_root: str
+    project_id: int
+    limit_bytes: int
+
+    @property
+    def assign_project_argv(self) -> list[str]:
+        return [
+            "xfs_quota",
+            "-x",
+            "-c",
+            f"project -s -p {self.upper_dir} {self.project_id}",
+            self.filesystem_root,
+        ]
+
+    @property
+    def set_limit_argv(self) -> list[str]:
+        return [
+            "xfs_quota",
+            "-x",
+            "-c",
+            f"limit -p bhard={self.limit_bytes} {self.project_id}",
+            self.filesystem_root,
+        ]
+
+    @property
+    def clear_limit_argv(self) -> list[str]:
+        return [
+            "xfs_quota",
+            "-x",
+            "-c",
+            f"limit -p bhard=0 {self.project_id}",
+            self.filesystem_root,
+        ]
+
+
+@dataclass(slots=True)
+class _AppliedDiskQuota:
+    limit_bytes: int = 0
+    project_id: int = 0
+    reason: str = ""
+
+
 class ContainerRootfsError(RuntimeError):
     pass
 
@@ -133,6 +199,57 @@ def plan_container_rootfs_overlay(
         work_dir=str(container_root / CONTAINER_ROOTFS_WORK_DIR_NAME),
         merged_dir=str(container_root / CONTAINER_ROOTFS_MERGED_DIR_NAME),
     )
+
+
+def plan_container_disk_quota(
+    *,
+    container_id: str,
+    upper_dir: Path,
+    filesystem_root: Path,
+    limit_bytes: int,
+    project_id: int,
+) -> ContainerDiskQuotaPlan:
+    if limit_bytes <= 0:
+        msg = "container disk limit must be positive"
+        raise ContainerRootfsError(msg)
+    if project_id <= 0:
+        msg = "container disk quota project id must be positive"
+        raise ContainerRootfsError(msg)
+    return ContainerDiskQuotaPlan(
+        container_id=container_id,
+        upper_dir=str(upper_dir),
+        filesystem_root=str(filesystem_root),
+        project_id=project_id,
+        limit_bytes=limit_bytes,
+    )
+
+
+def quota_project_id_for_path(path: Path) -> int:
+    """Project id derived from the directory inode.
+
+    An inode is unique on its filesystem for as long as the directory exists,
+    which is exactly the container's lifetime. Hashing the container id instead
+    would risk two live containers sharing one quota.
+    """
+    # XFS project ids are 32-bit; 0 means "no project".
+    return (path.lstat().st_ino % (2**32 - 1)) + 1
+
+
+def filesystem_mount_point(path: Path, *, mountinfo_text: str = "") -> str:
+    """Mount point of the filesystem backing `path`, for quota commands."""
+    if not mountinfo_text:
+        mountinfo_text = _read_proc_mountinfo()
+    target = _existing_ancestor(path)
+    best = ""
+    for line in mountinfo_text.splitlines():
+        fields = line.split()
+        if len(fields) < 5:
+            continue
+        mount_point = fields[4]
+        matches = target == mount_point or target.startswith(mount_point.rstrip("/") + "/")
+        if matches and len(mount_point) > len(best):
+            best = mount_point
+    return best
 
 
 def _read_proc_mountinfo() -> str:
@@ -187,9 +304,37 @@ class ContainerRootfsOverlayManager:
     scratch_root: Path = Path(DEFAULT_CONTAINER_ROOTFS_ROOT)
     system: ContainerRootfsSystem = field(default_factory=ContainerRootfsSystem)
     mount_timeout_seconds: float = DEFAULT_CONTAINER_ROOTFS_MOUNT_TIMEOUT_SECONDS
+    default_disk_limit_bytes: int = DEFAULT_CONTAINER_DISK_LIMIT_BYTES
+    minimum_free_bytes: int = DEFAULT_CONTAINER_ROOTFS_MIN_FREE_BYTES
+    require_quota: bool = True
+    backing_image_bytes: int = DEFAULT_CONTAINER_ROOTFS_BACKING_BYTES
+    backing_image_path: Path | None = None
     _root_prepared: bool = field(default=False, init=False, repr=False)
+    _quota_filesystem: str = field(default="", init=False, repr=False)
 
-    def prepare(self, *, container_id: str, image_id: str) -> ContainerRootfsSetupResult:
+    def __post_init__(self) -> None:
+        if self.default_disk_limit_bytes <= 0:
+            msg = "container disk limit must be positive"
+            raise ContainerRootfsError(msg)
+        if self.minimum_free_bytes < 0:
+            msg = "container rootfs free-space reserve cannot be negative"
+            raise ContainerRootfsError(msg)
+        if self.minimum_free_bytes >= self.backing_image_bytes:
+            # Otherwise the reserve can never be satisfied and no container
+            # would ever be admitted.
+            msg = (
+                "container rootfs free-space reserve must be smaller than its backing store: "
+                f"reserve={self.minimum_free_bytes} backing={self.backing_image_bytes}"
+            )
+            raise ContainerRootfsError(msg)
+
+    def prepare(
+        self,
+        *,
+        container_id: str,
+        image_id: str,
+        disk_limit_bytes: int = 0,
+    ) -> ContainerRootfsSetupResult:
         plan = plan_container_rootfs_overlay(
             container_id=container_id,
             image_id=image_id,
@@ -222,8 +367,25 @@ class ContainerRootfsOverlayManager:
                 upper_path=plan.upper_dir,
             )
 
+        floor = self._free_space_rejection()
+        if floor:
+            return ContainerRootfsSetupResult(
+                container_id=container_id,
+                status=ContainerRootfsStatus.Failed,
+                reason=floor,
+            )
+
         for directory in (Path(plan.upper_dir), Path(plan.work_dir), merged):
             directory.mkdir(parents=True, exist_ok=True)
+
+        limit = disk_limit_bytes if disk_limit_bytes > 0 else self.default_disk_limit_bytes
+        quota = self._apply_disk_quota(plan, limit_bytes=limit)
+        if quota.reason:
+            return ContainerRootfsSetupResult(
+                container_id=container_id,
+                status=ContainerRootfsStatus.Failed,
+                reason=quota.reason,
+            )
 
         result = self.system.run_command(self.mount_timeout_seconds, plan.mount_argv)
         if result.exit_code != 0:
@@ -240,6 +402,8 @@ class ContainerRootfsOverlayManager:
             status=ContainerRootfsStatus.Mounted,
             root_path=plan.merged_dir,
             upper_path=plan.upper_dir,
+            disk_limit_bytes=quota.limit_bytes,
+            quota_project_id=quota.project_id,
         )
 
     def release(self, container_id: str) -> ContainerRootfsReleaseResult:
@@ -286,6 +450,127 @@ class ContainerRootfsOverlayManager:
             freed_bytes=freed,
         )
 
+    def _provision_backing_filesystem(self, scratch_root: Path, *, current: str) -> str:
+        """Back the scratch root with an XFS image so quotas can be enforced.
+
+        The host filesystem is usually ext4 and cannot enforce project quotas, and
+        it cannot be converted in place. A loopback XFS image mounted at the
+        scratch root gives every container the same limit behavior regardless of
+        how the host was provisioned.
+        """
+        if self.system.mount_checker(str(scratch_root)):
+            # Already mounted but not quota-capable: converting would destroy
+            # whatever is on it, so refuse instead of guessing.
+            msg = (
+                f"container rootfs storage at {scratch_root} is already mounted as "
+                f"{current!r}, which cannot enforce per-container disk limits"
+            )
+            raise ContainerRootfsError(msg)
+
+        if self.backing_image_bytes < MINIMUM_CONTAINER_ROOTFS_BACKING_BYTES:
+            msg = (
+                "container rootfs backing store is too small for xfs: "
+                f"{self.backing_image_bytes} < {MINIMUM_CONTAINER_ROOTFS_BACKING_BYTES}"
+            )
+            raise ContainerRootfsError(msg)
+
+        image = self.backing_image_path or scratch_root.parent / CONTAINER_ROOTFS_BACKING_IMAGE_NAME
+        image.parent.mkdir(parents=True, exist_ok=True)
+        if not image.exists():
+            free = shutil.disk_usage(image.parent).free
+            if free < self.backing_image_bytes:
+                msg = (
+                    "not enough free space to provision container rootfs storage: "
+                    f"free={free} required={self.backing_image_bytes}"
+                )
+                raise ContainerRootfsError(msg)
+            # Sparse: the image reserves an address space, not the bytes.
+            with image.open("wb") as handle:
+                handle.truncate(self.backing_image_bytes)
+            result = self.system.run_command(
+                self.mount_timeout_seconds,
+                ["mkfs.xfs", "-q", str(image)],
+            )
+            if result.exit_code != 0:
+                image.unlink(missing_ok=True)
+                msg = (
+                    "failed to format container rootfs storage at "
+                    f"{image}: {_command_failure_detail(result)}"
+                )
+                raise ContainerRootfsError(msg)
+
+        result = self.system.run_command(
+            self.mount_timeout_seconds,
+            ["mount", "-o", CONTAINER_ROOTFS_MOUNT_OPTIONS, str(image), str(scratch_root)],
+        )
+        if result.exit_code != 0:
+            msg = (
+                "failed to mount container rootfs storage at "
+                f"{scratch_root}: {_command_failure_detail(result)}"
+            )
+            raise ContainerRootfsError(msg)
+        return "xfs"
+
+    def _free_space_rejection(self) -> str:
+        if self.minimum_free_bytes <= 0:
+            return ""
+        free = shutil.disk_usage(self.scratch_root).free
+        if free >= self.minimum_free_bytes:
+            return ""
+        # The per-container cap is oversubscribed on purpose, so this floor is
+        # what actually keeps the worker alive.
+        return (
+            "container rootfs storage is below its free-space reserve: "
+            f"free={free} required={self.minimum_free_bytes}"
+        )
+
+    def _apply_disk_quota(
+        self,
+        plan: ContainerRootfsOverlayPlan,
+        *,
+        limit_bytes: int,
+    ) -> _AppliedDiskQuota:
+        upper = Path(plan.upper_dir)
+        filesystem_root = filesystem_mount_point(
+            upper,
+            mountinfo_text=self.system.read_mountinfo(),
+        )
+        if not filesystem_root:
+            return _AppliedDiskQuota(
+                reason=f"cannot resolve the filesystem backing {plan.upper_dir}",
+            )
+        if self._quota_filesystem not in QUOTA_CAPABLE_FILESYSTEMS:
+            if self.require_quota:
+                return _AppliedDiskQuota(
+                    reason=(
+                        f"container rootfs storage at {filesystem_root} is "
+                        f"{self._quota_filesystem!r}, which cannot enforce a per-container "
+                        "disk limit; provision it as xfs with the prjquota mount option"
+                    ),
+                )
+            return _AppliedDiskQuota()
+
+        quota = plan_container_disk_quota(
+            container_id=plan.container_id,
+            upper_dir=upper,
+            filesystem_root=Path(filesystem_root),
+            limit_bytes=limit_bytes,
+            project_id=quota_project_id_for_path(upper),
+        )
+        for argv in (quota.assign_project_argv, quota.set_limit_argv):
+            result = self.system.run_command(self.mount_timeout_seconds, argv)
+            if result.exit_code != 0:
+                return _AppliedDiskQuota(
+                    reason=(
+                        f"failed to apply the container disk quota for {plan.container_id}: "
+                        f"{_command_failure_detail(result)}"
+                    ),
+                )
+        return _AppliedDiskQuota(
+            limit_bytes=quota.limit_bytes,
+            project_id=quota.project_id,
+        )
+
     def _prepare_scratch_root(self) -> None:
         if self._root_prepared:
             return
@@ -302,6 +587,9 @@ class ContainerRootfsOverlayManager:
             resolved,
             mountinfo_text=self.system.read_mountinfo(),
         )
+        if filesystem not in QUOTA_CAPABLE_FILESYSTEMS and self.require_quota:
+            filesystem = self._provision_backing_filesystem(resolved, current=filesystem)
+        self._quota_filesystem = filesystem
         if filesystem in UNSUPPORTED_UPPER_FILESYSTEMS:
             # Named explicitly: overlayfs cannot stack, and the kernel's own
             # error for this is opaque.
