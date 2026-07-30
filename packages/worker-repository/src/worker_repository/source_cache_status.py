@@ -7,6 +7,7 @@ from database.context import ServiceContext
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.source_cache import SourceCacheCleanupRepository
 from shared.errors import NotFoundError
+from shared.source_cache_cleanup import SourceCacheCleanupErrorCode
 from shared.timestamps import utc_now
 
 
@@ -17,6 +18,8 @@ class SourceCacheCleanupStatusSnapshot:
     claimed_count: int
     completed_count: int
     generations_pending: int
+    failing_count: int
+    last_error_code: SourceCacheCleanupErrorCode | None
     oldest_pending_age_seconds: int | None
     complete: bool
 
@@ -51,6 +54,8 @@ class SourceCacheCleanupStatusService:
             claimed_count=summary.claimed_count,
             completed_count=summary.completed_count,
             generations_pending=summary.generations_pending,
+            failing_count=summary.failing_count,
+            last_error_code=summary.last_error_code,
             oldest_pending_age_seconds=oldest_pending_age_seconds,
             complete=summary.complete,
         )

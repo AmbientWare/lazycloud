@@ -124,6 +124,10 @@ class SourceCacheCleanupSummary(ContractModel):
     claimed_count: int = Field(ge=0)
     completed_count: int = Field(ge=0)
     generations_pending: int = Field(ge=0)
+    # A target that keeps failing holds its worker out of service, so the operator
+    # surface names how many and why rather than only that work is outstanding.
+    failing_count: int = Field(default=0, ge=0)
+    last_error_code: SourceCacheCleanupErrorCode | None = None
     oldest_pending_at: datetime | None = None
     complete: bool
 

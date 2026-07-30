@@ -32,7 +32,8 @@ def test_private_worker_cannot_resolve_another_workspace_cache_claim(
         principal=owner,
         worker_id=worker_id,
         generation_id=str(uuid4()),
-        storage_id="private-cache-storage",
+        # Production always sends the owner-qualified form the worker builds.
+        storage_id="machine:private-cache-machine",
     )
     source_object_id = str(uuid4())
     with isolated_services.context.database.session() as session:

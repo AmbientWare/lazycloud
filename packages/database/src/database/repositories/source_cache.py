@@ -284,12 +284,35 @@ class SourceCacheCleanupRepository:
                 incomplete,
             )
         )
+        failing_count = self.session.scalar(
+            select(func.count(SourceCacheCleanupTargetTable.id)).where(
+                SourceCacheCleanupTargetTable.workspace_id == workspace_id,
+                incomplete,
+                SourceCacheCleanupTargetTable.last_error_code.is_not(None),
+            )
+        )
+        last_error_code = self.session.scalar(
+            select(SourceCacheCleanupTargetTable.last_error_code)
+            .where(
+                SourceCacheCleanupTargetTable.workspace_id == workspace_id,
+                incomplete,
+                SourceCacheCleanupTargetTable.last_error_code.is_not(None),
+            )
+            .order_by(SourceCacheCleanupTargetTable.updated_at.desc())
+            .limit(1)
+        )
         return SourceCacheCleanupSummary(
             workspace_id=workspace_id,
             pending_count=counts.get(SourceCacheCleanupStatus.Pending, 0),
             claimed_count=counts.get(SourceCacheCleanupStatus.Claimed, 0),
             completed_count=counts.get(SourceCacheCleanupStatus.Completed, 0),
             generations_pending=generations_pending or 0,
+            failing_count=failing_count or 0,
+            last_error_code=(
+                SourceCacheCleanupErrorCode(str(last_error_code))
+                if last_error_code is not None
+                else None
+            ),
             oldest_pending_at=oldest_pending_at,
             complete=(
                 counts.get(SourceCacheCleanupStatus.Pending, 0)

@@ -116,6 +116,8 @@ def workspace_cleanup_status(
                 "claimed",
                 "completed",
                 "generations",
+                "failing",
+                "error",
                 "oldest (s)",
                 "complete",
             ],
@@ -126,6 +128,8 @@ def workspace_cleanup_status(
                     record.claimed_count,
                     record.completed_count,
                     record.generations_pending,
+                    record.failing_count,
+                    record.last_error_code.value if record.last_error_code else "-",
                     oldest_age,
                     record.complete,
                 ]

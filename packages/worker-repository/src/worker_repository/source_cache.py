@@ -4,14 +4,18 @@ from dataclasses import dataclass
 from datetime import timedelta
 
 from database.context import ServiceContext
+from database.repositories.orchestration import WorkerRepository
 from database.repositories.source_cache import SourceCacheCleanupRepository
+from database.types import DatabaseSession
 from identity.auth import AuthorizationDeniedError
-from shared.errors import ConflictError, UpstreamUnavailableError
+from shared.errors import ConflictError, InvalidInputError, UpstreamUnavailableError
 from shared.source_cache_cleanup import (
     SourceCacheCleanupErrorCode,
     SourceCacheCleanupTargetRecord,
     WorkerCacheGenerationRecord,
     WorkerCacheGenerationState,
+    WorkerCacheStorageOwnerKind,
+    WorkerCacheStorageOwnerRecord,
 )
 from shared.timestamps import utc_now
 from worker.repository_payloads import WorkerRepositoryPrincipal
@@ -45,12 +49,41 @@ class WorkerSourceCacheService:
         self._authorize_worker(principal, worker_id, allow_bootstrap=True)
         now = utc_now()
         with self.context.database.session() as session:
+            self._assert_storage_owner(session, worker_id=worker_id, storage_id=storage_id)
             return SourceCacheCleanupRepository(session).register_generation(
                 generation_id,
                 worker_id=worker_id,
                 storage_id=storage_id,
                 workspace_id=self._workspace_scope(principal),
                 now=now,
+            )
+
+    @staticmethod
+    def _assert_storage_owner(
+        session: DatabaseSession,
+        *,
+        worker_id: str,
+        storage_id: str,
+    ) -> None:
+        """Reject a storage id that cache retirement could never resolve.
+
+        Retirement resolves a generation strictly by its owner identity, so a
+        registration whose storage id names a different owner produces a generation
+        no machine termination can retire, leaving that workspace's cleanup pending
+        forever.
+        """
+        try:
+            owner = WorkerCacheStorageOwnerRecord.from_storage_id(storage_id)
+        except ValueError as exc:
+            raise InvalidInputError(str(exc)) from exc
+        if owner.kind is not WorkerCacheStorageOwnerKind.Machine:
+            return
+        worker = WorkerRepository(session).get_across_workspaces(worker_id)
+        if worker is None or not worker.machine_id:
+            return
+        if owner.owner_id != worker.machine_id:
+            raise InvalidInputError(
+                "worker cache storage owner does not match the worker's machine"
             )
 
     def claim(
