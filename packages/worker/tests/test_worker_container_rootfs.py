@@ -295,3 +295,27 @@ def test_backing_store_below_the_xfs_minimum_is_rejected_by_name(tmp_path: Path)
 
     with pytest.raises(ContainerRootfsError, match="too small for xfs"):
         manager.prepare(container_id="ctr-1", image_id="image-1")
+
+
+def test_container_tmpfs_is_bounded_by_the_memory_request() -> None:
+    """An unsized tmpfs lets a container reach its whole memory ceiling through it."""
+    from worker.oci_runtime import _container_tmpfs_size_mib
+    from worker.runtime_config import DEFAULT_CONTAINER_TMPFS_SIZE_MIB, build_base_oci_config
+
+    assert _container_tmpfs_size_mib(0) == DEFAULT_CONTAINER_TMPFS_SIZE_MIB
+    assert _container_tmpfs_size_mib(1024) == 512
+    # Never unbounded, and never larger than the request it was derived from.
+    assert _container_tmpfs_size_mib(16384) < 16384
+
+    config = build_base_oci_config(tmpfs_size_mib=512)
+    mounts = config["mounts"]
+    assert isinstance(mounts, list)
+    sized = {}
+    for mount in mounts:
+        assert isinstance(mount, dict)
+        destination = mount.get("destination")
+        options = mount.get("options")
+        if destination in {"/volumes", "/dev/shm"} and isinstance(options, list):
+            sized[destination] = [opt for opt in options if str(opt).startswith("size=")]
+    assert sized["/volumes"] == ["size=512m"]
+    assert sized["/dev/shm"] == ["size=512m"]

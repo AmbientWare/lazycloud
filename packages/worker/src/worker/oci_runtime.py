@@ -68,6 +68,7 @@ from worker.managed_runtime_catalog import (
 from worker.runtime_config import (
     DEFAULT_CONTAINER_CLI_PATH,
     DEFAULT_CONTAINER_CLI_SOURCE,
+    DEFAULT_CONTAINER_TMPFS_SIZE_MIB,
     OciRuntimeName,
     RuntimeAvailability,
     RuntimeAvailabilityStatus,
@@ -312,6 +313,7 @@ class OciRuntimeSpecBuilder:
             readonly_rootfs=self.readonly_rootfs,
             container_cli_source=self._container_cli_source(),
             container_cli_path=self.container_cli_path,
+            tmpfs_size_mib=_container_tmpfs_size_mib(context.request.memory_mib),
         )
         supervisor_token_path = self._apply_sandbox_supervisor(context, spec, bundle_path)
         self._apply_sandbox_upload_mount(context, spec)
@@ -635,6 +637,18 @@ def _readonly_file_mount(source: Path, destination: str) -> OciMount:
         destination=destination,
         options=["ro", "rbind", "rprivate", "nosuid", "noexec", "nodev"],
     )
+
+
+def _container_tmpfs_size_mib(memory_mib: int) -> int:
+    """Bound in-container tmpfs by the container's own memory request.
+
+    tmpfs pages are charged to the allocating memory cgroup, so sizing these from
+    the request keeps a container's tmpfs use inside the budget it asked for
+    instead of letting it reach the whole memory ceiling.
+    """
+    if memory_mib <= 0:
+        return DEFAULT_CONTAINER_TMPFS_SIZE_MIB
+    return max(DEFAULT_CONTAINER_TMPFS_SIZE_MIB, memory_mib // 2)
 
 
 def _mount_destination_exists(spec: dict[str, JsonValue], destination: str) -> bool:
