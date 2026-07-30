@@ -322,6 +322,7 @@ class PodControlService:
                     ),
                     cpu_millicores=plan.cpu_millicores,
                     memory_mib=plan.memory_mib,
+                    disk_mib=plan.disk_mib,
                     gpu_type=config.runtime.requested_gpu_type,
                     gpu_request=plan.gpu_request,
                     gpu_count=plan.gpu_count,

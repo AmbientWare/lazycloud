@@ -105,6 +105,7 @@ class ShellStandaloneRequest(ContractModel):
     container_id_suffix: str = ""
     cpu_millicores: int = 0
     memory_mib: int = 0
+    disk_mib: int = 0
     gpu_request: tuple[str, ...] = ()
     gpu_count: int = 0
     requires_gpu: bool = False
@@ -120,6 +121,7 @@ class ShellStandalonePlan(ContractModel):
     idle_timeout_seconds: int
     cpu_millicores: int
     memory_mib: int
+    disk_mib: int = 0
     gpu_request: tuple[str, ...]
     gpu_count: int
     env: tuple[str, ...]
@@ -207,6 +209,7 @@ def plan_shell_standalone(request: ShellStandaloneRequest) -> ShellStandalonePla
         idle_timeout_seconds=SHELL_SERVER_IDLE_TIMEOUT_SECONDS,
         cpu_millicores=cpu,
         memory_mib=memory,
+        disk_mib=request.disk_mib,
         gpu_request=request.gpu_request,
         gpu_count=gpu_count,
         env=env,

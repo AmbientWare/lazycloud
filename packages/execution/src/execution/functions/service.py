@@ -398,6 +398,7 @@ class FunctionControlService:
                 deployment_id=stub.deployment_id or "",
                 cpu_millicores=container_plan.cpu_millicores,
                 memory_mib=container_plan.memory_mib,
+                disk_mib=container_plan.disk_mib,
                 gpu_type=config.runtime.requested_gpu_type,
                 gpu_request=container_plan.gpu_request,
                 gpu_count=container_plan.gpu_count,
