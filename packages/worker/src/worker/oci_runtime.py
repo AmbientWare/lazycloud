@@ -34,6 +34,7 @@ from worker.container_execution import (
     ContainerRuntimeRunResult,
     ContainerRuntimeStartError,
 )
+from worker.container_rootfs import ContainerRootfsSetupResult
 from worker.execution import (
     CONTAINER_INNER_PORT,
     ContainerEnvironmentRequest,
@@ -268,11 +269,12 @@ class OciRuntimeSpecBuilder:
         mount_result: ContainerMountSetupResult | None = None,
         network_result: ContainerNetworkSetupResult | None = None,
         gpu_result: ContainerGpuAssignmentResult | None = None,
+        rootfs_result: ContainerRootfsSetupResult | None = None,
     ) -> worker.oci_spec.OciRuntimeContainerSpec:
         _ = bind_ports
         runtime_config = _select_runtime_config(context.runtime, self.runtime_configs)
         bundle_path = self.bundle_root / context.request.container_id
-        root_path = self._root_path(context)
+        root_path = self._root_path(context, rootfs_result)
         env = self._runtime_env(
             context,
             bind_ports=bind_ports,
@@ -428,9 +430,23 @@ class OciRuntimeSpecBuilder:
             ],
         )
 
-    def _root_path(self, context: ContainerExecutionContext) -> str:
+    def _root_path(
+        self,
+        context: ContainerExecutionContext,
+        rootfs_result: ContainerRootfsSetupResult | None = None,
+    ) -> str:
+        # The per-container overlay merged view is the only correct writable root:
+        # the image mount root is shared by every container running that image.
+        if rootfs_result is not None and rootfs_result.prepared and rootfs_result.root_path:
+            return rootfs_result.root_path
         if context.request.image_id:
-            return str(self.image_mount_root / context.request.image_id)
+            msg = (
+                "container "
+                f"{context.request.container_id} has image "
+                f"{context.request.image_id} but no prepared root filesystem; refusing to "
+                "share the image directory as a writable root"
+            )
+            raise RuntimeError(msg)
         return "rootfs"
 
     def _container_cli_source(self) -> str | None:

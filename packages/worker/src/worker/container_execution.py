@@ -20,6 +20,11 @@ from shared.worker_events import WorkerEventRecord
 from storage_client.mounts import StorageMountResult
 
 from worker.container_logs import ContainerLogCaptureResult
+from worker.container_rootfs import (
+    ContainerRootfsReleaseResult,
+    ContainerRootfsSetupResult,
+    ContainerRootfsStatus,
+)
 from worker.events import (
     ContainerEventPayload,
     ContainerExecutionPhase,
@@ -110,6 +115,12 @@ class ContainerMountPreparer(Protocol):
     def setup_mounts(self, request: ContainerRequestContext) -> ContainerMountSetupResult: ...
 
 
+class ContainerRootfsPreparer(Protocol):
+    def prepare(self, *, container_id: str, image_id: str) -> ContainerRootfsSetupResult: ...
+
+    def release(self, container_id: str) -> ContainerRootfsReleaseResult: ...
+
+
 class ContainerWorkspaceStorageMounter(Protocol):
     def ensure_workspace_storage(
         self,
@@ -139,6 +150,7 @@ class ContainerSpecBuilder(Protocol):
         mount_result: ContainerMountSetupResult,
         network_result: ContainerNetworkSetupResult | None = None,
         gpu_result: ContainerGpuAssignmentResult | None = None,
+        rootfs_result: ContainerRootfsSetupResult | None = None,
     ) -> OciRuntimeContainerSpec: ...
 
 
@@ -315,6 +327,7 @@ class ContainerExecutionResult(ContractModel):
     network_result: ContainerNetworkSetupResult | None = None
     mount_result: ContainerMountSetupResult | None = None
     gpu_result: ContainerGpuAssignmentResult | None = None
+    rootfs_result: ContainerRootfsSetupResult | None = None
     oom_watcher: WorkerOomWatcherPlan | None = None
     oom_result: WorkerOomHandlingResult | None = None
     monitoring: ContainerRuntimeMonitoringResult | None = None
@@ -345,6 +358,7 @@ class WorkerContainerExecutionService:
     image_loader: ContainerImageLoader
     port_allocator: ContainerPortAllocator
     mount_preparer: ContainerMountPreparer
+    rootfs_preparer: ContainerRootfsPreparer
     spec_builder: ContainerSpecBuilder
     runtime: ContainerRuntimeExecutor
     finalizer: WorkerContainerFinalizationService
@@ -467,6 +481,15 @@ class WorkerContainerExecutionService:
             return result
         mount_result = mount_result_holder["mount_result"]
 
+        if not self._phase(
+            result,
+            ContainerExecutionPhase.PrepareRootfs,
+            lambda: self._set_rootfs_result(context, result),
+            request=context.request,
+        ):
+            self._finalize_startup_failure(result, context)
+            return result
+
         gpu_result_holder: dict[str, ContainerGpuAssignmentResult] = {}
         if not self._phase(
             result,
@@ -491,6 +514,7 @@ class WorkerContainerExecutionService:
                 mount_result,
                 network_result,
                 gpu_result,
+                result.rootfs_result,
             ),
             request=context.request,
         ):
@@ -698,6 +722,7 @@ class WorkerContainerExecutionService:
         mount_result: ContainerMountSetupResult,
         network_result: ContainerNetworkSetupResult | None,
         gpu_result: ContainerGpuAssignmentResult | None,
+        rootfs_result: ContainerRootfsSetupResult | None = None,
     ) -> None:
         holder["spec"] = self.spec_builder.build_spec(
             context,
@@ -706,7 +731,26 @@ class WorkerContainerExecutionService:
             mount_result=mount_result,
             network_result=network_result,
             gpu_result=gpu_result,
+            rootfs_result=rootfs_result,
         )
+
+    def _set_rootfs_result(
+        self,
+        context: ContainerExecutionContext,
+        result: ContainerExecutionResult,
+    ) -> None:
+        rootfs_result = self.rootfs_preparer.prepare(
+            container_id=context.request.container_id,
+            image_id=context.request.image_id,
+        )
+        result.rootfs_result = rootfs_result
+        if rootfs_result.status is ContainerRootfsStatus.Failed:
+            # Falling through would hand the container the shared image directory
+            # as its writable root, which is the isolation break this exists to
+            # prevent. Fail the startup instead.
+            raise RuntimeError(
+                rootfs_result.reason or "failed to prepare the container root filesystem"
+            )
 
     @staticmethod
     def _container_hostname(

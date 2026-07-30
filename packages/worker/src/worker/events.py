@@ -59,6 +59,7 @@ class ContainerExecutionPhase(StrEnum):
     PublishContainerRoutes = "publish-container-routes"
     SetupWorkspaceStorage = "setup-workspace-storage"
     SetupMounts = "setup-mounts"
+    PrepareRootfs = "prepare-rootfs"
     AssignGpu = "assign-gpu"
     BuildSpec = "build-spec"
     PrepareRuntime = "prepare-runtime"

@@ -71,6 +71,7 @@ from worker.container_metrics import (
     ProcessTreeContainerMetricsSourceFactory,
     WorkerContainerMetricsService,
 )
+from worker.container_rootfs import ContainerRootfsOverlayManager
 from worker.container_service.models import (
     SandboxDockerDaemonStatus,
     WorkerContainerServiceInstance,
@@ -1384,6 +1385,10 @@ def build_production_worker_process_services(
         mount_preparer=WorkerRequestMountPreparer(
             request_mounts,
             source_materializer,
+        ),
+        rootfs_preparer=ContainerRootfsOverlayManager(
+            image_mount_root=Path(config.resolved_image_mount_root),
+            scratch_root=config.configuration.paths.container_rootfs_root,
         ),
         spec_builder=OciRuntimeSpecBuilder(
             bundle_root=config.resolved_bundle_root,

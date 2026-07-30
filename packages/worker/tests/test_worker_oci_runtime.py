@@ -19,6 +19,10 @@ from worker.container_execution import (
     ContainerExecutionContext,
     ContainerMountSetupResult,
 )
+from worker.container_rootfs import (
+    ContainerRootfsSetupResult,
+    ContainerRootfsStatus,
+)
 from worker.events import ContainerRequestContext
 from worker.oci_runtime import (
     OciRuntimeCommandController,
@@ -91,6 +95,17 @@ def _context(tmp_path: Path) -> ContainerExecutionContext:
             memory_mib=512,
         ),
         runtime=OciRuntimeName.Runsc,
+    )
+
+
+def _prepared_rootfs(tmp_path: Path, container_id: str = "ctr-1") -> ContainerRootfsSetupResult:
+    merged = tmp_path / "container-rootfs" / container_id / "merged"
+    merged.mkdir(parents=True, exist_ok=True)
+    return ContainerRootfsSetupResult(
+        container_id=container_id,
+        status=ContainerRootfsStatus.Mounted,
+        root_path=str(merged),
+        upper_path=str(tmp_path / "container-rootfs" / container_id / "upper"),
     )
 
 
@@ -290,6 +305,7 @@ def test_oci_runtime_aborts_inflight_run_when_started_callback_rejects(
         port_bindings=[],
         mount_result=ContainerMountSetupResult(),
         network_result=None,
+        rootfs_result=_prepared_rootfs(tmp_path),
     )
     controller = OciRuntimeCommandController(
         run_command=runner.run,
@@ -361,6 +377,7 @@ def test_oci_runtime_bounds_hung_runsc_delete_during_start_abort(tmp_path: Path)
         bind_ports=[],
         port_bindings=[],
         mount_result=ContainerMountSetupResult(),
+        rootfs_result=_prepared_rootfs(tmp_path),
     )
     controller = OciRuntimeCommandController(
         runtime_config=runtime_config,
