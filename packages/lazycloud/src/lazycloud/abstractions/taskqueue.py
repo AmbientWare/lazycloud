@@ -9,6 +9,7 @@ from typing import Any, Generic, ParamSpec, Protocol, TypedDict, TypeVar, overlo
 from shared.autoscaling import QueueDepthAutoscaler
 from shared.compute_fleet import Pool
 from shared.deployment_records import (
+    DEFAULT_DISK,
     DEFAULT_TASK_QUEUE_CPU,
     DEFAULT_TASK_QUEUE_MEMORY,
     DeploymentSpec,
@@ -91,6 +92,7 @@ class TaskQueueOptions(TypedDict, total=False):
     name: str | None
     cpu: float | None
     memory: str | None
+    disk: str | None
     gpu: str | None
     gpu_count: int
     timeout: int | None
@@ -142,6 +144,7 @@ class TaskQueueFunction(Generic[P, R]):
     name: str | None = None
     cpu: float | None = DEFAULT_TASK_QUEUE_CPU
     memory: str | None = DEFAULT_TASK_QUEUE_MEMORY
+    disk: str | None = None
     gpu: str | None = None
     gpu_count: int = 0
     timeout: int | None = 3600
@@ -242,6 +245,7 @@ class TaskQueueFunction(Generic[P, R]):
             resources=Resources(
                 cpu=self.cpu,
                 memory=self.memory,
+                disk=self.disk or DEFAULT_DISK,
                 gpu=self.gpu,
                 gpu_count=self.gpu_count,
                 timeout_seconds=self.timeout,
@@ -590,6 +594,7 @@ def _task_queue(
     name: str | None = None,
     cpu: float | None = DEFAULT_TASK_QUEUE_CPU,
     memory: str | None = DEFAULT_TASK_QUEUE_MEMORY,
+    disk: str | None = None,
     gpu: str | None = None,
     gpu_count: int = 0,
     timeout: int | None = 3600,
@@ -637,6 +642,7 @@ def _task_queue(
     name: str | None = None,
     cpu: float | None = DEFAULT_TASK_QUEUE_CPU,
     memory: str | None = DEFAULT_TASK_QUEUE_MEMORY,
+    disk: str | None = None,
     gpu: str | None = None,
     gpu_count: int = 0,
     timeout: int | None = 3600,
@@ -683,6 +689,7 @@ def _task_queue(
     name: str | None = None,
     cpu: float | None = DEFAULT_TASK_QUEUE_CPU,
     memory: str | None = DEFAULT_TASK_QUEUE_MEMORY,
+    disk: str | None = None,
     gpu: str | None = None,
     gpu_count: int = 0,
     timeout: int | None = 3600,
@@ -727,6 +734,7 @@ def _task_queue(
             name=name,
             cpu=cpu,
             memory=memory,
+            disk=disk,
             gpu=gpu,
             gpu_count=gpu_count,
             timeout=timeout,

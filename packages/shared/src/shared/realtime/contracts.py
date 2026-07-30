@@ -56,6 +56,10 @@ class ContainerMetricsData(ContractModel):
     memory_total_bytes: int = 0
     disk_read_bytes: int = 0
     disk_write_bytes: int = 0
+    # Footprint, not throughput: disk_read_bytes/disk_write_bytes above are
+    # cumulative /proc io counters and say nothing about space consumed.
+    disk_used_bytes: int = 0
+    disk_total_bytes: int = 0
     network_recv_bytes: int = 0
     network_sent_bytes: int = 0
     network_recv_packets: int = 0

@@ -35,6 +35,7 @@ from worker.container_execution import (
     ContainerMountPreparer,
     ContainerNetworkPreparer,
     ContainerPortAllocator,
+    ContainerRootfsPreparer,
     ContainerRuntimeExecutor,
     ContainerSpecBuilder,
     ContainerWorkspaceStorageMounter,
@@ -118,6 +119,7 @@ class WorkerProcessExecutionDependencies:
     image_loader: ContainerImageLoader
     port_allocator: ContainerPortAllocator
     mount_preparer: ContainerMountPreparer
+    rootfs_preparer: ContainerRootfsPreparer
     spec_builder: ContainerSpecBuilder
     runtime_executor: ContainerRuntimeExecutor
     runtime_controller: WorkerContainerRuntimeController
@@ -241,6 +243,7 @@ def build_worker_process_services(
             sandbox_docker=container_service_dependencies.sandbox_docker,
             source_workspaces=finalization_dependencies.source_workspaces,
             workspace_storage=dependencies.workspace_storage_mounter,
+            container_rootfs=dependencies.rootfs_preparer,
         ),
     )
     execution = WorkerContainerExecutionService(
@@ -248,6 +251,7 @@ def build_worker_process_services(
         image_loader=dependencies.image_loader,
         port_allocator=dependencies.port_allocator,
         mount_preparer=dependencies.mount_preparer,
+        rootfs_preparer=dependencies.rootfs_preparer,
         spec_builder=dependencies.spec_builder,
         runtime=dependencies.runtime_executor,
         finalizer=finalizer,

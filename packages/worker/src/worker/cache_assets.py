@@ -38,6 +38,9 @@ class WorkspaceGeeseFsStorageConfig(ContractModel):
     binary: str = "geesefs"
     cache_root: str = "/var/lib/lazycloud/geesefs-cache"
     memory_limit_mb: int = 1024
+    # The worker's total memory, used to bound the mount's data cache. Zero
+    # means unknown, in which case the configured limit stands.
+    worker_memory_mib: int = 0
     max_flushers: int = 16
     stat_cache_ttl_seconds: int = 1
 

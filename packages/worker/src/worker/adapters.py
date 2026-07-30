@@ -27,6 +27,7 @@ from worker.container_execution import (
     ContainerExecutionContext,
     ContainerWorkspaceStorageMounter,
 )
+from worker.container_rootfs import ContainerRootfsReleaser
 from worker.container_service.models import WorkerContainerServiceInstance
 from worker.container_service.protocols import (
     LocalSandboxPortPublisher,
@@ -445,6 +446,7 @@ class WorkerFinalizationCleanup:
     sandbox_docker: WorkerSandboxDockerLifecycle | None = None
     source_workspaces: SourceWorkspaceLifecycle | None = None
     workspace_storage: ContainerWorkspaceStorageMounter | None = None
+    container_rootfs: ContainerRootfsReleaser | None = None
     upload_root: Path = Path(DEFAULT_WORKER_UPLOAD_ROOT)
 
     def release_gpu(self, container_id: str) -> None:
@@ -490,6 +492,15 @@ class WorkerFinalizationCleanup:
     def unmount_request_mounts(self, container_id: str) -> None:
         if self.request_mounts is not None:
             self.request_mounts.unmount_request_mounts(container_id)
+
+    def release_container_rootfs(self, container_id: str) -> None:
+        if self.container_rootfs is None:
+            return
+        result = self.container_rootfs.release(container_id)
+        if result.reason:
+            # A failed unmount is reported, never swallowed: leaving the overlay
+            # mounted strands the upper layer and its disk on this worker.
+            raise RuntimeError(result.reason)
 
     def delete_local_state(self, container_id: str) -> None:
         instance = (

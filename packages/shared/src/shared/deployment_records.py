@@ -19,6 +19,9 @@ from shared.lifecycle import LifecycleHooks
 from shared.tasks import RetryPolicy
 from shared.timestamps import utc_now
 
+# A per-container ceiling rather than an allocation, so one value serves every
+# workload kind; workloads that genuinely need more raise it explicitly.
+DEFAULT_DISK = "100Gi"
 DEFAULT_FUNCTION_CPU = 0.125
 DEFAULT_FUNCTION_AUTHORIZED = True
 DEFAULT_FUNCTION_MAX_PENDING_TASKS = 100
@@ -45,12 +48,23 @@ DEFAULT_TASK_QUEUE_TIMEOUT_SECONDS = 3600
 class Resources(ContractModel):
     cpu: float | None = None
     memory: str | None = None
+    disk: str = DEFAULT_DISK
     gpu: str | None = None
     gpu_count: int = 0
     timeout_seconds: int | None = None
     concurrency: int = 1
     keep_warm: int | None = None
     preemptible: bool = False
+
+    @field_validator("disk", mode="before")
+    @classmethod
+    def disk_defaults_to_the_platform_ceiling(cls, value: object) -> object:
+        # A record written without a ceiling reads back as the platform one.
+        # Every container has a limit, so an absent value is the default rather
+        # than an error or an unbounded container.
+        if value is None or value == "":
+            return DEFAULT_DISK
+        return value
 
     @field_validator("cpu")
     @classmethod
@@ -132,6 +146,17 @@ def resolve_memory(kind: DeploymentKind | str, value: str | int | None) -> str |
     if deployment_kind is DeploymentKind.TaskQueue:
         return DEFAULT_TASK_QUEUE_MEMORY
     return None
+
+
+def resolve_disk(value: str | int | None) -> str | int | None:
+    """Per-container disk ceiling.
+
+    Unlike cpu and memory this does not vary by workload kind: it is a runaway
+    guard, not a resource allocation, so the same ceiling applies everywhere.
+    """
+    if value is not None:
+        return value
+    return DEFAULT_DISK
 
 
 def resolve_timeout_seconds(kind: DeploymentKind | str, value: int | None) -> int | None:
@@ -267,6 +292,7 @@ class Deployment(ContractModel):
 
 
 __all__ = [
+    "DEFAULT_DISK",
     "DEFAULT_FUNCTION_AUTHORIZED",
     "DEFAULT_FUNCTION_CPU",
     "DEFAULT_FUNCTION_KEEP_WARM_SECONDS",
@@ -295,6 +321,7 @@ __all__ = [
     "default_keep_warm_seconds",
     "resolve_authorized",
     "resolve_cpu",
+    "resolve_disk",
     "resolve_http_wait_timeout_seconds",
     "resolve_keep_warm_seconds",
     "resolve_max_pending_tasks",

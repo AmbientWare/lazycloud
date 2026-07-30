@@ -200,13 +200,6 @@ class ProvisioningReservationCompletionPlan(ContractModel):
     reason: str = ""
 
 
-class ParsedTmpSizeLimit(ContractModel):
-    value_mib: int
-    source: str
-    used_default: bool = False
-    reason: str = ""
-
-
 def worker_id_for_job_pod(job: WorkerJobRef, pod: WorkerPodRef) -> str:
     return pod.labels.get(WORKER_LABEL_ID) or job.labels.get(WORKER_LABEL_ID, "")
 
@@ -587,35 +580,3 @@ def is_local_build_registry(registry: str) -> bool:
     parsed = urlparse(target)
     host = (parsed.hostname or registry.split(":", 1)[0]).lower()
     return host in {"localhost", "127.0.0.1", "::1"} or host.endswith(".localhost")
-
-
-def parse_tmp_size_limit_mib(
-    worker_pool_limit: str,
-    global_limit: str,
-    *,
-    default_limit: str = "128Gi",
-) -> ParsedTmpSizeLimit:
-    for source, value in (
-        ("worker-pool", worker_pool_limit),
-        ("global", global_limit),
-        ("default", default_limit),
-    ):
-        if not value:
-            continue
-        try:
-            return ParsedTmpSizeLimit(
-                value_mib=parse_scheduler_memory_mib(value),
-                source=source,
-                used_default=source == "default",
-                reason="parsed tmp size limit",
-            )
-        except ValueError:
-            if source == "default":
-                raise
-            continue
-    return ParsedTmpSizeLimit(
-        value_mib=parse_scheduler_memory_mib(default_limit),
-        source="default",
-        used_default=True,
-        reason="used default tmp size limit",
-    )

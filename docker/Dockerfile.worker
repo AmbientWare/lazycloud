@@ -343,6 +343,7 @@ RUN apt-get update \
         slirp4netns \
         tini \
         uidmap \
+        xfsprogs \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=container-worker-tools /out/usr/local/bin/geesefs /usr/local/bin/geesefs
 COPY --from=container-worker-tools /out/usr/local/bin/mount-s3 /usr/local/bin/mount-s3

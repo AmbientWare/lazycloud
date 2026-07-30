@@ -59,6 +59,8 @@ export const containerMetricsPointSchema = z.object({
   network_sent_bytes: z.number().default(0),
   disk_read_bytes: z.number().default(0),
   disk_write_bytes: z.number().default(0),
+  disk_used_bytes: z.number().default(0),
+  disk_total_bytes: z.number().default(0),
   gpu_memory_used_bytes: z.number().default(0),
   gpu_memory_total_bytes: z.number().default(0),
   gpu_type: z.string().default(""),

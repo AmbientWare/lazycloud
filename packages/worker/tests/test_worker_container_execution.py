@@ -29,6 +29,11 @@ from worker.container_execution import (
     WorkerContainerExecutionService,
 )
 from worker.container_logs import WorkerContainerLogCaptureService
+from worker.container_rootfs import (
+    ContainerRootfsReleaseResult,
+    ContainerRootfsSetupResult,
+    ContainerRootfsStatus,
+)
 from worker.events import (
     ContainerEventPayload,
     ContainerExitCode,
@@ -205,9 +210,42 @@ class WorkspaceStorageMounter:
 
 
 @dataclass(slots=True)
+class RootfsPreparer:
+    log: CallLog
+    released: list[str] = field(default_factory=list)
+    disk_limits: list[int] = field(default_factory=list)
+
+    def prepare(
+        self,
+        *,
+        container_id: str,
+        image_id: str,
+        disk_limit_bytes: int = 0,
+    ) -> ContainerRootfsSetupResult:
+        _ = image_id
+        self.disk_limits.append(disk_limit_bytes)
+        self.log.calls.append(f"rootfs:{container_id}")
+        return ContainerRootfsSetupResult(
+            container_id=container_id,
+            status=ContainerRootfsStatus.Mounted,
+            root_path=f"/var/lib/lazycloud/container-rootfs/{container_id}/merged",
+            upper_path=f"/var/lib/lazycloud/container-rootfs/{container_id}/upper",
+        )
+
+    def release(self, container_id: str) -> ContainerRootfsReleaseResult:
+        self.released.append(container_id)
+        return ContainerRootfsReleaseResult(
+            container_id=container_id,
+            unmounted=True,
+            removed=True,
+        )
+
+
+@dataclass(slots=True)
 class SpecBuilder:
     log: CallLog
     gpu_result: ContainerGpuAssignmentResult | None = None
+    rootfs_result: ContainerRootfsSetupResult | None = None
 
     def build_spec(
         self,
@@ -218,8 +256,10 @@ class SpecBuilder:
         mount_result: ContainerMountSetupResult,
         network_result: ContainerNetworkSetupResult | None = None,
         gpu_result: ContainerGpuAssignmentResult | None = None,
+        rootfs_result: ContainerRootfsSetupResult | None = None,
     ) -> OciRuntimeContainerSpec:
         self.log.calls.append(f"spec:{context.request.container_id}")
+        self.rootfs_result = rootfs_result
         self.gpu_result = gpu_result
         container_id = context.request.container_id
         bundle_path = f"/tmp/{container_id}"
@@ -491,6 +531,10 @@ class Cleanup:
         _ = container_id
         self.calls.append(ContainerFinalizationStep.UnmountRequestMounts)
 
+    def release_container_rootfs(self, container_id: str) -> None:
+        _ = container_id
+        self.calls.append(ContainerFinalizationStep.ReleaseContainerRootfs)
+
     def delete_local_state(self, container_id: str) -> None:
         _ = container_id
         self.calls.append(ContainerFinalizationStep.DeleteLocalState)
@@ -538,6 +582,7 @@ def test_worker_container_execution_service_runs_full_lifecycle() -> None:
         ContainerExecutionPhase.SetupNetwork,
         ContainerExecutionPhase.SetupWorkspaceStorage,
         ContainerExecutionPhase.SetupMounts,
+        ContainerExecutionPhase.PrepareRootfs,
         ContainerExecutionPhase.AssignGpu,
         ContainerExecutionPhase.BuildSpec,
         ContainerExecutionPhase.PrepareRuntime,
@@ -554,6 +599,7 @@ def test_worker_container_execution_service_runs_full_lifecycle() -> None:
         "image:ctr-1",
         "ports:2",
         "mounts:ctr-1",
+        "rootfs:ctr-1",
         "spec:ctr-1",
         "runtime-prepare",
         "runtime-run",
@@ -759,6 +805,7 @@ def test_worker_container_execution_cleans_runtime_when_cancelled_after_start() 
         ContainerFinalizationStep.ForceKillIfRunning,
         ContainerFinalizationStep.StopOomWatcher,
         ContainerFinalizationStep.UnmountRequestMounts,
+        ContainerFinalizationStep.ReleaseContainerRootfs,
         ContainerFinalizationStep.DeleteLocalState,
     ]
 
@@ -933,6 +980,7 @@ def _service(
     runtime_result: ContainerRuntimeRunResult | None = None,
     runtime_failure: ContainerRuntimeStartError | None = None,
     mount_preparer: MountPreparer | None = None,
+    rootfs_preparer: RootfsPreparer | None = None,
     oom_supervisor: WorkerSupervisionService | None = None,
     exit_events: ExitEvents | None = None,
     route_publisher: RoutePublisher | None = None,
@@ -955,6 +1003,7 @@ def _service(
         image_loader=image_loader or ImageLoader(log, image_result or ContainerImageLoadResult()),
         port_allocator=PortAllocator(log),
         mount_preparer=mount_preparer or MountPreparer(log),
+        rootfs_preparer=rootfs_preparer or RootfsPreparer(log),
         spec_builder=spec_builder or SpecBuilder(log),
         runtime=RuntimeExecutor(
             log,

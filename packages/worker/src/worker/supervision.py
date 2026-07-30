@@ -400,6 +400,8 @@ def usage_record_kind(metric: WorkerUsageMetricName) -> tuple[UsageMetric, Usage
         return (UsageMetric.MemoryGibSeconds, UsageUnit.GibSeconds)
     if metric is WorkerUsageMetricName.Gpu:
         return (UsageMetric.GpuSeconds, UsageUnit.Seconds)
+    if metric is WorkerUsageMetricName.ContainerDisk:
+        return (UsageMetric.ContainerDiskByteSeconds, UsageUnit.ByteSeconds)
     if metric is WorkerUsageMetricName.CpuUsed:
         return (UsageMetric.CpuUsedCoreSeconds, UsageUnit.Seconds)
     if metric is WorkerUsageMetricName.MemoryRss:

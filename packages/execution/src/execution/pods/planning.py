@@ -42,6 +42,7 @@ class PodContainerStartRequest(ContractModel):
     entrypoint: list[str] = Field(default_factory=list)
     cpu_millicores: int = Field(default=0, ge=0)
     memory_mib: int = Field(default=0, ge=0)
+    disk_mib: int = Field(default=0, ge=0)
     requires_gpu: bool = False
     gpu_count: int = Field(default=0, ge=0)
     gpu_request: list[str] = Field(default_factory=list)
@@ -58,6 +59,7 @@ class PodContainerStartPlan(ContractModel):
     env: list[str]
     cpu_millicores: int
     memory_mib: int
+    disk_mib: int = 0
     gpu_count: int
     gpu_request: list[str]
     image_id: str
@@ -151,6 +153,7 @@ def plan_pod_container_start(request: PodContainerStartRequest) -> PodContainerS
         ],
         cpu_millicores=request.cpu_millicores,
         memory_mib=request.memory_mib,
+        disk_mib=request.disk_mib,
         gpu_count=gpu_count,
         gpu_request=request.gpu_request,
         image_id=request.image_id,

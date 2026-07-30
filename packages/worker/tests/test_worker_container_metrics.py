@@ -13,6 +13,9 @@ from worker.events import (
     GpuMemoryCounters,
     WorkerPoolMode,
     WorkerUsageEvidence,
+    WorkerUsageMetricName,
+    WorkerUsageMetricPlan,
+    plan_worker_usage_metrics,
 )
 from worker.monitoring import ContainerRuntimeMonitorSettings, WorkerContainerRuntimeMonitor
 from worker.supervision import WorkerUsageEmissionResult
@@ -46,6 +49,17 @@ class SequenceMetricsSourceFactory:
     def metrics_source_for_pid(self, pid: int) -> SequenceMetricsSource:
         self.pids.append(pid)
         return self.source
+
+
+@dataclass(slots=True)
+class ConstantDiskUsage:
+    """Reports the bytes a container's own layer occupies, as the quota does."""
+
+    used_bytes_by_container: int
+
+    def used_bytes(self, container_id: str) -> int:
+        _ = container_id
+        return self.used_bytes_by_container
 
 
 @dataclass(slots=True)
@@ -167,7 +181,11 @@ def test_worker_container_runtime_monitor_publishes_metrics_and_usage_on_stop() 
     source_factory = SequenceMetricsSourceFactory(source)
     usage = UsageRecorder()
     monitor = WorkerContainerRuntimeMonitor(
-        metrics=WorkerContainerMetricsService(worker_id="worker-1", sink=sink),
+        metrics=WorkerContainerMetricsService(
+            worker_id="worker-1",
+            sink=sink,
+            disk_usage=ConstantDiskUsage(used_bytes_by_container=64 * 1024**2),
+        ),
         metrics_source_factory=source_factory,
         usage_recorder=usage,
         settings=ContainerRuntimeMonitorSettings(sample_interval_seconds=60),
@@ -198,9 +216,13 @@ def test_worker_container_runtime_monitor_publishes_metrics_and_usage_on_stop() 
     assert usage.evidence[0].disk_read_bytes == 4
     assert usage.evidence[0].network_ingress_bytes == 8
     assert usage.evidence[0].cpu_used_core_seconds > 0
+    # Disk occupancy has to survive both the per-container rebind of the metrics
+    # service and the accumulation into the window, or it is billed as zero.
+    assert usage.evidence[0].disk_used_byte_seconds > 0
     assert sink.payloads
     assert sink.payloads[-1].container_id == "ctr-1"
     assert sink.payloads[-1].metrics.disk_read_bytes == 4
+    assert sink.payloads[-1].metrics.disk_used_bytes == 64 * 1024**2
 
 
 def test_worker_container_metrics_service_primes_without_publishing_first_sample() -> None:
@@ -225,3 +247,69 @@ def test_worker_container_metrics_service_primes_without_publishing_first_sample
     assert sink.payloads == []
     assert result.next_state.process_io.disk_read_bytes == 100
     assert result.next_state.network_io.bytes_recv == 100
+
+
+def test_billing_takes_the_greater_of_reservation_and_measured_usage() -> None:
+    """A request is a floor, so a bursting container must not bill as if capped."""
+    request = ContainerRequestContext(
+        container_id="ctr-1",
+        workspace_id="ws-1",
+        cpu_millicores=125,
+        memory_mib=128,
+    )
+
+    def value_of(
+        plans: tuple[WorkerUsageMetricPlan, ...],
+        name: WorkerUsageMetricName,
+    ) -> float:
+        for plan in plans:
+            if plan.name is name:
+                return plan.value
+        raise AssertionError(f"{name} was not emitted")
+
+    # Idle: the reservation is the floor.
+    idle = plan_worker_usage_metrics(
+        worker_id="w",
+        request=request,
+        duration_ms=10_000,
+        evidence=WorkerUsageEvidence(cpu_used_core_seconds=0.1),
+    )
+    assert value_of(idle, WorkerUsageMetricName.Cpu) == 1.25
+
+    # Bursting past the request bills the usage, not the reservation.
+    bursting = plan_worker_usage_metrics(
+        worker_id="w",
+        request=request,
+        duration_ms=10_000,
+        evidence=WorkerUsageEvidence(
+            cpu_used_core_seconds=80.0,
+            memory_rss_byte_seconds=8 * 1024**3,
+        ),
+    )
+    assert value_of(bursting, WorkerUsageMetricName.Cpu) == 80.0
+    assert value_of(bursting, WorkerUsageMetricName.Memory) == 8.0
+
+
+def test_ephemeral_disk_bills_what_was_used_not_the_oversubscribed_ceiling() -> None:
+    """The disk cap is oversubscribed by design, so only real occupancy is billable."""
+    request = ContainerRequestContext(
+        container_id="ctr-1",
+        workspace_id="ws-1",
+        cpu_millicores=125,
+        memory_mib=128,
+        disk_limit_bytes=100 * 1024**3,
+    )
+    plans = plan_worker_usage_metrics(
+        worker_id="w",
+        request=request,
+        duration_ms=10_000,
+        evidence=WorkerUsageEvidence(disk_used_byte_seconds=5 * 1024**3),
+    )
+    emitted = {plan.name: plan.value for plan in plans}
+    assert emitted[WorkerUsageMetricName.ContainerDisk] == float(5 * 1024**3)
+
+    # No occupancy, nothing billed: the ceiling alone is never charged.
+    idle = plan_worker_usage_metrics(
+        worker_id="w", request=request, duration_ms=10_000, evidence=WorkerUsageEvidence()
+    )
+    assert WorkerUsageMetricName.ContainerDisk not in {plan.name for plan in idle}

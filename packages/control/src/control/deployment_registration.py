@@ -14,6 +14,7 @@ from shared.deployment_records import (
     VolumeMount,
     resolve_authorized,
     resolve_cpu,
+    resolve_disk,
     resolve_keep_warm_seconds,
     resolve_max_pending_tasks,
     resolve_memory,
@@ -215,6 +216,7 @@ def _stub_config_from_deployment_spec(spec: DeploymentSpec) -> StubConfig:
             "runtime": {
                 "cpu": resolve_cpu(spec.kind, resources.cpu),
                 "memory": resolve_memory(spec.kind, resources.memory),
+                "disk": resolve_disk(resources.disk),
                 "gpu": resources.gpu,
                 "gpu_count": resources.gpu_count,
                 "timeout_seconds": resolve_timeout_seconds(spec.kind, resources.timeout_seconds)

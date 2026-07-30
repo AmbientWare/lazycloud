@@ -77,11 +77,18 @@ class ContainerMetricsSampleResult(ContractModel):
     reason: str = ""
 
 
+class ContainerDiskUsageSource(Protocol):
+    def used_bytes(self, container_id: str) -> int: ...
+
+
 @dataclass(slots=True)
 class WorkerContainerMetricsService:
     worker_id: str
     sink: ContainerMetricsSink
     source: ContainerMetricsSource | None = None
+    # Reports the bytes a container's own layer occupies, so ephemeral disk is
+    # billed on what was actually used rather than on an oversubscribed cap.
+    disk_usage: ContainerDiskUsageSource | None = None
 
     def prime(
         self,
@@ -106,6 +113,16 @@ class WorkerContainerMetricsService:
             sample_interval_ms=sample_interval_ms,
         )
 
+    def _disk_used_bytes(self, container_id: str) -> int:
+        if self.disk_usage is None:
+            return 0
+        try:
+            return self.disk_usage.used_bytes(container_id)
+        except Exception:
+            # Metrics are reported best effort; a usage read must never take the
+            # container down.
+            return 0
+
     def publish_sample(
         self,
         request: ContainerRequestContext,
@@ -127,6 +144,7 @@ class WorkerContainerMetricsService:
             sample=sample,
             previous=previous,
             sample_interval_ms=sample_interval_ms,
+            disk_used_bytes=self._disk_used_bytes(request.container_id),
         )
         self.sink.publish_container_metrics(payload)
         return ContainerMetricsSampleResult(
@@ -369,6 +387,7 @@ def container_metrics_payload_from_sample(
     sample: ContainerMetricsRawSample,
     previous: ContainerMetricsCounterState,
     sample_interval_ms: int,
+    disk_used_bytes: int = 0,
 ) -> ContainerMetricsPayload:
     return build_container_metrics_payload(
         worker_id=worker_id,
@@ -381,6 +400,7 @@ def container_metrics_payload_from_sample(
         process_io=process_io_delta(sample.process_io, previous.process_io),
         network_io=network_io_delta(sample.network_io, previous.network_io),
         gpu_memory=sample.gpu_memory,
+        disk_used_bytes=max(disk_used_bytes, 0),
     )
 
 

@@ -709,6 +709,7 @@ def _stub_request_from_spec(
         image_ignore_python=image.ignore_python,
         cpu=spec.resources.cpu,
         memory=spec.resources.memory,
+        disk=spec.resources.disk,
         gpu=spec.resources.gpu or "",
         gpu_count=spec.resources.gpu_count,
         handler=spec.handler or "",

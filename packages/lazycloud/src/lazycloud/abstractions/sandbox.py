@@ -12,7 +12,7 @@ from typing import Any, Protocol, TypedDict
 import yaml
 from pydantic import JsonValue
 from shared.app_identity import SANDBOX_COMPOSE_OVERRIDE_PATH
-from shared.deployment_records import DeploymentSpec, Resources, VolumeMount
+from shared.deployment_records import DEFAULT_DISK, DeploymentSpec, Resources, VolumeMount
 from shared.deployments import DeploymentKind
 from shared.http import pods
 from shared.http.errors import HttpApiError
@@ -209,6 +209,7 @@ class SandboxPodClient(Protocol):
 class SandboxOptions(TypedDict, total=False):
     cpu: int | float | str
     memory: int | str
+    disk: str | None
     gpu: str | None
     gpu_count: int
     image: Image | None
@@ -1525,6 +1526,7 @@ class Sandbox(ControlClientConfigMixin):
     ports: list[int] = field(default_factory=list)
     cpu: float | None = None
     memory: str | None = None
+    disk: str | None = None
     gpu: str | None = None
     gpu_count: int = 0
     keep_warm_seconds: int = 600
@@ -1557,6 +1559,7 @@ class Sandbox(ControlClientConfigMixin):
         _app_slug: str,
         cpu: int | float | str = 1.0,
         memory: int | str = 128,
+        disk: str | None = None,
         gpu: str | None = None,
         gpu_count: int = 0,
         image: Image | None = None,
@@ -1588,6 +1591,7 @@ class Sandbox(ControlClientConfigMixin):
         self.ports = _sandbox_ports(ports or [])
         self.cpu = _cpu_value(cpu)
         self.memory = _memory_value(memory)
+        self.disk = disk
         self.gpu = gpu
         self.gpu_count = gpu_count
         self.keep_warm_seconds = keep_warm_seconds
@@ -1631,6 +1635,7 @@ class Sandbox(ControlClientConfigMixin):
             resources=Resources(
                 cpu=self.cpu,
                 memory=self.memory,
+                disk=self.disk or DEFAULT_DISK,
                 gpu=self.gpu,
                 gpu_count=self.gpu_count,
                 keep_warm=self.keep_warm_seconds,

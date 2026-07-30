@@ -199,6 +199,7 @@ def test_checkpoint_gpu_limit_rejects_before_scheduler_submission(
                 checkpoint_readiness_path="/ready",
                 checkpoint_readiness_port=8080,
                 gpu_count=2,
+                disk_mib=2048,
             ),
         )
 

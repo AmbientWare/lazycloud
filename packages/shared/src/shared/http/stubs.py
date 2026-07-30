@@ -37,6 +37,7 @@ class StubRuntimeConfigResponse(HttpModel):
 
     cpu: int | float | None = None
     memory: int | str | None = None
+    disk: int | str | None = None
     gpu: str | None = None
     gpu_count: int | None = None
     keep_warm: int | None = Field(default=None, ge=-1)

@@ -59,6 +59,7 @@ class ContainerExecutionPhase(StrEnum):
     PublishContainerRoutes = "publish-container-routes"
     SetupWorkspaceStorage = "setup-workspace-storage"
     SetupMounts = "setup-mounts"
+    PrepareRootfs = "prepare-rootfs"
     AssignGpu = "assign-gpu"
     BuildSpec = "build-spec"
     PrepareRuntime = "prepare-runtime"
@@ -106,6 +107,7 @@ class WorkerUsageMetricName(StrEnum):
     NetworkEgress = "network_egress_bytes"
     NetworkIngressPackets = "network_ingress_packets"
     NetworkEgressPackets = "network_egress_packets"
+    ContainerDisk = "container_disk_byte_seconds"
     DiskRead = "disk_read_bytes"
     DiskWrite = "disk_write_bytes"
 
@@ -178,11 +180,12 @@ class ContainerRequestContext(ContractModel):
     workspace_storage_base_mount_path: str = DEFAULT_WORKSPACE_STORAGE_BASE_MOUNT_PATH
     cpu_millicores: int = 0
     memory_mib: int = 0
+    disk_limit_bytes: int = 0
     gpu: str = ""
     gpu_count: int = 0
     cost_per_ms: float = 0.0
 
-    @field_validator("cpu_millicores", "memory_mib", "gpu_count")
+    @field_validator("cpu_millicores", "memory_mib", "disk_limit_bytes", "gpu_count")
     @classmethod
     def non_negative_ints(cls, value: int) -> int:
         if value < 0:
@@ -239,6 +242,8 @@ class WorkerUsageEvidence(ContractModel):
     cpu_used_core_seconds: float = 0
     memory_rss_byte_seconds: float = 0
     memory_swap_byte_seconds: float = 0
+    # Ephemeral container disk actually occupied, for the window.
+    disk_used_byte_seconds: float = 0
     gpu_memory_byte_seconds: float = 0
     network_ingress_bytes: int = 0
     network_egress_bytes: int = 0
@@ -266,20 +271,15 @@ class WorkerUsageEvidence(ContractModel):
         return self
 
     def plus(self, other: WorkerUsageEvidence) -> WorkerUsageEvidence:
-        return WorkerUsageEvidence(
-            cpu_used_core_seconds=(self.cpu_used_core_seconds + other.cpu_used_core_seconds),
-            memory_rss_byte_seconds=(self.memory_rss_byte_seconds + other.memory_rss_byte_seconds),
-            memory_swap_byte_seconds=(
-                self.memory_swap_byte_seconds + other.memory_swap_byte_seconds
-            ),
-            gpu_memory_byte_seconds=(self.gpu_memory_byte_seconds + other.gpu_memory_byte_seconds),
-            network_ingress_bytes=self.network_ingress_bytes + other.network_ingress_bytes,
-            network_egress_bytes=self.network_egress_bytes + other.network_egress_bytes,
-            network_ingress_packets=(self.network_ingress_packets + other.network_ingress_packets),
-            network_egress_packets=(self.network_egress_packets + other.network_egress_packets),
-            disk_read_bytes=self.disk_read_bytes + other.disk_read_bytes,
-            disk_write_bytes=self.disk_write_bytes + other.disk_write_bytes,
-        )
+        """Accumulate one sample into a metering window.
+
+        Summed field-wise off the model itself: enumerating fields by hand meant a
+        newly added counter was silently dropped from every window it appeared in.
+        """
+        totals = {
+            name: getattr(self, name) + getattr(other, name) for name in type(self).model_fields
+        }
+        return WorkerUsageEvidence(**totals)
 
 
 class WorkerGrpcConnectionPlan(ContractModel):
@@ -564,6 +564,7 @@ def build_container_metrics_payload(
     process_io: ProcessIoCounters | None = None,
     network_io: NetworkIoCounters | None = None,
     gpu_memory: GpuMemoryCounters | None = None,
+    disk_used_bytes: int = 0,
 ) -> ContainerMetricsPayload:
     process = process_io or ProcessIoCounters()
     network = network_io or NetworkIoCounters()
@@ -588,6 +589,8 @@ def build_container_metrics_payload(
             memory_total_bytes=request.memory_mib * 1024 * 1024,
             disk_read_bytes=process.disk_read_bytes,
             disk_write_bytes=process.disk_write_bytes,
+            disk_used_bytes=disk_used_bytes,
+            disk_total_bytes=request.disk_limit_bytes,
             network_recv_bytes=network.bytes_recv,
             network_sent_bytes=network.bytes_sent,
             network_recv_packets=network.packets_recv,
@@ -635,6 +638,19 @@ def plan_worker_usage_metrics(
         "cost_for_duration": effective_cost_per_ms * duration_ms,
     }
     duration_seconds = duration_ms / 1_000
+    measured = evidence or WorkerUsageEvidence()
+    # A request is a floor, not a cap: a container can burst well past what it
+    # reserved, so billing the reservation alone would undercount the burst. Bill
+    # the greater of the two, per window, so a short burst is not charged as if it
+    # lasted the whole container.
+    billable_cpu_core_seconds = max(
+        request.cpu_millicores / 1_000 * duration_seconds,
+        measured.cpu_used_core_seconds,
+    )
+    billable_memory_gib_seconds = max(
+        request.memory_mib / 1_024 * duration_seconds,
+        measured.memory_rss_byte_seconds / 1_024**3,
+    )
     plans = [
         WorkerUsageMetricPlan(
             name=WorkerUsageMetricName.ContainerDuration,
@@ -644,12 +660,12 @@ def plan_worker_usage_metrics(
         WorkerUsageMetricPlan(
             name=WorkerUsageMetricName.Cpu,
             labels=labels,
-            value=request.cpu_millicores / 1_000 * duration_seconds,
+            value=billable_cpu_core_seconds,
         ),
         WorkerUsageMetricPlan(
             name=WorkerUsageMetricName.Memory,
             labels=labels,
-            value=request.memory_mib / 1_024 * duration_seconds,
+            value=billable_memory_gib_seconds,
         ),
         WorkerUsageMetricPlan(
             name=WorkerUsageMetricName.Gpu,
@@ -665,7 +681,14 @@ def plan_worker_usage_metrics(
                 value=effective_cost_per_ms * duration_ms,
             )
         )
-    measured = evidence or WorkerUsageEvidence()
+    if measured.disk_used_byte_seconds > 0:
+        plans.append(
+            WorkerUsageMetricPlan(
+                name=WorkerUsageMetricName.ContainerDisk,
+                labels=labels,
+                value=measured.disk_used_byte_seconds,
+            )
+        )
     evidence_values = (
         (WorkerUsageMetricName.CpuUsed, measured.cpu_used_core_seconds),
         (WorkerUsageMetricName.MemoryRss, measured.memory_rss_byte_seconds),

@@ -153,6 +153,7 @@ class ShellControlService:
                 requested_ports=[SHELL_WORKER_PORT],
                 cpu_millicores=plan.cpu_millicores,
                 memory_mib=plan.memory_mib,
+                disk_mib=plan.disk_mib,
                 gpu_request=list(plan.gpu_request),
                 gpu_count=plan.gpu_count,
                 requested_placement=stub.config.placement,

@@ -45,6 +45,7 @@ from shared.tasks import TaskStatus
 from shared.timestamps import utc_now
 
 from execution.containers.planning import (
+    DEFAULT_CONTAINER_DISK_MIB,
     ContainerSchedulingOptions,
     resolve_oci_runtime,
     validate_checkpoint_request,
@@ -170,6 +171,7 @@ class ContainerService:
         timeout_seconds: int | None = None,
         cpu_millicores: int = 0,
         memory_mib: int = 0,
+        disk_mib: int = DEFAULT_CONTAINER_DISK_MIB,
         gpu_type: str = "",
         gpu_request: Iterable[str] | None = None,
         gpu_count: int = 0,
@@ -236,6 +238,7 @@ class ContainerService:
                 requested_ports=list(ports.values()) if ports else None,
                 cpu_millicores=cpu_millicores,
                 memory_mib=memory_mib,
+                disk_mib=disk_mib,
                 gpu_type=gpu_type,
                 gpu_request=list(gpu_request) if gpu_request is not None else None,
                 gpu_count=gpu_count,
@@ -351,6 +354,9 @@ class ContainerService:
             workspace_storage_required=options.workspace_storage_required,
             workspace_storage_available=options.workspace_storage_available,
             workspace_storage_base_mount_path=options.workspace_storage_base_mount_path,
+            # Disk is a per-container ceiling rather than scheduled capacity, so it
+            # travels in the worker payload and not on the scheduler request.
+            disk_limit_bytes=options.disk_mib * 1024 * 1024,
         )
         request = SchedulerWorkerRequest(
             workspace_id=record.workspace_id,
