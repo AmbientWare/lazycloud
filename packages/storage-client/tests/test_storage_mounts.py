@@ -27,3 +27,35 @@ def test_mount_fails_immediately_when_the_endpoint_host_does_not_resolve() -> No
     assert result.status is StorageMountStatus.Failed
     assert "mount-endpoint.invalid" in result.reason
     assert "does not resolve" in result.reason
+
+
+def test_geesefs_data_cache_is_bounded_by_worker_memory() -> None:
+    """A fixed limit claims the same RAM on every worker, which a small one cannot spare."""
+    from storage_client.mounts import GEESEFS_MIN_MEMORY_LIMIT_MB, geesefs_memory_limit_mb
+
+    # Half the worker, so the mount never takes the machine.
+    assert geesefs_memory_limit_mb(configured_mb=1024, worker_memory_mib=2048) == 1024
+    assert geesefs_memory_limit_mb(configured_mb=1024, worker_memory_mib=1024) == 512
+    # The configured value is a ceiling, never raised by a large worker.
+    assert geesefs_memory_limit_mb(configured_mb=512, worker_memory_mib=65536) == 512
+    # A tiny worker still gets a usable cache, but never more than it has.
+    assert geesefs_memory_limit_mb(configured_mb=1024, worker_memory_mib=64) <= 64
+    assert geesefs_memory_limit_mb(configured_mb=1024, worker_memory_mib=256) == (
+        GEESEFS_MIN_MEMORY_LIMIT_MB
+    )
+    # Unknown worker memory leaves the configured limit alone.
+    assert geesefs_memory_limit_mb(configured_mb=1024, worker_memory_mib=0) == 1024
+
+
+def test_geesefs_command_keeps_the_memory_limit_enforceable() -> None:
+    """Default readahead is allocated per reader and overruns the limit without these."""
+    from storage_client.mounts import GeeseFsMountConfig, geesefs_command
+
+    command = geesefs_command(GeeseFsMountConfig(bucket_name="b"), "/mnt/x")
+
+    assert "--use-enomem" in command
+    assert "--no-preload-dir" in command
+    assert any(part.startswith("--read-ahead-large=") for part in command), command
+    # The correctness flags this mount depends on must survive the tuning changes.
+    assert "--fsync-on-close" in command
+    assert any(part.startswith("--stat-cache-ttl=") for part in command), command

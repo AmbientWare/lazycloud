@@ -1373,6 +1373,7 @@ def build_production_worker_process_services(
             geesefs=WorkspaceGeeseFsStorageConfig(
                 binary=config.workspace_storage_geesefs_binary,
                 memory_limit_mb=config.workspace_storage_geesefs_memory_limit_mb,
+                worker_memory_mib=config.resolved_memory_mib,
             ),
         ),
     )

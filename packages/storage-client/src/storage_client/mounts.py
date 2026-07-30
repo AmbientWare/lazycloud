@@ -64,6 +64,29 @@ class StorageMountResult(ContractModel):
         }
 
 
+# 32MB, matching the readahead a production geesefs deployment settles on: large
+# enough for linear reads, small enough that concurrent readers stay inside the
+# memory limit.
+DEFAULT_GEESEFS_READ_AHEAD_LARGE_KB = 32 * 1024
+GEESEFS_MIN_MEMORY_LIMIT_MB = 128
+
+
+def geesefs_memory_limit_mb(*, configured_mb: int, worker_memory_mib: int) -> int:
+    """Bound the mount's data cache by the worker it runs on.
+
+    A fixed limit claims the same RAM on every worker, which on a small one is
+    most of the machine. Half the worker's memory, floored so a tiny worker
+    still gets a usable cache, and never above what was configured.
+    """
+    if worker_memory_mib <= 0:
+        return configured_mb
+    ceiling = max(worker_memory_mib // 2, GEESEFS_MIN_MEMORY_LIMIT_MB)
+    ceiling = min(ceiling, worker_memory_mib)
+    if configured_mb <= 0:
+        return ceiling
+    return min(configured_mb, ceiling)
+
+
 class GeeseFsMountConfig(ContractModel):
     """A workspace's own bucket, mounted so files map one-to-one onto S3 keys.
 
@@ -84,6 +107,13 @@ class GeeseFsMountConfig(ContractModel):
     memory_limit_mb: int = 1024
     max_flushers: int = 16
     stat_cache_ttl_seconds: int = 1
+    # GeeseFS defaults large readahead to 100MB, and it allocates that per
+    # concurrent reader, so a handful of parallel large reads overruns
+    # memory_limit_mb and makes the limit advisory rather than real.
+    read_ahead_large_kb: int = DEFAULT_GEESEFS_READ_AHEAD_LARGE_KB
+    # Make the limit refuse work instead of exceeding it.
+    enforce_memory_limit: bool = True
+    preload_directories: bool = False
     dir_mode: str = "0777"
     file_mode: str = "0666"
     binary: str = "geesefs"
@@ -256,7 +286,14 @@ def geesefs_command(config: GeeseFsMountConfig, local_path: str) -> list[str]:
         f"--stat-cache-ttl={config.stat_cache_ttl_seconds}s",
         f"--memory-limit={config.memory_limit_mb}",
         f"--max-flushers={config.max_flushers}",
+        f"--read-ahead-large={config.read_ahead_large_kb}",
     ]
+    if config.enforce_memory_limit:
+        command.append("--use-enomem")
+    if not config.preload_directories:
+        # Listing a large bucket up front costs metadata cache for entries no
+        # container asked for.
+        command.append("--no-preload-dir")
     if config.endpoint_url:
         command.append(f"--endpoint={config.endpoint_url}")
     if config.region:
