@@ -395,3 +395,17 @@ def test_ephemeral_disk_bills_what_was_used_not_the_oversubscribed_ceiling() -> 
         worker_id="w", request=request, duration_ms=10_000, evidence=WorkerUsageEvidence()
     )
     assert WorkerUsageMetricName.ContainerDisk not in {plan.name for plan in idle}
+
+
+def test_usage_evidence_accumulates_every_counter() -> None:
+    """A hand-written sum drops newly added counters from every metering window."""
+    from worker.events import WorkerUsageEvidence
+
+    fields = tuple(WorkerUsageEvidence.model_fields)
+    first = WorkerUsageEvidence(**{name: 1 for name in fields})
+    second = WorkerUsageEvidence(**{name: 2 for name in fields})
+
+    total = first.plus(second)
+
+    for name in fields:
+        assert getattr(total, name) == 3, name

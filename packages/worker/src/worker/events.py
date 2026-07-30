@@ -271,20 +271,16 @@ class WorkerUsageEvidence(ContractModel):
         return self
 
     def plus(self, other: WorkerUsageEvidence) -> WorkerUsageEvidence:
-        return WorkerUsageEvidence(
-            cpu_used_core_seconds=(self.cpu_used_core_seconds + other.cpu_used_core_seconds),
-            memory_rss_byte_seconds=(self.memory_rss_byte_seconds + other.memory_rss_byte_seconds),
-            memory_swap_byte_seconds=(
-                self.memory_swap_byte_seconds + other.memory_swap_byte_seconds
-            ),
-            gpu_memory_byte_seconds=(self.gpu_memory_byte_seconds + other.gpu_memory_byte_seconds),
-            network_ingress_bytes=self.network_ingress_bytes + other.network_ingress_bytes,
-            network_egress_bytes=self.network_egress_bytes + other.network_egress_bytes,
-            network_ingress_packets=(self.network_ingress_packets + other.network_ingress_packets),
-            network_egress_packets=(self.network_egress_packets + other.network_egress_packets),
-            disk_read_bytes=self.disk_read_bytes + other.disk_read_bytes,
-            disk_write_bytes=self.disk_write_bytes + other.disk_write_bytes,
-        )
+        """Accumulate one sample into a metering window.
+
+        Summed field-wise off the model itself: enumerating fields by hand meant a
+        newly added counter was silently dropped from every window it appeared in.
+        """
+        totals = {
+            name: getattr(self, name) + getattr(other, name)
+            for name in type(self).model_fields
+        }
+        return WorkerUsageEvidence(**totals)
 
 
 class WorkerGrpcConnectionPlan(ContractModel):
