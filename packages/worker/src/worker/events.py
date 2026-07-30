@@ -277,8 +277,7 @@ class WorkerUsageEvidence(ContractModel):
         newly added counter was silently dropped from every window it appeared in.
         """
         totals = {
-            name: getattr(self, name) + getattr(other, name)
-            for name in type(self).model_fields
+            name: getattr(self, name) + getattr(other, name) for name in type(self).model_fields
         }
         return WorkerUsageEvidence(**totals)
 

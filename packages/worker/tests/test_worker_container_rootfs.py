@@ -326,6 +326,7 @@ def test_billing_takes_the_greater_of_reservation_and_measured_usage() -> None:
     from worker.events import (
         WorkerUsageEvidence,
         WorkerUsageMetricName,
+        WorkerUsageMetricPlan,
         plan_worker_usage_metrics,
     )
 
@@ -336,8 +337,10 @@ def test_billing_takes_the_greater_of_reservation_and_measured_usage() -> None:
         memory_mib=128,
     )
 
-    def value_of(plans: object, name: WorkerUsageMetricName) -> float:
-        assert isinstance(plans, tuple)
+    def value_of(
+        plans: tuple[WorkerUsageMetricPlan, ...],
+        name: WorkerUsageMetricName,
+    ) -> float:
         for plan in plans:
             if plan.name is name:
                 return plan.value
@@ -350,7 +353,7 @@ def test_billing_takes_the_greater_of_reservation_and_measured_usage() -> None:
         duration_ms=10_000,
         evidence=WorkerUsageEvidence(cpu_used_core_seconds=0.1),
     )
-    assert value_of(idle, WorkerUsageMetricName.Cpu) == pytest.approx(1.25)
+    assert value_of(idle, WorkerUsageMetricName.Cpu) == 1.25
 
     # Bursting past the request bills the usage, not the reservation.
     bursting = plan_worker_usage_metrics(
@@ -362,8 +365,8 @@ def test_billing_takes_the_greater_of_reservation_and_measured_usage() -> None:
             memory_rss_byte_seconds=8 * 1024**3,
         ),
     )
-    assert value_of(bursting, WorkerUsageMetricName.Cpu) == pytest.approx(80.0)
-    assert value_of(bursting, WorkerUsageMetricName.Memory) == pytest.approx(8.0)
+    assert value_of(bursting, WorkerUsageMetricName.Cpu) == 80.0
+    assert value_of(bursting, WorkerUsageMetricName.Memory) == 8.0
 
 
 def test_ephemeral_disk_bills_what_was_used_not_the_oversubscribed_ceiling() -> None:
@@ -388,7 +391,7 @@ def test_ephemeral_disk_bills_what_was_used_not_the_oversubscribed_ceiling() -> 
         evidence=WorkerUsageEvidence(disk_used_byte_seconds=5 * 1024**3),
     )
     emitted = {plan.name: plan.value for plan in plans}
-    assert emitted[WorkerUsageMetricName.ContainerDisk] == pytest.approx(5 * 1024**3)
+    assert emitted[WorkerUsageMetricName.ContainerDisk] == float(5 * 1024**3)
 
     # No occupancy, nothing billed: the ceiling alone is never charged.
     idle = plan_worker_usage_metrics(
