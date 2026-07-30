@@ -233,10 +233,13 @@ def test_container_worker_process_deregisters_on_shutdown_signal(
 
     assert result is None
     assert services.processor.calls == 1
+    # A signal is an ordinary administrative stop — `docker stop`, systemd, a
+    # deploy. Preemption is reported by the provider's capacity reclaim path, so
+    # inferring it from SIGTERM would label every restart a preemption.
     assert services.lifecycle.calls == [
         "register_available",
         "keepalive",
-        "shutdown:True:PREEMPTED",
+        "shutdown:True:ADMIN",
     ]
     assert (signal.SIGTERM, signal.SIG_DFL) in restored
 
