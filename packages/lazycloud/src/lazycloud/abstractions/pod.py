@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol, TypedDict
 
-from shared.deployment_records import DeploymentSpec, Resources, VolumeMount
+from shared.deployment_records import DEFAULT_DISK, DeploymentSpec, Resources, VolumeMount
 from shared.deployments import DeploymentKind
 from shared.http.compute import ContainerResponse
 from shared.http.deployments import DeploymentResponse
@@ -258,7 +258,7 @@ class Pod(ControlClientConfigMixin):
             resources=Resources(
                 cpu=self.cpu,
                 memory=self.memory,
-                disk=self.disk,
+                disk=self.disk or DEFAULT_DISK,
                 gpu=self.gpu,
                 gpu_count=self.gpu_count,
                 keep_warm=self.keep_warm,

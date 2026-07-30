@@ -12,7 +12,7 @@ from typing import Any, Protocol, TypedDict
 import yaml
 from pydantic import JsonValue
 from shared.app_identity import SANDBOX_COMPOSE_OVERRIDE_PATH
-from shared.deployment_records import DeploymentSpec, Resources, VolumeMount
+from shared.deployment_records import DEFAULT_DISK, DeploymentSpec, Resources, VolumeMount
 from shared.deployments import DeploymentKind
 from shared.http import pods
 from shared.http.errors import HttpApiError
@@ -1635,7 +1635,7 @@ class Sandbox(ControlClientConfigMixin):
             resources=Resources(
                 cpu=self.cpu,
                 memory=self.memory,
-                disk=self.disk,
+                disk=self.disk or DEFAULT_DISK,
                 gpu=self.gpu,
                 gpu_count=self.gpu_count,
                 keep_warm=self.keep_warm_seconds,

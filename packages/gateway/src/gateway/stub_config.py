@@ -6,10 +6,12 @@ from control.service import StubKind, StubRecord
 from pydantic import JsonValue, TypeAdapter
 from shared.autoscaling import QueueDepthAutoscaler
 from shared.deployment_records import (
+    DEFAULT_DISK,
     DeploymentSpec,
     Resources,
     VolumeMount,
     resolve_cpu,
+    resolve_disk,
     resolve_keep_warm_seconds,
     resolve_memory,
     resolve_timeout_seconds,
@@ -101,6 +103,7 @@ def stub_config(request: GetOrCreateStubRequest) -> StubConfig:
         runtime=StubRuntimeConfig(
             cpu=resolve_cpu(request.stub_type, request.cpu),
             memory=resolve_memory(request.stub_type, request.memory),
+            disk=resolve_disk(request.disk),
             gpu=request.gpu or None,
             gpu_count=request.gpu_count,
             timeout_seconds=resolve_timeout_seconds(
@@ -205,7 +208,13 @@ def deployment_spec_from_stub(stub: StubRecord, *, name: str) -> DeploymentSpec:
             memory=(
                 str(runtime_config.memory) if runtime_config.memory not in {None, "", 0} else None
             ),
-            disk=(str(runtime_config.disk) if runtime_config.disk not in {None, "", 0} else None),
+            # A stored config without a ceiling rehydrates to the platform one
+            # rather than to None: the spec never carries an absent limit.
+            disk=(
+                str(runtime_config.disk)
+                if runtime_config.disk not in {None, "", 0}
+                else DEFAULT_DISK
+            ),
             gpu=runtime_config.gpu,
             gpu_count=runtime_config.gpu_count,
             timeout_seconds=(

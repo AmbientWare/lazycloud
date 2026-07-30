@@ -48,13 +48,23 @@ DEFAULT_TASK_QUEUE_TIMEOUT_SECONDS = 3600
 class Resources(ContractModel):
     cpu: float | None = None
     memory: str | None = None
-    disk: str | None = None
+    disk: str = DEFAULT_DISK
     gpu: str | None = None
     gpu_count: int = 0
     timeout_seconds: int | None = None
     concurrency: int = 1
     keep_warm: int | None = None
     preemptible: bool = False
+
+    @field_validator("disk", mode="before")
+    @classmethod
+    def disk_defaults_to_the_platform_ceiling(cls, value: object) -> object:
+        # A record written without a ceiling reads back as the platform one.
+        # Every container has a limit, so an absent value is the default rather
+        # than an error or an unbounded container.
+        if value is None or value == "":
+            return DEFAULT_DISK
+        return value
 
     @field_validator("cpu")
     @classmethod

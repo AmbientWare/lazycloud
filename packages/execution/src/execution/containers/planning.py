@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
+from foundation.resources import parse_memory_mib
+from pydantic import Field
 from shared.compute_policy import ComputePlacementTarget
 from shared.container_requests import (
     DEFAULT_WORKSPACE_STORAGE_BASE_MOUNT_PATH,
@@ -11,8 +13,13 @@ from shared.container_requests import (
     WorkerStartupKind,
 )
 from shared.contracts import ContractModel
+from shared.deployment_records import DEFAULT_DISK
 from shared.errors import InvalidInputError
 from shared.workload_config import StubRuntimeConfig
+
+# The platform ceiling in MiB, for paths that start a container without a
+# workload config to read it from.
+DEFAULT_CONTAINER_DISK_MIB = parse_memory_mib(DEFAULT_DISK) or 0
 
 
 class ContainerSchedulingOptions(ContractModel):
@@ -37,7 +44,10 @@ class ContainerSchedulingOptions(ContractModel):
     checkpoint_readiness_interval_seconds: float = 1.0
     cpu_millicores: int = 0
     memory_mib: int = 0
-    disk_mib: int = 0
+    # Required and positive: a start path that forgets the ceiling must fail
+    # here rather than silently fall back to the platform default, and zero
+    # would mean unlimited, which no container gets.
+    disk_mib: int = Field(gt=0)
     gpu_type: str = ""
     gpu_request: list[str] | None = None
     gpu_count: int = 0

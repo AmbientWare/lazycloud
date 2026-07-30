@@ -23,6 +23,7 @@ from pydantic import JsonValue
 from shared.autoscaling import QueueDepthAutoscaler
 from shared.compute_fleet import Pool
 from shared.deployment_records import (
+    DEFAULT_DISK,
     DEFAULT_HTTP_CPU,
     DEFAULT_HTTP_MEMORY,
     DeploymentSpec,
@@ -276,7 +277,7 @@ class Endpoint(Generic[P, R]):
             resources=Resources(
                 cpu=self.cpu,
                 memory=self.memory,
-                disk=self.disk,
+                disk=self.disk or DEFAULT_DISK,
                 gpu=self.gpu,
                 gpu_count=self.gpu_count,
                 timeout_seconds=_effective_timeout_seconds(self.task_policy, self.timeout_seconds),
@@ -662,7 +663,7 @@ class ASGI:
             resources=Resources(
                 cpu=self.cpu,
                 memory=self.memory,
-                disk=self.disk,
+                disk=self.disk or DEFAULT_DISK,
                 gpu=self.gpu,
                 gpu_count=self.gpu_count,
                 timeout_seconds=_effective_timeout_seconds(self.task_policy, self.timeout_seconds),

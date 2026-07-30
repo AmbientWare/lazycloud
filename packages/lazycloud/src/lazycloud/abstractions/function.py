@@ -19,6 +19,7 @@ from typing import (
 from pydantic import ValidationError
 from shared.compute_fleet import Pool
 from shared.deployment_records import (
+    DEFAULT_DISK,
     DEFAULT_FUNCTION_AUTHORIZED,
     DEFAULT_FUNCTION_CPU,
     DEFAULT_FUNCTION_MEMORY,
@@ -279,7 +280,7 @@ class Function(Generic[P, R]):
             resources=Resources(
                 cpu=self.cpu,
                 memory=self.memory,
-                disk=self.disk,
+                disk=self.disk or DEFAULT_DISK,
                 gpu=self.gpu,
                 gpu_count=self.gpu_count,
                 timeout_seconds=self._effective_timeout_seconds(),

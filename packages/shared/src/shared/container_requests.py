@@ -16,6 +16,8 @@ DEFAULT_VOLUMES_PREFIX = "volumes"
 DEFAULT_ARTIFACTS_PREFIX = "artifacts"
 DEFAULT_WORKSPACE_STORAGE_BASE_MOUNT_PATH = "/workspace"
 CONTAINER_INNER_PORT = 8001
+# Matches DEFAULT_DISK in shared.deployment_records, in bytes.
+DEFAULT_CONTAINER_DISK_LIMIT_BYTES = 100 * 1024**3
 
 
 class WorkerStartupKind(StringEnum):
@@ -147,8 +149,9 @@ class WorkerContainerRequestPayload(ContractModel):
     memory_enforced: bool = True
     memory_limit_bytes: int | None = None
     # Per-container disk ceiling for the container's writable layer. A cap, not
-    # a reservation: the scheduler does not fit against it.
-    disk_limit_bytes: int | None = None
+    # a reservation: the scheduler does not fit against it. Never optional: a
+    # container without a ceiling is the unbounded case this exists to prevent.
+    disk_limit_bytes: int = DEFAULT_CONTAINER_DISK_LIMIT_BYTES
     cgroup_path: str | None = None
     run_delayed_cleanup: bool = True
     cost_per_ms: float = 0.0
@@ -167,6 +170,7 @@ __all__ = [
     "CONTAINER_INNER_PORT",
     "DEFAULT_ARTIFACTS_PATH",
     "DEFAULT_ARTIFACTS_PREFIX",
+    "DEFAULT_CONTAINER_DISK_LIMIT_BYTES",
     "DEFAULT_OBJECTS_PATH",
     "DEFAULT_VOLUMES_PATH",
     "DEFAULT_VOLUMES_PREFIX",

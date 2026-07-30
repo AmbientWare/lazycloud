@@ -9,6 +9,7 @@ from typing import Any, Generic, ParamSpec, Protocol, TypedDict, TypeVar, overlo
 from shared.autoscaling import QueueDepthAutoscaler
 from shared.compute_fleet import Pool
 from shared.deployment_records import (
+    DEFAULT_DISK,
     DEFAULT_TASK_QUEUE_CPU,
     DEFAULT_TASK_QUEUE_MEMORY,
     DeploymentSpec,
@@ -244,7 +245,7 @@ class TaskQueueFunction(Generic[P, R]):
             resources=Resources(
                 cpu=self.cpu,
                 memory=self.memory,
-                disk=self.disk,
+                disk=self.disk or DEFAULT_DISK,
                 gpu=self.gpu,
                 gpu_count=self.gpu_count,
                 timeout_seconds=self.timeout,
