@@ -15,6 +15,11 @@ build, deploy, migrate, reset, or inventory the platform.
   wrong defect. If currency is already established, do not re-check; if it is
   not, confirm it before running anything — image timestamps against the change
   under test, and no worker container still running a superseded image.
+- Rebuild every image that embeds the source together, from one source state.
+  Rebuilding only the service you just edited leaves the others built from
+  different source, which the managed runtime rejects as a package digest
+  mismatch rather than as anything resembling the edit. Finish editing, then
+  rebuild once.
 - Ordinary `pytest` and changed-scope validation must not execute this tree.
   Run Python scenarios as exact modules from the repository root
   (`uv run python -m tests.e2e...`) and browser scenarios as exact nodes. Do
