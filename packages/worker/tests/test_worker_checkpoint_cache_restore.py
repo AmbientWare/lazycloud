@@ -11,7 +11,7 @@ from cache.protocol import (
     CacheContentStoreStatus,
 )
 from shared.checkpoints import CheckpointRecord
-from worker.checkpoint_restore import RuntimeCheckpointRestorer
+from worker.checkpoint_restore import assemble_checkpoint_archive_from_cache
 
 
 class _Cache:
@@ -19,7 +19,6 @@ class _Cache:
 
     def __init__(self, blob: bytes | None) -> None:
         self.blob = blob
-        self.stored: list[str] = []
 
     def read_content(self, request: CacheContentReadRequest) -> CacheContentReadResult:
         if self.blob is None:
@@ -44,21 +43,10 @@ class _Cache:
         cache_path: str = "",
     ) -> CacheContentStoreResult:
         _ = (path, cache_path)
-        self.stored.append(expected_hash)
         return CacheContentStoreResult(
             status=CacheContentStoreStatus.Stored,
             content_hash=expected_hash,
         )
-
-
-def _restorer(tmp_path: Path, cache: _Cache | None) -> RuntimeCheckpointRestorer:
-    return RuntimeCheckpointRestorer(
-        source=None,  # pyright: ignore[reportArgumentType]
-        state_sink=None,  # pyright: ignore[reportArgumentType]
-        runtime=None,  # pyright: ignore[reportArgumentType]
-        checkpoint_root=str(tmp_path),
-        cache=cache,
-    )
 
 
 def _record(payload: bytes) -> CheckpointRecord:
@@ -73,30 +61,29 @@ def _record(payload: bytes) -> CheckpointRecord:
 def test_checkpoint_archive_is_rebuilt_from_the_content_cache(tmp_path: Path) -> None:
     """A cached checkpoint must not be re-downloaded from object storage."""
     payload = b"checkpoint-archive-bytes" * 500
-    restorer = _restorer(tmp_path, _Cache(payload))
     archive = tmp_path / "archive.tar"
 
-    assert restorer._assemble_from_cache(_record(payload), archive)
+    assert assemble_checkpoint_archive_from_cache(_Cache(payload), _record(payload), archive)
     assert archive.read_bytes() == payload
 
 
-def test_a_cache_miss_falls_through_instead_of_failing_the_restore(tmp_path: Path) -> None:
-    payload = b"checkpoint-archive-bytes" * 500
-    restorer = _restorer(tmp_path, _Cache(None))
-
-    assert not restorer._assemble_from_cache(_record(payload), tmp_path / "archive.tar")
-
-
 def test_a_truncated_cache_entry_is_not_accepted_as_complete(tmp_path: Path) -> None:
-    """Short reads must be reported as a miss, never restored as the checkpoint."""
+    """A short read must report a miss, never a checkpoint missing its tail."""
     payload = b"checkpoint-archive-bytes" * 500
-    restorer = _restorer(tmp_path, _Cache(payload[:100]))
 
-    assert not restorer._assemble_from_cache(_record(payload), tmp_path / "archive.tar")
+    assembled = assemble_checkpoint_archive_from_cache(
+        _Cache(payload[:100]),
+        _record(payload),
+        tmp_path / "archive.tar",
+    )
+
+    assert not assembled
 
 
-def test_restore_without_a_configured_cache_uses_origin_storage(tmp_path: Path) -> None:
+def test_a_cache_miss_falls_through_instead_of_failing_the_restore(tmp_path: Path) -> None:
+    """A miss costs a download; it must not surface as a restore failure."""
     payload = b"checkpoint-archive-bytes" * 500
-    restorer = _restorer(tmp_path, None)
 
-    assert not restorer._assemble_from_cache(_record(payload), tmp_path / "archive.tar")
+    assert not assemble_checkpoint_archive_from_cache(
+        _Cache(None), _record(payload), tmp_path / "archive.tar"
+    )

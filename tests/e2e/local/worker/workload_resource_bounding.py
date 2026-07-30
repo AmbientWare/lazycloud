@@ -12,18 +12,11 @@ REQUESTED_CORES = 0.125
 REQUESTED_MEMORY = "128Mi"
 REQUESTED_DISK = "2Gi"
 REQUESTED_DISK_BYTES = 2 * 1024**3
-DEFAULT_DISK_BYTES = 100 * 1024**3
 
 BURST_PROCESSES = 8
 BURST_SECONDS = 3.0
 ALLOCATE_MIB = 512
 FILL_CHUNK_MIB = 32
-
-# Eight busy processes against an eighth of a core. One whole core is already
-# eight times the request while staying far below both the burst ceiling and
-# what any host running this stack can supply, so the threshold does not depend
-# on the host's core count.
-MINIMUM_BURST_CORES = 1.0
 
 APP_NAME = f"e2e_bounding_{secrets.token_hex(6)}"
 app = App(APP_NAME)

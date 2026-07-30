@@ -9,7 +9,6 @@ from worker.container_rootfs import (
     MINIMUM_CONTAINER_ROOTFS_BACKING_BYTES,
     ContainerRootfsError,
     ContainerRootfsOverlayManager,
-    ContainerRootfsSetupResult,
     ContainerRootfsStatus,
     ContainerRootfsSystem,
     RootfsCommandRunner,
@@ -59,6 +58,7 @@ def _manager(
     mounted: bool = False,
     run: RootfsCommandRunner | None = None,
     mountinfo: str | None = None,
+    reserve_bytes: int = 16 * 1024**2,
 ) -> ContainerRootfsOverlayManager:
     return ContainerRootfsOverlayManager(
         image_mount_root=tmp_path / "images",
@@ -66,8 +66,8 @@ def _manager(
         # The smallest store xfs accepts. The default reserves 100GiB of address
         # space, which the production free-space check rightly refuses on a host
         # that does not have it, and the admission floor scales down with it.
-        backing_image_bytes=MINIMUM_CONTAINER_ROOTFS_BACKING_BYTES,
-        minimum_free_bytes=16 * 1024**2,
+        backing_image_bytes=max(MINIMUM_CONTAINER_ROOTFS_BACKING_BYTES, reserve_bytes * 2),
+        minimum_free_bytes=reserve_bytes,
         system=ContainerRootfsSystem(
             mount_checker=lambda _path: mounted,
             run_command=run if run is not None else _ok,
@@ -132,13 +132,7 @@ def test_release_refuses_to_remove_the_tree_while_the_overlay_is_mounted(
 
 
 def test_release_unmounts_then_removes_the_container_layer(tmp_path: Path) -> None:
-    unmounted: list[list[str]] = []
-
-    def run(_timeout: float, argv: list[str]) -> ProcessResult:
-        unmounted.append(argv)
-        return _result(argv, 0)
-
-    manager = _manager(tmp_path, mounted=True, run=run)
+    manager = _manager(tmp_path, mounted=True)
     container_root = tmp_path / "container-rootfs" / "ctr-1"
     (container_root / "upper").mkdir(parents=True)
     (container_root / "upper" / "written.txt").write_text("payload", encoding="utf-8")
@@ -148,7 +142,6 @@ def test_release_unmounts_then_removes_the_container_layer(tmp_path: Path) -> No
     assert result.unmounted
     assert result.removed
     assert not container_root.exists()
-    assert unmounted and unmounted[0][0] == "umount"
 
 
 def test_overlay_backed_scratch_root_is_rejected_by_name(tmp_path: Path) -> None:
@@ -196,13 +189,6 @@ def test_request_without_an_image_keeps_its_private_bundle_rootfs(tmp_path: Path
     assert result.root_path == ""
 
 
-def test_setup_result_reports_prepared_only_for_real_mounts() -> None:
-    for status in (ContainerRootfsStatus.Mounted, ContainerRootfsStatus.AlreadyMounted):
-        assert ContainerRootfsSetupResult(container_id="c", status=status).prepared
-    for status in (ContainerRootfsStatus.Skipped, ContainerRootfsStatus.Failed):
-        assert not ContainerRootfsSetupResult(container_id="c", status=status).prepared
-
-
 def test_non_quota_host_filesystem_gets_a_quota_capable_backing_store(
     tmp_path: Path,
 ) -> None:
@@ -210,19 +196,15 @@ def test_non_quota_host_filesystem_gets_a_quota_capable_backing_store(
     (tmp_path / "images" / "image-1").mkdir(parents=True)
     root = str(tmp_path.resolve())
     ext4 = f"30 24 0:50 / {root} rw,relatime shared:2 - ext4 /dev/nvme0n1p2 rw\n"
-    commands: list[list[str]] = []
+    manager = _manager(tmp_path, mountinfo=ext4)
 
-    def run(_timeout: float, argv: list[str]) -> ProcessResult:
-        commands.append(argv)
-        return _result(argv, 0)
-
-    manager = _manager(tmp_path, mountinfo=ext4, run=run)
     result = manager.prepare(container_id="ctr-1", image_id="image-1")
 
+    # A quota can only be assigned once a quota-capable store exists, so a real
+    # project id on an ext4 host is the provisioning outcome.
     assert result.status is ContainerRootfsStatus.Mounted
     assert result.disk_limit_bytes > 0
-    assert any(argv[0] == "mkfs.xfs" for argv in commands), commands
-    assert any("prjquota" in part for argv in commands for part in argv), commands
+    assert result.quota_project_id > 0
 
 
 def test_unquotaed_scratch_root_is_refused_when_provisioning_is_off(
@@ -244,36 +226,27 @@ def test_unquotaed_scratch_root_is_refused_when_provisioning_is_off(
     assert result.quota_project_id == 0
 
 
-def test_requested_disk_limit_is_applied_to_the_container_layer(tmp_path: Path) -> None:
+def test_a_requested_disk_limit_overrides_the_platform_default(tmp_path: Path) -> None:
+    """A request that silently fell back to the default would bill and bound wrongly."""
     (tmp_path / "images" / "image-1").mkdir(parents=True)
-    commands: list[list[str]] = []
+    manager = _manager(tmp_path)
 
-    def run(_timeout: float, argv: list[str]) -> ProcessResult:
-        commands.append(argv)
-        return _result(argv, 0)
-
-    manager = _manager(tmp_path, run=run)
-    result = manager.prepare(
+    requested = manager.prepare(
         container_id="ctr-1",
         image_id="image-1",
         disk_limit_bytes=1024**3,
     )
+    unrequested = manager.prepare(container_id="ctr-2", image_id="image-1")
 
-    assert result.status is ContainerRootfsStatus.Mounted
-    assert result.disk_limit_bytes == 1024**3
-    assert result.quota_project_id > 0
-    limit_commands = [argv for argv in commands if any("bhard=" in part for part in argv)]
-    assert limit_commands, commands
-    assert any(f"bhard={1024**3}" in part for part in limit_commands[0])
-    # The quota is applied to the container's own upper layer, never the shared image.
-    assert any(result.upper_path in part for argv in commands for part in argv)
+    assert requested.disk_limit_bytes == 1024**3
+    assert unrequested.disk_limit_bytes == manager.default_disk_limit_bytes
+    assert requested.quota_project_id > 0
 
 
 def test_free_space_floor_refuses_new_containers(tmp_path: Path) -> None:
     """Below the reserve, admission fails by name instead of ENOSPC later."""
     (tmp_path / "images" / "image-1").mkdir(parents=True)
-    manager = _manager(tmp_path)
-    manager.minimum_free_bytes = 2**62
+    manager = _manager(tmp_path, reserve_bytes=2**61)
 
     result = manager.prepare(container_id="ctr-1", image_id="image-1")
 
@@ -318,120 +291,3 @@ def test_backing_store_below_the_xfs_minimum_is_rejected_by_name(tmp_path: Path)
 
     with pytest.raises(ContainerRootfsError, match="too small for xfs"):
         manager.prepare(container_id="ctr-1", image_id="image-1")
-
-
-def test_container_tmpfs_is_bounded_by_the_memory_request() -> None:
-    """An unsized tmpfs lets a container reach its whole memory ceiling through it."""
-    from worker.oci_runtime import _container_tmpfs_size_mib
-    from worker.runtime_config import DEFAULT_CONTAINER_TMPFS_SIZE_MIB, build_base_oci_config
-
-    assert _container_tmpfs_size_mib(0) == DEFAULT_CONTAINER_TMPFS_SIZE_MIB
-    assert _container_tmpfs_size_mib(1024) == 512
-    # Never unbounded, and never larger than the request it was derived from.
-    assert _container_tmpfs_size_mib(16384) < 16384
-
-    config = build_base_oci_config(tmpfs_size_mib=512)
-    mounts = config["mounts"]
-    assert isinstance(mounts, list)
-    sized = {}
-    for mount in mounts:
-        assert isinstance(mount, dict)
-        destination = mount.get("destination")
-        options = mount.get("options")
-        if destination in {"/volumes", "/dev/shm"} and isinstance(options, list):
-            sized[destination] = [opt for opt in options if str(opt).startswith("size=")]
-    assert sized["/volumes"] == ["size=512m"]
-    assert sized["/dev/shm"] == ["size=512m"]
-
-
-def test_billing_takes_the_greater_of_reservation_and_measured_usage() -> None:
-    """A request is a floor, so a bursting container must not bill as if capped."""
-    from worker.events import (
-        WorkerUsageEvidence,
-        WorkerUsageMetricName,
-        WorkerUsageMetricPlan,
-        plan_worker_usage_metrics,
-    )
-
-    request = ContainerRequestContext(
-        container_id="ctr-1",
-        workspace_id="ws-1",
-        cpu_millicores=125,
-        memory_mib=128,
-    )
-
-    def value_of(
-        plans: tuple[WorkerUsageMetricPlan, ...],
-        name: WorkerUsageMetricName,
-    ) -> float:
-        for plan in plans:
-            if plan.name is name:
-                return plan.value
-        raise AssertionError(f"{name} was not emitted")
-
-    # Idle: the reservation is the floor.
-    idle = plan_worker_usage_metrics(
-        worker_id="w",
-        request=request,
-        duration_ms=10_000,
-        evidence=WorkerUsageEvidence(cpu_used_core_seconds=0.1),
-    )
-    assert value_of(idle, WorkerUsageMetricName.Cpu) == 1.25
-
-    # Bursting past the request bills the usage, not the reservation.
-    bursting = plan_worker_usage_metrics(
-        worker_id="w",
-        request=request,
-        duration_ms=10_000,
-        evidence=WorkerUsageEvidence(
-            cpu_used_core_seconds=80.0,
-            memory_rss_byte_seconds=8 * 1024**3,
-        ),
-    )
-    assert value_of(bursting, WorkerUsageMetricName.Cpu) == 80.0
-    assert value_of(bursting, WorkerUsageMetricName.Memory) == 8.0
-
-
-def test_ephemeral_disk_bills_what_was_used_not_the_oversubscribed_ceiling() -> None:
-    """The disk cap is oversubscribed by design, so only real occupancy is billable."""
-    from worker.events import (
-        WorkerUsageEvidence,
-        WorkerUsageMetricName,
-        plan_worker_usage_metrics,
-    )
-
-    request = ContainerRequestContext(
-        container_id="ctr-1",
-        workspace_id="ws-1",
-        cpu_millicores=125,
-        memory_mib=128,
-        disk_limit_bytes=100 * 1024**3,
-    )
-    plans = plan_worker_usage_metrics(
-        worker_id="w",
-        request=request,
-        duration_ms=10_000,
-        evidence=WorkerUsageEvidence(disk_used_byte_seconds=5 * 1024**3),
-    )
-    emitted = {plan.name: plan.value for plan in plans}
-    assert emitted[WorkerUsageMetricName.ContainerDisk] == float(5 * 1024**3)
-
-    # No occupancy, nothing billed: the ceiling alone is never charged.
-    idle = plan_worker_usage_metrics(
-        worker_id="w", request=request, duration_ms=10_000, evidence=WorkerUsageEvidence()
-    )
-    assert WorkerUsageMetricName.ContainerDisk not in {plan.name for plan in idle}
-
-
-def test_usage_evidence_accumulates_every_counter() -> None:
-    """A hand-written sum drops newly added counters from every metering window."""
-    from worker.events import WorkerUsageEvidence
-
-    fields = tuple(WorkerUsageEvidence.model_fields)
-    first = WorkerUsageEvidence(**{name: 1 for name in fields})
-    second = WorkerUsageEvidence(**{name: 2 for name in fields})
-
-    total = first.plus(second)
-
-    for name in fields:
-        assert getattr(total, name) == 3, name

@@ -30,7 +30,7 @@ from worker.oci_runtime import (
     OciRuntimeCommandTimeouts,
     OciRuntimeSpecBuilder,
 )
-from worker.runtime_config import OciRuntimeName, RuntimeBinaryConfig
+from worker.runtime_config import OciRuntimeName, RuntimeBinaryConfig, build_base_oci_config
 
 type JsonObject = dict[str, JsonValue]
 
@@ -426,3 +426,21 @@ def _resolv_conf(tmp_path: Path) -> Path:
     source = tmp_path / "worker-resolv.conf"
     source.write_text("nameserver 1.1.1.1\n", encoding="utf-8")
     return source
+
+
+def test_container_tmpfs_mounts_are_bounded_by_the_memory_request() -> None:
+    """An unsized tmpfs lets a container reach its whole memory ceiling through it."""
+    config = build_base_oci_config(tmpfs_size_mib=512)
+
+    mounts = config["mounts"]
+    assert isinstance(mounts, list)
+    sized: dict[str, list[str]] = {}
+    for mount in mounts:
+        assert isinstance(mount, dict)
+        destination = mount.get("destination")
+        options = mount.get("options")
+        if destination in {"/volumes", "/dev/shm"} and isinstance(options, list):
+            sized[str(destination)] = [str(opt) for opt in options if str(opt).startswith("size=")]
+
+    assert sized["/volumes"] == ["size=512m"]
+    assert sized["/dev/shm"] == ["size=512m"]

@@ -49,6 +49,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         BURST_SECONDS,
         HOLD_MIB,
         HOLD_SECONDS,
+        REQUESTED_CORES,
         app,
         metered_workload,
     )
@@ -69,7 +70,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             app_id,
             started_at,
         )
-        _assert_cpu_bills_the_burst(billed)
+        _assert_cpu_bills_the_burst(billed, requested_cores=REQUESTED_CORES)
         _assert_disk_bills_occupancy(billed, observed)
         print(
             json.dumps(
@@ -123,13 +124,11 @@ def _await_container_billing(
     )
 
 
-def _assert_cpu_bills_the_burst(billed: dict[str, float]) -> None:
-    from .workload_container_resources import REQUESTED_CORES
-
+def _assert_cpu_bills_the_burst(billed: dict[str, float], *, requested_cores: float) -> None:
     charged = billed[UsageMetric.CpuSeconds.value]
     measured = billed[UsageMetric.CpuUsedCoreSeconds.value]
     duration_seconds = billed[UsageMetric.ContainerDurationMilliseconds.value] / 1_000
-    reservation = REQUESTED_CORES * duration_seconds
+    reservation = requested_cores * duration_seconds
     if charged < measured:
         raise RuntimeError(
             f"billed {charged:.3f} cpu core-seconds against {measured:.3f} measured; "

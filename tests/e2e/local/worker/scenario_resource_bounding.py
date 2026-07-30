@@ -18,6 +18,15 @@ from tests.e2e._support.process import LivePrerequisiteError, blocked, require_l
 
 SOURCE_ROOT = Path(__file__).resolve().parent
 
+# Eight busy processes against an eighth of a core. One whole core is already
+# eight times the request while staying far below both the burst ceiling and
+# what any host running this stack can supply, so the threshold does not depend
+# on the host's core count.
+MINIMUM_BURST_CORES = 1.0
+# The ceiling a container gets when nothing was requested. Seeing it means the
+# request never arrived.
+PLATFORM_DEFAULT_DISK_BYTES = 100 * 1024**3
+
 
 def main(argv: Sequence[str] | None = None) -> int:
     try:
@@ -30,7 +39,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         BURST_PROCESSES,
         BURST_SECONDS,
         FILL_CHUNK_MIB,
+        REQUESTED_CORES,
         REQUESTED_DISK,
+        REQUESTED_DISK_BYTES,
         REQUESTED_MEMORY,
         app,
         bounded_workload,
@@ -45,10 +56,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             allocate_mib=ALLOCATE_MIB,
             chunk_mib=FILL_CHUNK_MIB,
         )
-        _assert_cpu_request_is_a_floor(observed)
-        _assert_memory_request_is_a_floor(observed)
-        _assert_requested_disk_reached_the_container(observed)
-        _assert_disk_ceiling_stopped_the_write(observed)
+        _assert_cpu_request_is_a_floor(observed, requested_cores=REQUESTED_CORES)
+        _assert_memory_request_is_a_floor(
+            observed, requested=REQUESTED_MEMORY, allocated_mib=ALLOCATE_MIB
+        )
+        _assert_requested_disk_reached_the_container(
+            observed, requested=REQUESTED_DISK, requested_bytes=REQUESTED_DISK_BYTES
+        )
+        _assert_disk_ceiling_stopped_the_write(observed, requested=REQUESTED_DISK)
         print(
             json.dumps(
                 {
@@ -65,58 +80,49 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
-def _assert_cpu_request_is_a_floor(observed: dict[str, float]) -> None:
-    from .workload_resource_bounding import MINIMUM_BURST_CORES, REQUESTED_CORES
-
+def _assert_cpu_request_is_a_floor(observed: dict[str, float], *, requested_cores: float) -> None:
     effective = observed["effective_cores"]
     if effective < MINIMUM_BURST_CORES:
         raise RuntimeError(
-            f"a {REQUESTED_CORES}-core request held the container to {effective} cores; "
+            f"a {requested_cores}-core request held the container to {effective} cores; "
             "the request is being applied as a ceiling rather than a floor"
         )
 
 
-def _assert_memory_request_is_a_floor(observed: dict[str, float]) -> None:
-    from .workload_resource_bounding import ALLOCATE_MIB, REQUESTED_MEMORY
-
+def _assert_memory_request_is_a_floor(
+    observed: dict[str, float], *, requested: str, allocated_mib: int
+) -> None:
     allocated = observed["allocated_mib"]
-    if allocated != ALLOCATE_MIB:
+    if allocated != allocated_mib:
         raise RuntimeError(
-            f"a {REQUESTED_MEMORY} request allowed only {allocated}MiB of "
-            f"{ALLOCATE_MIB}MiB to be touched"
+            f"a {requested} request allowed only {allocated}MiB of {allocated_mib}MiB to be touched"
         )
 
 
-def _assert_requested_disk_reached_the_container(observed: dict[str, float]) -> None:
-    from .workload_resource_bounding import (
-        DEFAULT_DISK_BYTES,
-        REQUESTED_DISK,
-        REQUESTED_DISK_BYTES,
-    )
-
+def _assert_requested_disk_reached_the_container(
+    observed: dict[str, float], *, requested: str, requested_bytes: int
+) -> None:
     total = observed["root_total_bytes"]
-    if total >= DEFAULT_DISK_BYTES:
+    if total >= PLATFORM_DEFAULT_DISK_BYTES:
         raise RuntimeError(
             f"the container's root reports {total} bytes, the platform default; "
-            f"the requested {REQUESTED_DISK} never reached the worker"
+            f"the requested {requested} never reached the worker"
         )
     # Filesystem overhead leaves the visible total a little under the request.
-    if not REQUESTED_DISK_BYTES * 0.9 <= total <= REQUESTED_DISK_BYTES:
+    if not requested_bytes * 0.9 <= total <= requested_bytes:
         raise RuntimeError(
             f"the container's root reports {total} bytes, which is not the "
-            f"requested {REQUESTED_DISK_BYTES} bytes"
+            f"requested {requested_bytes} bytes"
         )
 
 
-def _assert_disk_ceiling_stopped_the_write(observed: dict[str, float]) -> None:
-    from .workload_resource_bounding import REQUESTED_DISK
-
+def _assert_disk_ceiling_stopped_the_write(observed: dict[str, float], *, requested: str) -> None:
     written = observed["written_bytes"]
     total = observed["root_total_bytes"]
     write_errno = int(observed["write_errno"])
     if write_errno != errno.ENOSPC:
         raise RuntimeError(
-            f"writing past the {REQUESTED_DISK} ceiling ended with errno {write_errno} "
+            f"writing past the {requested} ceiling ended with errno {write_errno} "
             f"after {written} bytes; the ceiling did not reject the write"
         )
     if written > total:

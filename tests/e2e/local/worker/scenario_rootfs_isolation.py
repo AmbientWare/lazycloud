@@ -48,7 +48,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         read_back = canary_reader.remote(root_path=ROOT_CANARY, tmp_path=TMP_CANARY)
         _assert_distinct_containers(written, read_back)
-        _assert_nothing_leaked(read_back, secret)
+        _assert_nothing_leaked(read_back, secret, paths=(ROOT_CANARY, TMP_CANARY))
         print(
             json.dumps(
                 {
@@ -75,14 +75,15 @@ def _assert_distinct_containers(written: dict[str, str], read_back: dict[str, st
         )
 
 
-def _assert_nothing_leaked(read_back: dict[str, str], secret: str) -> None:
-    from .workload_rootfs_isolation import ROOT_CANARY, TMP_CANARY
-
+def _assert_nothing_leaked(
+    read_back: dict[str, str], secret: str, *, paths: tuple[str, str]
+) -> None:
+    root_path, tmp_path = paths
     leaked = [
         path
         for path, content in (
-            (ROOT_CANARY, read_back["root_canary"]),
-            (TMP_CANARY, read_back["tmp_canary"]),
+            (root_path, read_back["root_canary"]),
+            (tmp_path, read_back["tmp_canary"]),
         )
         if content
     ]

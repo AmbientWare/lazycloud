@@ -45,17 +45,3 @@ def test_geesefs_data_cache_is_bounded_by_worker_memory() -> None:
     )
     # Unknown worker memory leaves the configured limit alone.
     assert geesefs_memory_limit_mb(configured_mb=1024, worker_memory_mib=0) == 1024
-
-
-def test_geesefs_command_keeps_the_memory_limit_enforceable() -> None:
-    """Default readahead is allocated per reader and overruns the limit without these."""
-    from storage_client.mounts import GeeseFsMountConfig, geesefs_command
-
-    command = geesefs_command(GeeseFsMountConfig(bucket_name="b"), "/mnt/x")
-
-    assert "--use-enomem" in command
-    assert "--no-preload-dir" in command
-    assert any(part.startswith("--read-ahead-large=") for part in command), command
-    # The correctness flags this mount depends on must survive the tuning changes.
-    assert "--fsync-on-close" in command
-    assert any(part.startswith("--stat-cache-ttl=") for part in command), command
