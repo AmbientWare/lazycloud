@@ -434,7 +434,8 @@ class ContainerRootfsOverlayManager:
             return 0
         result = self.system.run_command(
             self.mount_timeout_seconds,
-            ["xfs_quota", "-x", "-c", f"report -p -N -b {project_id}", filesystem_root],
+            # report takes no project filter; the parser selects the line.
+            ["xfs_quota", "-x", "-c", "report -p -N -b", filesystem_root],
         )
         if result.exit_code != 0:
             return 0
