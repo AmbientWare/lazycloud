@@ -120,7 +120,11 @@ class ContainerRootfsOverlayPlan(ContractModel):
 
 class ContainerDiskQuotaPlan(ContractModel):
     container_id: str
-    upper_dir: str
+    # The container root, holding both the overlay upper and work directories.
+    # The project must cover both: overlayfs copies a file up by creating it in
+    # the work directory and renaming it into the upper directory, and a rename
+    # across two XFS project ids fails with EXDEV.
+    quota_dir: str
     filesystem_root: str
     project_id: int
     limit_bytes: int
@@ -131,7 +135,7 @@ class ContainerDiskQuotaPlan(ContractModel):
             "xfs_quota",
             "-x",
             "-c",
-            f"project -s -p {self.upper_dir} {self.project_id}",
+            f"project -s -p {self.quota_dir} {self.project_id}",
             self.filesystem_root,
         ]
 
@@ -204,7 +208,7 @@ def plan_container_rootfs_overlay(
 def plan_container_disk_quota(
     *,
     container_id: str,
-    upper_dir: Path,
+    quota_dir: Path,
     filesystem_root: Path,
     limit_bytes: int,
     project_id: int,
@@ -217,7 +221,7 @@ def plan_container_disk_quota(
         raise ContainerRootfsError(msg)
     return ContainerDiskQuotaPlan(
         container_id=container_id,
-        upper_dir=str(upper_dir),
+        quota_dir=str(quota_dir),
         filesystem_root=str(filesystem_root),
         project_id=project_id,
         limit_bytes=limit_bytes,
@@ -530,9 +534,11 @@ class ContainerRootfsOverlayManager:
         *,
         limit_bytes: int,
     ) -> _AppliedDiskQuota:
-        upper = Path(plan.upper_dir)
+        # Both the upper and work directories live under the container root, so
+        # the quota is applied there rather than to the upper directory alone.
+        quota_dir = Path(plan.upper_dir).parent
         filesystem_root = filesystem_mount_point(
-            upper,
+            quota_dir,
             mountinfo_text=self.system.read_mountinfo(),
         )
         if not filesystem_root:
@@ -552,10 +558,10 @@ class ContainerRootfsOverlayManager:
 
         quota = plan_container_disk_quota(
             container_id=plan.container_id,
-            upper_dir=upper,
+            quota_dir=quota_dir,
             filesystem_root=Path(filesystem_root),
             limit_bytes=limit_bytes,
-            project_id=quota_project_id_for_path(upper),
+            project_id=quota_project_id_for_path(quota_dir),
         )
         for argv in (quota.assign_project_argv, quota.set_limit_argv):
             result = self.system.run_command(self.mount_timeout_seconds, argv)
