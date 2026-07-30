@@ -6,6 +6,7 @@ import pytest
 from foundation.process import ProcessResult
 from worker.container_execution import ContainerExecutionContext
 from worker.container_rootfs import (
+    MINIMUM_CONTAINER_ROOTFS_BACKING_BYTES,
     ContainerRootfsError,
     ContainerRootfsOverlayManager,
     ContainerRootfsSetupResult,
@@ -62,6 +63,11 @@ def _manager(
     return ContainerRootfsOverlayManager(
         image_mount_root=tmp_path / "images",
         scratch_root=tmp_path / "container-rootfs",
+        # The smallest store xfs accepts. The default reserves 100GiB of address
+        # space, which the production free-space check rightly refuses on a host
+        # that does not have it, and the admission floor scales down with it.
+        backing_image_bytes=MINIMUM_CONTAINER_ROOTFS_BACKING_BYTES,
+        minimum_free_bytes=16 * 1024**2,
         system=ContainerRootfsSystem(
             mount_checker=lambda _path: mounted,
             run_command=run if run is not None else _ok,
