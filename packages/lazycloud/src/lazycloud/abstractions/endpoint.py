@@ -120,6 +120,7 @@ class EndpointOptions(TypedDict, total=False):
     methods: list[str] | None
     cpu: float | None
     memory: str | None
+    disk: str | None
     gpu: str | None
     gpu_count: int
     timeout_seconds: int | None
@@ -155,6 +156,7 @@ class ASGIOptions(TypedDict, total=False):
     route: str
     cpu: float | None
     memory: str | None
+    disk: str | None
     gpu: str | None
     gpu_count: int
     timeout_seconds: int | None
@@ -201,6 +203,7 @@ class Endpoint(Generic[P, R]):
     methods: list[str] = field(default_factory=lambda: ["GET", "POST"])
     cpu: float | None = DEFAULT_HTTP_CPU
     memory: str | None = DEFAULT_HTTP_MEMORY
+    disk: str | None = None
     gpu: str | None = None
     gpu_count: int = 0
     timeout_seconds: int | None = 180
@@ -273,6 +276,7 @@ class Endpoint(Generic[P, R]):
             resources=Resources(
                 cpu=self.cpu,
                 memory=self.memory,
+                disk=self.disk,
                 gpu=self.gpu,
                 gpu_count=self.gpu_count,
                 timeout_seconds=_effective_timeout_seconds(self.task_policy, self.timeout_seconds),
@@ -429,6 +433,7 @@ def _endpoint(
     methods: list[str] | None = None,
     cpu: float | None = DEFAULT_HTTP_CPU,
     memory: str | None = DEFAULT_HTTP_MEMORY,
+    disk: str | None = None,
     gpu: str | None = None,
     gpu_count: int = 0,
     timeout_seconds: int | None = 180,
@@ -470,6 +475,7 @@ def _endpoint(
     methods: list[str] | None = None,
     cpu: float | None = DEFAULT_HTTP_CPU,
     memory: str | None = DEFAULT_HTTP_MEMORY,
+    disk: str | None = None,
     gpu: str | None = None,
     gpu_count: int = 0,
     timeout_seconds: int | None = 180,
@@ -510,6 +516,7 @@ def _endpoint(
     methods: list[str] | None = None,
     cpu: float | None = DEFAULT_HTTP_CPU,
     memory: str | None = DEFAULT_HTTP_MEMORY,
+    disk: str | None = None,
     gpu: str | None = None,
     gpu_count: int = 0,
     timeout_seconds: int | None = 180,
@@ -546,6 +553,7 @@ def _endpoint(
             name=name,
             cpu=cpu,
             memory=memory,
+            disk=disk,
             gpu=gpu,
             gpu_count=gpu_count,
             timeout_seconds=timeout_seconds,
@@ -591,6 +599,7 @@ class ASGI:
     route: str = "/"
     cpu: float | None = DEFAULT_HTTP_CPU
     memory: str | None = DEFAULT_HTTP_MEMORY
+    disk: str | None = None
     gpu: str | None = None
     gpu_count: int = 0
     timeout_seconds: int | None = 180
@@ -653,6 +662,7 @@ class ASGI:
             resources=Resources(
                 cpu=self.cpu,
                 memory=self.memory,
+                disk=self.disk,
                 gpu=self.gpu,
                 gpu_count=self.gpu_count,
                 timeout_seconds=_effective_timeout_seconds(self.task_policy, self.timeout_seconds),
@@ -788,6 +798,7 @@ def _asgi(
     route: str = "/",
     cpu: float | None = DEFAULT_HTTP_CPU,
     memory: str | None = DEFAULT_HTTP_MEMORY,
+    disk: str | None = None,
     gpu: str | None = None,
     gpu_count: int = 0,
     timeout_seconds: int | None = 180,
@@ -817,6 +828,7 @@ def _asgi(
             route=route,
             cpu=cpu,
             memory=memory,
+            disk=disk,
             gpu=gpu,
             gpu_count=gpu_count,
             timeout_seconds=timeout_seconds,
@@ -849,6 +861,7 @@ def _realtime(
     route: str = "/",
     cpu: float | None = DEFAULT_HTTP_CPU,
     memory: str | None = DEFAULT_HTTP_MEMORY,
+    disk: str | None = None,
     gpu: str | None = None,
     gpu_count: int = 0,
     timeout_seconds: int | None = 180,
@@ -878,6 +891,7 @@ def _realtime(
             route=route,
             cpu=cpu,
             memory=memory,
+            disk=disk,
             gpu=gpu,
             gpu_count=gpu_count,
             timeout_seconds=timeout_seconds,

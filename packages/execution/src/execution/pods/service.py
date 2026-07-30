@@ -220,6 +220,7 @@ class PodControlService:
                 ),
                 cpu_millicores=config.runtime.requested_cpu_millicores,
                 memory_mib=config.runtime.requested_memory_mib,
+                disk_mib=config.runtime.requested_disk_mib,
                 requires_gpu=config.runtime.gpu_required,
                 gpu_count=config.runtime.gpu_count,
                 gpu_request=config.runtime.gpu_request,

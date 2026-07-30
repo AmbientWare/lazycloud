@@ -213,9 +213,17 @@ class WorkspaceStorageMounter:
 class RootfsPreparer:
     log: CallLog
     released: list[str] = field(default_factory=list)
+    disk_limits: list[int] = field(default_factory=list)
 
-    def prepare(self, *, container_id: str, image_id: str) -> ContainerRootfsSetupResult:
+    def prepare(
+        self,
+        *,
+        container_id: str,
+        image_id: str,
+        disk_limit_bytes: int = 0,
+    ) -> ContainerRootfsSetupResult:
         _ = image_id
+        self.disk_limits.append(disk_limit_bytes)
         self.log.calls.append(f"rootfs:{container_id}")
         return ContainerRootfsSetupResult(
             container_id=container_id,

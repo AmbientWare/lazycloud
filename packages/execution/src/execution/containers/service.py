@@ -351,6 +351,9 @@ class ContainerService:
             workspace_storage_required=options.workspace_storage_required,
             workspace_storage_available=options.workspace_storage_available,
             workspace_storage_base_mount_path=options.workspace_storage_base_mount_path,
+            # Disk is a per-container ceiling rather than scheduled capacity, so it
+            # travels in the worker payload and not on the scheduler request.
+            disk_limit_bytes=(options.disk_mib * 1024 * 1024) if options.disk_mib > 0 else None,
         )
         request = SchedulerWorkerRequest(
             workspace_id=record.workspace_id,

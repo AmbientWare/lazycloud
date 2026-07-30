@@ -146,6 +146,9 @@ class WorkerContainerRequestPayload(ContractModel):
     allow_list: list[str] = Field(default_factory=list)
     memory_enforced: bool = True
     memory_limit_bytes: int | None = None
+    # Per-container disk ceiling for the container's writable layer. A cap, not
+    # a reservation: the scheduler does not fit against it.
+    disk_limit_bytes: int | None = None
     cgroup_path: str | None = None
     run_delayed_cleanup: bool = True
     cost_per_ms: float = 0.0

@@ -91,6 +91,7 @@ class TaskQueueOptions(TypedDict, total=False):
     name: str | None
     cpu: float | None
     memory: str | None
+    disk: str | None
     gpu: str | None
     gpu_count: int
     timeout: int | None
@@ -142,6 +143,7 @@ class TaskQueueFunction(Generic[P, R]):
     name: str | None = None
     cpu: float | None = DEFAULT_TASK_QUEUE_CPU
     memory: str | None = DEFAULT_TASK_QUEUE_MEMORY
+    disk: str | None = None
     gpu: str | None = None
     gpu_count: int = 0
     timeout: int | None = 3600
@@ -242,6 +244,7 @@ class TaskQueueFunction(Generic[P, R]):
             resources=Resources(
                 cpu=self.cpu,
                 memory=self.memory,
+                disk=self.disk,
                 gpu=self.gpu,
                 gpu_count=self.gpu_count,
                 timeout_seconds=self.timeout,
@@ -590,6 +593,7 @@ def _task_queue(
     name: str | None = None,
     cpu: float | None = DEFAULT_TASK_QUEUE_CPU,
     memory: str | None = DEFAULT_TASK_QUEUE_MEMORY,
+    disk: str | None = None,
     gpu: str | None = None,
     gpu_count: int = 0,
     timeout: int | None = 3600,
@@ -637,6 +641,7 @@ def _task_queue(
     name: str | None = None,
     cpu: float | None = DEFAULT_TASK_QUEUE_CPU,
     memory: str | None = DEFAULT_TASK_QUEUE_MEMORY,
+    disk: str | None = None,
     gpu: str | None = None,
     gpu_count: int = 0,
     timeout: int | None = 3600,
@@ -683,6 +688,7 @@ def _task_queue(
     name: str | None = None,
     cpu: float | None = DEFAULT_TASK_QUEUE_CPU,
     memory: str | None = DEFAULT_TASK_QUEUE_MEMORY,
+    disk: str | None = None,
     gpu: str | None = None,
     gpu_count: int = 0,
     timeout: int | None = 3600,
@@ -727,6 +733,7 @@ def _task_queue(
             name=name,
             cpu=cpu,
             memory=memory,
+            disk=disk,
             gpu=gpu,
             gpu_count=gpu_count,
             timeout=timeout,

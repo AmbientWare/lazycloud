@@ -118,6 +118,7 @@ class FunctionOptions(TypedDict, total=False):
     name: str | None
     cpu: float | None
     memory: str | None
+    disk: str | None
     gpu: str | None
     gpu_count: int
     timeout_seconds: int | None
@@ -157,6 +158,7 @@ class Function(Generic[P, R]):
     name: str | None = None
     cpu: float | None = DEFAULT_FUNCTION_CPU
     memory: str | None = DEFAULT_FUNCTION_MEMORY
+    disk: str | None = None
     gpu: str | None = None
     gpu_count: int = 0
     timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS
@@ -230,6 +232,7 @@ class Function(Generic[P, R]):
         image: Image | None = None,
         cpu: float | None = None,
         memory: str | None = None,
+        disk: str | None = None,
         gpu: str | None = None,
         gpu_count: int | None = None,
         env: Mapping[str, str] | None = None,
@@ -276,6 +279,7 @@ class Function(Generic[P, R]):
             resources=Resources(
                 cpu=self.cpu,
                 memory=self.memory,
+                disk=self.disk,
                 gpu=self.gpu,
                 gpu_count=self.gpu_count,
                 timeout_seconds=self._effective_timeout_seconds(),
@@ -720,6 +724,7 @@ def _function(
     name: str | None = None,
     cpu: float | None = DEFAULT_FUNCTION_CPU,
     memory: str | None = DEFAULT_FUNCTION_MEMORY,
+    disk: str | None = None,
     gpu: str | None = None,
     gpu_count: int = 0,
     timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS,
@@ -761,6 +766,7 @@ def _function(
     name: str | None = None,
     cpu: float | None = DEFAULT_FUNCTION_CPU,
     memory: str | None = DEFAULT_FUNCTION_MEMORY,
+    disk: str | None = None,
     gpu: str | None = None,
     gpu_count: int = 0,
     timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS,
@@ -801,6 +807,7 @@ def _function(
     name: str | None = None,
     cpu: float | None = DEFAULT_FUNCTION_CPU,
     memory: str | None = DEFAULT_FUNCTION_MEMORY,
+    disk: str | None = None,
     gpu: str | None = None,
     gpu_count: int = 0,
     timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS,
@@ -839,6 +846,7 @@ def _function(
             name=name,
             cpu=cpu,
             memory=memory,
+            disk=disk,
             gpu=gpu,
             gpu_count=gpu_count,
             timeout_seconds=timeout_seconds,
@@ -922,6 +930,7 @@ def _cron(
     name: str | None = None,
     cpu: float | None = None,
     memory: str | None = None,
+    disk: str | None = None,
     gpu: str | None = None,
     gpu_count: int = 0,
     timeout_seconds: int | None = None,
@@ -967,6 +976,7 @@ def _cron(
             name=name,
             cpu=cpu,
             memory=memory,
+            disk=disk,
             gpu=gpu,
             gpu_count=gpu_count,
             timeout_seconds=timeout_seconds,

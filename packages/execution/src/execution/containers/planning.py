@@ -37,6 +37,7 @@ class ContainerSchedulingOptions(ContractModel):
     checkpoint_readiness_interval_seconds: float = 1.0
     cpu_millicores: int = 0
     memory_mib: int = 0
+    disk_mib: int = 0
     gpu_type: str = ""
     gpu_request: list[str] | None = None
     gpu_count: int = 0

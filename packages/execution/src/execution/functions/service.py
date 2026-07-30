@@ -346,6 +346,7 @@ class FunctionControlService:
                 python_executable=config.image.python_executable,
                 cpu_millicores=config.runtime.requested_cpu_millicores,
                 memory_mib=config.runtime.requested_memory_mib,
+                disk_mib=config.runtime.requested_disk_mib,
                 requires_gpu=config.runtime.gpu_required,
                 gpu_count=config.runtime.gpu_count,
                 image_id=config.effective_image_id,

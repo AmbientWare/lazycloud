@@ -179,11 +179,12 @@ class ContainerRequestContext(ContractModel):
     workspace_storage_base_mount_path: str = DEFAULT_WORKSPACE_STORAGE_BASE_MOUNT_PATH
     cpu_millicores: int = 0
     memory_mib: int = 0
+    disk_limit_bytes: int = 0
     gpu: str = ""
     gpu_count: int = 0
     cost_per_ms: float = 0.0
 
-    @field_validator("cpu_millicores", "memory_mib", "gpu_count")
+    @field_validator("cpu_millicores", "memory_mib", "disk_limit_bytes", "gpu_count")
     @classmethod
     def non_negative_ints(cls, value: int) -> int:
         if value < 0:
@@ -565,6 +566,7 @@ def build_container_metrics_payload(
     process_io: ProcessIoCounters | None = None,
     network_io: NetworkIoCounters | None = None,
     gpu_memory: GpuMemoryCounters | None = None,
+    disk_used_bytes: int = 0,
 ) -> ContainerMetricsPayload:
     process = process_io or ProcessIoCounters()
     network = network_io or NetworkIoCounters()
@@ -589,6 +591,8 @@ def build_container_metrics_payload(
             memory_total_bytes=request.memory_mib * 1024 * 1024,
             disk_read_bytes=process.disk_read_bytes,
             disk_write_bytes=process.disk_write_bytes,
+            disk_used_bytes=disk_used_bytes,
+            disk_total_bytes=request.disk_limit_bytes,
             network_recv_bytes=network.bytes_recv,
             network_sent_bytes=network.bytes_sent,
             network_recv_packets=network.packets_recv,

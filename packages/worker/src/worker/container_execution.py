@@ -116,7 +116,13 @@ class ContainerMountPreparer(Protocol):
 
 
 class ContainerRootfsPreparer(Protocol):
-    def prepare(self, *, container_id: str, image_id: str) -> ContainerRootfsSetupResult: ...
+    def prepare(
+        self,
+        *,
+        container_id: str,
+        image_id: str,
+        disk_limit_bytes: int = 0,
+    ) -> ContainerRootfsSetupResult: ...
 
     def release(self, container_id: str) -> ContainerRootfsReleaseResult: ...
 
@@ -742,6 +748,7 @@ class WorkerContainerExecutionService:
         rootfs_result = self.rootfs_preparer.prepare(
             container_id=context.request.container_id,
             image_id=context.request.image_id,
+            disk_limit_bytes=context.request.disk_limit_bytes,
         )
         result.rootfs_result = rootfs_result
         if rootfs_result.status is ContainerRootfsStatus.Failed:

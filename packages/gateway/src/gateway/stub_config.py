@@ -205,6 +205,7 @@ def deployment_spec_from_stub(stub: StubRecord, *, name: str) -> DeploymentSpec:
             memory=(
                 str(runtime_config.memory) if runtime_config.memory not in {None, "", 0} else None
             ),
+            disk=(str(runtime_config.disk) if runtime_config.disk not in {None, "", 0} else None),
             gpu=runtime_config.gpu,
             gpu_count=runtime_config.gpu_count,
             timeout_seconds=(

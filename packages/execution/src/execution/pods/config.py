@@ -19,6 +19,7 @@ class PodRuntimeConfig(BaseModel):
     cpu_millicores: int = Field(default=0, ge=0)
     memory: str | int | None = None
     memory_mib: int = Field(default=0, ge=0)
+    disk: str | int | None = None
     gpu: str | None = None
     gpu_type: str | None = None
     gpu_count: int = Field(default=0, ge=0)
@@ -61,6 +62,12 @@ class PodRuntimeConfig(BaseModel):
         if self.memory_mib:
             return self.memory_mib
         return parse_memory_mib(self.memory) or 0
+
+    @property
+    def requested_disk_mib(self) -> int:
+        # Reuses the memory parser: the units are the same and disk accepts the
+        # same "10Gi" strings users already write for memory.
+        return parse_memory_mib(self.disk) or 0
 
     @property
     def requested_gpu_type(self) -> str:
