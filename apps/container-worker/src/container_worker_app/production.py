@@ -1303,6 +1303,10 @@ def build_production_worker_process_services(
     usage_recorder = RemoteWorkerUsageRecorder(repository)
     log_sink = RemoteSandboxProcessLogSink(repository)
     container_log_capture = WorkerContainerLogCaptureService(RemoteContainerLogSink(repository))
+    container_rootfs = ContainerRootfsOverlayManager(
+        image_mount_root=Path(config.resolved_image_mount_root),
+        scratch_root=config.configuration.paths.container_rootfs_root,
+    )
     cache_server = _worker_content_cache(config)
     checkpoint_state_sink = RemoteCheckpointStateSink(repository)
     automatic_checkpoint_leases = RemoteAutomaticCheckpointCreationLeaseCoordinator(repository)
@@ -1332,6 +1336,7 @@ def build_production_worker_process_services(
             WorkerContainerMetricsService(
                 worker_id=identity.worker_id,
                 sink=RemoteContainerMetricsSink(repository),
+                disk_usage=container_rootfs,
             )
             if config.resolved_metrics_enabled
             else None
@@ -1398,10 +1403,7 @@ def build_production_worker_process_services(
             request_mounts,
             source_materializer,
         ),
-        rootfs_preparer=ContainerRootfsOverlayManager(
-            image_mount_root=Path(config.resolved_image_mount_root),
-            scratch_root=config.configuration.paths.container_rootfs_root,
-        ),
+        rootfs_preparer=container_rootfs,
         spec_builder=OciRuntimeSpecBuilder(
             bundle_root=config.resolved_bundle_root,
             image_mount_root=Path(config.resolved_image_mount_root),

@@ -410,6 +410,36 @@ class ContainerRootfsOverlayManager:
             quota_project_id=quota.project_id,
         )
 
+    def used_bytes(self, container_id: str) -> int:
+        """Bytes the container's layer currently occupies.
+
+        Read from the project quota the kernel already maintains rather than by
+        walking the layer, so sampling stays constant-time no matter how many
+        files the container wrote.
+        """
+        if not container_id:
+            return 0
+        container_root = self.scratch_root / container_id
+        if not container_root.exists():
+            return 0
+        try:
+            project_id = quota_project_id_for_path(container_root)
+        except OSError:
+            return 0
+        filesystem_root = filesystem_mount_point(
+            container_root,
+            mountinfo_text=self.system.read_mountinfo(),
+        )
+        if not filesystem_root:
+            return 0
+        result = self.system.run_command(
+            self.mount_timeout_seconds,
+            ["xfs_quota", "-x", "-c", f"report -p -N -b {project_id}", filesystem_root],
+        )
+        if result.exit_code != 0:
+            return 0
+        return _parse_quota_used_bytes(result.stdout, project_id)
+
     def release(self, container_id: str) -> ContainerRootfsReleaseResult:
         if not container_id:
             return ContainerRootfsReleaseResult(
@@ -616,6 +646,23 @@ class ContainerRootfsOverlayManager:
         if actual_parent != expected_parent:
             msg = f"container rootfs path is outside the scratch root: {container_root}"
             raise ContainerRootfsError(msg)
+
+
+def _parse_quota_used_bytes(report: str, project_id: int) -> int:
+    """Used blocks for one project from an xfs_quota block report, in bytes.
+
+    Report columns are: project, used, soft, hard, warn/grace. Sizes are in KiB.
+    """
+    marker = f"#{project_id}"
+    for line in report.splitlines():
+        fields = line.split()
+        if len(fields) < 2 or fields[0] != marker:
+            continue
+        try:
+            return int(fields[1]) * 1024
+        except ValueError:
+            return 0
+    return 0
 
 
 def _command_failure_detail(result: ProcessResult) -> str:

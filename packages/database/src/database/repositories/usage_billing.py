@@ -235,6 +235,7 @@ class UsageBillingWindowIdentity:
 _BILLING_USAGE_METRICS = (
     UsageMetric.CpuSeconds,
     UsageMetric.MemoryGibSeconds,
+    UsageMetric.ContainerDiskByteSeconds,
     UsageMetric.GpuSeconds,
     UsageMetric.TaskCount,
     UsageMetric.ContainerDurationMilliseconds,

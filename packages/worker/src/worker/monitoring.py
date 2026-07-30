@@ -324,6 +324,7 @@ def _usage_evidence_from_metrics(metrics: ContainerMetricsData) -> WorkerUsageEv
         cpu_used_core_seconds=metrics.cpu_used / 1_000 * interval_seconds,
         memory_rss_byte_seconds=metrics.memory_rss_bytes * interval_seconds,
         memory_swap_byte_seconds=metrics.memory_swap_bytes * interval_seconds,
+        disk_used_byte_seconds=metrics.disk_used_bytes * interval_seconds,
         gpu_memory_byte_seconds=metrics.gpu_memory_used_bytes * interval_seconds,
         network_ingress_bytes=metrics.network_recv_bytes,
         network_egress_bytes=metrics.network_sent_bytes,

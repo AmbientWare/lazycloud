@@ -107,6 +107,7 @@ class WorkerUsageMetricName(StrEnum):
     NetworkEgress = "network_egress_bytes"
     NetworkIngressPackets = "network_ingress_packets"
     NetworkEgressPackets = "network_egress_packets"
+    ContainerDisk = "container_disk_byte_seconds"
     DiskRead = "disk_read_bytes"
     DiskWrite = "disk_write_bytes"
 
@@ -241,6 +242,8 @@ class WorkerUsageEvidence(ContractModel):
     cpu_used_core_seconds: float = 0
     memory_rss_byte_seconds: float = 0
     memory_swap_byte_seconds: float = 0
+    # Ephemeral container disk actually occupied, for the window.
+    disk_used_byte_seconds: float = 0
     gpu_memory_byte_seconds: float = 0
     network_ingress_bytes: int = 0
     network_egress_bytes: int = 0
@@ -640,6 +643,19 @@ def plan_worker_usage_metrics(
         "cost_for_duration": effective_cost_per_ms * duration_ms,
     }
     duration_seconds = duration_ms / 1_000
+    measured = evidence or WorkerUsageEvidence()
+    # A request is a floor, not a cap: a container can burst well past what it
+    # reserved, so billing the reservation alone would undercount the burst. Bill
+    # the greater of the two, per window, so a short burst is not charged as if it
+    # lasted the whole container.
+    billable_cpu_core_seconds = max(
+        request.cpu_millicores / 1_000 * duration_seconds,
+        measured.cpu_used_core_seconds,
+    )
+    billable_memory_gib_seconds = max(
+        request.memory_mib / 1_024 * duration_seconds,
+        measured.memory_rss_byte_seconds / 1_024**3,
+    )
     plans = [
         WorkerUsageMetricPlan(
             name=WorkerUsageMetricName.ContainerDuration,
@@ -649,12 +665,12 @@ def plan_worker_usage_metrics(
         WorkerUsageMetricPlan(
             name=WorkerUsageMetricName.Cpu,
             labels=labels,
-            value=request.cpu_millicores / 1_000 * duration_seconds,
+            value=billable_cpu_core_seconds,
         ),
         WorkerUsageMetricPlan(
             name=WorkerUsageMetricName.Memory,
             labels=labels,
-            value=request.memory_mib / 1_024 * duration_seconds,
+            value=billable_memory_gib_seconds,
         ),
         WorkerUsageMetricPlan(
             name=WorkerUsageMetricName.Gpu,
@@ -670,7 +686,14 @@ def plan_worker_usage_metrics(
                 value=effective_cost_per_ms * duration_ms,
             )
         )
-    measured = evidence or WorkerUsageEvidence()
+    if measured.disk_used_byte_seconds > 0:
+        plans.append(
+            WorkerUsageMetricPlan(
+                name=WorkerUsageMetricName.ContainerDisk,
+                labels=labels,
+                value=measured.disk_used_byte_seconds,
+            )
+        )
     evidence_values = (
         (WorkerUsageMetricName.CpuUsed, measured.cpu_used_core_seconds),
         (WorkerUsageMetricName.MemoryRss, measured.memory_rss_byte_seconds),

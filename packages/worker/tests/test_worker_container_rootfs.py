@@ -319,3 +319,79 @@ def test_container_tmpfs_is_bounded_by_the_memory_request() -> None:
             sized[destination] = [opt for opt in options if str(opt).startswith("size=")]
     assert sized["/volumes"] == ["size=512m"]
     assert sized["/dev/shm"] == ["size=512m"]
+
+
+def test_billing_takes_the_greater_of_reservation_and_measured_usage() -> None:
+    """A request is a floor, so a bursting container must not bill as if capped."""
+    from worker.events import (
+        WorkerUsageEvidence,
+        WorkerUsageMetricName,
+        plan_worker_usage_metrics,
+    )
+
+    request = ContainerRequestContext(
+        container_id="ctr-1",
+        workspace_id="ws-1",
+        cpu_millicores=125,
+        memory_mib=128,
+    )
+
+    def value_of(plans: object, name: WorkerUsageMetricName) -> float:
+        assert isinstance(plans, tuple)
+        for plan in plans:
+            if plan.name is name:
+                return plan.value
+        raise AssertionError(f"{name} was not emitted")
+
+    # Idle: the reservation is the floor.
+    idle = plan_worker_usage_metrics(
+        worker_id="w",
+        request=request,
+        duration_ms=10_000,
+        evidence=WorkerUsageEvidence(cpu_used_core_seconds=0.1),
+    )
+    assert value_of(idle, WorkerUsageMetricName.Cpu) == pytest.approx(1.25)
+
+    # Bursting past the request bills the usage, not the reservation.
+    bursting = plan_worker_usage_metrics(
+        worker_id="w",
+        request=request,
+        duration_ms=10_000,
+        evidence=WorkerUsageEvidence(
+            cpu_used_core_seconds=80.0,
+            memory_rss_byte_seconds=8 * 1024**3,
+        ),
+    )
+    assert value_of(bursting, WorkerUsageMetricName.Cpu) == pytest.approx(80.0)
+    assert value_of(bursting, WorkerUsageMetricName.Memory) == pytest.approx(8.0)
+
+
+def test_ephemeral_disk_bills_what_was_used_not_the_oversubscribed_ceiling() -> None:
+    """The disk cap is oversubscribed by design, so only real occupancy is billable."""
+    from worker.events import (
+        WorkerUsageEvidence,
+        WorkerUsageMetricName,
+        plan_worker_usage_metrics,
+    )
+
+    request = ContainerRequestContext(
+        container_id="ctr-1",
+        workspace_id="ws-1",
+        cpu_millicores=125,
+        memory_mib=128,
+        disk_limit_bytes=100 * 1024**3,
+    )
+    plans = plan_worker_usage_metrics(
+        worker_id="w",
+        request=request,
+        duration_ms=10_000,
+        evidence=WorkerUsageEvidence(disk_used_byte_seconds=5 * 1024**3),
+    )
+    emitted = {plan.name: plan.value for plan in plans}
+    assert emitted[WorkerUsageMetricName.ContainerDisk] == pytest.approx(5 * 1024**3)
+
+    # No occupancy, nothing billed: the ceiling alone is never charged.
+    idle = plan_worker_usage_metrics(
+        worker_id="w", request=request, duration_ms=10_000, evidence=WorkerUsageEvidence()
+    )
+    assert WorkerUsageMetricName.ContainerDisk not in {plan.name for plan in idle}
