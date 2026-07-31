@@ -656,13 +656,22 @@ class SchedulerContainerRequestService:
                 reason=f"capacity-owner mutation is in progress: {exc}",
             )
         except Exception as exc:
+            # The reason reaches the caller as a task error, and a type name
+            # alone cannot be acted on: it names neither the capacity owner nor
+            # what the acquisition rejected. Keep the caller's contract and put
+            # the exception where it can be read.
+            LOGGER.exception(
+                "capacity acquisition failed for container %s on capacity owner %s",
+                request.container_id,
+                request.capacity_owner_id,
+            )
             result = CapacityAcquisitionResult(
                 status=CapacityAcquisitionStatus.TemporarilyUnavailable,
                 capacity_owner_id=request.capacity_owner_id,
                 reservation_id=request.container_id,
                 operation_id=request.container_id,
                 retry_delay_seconds=DEFAULT_PROVISIONING_HANDOFF.total_seconds(),
-                reason=f"capacity acquisition failed: {type(exc).__name__}",
+                reason=f"capacity acquisition failed: {type(exc).__name__}: {exc}",
             )
         waiting = result.status in {
             CapacityAcquisitionStatus.ExistingPending,
