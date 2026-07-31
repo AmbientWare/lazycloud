@@ -16,6 +16,32 @@ sequence, resolves the places where they conflict, and marks where we may stop.
 81 items. Phases 0–4 are the programme. Phases 5–6 are elective and are called
 out as such.
 
+## Rule 0 — loop until done
+
+**This is the working rule. It comes before everything else.**
+
+For each item, in this order, and do not skip a step:
+
+1. **Complete the current task.** Finish it — implementation, acceptance, and the
+   commit. A task is not done because the code is written; it is done when its
+   acceptance evidence has actually been produced and the tree is clean.
+2. **Determine what is next.** Take the next unchecked item in phase order,
+   respecting the *after* annotations. Do not jump ahead to something easier, and
+   do not start a second item while one is half-finished.
+3. **Investigate it until you understand it.** Read the track document's entry,
+   then read the real code it names and verify every `file:line` still says what
+   the plan claims. The plan is a claim with evidence attached, not a fact. If
+   the code has moved or the plan is wrong, correct the plan first, then proceed.
+4. **Implement it.** Follow the track document's instruction.
+5. **Tick the box, record what the acceptance actually showed, and return to 1.**
+
+Do not stop at a phase boundary for permission unless the phase itself says to
+(the Gates, and the stop point after Phase 4). Do not stop because something was
+hard; stop only when genuinely blocked or genuinely finished, and say which.
+
+If an item turns out to be wrong, unnecessary, or already done, say so and strike
+it — do not implement something the code has made obsolete.
+
 ## Ground rules
 
 From `CLAUDE.md`, and they bind every item here:
@@ -269,39 +295,72 @@ and should be budgeted separately.
 
 ---
 
-## Open questions for the owner
+## Decisions
 
-Blocking, in the order they will be hit:
+Settled by the owner. These are binding; where a track document still poses one
+of these as a question, this section overrides it.
 
-1. **What is the public ingress, concretely?** INFRA-06 is a deployment project,
-   not a code change. Funnel is disqualified — it failed under exactly the load
-   we will put on it.
-2. **Is the 47.6 MB agent artifact served from the release bucket?** BOOT-05
-   assumes yes and adds `--agent-url`. If it must come from the control plane,
-   BOOT-05's shape changes and Gate A's load profile changes with it.
-3. **Should source-cache cleanup gate worker availability at all?** Today one
-   un-purgeable object holds a worker permanently out of service. That is an
-   unstated data-safety-versus-availability policy, and it is the owner's call.
-4. **How far do we go?** Phases 0–4, or continue into 5–6. Two of three
-   investigators recommended stopping earlier than this plan goes.
+| # | Decision | Effect |
+|---|---|---|
+| 1 | **Cloudflare Tunnel** is the public ingress | INFRA-06 is concrete: tunnel + `lazycloud.dev` zone. Not an ALB — the control plane does not run in AWS. Keeps DDoS absorption in front of the unauthenticated enrolment route |
+| 2 | Agent artifact stays on the **release bucket** | BOOT-05 adds `--agent-url`; the 47.6 MB transfer never touches the control plane |
+| 3 | **Do the full `DomainError`/`ErrorResponse` code field now** — option (a) | ERR-06 is one cross-owner change: shared contracts, API sink, SDK/CLI renderer, and `apps/web` Zod schemas together, per `CLAUDE.md` |
+| 4 | **Headscale is on the roadmap** (future, for scalability) | BOOT-06 must not further entrench the Tailscale SaaS `/api/v2` shape. `TailscaleTailnetControl` keeps its seam. The `--login-server` gap closes by construction in BOOT-05, since the agent authenticates with the `control_url` the control plane returns |
+| 5 | Source-cache cleanup **no longer hard-gates availability** | CAP-06: bound by attempt count, let the worker serve while cleanup retries, record the failure durably. One un-purgeable object must not strand a machine |
+| 6 | `ssm:SendCommand` goes to a **separate break-glass role** | INFRA-09 splits it out; the acceptance operator role does not hold RCE on nodes |
+| 7 | **No alerting for now** | INFRA-15 is deferred out of the programme. Signals still land durably (INFRA-14) and are scrapable (INFRA-12) — only paging is dropped. INFRA-19 loses its INFRA-15 dependency |
+| 8 | Delete the `lazycloud-shared` stack — **blocked, see below** | Recorded as INFRA-21 with a mandatory pre-check |
+| 9 | Customer re-authorization **now** | INFRA-16 proceeds while the test connection is the only one |
+| 10 | **`PATCH`** for partial policy edits; `PUT` stays full-replace | ERR-13 |
+| 11 | Failed-node reclaim hold: **300 s** | BOOT-01. Inspection becomes possible via INFRA-09 rather than by leaving nodes running |
+| 12 | `external_id` **documented, not encrypted** | INFRA-17: record in `AGENTS.md` that it is deliberately clear because it is a confused-deputy nonce, not a secret |
+| 13 | **Handle the worker RPC surface at the dispatch boundary** — option (b) | ERR-37 shrinks: one wrapper around RPC method invocation logs the cause and converts to the failure response, replacing 26 near-identical handlers in `container_service/service.py`. New RPC methods inherit it. Its own item, its own acceptance — not folded into the lint sweep |
+| 14 | CAP-13 stays **measurement-gated** | Decide from its acceptance measurement, not in advance |
+| 15 | Naming overlap with another codebase: **not a concern** | Removed from the plan entirely |
 
-Non-blocking, but decide before they surprise us:
+### Blocked: deleting `lazycloud-shared` (INFRA-21)
 
-5. `--login-server` is honoured by the runtime but not by the node bootstrap, so
-   a self-hosted coordination server would silently split node bootstrap onto
-   public Tailscale.
-6. The non-Amazon-Linux Docker install branch pipes `get.docker.com` unverified
-   while Tailscale and the agent are SHA-pinned. Managed nodes take the pinned
-   `dnf` branch, so it is out of scope here — but it is real.
-7. `infrastructure/secrets-backup/` holds live third-party credentials
-   unencrypted on disk. Untracked, never committed, correctly gitignored — but
-   present in a repository where agents have file access. INFRA-18 removes them;
-   they should be in a secret manager regardless.
-8. Contract names and string literals overlap exactly with beta9 —
-   `tsnet_restricted`, `/install/agent`, `--join-token`, `--machine-fingerprint`,
-   `RequestAgentTransportCredential`, the route-proxy shape. `CLAUDE.md` requires
-   original implementation and forbids another codebase's names. Direction and
-   history were not established. This is a judgement call, not a work item.
+Deletion was attempted and **refused by CloudFormation**, twice:
+
+> Delete canceled. Cannot delete export
+> `lazycloud-shared:ExportsOutputFnGetAttIAMRolesPlatformRolesExternalSecretsRole...Arn`
+> as it is in use by `lazycloud-prod-us-east-1-infra`.
+
+The stack holds a CDK substrate from the superseded architecture — 4 ECR
+repositories (`backend/api`, `backend/backgroundworkers`, `backend/crons`,
+`web`), ECR replication, 5 IAM roles (Karpenter controller and node, EBS CSI,
+EFS CSI, External Secrets), and a Secrets Manager secret. It exports several of
+those role ARNs, and `lazycloud-prod-us-east-1-infra` imports them.
+
+That importing stack has itself been in `DELETE_FAILED` since 2026-01-28,
+blocked on two subnets with live dependencies and an ACM wildcard certificate
+still in use. So the order is forced:
+
+- [ ] **INFRA-21** Retire the superseded CDK substrate — *needs an owner decision first*
+  - **Blocker**: `lazycloud-shared` cannot be deleted until
+    `lazycloud-prod-us-east-1-infra` is gone, and that one cannot be deleted
+    until its subnets and ACM certificate are released.
+  - **Decision required**: the blocking subnets may belong to the VPC hosting the
+    `eksctl-ambient-*` clusters, which appear to be an unrelated project.
+    Confirm that VPC is disposable before anything is deleted.
+  - **Change**: release the certificate and subnet dependents, delete
+    `lazycloud-prod-us-east-1-infra`, then delete `lazycloud-shared`.
+  - **Risk**: a half-completed delete leaves orphaned NAT gateways, load
+    balancers, or subnets accruing cost with no stack managing them — which is
+    exactly how prod-infra reached its current state.
+  - **Acceptance**: both stacks absent; no orphaned VPC/NAT/ELB remaining.
+
+## Deferred out of scope
+
+- **Alerting and paging** (INFRA-15) — owner decision 7. Revisit before real
+  production traffic; the durable signals it would have consumed still land.
+- **The unverified `get.docker.com` branch** (`operations.py:545-554`) —
+  Tailscale and the agent are SHA-pinned; this branch is not. Managed nodes take
+  the pinned `dnf` path, so it is out of scope here. It remains real.
+- **`infrastructure/secrets-backup/`** — live third-party credentials,
+  unencrypted on disk, untracked and never committed, correctly gitignored.
+  INFRA-18 removes them from the tree; they belong in a secret manager
+  regardless.
 
 ## How we work this
 
