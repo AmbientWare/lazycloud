@@ -1263,6 +1263,20 @@ class CapacityReservationService:
             owner_reservations = tuple(
                 self.reservations.list_for_owner(controller.capacity_owner_id)
             )
+            if reservation.source is CapacityReservationSource.PendingWorker:
+                # This reservation claims a worker that is already booting, so it
+                # asks the provider for nothing and carries no desired unit. The
+                # controller would refuse it on exactly that ground. `reconcile`
+                # skips it for the same reason.
+                return CapacityAcquisitionResult(
+                    status=CapacityAcquisitionStatus.ExistingPending,
+                    capacity_owner_id=reservation.capacity_owner_id,
+                    reservation_id=reservation.id,
+                    operation_id=reservation.operation_id,
+                    desired_unit=reservation.desired_unit,
+                    target_worker_id=reservation.target_worker_id,
+                    reason="pending worker capacity reservation is awaiting registration",
+                )
             if (
                 not decision.created
                 and reservation.status is not CapacityReservationStatus.Reserved

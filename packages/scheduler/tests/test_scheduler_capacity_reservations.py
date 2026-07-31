@@ -1078,6 +1078,48 @@ def test_cpu_memory_and_gpu_exhaustion_prevent_false_compatible_reuse(
     assert first.reservation.id != second.reservation.id
 
 
+def test_acquiring_for_a_container_already_claiming_a_pending_worker_asks_no_provider(
+    real_redis_actors: _RealRedisActors,
+) -> None:
+    """A pending-worker claim carries no desired unit, so it must not be acquired.
+
+    `reserve_pending` persists the claim with no desired unit — it buys nothing,
+    it waits for a machine that is already booting. `reconcile` skips such a
+    reservation for that reason; the acquisition path did not, and drove it into
+    the controller, which refused it on exactly the ground that made it valid.
+    Every later attempt for that container raised until the registration
+    deadline, so one worker that failed to register turned into a failed task
+    with a Python type name for a reason.
+    """
+    pool = _managed_pool()
+    repository = _repository(real_redis_actors)
+    controller = ComputePoolCapacityController(
+        "workspace-1",
+        pool,
+        # Raises if the provider is consulted at all, which is the assertion.
+        _UnusedComputeCapacity(pool),
+        _WorkerRepository(),
+    )
+    owner = PendingCapacityOwner(
+        capacity_owner_id=OWNER_ID,
+        owner_kind=CapacityOwnerKind.ManagedPool,
+        pool_name=pool.name,
+        workspace_id="workspace-1",
+    )
+    service = CapacityReservationService(repository, lambda: [controller], lambda: [owner])
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    pending = _worker(OWNER_ID, created_at=now).model_copy(
+        update={"status": SchedulerWorkerStatus.Pending}
+    )
+    reserved = service.reserve_pending(_request("pending-claim"), pending, now=now)
+    assert reserved.status is CapacityAcquisitionStatus.ExistingPending
+
+    result = service.acquire(_request("pending-claim"), now=now + timedelta(seconds=1))
+
+    assert result.status is CapacityAcquisitionStatus.ExistingPending
+    assert result.target_worker_id == pending.worker_id
+
+
 def test_agent_and_disabled_pool_pending_workers_are_durably_reserved(
     real_redis_actors: _RealRedisActors,
 ) -> None:

@@ -115,7 +115,7 @@ construction, and we are not shipping a window where that gets worse.
 Independent, cheap, and each one either fixes a live fault or removes a
 diagnostic blind spot. Nothing here depends on anything else.
 
-- [ ] **CAP-01** Guard `_acquire_from_controller` against pending-worker reservations
+- [x] **CAP-01** Guard `_acquire_from_controller` against pending-worker reservations
 - [ ] **BOOT-01** Give the `Failed` bootstrap phase a reclaim deadline
 - [ ] **BOOT-02** Stop a revoked agent from re-enrolling forever
 - [ ] **INFRA-18** Remove the prior architecture's credential backups from the working tree
