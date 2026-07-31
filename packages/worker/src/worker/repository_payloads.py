@@ -26,6 +26,7 @@ from shared.scheduling import (
     WorkerRemovalResult,
     WorkerRepositoryLockRecord,
     WorkerRepositoryLockRelease,
+    WorkerUnavailableReason,
 )
 from shared.source_cache_cleanup import (
     SourceCacheCleanupTargetRecord,
@@ -126,7 +127,8 @@ class WorkerIdRequest(ContractModel):
 
 class DisableWorkerRequest(ContractModel):
     worker_id: str
-    reason: str
+    reason: WorkerUnavailableReason
+    detail: str = Field(default="", max_length=512)
 
 
 class AddWorkerRequest(ContractModel):

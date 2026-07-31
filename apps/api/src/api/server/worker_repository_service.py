@@ -71,6 +71,7 @@ from shared.scheduling import (
     SchedulerWorkerRecord,
     SchedulerWorkerRequest,
     SchedulerWorkerStatus,
+    WorkerUnavailableReason,
 )
 from shared.source_cache_cleanup import WorkerCacheGenerationState
 from shared.tasks import Task, TaskStatus, is_terminal_task_status
@@ -824,7 +825,11 @@ class WorkerRepositoryService:
     def disable_worker(self, request: DisableWorkerRequest) -> WorkerRecordResponse:
         try:
             return WorkerRecordResponse(
-                worker=self.workers.disable_worker(request.worker_id, reason=request.reason)
+                worker=self.workers.disable_worker(
+                    request.worker_id,
+                    reason=request.reason,
+                    detail=request.detail,
+                )
             )
         except SchedulerRepositoryError as exc:
             raise _scheduler_domain_error(exc) from exc
@@ -953,7 +958,7 @@ class WorkerRepositoryService:
             }:
                 self.workers.disable_worker(
                     worker_id,
-                    reason="source cache is unavailable on this worker",
+                    reason=WorkerUnavailableReason.SourceCacheUnavailable,
                 )
         except SchedulerRepositoryError:
             return

@@ -96,6 +96,7 @@ from shared.realtime.contracts import (
     EventRecordType,
     create_cloud_event_record,
 )
+from shared.scheduling import WorkerUnavailableReason
 from shared.tasks import RetryPolicy, Task, TaskStatus
 from tests.redis_fakes import FakeRedis
 
@@ -890,7 +891,7 @@ def test_scheduler_worker_repository_lifecycle_capacity_queue_and_image_pull_loc
     assert _claim_and_acknowledge_requests(repo, now=now, limit=10) == []
     assert _claim_and_acknowledge_requests(repo, now=future, limit=10) == [request]
 
-    disabled = repo.disable_worker("worker-1", reason="cordoned")
+    disabled = repo.disable_worker("worker-1", reason=WorkerUnavailableReason.OperatorCordon)
     assert disabled.status is SchedulerWorkerStatus.Unavailable
 
     image_lock = repo.set_image_pull_lock(

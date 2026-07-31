@@ -175,6 +175,7 @@ from shared.scheduling import (
     SchedulerContainerStatus,
     SchedulerWorkerRecord,
     SchedulerWorkerStatus,
+    WorkerUnavailableReason,
 )
 from shared.source_cache_cleanup import (
     WorkerCacheStorageDestructionEvidence,
@@ -1015,7 +1016,7 @@ class GatewayControlService:
                         if worker.capacity_owner_id == owner.capacity_owner_id:
                             self.scheduler_worker_lookup.disable_worker(
                                 worker.worker_id,
-                                reason="compute pool was scaled to zero machines",
+                                reason=WorkerUnavailableReason.MachineRetired,
                             )
 
             return self.services.compute.scale_internal_pool(

@@ -10,7 +10,7 @@ from compute.projection import PrivatePoolState
 from compute.state import ComputePoolState, ComputePoolStatus
 from shared.compute_fleet import Machine
 from shared.compute_policy import ComputePoolPhase, ComputePoolRecord
-from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
+from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus, WorkerUnavailableReason
 
 OPEN_RESERVATION_STATUSES = {"", "active", "pending"}
 
@@ -37,7 +37,8 @@ class SchedulerHookWorkerRepository(Protocol):
         self,
         worker_id: str,
         *,
-        reason: str,
+        reason: WorkerUnavailableReason,
+        detail: str = "",
         ttl_seconds: int = 0,
         now: datetime | None = None,
     ) -> SchedulerWorkerRecord: ...
@@ -61,7 +62,11 @@ class SchedulerComputeHooks:
 
     def disable_machine(self, machine_id: str, reason: str) -> None:
         for worker in self._workers_for_machine(machine_id):
-            self.workers.disable_worker(worker.worker_id, reason=reason)
+            self.workers.disable_worker(
+                worker.worker_id,
+                reason=WorkerUnavailableReason.MachineRetired,
+                detail=reason,
+            )
 
     def retire_machine(
         self,

@@ -37,6 +37,7 @@ from shared.scheduling import (
     WorkerRepositoryLockKind,
     WorkerRepositoryLockRecord,
     WorkerRepositoryLockRelease,
+    WorkerUnavailableReason,
     gpu_count_for_capacity,
 )
 from shared.timestamps import utc_now
@@ -734,7 +735,8 @@ class RedisSchedulerWorkerRepository:
         ttl_seconds: int = DEFAULT_WORKER_STATE_TTL_SECONDS,
         now: datetime | None = None,
         reconcile_capacity: bool = False,
-        unavailable_reason: str = "",
+        unavailable_reason: WorkerUnavailableReason | None = None,
+        unavailable_detail: str = "",
     ) -> SchedulerWorkerRecord:
         def write() -> SchedulerWorkerRecord:
             worker = self.get_worker(worker_id)
@@ -746,6 +748,7 @@ class RedisSchedulerWorkerRepository:
                 update={
                     "status": status,
                     "unavailable_reason": unavailable_reason,
+                    "unavailable_detail": unavailable_detail,
                     "resource_version": worker.resource_version + 1,
                     "updated_at": now or utc_now(),
                 }
@@ -776,7 +779,8 @@ class RedisSchedulerWorkerRepository:
         self,
         worker_id: str,
         *,
-        reason: str,
+        reason: WorkerUnavailableReason,
+        detail: str = "",
         ttl_seconds: int = DEFAULT_WORKER_STATE_TTL_SECONDS,
         now: datetime | None = None,
     ) -> SchedulerWorkerRecord:
@@ -784,6 +788,7 @@ class RedisSchedulerWorkerRepository:
             worker_id,
             SchedulerWorkerStatus.Unavailable,
             unavailable_reason=reason,
+            unavailable_detail=detail,
             ttl_seconds=ttl_seconds,
             now=now,
         )

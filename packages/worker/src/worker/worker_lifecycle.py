@@ -11,7 +11,7 @@ from typing import Protocol, runtime_checkable
 from pydantic import Field
 from shared.container_requests import StopContainerReason
 from shared.contracts import ContractModel
-from shared.scheduling import SchedulerWorkerRecord, WorkerRemovalResult
+from shared.scheduling import SchedulerWorkerRecord, WorkerRemovalResult, WorkerUnavailableReason
 from shared.timestamps import utc_now
 
 from worker.events import ContainerRequestContext
@@ -77,7 +77,8 @@ class WorkerLifecycleRepository(Protocol):
         self,
         worker_id: str,
         *,
-        reason: str,
+        reason: WorkerUnavailableReason,
+        detail: str = "",
         ttl_seconds: int,
     ) -> SchedulerWorkerRecord | None: ...
 
@@ -318,7 +319,7 @@ class WorkerLifecycleOrchestrator:
             WorkerLifecycleAction.DisableScheduling,
             lambda: repository.disable_worker(
                 self.worker_id,
-                reason="worker process is shutting down",
+                reason=WorkerUnavailableReason.ShuttingDown,
                 ttl_seconds=self.keepalive_ttl_seconds,
             ),
         )

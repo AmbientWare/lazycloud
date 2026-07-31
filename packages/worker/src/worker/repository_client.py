@@ -30,6 +30,7 @@ from shared.scheduling import (
     WorkerRemovalResult,
     WorkerRepositoryLockRecord,
     WorkerRepositoryLockRelease,
+    WorkerUnavailableReason,
 )
 from shared.source_cache_cleanup import (
     SourceCacheCleanupTargetRecord,
@@ -984,12 +985,13 @@ class RemoteSchedulerWorkerRepository:
         self,
         worker_id: str,
         *,
-        reason: str,
+        reason: WorkerUnavailableReason,
+        detail: str = "",
         ttl_seconds: int = 0,
     ) -> SchedulerWorkerRecord:
         _ = ttl_seconds
         worker = self.client.disable_worker(
-            DisableWorkerRequest(worker_id=worker_id, reason=reason)
+            DisableWorkerRequest(worker_id=worker_id, reason=reason, detail=detail)
         ).worker
         if worker is None:
             msg = f"worker {worker_id!r} was not returned by repository"

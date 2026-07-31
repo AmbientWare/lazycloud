@@ -198,7 +198,7 @@ failure carries its cause to a durable place in every path we touched.
   and `max_gpu_instances` is read only as a placement ceiling
   (`request_placement.py:80`, `service.py:2315`). The defect was gating a CPU
   release on a GPU ceiling, so the knob was removed from the predicate.*
-- [ ] **CAP-02** Carry a typed reason on every transition to `Unavailable` — *after ERR-12*
+- [x] **CAP-02** Carry a typed reason on every transition to `Unavailable` — *after ERR-12*
 - [ ] **CAP-03** Report which registration step failed — *after CAP-02*
 - [ ] **CAP-04** Remove the worker record when registration never completed — *after CAP-03*
 - [ ] **CAP-05** Stop discarding the keep-alive source-cache outcome — *after CAP-02*

@@ -102,13 +102,27 @@ class SchedulerWorkerRequest(ContractModel):
         )
 
 
+class WorkerUnavailableReason(StringEnum):
+    """Typed diagnosis for a worker leaving the schedulable set."""
+
+    RegistrationFailed = "registration_failed"
+    ReadinessValidationFailed = "readiness_validation_failed"
+    SourceCacheUnavailable = "source_cache_unavailable"
+    Draining = "draining"
+    MachineRetired = "machine_retired"
+    AgentDisconnected = "agent_disconnected"
+    OperatorCordon = "operator_cordon"
+    ShuttingDown = "shutting_down"
+
+
 class SchedulerWorkerRecord(ContractModel):
     worker_id: str
     pool_name: str
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     machine_id: str = ""
     status: SchedulerWorkerStatus = SchedulerWorkerStatus.Pending
-    unavailable_reason: str = ""
+    unavailable_reason: WorkerUnavailableReason | None = None
+    unavailable_detail: str = Field(default="", max_length=512)
     gpu_type: str = ""
     runtime_class: str = ""
     runtime_classes: list[str] = Field(default_factory=list)

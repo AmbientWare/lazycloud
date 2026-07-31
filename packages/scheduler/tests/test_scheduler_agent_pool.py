@@ -12,6 +12,7 @@ from scheduler.agent_pool import (
 from scheduler.fleet import SchedulerWorkerStatus
 from scheduler.state import SchedulerWorkerRecord
 from shared.compute_enrollment import ComputePreflightCheck
+from shared.scheduling import WorkerUnavailableReason
 
 
 def test_agent_worker_pool_reconciles_connected_machine_and_capacity() -> None:
@@ -161,7 +162,8 @@ class _WorkerRepo:
         self,
         worker_id: str,
         *,
-        reason: str = "",
+        reason: WorkerUnavailableReason = WorkerUnavailableReason.AgentDisconnected,
+        detail: str = "",
         ttl_seconds: int = 0,
         now: datetime | None = None,
     ) -> SchedulerWorkerRecord:

@@ -16,6 +16,7 @@ from shared.contracts import ContractModel
 from shared.scheduling import (
     SchedulerWorkerRecord,
     SchedulerWorkerStatus,
+    WorkerUnavailableReason,
 )
 from shared.timestamps import utc_now
 
@@ -81,7 +82,8 @@ class AgentWorkerRepository(Protocol):
         self,
         worker_id: str,
         *,
-        reason: str,
+        reason: WorkerUnavailableReason,
+        detail: str = "",
         ttl_seconds: int = 0,
         now: datetime | None = None,
     ) -> SchedulerWorkerRecord: ...
@@ -141,7 +143,7 @@ class AgentWorkerPoolController:
                 )
             disabled = self.workers.disable_worker(
                 worker.worker_id,
-                reason="agent machine is not schedulable",
+                reason=WorkerUnavailableReason.AgentDisconnected,
                 now=current_time,
             )
             return AgentPoolWorkerResult(
