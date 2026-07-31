@@ -64,7 +64,12 @@ def test_issues_single_use_persistent_tagged_key_and_caches_oauth_token() -> Non
         "client_id": ["oauth-client-id"],
         "client_secret": [CLIENT_SECRET],
         "scope": ["auth_keys devices:core"],
-        "tags": ["tag:lazycloud-agent"],
+        # Both tags this control plane issues for. The token is cached and
+        # shared by the machine and pool-bootstrap issuers, so one bound to a
+        # single tag makes the other's keys unmintable — and Tailscale reports
+        # that as the tag being "not permitted", which reads like the tailnet's
+        # policy is wrong rather than the token this process asked for.
+        "tags": ["tag:lazycloud-agent,tag:lazycloud-bootstrap"],
     }
     key_request = requests[1]
     assert key_request.headers["authorization"] == "Bearer tskey-api-token"

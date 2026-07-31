@@ -8,7 +8,15 @@ from typing import Protocol, Self
 from urllib.parse import quote, urlparse
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from shared.app_identity import AGENT_NAME, NAME
 
 DEFAULT_TAILSCALE_API_URL = "https://api.tailscale.com"
@@ -223,6 +231,11 @@ class TailscaleTailnetControlConfig(BaseModel):
         if not normalized.startswith("tag:") or len(normalized) == len("tag:"):
             raise ValueError("Tailscale tag must use the tag:<name> form")
         return normalized
+
+    @property
+    def issuable_tags(self) -> tuple[str, ...]:
+        """The tags this control plane may mint auth keys for."""
+        return (self.agent_tag, self.pool_bootstrap_tag)
 
     @model_validator(mode="after")
     def bootstrap_tag_must_be_distinct(self) -> Self:
@@ -519,7 +532,7 @@ class TailscaleTailnetControl:
                 content=content,
             )
         if response.status_code not in allowed_status_codes:
-            raise _http_error(method, path, response.status_code)
+            raise _http_error(method, path, response.status_code, _error_detail(response))
         return response
 
     def _request(
@@ -576,7 +589,13 @@ class TailscaleTailnetControl:
                         "client_id": self.config.oauth_client_id,
                         "client_secret": self.config.oauth_client_secret.get_secret_value(),
                         "scope": TAILSCALE_OAUTH_SCOPES,
-                        "tags": self.config.agent_tag,
+                        # Every tag this control plane mints keys for. The token
+                        # is cached and shared by both issuers, so a token bound
+                        # to one tag makes the other's keys unmintable — and
+                        # Tailscale reports that as the requested tag being "not
+                        # permitted", which reads like a policy problem on the
+                        # tailnet rather than the token this process asked for.
+                        "tags": ",".join(self.config.issuable_tags),
                     },
                     headers={"Accept": "application/json"},
                 )
@@ -587,7 +606,12 @@ class TailscaleTailnetControl:
                 retryable=True,
             ) from exc
         if response.status_code != 200:
-            raise _http_error("POST", "/api/v2/oauth/token", response.status_code)
+            raise _http_error(
+                "POST",
+                "/api/v2/oauth/token",
+                response.status_code,
+                _error_detail(response),
+            )
         return response
 
     def _invalidate_token(self, token: SecretStr) -> None:
@@ -718,7 +742,24 @@ def _machine_device_name_matches(
     return not name or name == hostname or name.startswith(f"{hostname}.")
 
 
-def _http_error(method: str, path: str, status_code: int) -> TailnetControlError:
+class _TailscaleErrorBody(_TailscaleResponseModel):
+    message: str = ""
+
+
+def _error_detail(response: httpx.Response) -> str:
+    """Tailscale's own explanation, bounded and without echoing a request body."""
+    try:
+        return _TailscaleErrorBody.model_validate_json(response.content).message[:200]
+    except ValidationError:
+        return ""
+
+
+def _http_error(
+    method: str,
+    path: str,
+    status_code: int,
+    detail: str = "",
+) -> TailnetControlError:
     if status_code == 401:
         code = TailnetControlErrorCode.AuthenticationFailed
         retryable = False
@@ -740,9 +781,13 @@ def _http_error(method: str, path: str, status_code: int) -> TailnetControlError
     else:
         code = TailnetControlErrorCode.InvalidConfiguration
         retryable = False
+    # Tailscale explains its 4xx responses in the body, and without that a
+    # rejected tag and a malformed description are the same bare 400. The body
+    # names the resource, never a credential.
+    explanation = f": {detail}" if detail else ""
     return TailnetControlError(
         code,
-        f"Tailscale API returned status {status_code} for {method} {path}",
+        f"Tailscale API returned status {status_code} for {method} {path}{explanation}",
         retryable=retryable,
     )
 
