@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Authenticated node-local whole-object cache service and HTTP client."
 requires-python = ">=3.12"
 dependencies = [
+    "networking",
     "lazycloud-shared==0.1.0",
     "pydantic>=2.8,<3",
 ]

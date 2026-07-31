@@ -22,10 +22,10 @@ every signature it touched.
 from __future__ import annotations
 
 import threading
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import IO, Protocol
 from urllib.parse import urlparse, urlunparse
 
 import httpx
@@ -139,7 +139,7 @@ class InternalHttpClient:
         url: str,
         *,
         headers: Mapping[str, str] | None = None,
-        content: bytes | None = None,
+        content: bytes | Iterable[bytes] | IO[bytes] | None = None,
         timeout_seconds: float | None = None,
     ) -> httpx.Response:
         timeout = timeout_seconds or self.timeout_seconds
@@ -164,7 +164,7 @@ class InternalHttpClient:
         url: str,
         *,
         headers: Mapping[str, str] | None = None,
-        content: bytes | None = None,
+        content: bytes | Iterable[bytes] | IO[bytes] | None = None,
         timeout_seconds: float | None = None,
     ) -> Iterator[httpx.Response]:
         timeout = timeout_seconds or self.timeout_seconds

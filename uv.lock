@@ -293,12 +293,14 @@ version = "0.1.0"
 source = { editable = "packages/cache" }
 dependencies = [
     { name = "lazycloud-shared" },
+    { name = "networking" },
     { name = "pydantic" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "lazycloud-shared", editable = "packages/shared" },
+    { name = "networking", editable = "packages/networking" },
     { name = "pydantic", specifier = ">=2.8,<3" },
 ]
 
