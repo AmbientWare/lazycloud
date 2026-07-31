@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
+from contextlib import suppress
 
 from pydantic import JsonValue
 from scheduler.state import (
@@ -126,3 +127,79 @@ class _FakeWorkerRepositoryTransport:
     ) -> Iterator[dict[str, JsonValue]]:
         self.streams.append((path, dict(payload)))
         yield from self._streams.get(path, [])
+
+
+def test_worker_repository_reaches_a_control_plane_named_by_tailnet_peer() -> None:
+    """The worker's busiest hop must follow the destination, not the hostname.
+
+    A remote worker was handed an origin only the control plane could resolve
+    and failed there rather than at startup; this is the hop that failed.
+    """
+    import json as _json
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    from networking.internal_http import (
+        InternalHttpClient,
+        TailnetHostPolicy,
+        TailnetPeerAddresses,
+    )
+    from worker.repository_client import build_worker_repository_http_client
+
+    seen: list[str] = []
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            seen.append(self.headers.get("Host", ""))
+            body = _json.dumps({"ok": True}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: object) -> None:
+            del format, args
+
+    class _Peers:
+        def wait_for_peer(self, host: str, timeout_seconds: float) -> None:
+            del host, timeout_seconds
+
+        def resolve_peer_host(self, host: str) -> str:
+            return "127.0.0.1" if host.endswith(".example.ts.net") else ""
+
+        def start(self) -> None: ...
+
+        def close(self) -> None: ...
+
+    def _serve() -> Iterator[int]:
+        server = HTTPServer(("127.0.0.1", 0), _Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            yield server.server_port
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    ports = _serve()
+    port = next(ports)
+    try:
+        http = InternalHttpClient(
+            addresses=TailnetPeerAddresses(
+                runtime=_Peers(),
+                policy=TailnetHostPolicy(dns_suffix="example.ts.net"),
+            ),
+            timeout_seconds=5.0,
+        )
+        client = build_worker_repository_http_client(
+            endpoint=f"http://control-plane.example.ts.net:{port}",
+            token="worker-token",
+            http=http,
+        )
+        assert client.transport.post("/anything", {}) == {"ok": True}
+    finally:
+        with suppress(StopIteration):
+            next(ports)
+
+    # Reached loopback while still addressed to the peer, which is what keeps a
+    # signed URL valid and what routes the request over the tailnet.
+    assert seen == [f"control-plane.example.ts.net:{port}"]

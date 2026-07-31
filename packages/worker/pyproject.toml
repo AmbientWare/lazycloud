@@ -7,6 +7,7 @@ dependencies = [
     "cache",
     "lazycloud-shared==0.1.0",
     "foundation",
+    "networking",
     "storage-client",
     "pydantic>=2.8,<3",
     "pydantic-settings>=2.4,<3",
