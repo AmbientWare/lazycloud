@@ -373,14 +373,26 @@ tailnet_join() {
     bootstrap_error 'tailnet join was refused'
   fi
   rm -f "$key_file"
-  control_plane_address="$(ts ip -4 "$CONTROL_PLANE_HOST" 2>/dev/null | sed -n 1p)"
+  # `|| true` on both: `pipefail` is set, so an unresolvable name would abort
+  # the script through the ERR trap before the refusal below could name it.
+  control_plane_address="$(ts ip -4 "$CONTROL_PLANE_HOST" 2>/dev/null | sed -n 1p)" || true
   if [ -z "$control_plane_address" ]; then
-    control_plane_address="$(ts ip -4 "${CONTROL_PLANE_HOST%%.*}" 2>/dev/null | sed -n 1p)"
+    control_plane_address="$(ts ip -4 "${CONTROL_PLANE_HOST%%.*}" 2>/dev/null | sed -n 1p)" || true
   fi
   if [ -z "$control_plane_address" ]; then
     bootstrap_error "control plane ${CONTROL_PLANE_HOST} is not a reachable tailnet peer"
   fi
   CURL_RESOLVE=(--resolve "${CONTROL_PLANE_HOST}:${CONTROL_PLANE_PORT}:${control_plane_address}")
+  # This script pins the address and needs no resolver, but the agent it hands
+  # off to resolves the same name through the system one. That works because
+  # Tailscale publishes public records for MagicDNS names on a tailnet with
+  # HTTPS certificates enabled — a tailnet property, not something this node
+  # controls. Check it here, where the failure is still attributable, rather
+  # than let the agent discover it as an unexplained enrollment timeout.
+  if ! getent hosts "$CONTROL_PLANE_HOST" >/dev/null 2>&1; then
+    bootstrap_error "control plane ${CONTROL_PLANE_HOST} does not resolve; enable HTTPS \
+certificates on the tailnet so its MagicDNS names are publicly resolvable"
+  fi
 }
 
 # The agent owns the tailnet from here. Leaving this daemon running would make
@@ -389,12 +401,14 @@ tailnet_stop() {
   if [ -z "$TAILSCALED_PID" ]; then
     return
   fi
+  # `wait` both blocks and reaps. Without the reap the daemon lingers as a
+  # zombie that still answers `kill -0`, so anything checking whether it stopped
+  # is told it has not. The wait is unbounded only in principle: a daemon that
+  # ignores SIGTERM leaves the node short of `ready` and its pool's bootstrap
+  # phase deadline reclaims it, which is the same net every other step here
+  # relies on.
   kill "$TAILSCALED_PID" 2>/dev/null || true
-  (sleep 30 && kill -9 "$TAILSCALED_PID" 2>/dev/null) &
-  watchdog=$!
   wait "$TAILSCALED_PID" 2>/dev/null || true
-  kill "$watchdog" 2>/dev/null || true
-  wait "$watchdog" 2>/dev/null || true
   TAILSCALED_PID=""
 }
 

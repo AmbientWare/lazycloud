@@ -726,8 +726,19 @@ class AgentDaemonService:
 
     def run(self) -> AgentDaemonRunResult:
         self.state_store.begin_run()
-        state = self._join_step("identity.resolve", self.resolve_identity)
-        tailnet_runtime: AgentTailnetRuntime | None = None
+        # Before enrolment, because enrolment now travels over the tailnet on a
+        # node whose user-data already joined it.
+        attached_tailnet = self._attach_tailnet()
+        try:
+            state = self._join_step("identity.resolve", self.resolve_identity)
+        except Exception:
+            # The run's own cleanup starts below this point, so a session
+            # resumed above it has to be closed here or it outlives the process
+            # that owns it.
+            if attached_tailnet is not None:
+                attached_tailnet.close()
+            raise
+        tailnet_runtime: AgentTailnetRuntime | None = attached_tailnet
         tailnet_hostname = ""
         iterations = 0
         last_result = AgentDaemonRunResult(
@@ -740,7 +751,7 @@ class AgentDaemonService:
         try:
             tailnet_runtime, tailnet_hostname = self._join_step(
                 "tailnet.start",
-                lambda: self._start_tailnet(state),
+                lambda: self._start_tailnet(state, attached_tailnet),
             )
             last_result = last_result.model_copy(
                 update={
@@ -1245,27 +1256,81 @@ class AgentDaemonService:
                 )
                 time.sleep(delay)
 
-    def _start_tailnet(self, state: AgentState) -> tuple[AgentTailnetRuntime | None, str]:
-        if not _agent_uses_tailnet(state.bootstrap.transport):
-            return (None, "")
+    def _attach_tailnet(self) -> AgentTailnetRuntime | None:
+        """Adopt a tailnet session this node's bootstrap already opened.
+
+        A managed-pool node joins the tailnet from its user-data and hands the
+        agent the same state directory, so the session is on disk before the
+        agent runs. Resuming it here is what lets enrolment address the control
+        plane as a peer instead of a public origin.
+
+        An agent with no such session is left exactly as it was: the daemon
+        stays down until enrolment produces a key, which is the only order a
+        self-hosted machine can follow.
+        """
         runtime = self.tailnet_runtime or TailnetRuntime(_tailnet_runtime_options(self.options))
         try:
-            try:
-                runtime.start()
-                status = runtime.status()
-            except TailnetAuthenticationRequired:
-                credential = self.client.request_agent_transport_credential(
-                    RequestAgentTransportCredentialRequest(
-                        agent_token=state.agent_token,
-                        transport=BackendRouteTransport.TsnetRestricted,
+            runtime.start()
+            runtime.status()
+        except TailnetAuthenticationRequired:
+            return None
+        except Exception as exc:
+            # Not fatal on its own: enrolment may still reach a reachable
+            # origin, and the tailnet is brought up again once it has a key.
+            # Reported rather than swallowed, because on a managed-pool node
+            # this is the reason the calls that follow are slow or fail.
+            self.telemetry.enqueue_event(
+                event_type=AgentTelemetryEventType.Agent,
+                action="tailnet.attach",
+                status="skipped",
+                message="tailnet session could not be resumed before enrollment",
+                attrs={"error_type": type(exc).__name__},
+            )
+            return None
+        return runtime
+
+    def _start_tailnet(
+        self,
+        state: AgentState,
+        attached: AgentTailnetRuntime | None = None,
+    ) -> tuple[AgentTailnetRuntime | None, str]:
+        if not _agent_uses_tailnet(state.bootstrap.transport):
+            if attached is not None:
+                attached.close()
+            return (None, "")
+        runtime = (
+            attached
+            or self.tailnet_runtime
+            or TailnetRuntime(_tailnet_runtime_options(self.options))
+        )
+        try:
+            if attached is not None:
+                status = attached.status()
+            else:
+                try:
+                    runtime.start()
+                    status = runtime.status()
+                except TailnetAuthenticationRequired:
+                    credential = self.client.request_agent_transport_credential(
+                        RequestAgentTransportCredentialRequest(
+                            agent_token=state.agent_token,
+                            transport=BackendRouteTransport.TsnetRestricted,
+                        )
                     )
-                )
-                status = runtime.authenticate(
-                    auth_key=credential.auth_key,
-                    hostname=credential.hostname,
-                    control_url=credential.control_url,
-                )
+                    status = runtime.authenticate(
+                        auth_key=credential.auth_key,
+                        hostname=credential.hostname,
+                        control_url=credential.control_url,
+                    )
             _require_authenticated_tailnet_status(status)
+            if not _tailnet_identity_is_this_machine(status, state.machine_id):
+                # The session belongs to something other than this machine —
+                # on a managed-pool node, the pool-scoped identity its bootstrap
+                # used. Trade it for the single-use, machine-scoped key the
+                # control plane issues now that enrolment has given this node an
+                # identity, so the pool key stops being what holds it on the
+                # tailnet.
+                status = self._reissue_tailnet_identity(state, runtime)
             try:
                 binding = self._register_tailnet_device(state, status)
             except HttpApiError as exc:
@@ -1282,7 +1347,11 @@ class AgentDaemonService:
             advertise_host = _tailnet_advertise_host(status)
             return (runtime, advertise_host)
         except Exception:
-            runtime.close()
+            # An attached session belongs to the caller, which retries this step
+            # and closes it if the retries run out. Closing it here would leave
+            # the next attempt talking to a daemon that is already gone.
+            if attached is None:
+                runtime.close()
             raise
 
     def _register_tailnet_device(
@@ -1476,6 +1545,21 @@ def _tailnet_dns_suffix(status: TailnetStatus) -> str:
 
 def _tailnet_device_hostname(status: TailnetStatus) -> str:
     return status.self_host_name.strip().rstrip(".") or status.self_dns_name.strip().rstrip(".")
+
+
+def _tailnet_identity_is_this_machine(status: TailnetStatus, machine_id: str) -> bool:
+    """Whether the local session is one the control plane issued to this machine.
+
+    The generation is deliberately not matched: the agent does not know which
+    generation the control plane last handed out, and demanding an exact name
+    would rotate the identity on every restart. The prefix is enough to tell a
+    machine-scoped session from a pool bootstrap one, which is the distinction
+    that decides whether a rotation is owed.
+    """
+    machine = machine_id.strip()
+    if not machine:
+        return False
+    return _tailnet_device_hostname(status).startswith(f"{AGENT_NAME}-{machine}-g")
 
 
 def _require_authenticated_tailnet_status(status: TailnetStatus) -> None:

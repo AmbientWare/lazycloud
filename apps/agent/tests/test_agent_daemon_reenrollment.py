@@ -40,7 +40,12 @@ def _status(node_id: str, hostname: str) -> TailnetStatus:
 class _AuthenticatedRuntime:
     """A daemon that is already logged in, as it is after a restart."""
 
-    status_value: TailnetStatus = field(default_factory=lambda: _status("node-old", "agent-old"))
+    status_value: TailnetStatus = field(
+        # A machine-scoped session, which is what a restart resumes. The agent
+        # only rotates an identity that is not its own, so a name shaped like
+        # something else would prove recovery the daemon never reached.
+        default_factory=lambda: _status("node-old", "lazycloud-agent-machine-g1")
+    )
     forced: list[str] = field(default_factory=list)
 
     def start(self) -> None: ...
@@ -64,6 +69,13 @@ class _AuthenticatedRuntime:
         return self.status_value
 
     def close(self) -> None: ...
+
+    def wait_for_peer(self, host: str, timeout_seconds: float) -> None:
+        del host, timeout_seconds
+
+    def resolve_peer_host(self, host: str) -> str:
+        del host
+        return ""
 
 
 @dataclass(slots=True)
@@ -140,6 +152,59 @@ def test_agent_reenrolls_when_the_control_plane_has_no_identity_for_its_session(
     assert runtime.forced == ["lazycloud-agent-machine-g1"]
     assert gateway.credentials_issued == 1
     assert gateway.registrations == ["node-old", "node-new"]
+    assert advertise_host
+
+
+@dataclass(slots=True)
+class _EnrollingGateway:
+    """Accepts the identity it just issued, as a fresh enrollment does."""
+
+    registrations: list[str] = field(default_factory=list)
+    credentials_issued: int = 0
+
+    def request_agent_transport_credential(
+        self,
+        request: RequestAgentTransportCredentialRequest,
+    ) -> RequestAgentTransportCredentialResponse:
+        del request
+        self.credentials_issued += 1
+        return RequestAgentTransportCredentialResponse(
+            auth_key="tskey-test",
+            hostname="lazycloud-agent-machine-g1",
+            control_url="",
+        )
+
+    def register_agent_tailnet_device(
+        self,
+        request: RegisterAgentTailnetDeviceRequest,
+    ) -> RegisterAgentTailnetDeviceResponse:
+        self.registrations.append(request.node_id)
+        return RegisterAgentTailnetDeviceResponse(device_id="device-1", node_id=request.node_id)
+
+
+def test_a_node_that_booted_on_the_pool_key_trades_it_for_its_own_identity(
+    tmp_path: Path,
+) -> None:
+    """The bootstrap identity must not be what keeps a node on the tailnet.
+
+    A managed-pool node joins from user-data with a key shared by every
+    instance its launch template starts, tagged to reach the control plane and
+    nothing else. Left in place it would satisfy the agent's own liveness check
+    while denying the control plane the route-proxy hop that makes the machine
+    usable, and the pool-scoped key would be the credential holding a running
+    machine on the network.
+    """
+    gateway = _EnrollingGateway()
+    runtime = _AuthenticatedRuntime(
+        status_value=_status("node-bootstrap", "bootstrap-i-0123456789abcdef0")
+    )
+
+    _, advertise_host = _service(tmp_path, gateway, runtime)._start_tailnet(_state(), runtime)
+
+    assert runtime.forced == ["lazycloud-agent-machine-g1"]
+    assert gateway.credentials_issued == 1
+    # Registered once, under the machine identity — never under the pool's.
+    assert gateway.registrations == ["node-new"]
     assert advertise_host
 
 
