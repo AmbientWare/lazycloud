@@ -14,6 +14,7 @@ from provider_aws.managed_pool import (
     AwsManagedPoolSpec,
     aws_managed_pool_bootstrap_script,
 )
+from pydantic import SecretStr
 
 _AGENT_SHA256 = "a" * 64
 _AGENT_BINARY_URL = (
@@ -46,6 +47,7 @@ def _spec() -> AwsManagedPoolSpec:
             agent_sha256=_AGENT_SHA256,
             agent_binary_url=_AGENT_BINARY_URL,
             worker_image_digest=f"registry.example.com/worker@sha256:{'b' * 64}",
+            tailnet_auth_key=SecretStr("tskey-auth-0123456789abcdef"),
         ),
     )
 
@@ -122,9 +124,18 @@ def test_bootstrap_script_refuses_an_agent_binary_that_fails_digest_verification
     assert not agent_bin.exists()
     assert not list(tmp_path.glob("lazycloud-agent.download.*"))
     # The artifact came from the pinned release URL, and the mismatch is
-    # reported as one bounded enrollment failure reason.
+    # reported as one bounded enrollment failure reason. The whole payload is
+    # pinned because the provider half of it is now a shell function the generic
+    # script splices in: dropping a field there would leave every bootstrap
+    # report rejected, and the report is deliberately best-effort, so nothing
+    # else would say so.
     assert _AGENT_BINARY_URL in reported
-    assert '"failure_reason":"agent_download_failed"' in reported
+    assert (
+        '{"enrollment_request_id":"12345678-1234-4123-8123-123456789abc"'
+        ',"provider":"aws","region":"","provider_instance_id":""'
+        ',"identity_proof_url":"https://sts.test/proof"'
+        ',"failure_reason":"agent_download_failed"}'
+    ) in reported
 
 
 def test_shell_minted_sigv4_proof_matches_botocore_query_auth(tmp_path: Path) -> None:
