@@ -42,7 +42,6 @@ jobs:
         with:
           name: lazycloud-python-packages
           path: dist/*
-          archive: false
           if-no-files-found: error
 
   connected-aws-assets:
@@ -167,5 +166,4 @@ jobs:
         with:
           name: lazycloud-connected-aws-${{ steps.version.outputs.version }}
           path: dist/connected-aws/${{ steps.version.outputs.version }}/
-          archive: false
           if-no-files-found: error
