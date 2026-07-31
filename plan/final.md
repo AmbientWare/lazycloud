@@ -146,7 +146,10 @@ diagnostic blind spot. Nothing here depends on anything else.
   `ConflictError`. Its `model_dump(mode="python")` was the real defect — it
   serializes, which ERR-02 now makes an error — so it became
   `model_validate(dict(record))`. The three no-ops were removed as planned.*
-- [ ] **ERR-05** Log the cause in the `DomainError` sink
+- [x] **ERR-05** Log the cause in the `DomainError` sink
+  — *verified live: a missing deployment returns 404 with `x-request-id`, and
+  the server log carries `NotFoundError serving GET … (request_id=…)` plus the
+  traceback, at `warning` for 4xx.*
 - [ ] **ERR-17** Delete `_resolve_in_session`
 - [ ] **CAP-11** Delete the dead projection status cluster
 
