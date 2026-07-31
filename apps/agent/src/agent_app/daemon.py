@@ -21,7 +21,9 @@ from types import TracebackType
 from typing import Protocol
 
 from agent.operations import (
+    AGENT_AUTHORITY_REVOKED_FILE,
     AGENT_RUNTIME_READY_FILE,
+    AgentAuthorityRevoked,
     AgentBootstrap,
     AgentCapacity,
     AgentCapacityCheck,
@@ -162,6 +164,14 @@ class ProviderInstanceIdentityMode(StrEnum):
 
 class AgentCapacityInterruptionDetectionError(RuntimeError):
     pass
+
+
+class AgentAuthorityRevokedError(RuntimeError):
+    """Raised on startup when this machine's authority was already revoked.
+
+    Terminal by construction: the process exits non-zero and the unit's start
+    limit stops respawning it, rather than rejoining once every restart.
+    """
 
 
 class AgentDaemonOptions(ContractModel):
@@ -443,8 +453,33 @@ class AgentStateStore:
         payload = _JSON_VALUE_ADAPTER.validate_python(agent_state_payload(state))
         _write_json_atomic(self.path, payload, permissions=0o600)
 
+    @property
+    def revoked_path(self) -> Path:
+        return self.state_dir / AGENT_AUTHORITY_REVOKED_FILE
+
     def begin_run(self) -> None:
         self.ready_path.unlink(missing_ok=True)
+
+    def mark_authority_revoked(self, state: AgentState) -> None:
+        """Record that this machine's authority is gone, and drop its identity.
+
+        Revocation is terminal, unlike every other reason the stream ends. The
+        saved identity is what a restart would re-present, so it goes with it —
+        leaving it behind is what let a revoked agent rejoin and be rejected on
+        a loop, on a machine that keeps billing.
+        """
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        self.state_dir.chmod(0o700)
+        marker = AgentAuthorityRevoked(machine_id=state.machine_id)
+        _write_json_atomic(self.revoked_path, _payload(marker), permissions=0o600)
+        self.path.unlink(missing_ok=True)
+
+    def authority_revoked(self) -> AgentAuthorityRevoked | None:
+        if not self.revoked_path.exists():
+            return None
+        return AgentAuthorityRevoked.model_validate_json(
+            self.revoked_path.read_text(encoding="utf-8")
+        )
 
     def mark_ready(self, state: AgentState, *, stream_iteration: int) -> None:
         marker = AgentRuntimeReady(
@@ -782,6 +817,7 @@ class AgentDaemonService:
                 except Exception as exc:
                     if agent_authority_was_revoked(exc):
                         self.worker_controller.stop_all()
+                        self.state_store.mark_authority_revoked(state)
                         return last_result.model_copy(
                             update={
                                 "stream_iterations": next_iteration,
@@ -813,6 +849,7 @@ class AgentDaemonService:
             if not agent_authority_was_revoked(exc):
                 raise
             self.worker_controller.stop_all()
+            self.state_store.mark_authority_revoked(state)
             return last_result.model_copy(update={"authority_revoked": True})
         finally:
             if route_proxy is not None:
@@ -821,6 +858,17 @@ class AgentDaemonService:
                 tailnet_runtime.close()
 
     def resolve_identity(self) -> AgentState:
+        revoked = self.state_store.authority_revoked()
+        if revoked is not None:
+            # Nothing this process can do recovers a revoked authority, and the
+            # control plane rejects every join it would attempt. Refusing here
+            # is what makes the refusal cost one exit instead of one per restart
+            # for the life of the machine.
+            msg = (
+                f"authority for machine {revoked.machine_id} was revoked at "
+                f"{revoked.revoked_at.isoformat()}; this agent cannot rejoin"
+            )
+            raise AgentAuthorityRevokedError(msg)
         gateway_url = normalize_gateway_url(self.options.gateway_url)
         saved_state = self.state_store.load(gateway_url)
         if saved_state is not None and self.options.provider_enrollment_request:

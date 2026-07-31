@@ -3,9 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import pytest
 from agent.operations import AgentBootstrap, AgentState
 from agent_app.daemon import (
     TAILNET_ENROLLMENT_NOT_AWAITING_DETAIL,
+    AgentAuthorityRevokedError,
     AgentDaemonOptions,
     AgentDaemonService,
     _recoverable_stream_error,
@@ -206,6 +208,26 @@ def test_a_node_that_booted_on_the_pool_key_trades_it_for_its_own_identity(
     # Registered once, under the machine identity — never under the pool's.
     assert gateway.registrations == ["node-new"]
     assert advertise_host
+
+
+def test_a_revoked_agent_refuses_to_rejoin_on_the_next_start(tmp_path: Path) -> None:
+    """Revocation has to outlive the process that observed it.
+
+    The agent used to exit cleanly on revocation with its saved identity intact,
+    so the service manager restarted it, `resolve_identity` returned that
+    identity, and the control plane rejected it again — every fifteen seconds,
+    for as long as the machine ran, and the machine was billing throughout.
+    """
+    gateway = _EnrollingGateway()
+    service = _service(tmp_path, gateway, _AuthenticatedRuntime())
+    service.state_store.save(_state())
+
+    service.state_store.mark_authority_revoked(_state())
+
+    assert not service.state_store.path.exists()
+    with pytest.raises(AgentAuthorityRevokedError):
+        service.resolve_identity()
+    assert gateway.registrations == []
 
 
 def test_a_diverged_enrollment_does_not_end_the_agent_process() -> None:

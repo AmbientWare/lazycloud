@@ -400,10 +400,14 @@ def render_systemd_unit(spec: AgentServiceSpec) -> str:
         f"Description={spec.description}",
         "Wants=network-online.target docker.service",
         "After=network-online.target docker.service",
-        # A machine that cannot reach the control plane must keep trying. A start
-        # rate limit turns a transient gateway failure into a permanently dead
-        # agent on a machine that keeps billing, so the agent has no start limit.
-        "StartLimitIntervalSec=0",
+        # A machine that cannot reach the control plane must keep trying, so the
+        # limit is sized to outlast a full bootstrap phase deadline of gateway
+        # unavailability (300s at RestartSec=15 is 20 starts; 40 doubles it).
+        # Unbounded is the wrong answer to that: a revoked agent is rejected by
+        # every join it will ever attempt, and with no limit it retried forever
+        # on a machine that keeps billing.
+        "StartLimitIntervalSec=600",
+        "StartLimitBurst=40",
         "",
         "[Service]",
         "Type=simple",
@@ -414,7 +418,9 @@ def render_systemd_unit(spec: AgentServiceSpec) -> str:
     lines.extend(
         [
             f"ExecStart={systemd_command([spec.binary_path, *spec.args])}",
-            "Restart=always",
+            # `on-failure`, not `always`: the agent exits non-zero for every
+            # reason worth retrying, and a revoked one must be allowed to stop.
+            "Restart=on-failure",
             "RestartSec=15",
             "KillSignal=SIGINT",
             "TimeoutStopSec=30",

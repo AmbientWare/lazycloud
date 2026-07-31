@@ -72,6 +72,7 @@ from agent.service_manager import (
 AGENT_WORKER_CONTAINER_SERVICE_BASE_PORT = 19000
 AGENT_WORKER_CONTAINER_SERVICE_PORT_SPAN = 20000
 AGENT_RUNTIME_READY_FILE = "runtime-ready.json"
+AGENT_AUTHORITY_REVOKED_FILE = "authority-revoked.json"
 AGENT_SERVICE_READY_TIMEOUT_SECONDS = 180
 DOCKER_NETWORK_NAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$"
 
@@ -966,6 +967,18 @@ class AgentRuntimeReady(ContractModel):
     machine_id: str
     stream_iteration: int = Field(ge=1)
     ready_at: datetime = Field(default_factory=utc_now)
+
+
+class AgentAuthorityRevoked(ContractModel):
+    """Written once when the control plane revokes this machine's authority.
+
+    Its presence is what stops the next start from re-joining. Revocation is the
+    one stream ending that a restart cannot recover from, so it is recorded on
+    disk rather than inferred from the absence of saved state.
+    """
+
+    machine_id: str
+    revoked_at: datetime = Field(default_factory=utc_now)
 
 
 class AgentCapacityInterruptionNotice(ContractModel):
