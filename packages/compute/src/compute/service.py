@@ -2082,7 +2082,7 @@ class ComputeService:
                         },
                     }
                 )
-                current = repository.upsert(ComputePoolRecord.model_validate(current))
+                current = repository.upsert(current)
             scheduler_pools.upsert(
                 Pool(
                     capacity_owner_id=current.capacity_owner_id,

@@ -378,7 +378,12 @@ class ComputePoolRepository:
         )
 
     def upsert(self, record: ComputePoolRecord) -> ComputePoolRecord:
-        record = ComputePoolRecord.model_validate(record.model_dump(mode="python"))
+        # The immutability comparison below is by identity, and it runs before the
+        # store's own validation, so the record has to be typed by the time it
+        # gets there or an unchanged owner reads as a changed one. `dict(record)`
+        # rather than `model_dump`: dumping serializes, and a drifted record would
+        # raise the serializer warning here instead of where it was introduced.
+        record = ComputePoolRecord.model_validate(dict(record))
         current = self.get(record.id, for_update=True)
         if current is not None and (
             current.capacity_owner_id != record.capacity_owner_id
@@ -520,7 +525,7 @@ class ComputePoolRepository:
                 "provider_state": provider_state,
             }
         )
-        return self.upsert(ComputePoolRecord.model_validate(updated))
+        return self.upsert(updated)
 
     def apply_provider_state(
         self,
@@ -542,7 +547,7 @@ class ComputePoolRepository:
                 "provider_state": provider_state,
             }
         )
-        return self.upsert(ComputePoolRecord.model_validate(updated))
+        return self.upsert(updated)
 
     def _write_columns(self, record: ComputePoolRecord) -> None:
         row = self.session.scalars(
