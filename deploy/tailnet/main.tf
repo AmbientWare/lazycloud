@@ -1,8 +1,9 @@
 locals {
   policy = templatefile("${path.module}/policy.json.tftpl", {
-    agent_tag         = var.agent_tag
-    control_plane_tag = var.control_plane_tag
-    agent_proxy_port  = var.agent_proxy_port
+    agent_tag          = var.agent_tag
+    control_plane_tag  = var.control_plane_tag
+    agent_proxy_port   = var.agent_proxy_port
+    control_plane_port = var.control_plane_port
   })
 }
 
