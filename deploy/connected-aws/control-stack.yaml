@@ -32,6 +32,14 @@ Parameters:
       Fixed rather than generated: the acceptance profile chain and the source identity's
       own AssumeRole policy both name this role, so a generated name would break both on
       every redeploy.
+  DiagnosticsRoleName:
+    Type: String
+    Default: lazycloud-default-test-diagnostics
+    AllowedPattern: "^[A-Za-z0-9_+=,.@-]{1,64}$"
+    Description: >-
+      Break-glass node diagnostics, assumed only to inspect a failed machine. Separate
+      from the operator role because running a command on a node is remote code
+      execution, and acceptance runs should not carry that for their whole duration.
   ExecutionRoleName:
     Type: String
     Default: lazycloud-customer-connection-stack
@@ -271,6 +279,60 @@ Resources:
                 Action: sts:AssumeRole
                 Resource: !GetAtt ControlRole.Arn
 
+  # A node that fails after handoff is otherwise unreachable: it has no public
+  # ingress, Tailscale SSH is not granted, and cloud-init output goes nowhere a
+  # caller can read. Every diagnosis so far has cost a full launch cycle for want
+  # of these four calls. They are break-glass rather than operator permissions
+  # because SendCommand is remote code execution on a running node.
+  DiagnosticsRole:
+    Type: AWS::IAM::Role
+    Condition: AcceptanceOperator
+    Properties:
+      RoleName: !Ref DiagnosticsRoleName
+      Description: LazyCloud break-glass node diagnostics.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Ref TrustedPrincipalArns
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: node-diagnostics
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Reads only. SSM does not support resource-level authorization on
+              # these, so the write below is where the scoping has to hold.
+              - Sid: InspectManagedNodes
+                Effect: Allow
+                Action:
+                  - ssm:DescribeInstanceInformation
+                  - ssm:GetCommandInvocation
+                  - ssm:ListCommandInvocations
+                  - ssm:ListCommands
+                Resource: "*"
+              - Sid: UseShellDocument
+                Effect: Allow
+                Action: ssm:SendCommand
+                Resource: arn:aws:ssm:*::document/AWS-RunShellScript
+              # The tag is applied at launch by the managed pool, so a node this
+              # platform did not start cannot be targeted.
+              - Sid: TargetOnlyOwnedNodes
+                Effect: Allow
+                Action: ssm:SendCommand
+                Resource: arn:aws:ec2:*:*:instance/*
+                Condition:
+                  StringEquals:
+                    ssm:resourceTag/cloud-pool:managed-by: control-plane
+              # The only diagnostic that survives a node which never reached
+              # userland, where SSM cannot help. Treat its output as sensitive:
+              # kernel messages can carry instance metadata.
+              - Sid: ReadNodeConsole
+                Effect: Allow
+                Action: ec2:GetConsoleOutput
+                Resource: arn:aws:ec2:*:*:instance/*
+
 Outputs:
   ControlPrincipalArn:
     Description: LAZYCLOUD_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN
@@ -282,6 +344,10 @@ Outputs:
     Condition: AcceptanceOperator
     Description: LAZYCLOUD_E2E_AWS_OPERATOR_ROLE_ARN
     Value: !GetAtt OperatorRole.Arn
+  DiagnosticsRoleArn:
+    Condition: AcceptanceOperator
+    Description: LAZYCLOUD_E2E_AWS_DIAGNOSTICS_ROLE_ARN
+    Value: !GetAtt DiagnosticsRole.Arn
   CustomerStackExecutionRoleArn:
     Condition: AcceptanceOperator
     Description: LAZYCLOUD_E2E_AWS_CUSTOMER_STACK_EXECUTION_ROLE_ARN

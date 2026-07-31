@@ -130,7 +130,12 @@ diagnostic blind spot. Nothing here depends on anything else.
   `PREFECT_DATABASE_URL` embedded passwords. `infrastructure/terraform/kubeconfig`
   and `talosconfig` left in place (0600) — cluster admin credentials, but
   possibly live tool inputs, so the owner should confirm before they move.*
-- [ ] **INFRA-09** Grant the operator role node diagnostics
+- [x] **INFRA-09** Grant node diagnostics to a break-glass role
+  — *deployed 2026-07-31 as `lazycloud-default-test-diagnostics` (separate from
+  the operator role, per decision 6). Verified live: `ssm:DescribeInstanceInformation`
+  succeeds where it returned `AccessDeniedException`, and `ec2:GetConsoleOutput`
+  returns kernel output even for a terminated instance. The `ssm:send-command`
+  and untagged-instance-denial checks need a running node — verify in Phase 4.*
 - [ ] **ERR-01** Revalidate every record on the upsert path
 - [ ] **ERR-02** Make Pydantic serializer warnings a test failure — *after ERR-01*
 - [ ] **ERR-04** Delete the three no-op revalidation calls — *after ERR-01*
