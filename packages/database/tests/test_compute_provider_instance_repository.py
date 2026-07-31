@@ -49,3 +49,55 @@ def test_provider_instance_machine_binding_is_idempotent_and_fenced(
         assert repository.bind_machine(pool.id, instance.instance_id or "", machine_id) == bound
         assert repository.bind_machine(pool.id, instance.instance_id or "", str(uuid4())) is None
         assert repository.bind_machine(pool.id, "i-0ffffffffffffffff", machine_id) is None
+
+
+def test_unbinding_releases_only_the_machine_it_names(
+    isolated_services: ApiServices,
+) -> None:
+    """A machine torn down after binding must leave no reference behind.
+
+    The reference outlives the machine row otherwise, and every later pool sync
+    fails its foreign key — which takes enrollment down for the whole pool.
+    """
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+        pool = ComputePoolRecord(
+            id=str(uuid4()),
+            workspace_id=workspace_id,
+            name="provider-unbinding",
+        )
+        ComputePoolRepository(session).upsert(pool)
+        instance = ComputeProviderInstanceRecord(
+            id=str(uuid4()),
+            provider="aws",
+            offer_id="i4i.xlarge:us-east-1",
+            instance_type="i4i.xlarge",
+            instance_id="i-0abcdef0123456789",
+            status="running",
+            source="pooled",
+            pool_id=pool.id,
+        )
+        repository = ComputeProviderInstanceRepository(session)
+        repository.upsert(instance)
+
+        machines = MachineRepository(session)
+        first = str(uuid4())
+        machines.upsert(
+            Machine(id=first, pool=pool.name, provider="aws"), workspace_id=workspace_id
+        )
+        assert repository.bind_machine(pool.id, instance.instance_id or "", first) is not None
+
+        # A stale release must not strand the binding a later enrollment made.
+        second = str(uuid4())
+        machines.upsert(
+            Machine(id=second, pool=pool.name, provider="aws"), workspace_id=workspace_id
+        )
+        kept = repository.unbind_machine(pool.id, instance.instance_id or "", second)
+        assert kept is not None
+        assert kept.machine_id == first
+
+        released = repository.unbind_machine(pool.id, instance.instance_id or "", first)
+        assert released is not None
+        assert released.machine_id is None
+        # Released rows rebind cleanly rather than staying poisoned.
+        assert repository.bind_machine(pool.id, instance.instance_id or "", second) is not None

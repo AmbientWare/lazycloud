@@ -38,6 +38,9 @@ DEFAULT_CONTAINER_DISK_LIMIT_BYTES = 100 * 1024**3
 # arbitrary places.
 DEFAULT_CONTAINER_ROOTFS_MIN_FREE_BYTES = 5 * 1024**3
 QUOTA_CAPABLE_FILESYSTEMS = frozenset({"xfs"})
+# XFS accounts project quotas only when mounted with one of these. A root
+# filesystem that is already xfs but carries `noquota` is not usable.
+PROJECT_QUOTA_MOUNT_OPTIONS = frozenset({"prjquota", "pquota"})
 # Provisioned once at worker start, not per container: a loopback image keeps the
 # quota-capable filesystem provider-neutral, so managed hosts, connected-cloud
 # hosts, and agent-enrolled machines all get the same enforcement without any
@@ -265,14 +268,35 @@ def _read_proc_mountinfo() -> str:
     return mountinfo.read_text(encoding="utf-8", errors="replace")
 
 
-def path_filesystem_type(path: Path, *, mountinfo_text: str = "") -> str:
-    """Filesystem type backing `path`, from the longest matching mountinfo entry."""
+@dataclass(frozen=True, slots=True)
+class FilesystemMount:
+    """The filesystem backing a path, and the options it was mounted with."""
+
+    filesystem: str = ""
+    super_options: tuple[str, ...] = ()
+
+    @property
+    def enforces_project_quota(self) -> bool:
+        """Whether this mount can hold a per-container project quota.
+
+        The filesystem type is not sufficient. XFS only accounts project quotas
+        when mounted with `prjquota`/`pquota`, and an image whose root is XFS
+        without them accepts the quota commands' filesystem but has nothing for
+        them to attach to.
+        """
+        return self.filesystem in QUOTA_CAPABLE_FILESYSTEMS and bool(
+            PROJECT_QUOTA_MOUNT_OPTIONS.intersection(self.super_options)
+        )
+
+
+def path_filesystem_mount(path: Path, *, mountinfo_text: str = "") -> FilesystemMount:
+    """The mount backing `path`, from the longest matching mountinfo entry."""
     if not mountinfo_text:
         mountinfo_text = _read_proc_mountinfo()
 
     target = _existing_ancestor(path)
     best_len = -1
-    best_type = ""
+    best = FilesystemMount()
     for line in mountinfo_text.splitlines():
         fields = line.split()
         if len(fields) < 5:
@@ -284,8 +308,18 @@ def path_filesystem_type(path: Path, *, mountinfo_text: str = "") -> str:
         matches = target == mount_point or target.startswith(mount_point.rstrip("/") + "/")
         if matches and len(mount_point) > best_len:
             best_len = len(mount_point)
-            best_type = fields[separator + 1]
-    return best_type
+            # mountinfo tail is: - <fstype> <source> <super options>
+            options = fields[separator + 3] if len(fields) > separator + 3 else ""
+            best = FilesystemMount(
+                filesystem=fields[separator + 1],
+                super_options=tuple(part for part in options.split(",") if part),
+            )
+    return best
+
+
+def path_filesystem_type(path: Path, *, mountinfo_text: str = "") -> str:
+    """Filesystem type backing `path`, from the longest matching mountinfo entry."""
+    return path_filesystem_mount(path, mountinfo_text=mountinfo_text).filesystem
 
 
 def _read_device_numbers(device: str) -> str:
@@ -328,7 +362,7 @@ class ContainerRootfsOverlayManager:
     backing_image_bytes: int = DEFAULT_CONTAINER_ROOTFS_BACKING_BYTES
     backing_image_path: Path | None = None
     _root_prepared: bool = field(default=False, init=False, repr=False)
-    _quota_filesystem: str = field(default="", init=False, repr=False)
+    _quota_mount: FilesystemMount = field(default_factory=FilesystemMount, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.default_disk_limit_bytes <= 0:
@@ -652,13 +686,15 @@ class ContainerRootfsOverlayManager:
             return _AppliedDiskQuota(
                 reason=f"cannot resolve the filesystem backing {plan.upper_dir}",
             )
-        if self._quota_filesystem not in QUOTA_CAPABLE_FILESYSTEMS:
+        if not self._quota_mount.enforces_project_quota:
             if self.require_quota:
+                options = ",".join(self._quota_mount.super_options) or "<none>"
                 return _AppliedDiskQuota(
                     reason=(
                         f"container rootfs storage at {filesystem_root} is "
-                        f"{self._quota_filesystem!r}, which cannot enforce a per-container "
-                        "disk limit; provision it as xfs with the prjquota mount option"
+                        f"{self._quota_mount.filesystem!r} mounted {options}, which cannot "
+                        "enforce a per-container disk limit; provision it as xfs with the "
+                        "prjquota mount option"
                     ),
                 )
             return _AppliedDiskQuota()
@@ -696,13 +732,28 @@ class ContainerRootfsOverlayManager:
             raise ContainerRootfsError(msg)
         resolved.mkdir(parents=True, exist_ok=True)
 
-        filesystem = path_filesystem_type(
+        mount = path_filesystem_mount(
             resolved,
             mountinfo_text=self.system.read_mountinfo(),
         )
-        if filesystem not in QUOTA_CAPABLE_FILESYSTEMS and self.require_quota:
-            filesystem = self._provision_backing_filesystem(resolved, current=filesystem)
-        self._quota_filesystem = filesystem
+        # An xfs root mounted `noquota` reaches here looking capable by type and
+        # is not: the quota commands would accept it and enforce nothing.
+        if not mount.enforces_project_quota and self.require_quota:
+            self._provision_backing_filesystem(resolved, current=mount.filesystem)
+            mount = path_filesystem_mount(
+                resolved,
+                mountinfo_text=self.system.read_mountinfo(),
+            )
+            if not mount.enforces_project_quota:
+                msg = (
+                    "container rootfs storage at "
+                    f"{resolved} was provisioned but reports {mount.filesystem!r} "
+                    f"with options {','.join(mount.super_options) or '<none>'}, "
+                    "which cannot enforce a per-container disk limit"
+                )
+                raise ContainerRootfsError(msg)
+        self._quota_mount = mount
+        filesystem = mount.filesystem
         if filesystem in UNSUPPORTED_UPPER_FILESYSTEMS:
             # Named explicitly: overlayfs cannot stack, and the kernel's own
             # error for this is opaque.

@@ -25,6 +25,7 @@ from shared.aws_connections import (
 from shared.compute_policy import AwsWorkspaceComputePolicy
 from shared.http.aws_connections import AwsConnectionResponse
 from shared.http.compute_policy import WorkspaceComputePolicyUpdateRequest
+from shared.http.errors import HttpApiError
 from tests.e2e.external import _support
 
 _ACCOUNT_ID = re.compile(r"^[0-9]{12}$")
@@ -45,7 +46,29 @@ def _managed_stacks(connection: AwsConnectionResponse) -> dict[str, str]:
     return stacks
 
 
-def _zero_policy(client: ComputeClient) -> AwsWorkspaceComputePolicy:
+def _zero_policy(
+    client: ComputeClient,
+    deadline: _support.Deadline,
+) -> AwsWorkspaceComputePolicy:
+    """Zero the workspace policy, waiting out an in-flight reconcile.
+
+    The owner rejects a policy write while it is reconciling capacity, which is
+    exactly when a cleanup runs. Treating that as terminal aborts the stage and
+    leaves the capacity it was asked to release still running.
+    """
+
+    def attempt() -> AwsWorkspaceComputePolicy | None:
+        try:
+            return _apply_zero_policy(client)
+        except HttpApiError as exc:
+            if exc.status_code in {409, 503}:
+                return None
+            raise
+
+    return _support.poll_until(deadline, "the workspace compute policy to zero", attempt)
+
+
+def _apply_zero_policy(client: ComputeClient) -> AwsWorkspaceComputePolicy:
     current = client.policy()
     aws = current.aws
     zero = AwsWorkspaceComputePolicy(
@@ -247,7 +270,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise RuntimeError("the workspace is connected to a different AWS account")
 
     stacks = _managed_stacks(connection) if connection is not None else {}
-    zero = _zero_policy(client)
+    zero = _zero_policy(client, deadline)
     _wait_public_zero(client, deadline)
     if connection is not None:
         _wait_disconnected(client, stacks, args, deadline)
