@@ -150,7 +150,7 @@ diagnostic blind spot. Nothing here depends on anything else.
   — *verified live: a missing deployment returns 404 with `x-request-id`, and
   the server log carries `NotFoundError serving GET … (request_id=…)` plus the
   traceback, at `warning` for 4xx.*
-- [ ] **ERR-17** Delete `_resolve_in_session`
+- [x] **ERR-17** Delete `_resolve_in_session`
 - [ ] **CAP-11** Delete the dead projection status cluster
 
 **Why these first.** CAP-01 is the live outage. BOOT-01 is why a failed node

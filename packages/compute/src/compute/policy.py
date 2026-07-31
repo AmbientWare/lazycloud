@@ -417,57 +417,6 @@ class WorkspaceComputePolicyService:
         ):
             raise ConflictError("disconnect AWS compute before deleting this workspace")
 
-    def _resolve_in_session(
-        self,
-        *,
-        session: DatabaseSession,
-        workspace_id: str,
-        requested: ComputePlacementTarget | None,
-        attached_pool: str,
-    ) -> ComputePlacement:
-        if requested is not None and attached_pool:
-            raise InvalidInputError(
-                "workload placement cannot combine an explicit target with a self-hosted pool"
-            )
-        policy = self._policy_in_session(session, workspace_id)
-        if attached_pool:
-            pool = ComputePoolRepository(session).get_by_name(workspace_id, attached_pool)
-            if pool is not None:
-                return self._attached_pool_placement(pool)
-            scheduler_pool = PoolRepository(session).get(
-                attached_pool,
-                workspace_id=workspace_id,
-            )
-            if scheduler_pool is not None:
-                return ComputePlacement(
-                    target=ComputePlacementTarget.Managed,
-                    source=ComputePlacementSource.AttachedPool,
-                    provider=scheduler_pool.provider,
-                    pool_name=scheduler_pool.name,
-                )
-            raise InvalidInputError(f"attached compute pool {attached_pool!r} was not found")
-        target = requested if requested is not None else policy.default_placement
-        source = (
-            ComputePlacementSource.WorkloadOverride
-            if requested is not None
-            else ComputePlacementSource.WorkspaceDefault
-        )
-        if target is ComputePlacementTarget.Managed:
-            return ComputePlacement(target=target, source=source, provider="managed")
-        connection = AwsAccountConnectionRepository(session).get_for_workspace(workspace_id)
-        if connection is None or not connection.accepts_placement:
-            raise ConflictError("AWS placement requires a ready workspace connection")
-        region = policy.aws.default_region
-        if region not in policy.aws.allowed_regions:
-            raise InvalidInputError(f"AWS region {region!r} is not allowed by workspace policy")
-        return ComputePlacement(
-            target=target,
-            source=source,
-            provider="aws",
-            region=region,
-            provider_ref=f"aws:{connection.id}",
-        )
-
     @staticmethod
     def _attached_pool_placement(pool: ComputePoolRecord) -> ComputePlacement:
         aws = pool.provider_ref.startswith("aws:")
