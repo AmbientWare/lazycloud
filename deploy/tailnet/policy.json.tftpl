@@ -1,7 +1,8 @@
 {
   "tagOwners": {
     "${agent_tag}": ["autogroup:admin"],
-    "${control_plane_tag}": ["autogroup:admin"]
+    "${control_plane_tag}": ["autogroup:admin"],
+    "${bootstrap_tag}": ["autogroup:admin"]
   },
   "grants": [
     {
@@ -13,6 +14,11 @@
       "src": ["${agent_tag}"],
       "dst": ["${control_plane_tag}"],
       "ip": ["tcp:${control_plane_port}"]
+    },
+    {
+      "src": ["${bootstrap_tag}"],
+      "dst": ["${control_plane_tag}"],
+      "ip": ["tcp:${control_plane_port}"]
     }
   ],
   "tests": [
@@ -20,7 +26,11 @@
       "src": "${control_plane_tag}",
       "proto": "tcp",
       "accept": ["${agent_tag}:${agent_proxy_port}"],
-      "deny": ["${agent_tag}:22", "${control_plane_tag}:${agent_proxy_port}"]
+      "deny": [
+        "${agent_tag}:22",
+        "${control_plane_tag}:${agent_proxy_port}",
+        "${bootstrap_tag}:${agent_proxy_port}"
+      ]
     },
     {
       "src": "${agent_tag}",
@@ -28,6 +38,18 @@
       "accept": ["${control_plane_tag}:${control_plane_port}"],
       "deny": [
         "${agent_tag}:${agent_proxy_port}",
+        "${control_plane_tag}:${agent_proxy_port}",
+        "${control_plane_tag}:22",
+        "${bootstrap_tag}:${agent_proxy_port}"
+      ]
+    },
+    {
+      "src": "${bootstrap_tag}",
+      "proto": "tcp",
+      "accept": ["${control_plane_tag}:${control_plane_port}"],
+      "deny": [
+        "${agent_tag}:${agent_proxy_port}",
+        "${bootstrap_tag}:${agent_proxy_port}",
         "${control_plane_tag}:${agent_proxy_port}",
         "${control_plane_tag}:22"
       ]

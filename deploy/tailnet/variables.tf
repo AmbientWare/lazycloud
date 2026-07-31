@@ -53,6 +53,17 @@ variable "control_plane_tag" {
   }
 }
 
+variable "bootstrap_tag" {
+  description = "Tag carried only by a node that has not enrolled yet. It reaches the control plane and nothing else."
+  type        = string
+  default     = "tag:lazycloud-bootstrap"
+
+  validation {
+    condition     = can(regex("^tag:[a-z][a-z0-9-]{1,30}$", var.bootstrap_tag))
+    error_message = "bootstrap_tag must use the tag:<lowercase-name> form."
+  }
+}
+
 variable "agent_proxy_port" {
   description = "TCP port exposed by each customer-compute machine route proxy."
   type        = number

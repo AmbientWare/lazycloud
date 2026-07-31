@@ -6,4 +6,5 @@ environment               = "production"
 # Keep these aligned with Compose deployment values.
 agent_tag         = "tag:lazycloud-agent"
 control_plane_tag = "tag:lazycloud-control-plane"
+bootstrap_tag     = "tag:lazycloud-bootstrap"
 agent_proxy_port  = 29443
