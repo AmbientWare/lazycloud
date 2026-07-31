@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -54,6 +55,8 @@ from scheduler.state import (
     capacity_memory_mib,
     capacity_owner_key_segment,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 DEFAULT_CAPACITY_MUTATION_LOCK_SECONDS = 300
 DEFAULT_CAPACITY_RESERVATION_RETENTION_SECONDS = 86_400
@@ -744,6 +747,7 @@ class RedisCapacityReservationRepository:
             )
         stop_renewal = Event()
         lease_lost = Event()
+        lease_loss: list[tuple[str, BaseException | None]] = []
 
         def renew() -> None:
             interval_seconds = max(ttl_seconds / 3, 0.1)
@@ -756,10 +760,16 @@ class RedisCapacityReservationRepository:
                         token,
                         ttl_seconds,
                     )
-                except Exception:
+                except Exception as exc:
+                    LOGGER.exception(
+                        "capacity mutation lease renewal failed for owner %s",
+                        capacity_owner_id,
+                    )
+                    lease_loss.append(("renewal failed", exc))
                     lease_lost.set()
                     return
                 if renewed != 1:
+                    lease_loss.append(("the lock was taken by another holder", None))
                     lease_lost.set()
                     return
 
@@ -780,19 +790,31 @@ class RedisCapacityReservationRepository:
             renewal.join(timeout=max(min(ttl_seconds / 3, 1.0), 0.1))
             try:
                 current_token = self.redis.get(key)
-            except Exception:
+            except Exception as exc:
+                LOGGER.exception(
+                    "reading the capacity mutation lease failed for owner %s",
+                    capacity_owner_id,
+                )
+                lease_loss.append(("reading the lock failed", exc))
                 lease_lost.set()
             else:
                 if current_token is None or redis_text(current_token) != token:
+                    lease_loss.append(("the lock was taken by another holder", None))
                     lease_lost.set()
             try:
                 release_token_lock(self.redis, key, token)
-            except Exception:
+            except Exception as exc:
+                LOGGER.exception(
+                    "releasing the capacity mutation lease failed for owner %s",
+                    capacity_owner_id,
+                )
+                lease_loss.append(("releasing the lock failed", exc))
                 lease_lost.set()
             if lease_lost.is_set() and not body_failed:
+                why, cause = lease_loss[0] if lease_loss else ("the lock was lost", None)
                 raise CapacityReservationLeaseLostError(
-                    f"capacity owner {capacity_owner_id} mutation lease was lost"
-                )
+                    f"capacity owner {capacity_owner_id} mutation lease was lost: {why}"
+                ) from cause
 
     def reserve(
         self,
