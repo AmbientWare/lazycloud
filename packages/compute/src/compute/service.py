@@ -192,7 +192,7 @@ class ProviderPoolBootstrapFactory(Protocol):
 PROVIDER_MACHINE_IDENTITY_SETTLE_SECONDS = 30
 
 
-class ManagedComputeLaunchError(RuntimeError):
+class ManagedComputeLaunchError(DomainError):
     def __init__(
         self,
         message: str,
@@ -200,9 +200,24 @@ class ManagedComputeLaunchError(RuntimeError):
         code: str,
         decision: BillingDecision | None = None,
     ) -> None:
-        super().__init__(message)
-        self.code = code
+        super().__init__(message, code=code)
         self.decision = decision or BillingDecision(ok=False, message=message)
+
+
+_LAUNCH_CODES_UPSTREAM = frozenset({"provider_unavailable"})
+
+
+def _launch_failure_as_domain_error(exc: ManagedComputeLaunchError) -> DomainError:
+    """Map a launch refusal to the status its code deserves.
+
+    Only an unreachable provider is a 503. A quota, an empty offer set or an
+    exhausted balance are states the caller owns and can act on, and reporting
+    them as an upstream outage tells them to wait for something that will not
+    change on its own.
+    """
+    if exc.code in _LAUNCH_CODES_UPSTREAM:
+        return UpstreamUnavailableError(exc.message, code=exc.code)
+    return ConflictError(exc.message, code=exc.code)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1672,7 +1687,7 @@ class ComputeService:
             clients = self._provider_client_snapshot(workspace_id)
             return self._list_pool_offers(request, workspace_id=workspace_id, clients=clients)
         except ManagedComputeLaunchError as exc:
-            raise UpstreamUnavailableError(str(exc)) from exc
+            raise _launch_failure_as_domain_error(exc) from exc
         except ValueError as exc:
             raise InvalidInputError(str(exc)) from exc
 
@@ -2748,7 +2763,7 @@ class ComputeService:
                 now=now,
             )
         except ManagedComputeLaunchError as exc:
-            raise ConflictError(f"{exc.code}: {exc}") from exc
+            raise _launch_failure_as_domain_error(exc) from exc
         except ValueError as exc:
             raise InvalidInputError(str(exc)) from exc
 

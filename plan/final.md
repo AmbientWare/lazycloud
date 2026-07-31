@@ -179,7 +179,11 @@ failure carries its cause to a durable place in every path we touched.
   (`service.py:4240`) already passes Python-typed values: `config` is declared
   `dict[str, JsonValue]`, so `_json_object(config)` is correct there.*
 - [x] **ERR-06** Give `DomainError` and `ErrorResponse` a stable code — *after ERR-05*
-- [ ] **ERR-07** Stop flattening `ManagedComputeLaunchError`; stop returning 500 for a quota hit — *after ERR-06*
+- [x] **ERR-07** Stop flattening `ManagedComputeLaunchError`; stop returning 500 for a quota hit — *after ERR-06*
+  — *the plan mapped three codes; there are five. AST enumeration of all 13 raise
+  sites found `offer_unavailable` and a billing-derived `decision.error_code`
+  the plan missed, so the map defaults to conflict and names only
+  `provider_unavailable` as upstream.*
 - [ ] **ERR-08** Record why a lease was lost instead of only that it was
 - [ ] **ERR-09** Give the shell compensation path a reason
 - [ ] **ERR-13** Move compute-policy editing server-side — *after ERR-06*
