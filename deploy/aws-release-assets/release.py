@@ -697,8 +697,13 @@ def _validate_worker_image_platform(payload: str, *, expected_reference: str) ->
             "container-worker image index must contain exactly one runnable Linux amd64 image"
         )
     runnable_digest = runnable[0].descriptor.digest
+    # Only payloads that carry annotations can be cross-checked; `docker manifest
+    # inspect --verbose` omits them, and an attestation it reported is already
+    # known to belong to this index because every descriptor was matched to this
+    # repository above.
     if any(
-        attestation.descriptor.annotations[_DOCKER_REFERENCE_DIGEST_ANNOTATION] != runnable_digest
+        attestation.descriptor.annotations.get(_DOCKER_REFERENCE_DIGEST_ANNOTATION, runnable_digest)
+        != runnable_digest
         for attestation in attestations
     ):
         raise RuntimeError("container-worker image index contains an attestation for another image")
@@ -717,11 +722,25 @@ def _is_linux_amd64_image(descriptor: DockerImageDescriptor) -> bool:
 
 
 def _is_buildkit_attestation(descriptor: DockerImageDescriptor) -> bool:
+    """Whether a descriptor is a buildkit attestation rather than a runnable image.
+
+    `docker manifest inspect --verbose` omits descriptor annotations, so the
+    reference-type annotation buildkit writes is not available here even though
+    the registry index carries it. The `unknown/unknown` platform is what
+    buildkit uses to keep attestations off every real platform and is present in
+    both payloads; the annotations are still required when the payload includes
+    them, so a genuine image cannot be discarded by claiming to be one.
+    """
+    if (
+        descriptor.media_type != _OCI_IMAGE_MANIFEST_MEDIA_TYPE
+        or descriptor.platform.os != "unknown"
+        or descriptor.platform.architecture != "unknown"
+    ):
+        return False
+    if not descriptor.annotations:
+        return True
     return (
-        descriptor.media_type == _OCI_IMAGE_MANIFEST_MEDIA_TYPE
-        and descriptor.platform.os == "unknown"
-        and descriptor.platform.architecture == "unknown"
-        and descriptor.annotations.get(_DOCKER_REFERENCE_TYPE_ANNOTATION)
+        descriptor.annotations.get(_DOCKER_REFERENCE_TYPE_ANNOTATION)
         == _DOCKER_ATTESTATION_REFERENCE_TYPE
         and _DOCKER_REFERENCE_DIGEST_ANNOTATION in descriptor.annotations
     )

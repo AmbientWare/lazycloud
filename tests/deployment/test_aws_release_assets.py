@@ -278,6 +278,45 @@ def test_worker_image_verification_accepts_buildkit_attested_amd64_index() -> No
     )
 
 
+def test_worker_image_verification_accepts_an_attestation_without_annotations() -> None:
+    """`docker manifest inspect --verbose` omits descriptor annotations.
+
+    That is the payload verification actually reads, so requiring the annotation
+    made every real release fail: buildkit's attestation was counted as a second
+    runnable image. A descriptor on the `unknown/unknown` platform is not
+    runnable by anything, so it cannot be the release image either way.
+    """
+    index_digest = f"sha256:{'a' * 64}"
+    image_digest = f"sha256:{'b' * 64}"
+    attestation_digest = f"sha256:{'c' * 64}"
+    repository = "public.ecr.aws/example/worker"
+    payload = json.dumps(
+        [
+            {
+                "Ref": f"{repository}@{image_digest}",
+                "Descriptor": {
+                    "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                    "digest": image_digest,
+                    "platform": {"architecture": "amd64", "os": "linux"},
+                },
+            },
+            {
+                "Ref": f"{repository}@{attestation_digest}",
+                "Descriptor": {
+                    "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                    "digest": attestation_digest,
+                    "platform": {"architecture": "unknown", "os": "unknown"},
+                },
+            },
+        ]
+    )
+
+    aws_release_assets._validate_worker_image_platform(
+        payload,
+        expected_reference=f"{repository}@{index_digest}",
+    )
+
+
 @pytest.mark.parametrize(
     ("extra_descriptor", "error"),
     [
@@ -286,14 +325,6 @@ def test_worker_image_verification_accepts_buildkit_attested_amd64_index() -> No
                 "mediaType": "application/vnd.oci.image.manifest.v1+json",
                 "digest": f"sha256:{'d' * 64}",
                 "platform": {"architecture": "arm64", "os": "linux"},
-            },
-            "exactly one runnable Linux amd64",
-        ),
-        (
-            {
-                "mediaType": "application/vnd.oci.image.manifest.v1+json",
-                "digest": f"sha256:{'d' * 64}",
-                "platform": {"architecture": "unknown", "os": "unknown"},
             },
             "exactly one runnable Linux amd64",
         ),
