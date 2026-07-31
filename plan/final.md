@@ -192,7 +192,12 @@ failure carries its cause to a durable place in every path we touched.
   instead of all ten stored values, and renders a typed panel with exit 1.
   The cross-field case in the acceptance needs a live AWS connection, which the
   reset removed — the placement guard fires first. Re-check in Phase 4.*
-- [ ] **ERR-14** Stop billing a workspace that zeroed its CPU capacity
+- [x] **ERR-14** Stop billing a workspace that zeroed its CPU capacity
+  — *plan corrected: it called for splitting CPU and GPU release. There is no
+  GPU release to split — `reconcile_aws_default_capacity` takes no GPU argument,
+  and `max_gpu_instances` is read only as a placement ceiling
+  (`request_placement.py:80`, `service.py:2315`). The defect was gating a CPU
+  release on a GPU ceiling, so the knob was removed from the predicate.*
 - [ ] **CAP-02** Carry a typed reason on every transition to `Unavailable` — *after ERR-12*
 - [ ] **CAP-03** Report which registration step failed — *after CAP-02*
 - [ ] **CAP-04** Remove the worker record when registration never completed — *after CAP-03*

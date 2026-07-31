@@ -118,12 +118,15 @@ class AwsDefaultCapacityOwner(Protocol):
 
 
 def _aws_capacity_is_zero(aws: AwsWorkspaceComputePolicy) -> bool:
-    return (
-        aws.min_cpu_workers == 0
-        and aws.initial_cpu_workers == 0
-        and aws.max_cpu_instances == 0
-        and aws.max_gpu_instances == 0
-    )
+    """Whether this baseline should hold no machines.
+
+    Only the CPU knobs answer that. This owner provisions CPU machines and
+    nothing else — `reconcile_aws_default_capacity` takes no GPU argument — and
+    `max_gpu_instances` is a placement ceiling, not a floor, so a workspace that
+    zeroed every control it was given kept paying while that ceiling sat at its
+    default.
+    """
+    return aws.min_cpu_workers == 0 and aws.initial_cpu_workers == 0 and aws.max_cpu_instances == 0
 
 
 @dataclass(frozen=True, slots=True)
