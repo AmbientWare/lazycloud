@@ -267,6 +267,7 @@ def run_container_worker(
         WorkerUnavailableReason.ShuttingDown,
         "",
     )
+    registration_failed = False
     shutdown_signal = 0
 
     def record_shutdown_signal(signum: int) -> None:
@@ -306,6 +307,7 @@ def run_container_worker(
                         step for step in registration if step.status is not WorkerLifecycleStatus.Ok
                     )
                     registration_failure = _registration_failure(failed)
+                    registration_failed = True
                     raise ContainerWorkerRegistrationError(detail)
                 if once:
                     _reconcile_worker_artifacts(worker_services)
@@ -374,7 +376,10 @@ def run_container_worker(
             event_loop.stop()
         if shutdown_registered_worker:
             worker_services.lifecycle.shutdown(
-                remove_worker=not resolved_settings.resolved_persistent,
+                # A worker that never became available holds no work and no
+                # capacity worth keeping. Leaving its record behind offers the
+                # scheduler a candidate that will never accept a container.
+                remove_worker=(registration_failed or not resolved_settings.resolved_persistent),
                 stop_reason=(
                     StopContainerReason.Admin if shutdown_signal else StopContainerReason.Unknown
                 ),

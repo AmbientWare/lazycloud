@@ -102,7 +102,15 @@ def test_worker_does_not_process_when_registration_fails() -> None:
     assert lifecycle.keepalive_calls == 0
 
 
-def test_persistent_worker_registration_rollback_preserves_owner_identity() -> None:
+def test_a_worker_that_never_registered_leaves_no_record_behind() -> None:
+    """Registration failure must not leave a candidate the scheduler will try.
+
+    A persistent worker kept its record on this path. The record declares
+    capacity and is admitted to the scheduling candidate set, so a container
+    could be told to wait for a worker that had already exited. Identity is
+    carried by `WORKER_ID`, not by the record, so nothing is lost by removing
+    one that never became available.
+    """
     processor = _UnexpectedProcessor()
     lifecycle = _Lifecycle(
         registration_steps=[
@@ -123,7 +131,7 @@ def test_persistent_worker_registration_rollback_preserves_owner_identity() -> N
         )
 
     assert processor.calls == 0
-    assert lifecycle.shutdown_remove_worker == [False]
+    assert lifecycle.shutdown_remove_worker == [True]
 
 
 @dataclass(slots=True)

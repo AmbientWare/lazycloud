@@ -206,7 +206,11 @@ failure carries its cause to a durable place in every path we touched.
   failure containing a gateway URL and a token yields
   `'validate-readiness failed (ConnectionError)'`. Live confirmation on a node
   belongs to Phase 4.*
-- [ ] **CAP-04** Remove the worker record when registration never completed — *after CAP-03*
+- [x] **CAP-04** Remove the worker record when registration never completed — *after CAP-03*
+  — *an existing test asserted the opposite and claimed it preserved owner
+  identity. It does not: `worker_id` comes from `WORKER_ID`, and `remove_worker`
+  touches no durable owner record — it requeues queued requests and deletes the
+  state key. Test reworked to assert the cleanup obligation instead.*
 - [ ] **CAP-05** Stop discarding the keep-alive source-cache outcome — *after CAP-02*
 - [ ] **CAP-06** Give `mark_available` one job — *after CAP-03*
 - [ ] **CAP-07** Reclassify "at limit" as backpressure
