@@ -5116,6 +5116,10 @@ class ComputeService:
         phase_started_at = _utc(record.bootstrap_observed_at or record.created_at)
         if now - phase_started_at < deadline:
             return None
+        if record.bootstrap_phase is MachineBootstrapPhase.Failed:
+            # The node named its own failure. Reclaim it under that reason rather
+            # than re-diagnosing it as a timeout it did not have.
+            return record.bootstrap_failure_reason or MachineBootstrapFailureReason.Unknown
         if record.bootstrap_phase in {
             MachineBootstrapPhase.Requested,
             MachineBootstrapPhase.Provisioning,

@@ -214,7 +214,7 @@ bootstrap_failed() {
     service) reason=agent_enrollment_failed ;;
   esac
   report_failure "$reason"
-  echo "worker bootstrap failed during ${STEP}; leaving instance available for inspection" >&2
+  echo "worker bootstrap failed during ${STEP}; the control plane reclaims this instance" >&2
   exit "$status"
 }
 trap bootstrap_failed ERR

@@ -45,12 +45,19 @@ DEFAULT_BOOTSTRAP_PHASE_DEADLINE_SECONDS: dict[str, int] = {
     MachineBootstrapPhase.Provisioning.value: 300,
     MachineBootstrapPhase.Booting.value: 300,
     MachineBootstrapPhase.Joining.value: 300,
+    MachineBootstrapPhase.Failed.value: 300,
 }
 """Machines stuck in one bootstrap phase are reclaimed after 5 minutes.
 
 Each phase deadline restarts on an observed phase transition, so a healthy but
 slow bootstrap gets the full window per phase while a machine that dies in any
 single phase is bounded to minutes, not a billed hour.
+
+`Failed` is bounded for the same reason and on the same clock. Without it a
+machine that reported why it failed ran and billed until someone noticed, while
+one that died silently was reclaimed in five minutes — so the boot path that
+reported nothing cost less than the one that reported everything. The window is
+what a machine gets to be looked at, not a licence to keep it.
 """
 
 DEFAULT_MAX_LAUNCH_ATTEMPTS = 3

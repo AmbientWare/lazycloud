@@ -1539,6 +1539,62 @@ def test_never_registered_machine_is_reclaimed_after_the_deadline(
     assert machines.get(silent_machine_id, ResourceStatus.Deleted) is ResourceStatus.Deleted
 
 
+def test_a_machine_that_reported_its_failure_is_reclaimed_under_that_reason(
+    isolated_services: ApiServices,
+) -> None:
+    """Reporting a failure must not cost more than dying silently.
+
+    `Failed` had no deadline, and `Failed -> Deleting` is the only transition
+    out of it, so a machine that said why it failed ran and billed until someone
+    noticed — while one that said nothing was reclaimed on the phase clock. The
+    reported reason also has to survive the reclaim: re-labelling it
+    `BootstrapTimedOut` discards the only diagnosis the node managed to send.
+    """
+    alpha = _DirectProvider(name="alpha", offers=[_offer("alpha", hourly_cost_micros=100_000)])
+    _install_providers(isolated_services, {"alpha": alpha})
+    # The shipped defaults, deliberately: the bound on `Failed` is the subject.
+    isolated_services.compute.reclaim = ComputeReclaimPolicy()
+    state = isolated_services.compute.launch_pool_capacity(
+        PoolConfig(name="reclaim-pool", providers=["alpha"], nodes=1, ttl="4h", max_spend=9.0)
+    )
+    reported_at = utc_now()
+    machine_id = state.reservations[0].machine_id
+    instance_id = state.reservations[0].instance_id
+    with isolated_services.context.database.session() as session:
+        pool = ComputePoolRepository(session).get_by_name(state.workspace_id, "reclaim-pool")
+        assert pool is not None
+        repository = ComputeProviderInstanceRepository(session)
+        for record in repository.list_for_pool(pool.id):
+            if record.machine_id == machine_id:
+                repository.upsert(
+                    record.model_copy(
+                        update={
+                            "bootstrap_phase": MachineBootstrapPhase.Failed,
+                            "bootstrap_failure_reason": (
+                                MachineBootstrapFailureReason.NetworkJoinFailed
+                            ),
+                            "bootstrap_observed_at": reported_at,
+                        }
+                    )
+                )
+
+    isolated_services.compute.reconcile_provider_capacity(now=reported_at + timedelta(seconds=120))
+    assert alpha.terminate_calls == []
+
+    isolated_services.compute.reconcile_provider_capacity(now=reported_at + timedelta(seconds=360))
+
+    assert alpha.terminate_calls == [instance_id]
+    with isolated_services.context.database.session() as session:
+        pool = ComputePoolRepository(session).get_by_name(state.workspace_id, "reclaim-pool")
+        assert pool is not None
+        record = next(
+            item
+            for item in ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
+            if item.machine_id == machine_id
+        )
+    assert record.bootstrap_failure_reason is MachineBootstrapFailureReason.NetworkJoinFailed
+
+
 def _pool_for_capacity(
     services: ApiServices, alpha: _DirectProvider, name: str
 ) -> ComputePoolRecord:
