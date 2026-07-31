@@ -33,6 +33,7 @@ from shared.http.compute import (
 from shared.http.compute_policy import (
     ComputeCatalogResponse,
     WorkspaceComputeInstanceListResponse,
+    WorkspaceComputePolicyPatchRequest,
     WorkspaceComputePolicyResponse,
     WorkspaceComputePolicyUpdateRequest,
     WorkspaceComputeSummaryResponse,
@@ -137,6 +138,18 @@ class ComputeClient:
                 "PUT",
                 self._compute_path("/policy"),
                 payload=request.model_dump(mode="json"),
+            )
+        )
+
+    def patch_policy(
+        self,
+        request: WorkspaceComputePolicyPatchRequest,
+    ) -> WorkspaceComputePolicyResponse:
+        return WorkspaceComputePolicyResponse.model_validate(
+            self.channel.request(
+                "PATCH",
+                self._compute_path("/policy"),
+                payload=request.model_dump(mode="json", exclude_none=True),
             )
         )
 

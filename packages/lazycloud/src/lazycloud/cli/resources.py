@@ -7,7 +7,7 @@ from typing import Annotated, Any
 
 import typer
 from shared.aws_connections import AwsAccountConnectionPhase
-from shared.compute_policy import AwsWorkspaceComputePolicy, ComputePlacementTarget
+from shared.compute_policy import ComputePlacementTarget
 from shared.http.aws_connections import AwsConnectionResponse
 from shared.http.compute import (
     ContainerResponse,
@@ -22,7 +22,10 @@ from shared.http.compute import (
     PoolScaleRequest,
     PoolScaleResponse,
 )
-from shared.http.compute_policy import WorkspaceComputePolicyUpdateRequest
+from shared.http.compute_policy import (
+    AwsWorkspaceComputePolicyPatch,
+    WorkspaceComputePolicyPatchRequest,
+)
 from shared.http.gateway import (
     AttachToContainerResponse,
     CheckpointContainerRequest,
@@ -589,50 +592,27 @@ def compute_policy_update(
 ) -> None:
     client = compute_client(workspace=workspace)
     current = client.policy()
-    aws = current.aws
-    request = WorkspaceComputePolicyUpdateRequest(
+    request = WorkspaceComputePolicyPatchRequest(
         expected_revision=current.revision,
-        default_placement=default_placement or current.default_placement,
-        aws=AwsWorkspaceComputePolicy(
-            default_region=default_region or aws.default_region,
-            default_instance_type=(
-                aws.default_instance_type
-                if default_instance_type is None
-                else default_instance_type
-            ),
-            initial_cpu_workers=(
-                aws.initial_cpu_workers if initial_cpu_workers is None else initial_cpu_workers
-            ),
-            min_cpu_workers=(aws.min_cpu_workers if min_cpu_workers is None else min_cpu_workers),
-            max_cpu_instances=(
-                aws.max_cpu_instances if max_cpu_instances is None else max_cpu_instances
-            ),
-            max_gpu_instances=(
-                aws.max_gpu_instances if max_gpu_instances is None else max_gpu_instances
-            ),
-            min_free_cpu_millicores=(
-                aws.min_free_cpu_millicores
-                if min_free_cpu_millicores is None
-                else min_free_cpu_millicores
-            ),
-            min_free_memory_mib=(
-                aws.min_free_memory_mib if min_free_memory_mib is None else min_free_memory_mib
-            ),
-            allowed_regions=(
-                aws.allowed_regions if allowed_regions is None else tuple(allowed_regions)
-            ),
+        default_placement=default_placement,
+        aws=AwsWorkspaceComputePolicyPatch(
+            default_region=default_region,
+            default_instance_type=default_instance_type,
+            initial_cpu_workers=initial_cpu_workers,
+            min_cpu_workers=min_cpu_workers,
+            max_cpu_instances=max_cpu_instances,
+            max_gpu_instances=max_gpu_instances,
+            min_free_cpu_millicores=min_free_cpu_millicores,
+            min_free_memory_mib=min_free_memory_mib,
+            allowed_regions=None if allowed_regions is None else tuple(allowed_regions),
             allowed_instance_types=(
-                aws.allowed_instance_types
-                if allowed_instance_types is None
-                else tuple(allowed_instance_types)
+                None if allowed_instance_types is None else tuple(allowed_instance_types)
             ),
-            idle_timeout_seconds=(
-                aws.idle_timeout_seconds if idle_timeout_seconds is None else idle_timeout_seconds
-            ),
-            root_volume_gib=aws.root_volume_gib if root_volume_gib is None else root_volume_gib,
+            idle_timeout_seconds=idle_timeout_seconds,
+            root_volume_gib=root_volume_gib,
         ),
     )
-    response = client.update_policy(request)
+    response = client.patch_policy(request)
     print_payload(ctx, response.model_dump(mode="json"))
 
 

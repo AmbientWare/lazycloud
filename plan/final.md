@@ -186,7 +186,12 @@ failure carries its cause to a durable place in every path we touched.
   `provider_unavailable` as upstream.*
 - [x] **ERR-08** Record why a lease was lost instead of only that it was
 - [x] **ERR-09** Give the shell compensation path a reason
-- [ ] **ERR-13** Move compute-policy editing server-side — *after ERR-06*
+- [x] **ERR-13** Move compute-policy editing server-side — *after ERR-06*
+  — *`PATCH` added, `PUT` left as full-replace (decision 10). Verified live: the
+  CLI now sends `{'expected_revision': N, 'aws': {'max_cpu_instances': 1}}`
+  instead of all ten stored values, and renders a typed panel with exit 1.
+  The cross-field case in the acceptance needs a live AWS connection, which the
+  reset removed — the placement guard fires first. Re-check in Phase 4.*
 - [ ] **ERR-14** Stop billing a workspace that zeroed its CPU capacity
 - [ ] **CAP-02** Carry a typed reason on every transition to `Unavailable` — *after ERR-12*
 - [ ] **CAP-03** Report which registration step failed — *after CAP-02*

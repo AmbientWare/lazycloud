@@ -25,6 +25,29 @@ class WorkspaceComputePolicyUpdateRequest(HttpModel):
     aws: AwsWorkspaceComputePolicy
 
 
+class AwsWorkspaceComputePolicyPatch(HttpModel):
+    """Fields a caller chose to change. Omitted is not the same as zero."""
+
+    default_region: str | None = None
+    default_instance_type: str | None = None
+    initial_cpu_workers: int | None = None
+    min_cpu_workers: int | None = None
+    max_cpu_instances: int | None = None
+    max_gpu_instances: int | None = None
+    min_free_cpu_millicores: int | None = None
+    min_free_memory_mib: int | None = None
+    allowed_regions: tuple[str, ...] | None = None
+    allowed_instance_types: tuple[str, ...] | None = None
+    idle_timeout_seconds: int | None = None
+    root_volume_gib: int | None = None
+
+
+class WorkspaceComputePolicyPatchRequest(HttpModel):
+    expected_revision: int = Field(ge=1)
+    default_placement: ComputePlacementTarget | None = None
+    aws: AwsWorkspaceComputePolicyPatch = Field(default_factory=AwsWorkspaceComputePolicyPatch)
+
+
 class WorkspaceComputePolicyResponse(HttpModel):
     revision: int = Field(ge=1)
     default_placement: ComputePlacementTarget
