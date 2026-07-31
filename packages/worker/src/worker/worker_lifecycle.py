@@ -306,7 +306,12 @@ class WorkerLifecycleOrchestrator:
             )
         return result
 
-    def disable_scheduling(self) -> WorkerLifecycleStepResult:
+    def disable_scheduling(
+        self,
+        *,
+        reason: WorkerUnavailableReason = WorkerUnavailableReason.ShuttingDown,
+        detail: str = "",
+    ) -> WorkerLifecycleStepResult:
         self._draining = True
         repository = self.repository
         if repository is None:
@@ -319,7 +324,8 @@ class WorkerLifecycleOrchestrator:
             WorkerLifecycleAction.DisableScheduling,
             lambda: repository.disable_worker(
                 self.worker_id,
-                reason=WorkerUnavailableReason.ShuttingDown,
+                reason=reason,
+                detail=detail,
                 ttl_seconds=self.keepalive_ttl_seconds,
             ),
         )
@@ -447,12 +453,19 @@ class WorkerLifecycleOrchestrator:
         repository_timeout_seconds: float = DEFAULT_WORKER_SHUTDOWN_REPOSITORY_TIMEOUT_SECONDS,
         remove_worker: bool = True,
         stop_reason: StopContainerReason = StopContainerReason.Unknown,
+        unavailable_reason: WorkerUnavailableReason = WorkerUnavailableReason.ShuttingDown,
+        unavailable_detail: str = "",
     ) -> WorkerShutdownResult:
         if isinstance(self.repository, WorkerLifecycleShutdownRepository):
             self.repository.prepare_shutdown(
                 timeout_seconds=max(repository_timeout_seconds, 0.1),
             )
-        steps = [self.disable_scheduling()]
+        steps = [
+            self.disable_scheduling(
+                reason=unavailable_reason,
+                detail=unavailable_detail,
+            )
+        ]
         steps.append(
             self._wait_for_active_containers(
                 timeout_seconds=max(drain_timeout_seconds, 0.0),

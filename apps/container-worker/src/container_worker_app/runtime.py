@@ -6,6 +6,7 @@ from types import TracebackType
 from typing import Protocol
 
 from shared.container_requests import StopContainerReason
+from shared.scheduling import WorkerUnavailableReason
 from worker.event_bridge import WorkerEventHandlingResult
 from worker.events import WorkerStreamEvent
 from worker.repository_payloads import StreamWorkerEventsRequest
@@ -42,6 +43,8 @@ class ContainerWorkerLifecycle(Protocol):
         *,
         remove_worker: bool = True,
         stop_reason: StopContainerReason = StopContainerReason.Unknown,
+        unavailable_reason: WorkerUnavailableReason = WorkerUnavailableReason.ShuttingDown,
+        unavailable_detail: str = "",
     ) -> WorkerShutdownResult: ...
 
 

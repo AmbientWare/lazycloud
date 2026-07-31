@@ -17,6 +17,7 @@ from container_worker_app.main import (
 )
 from container_worker_app.production import ProductionWorkerSettings
 from shared.container_requests import StopContainerReason
+from shared.scheduling import WorkerUnavailableReason
 from worker.repository_client import WorkerRepositoryClientError
 from worker.status import WorkerSpindownPlan
 from worker.worker_lifecycle import (
@@ -166,6 +167,7 @@ class _Lifecycle:
     shutdown_calls: int = 0
     shutdown_remove_worker: list[bool] = field(default_factory=list)
     shutdown_reasons: list[StopContainerReason] = field(default_factory=list)
+    shutdown_unavailable: list[tuple[WorkerUnavailableReason, str]] = field(default_factory=list)
     keepalive_calls: int = 0
     renewed: threading.Event | None = None
     events: list[str] = field(default_factory=list)
@@ -200,10 +202,13 @@ class _Lifecycle:
         *,
         remove_worker: bool = True,
         stop_reason: StopContainerReason = StopContainerReason.Unknown,
+        unavailable_reason: WorkerUnavailableReason = WorkerUnavailableReason.ShuttingDown,
+        unavailable_detail: str = "",
     ) -> WorkerShutdownResult:
         self.shutdown_calls += 1
         self.shutdown_remove_worker.append(remove_worker)
         self.shutdown_reasons.append(stop_reason)
+        self.shutdown_unavailable.append((unavailable_reason, unavailable_detail))
         self.events.append("shutdown")
         return WorkerShutdownResult(worker_id="worker-1")
 

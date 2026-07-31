@@ -199,7 +199,13 @@ failure carries its cause to a durable place in every path we touched.
   (`request_placement.py:80`, `service.py:2315`). The defect was gating a CPU
   release on a GPU ceiling, so the knob was removed from the predicate.*
 - [x] **CAP-02** Carry a typed reason on every transition to `Unavailable` — *after ERR-12*
-- [ ] **CAP-03** Report which registration step failed — *after CAP-02*
+- [x] **CAP-03** Report which registration step failed — *after CAP-02*
+  — *the two candidates behind the 25-minute crash loop now produce different
+  durable values: `readiness_validation_failed` vs `source_cache_unavailable`.
+  Detail carries the step and exception class only — verified that a probe
+  failure containing a gateway URL and a token yields
+  `'validate-readiness failed (ConnectionError)'`. Live confirmation on a node
+  belongs to Phase 4.*
 - [ ] **CAP-04** Remove the worker record when registration never completed — *after CAP-03*
 - [ ] **CAP-05** Stop discarding the keep-alive source-cache outcome — *after CAP-02*
 - [ ] **CAP-06** Give `mark_available` one job — *after CAP-03*

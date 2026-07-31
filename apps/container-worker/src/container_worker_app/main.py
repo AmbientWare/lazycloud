@@ -17,6 +17,7 @@ from shared.app_identity import CONTAINER_WORKER_PROCESS_NAME
 from shared.container_requests import StopContainerReason
 from shared.process_liveness import HeartbeatFile, heartbeat_path
 from shared.routing import BackendRouteTransport
+from shared.scheduling import WorkerUnavailableReason
 from worker.events import WorkerPoolMode, WorkerStreamEventKind
 from worker.repository_payloads import StreamWorkerEventsRequest
 from worker.runtime_config import OciRuntimeName
@@ -262,6 +263,10 @@ def run_container_worker(
     retention_loop: WorkerRetentionLoop | None = None
     shutdown_event = threading.Event()
     shutdown_registered_worker = False
+    registration_failure: tuple[WorkerUnavailableReason, str] = (
+        WorkerUnavailableReason.ShuttingDown,
+        "",
+    )
     shutdown_signal = 0
 
     def record_shutdown_signal(signum: int) -> None:
@@ -297,6 +302,10 @@ def run_container_worker(
                         )
                         or "worker registration returned no steps"
                     )
+                    failed = next(
+                        step for step in registration if step.status is not WorkerLifecycleStatus.Ok
+                    )
+                    registration_failure = _registration_failure(failed)
                     raise ContainerWorkerRegistrationError(detail)
                 if once:
                     _reconcile_worker_artifacts(worker_services)
@@ -369,6 +378,8 @@ def run_container_worker(
                 stop_reason=(
                     StopContainerReason.Admin if shutdown_signal else StopContainerReason.Unknown
                 ),
+                unavailable_reason=registration_failure[0],
+                unavailable_detail=registration_failure[1],
             )
         if container_service is not None:
             container_service.stop()
@@ -518,6 +529,31 @@ def _run_retention_loop(
             continue
         consecutive_failures = 0
         stop_event.wait(interval_seconds)
+
+
+_REGISTRATION_STEP_REASONS: dict[WorkerLifecycleAction, WorkerUnavailableReason] = {
+    WorkerLifecycleAction.ValidateReadiness: WorkerUnavailableReason.ReadinessValidationFailed,
+    WorkerLifecycleAction.MarkAvailable: WorkerUnavailableReason.SourceCacheUnavailable,
+}
+
+
+def _registration_failure(
+    step: WorkerLifecycleStepResult,
+) -> tuple[WorkerUnavailableReason, str]:
+    """Name the step that refused registration, without quoting its error text.
+
+    The readiness probe dials the gateway and its failure text carries that URL,
+    so only the step and the exception class are safe to persist and show.
+    """
+    reason = _REGISTRATION_STEP_REASONS.get(
+        step.action,
+        WorkerUnavailableReason.RegistrationFailed,
+    )
+    exception_type = step.error_message.partition(":")[0].strip()
+    detail = f"{step.action.value} failed"
+    if exception_type and " " not in exception_type:
+        detail = f"{detail} ({exception_type})"
+    return reason, detail
 
 
 @contextmanager
