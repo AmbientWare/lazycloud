@@ -67,6 +67,7 @@ def _create_scheduler_app_services(
         create_schema=False,
         redis_client=redis,
         gateway_origin=services.gateway_settings.public_http_url,
+        runtime_callback_origin=services.gateway_settings.runtime_callback_http_url,
         observability=SchedulerObservabilitySettings(
             workspace_changes=services.workspace_change_stream_settings,
             usage_metrics=UsageMetricsSettings(),

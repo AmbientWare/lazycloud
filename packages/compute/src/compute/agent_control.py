@@ -873,7 +873,7 @@ def _is_tailnet_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) 
     return any(address in network for network in _TAILNET_NETWORKS)
 
 
-def _host_is_unreachable_from_a_remote_machine(host: str) -> bool:
+def host_is_unreachable_from_a_remote_machine(host: str) -> bool:
     """Whether a remote machine could never reach this host.
 
     A literal address is classified rather than pattern-matched: `10.0.0.150`
@@ -912,7 +912,7 @@ def _reject_unroutable_runtime_url(
     host = urlparse(url).hostname or ""
     if not host:
         raise ValueError("remote-machine runtime callback URL has no host")
-    if host in _LOCAL_RUNTIME_HOSTS or _host_is_unreachable_from_a_remote_machine(host):
+    if host in _LOCAL_RUNTIME_HOSTS or host_is_unreachable_from_a_remote_machine(host):
         raise ValueError(
             f"pool {pool_name!r} serves remote machines and cannot use runtime callback host "
             f"{host!r}: a remote machine cannot resolve it. Set "

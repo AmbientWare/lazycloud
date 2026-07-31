@@ -5,10 +5,10 @@ from enum import StrEnum
 from typing import Self
 from urllib.parse import urlparse
 
-from compute.agent_control import TailnetConfig
+from compute.agent_control import TailnetConfig, host_is_unreachable_from_a_remote_machine
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from shared.app_identity import CONTROL_PLANE_SERVICE_NAME, ENV_PREFIX
+from shared.app_identity import CONTROL_PLANE_TAILNET_HOSTNAME, ENV_PREFIX
 
 from networking.dialer import BackendRouteDialerConfig
 from networking.routing import BackendRouteAuthenticator
@@ -34,7 +34,7 @@ class ProviderNetworkClass(StrEnum):
 
 
 class TailnetRuntimeSettings(TailnetRuntimeOptions, BaseSettings):
-    hostname: str = CONTROL_PLANE_SERVICE_NAME
+    hostname: str = CONTROL_PLANE_TAILNET_HOSTNAME
     socket_path: str = "/var/run/tailscale/tailscaled.sock"
 
     model_config = SettingsConfigDict(
@@ -153,6 +153,7 @@ def validate_provider_network_configuration(
     network_class: ProviderNetworkClass,
     *,
     gateway_origin: str,
+    internal_origin: str,
     runtime: TailnetRuntimeSettings,
     control: TailnetControlSettings,
     backend_route: BackendRouteSettings,
@@ -163,6 +164,19 @@ def validate_provider_network_configuration(
     issues: list[str] = []
     if not _is_https_origin(gateway_origin):
         issues.append("gateway HTTP URL must be an HTTPS origin")
+    # Nodes and workers dial the internal origin, not the public one. A Compose
+    # service name or a LAN address resolves on the control-plane host and
+    # nowhere else, and the machine that discovers that is an EC2 instance
+    # twenty minutes into a boot it will never finish.
+    internal_host = urlparse(internal_origin).hostname or ""
+    if not internal_host:
+        issues.append("internal control-plane origin must include a host")
+    elif host_is_unreachable_from_a_remote_machine(internal_host):
+        issues.append(
+            f"internal control-plane origin host {internal_host!r} is unreachable from a "
+            "remote machine; set LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL to the control plane's "
+            "tailnet origin"
+        )
     if runtime.mode is TailnetRuntimeMode.Disabled:
         issues.append("tailnet runtime mode must be sidecar or managed")
     if not runtime.hostname:

@@ -51,6 +51,10 @@ AGENT_NAME = f"{NAME}-agent"
 AGENT_SERVICE_DESCRIPTION = f"{DISPLAY_NAME} agent"
 AGENT_LAUNCHD_LABEL_PREFIX = f"com.{NAME}.agent"
 CONTROL_PLANE_SERVICE_NAME = f"{NAME}-api"
+# The control plane's tailnet device name. Distinct from the process name
+# above: this is what a node dials, so the deployment origin a remote
+# machine is given has to match it exactly.
+CONTROL_PLANE_TAILNET_HOSTNAME = f"{NAME}-control-plane"
 CONTROL_PLANE_IMAGE = "api"
 SCHEDULER_PROCESS_NAME = f"{NAME}-scheduler"
 SCHEDULER_IMAGE = "scheduler"
@@ -94,6 +98,7 @@ __all__ = [
     "CONTAINER_WORKER_PROCESS_NAME",
     "CONTROL_PLANE_IMAGE",
     "CONTROL_PLANE_SERVICE_NAME",
+    "CONTROL_PLANE_TAILNET_HOSTNAME",
     "DATA_STORAGE_BUCKET",
     "DEFAULT_RESOURCE_TYPE",
     "DISPLAY_NAME",

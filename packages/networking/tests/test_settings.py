@@ -43,6 +43,7 @@ def test_remote_provider_gate_reports_all_missing_security_requirements() -> Non
         validate_provider_network_configuration(
             ProviderNetworkClass.Remote,
             gateway_origin="https://user@control.example.test/path",
+            internal_origin="http://control-plane:9000",
             runtime=runtime,
             control=control,
             backend_route=route,
@@ -50,6 +51,10 @@ def test_remote_provider_gate_reports_all_missing_security_requirements() -> Non
 
     message = str(error.value)
     assert "gateway HTTP URL must be an HTTPS origin" in message
+    # A Compose service name resolves on the control-plane host and nowhere
+    # else. Accepting it here is what produced remote machines that enrolled,
+    # reported healthy, and then failed every call they made.
+    assert "'control-plane' is unreachable from a remote machine" in message
     assert "tailnet hostname is required" in message
     assert "tailnet sidecar socket path is required" in message
     assert "tailnet agent, control-plane, and bootstrap tags must be distinct" in message

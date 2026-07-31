@@ -234,6 +234,7 @@ class SchedulerAppServices:
                 capacity.agent_binaries,
                 connections=AwsAccountConnectionDirectory(context).list_for_workspace,
                 gateway_origin=gateway_origin,
+                internal_origin=runtime_callback_origin,
                 tailnet_runtime=network.tailnet_runtime,
                 tailnet_control=network.tailnet_control,
                 backend_route=network.backend_routes,
@@ -266,6 +267,7 @@ class SchedulerAppServices:
             provider_registry=configured_compute_provider_registry(
                 provider_service,
                 gateway_origin=gateway_origin,
+                internal_origin=runtime_callback_origin,
                 tailnet_runtime=network.tailnet_runtime,
                 tailnet_control=network.tailnet_control,
                 backend_route=network.backend_routes,

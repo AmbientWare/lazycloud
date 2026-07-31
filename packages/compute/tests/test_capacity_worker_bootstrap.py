@@ -111,6 +111,6 @@ def test_remote_pool_runtime_callback_rejects_hosts_no_remote_machine_can_reach(
     host: str,
     reachable: bool,
 ) -> None:
-    from compute.agent_control import _host_is_unreachable_from_a_remote_machine
+    from compute.agent_control import host_is_unreachable_from_a_remote_machine
 
-    assert _host_is_unreachable_from_a_remote_machine(host) is not reachable
+    assert host_is_unreachable_from_a_remote_machine(host) is not reachable

@@ -773,6 +773,7 @@ class ApiServices(ApiServiceCore):
                 agent_artifact_config,
                 connections=aws_connection_directory.list_for_workspace,
                 gateway_origin=gateway_config.public_http_url,
+                internal_origin=gateway_config.runtime_callback_http_url,
                 tailnet_runtime=resolved_tailnet_runtime_settings,
                 tailnet_control=resolved_tailnet_control_settings,
                 backend_route=resolved_backend_route_settings,
@@ -801,6 +802,7 @@ class ApiServices(ApiServiceCore):
             provider_registry=configured_compute_provider_registry(
                 provider_service,
                 gateway_origin=gateway_config.public_http_url,
+                internal_origin=gateway_config.runtime_callback_http_url,
                 tailnet_runtime=resolved_tailnet_runtime_settings,
                 tailnet_control=resolved_tailnet_control_settings,
                 backend_route=resolved_backend_route_settings,
@@ -823,6 +825,7 @@ class ApiServices(ApiServiceCore):
             connection_settings=aws_account_connection_config,
             capacity_settings=aws_capacity_config,
             gateway_origin=gateway_config.public_http_url,
+            internal_origin=gateway_config.runtime_callback_http_url,
             tailnet_runtime=resolved_tailnet_runtime_settings,
             tailnet_control=resolved_tailnet_control_settings,
             backend_route=resolved_backend_route_settings,

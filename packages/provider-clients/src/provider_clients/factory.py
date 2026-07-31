@@ -47,6 +47,7 @@ class _CachedProviderClient:
 class ConfiguredComputeProviderRegistry(DirectMachineProviderRegistry):
     provider_service: ProviderConfigLoader
     gateway_origin: str
+    internal_origin: str
     tailnet_runtime: TailnetRuntimeSettings
     tailnet_control: TailnetControlSettings
     backend_route: BackendRouteSettings
@@ -91,6 +92,7 @@ class ConfiguredComputeProviderRegistry(DirectMachineProviderRegistry):
                     client = _provider_client_from_record(
                         record,
                         gateway_origin=self.gateway_origin,
+                        internal_origin=self.internal_origin,
                         tailnet_runtime=self.tailnet_runtime,
                         tailnet_control=self.tailnet_control,
                         backend_route=self.backend_route,
@@ -109,6 +111,7 @@ def configured_compute_provider_registry(
     provider_service: ProviderConfigLoader,
     *,
     gateway_origin: str,
+    internal_origin: str,
     tailnet_runtime: TailnetRuntimeSettings,
     tailnet_control: TailnetControlSettings,
     backend_route: BackendRouteSettings,
@@ -116,6 +119,7 @@ def configured_compute_provider_registry(
     return ConfiguredComputeProviderRegistry(
         provider_service=provider_service,
         gateway_origin=gateway_origin,
+        internal_origin=internal_origin,
         tailnet_runtime=tailnet_runtime,
         tailnet_control=tailnet_control,
         backend_route=backend_route,
@@ -126,6 +130,7 @@ def _provider_client_from_record(
     record: ProviderConfig,
     *,
     gateway_origin: str,
+    internal_origin: str,
     tailnet_runtime: TailnetRuntimeSettings,
     tailnet_control: TailnetControlSettings,
     backend_route: BackendRouteSettings,
@@ -133,6 +138,7 @@ def _provider_client_from_record(
     validate_provider_network_configuration(
         ProviderNetworkClass.Remote,
         gateway_origin=gateway_origin,
+        internal_origin=internal_origin,
         runtime=tailnet_runtime,
         control=tailnet_control,
         backend_route=backend_route,
