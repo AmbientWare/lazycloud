@@ -46,6 +46,19 @@ class TailnetPeerResolver(Protocol):
     def resolve_peer_host(self, host: str) -> str: ...
 
 
+class TailnetPeerRuntime(TailnetPeerWaiter, TailnetPeerResolver, Protocol):
+    """A tailnet runtime that can both resolve and wait for a peer.
+
+    Declared once here rather than per consumer: a process that dials peers
+    needs both halves, and an interface that exposes only some of what its
+    implementation provides leaves the rest unreachable to callers that need it.
+    """
+
+    def start(self) -> None: ...
+
+    def close(self) -> None: ...
+
+
 class BackendRouteDialerConfig(ContractModel):
     timeout_seconds: float = Field(default=DEFAULT_BACKEND_ROUTE_DIAL_TIMEOUT_SECONDS, gt=0)
     ready_poll_seconds: float = Field(default=DEFAULT_BACKEND_ROUTE_READY_POLL_SECONDS, gt=0)
