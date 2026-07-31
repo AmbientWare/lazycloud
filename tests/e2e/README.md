@@ -58,8 +58,8 @@ plane and scheduler:
 
 ```sh
 LAZYCLOUD_COMPOSE_AWS_CONFIG_DIR=/absolute/path/to/.aws \
-AWS_PROFILE=default \
-docker compose -f compose.yaml -f deploy/compose/aws-profile.yaml up -d
+LAZYCLOUD_COMPOSE_AWS_PROFILE=compose-control \
+docker compose up -d
 ```
 
 The agent and its workers do not receive this profile. Production deployments

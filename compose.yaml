@@ -174,11 +174,16 @@ x-usage-credentials: &usage-credentials
   LAZYCLOUD_MANAGED_BILLING_AUTH_TOKEN: "${LAZYCLOUD_MANAGED_BILLING_AUTH_TOKEN:-}"
   LAZYCLOUD_MANAGED_BILLING_HEADERS: "${LAZYCLOUD_MANAGED_BILLING_HEADERS:-{}}"
 
-# Platform AWS identity only. Customer credentials are never accepted or
-# propagated. Production deployments should prefer workload/instance identity.
 x-platform-aws-credentials: &platform-aws-credentials
   AWS_REGION: "${AWS_REGION:-us-east-1}"
   AWS_DEFAULT_REGION: "${AWS_DEFAULT_REGION:-us-east-1}"
+  AWS_CONFIG_FILE: /run/lazycloud/aws/config
+  AWS_SHARED_CREDENTIALS_FILE: /run/lazycloud/aws/credentials
+  AWS_SDK_LOAD_CONFIG: "1"
+  AWS_PROFILE: "${LAZYCLOUD_COMPOSE_AWS_PROFILE:-compose-control}"
+
+x-platform-aws-config: &platform-aws-config
+  "${LAZYCLOUD_COMPOSE_AWS_CONFIG_DIR:-$HOME/.lazycloud/compose-aws}:/run/lazycloud/aws:ro"
 
 x-tailnet-control-credentials: &tailnet-control-credentials
   LAZYCLOUD_TAILNET_OAUTH_CLIENT_SECRET: "${LAZYCLOUD_TAILNET_OAUTH_CLIENT_SECRET:-}"
@@ -487,6 +492,7 @@ services:
       - "${LAZYCLOUD_AGENT_BINARY_DIR:-./.lazycloud/agent-binarys}:/var/lib/lazycloud/agent-binarys:ro"
       - tailnet-gateway-socket:/var/run/tailscale
       - tcp-ingress-tls:/var/lib/lazycloud/tcp-ingress:ro
+      - *platform-aws-config
     healthcheck:
       test:
         [
@@ -767,6 +773,7 @@ services:
       start_period: 30s
     volumes:
       - lazycloud-files:/var/lib/lazycloud
+      - *platform-aws-config
 
   container-worker:
     <<: *container-worker-settings

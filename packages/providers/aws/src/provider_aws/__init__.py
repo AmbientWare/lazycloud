@@ -27,6 +27,7 @@ from .account_connection import (
     aws_account_connection_template_identity,
     aws_node_bucket_access_policy,
     plan_aws_account_connection_authorization,
+    require_resolvable_aws_credentials,
 )
 from .account_connection_policy import validate_aws_account_connection_template_policy
 from .capacity_images import (
@@ -229,5 +230,6 @@ __all__ = [
     "parse_aws_connection_stack_cleanup_action",
     "parse_aws_connection_stack_create_action",
     "plan_aws_account_connection_authorization",
+    "require_resolvable_aws_credentials",
     "validate_aws_account_connection_template_policy",
 ]

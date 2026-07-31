@@ -31,18 +31,14 @@ current test.
   `CustomerStackExecutionRoleArn` output of the `lazycloud-default-test-operator`
   stack). `deploy/connected-aws/customer_stack.py` accepts it as
   `--execution-role-arn`.
-- Raw `docker compose up` leaves the control plane and scheduler without AWS
-  credentials, and connection validation can never succeed. The canonical
-  connected activation path is `uv run python deploy/compose/activation.py`
-  from the repository root: it validates the scoped configuration directory
-  (default `~/.lazycloud/compose-aws`, or `LAZYCLOUD_COMPOSE_AWS_CONFIG_DIR`),
-  asserts the non-root control role through STS, verifies the control stack,
-  then applies `deploy/compose/aws-profile.yaml` and recreates only the
-  credential-consuming services before waiting for their health
-  (`--skip-compose` validates without touching Compose). The scoped directory
-  contains only the test source credentials and the role-chain profiles ending
-  in `compose-control` (never the root `default` keys); the services refresh
-  through the SDK credential chain, so no fixed session expiry exists and the
-  command never creates or copies credential files.
+- `docker compose up` is the only activation path. The control plane and
+  scheduler mount `LAZYCLOUD_COMPOSE_AWS_CONFIG_DIR` (default
+  `~/.lazycloud/compose-aws`) at `/run/lazycloud/aws` and read the role chain
+  from it, so a connected stack differs from a local one by that variable alone.
+  The directory holds only the test source credentials and the role-chain
+  profiles ending in `compose-control`, never the root `default` keys; the SDK
+  refreshes the chain, so no fixed session expiry exists. A stack whose
+  credentials do not resolve refuses to start rather than reporting healthy and
+  failing every connection later.
 - The acceptance host may run AWS CLI v1: never pass v2-only flags such as
   `--no-cli-pager`; set `AWS_PAGER=""` in the subprocess environment instead.
