@@ -72,6 +72,7 @@ from gateway.http import (
     UpdateAgentRouteStatusRequest,
     UpdateAgentRouteStatusResponse,
 )
+from networking.dialer import TailnetPeerRuntime
 from networking.tailnet import (
     TailnetAuthenticationRequired,
     TailnetRuntime,
@@ -299,8 +300,15 @@ class AgentGatewayClient(AgentLeaveClient, Protocol):
     ) -> AgentTelemetryResponse: ...
 
 
-class AgentTailnetRuntime(Protocol):
-    def start(self) -> None: ...
+class AgentTailnetRuntime(TailnetPeerRuntime, Protocol):
+    """The agent's view of its tailnet runtime.
+
+    Extends the shared peer runtime rather than narrowing it. The agent is the
+    only process on a node holding a tailnet client, so declaring less than the
+    runtime implements left peer resolution unreachable — including to the
+    worker, which has no client of its own and must not be handed the tailscaled
+    socket, since that grants tailnet control rather than lookup.
+    """
 
     def authenticate(
         self,
@@ -312,8 +320,6 @@ class AgentTailnetRuntime(Protocol):
     ) -> TailnetStatus: ...
 
     def status(self) -> TailnetStatus: ...
-
-    def close(self) -> None: ...
 
 
 @dataclass(slots=True)
