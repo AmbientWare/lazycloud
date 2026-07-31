@@ -104,10 +104,30 @@ class ProviderNodeEnrollmentService:
                 failure_reason=None,
             )
         except Exception:
+            # Leaving the agent deletes the machine, so the binding written above
+            # has to go with it. A reference to a deleted machine fails the
+            # foreign key on every later pool sync, which takes down enrollment
+            # for the whole pool — including the report that would explain this
+            # failure.
+            with suppress(Exception):
+                self._release_machine_binding(pool.id, request.provider_instance_id, joined)
             with suppress(Exception):
                 self.gateway.leave_agent(LeaveAgentRequest(agent_token=joined.agent_token))
             raise
         return joined
+
+    def _release_machine_binding(
+        self,
+        pool_id: str,
+        provider_instance_id: str,
+        joined: JoinAgentResponse,
+    ) -> None:
+        with self.gateway.services.context.database.session() as session:
+            ComputeProviderInstanceRepository(session).unbind_machine(
+                pool_id,
+                provider_instance_id,
+                joined.machine_id,
+            )
 
     def report_failure(
         self,
