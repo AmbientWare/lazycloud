@@ -185,7 +185,7 @@ failure carries its cause to a durable place in every path we touched.
   the plan missed, so the map defaults to conflict and names only
   `provider_unavailable` as upstream.*
 - [x] **ERR-08** Record why a lease was lost instead of only that it was
-- [ ] **ERR-09** Give the shell compensation path a reason
+- [x] **ERR-09** Give the shell compensation path a reason
 - [ ] **ERR-13** Move compute-policy editing server-side — *after ERR-06*
 - [ ] **ERR-14** Stop billing a workspace that zeroed its CPU capacity
 - [ ] **CAP-02** Carry a typed reason on every transition to `Unavailable` — *after ERR-12*

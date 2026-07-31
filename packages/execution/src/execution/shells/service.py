@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import secrets
 import socket
 import time
@@ -67,12 +68,16 @@ class ShellTicketCompensationStatus(StrEnum):
     Failed = "failed"
 
 
+LOGGER = logging.getLogger(__name__)
+
+
 @dataclass(frozen=True, slots=True)
 class ShellTicketCompensationResult:
     container_id: str
     status: ShellTicketCompensationStatus
     terminal_status: ContainerStatus | None = None
     failure_recorded: bool = False
+    reason: str = ""
 
     @property
     def succeeded(self) -> bool:
@@ -299,10 +304,12 @@ class ShellControlService:
 
         try:
             container = self._container(container_id)
-        except Exception:
+        except Exception as exc:
+            LOGGER.exception("shell ticket compensation could not read container %s", container_id)
             return ShellTicketCompensationResult(
                 container_id=container_id,
                 status=ShellTicketCompensationStatus.Failed,
+                reason=f"{type(exc).__name__}: {exc}",
             )
         if container is None or container.workspace_id != workspace_id:
             return ShellTicketCompensationResult(
@@ -377,10 +384,12 @@ class ShellControlService:
 
         try:
             container = self._container(container_id)
-        except Exception:
+        except Exception as exc:
+            LOGGER.exception("shell ticket compensation could not read container %s", container_id)
             return ShellTicketCompensationResult(
                 container_id=container_id,
                 status=ShellTicketCompensationStatus.Failed,
+                reason=f"{type(exc).__name__}: {exc}",
             )
         if container is None or container.workspace_id != workspace_id:
             return ShellTicketCompensationResult(
@@ -391,6 +400,7 @@ class ShellControlService:
             client = self._container_client_factory().client_for(container).client
             response = client.sandbox_unexpose_port(container.id, SHELL_WORKER_PORT)
         except Exception:
+            LOGGER.exception("shell listener unpublish failed for container %s", container.id)
             recorded = self._record_ticket_compensation(
                 container,
                 action="shell.ticket.compensation_failed",
@@ -601,6 +611,7 @@ class ShellControlService:
         try:
             container = self._container(container_id)
         except Exception:
+            LOGGER.exception("shell compensation could not read container %s", container_id)
             return None
         if container is None or container.workspace_id != workspace_id:
             return None
@@ -625,6 +636,7 @@ class ShellControlService:
                 workspace_id=container.workspace_id,
             )
         except Exception:
+            LOGGER.exception("recording shell ticket compensation failed")
             return False
         return True
 
