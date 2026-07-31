@@ -78,11 +78,23 @@ most proven path in the repo — the control plane runs that way today.
 
 ### Live
 
-- [ ] Rebuild every source-bearing image together, from one source state.
-- [ ] Re-establish the AWS account connection (cleanup removed it).
+- [x] Rebuild every source-bearing image together, from one source state.
+- [x] AWS account connection — survived cleanup, phase `ready`.
+- [x] A control plane addressed by its tailnet address no longer refuses the
+      join. Pointing the origin at the CGNAT address made `tailnet_join` ask
+      `tailscale ip` to resolve an address, so a node that was on the tailnet
+      and reporting refused its own boot as `network_join_failed`.
+- [x] An agent that dies after handoff now reports. Until this, cloud-init had
+      exited and the unit was detached, so a crash and a node that never booted
+      were the same observation: `bootstrap_timed_out`, naming nothing.
+- [x] The published agent artifact accepts `--tailnet-mode sidecar` and
+      `--tailnet-socket` — checked by running it, not by reading the branch.
 - [ ] `one_machine_readiness` — node reaches ready, device rotates
       `bootstrap-<instance-id>` → `lazycloud-agent-<machine_id>-g1`.
 - [ ] `paid_resource_bounding`, then `cleanup`.
+
+Still unexplained: two nodes ended `bootstrap_timed_out` with no detail. They
+predate both fixes above, so the next timeout should name itself.
 
 ## Constraints that bit already
 
@@ -94,3 +106,15 @@ most proven path in the repo — the control plane runs that way today.
   and do not delete a device to reclaim a nicer name.
 - The assembler contract: `__SENTINEL__` + `shlex.quote`, never format strings;
   `bootstrap_main` stays the literal last line.
+- `compute_provider_instances.payload->>'bootstrap_failure_reason'` is the
+  authoritative signal for a node that failed. It named every failure this
+  branch hit; the tailnet device list and the access log did not, and reading
+  them instead produced two wrong diagnoses.
+- A node whose bootstrap reports a terminal failure keeps running — the error
+  path leaves it for inspection — and it holds the ASG's only slot, so no
+  replacement launches. Drive the policy to zero workers to clear it; the
+  reclaim path does not.
+- The test credentials are read-only for autoscaling and denied
+  `ec2:GetConsoleOutput` and `ec2:DescribeLaunchTemplates`, so a node cannot be
+  inspected out-of-band. Verify the generated script against the running
+  control plane instead of the launch template.
