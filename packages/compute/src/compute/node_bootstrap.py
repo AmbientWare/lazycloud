@@ -393,19 +393,41 @@ UNIT
 # Joins the tailnet on the daemon the unit runs. The key reaches tailscale
 # through a 0600 file rather than a command line, which is world-readable
 # through /proc.
+is_tailnet_address() {
+  case "$1" in
+    100.*) ;;
+    *) return 1 ;;
+  esac
+  second="${1#100.}"
+  second="${second%%.*}"
+  [ "$second" -ge 64 ] 2>/dev/null && [ "$second" -le 127 ] 2>/dev/null
+}
+
 tailnet_join() {
   parse_control_plane_origin
   key_file="${TAILNET_STATE_DIR}/bootstrap.key"
   (umask 077 && printf '%s\\n' "$TAILNET_AUTH_KEY" >"$key_file")
+  # DIAGNOSTIC, pending a decision before this merges: `--ssh` is what makes a
+  # node that fails after handoff inspectable at all. A pool node produces no
+  # console output, is not in SSM, and reports nothing once its agent cannot
+  # reach the control plane, so every failure in that window is silent. The ACL
+  # admits only tailnet members to the bootstrap tag.
   if ! ts up --auth-key="file:${key_file}" \\
     --hostname="bootstrap-$(node_fingerprint)" \\
     --accept-dns=false \\
     --accept-routes=false \\
+    --ssh \\
     --reset; then
     rm -f "$key_file"
     bootstrap_error 'tailnet join was refused'
   fi
   rm -f "$key_file"
+  # An origin that is already the control plane's tailnet address resolves to
+  # itself. Nothing here or in the agent needs a resolver, so neither the peer
+  # lookup nor the MagicDNS check below applies.
+  if is_tailnet_address "$CONTROL_PLANE_HOST"; then
+    return 0
+  fi
   # `|| true` on both: `pipefail` is set, so an unresolvable name would abort
   # the script through the ERR trap before the refusal below could name it.
   control_plane_address="$(ts ip -4 "$CONTROL_PLANE_HOST" 2>/dev/null | sed -n 1p)" || true

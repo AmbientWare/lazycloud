@@ -41,10 +41,10 @@ node_hostname() {
 """
 
 
-def _script() -> str:
+def _script(control_plane_url: str = f"http://{_PEER}:9000") -> str:
     return node_bootstrap_script(
         NodeBootstrapSettings(
-            control_plane_url=f"http://{_PEER}:9000",
+            control_plane_url=control_plane_url,
             enrollment_request_id="12345678-1234-4123-8123-123456789abc",
             agent_binary_url=f"https://artifacts.example.com/agent/{'a' * 64}/agent",
             agent_sha256="a" * 64,
@@ -104,13 +104,18 @@ def _stubs(tmp_path: Path) -> Path:
     return stub_dir
 
 
-def _run_bootstrap(tmp_path: Path, *, resolvable: bool = True) -> subprocess.CompletedProcess[str]:
+def _run_bootstrap(
+    tmp_path: Path,
+    *,
+    resolvable: bool = True,
+    control_plane_url: str = f"http://{_PEER}:9000",
+) -> subprocess.CompletedProcess[str]:
     bash = _require_bash()
     stub_dir = _stubs(tmp_path)
     unit_dir = tmp_path / "unit"
     unit_dir.mkdir()
 
-    lines = _script().rstrip("\n").split("\n")
+    lines = _script(control_plane_url).rstrip("\n").split("\n")
     assert lines[-1] == "bootstrap_main"
     resolved = 'printf "100.64.0.9\\n"' if resolvable else "return 1"
     driver = tmp_path / f"bootstrap-{resolvable}.sh"
@@ -214,6 +219,22 @@ def test_a_control_plane_that_is_not_a_peer_stops_the_boot_and_names_it(
     assert run.returncode != 0
     assert _PEER in run.stderr
     assert "not a reachable tailnet peer" in run.stderr
+
+
+def test_a_control_plane_reached_at_its_tailnet_address_needs_no_resolver(
+    tmp_path: Path,
+) -> None:
+    """A deployment may point nodes at the control plane's tailnet address.
+
+    The name path asks `tailscale ip` for the peer and then checks MagicDNS on
+    behalf of the agent. Neither applies to an address that is already the
+    answer, and running them anyway refused the boot as `network_join_failed`
+    on a node that was in fact on the tailnet and reporting.
+    """
+    run = _run_bootstrap(tmp_path, control_plane_url="http://100.79.134.95:9000")
+
+    assert run.returncode == 0, run.stderr
+    assert (tmp_path / "daemon-at-handoff.txt").read_text(encoding="utf-8") == "alive"
 
 
 def test_the_bootstrap_delivers_its_key_without_exposing_it(tmp_path: Path) -> None:
