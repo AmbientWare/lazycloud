@@ -40,5 +40,16 @@ current test.
   refreshes the chain, so no fixed session expiry exists. A stack whose
   credentials do not resolve refuses to start rather than reporting healthy and
   failing every connection later.
+- `tailnet-gateway` runs in the control plane's network namespace, so recreating
+  `control-plane` destroys it and Compose does not bring it back. The stack then
+  reports every service healthy while the control plane is absent from the
+  tailnet, and remote nodes fail to resolve it as a peer minutes later. Follow
+  any `control-plane` recreate with `docker compose up -d tailnet-gateway`, and
+  confirm `tailscale status` reports `Online: True` before trusting a run.
+- Read the control plane's tailnet name from the running sidecar rather than
+  assuming it. A device that lost its name to a collision keeps the `-1` suffix,
+  and `LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL` must match what the sidecar actually
+  holds. Do not delete a tailnet device to reclaim a nicer name: it invalidates
+  the sidecar's identity and takes the control plane off the tailnet.
 - The acceptance host may run AWS CLI v1: never pass v2-only flags such as
   `--no-cli-pager`; set `AWS_PAGER=""` in the subprocess environment instead.
