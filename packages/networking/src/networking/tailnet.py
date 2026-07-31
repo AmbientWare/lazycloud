@@ -262,15 +262,20 @@ class TailnetRuntime:
         name the control plane no longer recognizes, so keeping the session would
         register the wrong device.
         """
-        if self.options.mode is not TailnetRuntimeMode.Managed:
-            raise TailnetRuntimeError("only a managed tailnet runtime can authenticate")
+        if self.options.mode is TailnetRuntimeMode.Disabled:
+            raise TailnetRuntimeError("a disabled tailnet runtime cannot authenticate")
         if not auth_key.strip():
             raise TailnetRuntimeError("tailnet auth key is not configured")
         if not hostname.strip():
             raise TailnetRuntimeError("tailnet hostname is required")
         with self._lock:
             self._validate_start_config()
-            self._start_managed_daemon()
+            # Only a managed runtime owns its daemon. Starting one in sidecar
+            # mode would put a second tailscaled on the same socket and state
+            # file as the process that already runs it, which is the collision
+            # this mode exists to avoid.
+            if self.options.mode is TailnetRuntimeMode.Managed:
+                self._start_managed_daemon()
             status = self._managed_status()
             if _sidecar_authenticated(status) and not force:
                 self._started = True
@@ -683,6 +688,12 @@ class TailnetRuntime:
         if result.returncode != 0:
             raise TailnetRuntimeError(_command_error("tailnet sidecar status failed", result))
         state = status.backend_state or "unknown"
+        if state.strip().lower() == "needslogin":
+            # The same signal a managed runtime raises, so a caller holding a
+            # credential can log the daemon in. Without it an agent that
+            # restarts into an unauthenticated sidecar — a node whose key
+            # expired before it ever rotated — can never recover.
+            raise TailnetAuthenticationRequired(status.backend_state)
         raise TailnetRuntimeError(f"tailnet sidecar is not authenticated ({state})")
 
     def _tailscale_up_args(

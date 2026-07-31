@@ -11,6 +11,7 @@ from networking.tailnet import (
     TailnetAuthenticationRequired,
     TailnetCommandResult,
     TailnetRuntime,
+    TailnetRuntimeError,
     TailnetRuntimeMode,
     TailnetRuntimeOptions,
 )
@@ -114,8 +115,8 @@ def test_sidecar_tailnet_runtime_verifies_status_without_login(tmp_path: Path) -
     assert "--socket=/run/tailscaled.sock" in status_calls[0]
 
 
-def test_sidecar_tailnet_runtime_rejects_unauthenticated_status(tmp_path: Path) -> None:
-    runtime = TailnetRuntime(
+def _sidecar(tmp_path: Path, backend_state: str) -> TailnetRuntime:
+    return TailnetRuntime(
         TailnetRuntimeOptions(
             mode=TailnetRuntimeMode.Sidecar,
             state_dir=str(tmp_path),
@@ -124,12 +125,66 @@ def test_sidecar_tailnet_runtime_rejects_unauthenticated_status(tmp_path: Path) 
             wait_poll_seconds=0.001,
         ),
         runner=_Runner(
-            status_payloads=[_status_payload(backend_state="NeedsLogin", self_tailnet_ips=[])] * 10,
+            status_payloads=[_status_payload(backend_state=backend_state, self_tailnet_ips=[])]
+            * 10,
         ),
     )
 
-    with pytest.raises(RuntimeError, match="not authenticated"):
-        runtime.start()
+
+def test_a_sidecar_awaiting_login_asks_its_caller_for_a_credential(tmp_path: Path) -> None:
+    """A node whose key expired before it rotated must be able to recover.
+
+    The managed runtime already distinguishes "needs a credential" from "is
+    broken"; a sidecar that reported both as one error left the agent unable to
+    log a daemon in that was one `up` away from working.
+    """
+    with pytest.raises(TailnetAuthenticationRequired):
+        _sidecar(tmp_path, "NeedsLogin").start()
+
+
+def test_a_sidecar_in_any_other_unauthenticated_state_is_an_error(tmp_path: Path) -> None:
+    """No credential fixes a daemon with no state to log in with."""
+    with pytest.raises(TailnetRuntimeError, match="not authenticated") as exc:
+        _sidecar(tmp_path, "NoState").start()
+
+    assert not isinstance(exc.value, TailnetAuthenticationRequired)
+
+
+def test_a_sidecar_rotates_identity_on_the_daemon_someone_else_runs(tmp_path: Path) -> None:
+    """A pool node trades its bootstrap identity for its own without a restart.
+
+    The daemon belongs to the node's tailnet service, not to this runtime, so
+    rotation must reach it over the same socket and must never start one of its
+    own — a second tailscaled on that socket and state file is the collision
+    sidecar mode exists to prevent.
+    """
+    runner = _Runner(status_payloads=[_status_payload()] * 4)
+    launcher = _Launcher()
+    runtime = TailnetRuntime(
+        TailnetRuntimeOptions(
+            mode=TailnetRuntimeMode.Sidecar,
+            state_dir=str(tmp_path),
+            socket_path="/run/lazycloud/tailscaled.sock",
+        ),
+        runner=runner,
+        launcher=launcher,
+    )
+
+    runtime.authenticate(
+        auth_key="tskey-machine-scoped",
+        hostname="lazycloud-agent-machine-1-g1",
+        force=True,
+    )
+
+    assert launcher.calls == []
+    logout_at = next(i for i, call in enumerate(runner.calls) if "logout" in call)
+    up_at = next(i for i, call in enumerate(runner.calls) if "up" in call)
+    assert logout_at < up_at
+    for call in runner.calls:
+        assert "--socket=/run/lazycloud/tailscaled.sock" in call
+    up_call = next(call for call in runner.calls if "up" in call)
+    assert "--hostname=lazycloud-agent-machine-1-g1" in up_call
+    assert "tskey-machine-scoped" not in " ".join(up_call)
 
 
 def test_managed_tailnet_runtime_uses_auth_key_file_and_login_server(tmp_path: Path) -> None:

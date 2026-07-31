@@ -199,7 +199,7 @@ def test_a_node_that_booted_on_the_pool_key_trades_it_for_its_own_identity(
         status_value=_status("node-bootstrap", "bootstrap-i-0123456789abcdef0")
     )
 
-    _, advertise_host = _service(tmp_path, gateway, runtime)._start_tailnet(_state(), runtime)
+    _, advertise_host = _service(tmp_path, gateway, runtime)._start_tailnet(_state())
 
     assert runtime.forced == ["lazycloud-agent-machine-g1"]
     assert gateway.credentials_issued == 1

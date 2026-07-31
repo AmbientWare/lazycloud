@@ -17,12 +17,17 @@ transfer that immediately followed it. With a pool-scoped key already in
 user-data, the node is a tailnet peer by the time it reports `booting`, and the
 control plane is addressed as a peer for the rest of its life.
 
-The bootstrap runs `tailscaled` at the *agent's* state directory and socket, and
-stops it before handing off. Two daemons would contend for the same state file
-and TUN device, and the agent's runtime has no way to adopt one it did not
-spawn. `tailscale up --reset` persists `WantRunning=true`, so when the agent
-starts its own daemon from that state it resumes the same node key rather than
-logging in twice.
+`tailscaled` is installed as a systemd unit this script owns and started once,
+before the join. Nothing stops it: the agent attaches to that same daemon in
+sidecar mode rather than running one of its own, so the node holds a single
+tailnet session from first boot until it is terminated.
+
+An earlier version stopped the daemon before handing off, on the theory that
+`tailscale up --reset` persists `WantRunning=true` and the agent would resume
+the same node key. That is false for the pool bootstrap key, which is
+`ephemeral`: stopping the daemon makes the control server delete the device, so
+the agent came up holding a revoked key and enrolled over a tailnet it was no
+longer on. There is no session to resume, which is why there is no handoff.
 """
 
 from __future__ import annotations
@@ -38,6 +43,7 @@ from shared.app_identity import (
     AGENT_NAME,
     AGENT_STATE_DIR,
     AGENT_TAILNET_DIR_NAME,
+    NAME,
     TAILSCALED_SOCKET_NAME,
     TAILSCALED_STATE_NAME,
 )
@@ -45,17 +51,23 @@ from shared.contracts import ContractModel
 from shared.tailscale_install import TAILSCALE_AMD64_SHA256, TAILSCALE_INSTALL_VERSION
 from shared.urls import normalize_http_origin
 
-# The agent derives these from the `--state-dir` this script passes it. Every
-# component of the derivation is named once, in `shared.app_identity`, because
-# a single character of drift here makes the agent spawn a rival tailscaled
-# against the same state file rather than resuming this one's session.
+# The socket the unit serves is the socket the agent is told to dial. Every
+# component of both is named once, in `shared.app_identity`, so the daemon and
+# the process attaching to it cannot disagree about where it lives.
 AGENT_BIN_PATH = f"/usr/local/bin/{AGENT_NAME}"
 TAILNET_STATE_DIR = f"{AGENT_STATE_DIR}/{AGENT_TAILNET_DIR_NAME}"
 TAILNET_SOCKET_PATH = f"{TAILNET_STATE_DIR}/{TAILSCALED_SOCKET_NAME}"
 TAILNET_STATE_FILE = f"{TAILNET_STATE_DIR}/{TAILSCALED_STATE_NAME}"
 
+# Not `tailscaled.service`: that name belongs to the upstream Tailscale package,
+# and a node that ever installs it would end up with two units for one daemon.
+TAILNET_SERVICE_NAME = f"{NAME}-tailscaled.service"
+TAILNET_SERVICE_PATH = f"/etc/systemd/system/{TAILNET_SERVICE_NAME}"
+
 # Resolved through PATH, matching the agent's own defaults, so a node that
 # passes `tailscale_ready` is running the binaries the agent will later find.
+# The unit resolves `tailscaled` to an absolute path before writing ExecStart,
+# which systemd requires.
 TAILSCALE_BINARY = "tailscale"
 TAILSCALED_BINARY = "tailscaled"
 
@@ -176,9 +188,10 @@ TAILNET_STATE_FILE=__TAILNET_STATE_FILE__
 TAILNET_SOCKET=__TAILNET_SOCKET__
 TAILSCALE_BIN=__TAILSCALE_BIN__
 TAILSCALED_BIN=__TAILSCALED_BIN__
+TAILNET_SERVICE_NAME=__TAILNET_SERVICE_NAME__
+TAILNET_SERVICE_PATH=__TAILNET_SERVICE_PATH__
 
 STEP=identity
-TAILSCALED_PID=""
 CONTROL_PLANE_HOST=""
 CONTROL_PLANE_PORT=""
 # Pins the control plane's dial address to its tailnet peer address while the
@@ -334,36 +347,56 @@ ensure_agent() {
   mv -f "$agent_download" "$AGENT_BIN"
 }
 
-# Joins the tailnet at the agent's own state directory and socket so the agent
-# resumes this session instead of starting a rival daemon against the same
-# state. The key reaches tailscale through a 0600 file rather than a command
-# line, which is world-readable through /proc.
-tailnet_join() {
-  parse_control_plane_origin
+# The daemon runs for the node's lifetime under a unit this script owns, so the
+# agent can attach to it in sidecar mode instead of starting a rival. systemd
+# rejects a relative ExecStart, and `TAILSCALED_BIN` is resolved through PATH,
+# so the absolute path is taken here — a unit that fails to load leaves the node
+# off the tailnet with nothing else to explain it.
+ensure_tailnet_service() {
   install -d -m 0700 "$TAILNET_STATE_DIR"
-  key_file="${TAILNET_STATE_DIR}/bootstrap.key"
-  (umask 077 && printf '%s\\n' "$TAILNET_AUTH_KEY" >"$key_file")
-  "$TAILSCALED_BIN" \\
-    --state="$TAILNET_STATE_FILE" \\
-    --socket="$TAILNET_SOCKET" \\
-    >>"${TAILNET_STATE_DIR}/tailscaled.log" 2>&1 &
-  TAILSCALED_PID=$!
-  daemon_ready=""
+  tailscaled_path="$(command -v "$TAILSCALED_BIN")"
+  if [ -z "$tailscaled_path" ]; then
+    bootstrap_error 'tailscaled is not on PATH after installation'
+  fi
+  cat >"${TAILNET_SERVICE_PATH}.tmp" <<UNIT
+[Unit]
+Description=LazyCloud node tailnet daemon
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=notify
+ExecStartPre=${tailscaled_path} --cleanup
+ExecStart=${tailscaled_path} --state=${TAILNET_STATE_FILE} --socket=${TAILNET_SOCKET} --port=41641
+ExecStopPost=${tailscaled_path} --cleanup
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  install -m 0644 "${TAILNET_SERVICE_PATH}.tmp" "$TAILNET_SERVICE_PATH"
+  rm -f "${TAILNET_SERVICE_PATH}.tmp"
+  systemctl daemon-reload
+  systemctl enable "$TAILNET_SERVICE_NAME"
+  systemctl restart "$TAILNET_SERVICE_NAME"
   for _ in {1..60}; do
-    if ! kill -0 "$TAILSCALED_PID" 2>/dev/null; then
-      rm -f "$key_file"
-      bootstrap_error 'tailscaled exited before it finished starting'
-    fi
     if ts status --json >/dev/null 2>&1; then
-      daemon_ready=1
-      break
+      return
     fi
     sleep 1
   done
-  if [ -z "$daemon_ready" ]; then
-    rm -f "$key_file"
-    bootstrap_error 'tailscaled did not finish loading its identity state'
-  fi
+  bootstrap_error 'tailnet daemon did not finish loading its identity state'
+}
+
+# Joins the tailnet on the daemon the unit runs. The key reaches tailscale
+# through a 0600 file rather than a command line, which is world-readable
+# through /proc.
+tailnet_join() {
+  parse_control_plane_origin
+  key_file="${TAILNET_STATE_DIR}/bootstrap.key"
+  (umask 077 && printf '%s\\n' "$TAILNET_AUTH_KEY" >"$key_file")
   if ! ts up --auth-key="file:${key_file}" \\
     --hostname="bootstrap-$(node_fingerprint)" \\
     --accept-dns=false \\
@@ -395,23 +428,6 @@ certificates on the tailnet so its MagicDNS names are publicly resolvable"
   fi
 }
 
-# The agent owns the tailnet from here. Leaving this daemon running would make
-# it a second owner of the same state file and TUN device.
-tailnet_stop() {
-  if [ -z "$TAILSCALED_PID" ]; then
-    return
-  fi
-  # `wait` both blocks and reaps. Without the reap the daemon lingers as a
-  # zombie that still answers `kill -0`, so anything checking whether it stopped
-  # is told it has not. The wait is unbounded only in principle: a daemon that
-  # ignores SIGTERM leaves the node short of `ready` and its pool's bootstrap
-  # phase deadline reclaims it, which is the same net every other step here
-  # relies on.
-  kill "$TAILSCALED_PID" 2>/dev/null || true
-  wait "$TAILSCALED_PID" 2>/dev/null || true
-  TAILSCALED_PID=""
-}
-
 bootstrap_main() {
   install -d -m 0700 "$AGENT_STATE_DIR"
 
@@ -422,6 +438,7 @@ bootstrap_main() {
   STEP=tailscale
   ensure_tailscale
   STEP=tailnet
+  ensure_tailnet_service
   tailnet_join
 
   report_phase booting
@@ -432,8 +449,6 @@ bootstrap_main() {
   ensure_agent
 
   report_phase joining
-  STEP=tailnet
-  tailnet_stop
 
   # The agent must outlive cloud-init. Running it as a cloud-init child leaves
   # the machine with no agent once that script module exits: it enrolls once,
@@ -453,7 +468,9 @@ bootstrap_main() {
     --executor container \\
     --worker-image "$WORKER_IMAGE_DIGEST" \\
     --max-gpus "$GPU_COUNT" \\
-    --state-dir "$AGENT_STATE_DIR"
+    --state-dir "$AGENT_STATE_DIR" \\
+    --tailnet-mode sidecar \\
+    --tailnet-socket "$TAILNET_SOCKET"
 }
 
 bootstrap_main
@@ -502,6 +519,8 @@ def node_bootstrap_script(
         "__TAILNET_STATE_FILE__": TAILNET_STATE_FILE,
         "__TAILNET_SOCKET__": TAILNET_SOCKET_PATH,
         "__TAILSCALE_BIN__": TAILSCALE_BINARY,
+        "__TAILNET_SERVICE_NAME__": TAILNET_SERVICE_NAME,
+        "__TAILNET_SERVICE_PATH__": TAILNET_SERVICE_PATH,
         "__TAILSCALED_BIN__": TAILSCALED_BINARY,
         **dict(profile.values),
     }
@@ -520,6 +539,8 @@ def node_bootstrap_script(
 
 __all__ = [
     "AGENT_BIN_PATH",
+    "TAILNET_SERVICE_NAME",
+    "TAILNET_SERVICE_PATH",
     "TAILNET_SOCKET_PATH",
     "TAILNET_STATE_DIR",
     "TAILNET_STATE_FILE",
