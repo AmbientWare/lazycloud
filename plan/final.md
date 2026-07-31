@@ -211,7 +211,7 @@ failure carries its cause to a durable place in every path we touched.
   identity. It does not: `worker_id` comes from `WORKER_ID`, and `remove_worker`
   touches no durable owner record — it requeues queued requests and deletes the
   state key. Test reworked to assert the cleanup obligation instead.*
-- [ ] **CAP-05** Stop discarding the keep-alive source-cache outcome — *after CAP-02*
+- [x] **CAP-05** Stop discarding the keep-alive source-cache outcome — *after CAP-02*
 - [ ] **CAP-06** Give `mark_available` one job — *after CAP-03*
 - [ ] **CAP-07** Reclassify "at limit" as backpressure
 - [ ] **CAP-08** Introduce one owned readiness predicate

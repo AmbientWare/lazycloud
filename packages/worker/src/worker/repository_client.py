@@ -158,6 +158,18 @@ class WorkerRepositoryClientError(RuntimeError):
     pass
 
 
+class WorkerSourceCacheNotAvailableError(WorkerRepositoryClientError):
+    """The repository withheld the worker because its cache is not available.
+
+    Distinct from a missing record: the worker is still registered, so
+    registering it again changes nothing and only adds load.
+    """
+
+    def __init__(self, worker_id: str, state: WorkerCacheGenerationState) -> None:
+        super().__init__(f"worker {worker_id!r} source cache is {state.value}")
+        self.state = state
+
+
 @dataclass(slots=True)
 class WorkerRepositoryHttpTransport:
     """The worker's channel to the control plane.
@@ -907,6 +919,11 @@ class RemoteSchedulerWorkerRepository:
             response = self.client.set_worker_keep_alive(self._session_request())
         worker = response.worker
         if worker is None:
+            if response.source_cache_state is not WorkerCacheGenerationState.Available:
+                raise WorkerSourceCacheNotAvailableError(
+                    worker_id,
+                    response.source_cache_state,
+                )
             msg = f"worker {worker_id!r} was not returned by repository"
             raise WorkerRepositoryClientError(msg)
         return worker

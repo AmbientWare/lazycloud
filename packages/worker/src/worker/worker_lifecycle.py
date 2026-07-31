@@ -15,6 +15,7 @@ from shared.scheduling import SchedulerWorkerRecord, WorkerRemovalResult, Worker
 from shared.timestamps import utc_now
 
 from worker.events import ContainerRequestContext
+from worker.repository_client import WorkerSourceCacheNotAvailableError
 from worker.status import (
     DEFAULT_WORKER_SPINDOWN_SECONDS,
     WorkerSpindownPlan,
@@ -288,13 +289,29 @@ class WorkerLifecycleOrchestrator:
                 status=WorkerLifecycleStatus.Skipped,
                 error_message="worker repository is not configured",
             )
-        result = self._run_repository_step(
-            WorkerLifecycleAction.KeepAlive,
-            lambda: repository.set_keep_alive(
+        try:
+            keepalive_result = repository.set_keep_alive(
                 self.worker_id,
                 ttl_seconds=self.keepalive_ttl_seconds,
-            ),
-        )
+            )
+        except WorkerSourceCacheNotAvailableError as exc:
+            # The record is still there; only the cache is withholding it.
+            # Registering again cannot change that and costs a request every
+            # interval for as long as the condition lasts.
+            return WorkerLifecycleStepResult(
+                action=WorkerLifecycleAction.KeepAlive,
+                status=WorkerLifecycleStatus.Skipped,
+                error_message=f"source cache is {exc.state.value}",
+            )
+        except Exception as exc:  # pragma: no cover - defensive boundary capture
+            result = WorkerLifecycleStepResult(
+                action=WorkerLifecycleAction.KeepAlive,
+                status=WorkerLifecycleStatus.Error,
+                error_message=f"{type(exc).__name__}: {exc}",
+            )
+        else:
+            del keepalive_result
+            result = WorkerLifecycleStepResult(action=WorkerLifecycleAction.KeepAlive)
         if result.ok or self.registration is None:
             return result
         registered = self.register_available()
