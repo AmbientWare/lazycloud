@@ -316,7 +316,6 @@ of these as a question, this section overrides it.
 | 12 | `external_id` **documented, not encrypted** | INFRA-17: record in `AGENTS.md` that it is deliberately clear because it is a confused-deputy nonce, not a secret |
 | 13 | **Handle the worker RPC surface at the dispatch boundary** — option (b) | ERR-37 shrinks: one wrapper around RPC method invocation logs the cause and converts to the failure response, replacing 26 near-identical handlers in `container_service/service.py`. New RPC methods inherit it. Its own item, its own acceptance — not folded into the lint sweep |
 | 14 | CAP-13 stays **measurement-gated** | Decide from its acceptance measurement, not in advance |
-| 15 | Naming overlap with another codebase: **not a concern** | Removed from the plan entirely |
 
 ### Blocked: deleting `lazycloud-shared` (INFRA-21)
 
