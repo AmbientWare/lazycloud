@@ -504,13 +504,14 @@ def compute_instances(
                 if item.bootstrap_failure_reason is not None
                 else ""
             ),
+            item.bootstrap_failure_detail,
         ]
         for item in response.data
     ]
     console.print(
         table(
             "Compute instances",
-            ["id", "provider", "region", "type", "phase", "reason"],
+            ["id", "provider", "region", "type", "phase", "reason", "detail"],
             rows,
         )
     )

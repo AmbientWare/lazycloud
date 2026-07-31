@@ -75,6 +75,7 @@ class ComputeInstanceView:
     region: str
     bootstrap_phase: MachineBootstrapPhase
     bootstrap_failure_reason: MachineBootstrapFailureReason | None
+    bootstrap_failure_detail: str
     bootstrap_observed_at: datetime
 
 
@@ -554,6 +555,7 @@ def _compute_instance_view(
         region=region,
         bootstrap_phase=phase,
         bootstrap_failure_reason=failure_reason,
+        bootstrap_failure_detail=record.bootstrap_failure_detail,
         bootstrap_observed_at=observed_at,
     )
 

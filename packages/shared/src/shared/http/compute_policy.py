@@ -102,6 +102,7 @@ class WorkspaceComputeInstanceResponse(HttpModel):
     memory_mb: int = Field(default=0, ge=0)
     bootstrap_phase: MachineBootstrapPhase
     bootstrap_failure_reason: MachineBootstrapFailureReason | None = None
+    bootstrap_failure_detail: str = ""
     bootstrap_observed_at: datetime
     launch_attempt: int = Field(default=1, ge=1)
     created_at: datetime

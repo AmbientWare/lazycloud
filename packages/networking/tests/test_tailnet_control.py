@@ -100,13 +100,23 @@ def test_each_issuer_takes_a_token_for_the_tag_it_is_about_to_mint() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/api/v2/oauth/token":
             token_tags.append(dict(parse_qs(request.content.decode()))["tags"][0])
-            return httpx.Response(200, json={
-                "access_token": f"tskey-api-{len(token_tags)}",
-                "token_type": "Bearer", "expires_in": 3600,
-                "scope": "auth_keys devices:core"})
-        return httpx.Response(200, json={
-            "id": f"key-{len(token_tags)}", "key": "tskey-auth-x",
-            "expires": "2026-10-14T18:05:00Z"})
+            return httpx.Response(
+                200,
+                json={
+                    "access_token": f"tskey-api-{len(token_tags)}",
+                    "token_type": "Bearer",
+                    "expires_in": 3600,
+                    "scope": "auth_keys devices:core",
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "id": f"key-{len(token_tags)}",
+                "key": "tskey-auth-x",
+                "expires": "2026-10-14T18:05:00Z",
+            },
+        )
 
     control = _control(handler)
     control.issue_auth_key(machine_id="machine-1", hostname="agent-machine-1")

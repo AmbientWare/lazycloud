@@ -250,6 +250,7 @@ export const customerComputeInstanceSchema = z
         "unknown",
       ])
       .nullable(),
+    bootstrap_failure_detail: z.string().default(""),
     bootstrap_observed_at: z.string(),
     launch_attempt: z.number().int().positive(),
     created_at: z.string(),

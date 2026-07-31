@@ -172,7 +172,7 @@ a live node's agent journal without SSH.
 Contracts first, then the callers that populate them. After this phase a
 failure carries its cause to a durable place in every path we touched.
 
-- [ ] **ERR-11** Add `bootstrap_failure_detail` beside the failure enum
+- [x] **ERR-11** Add `bootstrap_failure_detail` beside the failure enum
 - [ ] **ERR-12** Give `disable-worker` a reason field
 - [ ] **ERR-03** Stop building one payload dict for two different contracts
 - [ ] **ERR-06** Give `DomainError` and `ErrorResponse` a stable code — *after ERR-05*

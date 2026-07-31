@@ -71,6 +71,16 @@ normalization; preserve meaningful distinctions such as omitted versus `0`.
 Work from the repository root with `uv`; Bun is the only web package manager.
 Use `apply_patch` for manual edits and Ruff for Python formatting/imports.
 
+Comment sparingly, and only about the code as it now stands. A comment earns its
+place by explaining what the code cannot say itself: a non-obvious constraint, an
+ordering that must hold, a rejected alternative that looks correct. Do not narrate
+what the next line does, restate a name, or describe a change relative to what was
+there before — the reader has the current code, not the diff, and a comment about
+"used to" or "now" is stale the moment it is written. Rationale that belongs to a
+change belongs in the commit message; rationale that belongs to a decision belongs
+in the owning `AGENTS.md`. Delete comments that no longer describe the code when
+you touch the surrounding lines.
+
 ## Public Boundaries
 
 - Resources use `/api/v1/<resource>`; `/gateway/*` is reserved for RPC-style

@@ -8,230 +8,230 @@
 // You should NOT make any changes in this file as it will be overwritten.
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
-import { Route as rootRouteImport } from "./routes/__root"
-import { Route as DashboardRouteImport } from "./routes/dashboard"
-import { Route as ActivateRouteImport } from "./routes/activate"
-import { Route as IndexRouteImport } from "./routes/index"
-import { Route as WWorkspaceRouteRouteImport } from "./routes/w/$workspace/route"
-import { Route as WWorkspaceIndexRouteImport } from "./routes/w/$workspace/index"
-import { Route as WWorkspaceTasksRouteImport } from "./routes/w/$workspace/tasks"
-import { Route as WWorkspaceUsageIndexRouteImport } from "./routes/w/$workspace/usage/index"
-import { Route as WWorkspaceStorageIndexRouteImport } from "./routes/w/$workspace/storage/index"
-import { Route as WWorkspaceSettingsIndexRouteImport } from "./routes/w/$workspace/settings/index"
-import { Route as WWorkspaceAppsIndexRouteImport } from "./routes/w/$workspace/apps/index"
-import { Route as WWorkspaceTasksTaskIdRouteImport } from "./routes/w/$workspace/tasks.$taskId"
-import { Route as WWorkspaceSandboxesContainerIdRouteImport } from "./routes/w/$workspace/sandboxes/$containerId"
-import { Route as WWorkspaceAppsAppIdRouteImport } from "./routes/w/$workspace/apps/$appId"
-import { Route as WWorkspaceAppsAppIdWorkloadsNameRouteImport } from "./routes/w/$workspace/apps/$appId_.workloads.$name"
-import { Route as WWorkspaceAppsAppIdTasksTaskIdRouteImport } from "./routes/w/$workspace/apps/$appId.tasks.$taskId"
-import { Route as WWorkspaceAppsAppIdWorkloadsNameTasksTaskIdRouteImport } from "./routes/w/$workspace/apps/$appId_.workloads.$name.tasks.$taskId"
-import { Route as WWorkspaceAppsAppIdWorkloadsNameInstancesContainerIdRouteImport } from "./routes/w/$workspace/apps/$appId_.workloads.$name.instances.$containerId"
+import { Route as rootRouteImport } from './routes/__root'
+import { Route as DashboardRouteImport } from './routes/dashboard'
+import { Route as ActivateRouteImport } from './routes/activate'
+import { Route as IndexRouteImport } from './routes/index'
+import { Route as WWorkspaceRouteRouteImport } from './routes/w/$workspace/route'
+import { Route as WWorkspaceIndexRouteImport } from './routes/w/$workspace/index'
+import { Route as WWorkspaceTasksRouteImport } from './routes/w/$workspace/tasks'
+import { Route as WWorkspaceUsageIndexRouteImport } from './routes/w/$workspace/usage/index'
+import { Route as WWorkspaceStorageIndexRouteImport } from './routes/w/$workspace/storage/index'
+import { Route as WWorkspaceSettingsIndexRouteImport } from './routes/w/$workspace/settings/index'
+import { Route as WWorkspaceAppsIndexRouteImport } from './routes/w/$workspace/apps/index'
+import { Route as WWorkspaceTasksTaskIdRouteImport } from './routes/w/$workspace/tasks.$taskId'
+import { Route as WWorkspaceSandboxesContainerIdRouteImport } from './routes/w/$workspace/sandboxes/$containerId'
+import { Route as WWorkspaceAppsAppIdRouteImport } from './routes/w/$workspace/apps/$appId'
+import { Route as WWorkspaceAppsAppIdWorkloadsNameRouteImport } from './routes/w/$workspace/apps/$appId_.workloads.$name'
+import { Route as WWorkspaceAppsAppIdTasksTaskIdRouteImport } from './routes/w/$workspace/apps/$appId.tasks.$taskId'
+import { Route as WWorkspaceAppsAppIdWorkloadsNameTasksTaskIdRouteImport } from './routes/w/$workspace/apps/$appId_.workloads.$name.tasks.$taskId'
+import { Route as WWorkspaceAppsAppIdWorkloadsNameInstancesContainerIdRouteImport } from './routes/w/$workspace/apps/$appId_.workloads.$name.instances.$containerId'
 
 const DashboardRoute = DashboardRouteImport.update({
-  id: "/dashboard",
-  path: "/dashboard",
+  id: '/dashboard',
+  path: '/dashboard',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ActivateRoute = ActivateRouteImport.update({
-  id: "/activate",
-  path: "/activate",
+  id: '/activate',
+  path: '/activate',
   getParentRoute: () => rootRouteImport,
 } as any)
 const IndexRoute = IndexRouteImport.update({
-  id: "/",
-  path: "/",
+  id: '/',
+  path: '/',
   getParentRoute: () => rootRouteImport,
-} as any).lazy(() => import("./routes/index.lazy").then((d) => d.Route))
+} as any).lazy(() => import('./routes/index.lazy').then((d) => d.Route))
 const WWorkspaceRouteRoute = WWorkspaceRouteRouteImport.update({
-  id: "/w/$workspace",
-  path: "/w/$workspace",
+  id: '/w/$workspace',
+  path: '/w/$workspace',
   getParentRoute: () => rootRouteImport,
 } as any)
 const WWorkspaceIndexRoute = WWorkspaceIndexRouteImport.update({
-  id: "/",
-  path: "/",
+  id: '/',
+  path: '/',
   getParentRoute: () => WWorkspaceRouteRoute,
 } as any)
 const WWorkspaceTasksRoute = WWorkspaceTasksRouteImport.update({
-  id: "/tasks",
-  path: "/tasks",
+  id: '/tasks',
+  path: '/tasks',
   getParentRoute: () => WWorkspaceRouteRoute,
 } as any)
 const WWorkspaceUsageIndexRoute = WWorkspaceUsageIndexRouteImport.update({
-  id: "/usage/",
-  path: "/usage/",
+  id: '/usage/',
+  path: '/usage/',
   getParentRoute: () => WWorkspaceRouteRoute,
 } as any)
 const WWorkspaceStorageIndexRoute = WWorkspaceStorageIndexRouteImport.update({
-  id: "/storage/",
-  path: "/storage/",
+  id: '/storage/',
+  path: '/storage/',
   getParentRoute: () => WWorkspaceRouteRoute,
 } as any)
 const WWorkspaceSettingsIndexRoute = WWorkspaceSettingsIndexRouteImport.update({
-  id: "/settings/",
-  path: "/settings/",
+  id: '/settings/',
+  path: '/settings/',
   getParentRoute: () => WWorkspaceRouteRoute,
 } as any)
 const WWorkspaceAppsIndexRoute = WWorkspaceAppsIndexRouteImport.update({
-  id: "/apps/",
-  path: "/apps/",
+  id: '/apps/',
+  path: '/apps/',
   getParentRoute: () => WWorkspaceRouteRoute,
 } as any)
 const WWorkspaceTasksTaskIdRoute = WWorkspaceTasksTaskIdRouteImport.update({
-  id: "/$taskId",
-  path: "/$taskId",
+  id: '/$taskId',
+  path: '/$taskId',
   getParentRoute: () => WWorkspaceTasksRoute,
 } as any)
 const WWorkspaceSandboxesContainerIdRoute =
   WWorkspaceSandboxesContainerIdRouteImport.update({
-    id: "/sandboxes/$containerId",
-    path: "/sandboxes/$containerId",
+    id: '/sandboxes/$containerId',
+    path: '/sandboxes/$containerId',
     getParentRoute: () => WWorkspaceRouteRoute,
   } as any)
 const WWorkspaceAppsAppIdRoute = WWorkspaceAppsAppIdRouteImport.update({
-  id: "/apps/$appId",
-  path: "/apps/$appId",
+  id: '/apps/$appId',
+  path: '/apps/$appId',
   getParentRoute: () => WWorkspaceRouteRoute,
 } as any)
 const WWorkspaceAppsAppIdWorkloadsNameRoute =
   WWorkspaceAppsAppIdWorkloadsNameRouteImport.update({
-    id: "/apps/$appId_/workloads/$name",
-    path: "/apps/$appId/workloads/$name",
+    id: '/apps/$appId_/workloads/$name',
+    path: '/apps/$appId/workloads/$name',
     getParentRoute: () => WWorkspaceRouteRoute,
   } as any)
 const WWorkspaceAppsAppIdTasksTaskIdRoute =
   WWorkspaceAppsAppIdTasksTaskIdRouteImport.update({
-    id: "/tasks/$taskId",
-    path: "/tasks/$taskId",
+    id: '/tasks/$taskId',
+    path: '/tasks/$taskId',
     getParentRoute: () => WWorkspaceAppsAppIdRoute,
   } as any)
 const WWorkspaceAppsAppIdWorkloadsNameTasksTaskIdRoute =
   WWorkspaceAppsAppIdWorkloadsNameTasksTaskIdRouteImport.update({
-    id: "/tasks/$taskId",
-    path: "/tasks/$taskId",
+    id: '/tasks/$taskId',
+    path: '/tasks/$taskId',
     getParentRoute: () => WWorkspaceAppsAppIdWorkloadsNameRoute,
   } as any)
 const WWorkspaceAppsAppIdWorkloadsNameInstancesContainerIdRoute =
   WWorkspaceAppsAppIdWorkloadsNameInstancesContainerIdRouteImport.update({
-    id: "/instances/$containerId",
-    path: "/instances/$containerId",
+    id: '/instances/$containerId',
+    path: '/instances/$containerId',
     getParentRoute: () => WWorkspaceAppsAppIdWorkloadsNameRoute,
   } as any)
 
 export interface FileRoutesByFullPath {
-  "/": typeof IndexRoute
-  "/activate": typeof ActivateRoute
-  "/dashboard": typeof DashboardRoute
-  "/w/$workspace": typeof WWorkspaceRouteRouteWithChildren
-  "/w/$workspace/tasks": typeof WWorkspaceTasksRouteWithChildren
-  "/w/$workspace/": typeof WWorkspaceIndexRoute
-  "/w/$workspace/apps/$appId": typeof WWorkspaceAppsAppIdRouteWithChildren
-  "/w/$workspace/sandboxes/$containerId": typeof WWorkspaceSandboxesContainerIdRoute
-  "/w/$workspace/tasks/$taskId": typeof WWorkspaceTasksTaskIdRoute
-  "/w/$workspace/apps/": typeof WWorkspaceAppsIndexRoute
-  "/w/$workspace/settings/": typeof WWorkspaceSettingsIndexRoute
-  "/w/$workspace/storage/": typeof WWorkspaceStorageIndexRoute
-  "/w/$workspace/usage/": typeof WWorkspaceUsageIndexRoute
-  "/w/$workspace/apps/$appId/tasks/$taskId": typeof WWorkspaceAppsAppIdTasksTaskIdRoute
-  "/w/$workspace/apps/$appId/workloads/$name": typeof WWorkspaceAppsAppIdWorkloadsNameRouteWithChildren
-  "/w/$workspace/apps/$appId/workloads/$name/instances/$containerId": typeof WWorkspaceAppsAppIdWorkloadsNameInstancesContainerIdRoute
-  "/w/$workspace/apps/$appId/workloads/$name/tasks/$taskId": typeof WWorkspaceAppsAppIdWorkloadsNameTasksTaskIdRoute
+  '/': typeof IndexRoute
+  '/activate': typeof ActivateRoute
+  '/dashboard': typeof DashboardRoute
+  '/w/$workspace': typeof WWorkspaceRouteRouteWithChildren
+  '/w/$workspace/tasks': typeof WWorkspaceTasksRouteWithChildren
+  '/w/$workspace/': typeof WWorkspaceIndexRoute
+  '/w/$workspace/apps/$appId': typeof WWorkspaceAppsAppIdRouteWithChildren
+  '/w/$workspace/sandboxes/$containerId': typeof WWorkspaceSandboxesContainerIdRoute
+  '/w/$workspace/tasks/$taskId': typeof WWorkspaceTasksTaskIdRoute
+  '/w/$workspace/apps/': typeof WWorkspaceAppsIndexRoute
+  '/w/$workspace/settings/': typeof WWorkspaceSettingsIndexRoute
+  '/w/$workspace/storage/': typeof WWorkspaceStorageIndexRoute
+  '/w/$workspace/usage/': typeof WWorkspaceUsageIndexRoute
+  '/w/$workspace/apps/$appId/tasks/$taskId': typeof WWorkspaceAppsAppIdTasksTaskIdRoute
+  '/w/$workspace/apps/$appId/workloads/$name': typeof WWorkspaceAppsAppIdWorkloadsNameRouteWithChildren
+  '/w/$workspace/apps/$appId/workloads/$name/instances/$containerId': typeof WWorkspaceAppsAppIdWorkloadsNameInstancesContainerIdRoute
+  '/w/$workspace/apps/$appId/workloads/$name/tasks/$taskId': typeof WWorkspaceAppsAppIdWorkloadsNameTasksTaskIdRoute
 }
 export interface FileRoutesByTo {
-  "/": typeof IndexRoute
-  "/activate": typeof ActivateRoute
-  "/dashboard": typeof DashboardRoute
-  "/w/$workspace/tasks": typeof WWorkspaceTasksRouteWithChildren
-  "/w/$workspace": typeof WWorkspaceIndexRoute
-  "/w/$workspace/apps/$appId": typeof WWorkspaceAppsAppIdRouteWithChildren
-  "/w/$workspace/sandboxes/$containerId": typeof WWorkspaceSandboxesContainerIdRoute
-  "/w/$workspace/tasks/$taskId": typeof WWorkspaceTasksTaskIdRoute
-  "/w/$workspace/apps": typeof WWorkspaceAppsIndexRoute
-  "/w/$workspace/settings": typeof WWorkspaceSettingsIndexRoute
-  "/w/$workspace/storage": typeof WWorkspaceStorageIndexRoute
-  "/w/$workspace/usage": typeof WWorkspaceUsageIndexRoute
-  "/w/$workspace/apps/$appId/tasks/$taskId": typeof WWorkspaceAppsAppIdTasksTaskIdRoute
-  "/w/$workspace/apps/$appId/workloads/$name": typeof WWorkspaceAppsAppIdWorkloadsNameRouteWithChildren
-  "/w/$workspace/apps/$appId/workloads/$name/instances/$containerId": typeof WWorkspaceAppsAppIdWorkloadsNameInstancesContainerIdRoute
-  "/w/$workspace/apps/$appId/workloads/$name/tasks/$taskId": typeof WWorkspaceAppsAppIdWorkloadsNameTasksTaskIdRoute
+  '/': typeof IndexRoute
+  '/activate': typeof ActivateRoute
+  '/dashboard': typeof DashboardRoute
+  '/w/$workspace/tasks': typeof WWorkspaceTasksRouteWithChildren
+  '/w/$workspace': typeof WWorkspaceIndexRoute
+  '/w/$workspace/apps/$appId': typeof WWorkspaceAppsAppIdRouteWithChildren
+  '/w/$workspace/sandboxes/$containerId': typeof WWorkspaceSandboxesContainerIdRoute
+  '/w/$workspace/tasks/$taskId': typeof WWorkspaceTasksTaskIdRoute
+  '/w/$workspace/apps': typeof WWorkspaceAppsIndexRoute
+  '/w/$workspace/settings': typeof WWorkspaceSettingsIndexRoute
+  '/w/$workspace/storage': typeof WWorkspaceStorageIndexRoute
+  '/w/$workspace/usage': typeof WWorkspaceUsageIndexRoute
+  '/w/$workspace/apps/$appId/tasks/$taskId': typeof WWorkspaceAppsAppIdTasksTaskIdRoute
+  '/w/$workspace/apps/$appId/workloads/$name': typeof WWorkspaceAppsAppIdWorkloadsNameRouteWithChildren
+  '/w/$workspace/apps/$appId/workloads/$name/instances/$containerId': typeof WWorkspaceAppsAppIdWorkloadsNameInstancesContainerIdRoute
+  '/w/$workspace/apps/$appId/workloads/$name/tasks/$taskId': typeof WWorkspaceAppsAppIdWorkloadsNameTasksTaskIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
-  "/": typeof IndexRoute
-  "/activate": typeof ActivateRoute
-  "/dashboard": typeof DashboardRoute
-  "/w/$workspace": typeof WWorkspaceRouteRouteWithChildren
-  "/w/$workspace/tasks": typeof WWorkspaceTasksRouteWithChildren
-  "/w/$workspace/": typeof WWorkspaceIndexRoute
-  "/w/$workspace/apps/$appId": typeof WWorkspaceAppsAppIdRouteWithChildren
-  "/w/$workspace/sandboxes/$containerId": typeof WWorkspaceSandboxesContainerIdRoute
-  "/w/$workspace/tasks/$taskId": typeof WWorkspaceTasksTaskIdRoute
-  "/w/$workspace/apps/": typeof WWorkspaceAppsIndexRoute
-  "/w/$workspace/settings/": typeof WWorkspaceSettingsIndexRoute
-  "/w/$workspace/storage/": typeof WWorkspaceStorageIndexRoute
-  "/w/$workspace/usage/": typeof WWorkspaceUsageIndexRoute
-  "/w/$workspace/apps/$appId/tasks/$taskId": typeof WWorkspaceAppsAppIdTasksTaskIdRoute
-  "/w/$workspace/apps/$appId_/workloads/$name": typeof WWorkspaceAppsAppIdWorkloadsNameRouteWithChildren
-  "/w/$workspace/apps/$appId_/workloads/$name/instances/$containerId": typeof WWorkspaceAppsAppIdWorkloadsNameInstancesContainerIdRoute
-  "/w/$workspace/apps/$appId_/workloads/$name/tasks/$taskId": typeof WWorkspaceAppsAppIdWorkloadsNameTasksTaskIdRoute
+  '/': typeof IndexRoute
+  '/activate': typeof ActivateRoute
+  '/dashboard': typeof DashboardRoute
+  '/w/$workspace': typeof WWorkspaceRouteRouteWithChildren
+  '/w/$workspace/tasks': typeof WWorkspaceTasksRouteWithChildren
+  '/w/$workspace/': typeof WWorkspaceIndexRoute
+  '/w/$workspace/apps/$appId': typeof WWorkspaceAppsAppIdRouteWithChildren
+  '/w/$workspace/sandboxes/$containerId': typeof WWorkspaceSandboxesContainerIdRoute
+  '/w/$workspace/tasks/$taskId': typeof WWorkspaceTasksTaskIdRoute
+  '/w/$workspace/apps/': typeof WWorkspaceAppsIndexRoute
+  '/w/$workspace/settings/': typeof WWorkspaceSettingsIndexRoute
+  '/w/$workspace/storage/': typeof WWorkspaceStorageIndexRoute
+  '/w/$workspace/usage/': typeof WWorkspaceUsageIndexRoute
+  '/w/$workspace/apps/$appId/tasks/$taskId': typeof WWorkspaceAppsAppIdTasksTaskIdRoute
+  '/w/$workspace/apps/$appId_/workloads/$name': typeof WWorkspaceAppsAppIdWorkloadsNameRouteWithChildren
+  '/w/$workspace/apps/$appId_/workloads/$name/instances/$containerId': typeof WWorkspaceAppsAppIdWorkloadsNameInstancesContainerIdRoute
+  '/w/$workspace/apps/$appId_/workloads/$name/tasks/$taskId': typeof WWorkspaceAppsAppIdWorkloadsNameTasksTaskIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
-    | "/"
-    | "/activate"
-    | "/dashboard"
-    | "/w/$workspace"
-    | "/w/$workspace/tasks"
-    | "/w/$workspace/"
-    | "/w/$workspace/apps/$appId"
-    | "/w/$workspace/sandboxes/$containerId"
-    | "/w/$workspace/tasks/$taskId"
-    | "/w/$workspace/apps/"
-    | "/w/$workspace/settings/"
-    | "/w/$workspace/storage/"
-    | "/w/$workspace/usage/"
-    | "/w/$workspace/apps/$appId/tasks/$taskId"
-    | "/w/$workspace/apps/$appId/workloads/$name"
-    | "/w/$workspace/apps/$appId/workloads/$name/instances/$containerId"
-    | "/w/$workspace/apps/$appId/workloads/$name/tasks/$taskId"
+    | '/'
+    | '/activate'
+    | '/dashboard'
+    | '/w/$workspace'
+    | '/w/$workspace/tasks'
+    | '/w/$workspace/'
+    | '/w/$workspace/apps/$appId'
+    | '/w/$workspace/sandboxes/$containerId'
+    | '/w/$workspace/tasks/$taskId'
+    | '/w/$workspace/apps/'
+    | '/w/$workspace/settings/'
+    | '/w/$workspace/storage/'
+    | '/w/$workspace/usage/'
+    | '/w/$workspace/apps/$appId/tasks/$taskId'
+    | '/w/$workspace/apps/$appId/workloads/$name'
+    | '/w/$workspace/apps/$appId/workloads/$name/instances/$containerId'
+    | '/w/$workspace/apps/$appId/workloads/$name/tasks/$taskId'
   fileRoutesByTo: FileRoutesByTo
   to:
-    | "/"
-    | "/activate"
-    | "/dashboard"
-    | "/w/$workspace/tasks"
-    | "/w/$workspace"
-    | "/w/$workspace/apps/$appId"
-    | "/w/$workspace/sandboxes/$containerId"
-    | "/w/$workspace/tasks/$taskId"
-    | "/w/$workspace/apps"
-    | "/w/$workspace/settings"
-    | "/w/$workspace/storage"
-    | "/w/$workspace/usage"
-    | "/w/$workspace/apps/$appId/tasks/$taskId"
-    | "/w/$workspace/apps/$appId/workloads/$name"
-    | "/w/$workspace/apps/$appId/workloads/$name/instances/$containerId"
-    | "/w/$workspace/apps/$appId/workloads/$name/tasks/$taskId"
+    | '/'
+    | '/activate'
+    | '/dashboard'
+    | '/w/$workspace/tasks'
+    | '/w/$workspace'
+    | '/w/$workspace/apps/$appId'
+    | '/w/$workspace/sandboxes/$containerId'
+    | '/w/$workspace/tasks/$taskId'
+    | '/w/$workspace/apps'
+    | '/w/$workspace/settings'
+    | '/w/$workspace/storage'
+    | '/w/$workspace/usage'
+    | '/w/$workspace/apps/$appId/tasks/$taskId'
+    | '/w/$workspace/apps/$appId/workloads/$name'
+    | '/w/$workspace/apps/$appId/workloads/$name/instances/$containerId'
+    | '/w/$workspace/apps/$appId/workloads/$name/tasks/$taskId'
   id:
-    | "__root__"
-    | "/"
-    | "/activate"
-    | "/dashboard"
-    | "/w/$workspace"
-    | "/w/$workspace/tasks"
-    | "/w/$workspace/"
-    | "/w/$workspace/apps/$appId"
-    | "/w/$workspace/sandboxes/$containerId"
-    | "/w/$workspace/tasks/$taskId"
-    | "/w/$workspace/apps/"
-    | "/w/$workspace/settings/"
-    | "/w/$workspace/storage/"
-    | "/w/$workspace/usage/"
-    | "/w/$workspace/apps/$appId/tasks/$taskId"
-    | "/w/$workspace/apps/$appId_/workloads/$name"
-    | "/w/$workspace/apps/$appId_/workloads/$name/instances/$containerId"
-    | "/w/$workspace/apps/$appId_/workloads/$name/tasks/$taskId"
+    | '__root__'
+    | '/'
+    | '/activate'
+    | '/dashboard'
+    | '/w/$workspace'
+    | '/w/$workspace/tasks'
+    | '/w/$workspace/'
+    | '/w/$workspace/apps/$appId'
+    | '/w/$workspace/sandboxes/$containerId'
+    | '/w/$workspace/tasks/$taskId'
+    | '/w/$workspace/apps/'
+    | '/w/$workspace/settings/'
+    | '/w/$workspace/storage/'
+    | '/w/$workspace/usage/'
+    | '/w/$workspace/apps/$appId/tasks/$taskId'
+    | '/w/$workspace/apps/$appId_/workloads/$name'
+    | '/w/$workspace/apps/$appId_/workloads/$name/instances/$containerId'
+    | '/w/$workspace/apps/$appId_/workloads/$name/tasks/$taskId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -241,124 +241,124 @@ export interface RootRouteChildren {
   WWorkspaceRouteRoute: typeof WWorkspaceRouteRouteWithChildren
 }
 
-declare module "@tanstack/react-router" {
+declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    "/dashboard": {
-      id: "/dashboard"
-      path: "/dashboard"
-      fullPath: "/dashboard"
+    '/dashboard': {
+      id: '/dashboard'
+      path: '/dashboard'
+      fullPath: '/dashboard'
       preLoaderRoute: typeof DashboardRouteImport
       parentRoute: typeof rootRouteImport
     }
-    "/activate": {
-      id: "/activate"
-      path: "/activate"
-      fullPath: "/activate"
+    '/activate': {
+      id: '/activate'
+      path: '/activate'
+      fullPath: '/activate'
       preLoaderRoute: typeof ActivateRouteImport
       parentRoute: typeof rootRouteImport
     }
-    "/": {
-      id: "/"
-      path: "/"
-      fullPath: "/"
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    "/w/$workspace": {
-      id: "/w/$workspace"
-      path: "/w/$workspace"
-      fullPath: "/w/$workspace"
+    '/w/$workspace': {
+      id: '/w/$workspace'
+      path: '/w/$workspace'
+      fullPath: '/w/$workspace'
       preLoaderRoute: typeof WWorkspaceRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
-    "/w/$workspace/": {
-      id: "/w/$workspace/"
-      path: "/"
-      fullPath: "/w/$workspace/"
+    '/w/$workspace/': {
+      id: '/w/$workspace/'
+      path: '/'
+      fullPath: '/w/$workspace/'
       preLoaderRoute: typeof WWorkspaceIndexRouteImport
       parentRoute: typeof WWorkspaceRouteRoute
     }
-    "/w/$workspace/tasks": {
-      id: "/w/$workspace/tasks"
-      path: "/tasks"
-      fullPath: "/w/$workspace/tasks"
+    '/w/$workspace/tasks': {
+      id: '/w/$workspace/tasks'
+      path: '/tasks'
+      fullPath: '/w/$workspace/tasks'
       preLoaderRoute: typeof WWorkspaceTasksRouteImport
       parentRoute: typeof WWorkspaceRouteRoute
     }
-    "/w/$workspace/usage/": {
-      id: "/w/$workspace/usage/"
-      path: "/usage"
-      fullPath: "/w/$workspace/usage/"
+    '/w/$workspace/usage/': {
+      id: '/w/$workspace/usage/'
+      path: '/usage'
+      fullPath: '/w/$workspace/usage/'
       preLoaderRoute: typeof WWorkspaceUsageIndexRouteImport
       parentRoute: typeof WWorkspaceRouteRoute
     }
-    "/w/$workspace/storage/": {
-      id: "/w/$workspace/storage/"
-      path: "/storage"
-      fullPath: "/w/$workspace/storage/"
+    '/w/$workspace/storage/': {
+      id: '/w/$workspace/storage/'
+      path: '/storage'
+      fullPath: '/w/$workspace/storage/'
       preLoaderRoute: typeof WWorkspaceStorageIndexRouteImport
       parentRoute: typeof WWorkspaceRouteRoute
     }
-    "/w/$workspace/settings/": {
-      id: "/w/$workspace/settings/"
-      path: "/settings"
-      fullPath: "/w/$workspace/settings/"
+    '/w/$workspace/settings/': {
+      id: '/w/$workspace/settings/'
+      path: '/settings'
+      fullPath: '/w/$workspace/settings/'
       preLoaderRoute: typeof WWorkspaceSettingsIndexRouteImport
       parentRoute: typeof WWorkspaceRouteRoute
     }
-    "/w/$workspace/apps/": {
-      id: "/w/$workspace/apps/"
-      path: "/apps"
-      fullPath: "/w/$workspace/apps/"
+    '/w/$workspace/apps/': {
+      id: '/w/$workspace/apps/'
+      path: '/apps'
+      fullPath: '/w/$workspace/apps/'
       preLoaderRoute: typeof WWorkspaceAppsIndexRouteImport
       parentRoute: typeof WWorkspaceRouteRoute
     }
-    "/w/$workspace/tasks/$taskId": {
-      id: "/w/$workspace/tasks/$taskId"
-      path: "/$taskId"
-      fullPath: "/w/$workspace/tasks/$taskId"
+    '/w/$workspace/tasks/$taskId': {
+      id: '/w/$workspace/tasks/$taskId'
+      path: '/$taskId'
+      fullPath: '/w/$workspace/tasks/$taskId'
       preLoaderRoute: typeof WWorkspaceTasksTaskIdRouteImport
       parentRoute: typeof WWorkspaceTasksRoute
     }
-    "/w/$workspace/sandboxes/$containerId": {
-      id: "/w/$workspace/sandboxes/$containerId"
-      path: "/sandboxes/$containerId"
-      fullPath: "/w/$workspace/sandboxes/$containerId"
+    '/w/$workspace/sandboxes/$containerId': {
+      id: '/w/$workspace/sandboxes/$containerId'
+      path: '/sandboxes/$containerId'
+      fullPath: '/w/$workspace/sandboxes/$containerId'
       preLoaderRoute: typeof WWorkspaceSandboxesContainerIdRouteImport
       parentRoute: typeof WWorkspaceRouteRoute
     }
-    "/w/$workspace/apps/$appId": {
-      id: "/w/$workspace/apps/$appId"
-      path: "/apps/$appId"
-      fullPath: "/w/$workspace/apps/$appId"
+    '/w/$workspace/apps/$appId': {
+      id: '/w/$workspace/apps/$appId'
+      path: '/apps/$appId'
+      fullPath: '/w/$workspace/apps/$appId'
       preLoaderRoute: typeof WWorkspaceAppsAppIdRouteImport
       parentRoute: typeof WWorkspaceRouteRoute
     }
-    "/w/$workspace/apps/$appId_/workloads/$name": {
-      id: "/w/$workspace/apps/$appId_/workloads/$name"
-      path: "/apps/$appId/workloads/$name"
-      fullPath: "/w/$workspace/apps/$appId/workloads/$name"
+    '/w/$workspace/apps/$appId_/workloads/$name': {
+      id: '/w/$workspace/apps/$appId_/workloads/$name'
+      path: '/apps/$appId/workloads/$name'
+      fullPath: '/w/$workspace/apps/$appId/workloads/$name'
       preLoaderRoute: typeof WWorkspaceAppsAppIdWorkloadsNameRouteImport
       parentRoute: typeof WWorkspaceRouteRoute
     }
-    "/w/$workspace/apps/$appId/tasks/$taskId": {
-      id: "/w/$workspace/apps/$appId/tasks/$taskId"
-      path: "/tasks/$taskId"
-      fullPath: "/w/$workspace/apps/$appId/tasks/$taskId"
+    '/w/$workspace/apps/$appId/tasks/$taskId': {
+      id: '/w/$workspace/apps/$appId/tasks/$taskId'
+      path: '/tasks/$taskId'
+      fullPath: '/w/$workspace/apps/$appId/tasks/$taskId'
       preLoaderRoute: typeof WWorkspaceAppsAppIdTasksTaskIdRouteImport
       parentRoute: typeof WWorkspaceAppsAppIdRoute
     }
-    "/w/$workspace/apps/$appId_/workloads/$name/tasks/$taskId": {
-      id: "/w/$workspace/apps/$appId_/workloads/$name/tasks/$taskId"
-      path: "/tasks/$taskId"
-      fullPath: "/w/$workspace/apps/$appId/workloads/$name/tasks/$taskId"
+    '/w/$workspace/apps/$appId_/workloads/$name/tasks/$taskId': {
+      id: '/w/$workspace/apps/$appId_/workloads/$name/tasks/$taskId'
+      path: '/tasks/$taskId'
+      fullPath: '/w/$workspace/apps/$appId/workloads/$name/tasks/$taskId'
       preLoaderRoute: typeof WWorkspaceAppsAppIdWorkloadsNameTasksTaskIdRouteImport
       parentRoute: typeof WWorkspaceAppsAppIdWorkloadsNameRoute
     }
-    "/w/$workspace/apps/$appId_/workloads/$name/instances/$containerId": {
-      id: "/w/$workspace/apps/$appId_/workloads/$name/instances/$containerId"
-      path: "/instances/$containerId"
-      fullPath: "/w/$workspace/apps/$appId/workloads/$name/instances/$containerId"
+    '/w/$workspace/apps/$appId_/workloads/$name/instances/$containerId': {
+      id: '/w/$workspace/apps/$appId_/workloads/$name/instances/$containerId'
+      path: '/instances/$containerId'
+      fullPath: '/w/$workspace/apps/$appId/workloads/$name/instances/$containerId'
       preLoaderRoute: typeof WWorkspaceAppsAppIdWorkloadsNameInstancesContainerIdRouteImport
       parentRoute: typeof WWorkspaceAppsAppIdWorkloadsNameRoute
     }
@@ -444,12 +444,3 @@ const rootRouteChildren: RootRouteChildren = {
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
-
-import type { getRouter } from "./router.tsx"
-import type { createStart } from "@tanstack/react-start"
-declare module "@tanstack/react-start" {
-  interface Register {
-    ssr: true
-    router: Awaited<ReturnType<typeof getRouter>>
-  }
-}

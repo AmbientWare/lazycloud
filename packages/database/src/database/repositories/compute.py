@@ -128,6 +128,7 @@ class ComputeProviderInstanceRecord(ContractModel):
     billing_renewal_at: datetime | None = None
     bootstrap_phase: MachineBootstrapPhase = MachineBootstrapPhase.Requested
     bootstrap_failure_reason: MachineBootstrapFailureReason | None = None
+    bootstrap_failure_detail: str = ""
     bootstrap_observed_at: datetime = Field(default_factory=utc_now)
     launch_attempt: int = Field(default=1, ge=1)
     metadata: dict[str, JsonValue] = Field(default_factory=dict)

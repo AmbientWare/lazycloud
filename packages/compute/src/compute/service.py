@@ -4854,6 +4854,7 @@ class ComputeService:
                 update={
                     "bootstrap_phase": MachineBootstrapPhase.Failed,
                     "bootstrap_failure_reason": bootstrap_failure_reason,
+                    "bootstrap_failure_detail": message,
                     "bootstrap_observed_at": _utc(bootstrap_observed_at),
                     "updated_at": _utc(bootstrap_observed_at),
                 }

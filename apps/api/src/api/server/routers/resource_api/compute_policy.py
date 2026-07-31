@@ -152,6 +152,7 @@ def list_workspace_compute_instances(
                 memory_mb=item.record.memory_mb,
                 bootstrap_phase=item.bootstrap_phase,
                 bootstrap_failure_reason=item.bootstrap_failure_reason,
+                bootstrap_failure_detail=item.bootstrap_failure_detail,
                 bootstrap_observed_at=item.bootstrap_observed_at,
                 launch_attempt=item.record.launch_attempt,
                 created_at=item.record.created_at,
