@@ -81,6 +81,7 @@ class AgentWorkerRepository(Protocol):
         self,
         worker_id: str,
         *,
+        reason: str,
         ttl_seconds: int = 0,
         now: datetime | None = None,
     ) -> SchedulerWorkerRecord: ...
@@ -138,7 +139,11 @@ class AgentWorkerPoolController:
                     worker_id=worker.worker_id,
                     reason="agent machine worker already disabled",
                 )
-            disabled = self.workers.disable_worker(worker.worker_id, now=current_time)
+            disabled = self.workers.disable_worker(
+                worker.worker_id,
+                reason="agent machine is not schedulable",
+                now=current_time,
+            )
             return AgentPoolWorkerResult(
                 action=AgentPoolWorkerAction.Disabled,
                 machine_id=machine.machine_id,

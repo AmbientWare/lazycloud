@@ -64,6 +64,7 @@ from worker.repository_payloads import (
     ContainerLogBatchEntry,
     DeleteContainerStateRequest,
     DeleteContainerStateResponse,
+    DisableWorkerRequest,
     GetCacheOriginCredentialsResponse,
     GetCheckpointRestoreRequest,
     GetCheckpointRestoreResponse,
@@ -344,7 +345,7 @@ class WorkerRepositoryHttpClient:
             WorkerRecordResponse,
         )
 
-    def disable_worker(self, request: WorkerIdRequest) -> WorkerRecordResponse:
+    def disable_worker(self, request: DisableWorkerRequest) -> WorkerRecordResponse:
         return self._post_model(
             "/worker-repository/disable-worker",
             request,
@@ -983,10 +984,13 @@ class RemoteSchedulerWorkerRepository:
         self,
         worker_id: str,
         *,
+        reason: str,
         ttl_seconds: int = 0,
     ) -> SchedulerWorkerRecord:
         _ = ttl_seconds
-        worker = self.client.disable_worker(WorkerIdRequest(worker_id=worker_id)).worker
+        worker = self.client.disable_worker(
+            DisableWorkerRequest(worker_id=worker_id, reason=reason)
+        ).worker
         if worker is None:
             msg = f"worker {worker_id!r} was not returned by repository"
             raise WorkerRepositoryClientError(msg)

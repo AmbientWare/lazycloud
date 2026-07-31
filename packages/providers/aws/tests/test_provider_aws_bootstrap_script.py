@@ -72,9 +72,9 @@ def test_bootstrap_script_refuses_an_agent_binary_that_fails_digest_verification
     assert syntax.returncode == 0, syntax.stderr
 
     # The gateway install route is never used, and the agent owns its own unit:
-    # when this script wrote one too, a machine ran the agent's unit while this
-    # script claimed a different restart policy, so a fix made here never
-    # reached any machine.
+    # a unit written here would leave a machine running the agent's while this
+    # script claimed a different restart policy, so a fix made here would never
+    # reach any machine.
     assert "/install/agent" not in script
     assert "/etc/systemd/system/lazycloud-agent.service" not in script
 
@@ -125,7 +125,7 @@ def test_bootstrap_script_refuses_an_agent_binary_that_fails_digest_verification
     assert not list(tmp_path.glob("lazycloud-agent.download.*"))
     # The artifact came from the pinned release URL, and the mismatch is
     # reported as one bounded enrollment failure reason. The whole payload is
-    # pinned because the provider half of it is now a shell function the generic
+    # pinned because the provider half of it is a shell function the generic
     # script splices in: dropping a field there would leave every bootstrap
     # report rejected, and the report is deliberately best-effort, so nothing
     # else would say so.

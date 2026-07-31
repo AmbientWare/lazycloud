@@ -121,8 +121,8 @@ class _FakeLifecycleRepo:
             msg = f"worker {worker_id!r} state is missing"
             raise RuntimeError(msg)
 
-    def disable_worker(self, worker_id: str, *, ttl_seconds: int) -> None:
-        _ = worker_id, ttl_seconds
+    def disable_worker(self, worker_id: str, *, reason: str, ttl_seconds: int) -> None:
+        _ = worker_id, reason, ttl_seconds
         self.actions.append("disabled")
 
     def remove_worker(self, worker_id: str) -> WorkerRemovalResult:
@@ -153,8 +153,8 @@ class _ShutdownAwareLifecycleRepo:
     def set_keep_alive(self, worker_id: str, *, ttl_seconds: int) -> None:
         _ = worker_id, ttl_seconds
 
-    def disable_worker(self, worker_id: str, *, ttl_seconds: int) -> None:
-        _ = worker_id, ttl_seconds
+    def disable_worker(self, worker_id: str, *, reason: str, ttl_seconds: int) -> None:
+        _ = worker_id, reason, ttl_seconds
         self.actions.append("disabled")
 
     def remove_worker(self, worker_id: str) -> WorkerRemovalResult:

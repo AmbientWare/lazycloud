@@ -92,7 +92,7 @@ def test_agent_worker_token_reuse_requires_reusable_worker_binding() -> None:
     ("host", "reachable"),
     [
         # A LAN address carries dots and is not loopback, so a name-shaped check
-        # accepted it. A remote machine enrols against it, reports healthy, and
+        # accepts it. A remote machine enrols against it, reports healthy, and
         # crash-loops its worker on an origin only the control plane can reach.
         ("10.0.0.150", False),
         ("192.168.1.5", False),

@@ -55,9 +55,8 @@ class RetentionConfig(ContractModel):
     source_grace_seconds: int = DEFAULT_RETENTION_SOURCE_GRACE_SECONDS
     build_retention_seconds: int = DEFAULT_RETENTION_BUILD_SECONDS
     image_retention_seconds: int = DEFAULT_RETENTION_IMAGE_SECONDS
-    # Archives are their own durable owner now, so they need their own age. They
-    # used to disappear only as a side effect of pruning the one workspace image
-    # row that named them; a global archive outlives every such row.
+    # A global archive outlives every workspace image row that names it, so it
+    # carries its own age rather than being pruned as a side effect of those rows.
     image_archive_retention_seconds: int = DEFAULT_RETENTION_IMAGE_ARCHIVE_SECONDS
     max_items_per_cycle: int = DEFAULT_RETENTION_MAX_ITEMS_PER_CYCLE
     object_operation_lease_seconds: int = 2 * 60 * 60

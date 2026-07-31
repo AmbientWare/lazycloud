@@ -124,6 +124,11 @@ class WorkerIdRequest(ContractModel):
     worker_id: str
 
 
+class DisableWorkerRequest(ContractModel):
+    worker_id: str
+    reason: str
+
+
 class AddWorkerRequest(ContractModel):
     worker: SchedulerWorkerRecord
     cache_generation_id: str

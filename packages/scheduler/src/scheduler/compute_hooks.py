@@ -37,6 +37,7 @@ class SchedulerHookWorkerRepository(Protocol):
         self,
         worker_id: str,
         *,
+        reason: str,
         ttl_seconds: int = 0,
         now: datetime | None = None,
     ) -> SchedulerWorkerRecord: ...
@@ -59,9 +60,8 @@ class SchedulerComputeHooks:
         # an agent machine state. Provider launch alone is not ready capacity.
 
     def disable_machine(self, machine_id: str, reason: str) -> None:
-        _ = reason
         for worker in self._workers_for_machine(machine_id):
-            self.workers.disable_worker(worker.worker_id)
+            self.workers.disable_worker(worker.worker_id, reason=reason)
 
     def retire_machine(
         self,

@@ -227,7 +227,7 @@ class WorkerCacheOriginCredentialService:
         if not self.image_archive_available or settings is None or not image_id:
             return _ImageArchiveCredentials()
 
-        # Deliberately the workspace-scoped lookup even though one row now serves
+        # Deliberately the workspace-scoped lookup even though one row serves
         # every tenant: the physical key carries no tenant component, so this join
         # is the entire download boundary.
         archive = self._services().images.get_authorized_image_archive(

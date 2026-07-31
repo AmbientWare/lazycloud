@@ -168,10 +168,10 @@ class SubprocessTailnetCommandRunner:
 @dataclass(slots=True)
 class SubprocessTailnetProcessLauncher:
     def start(self, args: list[str], *, log_path: Path | None = None) -> TailnetManagedProcess:
-        # Discarding the daemon's output made every startup failure unexplainable:
-        # the machine could only report that tailscaled exited, never why, which
-        # is useless on a remote machine that is already billing. Send it to a
-        # file so the reason survives for the error message and for an operator.
+        # Discarding the daemon's output makes every startup failure unexplainable:
+        # the machine can only report that tailscaled exited, never why, which is
+        # useless on a remote machine that is already billing. Send it to a file
+        # so the reason survives for the error message and for an operator.
         if log_path is None:
             return subprocess.Popen(
                 args,

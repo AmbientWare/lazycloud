@@ -161,6 +161,7 @@ class _WorkerRepo:
         self,
         worker_id: str,
         *,
+        reason: str = "",
         ttl_seconds: int = 0,
         now: datetime | None = None,
     ) -> SchedulerWorkerRecord:

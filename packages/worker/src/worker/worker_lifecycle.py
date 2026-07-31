@@ -77,6 +77,7 @@ class WorkerLifecycleRepository(Protocol):
         self,
         worker_id: str,
         *,
+        reason: str,
         ttl_seconds: int,
     ) -> SchedulerWorkerRecord | None: ...
 
@@ -317,6 +318,7 @@ class WorkerLifecycleOrchestrator:
             WorkerLifecycleAction.DisableScheduling,
             lambda: repository.disable_worker(
                 self.worker_id,
+                reason="worker process is shutting down",
                 ttl_seconds=self.keepalive_ttl_seconds,
             ),
         )

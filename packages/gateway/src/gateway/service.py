@@ -1013,7 +1013,10 @@ class GatewayControlService:
                 if desired_machines == 0:
                     for worker in self.scheduler_worker_lookup.list_workers():
                         if worker.capacity_owner_id == owner.capacity_owner_id:
-                            self.scheduler_worker_lookup.disable_worker(worker.worker_id)
+                            self.scheduler_worker_lookup.disable_worker(
+                                worker.worker_id,
+                                reason="compute pool was scaled to zero machines",
+                            )
 
             return self.services.compute.scale_internal_pool(
                 workspace_id,

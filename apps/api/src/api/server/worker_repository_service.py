@@ -102,6 +102,7 @@ from worker.repository_payloads import (
     ClaimSourceCacheCleanupResponse,
     DeleteContainerStateRequest,
     DeleteContainerStateResponse,
+    DisableWorkerRequest,
     GetCacheOriginCredentialsResponse,
     GetCheckpointRestoreRequest,
     GetCheckpointRestoreResponse,
@@ -494,9 +495,9 @@ class WorkerRepositoryService:
                 self._require_source_cache_available(request, principal=principal)
             except WorkerSourceCacheUnavailableError:
                 # A cache generation that is still initializing is an expected
-                # transient, not a server fault. Raising here escaped as an
-                # unhandled ASGI error because the streaming response had already
-                # started, so it could never be mapped and instead buried real
+                # transient, not a server fault. Raising here escapes as an
+                # unhandled ASGI error because the streaming response has already
+                # started, so it can never be mapped and instead buries real
                 # failures under repeated tracebacks. Ending the stream lets the
                 # worker poll again once its generation is available.
                 return
@@ -820,9 +821,11 @@ class WorkerRepositoryService:
         except SchedulerRepositoryError as exc:
             raise _scheduler_domain_error(exc) from exc
 
-    def disable_worker(self, request: WorkerIdRequest) -> WorkerRecordResponse:
+    def disable_worker(self, request: DisableWorkerRequest) -> WorkerRecordResponse:
         try:
-            return WorkerRecordResponse(worker=self.workers.disable_worker(request.worker_id))
+            return WorkerRecordResponse(
+                worker=self.workers.disable_worker(request.worker_id, reason=request.reason)
+            )
         except SchedulerRepositoryError as exc:
             raise _scheduler_domain_error(exc) from exc
 
@@ -948,7 +951,10 @@ class WorkerRepositoryService:
                 SchedulerWorkerStatus.Available,
                 SchedulerWorkerStatus.Pending,
             }:
-                self.workers.disable_worker(worker_id)
+                self.workers.disable_worker(
+                    worker_id,
+                    reason="source cache is unavailable on this worker",
+                )
         except SchedulerRepositoryError:
             return
 

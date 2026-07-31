@@ -734,6 +734,7 @@ class RedisSchedulerWorkerRepository:
         ttl_seconds: int = DEFAULT_WORKER_STATE_TTL_SECONDS,
         now: datetime | None = None,
         reconcile_capacity: bool = False,
+        unavailable_reason: str = "",
     ) -> SchedulerWorkerRecord:
         def write() -> SchedulerWorkerRecord:
             worker = self.get_worker(worker_id)
@@ -744,6 +745,7 @@ class RedisSchedulerWorkerRepository:
             updated = worker.model_copy(
                 update={
                     "status": status,
+                    "unavailable_reason": unavailable_reason,
                     "resource_version": worker.resource_version + 1,
                     "updated_at": now or utc_now(),
                 }
@@ -774,12 +776,14 @@ class RedisSchedulerWorkerRepository:
         self,
         worker_id: str,
         *,
+        reason: str,
         ttl_seconds: int = DEFAULT_WORKER_STATE_TTL_SECONDS,
         now: datetime | None = None,
     ) -> SchedulerWorkerRecord:
         return self.update_worker_status(
             worker_id,
             SchedulerWorkerStatus.Unavailable,
+            unavailable_reason=reason,
             ttl_seconds=ttl_seconds,
             now=now,
         )

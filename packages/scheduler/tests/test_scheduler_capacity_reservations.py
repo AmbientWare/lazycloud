@@ -714,7 +714,11 @@ def test_final_dispatch_rechecks_owner_worker_after_scale_zero_mutation(
     def scale_zero() -> None:
         stale_snapshot_read.wait()
         with capacity.mutation_lock(OWNER_ID):
-            workers.disable_worker(worker.worker_id, now=now + timedelta(milliseconds=1))
+            workers.disable_worker(
+                worker.worker_id,
+                reason="scaled to zero",
+                now=now + timedelta(milliseconds=1),
+            )
         scale_zero_complete.wait()
 
     with ThreadPoolExecutor(max_workers=1) as executor:
