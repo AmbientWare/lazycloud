@@ -16,9 +16,15 @@ from typing import Protocol
 
 from compute.agent_control import TailnetPeerView, peer_matches_host
 from pydantic import Field, JsonValue, SecretStr, TypeAdapter, field_validator
+from shared.app_identity import (
+    AGENT_TAILNET_DIR_NAME,
+    STATE_DIR,
+    TAILSCALED_SOCKET_NAME,
+    TAILSCALED_STATE_NAME,
+)
 from shared.contracts import ContractModel
 
-DEFAULT_TAILNET_STATE_DIR = "/var/lib/lazycloud/tailnet"
+DEFAULT_TAILNET_STATE_DIR = f"{STATE_DIR}/{AGENT_TAILNET_DIR_NAME}"
 DEFAULT_TAILNET_WAIT_POLL_SECONDS = 0.5
 DEFAULT_TAILNET_LOGIN_TIMEOUT_SECONDS = 30.0
 DEFAULT_TAILNET_STATUS_TIMEOUT_SECONDS = 5.0
@@ -574,7 +580,7 @@ class TailnetRuntime:
         _make_private_dir(state_dir)
         args = [
             self.options.tailscaled_binary,
-            f"--state={state_dir / 'tailscaled.state'}",
+            f"--state={state_dir / TAILSCALED_STATE_NAME}",
         ]
         if self.options.userspace_networking or _managed_daemon_requires_userspace_networking():
             args.append("--tun=userspace-networking")
@@ -710,7 +716,7 @@ class TailnetRuntime:
         if self.options.socket_path:
             return self.options.socket_path
         if self.options.mode is TailnetRuntimeMode.Managed:
-            return str(Path(self.options.state_dir) / "tailscaled.sock")
+            return str(Path(self.options.state_dir) / TAILSCALED_SOCKET_NAME)
         return ""
 
     def _managed_process_alive(self) -> bool:

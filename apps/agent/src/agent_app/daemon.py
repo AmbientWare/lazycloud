@@ -90,7 +90,7 @@ from provider_clients import (
     provider_node_identity_evidence_provider,
 )
 from pydantic import Field, JsonValue, TypeAdapter, field_validator, model_validator
-from shared.app_identity import AGENT_NAME
+from shared.app_identity import AGENT_NAME, AGENT_TAILNET_DIR_NAME
 from shared.compute_enrollment import (
     AgentCapacityState,
     ComputePreflightCheck,
@@ -1440,7 +1440,7 @@ def _provider_capacity_interruption_detector(
 def _tailnet_runtime_options(
     options: AgentDaemonOptions,
 ) -> TailnetRuntimeOptions:
-    state_dir = options.tailnet_state_dir or str(Path(options.state_dir) / "tailnet")
+    state_dir = options.tailnet_state_dir or str(Path(options.state_dir) / AGENT_TAILNET_DIR_NAME)
     return TailnetRuntimeOptions(
         mode=options.tailnet_mode,
         state_dir=state_dir,

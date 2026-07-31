@@ -20,7 +20,15 @@ SHELL_IMAGE = f"{NAME}-shell"
 SHELL_LOG_PATH = f"/tmp/{NAME}-shell.log"
 AGENT_CONTAINER_TMP_PATH = f"/tmp/{NAME}"
 AGENT_CONTAINER_LOG_PATH = f"/var/log/{NAME}"
-AGENT_CONTAINER_DATA_PATH = f"{STATE_DIR}/agent/data"
+AGENT_STATE_DIR = f"{STATE_DIR}/agent"
+# The agent spawns its own tailscaled under its state directory. A node's
+# bootstrap joins the tailnet before the agent exists and must land on the
+# identical paths, or the agent starts a second daemon against the same state
+# file and TUN device instead of resuming the session the bootstrap opened.
+AGENT_TAILNET_DIR_NAME = "tailnet"
+TAILSCALED_SOCKET_NAME = "tailscaled.sock"
+TAILSCALED_STATE_NAME = "tailscaled.state"
+AGENT_CONTAINER_DATA_PATH = f"{AGENT_STATE_DIR}/data"
 AGENT_CONTAINER_OBJECT_PATH = f"{AGENT_CONTAINER_DATA_PATH}/objects"
 AGENT_WORKER_CONFIG_PATH = f"/etc/{NAME}/worker/config.json"
 CLI_NAME = NAME
@@ -71,6 +79,8 @@ __all__ = [
     "AGENT_LAUNCHD_LABEL_PREFIX",
     "AGENT_NAME",
     "AGENT_SERVICE_DESCRIPTION",
+    "AGENT_STATE_DIR",
+    "AGENT_TAILNET_DIR_NAME",
     "AGENT_WORKER_CONFIG_PATH",
     "CACHE_DIR",
     "CACHE_PAGES_DIR",
@@ -114,6 +124,8 @@ __all__ = [
     "SOURCE_CACHE_DIR",
     "SOURCE_PACKAGE_BUCKET",
     "STATE_DIR",
+    "TAILSCALED_SOCKET_NAME",
+    "TAILSCALED_STATE_NAME",
     "TASK_QUEUE_IMAGE",
     "WORKER_BOOTSTRAP_IMAGE",
     "WORKER_BOOTSTRAP_PROCESS_NAME",
