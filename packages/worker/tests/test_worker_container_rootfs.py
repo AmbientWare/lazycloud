@@ -60,6 +60,33 @@ def _manager(
     mountinfo: str | None = None,
     reserve_bytes: int = 16 * 1024**2,
 ) -> ContainerRootfsOverlayManager:
+    # Provisioning mounts a quota-capable store and then re-reads mountinfo to
+    # confirm it took, so the fake has to start unquotaed and report the new
+    # mount once the mount command runs — exactly what the host does.
+    scratch = str((tmp_path / "container-rootfs").resolve())
+    provisioned: list[bool] = []
+
+    def read_mountinfo() -> str:
+        base = _xfs_mountinfo(tmp_path) if mountinfo is None else mountinfo
+        if not provisioned:
+            return base
+        return base + (f"31 30 7:7 / {scratch} rw,relatime shared:3 - xfs /dev/loop7 rw,prjquota\n")
+
+    configured = run if run is not None else _ok
+
+    def quota_available() -> bool:
+        base = _xfs_mountinfo(tmp_path) if mountinfo is None else mountinfo
+        return bool(provisioned) or "prjquota" in base
+
+    def run_command(timeout: float, argv: list[str]) -> ProcessResult:
+        if argv and argv[0] == "mount" and any("prjquota" in part for part in argv):
+            provisioned.append(True)
+        # xfs_quota refuses a filesystem that was not mounted with project
+        # quotas; without this the fake accepts quotas nothing can enforce.
+        if argv and argv[0] == "xfs_quota" and not quota_available():
+            return _result(argv, 1, stderr="XFS_QUOTA: project quota flag not set on filesystem")
+        return configured(timeout, argv)
+
     return ContainerRootfsOverlayManager(
         image_mount_root=tmp_path / "images",
         scratch_root=tmp_path / "container-rootfs",
@@ -70,8 +97,8 @@ def _manager(
         minimum_free_bytes=reserve_bytes,
         system=ContainerRootfsSystem(
             mount_checker=lambda _path: mounted,
-            run_command=run if run is not None else _ok,
-            read_mountinfo=lambda: _xfs_mountinfo(tmp_path) if mountinfo is None else mountinfo,
+            run_command=run_command,
+            read_mountinfo=read_mountinfo,
             # No node under /dev, so provisioning must create one from sysfs.
             device_present=lambda _device: False,
             read_device_numbers=lambda _device: "7:7",
@@ -291,3 +318,26 @@ def test_backing_store_below_the_xfs_minimum_is_rejected_by_name(tmp_path: Path)
 
     with pytest.raises(ContainerRootfsError, match="too small for xfs"):
         manager.prepare(container_id="ctr-1", image_id="image-1")
+
+
+def test_xfs_root_without_project_quota_still_provisions_a_quota_capable_store(
+    tmp_path: Path,
+) -> None:
+    """An xfs root mounted `noquota` looks capable by type and enforces nothing.
+
+    This is the connected-AWS node image: its root is already xfs, so a
+    type-only check skips provisioning and every container silently runs
+    unbounded.
+    """
+    (tmp_path / "images" / "image-1").mkdir(parents=True)
+    root = str(tmp_path.resolve())
+    unquotaed = (
+        f"30 24 0:50 / {root} rw,noatime shared:2 - xfs /dev/nvme0n1p1 rw,attr2,inode64,noquota\n"
+    )
+    manager = _manager(tmp_path, mountinfo=unquotaed)
+
+    result = manager.prepare(container_id="ctr-1", image_id="image-1", disk_limit_bytes=1024**3)
+
+    assert result.status is ContainerRootfsStatus.Mounted
+    assert result.disk_limit_bytes == 1024**3
+    assert result.quota_project_id > 0
