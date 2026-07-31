@@ -3982,10 +3982,8 @@ class ComputeService:
                 "committed_micros": 0,
                 "expires_at": None,
                 "billing_renewal_at": None,
-                "bootstrap_phase": bootstrap_phase.value,
-                "bootstrap_failure_reason": (
-                    bootstrap_failure_reason.value if bootstrap_failure_reason is not None else None
-                ),
+                "bootstrap_phase": bootstrap_phase,
+                "bootstrap_failure_reason": bootstrap_failure_reason,
                 "bootstrap_observed_at": bootstrap_observed_at,
                 "launch_attempt": launch_attempt,
                 "metadata": {

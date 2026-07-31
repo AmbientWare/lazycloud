@@ -174,7 +174,10 @@ failure carries its cause to a durable place in every path we touched.
 
 - [x] **ERR-11** Add `bootstrap_failure_detail` beside the failure enum
 - [x] **ERR-12** Give `disable-worker` a reason field
-- [ ] **ERR-03** Stop building one payload dict for two different contracts
+- [x] **ERR-03** Stop building one payload dict for two different contracts
+  — *only the provider-instance site had the defect. `_ensure_compute_pool_record`
+  (`service.py:4240`) already passes Python-typed values: `config` is declared
+  `dict[str, JsonValue]`, so `_json_object(config)` is correct there.*
 - [ ] **ERR-06** Give `DomainError` and `ErrorResponse` a stable code — *after ERR-05*
 - [ ] **ERR-07** Stop flattening `ManagedComputeLaunchError`; stop returning 500 for a quota hit — *after ERR-06*
 - [ ] **ERR-08** Record why a lease was lost instead of only that it was
