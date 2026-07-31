@@ -64,12 +64,7 @@ def test_issues_single_use_persistent_tagged_key_and_caches_oauth_token() -> Non
         "client_id": ["oauth-client-id"],
         "client_secret": [CLIENT_SECRET],
         "scope": ["auth_keys devices:core"],
-        # Both tags this control plane issues for. The token is cached and
-        # shared by the machine and pool-bootstrap issuers, so one bound to a
-        # single tag makes the other's keys unmintable — and Tailscale reports
-        # that as the tag being "not permitted", which reads like the tailnet's
-        # policy is wrong rather than the token this process asked for.
-        "tags": ["tag:lazycloud-agent,tag:lazycloud-bootstrap"],
+        "tags": ["tag:lazycloud-agent"],
     }
     key_request = requests[1]
     assert key_request.headers["authorization"] == "Bearer tskey-api-token"
@@ -89,6 +84,38 @@ def test_issues_single_use_persistent_tagged_key_and_caches_oauth_token() -> Non
     }
     assert CLIENT_SECRET not in repr(control)
     assert first.key.get_secret_value() not in repr(first)
+
+
+def test_each_issuer_takes_a_token_for_the_tag_it_is_about_to_mint() -> None:
+    """Tailscale narrows a token to one tag, and it can mint only that one.
+
+    A token shared between the machine and pool-bootstrap issuers therefore
+    leaves whichever issuer did not request it permanently unable to mint —
+    reported as the tag being "not permitted", which points at the tailnet's
+    policy rather than at the token this process asked for. On the pool path
+    that means no managed node can ever boot.
+    """
+    token_tags: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v2/oauth/token":
+            token_tags.append(dict(parse_qs(request.content.decode()))["tags"][0])
+            return httpx.Response(200, json={
+                "access_token": f"tskey-api-{len(token_tags)}",
+                "token_type": "Bearer", "expires_in": 3600,
+                "scope": "auth_keys devices:core"})
+        return httpx.Response(200, json={
+            "id": f"key-{len(token_tags)}", "key": "tskey-auth-x",
+            "expires": "2026-10-14T18:05:00Z"})
+
+    control = _control(handler)
+    control.issue_auth_key(machine_id="machine-1", hostname="agent-machine-1")
+    control.issue_pool_bootstrap_key(pool_id="pool-1")
+    # And again, to prove each tag's token is cached rather than re-fetched.
+    control.issue_auth_key(machine_id="machine-2", hostname="agent-machine-2")
+    control.issue_pool_bootstrap_key(pool_id="pool-2")
+
+    assert token_tags == ["tag:lazycloud-agent", "tag:lazycloud-bootstrap"]
 
 
 def test_pool_bootstrap_key_is_reusable_ephemeral_and_confined_to_the_bootstrap_tag() -> None:

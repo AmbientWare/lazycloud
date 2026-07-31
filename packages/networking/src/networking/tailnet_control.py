@@ -337,7 +337,12 @@ class _CachedOAuthToken(BaseModel):
 class TailscaleTailnetControl:
     config: TailscaleTailnetControlConfig
     transport: httpx.BaseTransport | None = field(default=None, repr=False)
-    _token: _CachedOAuthToken | None = field(default=None, init=False, repr=False)
+    # One token per tag. Tailscale narrows a token to a single tag, and a
+    # token narrowed to one can mint only that one — so a shared token would
+    # make whichever issuer did not own it permanently unable to mint.
+    _tokens: dict[str, _CachedOAuthToken] = field(
+        default_factory=dict[str, _CachedOAuthToken], init=False, repr=False
+    )
     _token_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     def issue_auth_key(self, *, machine_id: str, hostname: str) -> TailnetAuthKey:
@@ -356,6 +361,7 @@ class TailscaleTailnetControl:
             "POST",
             "/api/v2/tailnet/-/keys",
             content=request.model_dump_json(by_alias=True),
+            tag=self.config.agent_tag,
         )
         parsed = self._parse_response(response, _CreateAuthKeyResponse, "auth-key creation")
         return TailnetAuthKey(
@@ -394,6 +400,7 @@ class TailscaleTailnetControl:
             "POST",
             "/api/v2/tailnet/-/keys",
             content=request.model_dump_json(by_alias=True),
+            tag=self.config.pool_bootstrap_tag,
         )
         parsed = self._parse_response(
             response, _CreateAuthKeyResponse, "pool bootstrap key creation"
@@ -514,8 +521,13 @@ class TailscaleTailnetControl:
         *,
         content: str | None = None,
         allowed_status_codes: tuple[int, ...] = (200,),
+        tag: str = "",
     ) -> httpx.Response:
-        token = self._access_token()
+        # Minting is the only tag-sensitive call; reading and removing devices
+        # act on the tailnet, so they use the agent identity this control plane
+        # is primarily configured as.
+        authority = tag or self.config.agent_tag
+        token = self._access_token(authority)
         response = self._request(
             method,
             path,
@@ -523,8 +535,8 @@ class TailscaleTailnetControl:
             content=content,
         )
         if response.status_code == 401:
-            self._invalidate_token(token)
-            token = self._access_token()
+            self._invalidate_token(authority, token)
+            token = self._access_token(authority)
             response = self._request(
                 method,
                 path,
@@ -559,27 +571,27 @@ class TailscaleTailnetControl:
                 retryable=True,
             ) from exc
 
-    def _access_token(self) -> SecretStr:
+    def _access_token(self, tag: str) -> SecretStr:
         now = datetime.now(UTC)
-        cached = self._token
+        cached = self._tokens.get(tag)
         if cached is not None and cached.usable_at(now):
             return cached.access_token
         with self._token_lock:
             now = datetime.now(UTC)
-            cached = self._token
+            cached = self._tokens.get(tag)
             if cached is not None and cached.usable_at(now):
                 return cached.access_token
-            response = self._request_oauth_token()
+            response = self._request_oauth_token(tag)
             parsed = self._parse_response(response, _OAuthTokenResponse, "OAuth token exchange")
             refresh_skew = min(TOKEN_REFRESH_SKEW_SECONDS, max(parsed.expires_in // 10, 1))
             token = _CachedOAuthToken(
                 access_token=parsed.access_token,
                 refresh_at=now + timedelta(seconds=parsed.expires_in - refresh_skew),
             )
-            self._token = token
+            self._tokens[tag] = token
             return token.access_token
 
-    def _request_oauth_token(self) -> httpx.Response:
+    def _request_oauth_token(self, tag: str) -> httpx.Response:
         try:
             with self._client() as client:
                 response = client.post(
@@ -589,13 +601,10 @@ class TailscaleTailnetControl:
                         "client_id": self.config.oauth_client_id,
                         "client_secret": self.config.oauth_client_secret.get_secret_value(),
                         "scope": TAILSCALE_OAUTH_SCOPES,
-                        # Every tag this control plane mints keys for. The token
-                        # is cached and shared by both issuers, so a token bound
-                        # to one tag makes the other's keys unmintable — and
-                        # Tailscale reports that as the requested tag being "not
-                        # permitted", which reads like a policy problem on the
-                        # tailnet rather than the token this process asked for.
-                        "tags": ",".join(self.config.issuable_tags),
+                        # Exactly one tag. Tailscale rejects a list here, and the
+                        # resulting token can mint that tag and no other, which
+                        # is why each caller asks for the tag it is about to use.
+                        "tags": tag,
                     },
                     headers={"Accept": "application/json"},
                 )
@@ -614,11 +623,11 @@ class TailscaleTailnetControl:
             )
         return response
 
-    def _invalidate_token(self, token: SecretStr) -> None:
+    def _invalidate_token(self, tag: str, token: SecretStr) -> None:
         with self._token_lock:
-            cached = self._token
+            cached = self._tokens.get(tag)
             if cached is not None and cached.access_token == token:
-                self._token = None
+                del self._tokens[tag]
 
     def _client(self) -> httpx.Client:
         return httpx.Client(
