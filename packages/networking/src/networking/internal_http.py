@@ -30,7 +30,7 @@ from urllib.parse import urlparse, urlunparse
 
 import httpx
 
-from networking.dialer import TailnetPeerRuntime, tailnet_dial_reserve_seconds
+from networking.dialer import TailnetPeerLookup, tailnet_dial_reserve_seconds
 
 DEFAULT_INTERNAL_HTTP_TIMEOUT_SECONDS = 30.0
 # A peer absent from the netmap needs it to catch up; one already known must not
@@ -69,7 +69,7 @@ class TailnetHostPolicy:
 class TailnetPeerAddresses:
     """Resolves tailnet hosts to peer addresses, waiting out a stale netmap."""
 
-    runtime: TailnetPeerRuntime
+    runtime: TailnetPeerLookup
     policy: TailnetHostPolicy
     wait_seconds: float = DEFAULT_PEER_WAIT_SECONDS
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)

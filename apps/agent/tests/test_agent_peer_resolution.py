@@ -111,3 +111,24 @@ def test_resolution_does_not_proxy_traffic(
         reply = connection.recv(128)
     assert reply == b"100.64.0.9\n"
     del service
+
+
+def test_the_tailnet_suffix_is_derived_from_the_node_identity() -> None:
+    """A separately configured suffix is one more value that can disagree."""
+    from agent_app.daemon import _tailnet_dns_suffix
+    from networking.tailnet import TailnetStatus
+
+    status = TailnetStatus(self_dns_name="lazycloud-control-plane.tailce6a2.ts.net.")
+
+    assert _tailnet_dns_suffix(status) == "tailce6a2.ts.net"
+
+
+def test_a_worker_told_nothing_dials_names_as_written() -> None:
+    """A single-host stack has no tailnet, and must need no branch to work."""
+    from networking.internal_http import InternalHttpClient
+
+    client = InternalHttpClient(timeout_seconds=1.0)
+    try:
+        assert client.addresses is None
+    finally:
+        client.close()

@@ -20,6 +20,12 @@ from cache.server import (
     WorkerCacheHttpClient,
 )
 from foundation.process import ProcessTimeoutError, run_process
+from networking.agent_peer_client import AgentPeerClient
+from networking.internal_http import (
+    InternalHttpClient,
+    TailnetHostPolicy,
+    TailnetPeerAddresses,
+)
 from pydantic import AliasChoices, Field, JsonValue, TypeAdapter, field_validator
 from pydantic_settings import (
     BaseSettings,
@@ -34,7 +40,12 @@ from shared.app_identity import (
 )
 from shared.capacity import CAPACITY_OWNER_ID_PATTERN
 from shared.checkpoints import CheckpointRecord
-from shared.env import GATEWAY_HTTP_URL_ENV, WORKER_REPOSITORY_URL_ENV
+from shared.env import (
+    GATEWAY_HTTP_URL_ENV,
+    WORKER_PEER_RESOLVER_ADDRESS_ENV,
+    WORKER_REPOSITORY_URL_ENV,
+    WORKER_TAILNET_DNS_SUFFIX_ENV,
+)
 from shared.routing import BackendRouteTransport
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from worker.adapters import (
@@ -254,6 +265,15 @@ class ProductionWorkerSettings(BaseSettings):
     worker_repository_url: str = Field(
         default="",
         validation_alias=WORKER_REPOSITORY_URL_ENV,
+    )
+
+    peer_resolver_address: str = Field(
+        default="",
+        validation_alias=AliasChoices(WORKER_PEER_RESOLVER_ADDRESS_ENV),
+    )
+    tailnet_dns_suffix: str = Field(
+        default="",
+        validation_alias=AliasChoices(WORKER_TAILNET_DNS_SUFFIX_ENV),
     )
     gateway_runtime_http_url: str = Field(
         default="",
@@ -1233,6 +1253,29 @@ class OciContainerServiceInstanceRecorder:
         self.instances.save_container_instance(instance)
 
 
+def _internal_http_client(config: ProductionWorkerSettings) -> InternalHttpClient:
+    """The worker's one HTTP client, routed when the node runs a tailnet.
+
+    The worker holds no tailnet client of its own; the agent that launched it
+    answers peer lookups over loopback. Without both an address and a suffix the
+    client dials names as written, which is what a single-host Compose stack
+    wants and needs no branch anywhere else.
+    """
+    timeout = config.worker_repository_timeout_seconds
+    if not config.peer_resolver_address or not config.tailnet_dns_suffix:
+        return InternalHttpClient(timeout_seconds=timeout)
+    return InternalHttpClient(
+        timeout_seconds=timeout,
+        addresses=TailnetPeerAddresses(
+            runtime=AgentPeerClient(
+                agent_address=config.peer_resolver_address,
+                worker_token=config.worker_token,
+            ),
+            policy=TailnetHostPolicy(dns_suffix=config.tailnet_dns_suffix),
+        ),
+    )
+
+
 def build_production_worker_process_services(
     *,
     settings: ProductionWorkerSettings,
@@ -1244,10 +1287,12 @@ def build_production_worker_process_services(
 ) -> WorkerProcessServices:
     config = settings
     identity = _worker_identity(config)
+    internal_http = _internal_http_client(config)
     repository = repository_client or build_worker_repository_http_client(
         endpoint=config.worker_repository_endpoint,
         token=config.worker_token,
         timeout_seconds=config.worker_repository_timeout_seconds,
+        http=internal_http,
     )
     image_build_scratch = ImageBuildScratchManager(
         root=config.resolved_image_build_root,

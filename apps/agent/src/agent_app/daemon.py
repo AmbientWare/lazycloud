@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import http.client as http_client
 import json
 import math
@@ -544,6 +545,8 @@ class DockerAgentWorkerController:
     runner: CommandRunner = field(default_factory=SubprocessCommandRunner)
     host_aliases: list[str] = field(default_factory=list)
     platform: str = ""
+    peer_resolver_address: str = ""
+    tailnet_dns_suffix: str = ""
 
     @property
     def active_slots_path(self) -> Path:
@@ -645,6 +648,8 @@ class DockerAgentWorkerController:
             platform=self.platform,
             host_aliases=self.host_aliases,
             network=self.worker_network,
+            peer_resolver_address=self.peer_resolver_address,
+            tailnet_dns_suffix=self.tailnet_dns_suffix,
         )
         for path in plan.dirs.all_paths():
             Path(path).mkdir(parents=True, exist_ok=True)
@@ -677,6 +682,34 @@ class DockerAgentWorkerController:
             _payload(slot) for slot in sorted(slots, key=lambda item: item.worker_id)
         ]
         _write_json_atomic(self.active_slots_path, payload, permissions=0o600)
+
+
+@dataclass(slots=True)
+class WorkerTailnetPeerResolver:
+    """Resolves tailnet peers for the workers this agent launched.
+
+    A worker holds no tailnet client and is deliberately not given the
+    tailscaled socket, which grants control rather than lookup. It presents the
+    token this agent issued it, so the check is against slots the agent already
+    tracks and no additional secret exists to distribute or rotate.
+    """
+
+    runtime: AgentTailnetRuntime
+    worker_controller: DockerAgentWorkerController
+    wait_seconds: float = 10.0
+
+    def resolve_for_worker(self, host: str, worker_token: str) -> str:
+        if not worker_token or not self._token_is_current(worker_token):
+            msg = "worker token is not recognised on this node"
+            raise PermissionError(msg)
+        self.runtime.wait_for_peer(host, self.wait_seconds)
+        return self.runtime.resolve_peer_host(host)
+
+    def _token_is_current(self, worker_token: str) -> bool:
+        return any(
+            slot.worker_token and hmac.compare_digest(slot.worker_token, worker_token)
+            for slot in self.worker_controller.active_slots()
+        )
 
 
 @dataclass(slots=True)
@@ -715,9 +748,14 @@ class AgentDaemonService:
                     "tailnet_hostname": tailnet_hostname,
                 }
             )
-            route_proxy = self._build_route_proxy(state, tailnet_hostname=tailnet_hostname)
+            route_proxy = self._build_route_proxy(
+                state,
+                tailnet_hostname=tailnet_hostname,
+                tailnet_runtime=tailnet_runtime,
+            )
             if route_proxy is not None:
                 route_proxy.start()
+                self._publish_peer_resolver(route_proxy, tailnet_runtime)
             while True:
                 next_iteration = iterations + 1
                 try:
@@ -1285,11 +1323,34 @@ class AgentDaemonService:
         _require_authenticated_tailnet_status(status)
         return status
 
+    def _publish_peer_resolver(
+        self,
+        route_proxy: AgentRouteProxyService,
+        tailnet_runtime: AgentTailnetRuntime | None,
+    ) -> None:
+        """Tell workers where to ask for peers, once there is somewhere to ask.
+
+        Both values travel together: an address without a suffix resolves
+        nothing, and a suffix without an address names peers a worker cannot
+        look up. Absent either, the worker dials names as written.
+        """
+        if tailnet_runtime is None:
+            return
+        try:
+            suffix = _tailnet_dns_suffix(tailnet_runtime.status())
+        except Exception:
+            return
+        if not suffix or not route_proxy.proxy_target:
+            return
+        self.worker_controller.peer_resolver_address = route_proxy.proxy_target
+        self.worker_controller.tailnet_dns_suffix = suffix
+
     def _build_route_proxy(
         self,
         state: AgentState,
         *,
         tailnet_hostname: str = "",
+        tailnet_runtime: AgentTailnetRuntime | None = None,
     ) -> AgentRouteProxyService | None:
         if not self.options.route_proxy.enabled:
             return None
@@ -1302,11 +1363,17 @@ class AgentDaemonService:
                 update["bind_host"] = tailnet_hostname
             if update:
                 config = config.model_copy(update=update)
+        resolver = (
+            WorkerTailnetPeerResolver(tailnet_runtime, self.worker_controller)
+            if tailnet_runtime is not None
+            else None
+        )
         return AgentRouteProxyService(
             config,
             self.client,
             state.agent_token,
             telemetry=self.telemetry,
+            peer_resolver=resolver,
         )
 
 
@@ -1393,6 +1460,18 @@ def _tailnet_advertise_host(status: TailnetStatus) -> str:
     if status.tailnet_ips:
         return status.tailnet_ips[0]
     return status.self_dns_name.strip().rstrip(".") or status.self_host_name.strip().rstrip(".")
+
+
+def _tailnet_dns_suffix(status: TailnetStatus) -> str:
+    """The tailnet's DNS suffix, taken from this node's own name.
+
+    Derived rather than configured: the node already knows which tailnet it
+    joined, and a separately stated suffix is one more value that can disagree
+    with reality.
+    """
+    dns_name = status.self_dns_name.strip().rstrip(".")
+    _host, _, suffix = dns_name.partition(".")
+    return suffix
 
 
 def _tailnet_device_hostname(status: TailnetStatus) -> str:

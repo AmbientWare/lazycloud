@@ -34,7 +34,9 @@ from shared.env import (
     GATEWAY_HTTP_PORT_ENV,
     GATEWAY_HTTP_TLS_ENV,
     GATEWAY_HTTP_URL_ENV,
+    WORKER_PEER_RESOLVER_ADDRESS_ENV,
     WORKER_REPOSITORY_URL_ENV,
+    WORKER_TAILNET_DNS_SUFFIX_ENV,
 )
 from shared.gpu import normalize_gpu_type
 from shared.routing import BackendRouteTransport
@@ -1439,6 +1441,8 @@ def plan_worker_container(
     platform: str = "",
     host_aliases: list[str] | None = None,
     network: AgentWorkerNetwork | None = None,
+    peer_resolver_address: str = "",
+    tailnet_dns_suffix: str = "",
 ) -> AgentWorkerContainerPlan:
     selected_network = network or AgentWorkerNetwork()
     dirs = build_agent_worker_dirs(state_dir, slot.worker_id)
@@ -1472,6 +1476,11 @@ def plan_worker_container(
         assignment = slot.gpu_assignment or "all"
         env["NVIDIA_VISIBLE_DEVICES"] = assignment
         env["WORKER_GPU_DEVICES"] = assignment
+    if peer_resolver_address and tailnet_dns_suffix:
+        # Both or neither: an address without a suffix resolves nothing, and a
+        # suffix without an address names peers the worker cannot look up.
+        env[WORKER_PEER_RESOLVER_ADDRESS_ENV] = peer_resolver_address
+        env[WORKER_TAILNET_DNS_SUFFIX_ENV] = tailnet_dns_suffix
     env.update(agent_gateway_env(bootstrap))
     volumes = [
         f"{dirs.images}:/images",

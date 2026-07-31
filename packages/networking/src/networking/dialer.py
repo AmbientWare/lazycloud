@@ -46,13 +46,17 @@ class TailnetPeerResolver(Protocol):
     def resolve_peer_host(self, host: str) -> str: ...
 
 
-class TailnetPeerRuntime(TailnetPeerWaiter, TailnetPeerResolver, Protocol):
-    """A tailnet runtime that can both resolve and wait for a peer.
+class TailnetPeerLookup(TailnetPeerWaiter, TailnetPeerResolver, Protocol):
+    """Whatever can answer where a peer lives.
 
-    Declared once here rather than per consumer: a process that dials peers
-    needs both halves, and an interface that exposes only some of what its
-    implementation provides leaves the rest unreachable to callers that need it.
+    Separate from the runtime because the answer does not have to come from a
+    tailnet client: a worker holds none and asks the agent instead, and requiring
+    a lifecycle it does not own would exclude it for no reason.
     """
+
+
+class TailnetPeerRuntime(TailnetPeerLookup, Protocol):
+    """A tailnet client that resolves peers and owns its own lifecycle."""
 
     def start(self) -> None: ...
 
