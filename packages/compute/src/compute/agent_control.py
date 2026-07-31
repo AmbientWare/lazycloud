@@ -859,6 +859,38 @@ def validate_agent_transport_config(
 
 
 _LOCAL_RUNTIME_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
+# Tailscale addresses a remote machine genuinely reaches. IPv4 uses the CGNAT
+# range, which `ipaddress` already reports as non-private; IPv6 uses a ULA
+# prefix, which it reports as private, so the prefix is named here rather than
+# leaving a working tailnet configuration to be refused as unroutable.
+_TAILNET_NETWORKS = (
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("fd7a:115c:a1e0::/48"),
+)
+
+
+def _is_tailnet_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    return any(address in network for network in _TAILNET_NETWORKS)
+
+
+def _host_is_unreachable_from_a_remote_machine(host: str) -> bool:
+    """Whether a remote machine could never reach this host.
+
+    A literal address is classified rather than pattern-matched: `10.0.0.150`
+    carries dots and is not loopback, so a name-shaped check accepts a LAN
+    address that resolves only on the control plane's own network. A name is
+    accepted here and left to DNS, except a single label, which resolves only
+    inside a container network.
+    """
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return "." not in host
+    if _is_tailnet_address(address):
+        return False
+    return (
+        address.is_private or address.is_loopback or address.is_link_local or address.is_unspecified
+    )
 
 
 def _reject_unroutable_runtime_url(
@@ -880,7 +912,7 @@ def _reject_unroutable_runtime_url(
     host = urlparse(url).hostname or ""
     if not host:
         raise ValueError("remote-machine runtime callback URL has no host")
-    if host in _LOCAL_RUNTIME_HOSTS or "." not in host:
+    if host in _LOCAL_RUNTIME_HOSTS or _host_is_unreachable_from_a_remote_machine(host):
         raise ValueError(
             f"pool {pool_name!r} serves remote machines and cannot use runtime callback host "
             f"{host!r}: a remote machine cannot resolve it. Set "
