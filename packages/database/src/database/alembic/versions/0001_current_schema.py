@@ -6,8 +6,9 @@ from alembic import op
 from database.tables import DatabaseBase
 
 # This identifier must change whenever the predeployment baseline changes so an
-# older disposable database cannot be mistaken for the current schema.
-revision = "20260731_pool_bootstrap_credentials"
+# older disposable database cannot be mistaken for the current schema. Alembic
+# stores it in a varchar(32), so it has to fit.
+revision = "20260731_pool_bootstrap_keys"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
