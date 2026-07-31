@@ -118,7 +118,18 @@ diagnostic blind spot. Nothing here depends on anything else.
 - [x] **CAP-01** Guard `_acquire_from_controller` against pending-worker reservations
 - [x] **BOOT-01** Give the `Failed` bootstrap phase a reclaim deadline
 - [x] **BOOT-02** Stop a revoked agent from re-enrolling forever
-- [ ] **INFRA-18** Remove the prior architecture's credential backups from the working tree
+- [~] **INFRA-18** Remove the prior architecture's credential backups from the working tree
+  — *repo exposure closed 2026-07-31: `infrastructure/secrets-backup/` moved to
+  `~/.lazycloud-legacy-secrets/secrets-backup` (moved, not deleted — rotation
+  needs the values). **Owner action outstanding**: rotate, then delete. Live
+  credentials: `AWS_ACCESS_KEY_ID`/`SECRET`, `CLOUDFLARE_API_KEY`,
+  `CLOUDFLARE_TUNNEL_TOKEN`, `WORKOS_API_KEY`/`COOKIE_PASSWORD`,
+  `POLAR_ACCESS_TOKEN`, `RESEND_API_KEY`, `DEPOT_API_TOKEN`/`REGISTRY_TOKEN`,
+  `UPSTASH_REDIS_REST_TOKEN`, `PREFECT_API_AUTH_STRING`/`AUTH_PASSWORD`,
+  `ADMIN_API_KEY`, `DB_SECRET_KEY`, and the `DATABASE_URL`/`REDIS_URL`/
+  `PREFECT_DATABASE_URL` embedded passwords. `infrastructure/terraform/kubeconfig`
+  and `talosconfig` left in place (0600) — cluster admin credentials, but
+  possibly live tool inputs, so the owner should confirm before they move.*
 - [ ] **INFRA-09** Grant the operator role node diagnostics
 - [ ] **ERR-01** Revalidate every record on the upsert path
 - [ ] **ERR-02** Make Pydantic serializer warnings a test failure — *after ERR-01*
