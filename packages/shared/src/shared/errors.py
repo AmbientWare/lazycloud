@@ -1,12 +1,22 @@
 from __future__ import annotations
 
+import re
+
+_CODE_BOUNDARY = re.compile(r"(?<!^)(?=[A-Z])")
+
+
+def _derived_code(error_type: type[DomainError]) -> str:
+    name = error_type.__name__.removesuffix("Error")
+    return _CODE_BOUNDARY.sub("_", name).lower()
+
 
 class DomainError(Exception):
     """Base error for domain failures that map to client-visible HTTP errors."""
 
-    def __init__(self, message: str) -> None:
+    def __init__(self, message: str, *, code: str = "") -> None:
         super().__init__(message)
         self.message = message
+        self.code = code or _derived_code(type(self))
 
 
 class NotFoundError(DomainError):

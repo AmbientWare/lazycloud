@@ -230,7 +230,8 @@ def test_pool_scale_is_workspace_scoped_and_idempotently_returns_durable_capacit
     assert invalid.status_code == 422
     assert blocked.status_code == 409
     assert blocked.json() == {
-        "detail": f"compute pool {pool.name!r} has active capacity reservations"
+        "detail": f"compute pool {pool.name!r} has active capacity reservations",
+        "code": "conflict",
     }
     assert first.status_code == 200, first.text
     assert repeated.status_code == 200, repeated.text

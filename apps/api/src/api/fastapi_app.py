@@ -234,7 +234,7 @@ def _create_app(runtime: ControlPlaneRuntime) -> FastAPI:
             exc_info=exc,
         )
         return JSONResponse(
-            ErrorResponse(detail=exc.message).model_dump(),
+            ErrorResponse(detail=exc.message, code=exc.code).model_dump(),
             status_code=status_code,
             headers={"X-Request-ID": request_id},
         )
