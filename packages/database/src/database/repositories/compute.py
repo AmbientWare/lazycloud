@@ -22,6 +22,7 @@ from database.tables.compute import (
     ComputeProviderInstanceTable,
     ComputeSolverDecisionTable,
     ComputeSolverRunTable,
+    PoolBootstrapCredentialTable,
     TailnetCleanupTombstoneTable,
     WorkspaceComputePolicyTable,
 )
@@ -40,6 +41,7 @@ from shared.compute_enrollment import (
     MachineBootstrapFailureReason,
     MachineBootstrapPhase,
     MachineReadinessPhase,
+    PoolBootstrapCredential,
     TailnetCleanupTombstone,
     TailnetEnrollmentPhase,
 )
@@ -1144,6 +1146,66 @@ class ComputeJoinCredentialRepository:
         )
         self.session.flush()
         return len(ids)
+
+
+@dataclass(slots=True)
+class PoolBootstrapCredentialRepository:
+    """The one tailnet key per pool that its launch template carries.
+
+    Kept out of `ComputePoolRecord`, which is serialised to the resource API,
+    and out of `ComputePoolProviderState.attributes`, which providers own and
+    which the AWS adapter discards when it does not recognise the shape.
+    """
+
+    session: Session
+
+    def get(self, pool_id: str, *, for_update: bool = False) -> PoolBootstrapCredential | None:
+        statement = select(PoolBootstrapCredentialTable).where(
+            PoolBootstrapCredentialTable.pool_id == pool_id
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        row = self.session.scalars(statement).first()
+        return PoolBootstrapCredential.model_validate(row.payload) if row is not None else None
+
+    def save(self, record: PoolBootstrapCredential) -> PoolBootstrapCredential:
+        row = self.session.scalars(
+            select(PoolBootstrapCredentialTable)
+            .where(PoolBootstrapCredentialTable.pool_id == record.pool_id)
+            .with_for_update()
+        ).first()
+        if row is None:
+            self.session.add(
+                PoolBootstrapCredentialTable(
+                    id=record.id,
+                    workspace_id=record.workspace_id,
+                    pool_id=record.pool_id,
+                    expires_at=record.expires_at,
+                    payload=_model_json(record),
+                    created_at=record.created_at,
+                    updated_at=record.updated_at,
+                )
+            )
+            self.session.flush()
+            return record
+        row.payload = _model_json(record)
+        row.expires_at = record.expires_at
+        row.updated_at = record.updated_at
+        flag_modified(row, "payload")
+        self.session.flush()
+        return record
+
+    def delete(self, pool_id: str) -> PoolBootstrapCredential | None:
+        existing = self.get(pool_id, for_update=True)
+        if existing is None:
+            return None
+        self.session.execute(
+            delete(PoolBootstrapCredentialTable).where(
+                PoolBootstrapCredentialTable.pool_id == pool_id
+            )
+        )
+        self.session.flush()
+        return existing
 
 
 @dataclass(slots=True)

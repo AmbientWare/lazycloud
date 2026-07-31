@@ -85,6 +85,32 @@ class TailnetCleanupTombstone(ContractModel):
     updated_at: datetime
 
 
+class PoolBootstrapCredential(ContractModel):
+    """The tailnet key a pool's launch template hands every node it starts.
+
+    `auth_key` is a plain string rather than `SecretStr` because repositories
+    persist a record through `model_dump_json`, which would write the mask
+    instead of the key. `repr=False` keeps it out of tracebacks and logs; what
+    keeps it out of API responses is that this record has no route.
+
+    `superseded_auth_key_ids` holds keys a refresh replaced but whose grace
+    period has not elapsed: an instance launched from the previous launch-template
+    version is still booting with one.
+    """
+
+    id: str
+    workspace_id: str
+    pool_id: str
+    pool_name: str
+    tag: str
+    auth_key_id: str
+    auth_key: str = Field(repr=False)
+    expires_at: datetime
+    superseded_auth_key_ids: list[str] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
 class PreflightSeverity(StringEnum):
     Info = "info"
     Warning = "warning"
@@ -111,6 +137,7 @@ __all__ = [
     "MachineBootstrapFailureReason",
     "MachineBootstrapPhase",
     "MachineReadinessPhase",
+    "PoolBootstrapCredential",
     "PreflightSeverity",
     "TailnetCleanupTombstone",
     "TailnetEnrollmentPhase",

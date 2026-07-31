@@ -12,10 +12,8 @@ from agent.service import AgentService
 from compute.agent_control import AgentImageConfig, GatewayEndpointConfig
 from compute.aws_connections import AwsAccountConnectionDirectory, AwsAccountConnectionService
 from compute.billing import managed_billing_client
-from compute.offers import ComputeOffer
 from compute.policy import AwsDefaultCapacityBaseline, WorkspaceComputePolicyService
 from compute.provider_config import ProviderConfigService
-from compute.providers import ProviderPoolBootstrap
 from compute.request_placement import ComputeCapacityPlacementService
 from compute.service import ComputeService
 from compute.state import ComputeAgentTokenState, RedisComputeStateRepository
@@ -64,6 +62,7 @@ from execution.volumes.records import VolumeService
 from gateway.container_transport import HttpContainerServiceTransportFactory
 from gateway.machine_lifecycle import MachineLifecycleService
 from gateway.pod_proxy import PodProxyHttpClient, RedisPodProxyConnectionRepository
+from gateway.pool_bootstrap import pool_bootstrap_provisioner
 from gateway.provider_enrollment import ProviderNodeEnrollmentService
 from gateway.route_prewarm import RoutePrewarmService, TailnetPeerStatusProvider
 from gateway.service import GatewayControlService
@@ -166,7 +165,6 @@ from scheduler.state import (
     RedisWorkerPoolStateRepository,
 )
 from scheduler.workers import SchedulerWorkerAdminService
-from shared.compute_policy import ComputePoolRecord
 from shared.container_requests import StopContainerReason
 from shared.http.endpoints import (
     EndpointForwardRequest,
@@ -783,19 +781,19 @@ class ApiServices(ApiServiceCore):
             else None
         )
 
-        def pool_bootstrap(
-            pool: ComputePoolRecord,
-            offer: ComputeOffer,
-        ) -> ProviderPoolBootstrap:
-            del offer
+        pool_bootstrap = None
+        if provider_resolver is not None:
             agent_version, agent_sha256 = agent_artifact_config.require_amd64()
-            return ProviderPoolBootstrap(
-                control_plane_url=gateway_config.public_http_url,
-                enrollment_request_id=pool.id,
+            pool_bootstrap = pool_bootstrap_provisioner(
+                context,
+                # Nodes reach the control plane as a tailnet peer, not through
+                # the public ingress, so this is the runtime callback origin.
+                control_plane_url=gateway_config.runtime_callback_http_url,
                 agent_version=agent_version,
                 agent_sha256=agent_sha256,
                 agent_binary_url=aws_capacity_config.agent_binary_url,
                 worker_image_digest=aws_capacity_config.worker_image_digest,
+                tailnet_control=resolved_tailnet_control_settings,
             )
 
         compute = ComputeService(
@@ -808,7 +806,7 @@ class ApiServices(ApiServiceCore):
                 backend_route=resolved_backend_route_settings,
             ),
             provider_resolver=provider_resolver,
-            pool_bootstrap_factory=pool_bootstrap if provider_resolver is not None else None,
+            pool_bootstrap_factory=pool_bootstrap,
             billing=managed_billing_client(managed_billing_config.to_runtime_settings()),
             usage_exporter=usage_exporter,
             scheduler_hooks=SchedulerComputeHooks(

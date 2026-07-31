@@ -86,6 +86,61 @@ def test_issues_single_use_persistent_tagged_key_and_caches_oauth_token() -> Non
     assert first.key.get_secret_value() not in repr(first)
 
 
+def test_pool_bootstrap_key_is_reusable_ephemeral_and_confined_to_the_bootstrap_tag() -> None:
+    """These four fields are the whole boundary around a key kept in user-data.
+
+    One launch template starts every node an autoscaling group launches, so the
+    key it carries has to be reusable — and any process on a booted node can
+    read it back out of the instance metadata service. What keeps that bounded
+    is the tag, which grants the control-plane port and nothing else, and
+    ephemerality, which removes the identity when the node trades it for a
+    machine-scoped key. Inheriting the agent tag here would silently hand every
+    pre-enrolment node the reach of an enrolled one.
+    """
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path == "/api/v2/oauth/token":
+            return httpx.Response(
+                200,
+                json={
+                    "access_token": "tskey-api-token",
+                    "token_type": "Bearer",
+                    "expires_in": 3600,
+                    "scope": "auth_keys devices:core",
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "id": "key-bootstrap",
+                "key": "tskey-auth-pool-bootstrap",
+                "expires": "2026-10-14T18:05:00Z",
+            },
+        )
+
+    control = _control(handler)
+
+    issued = control.issue_pool_bootstrap_key(pool_id="pool-1")
+
+    assert issued.key.get_secret_value() == "tskey-auth-pool-bootstrap"
+    assert json.loads(requests[1].content) == {
+        "capabilities": {
+            "devices": {
+                "create": {
+                    "reusable": True,
+                    "ephemeral": True,
+                    "preauthorized": True,
+                    "tags": ["tag:lazycloud-bootstrap"],
+                }
+            }
+        },
+        "expirySeconds": 7776000,
+        "description": "pool bootstrap pool-1",
+    }
+
+
 def test_verifies_device_identity_hostname_authorization_and_tag() -> None:
     control = _control(_device_handler())
 

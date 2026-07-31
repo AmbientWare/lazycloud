@@ -7,8 +7,8 @@ from typing import Protocol
 from shared.compute_enrollment import TailnetCleanupTombstone
 
 from networking.tailnet_control import (
-    TailnetControl,
     TailnetControlError,
+    TailnetIdentityCleanup,
     TailnetMachineIdentityReconciler,
 )
 
@@ -91,7 +91,7 @@ class TailnetCleanupBatch:
 @dataclass(frozen=True, slots=True)
 class TailnetCleanupCoordinator:
     store: TailnetCleanupStore
-    control: TailnetControl
+    control: TailnetIdentityCleanup
     settle_seconds: int = DEFAULT_TAILNET_CLEANUP_SETTLE_SECONDS
     lease_seconds: int = DEFAULT_TAILNET_CLEANUP_LEASE_SECONDS
     retry_seconds: int = DEFAULT_TAILNET_CLEANUP_RETRY_SECONDS

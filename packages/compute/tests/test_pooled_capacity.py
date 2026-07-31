@@ -1675,19 +1675,37 @@ def _offer() -> ComputeOffer:
     )
 
 
-def _bootstrap(pool: ComputePoolRecord, offer: ComputeOffer) -> ProviderPoolBootstrap:
-    del offer
-    return ProviderPoolBootstrap(
-        control_plane_url="https://control.example.com",
-        enrollment_request_id=pool.id,
-        agent_version="0.1.0",
-        agent_sha256="a" * 64,
-        agent_binary_url=(
-            f"https://s3.us-east-1.amazonaws.com/releases/agents/0.1.0/{'a' * 64}/"
-            "lazycloud-agent-linux-amd64"
-        ),
-        worker_image_digest=f"registry.example.com/worker@sha256:{'b' * 64}",
-    )
+class _Bootstrap:
+    """A pool bootstrap provisioner with no tailnet behind it."""
+
+    def __init__(self) -> None:
+        self.released: list[str] = []
+
+    def bootstrap(
+        self,
+        pool: ComputePoolRecord,
+        offer: ComputeOffer,
+        *,
+        writes_launch_template: bool,
+    ) -> ProviderPoolBootstrap:
+        del offer, writes_launch_template
+        return ProviderPoolBootstrap(
+            control_plane_url="https://control.example.com",
+            enrollment_request_id=pool.id,
+            agent_version="0.1.0",
+            agent_sha256="a" * 64,
+            agent_binary_url=(
+                f"https://s3.us-east-1.amazonaws.com/releases/agents/0.1.0/{'a' * 64}/"
+                "lazycloud-agent-linux-amd64"
+            ),
+            worker_image_digest=f"registry.example.com/worker@sha256:{'b' * 64}",
+        )
+
+    def release(self, pool: ComputePoolRecord) -> None:
+        self.released.append(pool.id)
+
+
+_bootstrap = _Bootstrap()
 
 
 def _allow_scale(pool: ComputePoolRecord) -> None:

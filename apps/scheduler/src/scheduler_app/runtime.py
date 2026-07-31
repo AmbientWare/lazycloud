@@ -105,6 +105,7 @@ class SchedulerRuntime:
                 create_schema=create_schema,
                 redis_client=redis_client,
                 gateway_origin=public_gateway_http_url,
+                runtime_callback_origin=runtime_callback_http_url,
                 observability=observability,
                 storage=storage,
                 network=network,

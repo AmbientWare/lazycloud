@@ -52,7 +52,7 @@ def test_remote_provider_gate_reports_all_missing_security_requirements() -> Non
     assert "gateway HTTP URL must be an HTTPS origin" in message
     assert "tailnet hostname is required" in message
     assert "tailnet sidecar socket path is required" in message
-    assert "tailnet agent and control-plane tags must be distinct" in message
+    assert "tailnet agent, control-plane, and bootstrap tags must be distinct" in message
     assert "Tailscale OAuth client ID is required" in message
     assert "Tailscale OAuth client secret is required" in message
     assert "Tailscale API URL must be an HTTPS URL without query or fragment" in message

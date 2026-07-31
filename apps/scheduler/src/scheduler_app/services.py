@@ -7,10 +7,8 @@ from pathlib import Path
 from agent.binary import AgentBinarySettings
 from compute.aws_connections import AwsAccountConnectionDirectory
 from compute.billing import managed_billing_client
-from compute.offers import ComputeOffer
 from compute.policy import WorkspaceComputePolicyService
 from compute.provider_config import ProviderConfigService
-from compute.providers import ProviderPoolBootstrap
 from compute.reclaim import ComputeReclaimPolicy
 from compute.request_placement import ComputeCapacityPlacementService
 from compute.service import ComputeService
@@ -34,6 +32,7 @@ from execution.collections.service import CollectionService
 from execution.containers.scheduling import ContainerSchedulingPersistenceService
 from execution.containers.service import ContainerService
 from execution.tasks import TaskService
+from gateway.pool_bootstrap import pool_bootstrap_provisioner
 from networking.settings import (
     BackendRouteSettings,
     TailnetControlSettings,
@@ -82,7 +81,6 @@ from scheduler.state import (
     RedisSchedulerWorkerRepository,
 )
 from shared.checkpoints import checkpoint_recent_stub_key
-from shared.compute_policy import ComputePoolRecord
 from storage.image_archive import ImageArchiveSettings, ResolvedImageArchiveSettings
 from storage.retention import (
     RetentionResult,
@@ -167,6 +165,7 @@ class SchedulerAppServices:
         create_schema: bool = True,
         redis_client: RedisClient,
         gateway_origin: str,
+        runtime_callback_origin: str,
         observability: SchedulerObservabilitySettings,
         storage: SchedulerStorageSettings,
         network: SchedulerNetworkSettings,
@@ -246,19 +245,21 @@ class SchedulerAppServices:
             capacity.agent_binaries.require_amd64() if provider_resolver is not None else ("", "")
         )
 
-        def pool_bootstrap(
-            pool: ComputePoolRecord,
-            offer: ComputeOffer,
-        ) -> ProviderPoolBootstrap:
-            del offer
-            return ProviderPoolBootstrap(
-                control_plane_url=gateway_origin,
-                enrollment_request_id=pool.id,
+        pool_bootstrap = (
+            pool_bootstrap_provisioner(
+                context,
+                # Nodes reach the control plane as a tailnet peer, not through
+                # the public ingress, so this is the runtime callback origin.
+                control_plane_url=runtime_callback_origin,
                 agent_version=agent_version,
                 agent_sha256=agent_sha256,
                 agent_binary_url=capacity.aws_capacity.agent_binary_url,
                 worker_image_digest=capacity.aws_capacity.worker_image_digest,
+                tailnet_control=network.tailnet_control,
             )
+            if provider_resolver is not None
+            else None
+        )
 
         compute = ComputeService(
             context,

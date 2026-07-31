@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 from math import ceil
+from typing import Protocol
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from database.repositories.compute import (
@@ -168,7 +169,26 @@ class _CapacityRequestMetadata(ContractModel):
     gpu: list[str] = Field(default_factory=list)
 
 
-ProviderPoolBootstrapFactory = Callable[[ComputePoolRecord, ComputeOffer], ProviderPoolBootstrap]
+class ProviderPoolBootstrapFactory(Protocol):
+    """What a booting node needs, and the credential lifetime behind it.
+
+    `release` is part of the protocol rather than a separate hook because the
+    tailnet key a pool's launch template carries lives in a row that cascades
+    away with the pool. Deleting the pool without revoking the key first would
+    drop the only record of a credential that still works.
+    """
+
+    def bootstrap(
+        self,
+        pool: ComputePoolRecord,
+        offer: ComputeOffer,
+        *,
+        writes_launch_template: bool,
+    ) -> ProviderPoolBootstrap: ...
+
+    def release(self, pool: ComputePoolRecord) -> None: ...
+
+
 PROVIDER_MACHINE_IDENTITY_SETTLE_SECONDS = 30
 
 
@@ -1537,6 +1557,7 @@ class ComputeService:
                     )
                     termination_errors.append(f"{record.provider}/{record.id}: {detail}")
                 if not termination_errors:
+                    self._release_pool_bootstrap(compute_pool)
                     compute_pool_repository.records.delete(
                         compute_pool.id,
                         workspace_id=workspace_id,
@@ -1616,6 +1637,7 @@ class ComputeService:
                     f"managed compute pool capacity could not be terminated: {details}"
                 )
             if compute_pool is not None:
+                self._release_pool_bootstrap(compute_pool)
                 compute_pool_repository.delete_for_workspace_deletion(
                     compute_pool.id,
                     workspace_id=workspace_id,
@@ -2368,7 +2390,9 @@ class ComputeService:
                     now=current_time,
                 )
             snapshot = provider.pooled.set_pool_capacity(
-                self._provider_pool_request(intent, offer),
+                # Creates the autoscaling group, and its launch template with
+                # it, when the pool has none yet.
+                self._provider_pool_request(intent, offer, writes_launch_template=True),
                 desired_machines=intent.desired_machines,
                 max_machines=intent.max_machines,
             )
@@ -2527,14 +2551,17 @@ class ComputeService:
                 offer=offer,
                 now=now,
             )
-            request = self._provider_pool_request(current, offer)
+            degraded = current.provider_state.degraded_reason is not None
+            request = self._provider_pool_request(
+                current,
+                offer,
+                writes_launch_template=not degraded,
+            )
             snapshot = (
                 # A durably degraded pool stopped relaunching: observe and prove
                 # terminations without restoring provider capacity until an
                 # explicit capacity mutation clears the degraded reason.
-                pooled.describe_pool(request)
-                if current.provider_state.degraded_reason is not None
-                else pooled.ensure_pool(request)
+                pooled.describe_pool(request) if degraded else pooled.ensure_pool(request)
             )
             return self._apply_pooled_snapshot(
                 current,
@@ -3699,11 +3726,37 @@ class ComputeService:
                 raise ConflictError(f"compute pool {pool.name!r} sizing intent was superseded")
             return intent
 
+    def _release_pool_bootstrap(self, pool: ComputePoolRecord) -> None:
+        """Revoke a deleted pool's tailnet key before its row cascades away.
+
+        Deletion is already committed to at this point, and a pool that never
+        launched managed capacity has no key: a revoke that fails must not
+        strand the pool in place, so the failure is recorded and the deletion
+        continues. The credential's own store retries.
+        """
+        if self.pool_bootstrap_factory is None:
+            return
+        try:
+            self.pool_bootstrap_factory.release(pool)
+        except Exception:
+            LOGGER.exception(
+                "tailnet bootstrap credential release failed for pool %s (%s)",
+                pool.name,
+                pool.id,
+            )
+
     def _provider_pool_request(
         self,
         pool: ComputePoolRecord,
         offer: ComputeOffer,
+        *,
+        writes_launch_template: bool = False,
     ) -> ProviderPoolRequest:
+        # Only a call that rewrites the provider's launch template needs a live
+        # tailnet bootstrap key; describing, releasing, and deleting build a
+        # request to address existing resources. Minting on those paths would
+        # issue credentials for a pool on its way out, and refreshing one would
+        # churn a launch-template version on every reconcile.
         if self.pool_bootstrap_factory is None or pool.provider_connection_id is None:
             raise RuntimeError("provider pool bootstrap is not configured")
         root_volume_gib = _pool_config_int(pool, "root_volume_gib", default=200)
@@ -3718,7 +3771,11 @@ class ComputeService:
             desired_machines=pool.desired_machines,
             max_machines=pool.max_machines,
             root_volume_gib=root_volume_gib,
-            bootstrap=self.pool_bootstrap_factory(pool, offer),
+            bootstrap=self.pool_bootstrap_factory.bootstrap(
+                pool,
+                offer,
+                writes_launch_template=writes_launch_template,
+            ),
             provider_state=pool.provider_state,
         )
 
