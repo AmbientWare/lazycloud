@@ -61,6 +61,7 @@ TAILNET_STATE_FILE = f"{TAILNET_STATE_DIR}/{TAILSCALED_STATE_NAME}"
 
 # Not `tailscaled.service`: that name belongs to the upstream Tailscale package,
 # and a node that ever installs it would end up with two units for one daemon.
+AGENT_SERVICE_NAME = f"{AGENT_NAME}.service"
 TAILNET_SERVICE_NAME = f"{NAME}-tailscaled.service"
 TAILNET_SERVICE_PATH = f"/etc/systemd/system/{TAILNET_SERVICE_NAME}"
 
@@ -189,6 +190,7 @@ TAILNET_SOCKET=__TAILNET_SOCKET__
 TAILSCALE_BIN=__TAILSCALE_BIN__
 TAILSCALED_BIN=__TAILSCALED_BIN__
 TAILNET_SERVICE_NAME=__TAILNET_SERVICE_NAME__
+AGENT_SERVICE_NAME=__AGENT_SERVICE_NAME__
 TAILNET_SERVICE_PATH=__TAILNET_SERVICE_PATH__
 
 STEP=identity
@@ -493,6 +495,26 @@ bootstrap_main() {
     --state-dir "$AGENT_STATE_DIR" \\
     --tailnet-mode sidecar \\
     --tailnet-socket "$TAILNET_SOCKET"
+
+  # Everything past this point is invisible from here: cloud-init exits, the
+  # unit is detached, and an agent that dies while enrolling leaves the machine
+  # silent until the bootstrap deadline expires as `bootstrap_timed_out`, which
+  # names nothing. Watch until the agent persists its identity, so a crash
+  # becomes a reported failure carrying the unit's own reason instead.
+  #
+  # Only `failed` ends the boot. An agent that is merely slow is the control
+  # plane's deadline to judge; refusing here on a guess would terminate healthy
+  # machines to improve a log message.
+  for _ in {1..20}; do
+    if [ -s "${AGENT_STATE_DIR}/agent-state.json" ]; then
+      return 0
+    fi
+    if [ "$(systemctl is-active "$AGENT_SERVICE_NAME" 2>/dev/null || true)" = failed ]; then
+      bootstrap_error "agent service failed: \\
+$(systemctl show -p Result --value "$AGENT_SERVICE_NAME" 2>/dev/null || true)"
+    fi
+    sleep 3
+  done
 }
 
 bootstrap_main
@@ -541,6 +563,7 @@ def node_bootstrap_script(
         "__TAILNET_STATE_FILE__": TAILNET_STATE_FILE,
         "__TAILNET_SOCKET__": TAILNET_SOCKET_PATH,
         "__TAILSCALE_BIN__": TAILSCALE_BINARY,
+        "__AGENT_SERVICE_NAME__": AGENT_SERVICE_NAME,
         "__TAILNET_SERVICE_NAME__": TAILNET_SERVICE_NAME,
         "__TAILNET_SERVICE_PATH__": TAILNET_SERVICE_PATH,
         "__TAILSCALED_BIN__": TAILSCALED_BINARY,

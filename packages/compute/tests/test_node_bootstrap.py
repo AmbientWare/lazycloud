@@ -92,6 +92,9 @@ def _stubs(tmp_path: Path) -> Path:
     (stub_dir / "fake-agent").write_text(
         "#!/bin/sh\n"
         f'printf "%s\\n" "$*" > "{tmp_path}/install-service.txt"\n'
+        # The real agent persists its identity here once it enrolls, which is
+        # what tells the script it may stop watching the unit.
+        f'mkdir -p "{tmp_path}/agent" && printf "{{}}" > "{tmp_path}/agent/agent-state.json"\n'
         f'if kill -0 "$(cat {tmp_path}/daemon.pid)" 2>/dev/null; then\n'
         f'  printf "alive" > "{tmp_path}/daemon-at-handoff.txt"\n'
         "else\n"
