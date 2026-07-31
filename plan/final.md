@@ -136,7 +136,7 @@ diagnostic blind spot. Nothing here depends on anything else.
   succeeds where it returned `AccessDeniedException`, and `ec2:GetConsoleOutput`
   returns kernel output even for a terminated instance. The `ssm:send-command`
   and untagged-instance-denial checks need a running node — verify in Phase 4.*
-- [ ] **ERR-01** Revalidate every record on the upsert path
+- [x] **ERR-01** Revalidate every record on the upsert path
 - [ ] **ERR-02** Make Pydantic serializer warnings a test failure — *after ERR-01*
 - [ ] **ERR-04** Delete the three no-op revalidation calls — *after ERR-01*
 - [ ] **ERR-05** Log the cause in the `DomainError` sink

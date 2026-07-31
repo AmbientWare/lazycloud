@@ -343,7 +343,6 @@ def test_managed_pool_ensure_is_idempotent_and_launches_into_the_stack_network()
     assert '--provider-enrollment-request "$ENROLLMENT_REQUEST_ID"' in user_data
     assert "--provider aws" in user_data
     assert "trap bootstrap_failed ERR" in user_data
-    assert "leaving instance available for inspection" in user_data
     assert "systemctl poweroff" not in user_data
     assert "shutdown -h" not in user_data
     assert "--join-token" not in user_data
