@@ -89,12 +89,17 @@ most proven path in the repo — the control plane runs that way today.
       were the same observation: `bootstrap_timed_out`, naming nothing.
 - [x] The published agent artifact accepts `--tailnet-mode sidecar` and
       `--tailnet-socket` — checked by running it, not by reading the branch.
-- [ ] `one_machine_readiness` — node reaches ready, device rotates
-      `bootstrap-<instance-id>` → `lazycloud-agent-<machine_id>-g1`.
+- [x] `one_machine_readiness` — exit 0 on `i-09ba692414072c44c`, machine
+      `16275328-1317-5123-a972-9777ff436533`, `ready: 1`. Enrolment reached the
+      control plane over the tailnet, and the device rotated
+      `bootstrap-i-09ba692414072c44c` → `lazycloud-agent-<machine_id>-g1` with
+      the bootstrap device gone from the tailnet.
 - [ ] `paid_resource_bounding`, then `cleanup`.
 
-Still unexplained: two nodes ended `bootstrap_timed_out` with no detail. They
-predate both fixes above, so the next timeout should name itself.
+The two `bootstrap_timed_out` nodes were never explained. Both predate the two
+fixes above and the same launch template now succeeds, so the cause is one of
+them — most likely the origin refusal, which produced no phase report at all
+before the failure path could name it. Left recorded rather than claimed.
 
 ## Constraints that bit already
 
