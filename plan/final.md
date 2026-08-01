@@ -294,7 +294,12 @@ confirm the workspace stops billing. `ERR-07`: hit a configured quota and get a
   the database. `/health` fails open when Redis is down, the provider-node prefix
   fails closed, authenticated routes are untouched, and the Compose healthcheck
   stays healthy.*
-- [ ] **INFRA-17** Close the remaining plaintext durable-secret gaps
+- [x] **INFRA-17** Close the remaining plaintext durable-secret gaps
+  — *decision 12 verified before recording it: `external_id` is passed to
+  `sts:AssumeRole` and the platform checks the customer's trust policy enforces
+  it (`ExternalIdNotEnforced`), so it is a confused-deputy nonce the customer
+  types into their own console — not an authenticator. Recorded in
+  `packages/compute/AGENTS.md`, with `WorkspaceSecretCipher`'s honest limit.*
 
 **Phase 2 acceptance.** Load-test `/gateway/provider-nodes/*` with an unverified
 pool UUID and demonstrate: no outbound AWS call occurs before identity
