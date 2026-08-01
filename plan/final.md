@@ -230,7 +230,12 @@ failure carries its cause to a durable place in every path we touched.
   case: an unreachable worker-state store keeps the machine and terminates
   nothing. Tests that faked readiness via durable `Worker(Running)` rows now
   register hot records, which is the honest change.*
-- [ ] **BOOT-03** Report bootstrap phases from the agent, not only from user-data
+- [x] **BOOT-03** Report bootstrap phases from the agent, not only from user-data
+  — *agent reports `Booting` at start, `Joining` after identity resolves, `Ready`
+  at the runtime-ready marker; pre-enrolment failures are labelled
+  `provider_identity_failed` / `network_join_failed`, and the enrolment path's
+  own precise report cannot be overwritten by an outer wrapper. Live phase
+  timeline check belongs to Phase 4's `one_machine_readiness` run.*
 - [ ] **INFRA-11** Emit HTTP request metrics from the gateway middleware
 - [ ] **INFRA-12** Make `/metrics` scrapable and correctly typed — *after INFRA-11*
 - [ ] **INFRA-13** Carry a bounded diagnostic excerpt on the bootstrap-failure report — *after BOOT-03*

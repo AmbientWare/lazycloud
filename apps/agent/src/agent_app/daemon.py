@@ -88,6 +88,7 @@ from provider_aws import (
     AwsSpotInterruptionMonitorError,
 )
 from provider_clients import (
+    ProviderNodeIdentityEvidence,
     ProviderNodeIdentityEvidenceProvider,
     provider_node_identity_evidence_provider,
 )
@@ -97,6 +98,7 @@ from shared.compute_enrollment import (
     AgentCapacityState,
     ComputePreflightCheck,
     MachineBootstrapFailureReason,
+    MachineBootstrapPhase,
 )
 from shared.contracts import ContractModel
 from shared.http.errors import HttpApiError, HttpTransportError
@@ -758,13 +760,67 @@ class AgentDaemonService:
     telemetry: AgentTelemetryBuffer = field(default_factory=AgentTelemetryBuffer)
     tailnet_runtime: AgentTailnetRuntime | None = None
     provider_identity: ProviderNodeIdentityEvidenceProvider | None = None
+    _bootstrap_failure_reported: bool = False
+
+    def _provider_proof(self) -> ProviderNodeIdentityEvidence:
+        if self.options.provider is None:
+            msg = "provider node reporting requires a provider"
+            raise ValueError(msg)
+        provider = self.provider_identity or provider_node_identity_evidence_provider(
+            self.options.provider
+        )
+        return provider.create()
+
+    def _report_bootstrap_phase(self, phase: MachineBootstrapPhase) -> None:
+        """Best effort: a report must never break the boot it narrates.
+
+        Each report mints a fresh identity proof — proofs are single-use, so
+        reusing one would read as a replay and be rejected.
+        """
+        if not self.options.provider_enrollment_request:
+            return
+        with suppress(Exception):
+            proof = self._provider_proof()
+            self.client.record_provider_node_bootstrap_phase(
+                ProviderNodeBootstrapPhaseRequest(
+                    enrollment_request_id=self.options.provider_enrollment_request,
+                    provider=proof.provider,
+                    region=proof.region,
+                    provider_instance_id=proof.provider_instance_id,
+                    identity_proof_url=proof.proof_url.get_secret_value(),
+                    phase=phase,
+                )
+            )
+
+    def _report_bootstrap_failure(self, reason: MachineBootstrapFailureReason) -> None:
+        if not self.options.provider_enrollment_request or self._bootstrap_failure_reported:
+            return
+        self._bootstrap_failure_reported = True
+        with suppress(Exception):
+            proof = self._provider_proof()
+            self.client.record_provider_node_bootstrap_failure(
+                ProviderNodeBootstrapFailureRequest(
+                    enrollment_request_id=self.options.provider_enrollment_request,
+                    provider=proof.provider,
+                    region=proof.region,
+                    provider_instance_id=proof.provider_instance_id,
+                    identity_proof_url=proof.proof_url.get_secret_value(),
+                    failure_reason=reason,
+                )
+            )
 
     def run(self) -> AgentDaemonRunResult:
         self.state_store.begin_run()
+        self._report_bootstrap_phase(MachineBootstrapPhase.Booting)
         # Enrolment travels over the tailnet on a pool node, and the node's own
         # tailnet service already brought it up before this process started.
         # Nothing to attach here.
-        state = self._join_step("identity.resolve", self.resolve_identity)
+        try:
+            state = self._join_step("identity.resolve", self.resolve_identity)
+        except Exception:
+            self._report_bootstrap_failure(MachineBootstrapFailureReason.ProviderIdentityFailed)
+            raise
+        self._report_bootstrap_phase(MachineBootstrapPhase.Joining)
         tailnet_runtime: AgentTailnetRuntime | None = None
         tailnet_hostname = ""
         iterations = 0
@@ -776,10 +832,14 @@ class AgentDaemonService:
         route_proxy: AgentRouteProxyService | None = None
         runtime_ready = False
         try:
-            tailnet_runtime, tailnet_hostname = self._join_step(
-                "tailnet.start",
-                lambda: self._start_tailnet(state),
-            )
+            try:
+                tailnet_runtime, tailnet_hostname = self._join_step(
+                    "tailnet.start",
+                    lambda: self._start_tailnet(state),
+                )
+            except Exception:
+                self._report_bootstrap_failure(MachineBootstrapFailureReason.NetworkJoinFailed)
+                raise
             last_result = last_result.model_copy(
                 update={
                     "tailnet_started": tailnet_runtime is not None,
@@ -841,6 +901,7 @@ class AgentDaemonService:
                 if not runtime_ready:
                     self.state_store.mark_ready(state, stream_iteration=next_iteration)
                     runtime_ready = True
+                    self._report_bootstrap_phase(MachineBootstrapPhase.Ready)
                 iterations = next_iteration
                 if self.options.once:
                     return last_result
@@ -1153,6 +1214,7 @@ class AgentDaemonService:
         try:
             response = self.client.enroll_provider_node(enrollment)
         except Exception:
+            self._bootstrap_failure_reported = True
             with suppress(Exception):
                 failed_proof = proof_provider.create()
                 self.client.record_provider_node_bootstrap_failure(
