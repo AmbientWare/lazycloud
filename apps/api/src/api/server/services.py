@@ -247,7 +247,11 @@ from api.server.worker_repository_service import (
     WorkerRepositoryDependencies,
     WorkerRepositoryService,
 )
-from api.settings import AgentRouteReconciliationSettings, TcpIngressSettings
+from api.settings import (
+    AgentRouteReconciliationSettings,
+    PublicIngressSettings,
+    TcpIngressSettings,
+)
 from database import DatabaseClient
 
 
@@ -1230,12 +1234,14 @@ def _compose_api_services(
         task_queues=taskqueue_control,
     )
     taskqueue = taskqueue_service or taskqueue_control
+    public_ingress_config = PublicIngressSettings()
     provider_node_enrollment = (
         ProviderNodeEnrollmentService(
             gateway=gateway,
             compute=core.compute,
             events=core.events,
             rate_limiter=redis,
+            proof_max_inflight=public_ingress_config.provider_node_proof_max_inflight,
             identity_verifier=AwsProviderNodeIdentityAdapter(
                 http_client=BoundedProviderNodeIdentityHttpClient(),
                 replay_guard=RedisProviderNodeIdentityReplayGuard(redis),

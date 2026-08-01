@@ -20,6 +20,7 @@ from provider_aws import (
     AwsStsGetCallerIdentityProof,
     AwsStsProofHttpResponse,
 )
+from provider_aws.provider_node_identity import AWS_STS_PROOF_TIMEOUT_SECONDS
 from pydantic import SecretStr, ValidationError
 
 _ACCOUNT_ID = "123456789012"
@@ -271,7 +272,7 @@ def test_identity_verifier_accepts_connection_and_managed_inventory() -> None:
     assert http.calls == [
         {
             "url": url,
-            "timeout_seconds": 3.0,
+            "timeout_seconds": AWS_STS_PROOF_TIMEOUT_SECONDS,
             "max_response_bytes": 32 * 1024,
             "follow_redirects": False,
         }

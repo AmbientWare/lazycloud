@@ -16,6 +16,7 @@ from networking.settings import (
     TailnetRuntimeSettings,
 )
 from observability.workspace_changes import WorkspaceChangePublisher
+from provider_aws.provider_node_identity import AWS_STS_PROOF_CONNECT_TIMEOUT_SECONDS
 from provider_clients import configured_aws_account_connection_components
 from provider_clients.provider_nodes import (
     ProviderNodeIdentityHttpError,
@@ -81,9 +82,14 @@ class BoundedProviderNodeIdentityHttpClient:
         connection = http.client.HTTPSConnection(
             parsed.hostname,
             parsed.port or 443,
-            timeout=timeout_seconds,
+            timeout=min(AWS_STS_PROOF_CONNECT_TIMEOUT_SECONDS, timeout_seconds),
         )
         try:
+            # Connect on the short budget, then read on the full one: a
+            # black-holed endpoint must not spend the whole budget twice.
+            connection.connect()
+            if connection.sock is not None:
+                connection.sock.settimeout(timeout_seconds)
             connection.request(
                 "GET",
                 target,

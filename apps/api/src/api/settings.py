@@ -54,6 +54,7 @@ class PublicIngressSettings(BaseSettings):
     """
 
     client_ip_header: str = ""
+    provider_node_proof_max_inflight: int = Field(default=8, ge=1)
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_PUBLIC_INGRESS_",

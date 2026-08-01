@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-from contextlib import suppress
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
+from secrets import token_urlsafe
 
 from compute.agent_control import ComputePrincipal, plan_join_token_creation
 from compute.provider_nodes import ProviderNodeIdentityProof, ProviderNodeIdentityVerifier
 from compute.service import ComputeService
-from coordination.rate_limit import try_consume
+from coordination.rate_limit import release_slot, try_acquire_slot, try_consume
 from coordination.redis_client import RedisClient
 from database.repositories.compute import (
     AwsAccountConnectionRepository,
@@ -14,6 +17,7 @@ from database.repositories.compute import (
     ComputePoolRepository,
     ComputeProviderInstanceRepository,
 )
+from provider_aws.provider_node_identity import AWS_STS_PROOF_TIMEOUT_SECONDS
 from pydantic import SecretStr
 from redis.exceptions import RedisError
 from shared.aws_connections import (
@@ -57,6 +61,7 @@ _ENROLLABLE_POOL_PHASES = {
 
 _CONTROL_CHARACTERS = {chr(i) for i in range(32)} - {"\n", "\t"}
 _INVENTORY_REFRESH_WINDOW_SECONDS = 5
+_PROOF_SLOT_TTL_SECONDS = int(AWS_STS_PROOF_TIMEOUT_SECONDS) + 1
 
 
 def _sanitized_excerpt(excerpt: str) -> str:
@@ -70,6 +75,7 @@ class ProviderNodeEnrollmentService:
     identity_verifier: ProviderNodeIdentityVerifier
     events: GatewayEventSink | None = None
     rate_limiter: RedisClient | None = None
+    proof_max_inflight: int = 8
 
     def enroll(self, request: ProviderNodeEnrollmentRequest) -> JoinAgentResponse:
         pool, connection = self._enrollment_target(request)
@@ -255,17 +261,45 @@ class ProviderNodeEnrollmentService:
             if not self._request_inventory_refresh(pool):
                 raise UpstreamUnavailableError("provider inventory is still refreshing")
             known = self._known_instance_ids(pool)
-        self.identity_verifier.verify(
-            ProviderNodeIdentityProof(
-                provider=provider,
-                region=region,
-                provider_instance_id=provider_instance_id,
-                proof_url=SecretStr(identity_proof_url),
-            ),
-            pool=pool,
-            connection=connection,
-            provider_instance_ids=known,
-        )
+        # Verification makes an outbound call from a synchronous route, so it
+        # occupies a request-handling thread for as long as it runs. Without a
+        # bound, enough unauthenticated callers stall every synchronous route
+        # in the process — not merely enrolment.
+        with self._proof_capacity():
+            self.identity_verifier.verify(
+                ProviderNodeIdentityProof(
+                    provider=provider,
+                    region=region,
+                    provider_instance_id=provider_instance_id,
+                    proof_url=SecretStr(identity_proof_url),
+                ),
+                pool=pool,
+                connection=connection,
+                provider_instance_ids=known,
+            )
+
+    @contextmanager
+    def _proof_capacity(self) -> Iterator[None]:
+        redis = self.rate_limiter
+        if redis is None:
+            yield
+            return
+        token = token_urlsafe(16)
+        key = "provider-node:proof-inflight"
+        if not try_acquire_slot(
+            redis,
+            key,
+            token,
+            limit=self.proof_max_inflight,
+            ttl_seconds=_PROOF_SLOT_TTL_SECONDS,
+            now_seconds=time.monotonic(),
+        ):
+            raise UpstreamUnavailableError("identity verification is at capacity")
+        try:
+            yield
+        finally:
+            with suppress(Exception):
+                release_slot(redis, key, token)
 
     def _known_instance_ids(self, pool: ComputePoolRecord) -> tuple[str, ...]:
         """Instances this pool owns, from durable inventory.

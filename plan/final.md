@@ -283,7 +283,11 @@ confirm the workspace stops billing. `ERR-07`: hit a configured quota and get a
   detected by the reconciler updating inventory, so the old live-describe
   divergence test was retargeted to the invariant this layer actually enforces.
   The unroutable-endpoint live proof belongs to Phase 3/4.*
-- [ ] **INFRA-04** Bound the STS proof verification so it cannot exhaust the API — *after INFRA-01, INFRA-03*
+- [x] **INFRA-04** Bound the STS proof verification so it cannot exhaust the API — *after INFRA-01, INFRA-03*
+  — *verification runs under a token-fenced slot (default 8, settable); 200
+  concurrent attempts admitted exactly 8 and refused 192 immediately. Budget cut
+  to 2s with a 1s connect bound so a black-holed endpoint cannot spend it twice.
+  The live 200-request/health-latency contrast belongs to Phase 3.*
 - [ ] **INFRA-05** Rate-limit every unauthenticated route before exposure — *after INFRA-01, INFRA-02*
 - [ ] **INFRA-17** Close the remaining plaintext durable-secret gaps
 
