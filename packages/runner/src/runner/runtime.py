@@ -13,6 +13,8 @@ class RunnerTaskLogStream(io.TextIOBase):
         self.stream = stream
         self.wrapped = wrapped
         self._pending = ""
+        self.dropped_appends = 0
+        self.last_append_error = ""
 
     def writable(self) -> bool:
         return True
@@ -44,8 +46,12 @@ class RunnerTaskLogStream(io.TextIOBase):
     def _append(self, value: str) -> None:
         try:
             self.append_log(value)
-        except Exception:
-            return
+        except Exception as exc:
+            # `write` already put this line on the real stream, so only the
+            # platform's copy is lost. Reporting through a logger would write
+            # back into this same stream.
+            self.dropped_appends += 1
+            self.last_append_error = f"{type(exc).__name__}: {exc}"
 
 
 def required_env(env: Mapping[str, str], key: str) -> str:

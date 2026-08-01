@@ -480,6 +480,7 @@ class ComputePoolCapacityController:
                 else planned
             )
         except Exception:
+            LOGGER.exception("compute pool sizing failed for %s", self.pool.name)
             _save_sizing_state(
                 self.compute,
                 sizing_failure_state(state, self.pool, now=now).model_copy(

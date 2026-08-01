@@ -2537,6 +2537,9 @@ class _FakeObjectStorage:
         del object_id, workspace_id
         raise KeyError("fake object records are not configured")
 
+    def exists(self, key: str, *, bucket: str | None = None) -> bool:
+        return (bucket or "default", key) in self.files
+
     def head(self, key: str, *, bucket: str | None = None) -> S3ObjectInfo:
         resolved_bucket = bucket or "default"
         payload = self.files.get((resolved_bucket, key))

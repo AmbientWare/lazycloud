@@ -1167,6 +1167,11 @@ class ComputeService:
                         )
                     )
                 except Exception:
+                    LOGGER.warning(
+                        "could not confirm storage destruction for %s",
+                        provider_instance_id,
+                        exc_info=True,
+                    )
                     destroyed = False
             else:
                 destroyed = self._terminate_provider_record(

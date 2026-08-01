@@ -331,6 +331,7 @@ class ShellControlService:
         try:
             stopped = self.services.containers.stop(container.id)
         except Exception:
+            LOGGER.warning("shell container %s did not stop", container.id, exc_info=True)
             refreshed = self._container_after_stop_failure(container.id, workspace_id)
             if refreshed is not None and _is_terminal_container_status(refreshed.status):
                 return ShellTicketCompensationResult(

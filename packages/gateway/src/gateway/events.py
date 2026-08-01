@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -10,6 +11,8 @@ from pydantic import JsonValue, TypeAdapter
 from shared.events import Event, EventLevel
 from shared.worker_events import GATEWAY_REQUEST_EVENT_ACTION
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+LOGGER = logging.getLogger(__name__)
 
 _ASGI_HEADERS = TypeAdapter(list[tuple[bytes, bytes]])
 _ASGI_CLIENT: TypeAdapter[tuple[str, int] | None] = TypeAdapter(tuple[str, int] | None)
@@ -111,6 +114,7 @@ class GatewayRequestEventMiddleware:
                 labels={"method": method, "route": template},
             )
         except Exception:
+            LOGGER.debug("request metrics were not recorded", exc_info=True)
             return
 
     def _emit_request_event(self, scope: Scope, status_code: int) -> None:
@@ -141,6 +145,9 @@ class GatewayRequestEventMiddleware:
                 workspace_id=workspace_id or None,
             )
         except Exception:
+            # This is the durable record of a 5xx. Losing it silently means the
+            # failure it describes leaves no trace at all.
+            LOGGER.warning("server-error event was not recorded", exc_info=True)
             return
 
 

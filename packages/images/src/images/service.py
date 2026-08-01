@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -73,6 +74,8 @@ from images.publication import (
     ImageBuildPublicationPublishStatus,
     image_build_publication_from_execution,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 DEFAULT_IMAGE_BUILD_DUPLICATE_WAIT_TIMEOUT_SECONDS = 900.0
 DEFAULT_IMAGE_BUILD_DUPLICATE_WAIT_POLL_SECONDS = 0.5
@@ -811,6 +814,7 @@ class ImageBuildService:
                             workspace_id=workspace_id,
                         )
                 except Exception:
+                    LOGGER.debug("build claim heartbeat failed", exc_info=True)
                     continue
                 if not active:
                     return

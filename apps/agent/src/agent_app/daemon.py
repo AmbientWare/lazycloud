@@ -3,6 +3,7 @@ from __future__ import annotations
 import hmac
 import http.client as http_client
 import json
+import logging
 import math
 import os
 import platform
@@ -128,6 +129,8 @@ from agent_app.route_proxy import (
 )
 from agent_app.telemetry import AgentTelemetryBuffer, AgentTelemetryEventType
 from gateway import http
+
+LOGGER = logging.getLogger(__name__)
 
 DEFAULT_AGENT_STREAM_INTERVAL_SECONDS = 5.0
 DEFAULT_AGENT_HTTP_TIMEOUT_SECONDS = 30.0
@@ -1468,6 +1471,7 @@ class AgentDaemonService:
         try:
             suffix = _tailnet_dns_suffix(tailnet_runtime.status())
         except Exception:
+            LOGGER.debug("tailnet status unavailable; peers stay dialled by name", exc_info=True)
             return
         if not suffix or not route_proxy.proxy_target:
             return

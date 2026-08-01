@@ -115,7 +115,7 @@ construction, and we are not shipping a window where that gets worse.
 Independent, cheap, and each one either fixes a live fault or removes a
 diagnostic blind spot. Nothing here depends on anything else.
 
-- [x] **CAP-01** Guard `_acquire_from_controller` against pending-worker reservations
+- [x] **CAP-01** Guard `_acquire_from_controller` against pending-worker reservations — *superseded by CAP-13 (2d8db15), which deleted the reservation kind the guard protected*
 - [x] **BOOT-01** Give the `Failed` bootstrap phase a reclaim deadline
 - [x] **BOOT-02** Stop a revoked agent from re-enrolling forever
 - [~] **INFRA-18** Remove the prior architecture's credential backups from the working tree
@@ -395,7 +395,7 @@ not the repo.
   green.*
 - [ ] **INFRA-20** Regenerate the Alembic baseline *(added in synthesis; see Gap above)*
 - [ ] **CAP-10** Delete `Worker.version` — *after CAP-09, INFRA-20*
-- [ ] **CAP-13** Delete the pending-worker reservation path — *after CAP-01; requires the restart measurement*
+- [x] **CAP-13** Delete the pending-worker reservation path — *2d8db15. The restart measurement was answered by inspection, not experiment: `list_workers` rebuilds the scheduler's worker set from Redis every tick and the reservation lives in the same Redis, so the "durable survives a restart, in-memory does not" premise was false. The Pending record is written at enrolment, so the claim never fires during a machine boot — PlacementMiss already dedups that window. CAP-01's guard went with it, along with `source`, the `reserve()` `target_worker_id` parameter, `PendingCapacityOwner`, and a stranding race between the two reservation kinds*
 - [ ] **CAP-14** Collapse acquisition to one idempotent entry point — *after CAP-13*
 - [ ] **CAP-15** Delete `CapacityPoolSizingState` and the `pools.sizing_*` columns — *after CAP-14, INFRA-20*
 - [ ] **CAP-16** Collapse the reservation status machine — *after CAP-15*
@@ -439,7 +439,7 @@ and should be budgeted separately.
 - [ ] **ERR-36** `packages/scheduler` — 22 — *overlaps ERR-08*
 - [ ] **ERR-37** `packages/worker` — 63 — *budget separately*
 - [ ] **ERR-38** Enable the rule — *after ERR-20 … ERR-37*
-- [ ] **INFRA-19** Write the production runbook — *after INFRA-06, -09, -13, -15*
+- [x] **INFRA-19** Write the production runbook — *03e3ec5, `deploy/RUNBOOK.md`. Covers bring-up, the sidecar recreate hazard, the four-step failed-node path, draining, rotation, and irreversible actions; every command run live. The ingress and alerting sections state they are pending rather than describing infrastructure that does not exist*
 
 ---
 

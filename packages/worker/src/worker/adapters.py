@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import shutil
 import time
 from contextlib import suppress
@@ -52,6 +53,8 @@ from worker.routes import (
 )
 from worker.runtime_config import RuntimeContainerStatus
 from worker.source_code import SourceWorkspaceLifecycle
+
+LOGGER = logging.getLogger(__name__)
 
 DEFAULT_WORKER_UPLOAD_ROOT = "/tmp/container-uploads"
 FORCE_KILL_SIGNAL = 9
@@ -473,6 +476,11 @@ class WorkerFinalizationCleanup:
         try:
             live = _runtime_status_is_live(self.runtime.status(container_id))
         except Exception:
+            LOGGER.warning(
+                "could not read runtime status for %s; leaving it running",
+                container_id,
+                exc_info=True,
+            )
             return
         if not live:
             return
@@ -483,6 +491,7 @@ class WorkerFinalizationCleanup:
                 force_delete=True,
             )
         except Exception:
+            LOGGER.warning("force kill of %s failed", container_id, exc_info=True)
             return
 
     def stop_oom_watcher(self, container_id: str) -> None:

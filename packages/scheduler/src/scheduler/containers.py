@@ -423,6 +423,7 @@ class SchedulerContainerRequestService:
                 },
             )
         except Exception:
+            LOGGER.debug("scheduling telemetry was not recorded", exc_info=True)
             return
 
     def dispatch_ready(
