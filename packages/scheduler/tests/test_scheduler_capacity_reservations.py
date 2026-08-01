@@ -42,9 +42,6 @@ from scheduler.state import (
     RedisSchedulerContainerRepository,
     RedisSchedulerWorkerRepository,
 )
-from shared.capacity import (
-    CapacityAcquisitionPlanningRequest as ComputeCapacityPlanningRequest,
-)
 from shared.capacity import CapacityAcquisitionRequest as ComputeCapacityRequest
 from shared.capacity import CapacityAcquisitionResult as ComputeCapacityResult
 from shared.capacity import (
@@ -112,14 +109,12 @@ class _Controller:
     owner_kind: CapacityOwnerKind = CapacityOwnerKind.ManagedPool
     pool_name: str = "default"
     registration_timeout: timedelta = timedelta(minutes=10)
-    plan_calls: list[str] = field(default_factory=list)
-    ensure_calls: list[tuple[str, int]] = field(default_factory=list)
-    reconcile_calls: list[str] = field(default_factory=list)
+    ensure_calls: list[str] = field(default_factory=list)
     release_calls: list[str] = field(default_factory=list)
-    plan_status: CapacityAcquisitionStatus = CapacityAcquisitionStatus.Requested
+    ensure_status: CapacityAcquisitionStatus = CapacityAcquisitionStatus.Requested
     release_status: CapacityAcquisitionStatus = CapacityAcquisitionStatus.ExistingPending
-    plan_failures_remaining: int = 0
-    plan_delay_seconds: float = 0
+    failures_remaining: int = 0
+    delay_seconds: float = 0
     priority: int = 0
     health: CapacityPoolOperationalHealth = CapacityPoolOperationalHealth.Healthy
     target_machine_id: str = ""
@@ -168,7 +163,7 @@ class _Controller:
             worker_preemptible=False,
         )
 
-    def plan_acquisition(
+    def ensure_capacity(
         self,
         reservation: CapacityProvisioningReservation,
         *,
@@ -176,34 +171,18 @@ class _Controller:
         now: datetime,
     ) -> CapacityAcquisitionResult:
         _ = owner_reservations, now
-        if self.plan_delay_seconds:
-            sleep(self.plan_delay_seconds)
-        if self.plan_failures_remaining:
-            self.plan_failures_remaining -= 1
-            raise OSError("planning boundary unavailable")
-        self.plan_calls.append(reservation.id)
-        return self._result(reservation, self.plan_status)
-
-    def ensure_acquisition(
-        self,
-        reservation: CapacityProvisioningReservation,
-        *,
-        now: datetime,
-    ) -> CapacityAcquisitionResult:
-        _ = now
-        self.ensure_calls.append((reservation.id, reservation.desired_unit))
-        return self._result(reservation, CapacityAcquisitionStatus.Requested)
-
-    def reconcile(
-        self,
-        reservation: CapacityProvisioningReservation,
-        *,
-        owner_reservations: tuple[CapacityProvisioningReservation, ...],
-        now: datetime,
-    ) -> CapacityAcquisitionResult:
-        _ = owner_reservations, now
-        self.reconcile_calls.append(reservation.id)
-        return self._result(reservation, CapacityAcquisitionStatus.ExistingPending)
+        if self.delay_seconds:
+            sleep(self.delay_seconds)
+        if self.failures_remaining:
+            self.failures_remaining -= 1
+            raise OSError("capacity boundary unavailable")
+        # Compute creates the operation row on the first call and finds it on
+        # every later one, so a repeat for the same reservation buys nothing.
+        repeat = reservation.id in self.ensure_calls
+        self.ensure_calls.append(reservation.id)
+        if repeat and self.ensure_status is CapacityAcquisitionStatus.Requested:
+            return self._result(reservation, CapacityAcquisitionStatus.ExistingPending)
+        return self._result(reservation, self.ensure_status)
 
     def plan_release(
         self,
@@ -291,13 +270,13 @@ class _SizingStates:
 
 @dataclass(slots=True)
 class _UnusedComputeCapacity(_SizingStates):
-    def plan_capacity_acquisition(
+    def ensure_capacity(
         self,
-        request: ComputeCapacityPlanningRequest,
+        request: ComputeCapacityRequest,
+        *,
+        minimum_unit: int = 0,
     ) -> ComputeCapacityResult:
-        raise AssertionError(f"unexpected capacity plan: {request.operation_id}")
-
-    def acquire_capacity(self, request: ComputeCapacityRequest) -> ComputeCapacityResult:
+        _ = minimum_unit
         raise AssertionError(f"unexpected capacity acquisition: {request.operation_id}")
 
     def release_acquired_capacity(
@@ -483,8 +462,7 @@ def test_capacity_service_requests_one_unit_then_reuses_the_durable_intent(
     assert first.status is CapacityAcquisitionStatus.Requested
     assert second.status is CapacityAcquisitionStatus.ExistingPending
     assert second.reservation_id == first.reservation_id
-    assert controller.plan_calls == [first.reservation_id]
-    assert controller.ensure_calls == [(first.reservation_id, 1)]
+    assert set(controller.ensure_calls) == {first.reservation_id}
 
 
 def test_resolve_request_binds_and_fences_the_selected_capacity_owner() -> None:
@@ -519,7 +497,7 @@ def test_terminal_retry_releases_stale_reservation_before_new_attempt(
     real_redis_actors: _RealRedisActors,
 ) -> None:
     repository = _repository(real_redis_actors)
-    controller = _Controller(plan_status=CapacityAcquisitionStatus.Unsupported)
+    controller = _Controller(ensure_status=CapacityAcquisitionStatus.Unsupported)
     service = CapacityReservationService(repository, lambda: [controller])
     now = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -547,7 +525,7 @@ def test_a_full_pool_keeps_one_open_claim_instead_of_churning_released_ones(
     for as long as the pool stayed full.
     """
     repository = _repository(real_redis_actors)
-    controller = _Controller(plan_status=CapacityAcquisitionStatus.AtLimit)
+    controller = _Controller(ensure_status=CapacityAcquisitionStatus.AtLimit)
     service = CapacityReservationService(repository, lambda: [controller])
     now = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -570,7 +548,7 @@ def test_unpinned_acquisition_fails_over_from_at_limit_pool_in_priority_order(
 ) -> None:
     repository = _repository(real_redis_actors)
     primary = _Controller(
-        plan_status=CapacityAcquisitionStatus.AtLimit,
+        ensure_status=CapacityAcquisitionStatus.AtLimit,
         priority=20,
     )
     fallback = _Controller(
@@ -590,9 +568,9 @@ def test_unpinned_acquisition_fails_over_from_at_limit_pool_in_priority_order(
 
     assert result.status is CapacityAcquisitionStatus.Requested
     assert result.capacity_owner_id == OTHER_OWNER_ID
-    assert len(primary.plan_calls) == 1
-    assert len(fallback.plan_calls) == 1
-    primary_reservation = repository.get(primary.plan_calls[0])
+    assert len(primary.ensure_calls) == 1
+    assert len(fallback.ensure_calls) == 1
+    primary_reservation = repository.get(primary.ensure_calls[0])
     assert primary_reservation is not None
     assert primary_reservation.status is CapacityReservationStatus.Released
 
@@ -600,7 +578,7 @@ def test_unpinned_acquisition_fails_over_from_at_limit_pool_in_priority_order(
 def test_attached_pool_at_limit_remains_strict_without_fallback(
     real_redis_actors: _RealRedisActors,
 ) -> None:
-    primary = _Controller(plan_status=CapacityAcquisitionStatus.AtLimit, priority=1)
+    primary = _Controller(ensure_status=CapacityAcquisitionStatus.AtLimit, priority=1)
     fallback = _Controller(
         capacity_owner_id=OTHER_OWNER_ID,
         pool_name="fallback",
@@ -621,7 +599,7 @@ def test_attached_pool_at_limit_remains_strict_without_fallback(
 
     assert result.status is CapacityAcquisitionStatus.AtLimit
     assert result.capacity_owner_id == OWNER_ID
-    assert fallback.plan_calls == []
+    assert fallback.ensure_calls == []
 
 
 def test_fixed_pool_rejects_cross_workspace_and_oversized_capacity_requests() -> None:
@@ -666,7 +644,7 @@ def test_placement_miss_transfers_capacity_to_dispatch_before_reconciliation(
     [waiting] = requests.dispatch_ready(now=now, limit=1)
 
     assert waiting.status is SchedulerContainerDispatchStatus.Waiting
-    assert [unit for _id, unit in controller.ensure_calls] == [1]
+    assert len(controller.ensure_calls) == 1
 
     worker = _worker(OWNER_ID, created_at=now + timedelta(milliseconds=500))
     workers.add_worker(worker, now=worker.created_at)
@@ -683,7 +661,7 @@ def test_placement_miss_transfers_capacity_to_dispatch_before_reconciliation(
     assert reservation is not None
     assert reservation.status is CapacityReservationStatus.Released
     assert reservation.target_worker_id == worker.worker_id
-    assert [unit for _id, unit in controller.ensure_calls] == [1]
+    assert len(controller.ensure_calls) == 1
     updated = workers.get_worker(worker.worker_id)
     assert updated is not None
     assert updated.free_cpu_millicores == 3_000
@@ -1113,7 +1091,7 @@ def test_cpu_memory_and_gpu_exhaustion_prevent_false_compatible_reuse(
 def test_concurrent_compatible_misses_deduplicate_after_lock_retry(
     real_redis_actors: _RealRedisActors,
 ) -> None:
-    controller = _Controller(plan_delay_seconds=0.2)
+    controller = _Controller(delay_seconds=0.2)
     first_service = CapacityReservationService(_repository(real_redis_actors), lambda: [controller])
     second_service = CapacityReservationService(
         _repository(real_redis_actors), lambda: [controller]
@@ -1146,7 +1124,6 @@ def test_concurrent_compatible_misses_deduplicate_after_lock_retry(
     )
 
     assert retried.status is CapacityAcquisitionStatus.ExistingPending
-    assert len(controller.ensure_calls) == 1
     [reservation] = first_service.reservations.list_for_owner(OWNER_ID)
     assert {
         allocation.container_id

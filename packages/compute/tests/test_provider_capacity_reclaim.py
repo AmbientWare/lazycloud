@@ -37,7 +37,6 @@ from gateway.http import JoinAgentRequest
 from scheduler.compute_hooks import SchedulerComputeHooks
 from scheduler.state import RedisSchedulerWorkerRepository
 from shared.capacity import (
-    CapacityAcquisitionPlanningRequest,
     CapacityAcquisitionRequest,
     CapacityAcquisitionShape,
     CapacityAcquisitionStatus,
@@ -324,7 +323,7 @@ def _install_providers(services: ApiServices, providers: dict[str, _DirectProvid
     services.compute.provider_resolver = None
 
 
-def test_direct_capacity_plan_is_read_only_and_retry_preserves_exact_intent(
+def test_direct_capacity_retry_reuses_one_operation_and_launches_once(
     isolated_services: ApiServices,
 ) -> None:
     alpha = _DirectProvider(name="alpha", offers=[_offer("alpha", hourly_cost_micros=100_000)])
@@ -341,34 +340,32 @@ def test_direct_capacity_plan_is_read_only_and_retry_preserves_exact_intent(
     with isolated_services.context.database.session() as session:
         pool = ComputePoolRepository(session).get_by_name(state.workspace_id, state.name)
     assert pool is not None
-    planning = CapacityAcquisitionPlanningRequest(
+    planning = CapacityAcquisitionRequest(
         capacity_owner_id=pool.capacity_owner_id,
         reservation_id=str(uuid4()),
         operation_id=str(uuid4()),
         shape=CapacityAcquisitionShape(cpu_millicores=4_000, memory_mib=8_192),
     )
-    launch_calls_before_plan = list(alpha.launch_calls)
+    launch_calls_before = list(alpha.launch_calls)
 
-    planned = isolated_services.compute.plan_capacity_acquisition(planning)
-
-    assert planned.status is CapacityAcquisitionStatus.Requested
-    assert planned.desired_unit == 2
-    assert alpha.launch_calls == launch_calls_before_plan
-    requested = isolated_services.compute.acquire_capacity(
-        CapacityAcquisitionRequest(
-            **planning.model_dump(),
-            desired_unit=planned.desired_unit,
-        )
-    )
-    launch_calls_after_acquire = list(alpha.launch_calls)
-
-    retried_plan = isolated_services.compute.plan_capacity_acquisition(planning)
+    requested = isolated_services.compute.ensure_capacity(planning)
+    launch_calls_after = list(alpha.launch_calls)
+    retried = isolated_services.compute.ensure_capacity(planning)
 
     assert requested.status is CapacityAcquisitionStatus.Requested
-    assert retried_plan.status is CapacityAcquisitionStatus.Requested
-    assert retried_plan.desired_unit == planned.desired_unit
-    assert retried_plan.target_machine_id == requested.target_machine_id
-    assert alpha.launch_calls == launch_calls_after_acquire
+    assert requested.desired_unit == 2
+    assert len(launch_calls_after) == len(launch_calls_before) + 1
+    # The retry re-derives the same intent and buys nothing further.
+    assert retried.desired_unit == requested.desired_unit
+    assert retried.target_machine_id == requested.target_machine_id
+    assert alpha.launch_calls == launch_calls_after
+    with isolated_services.context.database.session() as session:
+        # `one_or_none` raises if the retry created a second operation row.
+        operation = ComputeCapacityOperationRepository(session).get_by_reservation(
+            planning.reservation_id
+        )
+    assert operation is not None
+    assert operation.desired_unit == requested.desired_unit
 
 
 def test_direct_capacity_plan_rejects_limit_and_fixed_shape_without_mutation(
@@ -398,14 +395,14 @@ def test_direct_capacity_plan_rejects_limit_and_fixed_shape_without_mutation(
     }
     launch_calls_before_plan = list(alpha.launch_calls)
 
-    at_limit = isolated_services.compute.plan_capacity_acquisition(
-        CapacityAcquisitionPlanningRequest(
+    at_limit = isolated_services.compute.ensure_capacity(
+        CapacityAcquisitionRequest(
             **request_fields,
             shape=CapacityAcquisitionShape(cpu_millicores=4_000, memory_mib=8_192),
         )
     )
-    fixed_shape_rejection = isolated_services.compute.plan_capacity_acquisition(
-        CapacityAcquisitionPlanningRequest(
+    fixed_shape_rejection = isolated_services.compute.ensure_capacity(
+        CapacityAcquisitionRequest(
             **{
                 **request_fields,
                 "reservation_id": str(uuid4()),
@@ -443,12 +440,11 @@ def test_direct_capacity_acquisition_retries_without_launching_a_second_machine(
         capacity_owner_id=pool.capacity_owner_id,
         reservation_id=str(uuid4()),
         operation_id=str(uuid4()),
-        desired_unit=2,
         shape=CapacityAcquisitionShape(cpu_millicores=4_000, memory_mib=8_192),
     )
 
-    requested = isolated_services.compute.acquire_capacity(acquisition)
-    retried = isolated_services.compute.acquire_capacity(acquisition)
+    requested = isolated_services.compute.ensure_capacity(acquisition)
+    retried = isolated_services.compute.ensure_capacity(acquisition)
 
     assert requested.status is CapacityAcquisitionStatus.Requested
     assert retried.status is CapacityAcquisitionStatus.ExistingPending
@@ -494,15 +490,14 @@ def test_direct_capacity_acquisition_recovers_a_lost_provider_response(
         capacity_owner_id=pool.capacity_owner_id,
         reservation_id=str(uuid4()),
         operation_id=str(uuid4()),
-        desired_unit=2,
         shape=CapacityAcquisitionShape(cpu_millicores=4_000, memory_mib=8_192),
     )
     alpha.raise_after_launch = True
 
-    unavailable = isolated_services.compute.acquire_capacity(acquisition)
+    unavailable = isolated_services.compute.ensure_capacity(acquisition)
     alpha.hide_remote_reconciliations = 1
     alpha.raise_after_launch = False
-    recovered = isolated_services.compute.acquire_capacity(acquisition)
+    recovered = isolated_services.compute.ensure_capacity(acquisition)
 
     assert unavailable.status is CapacityAcquisitionStatus.TemporarilyUnavailable
     assert recovered.status is CapacityAcquisitionStatus.Requested
@@ -1735,11 +1730,10 @@ def test_compensated_launch_attempt_renews_join_authority_and_idempotency_key(
         capacity_owner_id=pool.capacity_owner_id,
         reservation_id=str(uuid4()),
         operation_id=str(uuid4()),
-        desired_unit=2,
         shape=CapacityAcquisitionShape(cpu_millicores=4_000, memory_mib=8_192),
     )
 
-    requested = isolated_services.compute.acquire_capacity(acquisition)
+    requested = isolated_services.compute.ensure_capacity(acquisition)
     assert requested.status is CapacityAcquisitionStatus.Requested
 
     # The reconciler revokes an overdue launch intent's unused credential.
@@ -1748,7 +1742,7 @@ def test_compensated_launch_attempt_renews_join_authority_and_idempotency_key(
         ComputeJoinCredentialRepository(session).save(existing.revoke(now=utc_now()))
     alpha.hide_remote_reconciliations = 1
 
-    renewed = isolated_services.compute.acquire_capacity(acquisition)
+    renewed = isolated_services.compute.ensure_capacity(acquisition)
 
     assert renewed.status is CapacityAcquisitionStatus.Requested
     assert renewed.target_machine_id == requested.target_machine_id
@@ -1772,11 +1766,10 @@ def test_consumed_join_authority_is_never_reminted(
         capacity_owner_id=pool.capacity_owner_id,
         reservation_id=str(uuid4()),
         operation_id=str(uuid4()),
-        desired_unit=2,
         shape=CapacityAcquisitionShape(cpu_millicores=4_000, memory_mib=8_192),
     )
 
-    requested = isolated_services.compute.acquire_capacity(acquisition)
+    requested = isolated_services.compute.ensure_capacity(acquisition)
     assert requested.status is CapacityAcquisitionStatus.Requested
 
     [existing] = _capacity_credentials(isolated_services, pool, requested.target_machine_id)
@@ -1784,7 +1777,7 @@ def test_consumed_join_authority_is_never_reminted(
         ComputeJoinCredentialRepository(session).save(existing.model_copy(update={"use_count": 1}))
     alpha.hide_remote_reconciliations = 1
 
-    rejected = isolated_services.compute.acquire_capacity(acquisition)
+    rejected = isolated_services.compute.ensure_capacity(acquisition)
 
     assert rejected.status is CapacityAcquisitionStatus.TemporarilyUnavailable
     assert len(_capacity_credentials(isolated_services, pool, requested.target_machine_id)) == 1
@@ -1808,11 +1801,10 @@ def test_provider_failure_is_typed_and_never_carries_upstream_text(
         capacity_owner_id=pool.capacity_owner_id,
         reservation_id=str(uuid4()),
         operation_id=str(uuid4()),
-        desired_unit=2,
         shape=CapacityAcquisitionShape(cpu_millicores=4_000, memory_mib=8_192),
     )
 
-    result = isolated_services.compute.acquire_capacity(acquisition)
+    result = isolated_services.compute.ensure_capacity(acquisition)
 
     assert result.status is CapacityAcquisitionStatus.TemporarilyUnavailable
     assert result.failure_code is CapacityFailureCode.ProviderLaunchFailed

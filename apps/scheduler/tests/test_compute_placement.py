@@ -15,7 +15,6 @@ from scheduler.capacity_reservations import (
 from scheduler.compute_placement import SchedulerComputePlacement
 from scheduler.state import SchedulerWorkerRequest
 from shared.capacity import (
-    CapacityAcquisitionPlanningRequest,
     CapacityAcquisitionRequest,
     CapacityAcquisitionResult,
     CapacityOwnerKind,
@@ -84,7 +83,7 @@ def test_scheduler_forwards_typed_ad_hoc_placement_to_capacity_owner() -> None:
         created_at=now,
         updated_at=now,
     )
-    planned = controller.plan_acquisition(
+    planned = controller.ensure_capacity(
         reservation,
         owner_reservations=(reservation,),
         now=now,
@@ -117,7 +116,7 @@ class _RecordingCapacity:
 
 @dataclass(slots=True)
 class _RequestedComputeCapacity:
-    plans: list[CapacityAcquisitionPlanningRequest] = field(default_factory=list)
+    plans: list[CapacityAcquisitionRequest] = field(default_factory=list)
 
     def get_pool_sizing_state(self, capacity_owner_id: str) -> CapacityPoolSizingState:
         raise AssertionError(f"unexpected sizing state read for {capacity_owner_id}")
@@ -128,10 +127,13 @@ class _RequestedComputeCapacity:
     ) -> CapacityPoolSizingState:
         raise AssertionError(f"unexpected sizing state mutation for {update.capacity_owner_id}")
 
-    def plan_capacity_acquisition(
+    def ensure_capacity(
         self,
-        request: CapacityAcquisitionPlanningRequest,
+        request: CapacityAcquisitionRequest,
+        *,
+        minimum_unit: int = 0,
     ) -> CapacityAcquisitionResult:
+        _ = minimum_unit
         self.plans.append(request)
         return CapacityAcquisitionResult(
             status=ComputeCapacityAcquisitionStatus.Requested,
@@ -139,9 +141,6 @@ class _RequestedComputeCapacity:
             reservation_id=request.reservation_id,
             desired_unit=1,
         )
-
-    def acquire_capacity(self, request: CapacityAcquisitionRequest) -> CapacityAcquisitionResult:
-        raise AssertionError(f"unexpected capacity acquisition for {request.operation_id}")
 
     def release_acquired_capacity(
         self,

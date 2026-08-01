@@ -47,7 +47,6 @@ from observability.workspace_changes import WorkspaceChangePublisher
 from pydantic import ConfigDict, Field, JsonValue, TypeAdapter
 from shared.app_identity import NAME
 from shared.capacity import (
-    CapacityAcquisitionPlanningRequest,
     CapacityAcquisitionRequest,
     CapacityAcquisitionResult,
     CapacityAcquisitionShape,
@@ -356,16 +355,29 @@ class ComputeService:
             )
             return repository.upsert(updated)
 
-    def acquire_capacity(
+    def ensure_capacity(
         self,
         request: CapacityAcquisitionRequest,
+        *,
+        minimum_unit: int = 0,
     ) -> CapacityAcquisitionResult:
-        """Acquire one exact unit for an internal scheduler reservation.
+        """Resolve the next bounded unit for a reservation and acquire it.
+
+        The unit is derived here rather than supplied, because compute holds the
+        authoritative count. The intent is committed with the pool row locked
+        before any provider call, and the provider idempotency key is derived
+        from the operation id, so a crash between the two cannot double-buy.
 
         The operation id is deliberately confined to this compute boundary. Public
         SDK and HTTP contracts expose the scheduler reservation, never provider
         mutation identity.
         """
+        planned = self._plan_capacity_acquisition(request)
+        if planned.status is not CapacityAcquisitionStatus.Requested:
+            return planned
+        # Pool sizing asks for a floor it has already committed to; a reservation
+        # asks for nothing and takes the planned next unit.
+        desired_unit = max(planned.desired_unit, minimum_unit)
         with self.context.database.session() as session:
             pool = ComputePoolRepository(session).get_by_capacity_owner_id(
                 request.capacity_owner_id
@@ -374,25 +386,26 @@ class ComputeService:
             return _capacity_result(
                 request,
                 CapacityAcquisitionStatus.Unsupported,
+                desired_unit=desired_unit,
                 reason="capacity owner is not managed by compute",
             )
         if pool.capacity_owner_kind is CapacityOwnerKind.ManagedPool:
-            return self._acquire_direct_capacity(pool, request)
+            return self._acquire_direct_capacity(pool, request, desired_unit=desired_unit)
         if pool.capacity_owner_kind is CapacityOwnerKind.PooledProvider:
-            return self._acquire_pooled_capacity(pool, request)
+            return self._acquire_pooled_capacity(pool, request, desired_unit=desired_unit)
         return _capacity_result(
             request,
             CapacityAcquisitionStatus.Unsupported,
+            desired_unit=desired_unit,
             reason=f"capacity owner kind {pool.capacity_owner_kind.value!r} is unsupported",
         )
 
-    def plan_capacity_acquisition(
+    def _plan_capacity_acquisition(
         self,
-        request: CapacityAcquisitionPlanningRequest,
+        request: CapacityAcquisitionRequest,
     ) -> CapacityAcquisitionResult:
         """Read authoritative capacity and plan the exact next bounded unit.
 
-        The scheduler persists this desired unit before calling ``acquire_capacity``.
         Existing operation intent always wins so retries cannot advance capacity twice.
         """
         with self.context.database.session() as session:
@@ -422,21 +435,21 @@ class ComputeService:
                 else 0
             )
         if pool is None or policy is None:
-            return _capacity_planning_result(
+            return _capacity_result(
                 request,
                 CapacityAcquisitionStatus.Unsupported,
                 desired_unit=1,
                 reason="capacity owner is not managed by compute",
             )
         if not policy.scaling_enabled:
-            return _capacity_planning_result(
+            return _capacity_result(
                 request,
                 CapacityAcquisitionStatus.Unsupported,
                 desired_unit=max(direct_units, 1),
                 reason="capacity owner scaling is disabled",
             )
         if not _shape_matches_pool(request.shape, policy):
-            return _capacity_planning_result(
+            return _capacity_result(
                 request,
                 CapacityAcquisitionStatus.Unsupported,
                 desired_unit=max(direct_units, 1),
@@ -473,7 +486,7 @@ class ComputeService:
                     self._provider_pool_request(current_pool, offer)
                 )
             except Exception as exc:
-                return _capacity_planning_result(
+                return _capacity_result(
                     request,
                     CapacityAcquisitionStatus.TemporarilyUnavailable,
                     desired_unit=max(pool.desired_machines, 1),
@@ -487,7 +500,7 @@ class ComputeService:
                 current_units=snapshot.desired_machines,
                 max_units=pool.max_machines,
             )
-        return _capacity_planning_result(
+        return _capacity_result(
             request,
             CapacityAcquisitionStatus.Unsupported,
             desired_unit=1,
@@ -543,6 +556,8 @@ class ComputeService:
         self,
         pool: ComputePoolRecord,
         request: CapacityAcquisitionRequest,
+        *,
+        desired_unit: int,
     ) -> CapacityAcquisitionResult:
         with self.context.database.session() as session:
             policy = PoolRepository(session).get(pool.name, workspace_id=pool.workspace_id)
@@ -556,6 +571,7 @@ class ComputeService:
                 request,
                 CapacityAcquisitionStatus.Unsupported,
                 reason="requested unit does not match the capacity owner's fixed worker shape",
+                desired_unit=desired_unit,
             )
         clients = self._provider_client_snapshot(pool.workspace_id)
         provider_name = pool.provider_ref or policy.provider
@@ -565,6 +581,7 @@ class ComputeService:
                 request,
                 CapacityAcquisitionStatus.TemporarilyUnavailable,
                 reason=f"direct provider {provider_name!r} is unavailable",
+                desired_unit=desired_unit,
             )
         try:
             offer = next(
@@ -584,12 +601,14 @@ class ComputeService:
                     exception_type=type(exc).__name__,
                 ),
                 failure_code=CapacityFailureCode.ProviderUnavailable,
+                desired_unit=desired_unit,
             )
         if offer is None:
             return _capacity_result(
                 request,
                 CapacityAcquisitionStatus.Unsupported,
                 reason="provider has no offer matching the fixed worker shape",
+                desired_unit=desired_unit,
             )
         expected_machine_ids = {
             item.machine_id
@@ -606,10 +625,11 @@ class ComputeService:
                     exception_type=type(exc).__name__,
                 ),
                 failure_code=CapacityFailureCode.ProviderReconciliationFailed,
+                desired_unit=desired_unit,
             )
         observed_by_machine = {item.machine_id: item for item in observed.observed_machines}
         if existing_operation is not None:
-            _validate_capacity_operation(existing_operation, request)
+            _validate_capacity_operation(existing_operation, request, desired_unit=desired_unit)
             if existing_operation.status == "released":
                 return _operation_result(
                     existing_operation,
@@ -626,6 +646,7 @@ class ComputeService:
                 return self._record_capacity_failure(
                     request,
                     reason="direct capacity intent has no target machine",
+                    desired_unit=desired_unit,
                 )
             remote = observed_by_machine.get(target)
             if remote is not None:
@@ -648,6 +669,7 @@ class ComputeService:
                     request,
                     CapacityAcquisitionStatus.TemporarilyUnavailable,
                     reason="capacity owner disappeared during acquisition",
+                    desired_unit=desired_unit,
                 )
             operations = ComputeCapacityOperationRepository(session)
             operation = operations.get(
@@ -662,31 +684,34 @@ class ComputeService:
                     if _reservation_open(item.status)
                 ]
                 current_units = len(open_records)
-                if request.desired_unit > policy.max_workers:
+                if desired_unit > policy.max_workers:
                     operation = operations.upsert(
                         _new_capacity_operation(
                             pool,
                             request,
+                            desired_unit=desired_unit,
                             status=CapacityAcquisitionStatus.AtLimit.value,
                             previous_desired_unit=current_units,
                         )
                     )
                     return _operation_result(operation, CapacityAcquisitionStatus.AtLimit)
-                if request.desired_unit <= current_units:
+                if desired_unit <= current_units:
                     operation = operations.upsert(
                         _new_capacity_operation(
                             pool,
                             request,
+                            desired_unit=desired_unit,
                             status=CapacityAcquisitionStatus.ExistingPending.value,
                             previous_desired_unit=current_units,
                         )
                     )
                     return _operation_result(operation, CapacityAcquisitionStatus.ExistingPending)
-                if request.desired_unit != current_units + 1:
+                if desired_unit != current_units + 1:
                     operation = operations.upsert(
                         _new_capacity_operation(
                             pool,
                             request,
+                            desired_unit=desired_unit,
                             status=CapacityAcquisitionStatus.TemporarilyUnavailable.value,
                             previous_desired_unit=current_units,
                             last_error="desired unit skips authoritative direct capacity",
@@ -721,6 +746,7 @@ class ComputeService:
                     _new_capacity_operation(
                         pool,
                         request,
+                        desired_unit=desired_unit,
                         status=_LAUNCH_STATE_INTENT,
                         previous_desired_unit=current_units,
                         target_machine_id=machine.id,
@@ -755,7 +781,7 @@ class ComputeService:
                         status=ReservationStatus.Pending.value,
                     )
             else:
-                _validate_capacity_operation(operation, request)
+                _validate_capacity_operation(operation, request, desired_unit=desired_unit)
             if operation.target_machine_id is None:
                 operation = operations.upsert(
                     operation.model_copy(
@@ -879,6 +905,7 @@ class ComputeService:
                     exception_type=type(exc).__name__,
                 ),
                 failure_code=CapacityFailureCode.ProviderLaunchFailed,
+                desired_unit=desired_unit,
             )
         self._commit_direct_capacity_operation(pool, operation, remote)
         return _operation_result(
@@ -948,6 +975,8 @@ class ComputeService:
         self,
         pool: ComputePoolRecord,
         request: CapacityAcquisitionRequest,
+        *,
+        desired_unit: int,
     ) -> CapacityAcquisitionResult:
         try:
             current_pool, provider, offer = self._internal_pool_provider(
@@ -963,18 +992,21 @@ class ComputeService:
                     exception_type=type(exc).__name__,
                 ),
                 failure_code=CapacityFailureCode.Unknown,
+                desired_unit=desired_unit,
             )
         if provider.pooled is None:
             return _capacity_result(
                 request,
                 CapacityAcquisitionStatus.Unsupported,
                 reason="capacity owner is not backed by a pooled provider",
+                desired_unit=desired_unit,
             )
         if not _offer_matches_capacity_shape(offer, request.shape):
             return _capacity_result(
                 request,
                 CapacityAcquisitionStatus.Unsupported,
                 reason="requested unit does not match the capacity owner's fixed worker shape",
+                desired_unit=desired_unit,
             )
         provider_request = self._provider_pool_request(current_pool, offer)
         try:
@@ -987,6 +1019,7 @@ class ComputeService:
                     exception_type=type(exc).__name__,
                 ),
                 failure_code=CapacityFailureCode.ProviderReconciliationFailed,
+                desired_unit=desired_unit,
             )
         with self.context.database.session() as session:
             pools = ComputePoolRepository(session)
@@ -996,6 +1029,7 @@ class ComputeService:
                     request,
                     CapacityAcquisitionStatus.TemporarilyUnavailable,
                     reason="capacity owner disappeared during acquisition",
+                    desired_unit=desired_unit,
                 )
             operations = ComputeCapacityOperationRepository(session)
             operation = operations.get(
@@ -1004,7 +1038,7 @@ class ComputeService:
                 for_update=True,
             )
             if operation is not None:
-                _validate_capacity_operation(operation, request)
+                _validate_capacity_operation(operation, request, desired_unit=desired_unit)
                 if operation.status == "released":
                     return _operation_result(
                         operation,
@@ -1018,31 +1052,34 @@ class ComputeService:
                     )
             else:
                 current_units = snapshot.desired_machines
-                if request.desired_unit > locked_pool.max_machines:
+                if desired_unit > locked_pool.max_machines:
                     operation = operations.upsert(
                         _new_capacity_operation(
                             locked_pool,
                             request,
+                            desired_unit=desired_unit,
                             status=CapacityAcquisitionStatus.AtLimit.value,
                             previous_desired_unit=current_units,
                         )
                     )
                     return _operation_result(operation, CapacityAcquisitionStatus.AtLimit)
-                if request.desired_unit <= current_units:
+                if desired_unit <= current_units:
                     operation = operations.upsert(
                         _new_capacity_operation(
                             locked_pool,
                             request,
+                            desired_unit=desired_unit,
                             status=CapacityAcquisitionStatus.ExistingPending.value,
                             previous_desired_unit=current_units,
                         )
                     )
                     return _operation_result(operation, CapacityAcquisitionStatus.ExistingPending)
-                if request.desired_unit != current_units + 1:
+                if desired_unit != current_units + 1:
                     operation = operations.upsert(
                         _new_capacity_operation(
                             locked_pool,
                             request,
+                            desired_unit=desired_unit,
                             status=CapacityAcquisitionStatus.TemporarilyUnavailable.value,
                             previous_desired_unit=current_units,
                             last_error="desired unit skips authoritative pooled capacity",
@@ -1057,12 +1094,13 @@ class ComputeService:
                     _new_capacity_operation(
                         locked_pool,
                         request,
+                        desired_unit=desired_unit,
                         status=_LAUNCH_STATE_INTENT,
                         previous_desired_unit=current_units,
                         owns_capacity=True,
                     )
                 )
-        if snapshot.desired_machines >= request.desired_unit:
+        if snapshot.desired_machines >= desired_unit:
             with self.context.database.session() as session:
                 repository = ComputeCapacityOperationRepository(session)
                 current = repository.get(
@@ -1084,11 +1122,11 @@ class ComputeService:
         try:
             updated_snapshot = provider.pooled.set_pool_capacity(
                 provider_request,
-                desired_machines=request.desired_unit,
+                desired_machines=desired_unit,
                 max_machines=current_pool.max_machines,
             )
             self._apply_pooled_snapshot(
-                current_pool.model_copy(update={"desired_machines": request.desired_unit}),
+                current_pool.model_copy(update={"desired_machines": desired_unit}),
                 offer,
                 updated_snapshot,
                 provider=provider.pooled,
@@ -1102,6 +1140,7 @@ class ComputeService:
                     exception_type=type(exc).__name__,
                 ),
                 failure_code=CapacityFailureCode.CapacityPlanningFailed,
+                desired_unit=desired_unit,
             )
         with self.context.database.session() as session:
             repository = ComputeCapacityOperationRepository(session)
@@ -1373,6 +1412,7 @@ class ComputeService:
         self,
         request: CapacityAcquisitionRequest,
         *,
+        desired_unit: int,
         reason: str,
         failure_code: CapacityFailureCode = CapacityFailureCode.Unknown,
     ) -> CapacityAcquisitionResult:
@@ -1405,6 +1445,7 @@ class ComputeService:
             CapacityAcquisitionStatus.TemporarilyUnavailable,
             reason=reason,
             failure_code=failure_code,
+            desired_unit=desired_unit,
         )
 
     def create_pool(
@@ -5415,6 +5456,7 @@ def _new_capacity_operation(
     pool: ComputePoolRecord,
     request: CapacityAcquisitionRequest,
     *,
+    desired_unit: int,
     status: str,
     previous_desired_unit: int,
     target_machine_id: str | None = None,
@@ -5429,7 +5471,7 @@ def _new_capacity_operation(
         capacity_owner_id=request.capacity_owner_id,
         reservation_id=request.reservation_id,
         operation_id=request.operation_id,
-        desired_unit=request.desired_unit,
+        desired_unit=desired_unit,
         status=status,
         target_machine_id=target_machine_id,
         previous_desired_unit=previous_desired_unit,
@@ -5444,10 +5486,12 @@ def _new_capacity_operation(
 def _validate_capacity_operation(
     operation: ComputeCapacityOperationRecord,
     request: CapacityAcquisitionRequest,
+    *,
+    desired_unit: int,
 ) -> None:
     if (
         operation.reservation_id != request.reservation_id
-        or operation.desired_unit != request.desired_unit
+        or operation.desired_unit != desired_unit
         or operation.shape != _json_object(request.shape)
     ):
         raise ConflictError(f"capacity operation request is immutable: {request.operation_id}")
@@ -5455,7 +5499,7 @@ def _validate_capacity_operation(
 
 def _validate_capacity_operation_plan(
     operation: ComputeCapacityOperationRecord,
-    request: CapacityAcquisitionPlanningRequest,
+    request: CapacityAcquisitionRequest,
 ) -> None:
     if operation.reservation_id != request.reservation_id or operation.shape != _json_object(
         request.shape
@@ -5478,6 +5522,7 @@ def _capacity_result(
     request: CapacityAcquisitionRequest,
     status: CapacityAcquisitionStatus,
     *,
+    desired_unit: int,
     reason: str = "",
     failure_code: CapacityFailureCode | None = None,
 ) -> CapacityAcquisitionResult:
@@ -5485,42 +5530,26 @@ def _capacity_result(
         status=status,
         capacity_owner_id=request.capacity_owner_id,
         reservation_id=request.reservation_id,
-        desired_unit=request.desired_unit,
+        desired_unit=max(desired_unit, 1),
         failure_code=failure_code,
         reason=reason,
     )
 
 
-def _capacity_planning_result(
-    request: CapacityAcquisitionPlanningRequest,
-    status: CapacityAcquisitionStatus,
-    *,
-    desired_unit: int,
-    reason: str = "",
-) -> CapacityAcquisitionResult:
-    return CapacityAcquisitionResult(
-        status=status,
-        capacity_owner_id=request.capacity_owner_id,
-        reservation_id=request.reservation_id,
-        desired_unit=max(desired_unit, 1),
-        reason=reason,
-    )
-
-
 def _plan_next_capacity_unit(
-    request: CapacityAcquisitionPlanningRequest,
+    request: CapacityAcquisitionRequest,
     *,
     current_units: int,
     max_units: int,
 ) -> CapacityAcquisitionResult:
     if current_units >= max_units:
-        return _capacity_planning_result(
+        return _capacity_result(
             request,
             CapacityAcquisitionStatus.AtLimit,
             desired_unit=max(current_units, 1),
             reason="durable capacity owner maximum is exhausted",
         )
-    return _capacity_planning_result(
+    return _capacity_result(
         request,
         CapacityAcquisitionStatus.Requested,
         desired_unit=current_units + 1,

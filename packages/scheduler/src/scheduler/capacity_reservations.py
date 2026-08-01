@@ -14,9 +14,6 @@ from uuid import uuid4
 from coordination.redis_client import RedisClient, redis_text
 from coordination.token_lock import release_token_lock, try_acquire_token_lock
 from pydantic import Field, model_validator
-from shared.capacity import (
-    CapacityAcquisitionPlanningRequest as ComputeCapacityPlanningRequest,
-)
 from shared.capacity import CapacityAcquisitionRequest as ComputeCapacityRequest
 from shared.capacity import CapacityAcquisitionResult as ComputeCapacityResult
 from shared.capacity import CapacityAcquisitionShape as ComputeCapacityShape
@@ -254,22 +251,7 @@ class CapacityAcquisitionController(Protocol):
 
     def reservation_shape(self, request: SchedulerWorkerRequest) -> CapacityRequestShape: ...
 
-    def plan_acquisition(
-        self,
-        reservation: CapacityProvisioningReservation,
-        *,
-        owner_reservations: tuple[CapacityProvisioningReservation, ...],
-        now: datetime,
-    ) -> CapacityAcquisitionResult: ...
-
-    def ensure_acquisition(
-        self,
-        reservation: CapacityProvisioningReservation,
-        *,
-        now: datetime,
-    ) -> CapacityAcquisitionResult: ...
-
-    def reconcile(
+    def ensure_capacity(
         self,
         reservation: CapacityProvisioningReservation,
         *,
@@ -303,12 +285,12 @@ class CapacityWorkerRepository(Protocol):
 
 
 class ComputeCapacityService(CapacityPoolSizingStateService, Protocol):
-    def plan_capacity_acquisition(
+    def ensure_capacity(
         self,
-        request: ComputeCapacityPlanningRequest,
+        request: ComputeCapacityRequest,
+        *,
+        minimum_unit: int = 0,
     ) -> ComputeCapacityResult: ...
-
-    def acquire_capacity(self, request: ComputeCapacityRequest) -> ComputeCapacityResult: ...
 
     def release_acquired_capacity(
         self,
@@ -454,30 +436,18 @@ class ComputePoolCapacityController:
             preemptible=self.pool.worker_preemptible,
         )
         try:
-            planned = self.compute.plan_capacity_acquisition(
-                ComputeCapacityPlanningRequest(
+            result = self.compute.ensure_capacity(
+                ComputeCapacityRequest(
                     capacity_owner_id=self.capacity_owner_id,
                     reservation_id=state.operation_id,
                     operation_id=state.operation_id,
                     shape=shape,
-                )
+                ),
+                minimum_unit=state.target_units,
             )
-            target_units = max(planned.desired_unit, state.target_units)
             state = _save_sizing_state(
-                self.compute, state.model_copy(update={"target_units": target_units})
-            )
-            result = (
-                self.compute.acquire_capacity(
-                    ComputeCapacityRequest(
-                        capacity_owner_id=self.capacity_owner_id,
-                        reservation_id=state.operation_id,
-                        operation_id=state.operation_id,
-                        desired_unit=target_units,
-                        shape=shape,
-                    )
-                )
-                if planned.status is ComputeCapacityStatus.Requested
-                else planned
+                self.compute,
+                state.model_copy(update={"target_units": result.desired_unit}),
             )
         except Exception:
             LOGGER.exception("compute pool sizing failed for %s", self.pool.name)
@@ -545,7 +515,7 @@ class ComputePoolCapacityController:
         )
         return plan.model_copy(update={"target_units": result.desired_unit})
 
-    def plan_acquisition(
+    def ensure_capacity(
         self,
         reservation: CapacityProvisioningReservation,
         *,
@@ -553,45 +523,15 @@ class ComputePoolCapacityController:
         now: datetime,
     ) -> CapacityAcquisitionResult:
         _ = owner_reservations, now
-        result = self.compute.plan_capacity_acquisition(
-            ComputeCapacityPlanningRequest(
-                capacity_owner_id=reservation.capacity_owner_id,
-                reservation_id=reservation.id,
-                operation_id=reservation.operation_id,
-                shape=_compute_capacity_shape(reservation.acquisition_shape),
-            )
-        )
-        return _compute_acquisition_result(reservation, result)
-
-    def ensure_acquisition(
-        self,
-        reservation: CapacityProvisioningReservation,
-        *,
-        now: datetime,
-    ) -> CapacityAcquisitionResult:
-        _ = now
-        if reservation.desired_unit <= 0:
-            raise ValueError("compute capacity acquisition requires a persisted desired unit")
-        result = self.compute.acquire_capacity(
+        result = self.compute.ensure_capacity(
             ComputeCapacityRequest(
                 capacity_owner_id=reservation.capacity_owner_id,
                 reservation_id=reservation.id,
                 operation_id=reservation.operation_id,
-                desired_unit=reservation.desired_unit,
                 shape=_compute_capacity_shape(reservation.acquisition_shape),
             )
         )
         return _compute_acquisition_result(reservation, result)
-
-    def reconcile(
-        self,
-        reservation: CapacityProvisioningReservation,
-        *,
-        owner_reservations: tuple[CapacityProvisioningReservation, ...],
-        now: datetime,
-    ) -> CapacityAcquisitionResult:
-        _ = owner_reservations
-        return self.ensure_acquisition(reservation, now=now)
 
     def plan_release(
         self,
@@ -1194,30 +1134,11 @@ class CapacityReservationService:
             owner_reservations = tuple(
                 self.reservations.list_for_owner(controller.capacity_owner_id)
             )
-            if (
-                not decision.created
-                and reservation.status is not CapacityReservationStatus.Reserved
-            ):
-                result = controller.reconcile(
-                    reservation,
-                    owner_reservations=owner_reservations,
-                    now=now,
-                )
-                self._record_acquisition_result(reservation, result, now=now)
-                return result
-            planned = controller.plan_acquisition(
+            result = controller.ensure_capacity(
                 reservation,
                 owner_reservations=owner_reservations,
                 now=now,
             )
-            reservation = self._record_acquisition_result(
-                reservation,
-                planned,
-                now=now,
-            )
-            if planned.status is not CapacityAcquisitionStatus.Requested:
-                return planned
-            result = controller.ensure_acquisition(reservation, now=now)
             self._record_acquisition_result(reservation, result, now=now)
             return result
 
@@ -1469,7 +1390,7 @@ class CapacityReservationService:
                     if controller is None:
                         reconciled.append(reservation)
                         continue
-                    result = controller.reconcile(
+                    result = controller.ensure_capacity(
                         reservation,
                         owner_reservations=tuple(
                             self.reservations.list_for_owner(reservation.capacity_owner_id)

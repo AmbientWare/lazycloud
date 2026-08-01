@@ -56,7 +56,6 @@ from shared.aws_connections import (
     AwsAccountConnectionPhase,
 )
 from shared.capacity import (
-    CapacityAcquisitionPlanningRequest,
     CapacityAcquisitionRequest,
     CapacityAcquisitionShape,
     CapacityAcquisitionStatus,
@@ -920,7 +919,7 @@ def test_pooled_reconcile_fails_closed_without_capacity_owner_lease(
         compute.reconcile_pooled_capacity()
 
 
-def test_pooled_capacity_plan_uses_authoritative_desired_state_without_mutation(
+def test_pooled_capacity_unit_comes_from_the_provider_authoritative_count(
     isolated_services: ApiServices,
 ) -> None:
     _seed_connection(isolated_services)
@@ -940,12 +939,11 @@ def test_pooled_capacity_plan_uses_authoritative_desired_state_without_mutation(
         root_volume_gib=200,
     )
     compute.reconcile_pooled_capacity()
+    # The pool was reconciled at 0; the provider is the authority that says 3.
     provider.desired = 3
-    capacity_calls_before_plan = list(provider.capacity_calls)
-    ensure_calls_before_plan = list(provider.ensure_calls)
 
-    planned = compute.plan_capacity_acquisition(
-        CapacityAcquisitionPlanningRequest(
+    planned = compute.ensure_capacity(
+        CapacityAcquisitionRequest(
             capacity_owner_id=pool.capacity_owner_id,
             reservation_id=str(uuid4()),
             operation_id=str(uuid4()),
@@ -958,9 +956,7 @@ def test_pooled_capacity_plan_uses_authoritative_desired_state_without_mutation(
 
     assert planned.status is CapacityAcquisitionStatus.Requested
     assert planned.desired_unit == 4
-    assert provider.capacity_calls == capacity_calls_before_plan
-    assert provider.ensure_calls == ensure_calls_before_plan
-    assert provider.desired == 3
+    assert provider.desired == 4
 
 
 def test_pooled_capacity_acquisition_is_idempotent_and_releases_only_its_unit(
@@ -987,20 +983,18 @@ def test_pooled_capacity_acquisition_is_idempotent_and_releases_only_its_unit(
         capacity_owner_id=pool.capacity_owner_id,
         reservation_id=str(uuid4()),
         operation_id=str(uuid4()),
-        desired_unit=1,
         shape=CapacityAcquisitionShape(cpu_millicores=4_000, memory_mib=32 * 1_024),
     )
     second = CapacityAcquisitionRequest(
         capacity_owner_id=pool.capacity_owner_id,
         reservation_id=str(uuid4()),
         operation_id=str(uuid4()),
-        desired_unit=2,
         shape=CapacityAcquisitionShape(cpu_millicores=4_000, memory_mib=32 * 1_024),
     )
 
-    requested = compute.acquire_capacity(first)
-    retried = compute.acquire_capacity(first)
-    sibling = compute.acquire_capacity(second)
+    requested = compute.ensure_capacity(first)
+    retried = compute.ensure_capacity(first)
+    sibling = compute.ensure_capacity(second)
     released = compute.release_acquired_capacity(
         CapacityReleaseRequest(
             capacity_owner_id=first.capacity_owner_id,

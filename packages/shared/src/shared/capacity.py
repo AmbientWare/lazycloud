@@ -104,14 +104,8 @@ class CapacityAcquisitionShape(ContractModel):
 
 
 class CapacityAcquisitionRequest(ContractModel):
-    capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
-    reservation_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
-    operation_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
-    desired_unit: int = Field(ge=1)
-    shape: CapacityAcquisitionShape
+    """What a reservation asks for. The unit it resolves to is compute's answer."""
 
-
-class CapacityAcquisitionPlanningRequest(ContractModel):
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     reservation_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     operation_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
@@ -285,7 +279,6 @@ def _unique_nonempty(values: Sequence[str]) -> tuple[str, ...]:
 
 __all__ = [
     "CAPACITY_OWNER_ID_PATTERN",
-    "CapacityAcquisitionPlanningRequest",
     "CapacityAcquisitionRequest",
     "CapacityAcquisitionResult",
     "CapacityAcquisitionShape",
