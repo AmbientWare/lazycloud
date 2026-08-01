@@ -505,6 +505,19 @@ still in use. So the order is forced:
     balancers, or subnets accruing cost with no stack managing them — which is
     exactly how prod-infra reached its current state.
   - **Acceptance**: both stacks absent; no orphaned VPC/NAT/ELB remaining.
+  - **Status 2026-08-01**: still blocked, and the blockers are now exact.
+    `lazycloud-prod-us-east-1-infra` fails on three resources: subnets
+    `subnet-0446af4ffd9326f46` and `subnet-09fda7ebdbfa009b4` (both report live
+    dependencies) and ACM certificate
+    `arn:aws:acm:us-east-1:534742592531:certificate/5ae60e35-8970-4b33-9ffb-abfd3fed05c6`
+    (in use). Determining what holds them is not possible from the acceptance
+    role: `lazycloud-default-test-operator` is denied `ec2:DescribeSubnets` and
+    `ec2:DescribeNetworkInterfaces`, correctly — it is scoped for acceptance, not
+    infrastructure teardown. So this needs owner credentials **and** an owner
+    determination that the VPC is disposable. The general "everything here is
+    test" authorization does not settle that: the plan itself records that these
+    subnets may host `eksctl-ambient-*` clusters belonging to another project,
+    and deleting them is irreversible.
 
 ### Decision 5: resolved
 
