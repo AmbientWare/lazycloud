@@ -420,25 +420,34 @@ incremental on-ramp: the rule goes on only when the last site is fixed. Counts
 are measured, not estimated. `packages/worker` alone is a third of the backlog
 and should be budgeted separately.
 
-- [ ] **ERR-20** `packages/foundation` — 1
-- [ ] **ERR-21** `packages/providers/aws` — 1
-- [ ] **ERR-22** `packages/observability` — 2
-- [ ] **ERR-23** `packages/storage` — 2
-- [ ] **ERR-24** `packages/storage-client` — 2
-- [ ] **ERR-25** `apps/agent` — 4
-- [ ] **ERR-26** `packages/gateway` — 4
-- [ ] **ERR-27** `packages/lazycloud` — 4
-- [ ] **ERR-28** `packages/control` — 7
-- [ ] **ERR-29** `apps/container-worker` — 8
-- [ ] **ERR-30** `packages/worker-repository` — 8
-- [ ] **ERR-31** `packages/runner` — 9
-- [ ] **ERR-32** `packages/compute` — 12 — *after ERR-16*
-- [ ] **ERR-33** `packages/images` — 13
-- [ ] **ERR-34** `packages/execution` — 14 — *overlaps ERR-09*
-- [ ] **ERR-35** `apps/api` — 18
-- [ ] **ERR-36** `packages/scheduler` — 22 — *overlaps ERR-08*
-- [ ] **ERR-37** `packages/worker` — 63 — *budget separately*
-- [ ] **ERR-38** Enable the rule — *after ERR-20 … ERR-37*
+The per-package split below was written against a count of every broad handler.
+Classifying all 195 changed what the work is: 3 re-raise, 8 already log a
+traceback, 145 bind the exception and carry it into the value they return (an
+RPC response, a persisted build failure, an error handed back to the caller),
+and 20 discarded it entirely. Only the last group had no sink at all, so
+ERR-20 … ERR-37 collapse into one sweep of those 20 rather than 18 per-package
+passes over sites that already satisfy the rule.
+
+- [x] **ERR-20 … ERR-37** Give every discarding handler a sink — *abbe42e. All
+  20 fixed in one pass, each in proportion to what its failure costs: a kill
+  that did not happen, a durable 5xx record that was never written, and an
+  unconfirmed storage destruction warn with their traceback; metrics, probes,
+  and retried loops log at debug. Two runner fallbacks were deliberate rather
+  than blind and narrowed their catch instead. Two were behaviour defects, not
+  just lost diagnostics, and are fixed in ec38436: a failed presign shipped a
+  mount whose download URL was empty, and an unreachable archive store read as
+  "bytes absent" — which takes the archive row away from its owner. The 145
+  carry-only sites were left alone deliberately: their cause already reaches a
+  caller or a durable record, and logging every one would put a stack trace on
+  ordinary user-visible failures*
+- [x] **ERR-38** Enable the rule — *20c766b, as a repo-owned gate rather than
+  BLE001. BLE001 passes `logger.exception` but flags
+  `logger.debug(..., exc_info=True)` — the treatment this plan itself
+  prescribes for best-effort handlers — and cannot see
+  `contextlib.suppress(Exception)`. With `noqa` disallowed, enabling it would
+  mean rewriting correct handlers to satisfy the checker.
+  `.github/scripts/validate_blind_handlers.py` asks the real question and runs
+  in CI beside the existing scope validator*
 - [x] **INFRA-19** Write the production runbook — *03e3ec5, `deploy/RUNBOOK.md`. Covers bring-up, the sidecar recreate hazard, the four-step failed-node path, draining, rotation, and irreversible actions; every command run live. The ingress and alerting sections state they are pending rather than describing infrastructure that does not exist*
 
 ---
