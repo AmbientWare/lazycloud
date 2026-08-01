@@ -40,10 +40,11 @@ _RETRY_AFTER = str(_WINDOW_SECONDS)
 
 @dataclass(slots=True)
 class UnauthenticatedRateLimitMiddleware:
-    """Refuse excess unauthenticated traffic before it reaches anything else.
+    """Refuse excess unauthenticated traffic before it reaches a route.
 
-    Registered outermost, so a rejected request never reaches the durable
-    request-event writer and cannot amplify into the database.
+    Sits inside the request-event middleware so a refusal is still metered as
+    a 4xx — the durable event writer only persists 5xx, so a refused request
+    is counted without becoming a database write.
     """
 
     app: ASGIApp

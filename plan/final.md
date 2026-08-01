@@ -309,6 +309,19 @@ unit test.
 
 ## Phase 3 — Public ingress
 
+`plan/14-ingress-design.md` holds the concrete design: a `cloudflared` sidecar
+sharing the control plane's network namespace, apex + wildcard hostnames (forced
+by the generated-invoke host routing), and edge path refusal for `/metrics` and
+`/worker-repository`. Two things it found that are not optional:
+
+- `LAZYCLOUD_PUBLIC_INGRESS_CLIENT_IP_HEADER` **must** be set to
+  `CF-Connecting-IP` in the tunnel deployment: every tunneled request's socket
+  peer is `127.0.0.1`, so unset, the whole internet shares one rate-limit bucket.
+- `/api/v1/logs/stream` emits nothing while a task is quiet and will be cut at
+  Cloudflare's 100s no-byte window. It needs the heartbeat the change stream
+  already has (`workspace_changes.py:25`), inside INFRA-06.
+
+
 - [ ] **INFRA-06** Stand up the public HTTPS ingress — *after INFRA-03, -04, -05*
 - [ ] **INFRA-07** Refuse to launch managed capacity against an unreachable public origin — *after INFRA-06*
 - [ ] **INFRA-15** Scrape, alert, and page on the tracks' failure signals — *after INFRA-12, CAP-02, CAP-08*
