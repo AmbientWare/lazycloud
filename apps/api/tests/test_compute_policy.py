@@ -39,6 +39,8 @@ from provider_aws import aws_account_connection_template_identity
 from provider_clients import configured_aws_compute_catalog
 from provider_clients.settings import AwsAccountConnectionSettings, AwsCapacitySettings
 from pydantic import SecretStr
+from scheduler.compute_hooks import SchedulerComputeHooks
+from scheduler.state import RedisSchedulerWorkerRepository
 from shared.aws_connections import (
     AwsAccountAuthorizationGeneration,
     AwsAccountAuthorizationMode,
@@ -63,6 +65,7 @@ from shared.http.compute_policy import (
     WorkspaceComputePolicyResponse,
     WorkspaceComputeSummaryResponse,
 )
+from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from tests.url_constants import EXAMPLE_COM_URL
 
 
@@ -303,6 +306,19 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
                 )
             )
 
+    hooks = isolated_services.compute.scheduler_hooks
+    assert isinstance(hooks, SchedulerComputeHooks)
+    workers = hooks.workers
+    assert isinstance(workers, RedisSchedulerWorkerRepository)
+    workers.add_worker(
+        SchedulerWorkerRecord(
+            worker_id=agent_machine_worker_id(ready_machine_id),
+            pool_name="current-aws-inventory",
+            capacity_owner_id="11111111-1111-4111-8111-111111111111",
+            machine_id=ready_machine_id,
+            status=SchedulerWorkerStatus.Available,
+        )
+    )
     client = _client(isolated_services, request)
     summary_response = client.get("/api/v1/compute/summary")
     instances_response = client.get("/api/v1/compute/instances")

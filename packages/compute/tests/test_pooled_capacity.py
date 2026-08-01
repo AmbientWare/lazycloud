@@ -262,6 +262,7 @@ class _Resolver(ComputeProviderResolver):
 @dataclass(slots=True)
 class _SchedulerHooks:
     retired: list[tuple[str, str, str, str]] = field(default_factory=list)
+    available_machines: set[str] = field(default_factory=set)
     revoked_join_tokens: list[str] = field(default_factory=list)
 
     def register_pool(self, state: PrivatePoolState) -> None:
@@ -275,6 +276,9 @@ class _SchedulerHooks:
 
     def disable_machine(self, machine_id: str, reason: str) -> None:
         del machine_id, reason
+
+    def machine_worker_available(self, machine_id: str) -> bool:
+        return machine_id in self.available_machines
 
     def retire_machine(
         self,

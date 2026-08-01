@@ -34,6 +34,8 @@ from database.repositories.compute import (
 from database.repositories.orchestration import MachineRepository, WorkerRepository
 from database.repositories.source_cache import SourceCacheCleanupRepository
 from gateway.http import JoinAgentRequest
+from scheduler.compute_hooks import SchedulerComputeHooks
+from scheduler.state import RedisSchedulerWorkerRepository
 from shared.capacity import (
     CapacityAcquisitionPlanningRequest,
     CapacityAcquisitionRequest,
@@ -52,6 +54,10 @@ from shared.compute_enrollment import (
 from shared.compute_fleet import Machine, ResourceStatus, Worker
 from shared.compute_policy import ComputePoolRecord
 from shared.errors import ConflictError
+from shared.scheduling import (
+    SchedulerWorkerRecord,
+    SchedulerWorkerStatus,
+)
 from shared.source_cache_cleanup import (
     SourceCacheCleanupCompletionReason,
     WorkerCacheGenerationState,
@@ -242,6 +248,7 @@ class _RecordingBilling:
 @dataclass(slots=True)
 class _RecordingSchedulerHooks:
     registered_pools: list[str] = field(default_factory=list)
+    available_machines: set[str] = field(default_factory=set)
     registered_machines: list[str] = field(default_factory=list)
     disabled_machines: list[str] = field(default_factory=list)
 
@@ -258,6 +265,9 @@ class _RecordingSchedulerHooks:
         del reason
         self.disabled_machines.append(machine_id)
 
+    def machine_worker_available(self, machine_id: str) -> bool:
+        return machine_id in self.available_machines
+
     def retire_machine(
         self,
         workspace_id: str,
@@ -273,6 +283,27 @@ class _RecordingSchedulerHooks:
 
 def _phase_deadlines(seconds: int) -> dict[str, int]:
     return dict.fromkeys(("requested", "provisioning", "booting", "joining"), seconds)
+
+
+def _scheduler_worker_available(services: ApiServices, machine_id: str, *, pool: str) -> None:
+    """Make the scheduler's hot record say this machine's worker takes work.
+
+    Readiness is decided by that record, not by the durable `Worker` row — a row
+    that says `Running` from the moment of registration.
+    """
+    hooks = services.compute.scheduler_hooks
+    assert isinstance(hooks, SchedulerComputeHooks)
+    workers = hooks.workers
+    assert isinstance(workers, RedisSchedulerWorkerRepository)
+    workers.add_worker(
+        SchedulerWorkerRecord(
+            worker_id=agent_machine_worker_id(machine_id),
+            pool_name=pool,
+            capacity_owner_id="11111111-1111-4111-8111-111111111111",
+            machine_id=machine_id,
+            status=SchedulerWorkerStatus.Available,
+        )
+    )
 
 
 def _offer(provider: str, *, hourly_cost_micros: int, available: int = 4) -> ComputeOffer:
@@ -1499,6 +1530,11 @@ def test_never_registered_machine_is_reclaimed_after_the_deadline(
             )
         )
 
+    _scheduler_worker_available(
+        isolated_services,
+        registered_machine_id,
+        pool="reclaim-pool",
+    )
     before_deadline = launched_at + timedelta(seconds=1200)
     isolated_services.compute.reconcile_provider_capacity(now=before_deadline)
     assert alpha.terminate_calls == []
@@ -1593,6 +1629,66 @@ def test_a_machine_that_reported_its_failure_is_reclaimed_under_that_reason(
             if item.machine_id == machine_id
         )
     assert record.bootstrap_failure_reason is MachineBootstrapFailureReason.NetworkJoinFailed
+
+
+def test_unreachable_worker_state_keeps_the_machine(
+    isolated_services: ApiServices,
+) -> None:
+    """Reclaim terminates billable machines on this answer; an outage is not one.
+
+    When the worker-state store cannot be read, the machine's readiness is
+    unknown, and unknown machines are kept — never read as gone and terminated.
+    """
+
+    @dataclass(slots=True)
+    class _UnreachableWorkerState(_RecordingSchedulerHooks):
+        def machine_worker_available(self, machine_id: str) -> bool:
+            raise ConnectionError("worker state store is unreachable")
+
+    alpha = _DirectProvider(name="alpha", offers=[_offer("alpha", hourly_cost_micros=100_000)])
+    _install_providers(isolated_services, {"alpha": alpha})
+    isolated_services.compute.reclaim = ComputeReclaimPolicy(
+        bootstrap_phase_deadline_seconds=_phase_deadlines(300)
+    )
+    state = isolated_services.compute.launch_pool_capacity(
+        PoolConfig(name="reclaim-pool", providers=["alpha"], nodes=1, ttl="4h", max_spend=9.0)
+    )
+    launched_at = utc_now()
+    machine_id = state.reservations[0].machine_id
+    assert machine_id is not None
+    with isolated_services.context.database.session() as session:
+        pool = ComputePoolRepository(session).get_by_name(state.workspace_id, "reclaim-pool")
+        assert pool is not None
+        repository = ComputeProviderInstanceRepository(session)
+        for record in repository.list_for_pool(pool.id):
+            repository.upsert(
+                record.model_copy(
+                    update={
+                        "bootstrap_phase": MachineBootstrapPhase.Joining,
+                        "bootstrap_observed_at": launched_at,
+                    }
+                )
+            )
+        ComputeMachineEnrollmentRepository(session).create(
+            ComputeMachineEnrollmentCreate(
+                workspace_id=state.workspace_id,
+                pool_name="reclaim-pool",
+                machine_id=machine_id,
+                machine_fingerprint_hash="a" * 64,
+                credential_hash="b" * 64,
+                status=ComputeMachineEnrollmentStatus.Active,
+                heartbeat_confirmed=True,
+                schedulable=True,
+                readiness_phase=MachineReadinessPhase.Ready,
+                last_join_at=launched_at,
+                last_heartbeat_at=launched_at,
+            )
+        )
+    isolated_services.compute.scheduler_hooks = _UnreachableWorkerState()
+
+    isolated_services.compute.reconcile_provider_capacity(now=launched_at + timedelta(seconds=600))
+
+    assert alpha.terminate_calls == []
 
 
 def _pool_for_capacity(

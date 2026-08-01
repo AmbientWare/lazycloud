@@ -95,6 +95,7 @@ from compute.agent_control import (
     ComputePrincipal,
     JoinTokenCreationPlan,
     agent_machine_worker_id,
+    machine_serves_workloads,
     plan_join_token_creation,
 )
 from compute.aws_connections import AwsAccountPoolDrain
@@ -5148,18 +5149,25 @@ class ComputeService:
         )
         if enrollment is None:
             return MachineBootstrapFailureReason.BootstrapTimedOut
-        worker = WorkerRepository(session).get(
-            agent_machine_worker_id(record.machine_id),
-            workspace_id=pool.workspace_id,
-        )
-        if (
-            enrollment.status is ComputeMachineEnrollmentStatus.Active
-            and enrollment.readiness_phase is MachineReadinessPhase.Ready
-            and worker is not None
-            and worker.status is ResourceStatus.Running
-        ):
+        if self.scheduler_hooks is None:
+            msg = "provider bootstrap reclaim requires scheduler worker state"
+            raise RuntimeError(msg)
+        try:
+            serves = machine_serves_workloads(
+                enrollment,
+                machine_id=record.machine_id,
+                worker_state=self.scheduler_hooks,
+            )
+        except Exception:
+            # This answer decides whether a billable machine is terminated. An
+            # unreachable worker-state store is "unknown", and unknown machines
+            # are kept, not reclaimed.
+            LOGGER.exception(
+                "worker state was unreachable while reclaiming machine %s; keeping it",
+                record.machine_id,
+            )
             return None
-        return MachineBootstrapFailureReason.WorkerReadinessFailed
+        return None if serves else MachineBootstrapFailureReason.WorkerReadinessFailed
 
     def _launch_intent_overdue(
         self,

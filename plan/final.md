@@ -223,7 +223,13 @@ failure carries its cause to a durable place in every path we touched.
   keys on `consecutive_failures`/`retry_after_at` — the signals genuine failures
   actually set via `sizing_failure_state`. Failover from a full pool is covered
   by the existing priority-order test, which still passes.*
-- [ ] **CAP-08** Introduce one owned readiness predicate
+- [x] **CAP-08** Introduce one owned readiness predicate
+  — *`machine_serves_workloads` in `compute/agent_control.py`; both the API
+  summary and bootstrap reclaim call it; body reads the scheduler's hot record
+  through the extended `ComputeSchedulerHooks`. Fail-closed proven by a focused
+  case: an unreachable worker-state store keeps the machine and terminates
+  nothing. Tests that faked readiness via durable `Worker(Running)` rows now
+  register hot records, which is the honest change.*
 - [ ] **BOOT-03** Report bootstrap phases from the agent, not only from user-data
 - [ ] **INFRA-11** Emit HTTP request metrics from the gateway middleware
 - [ ] **INFRA-12** Make `/metrics` scrapable and correctly typed — *after INFRA-11*

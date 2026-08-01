@@ -6,6 +6,7 @@ import secrets
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from typing import TYPE_CHECKING, Protocol
 from urllib.parse import urlparse
 from uuid import NAMESPACE_URL, uuid5
 
@@ -13,7 +14,15 @@ from foundation.network import worker_network_prefix
 from foundation.shell import shell_quote
 from pydantic import Field, JsonValue, field_validator
 from shared.capacity import CAPACITY_OWNER_ID_PATTERN
-from shared.compute_enrollment import AgentCapacityState, ComputePreflightCheck
+from shared.compute_enrollment import (
+    AgentCapacityState,
+    ComputeMachineEnrollmentStatus,
+    ComputePreflightCheck,
+    MachineReadinessPhase,
+)
+
+if TYPE_CHECKING:
+    from database.repositories.compute import ComputeMachineEnrollmentRecord
 from shared.contracts import ContractModel
 from shared.gpu import GPU_ANY, normalize_gpu_type
 from shared.routing import (
@@ -371,6 +380,40 @@ def managed_machine_id(workspace_id: str, pool_name: str, seed: str) -> str:
 
 def agent_machine_worker_id(machine_id: str) -> str:
     return str(uuid5(NAMESPACE_URL, f"agent-worker\x00{machine_id}"))
+
+
+class MachineWorkerState(Protocol):
+    """Narrow view of the scheduler's hot worker state.
+
+    Implementations raise when the state store is unreachable rather than
+    answering False: the reclaim path terminates billable machines on this
+    answer, and an outage must read as "unknown", never as "gone".
+    """
+
+    def machine_worker_available(self, machine_id: str) -> bool: ...
+
+
+def machine_serves_workloads(
+    enrollment: ComputeMachineEnrollmentRecord | None,
+    *,
+    machine_id: str,
+    worker_state: MachineWorkerState,
+) -> bool:
+    """Whether this machine accepts workloads right now.
+
+    Two facts with two owners, and both must hold: the durable enrollment says
+    the agent is alive and ready, and the scheduler's hot record says the
+    worker takes work. The API summary and bootstrap reclaim previously each
+    composed their own version from the durable `Worker` row, which asserts
+    `Running` at registration — before the worker can accept anything.
+    """
+    if enrollment is None:
+        return False
+    if enrollment.status is not ComputeMachineEnrollmentStatus.Active:
+        return False
+    if enrollment.readiness_phase is not MachineReadinessPhase.Ready:
+        return False
+    return worker_state.machine_worker_available(machine_id)
 
 
 def join_token_ttl_seconds(value: str) -> int:

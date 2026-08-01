@@ -81,6 +81,10 @@ class SchedulerComputeHooks:
     def revoke_pool_join_token(self, token_hash: str) -> None:
         self.compute_states.revoke_join_token_state(token_hash)
 
+    def machine_worker_available(self, machine_id: str) -> bool:
+        worker = self.workers.get_worker(agent_machine_worker_id(machine_id))
+        return worker is not None and worker.status is SchedulerWorkerStatus.Available
+
     def _workers_for_machine(self, machine_id: str) -> list[SchedulerWorkerRecord]:
         workers = [
             worker

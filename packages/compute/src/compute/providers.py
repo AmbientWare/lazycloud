@@ -256,6 +256,8 @@ class ComputeSchedulerHooks(Protocol):
 
     def disable_machine(self, machine_id: str, reason: str) -> None: ...
 
+    def machine_worker_available(self, machine_id: str) -> bool: ...
+
     def retire_machine(
         self,
         workspace_id: str,

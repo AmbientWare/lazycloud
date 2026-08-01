@@ -262,6 +262,11 @@ class SchedulerAppServices:
             else None
         )
 
+        scheduler_hooks = SchedulerComputeHooks(
+            RedisComputeStateRepository(redis),
+            worker_repository,
+        )
+        compute_policies.worker_state = scheduler_hooks
         compute = ComputeService(
             context,
             provider_registry=configured_compute_provider_registry(
@@ -276,10 +281,7 @@ class SchedulerAppServices:
             pool_bootstrap_factory=pool_bootstrap if provider_resolver is not None else None,
             billing=billing,
             usage_exporter=usage_exporter,
-            scheduler_hooks=SchedulerComputeHooks(
-                RedisComputeStateRepository(redis),
-                worker_repository,
-            ),
+            scheduler_hooks=scheduler_hooks,
             workspace_changes=workspace_changes,
             reclaim=capacity.reclaim,
             capacity_owner_mutations=RedisCapacityReservationRepository(redis),

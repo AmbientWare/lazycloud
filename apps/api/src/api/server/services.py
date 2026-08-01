@@ -797,6 +797,10 @@ class ApiServices(ApiServiceCore):
                 tailnet_control=resolved_tailnet_control_settings,
             )
 
+        scheduler_hooks = SchedulerComputeHooks(
+            RedisComputeStateRepository(redis),
+            worker_repository,
+        )
         compute = ComputeService(
             context,
             provider_registry=configured_compute_provider_registry(
@@ -811,14 +815,12 @@ class ApiServices(ApiServiceCore):
             pool_bootstrap_factory=pool_bootstrap,
             billing=managed_billing_client(managed_billing_config.to_runtime_settings()),
             usage_exporter=usage_exporter,
-            scheduler_hooks=SchedulerComputeHooks(
-                RedisComputeStateRepository(redis),
-                worker_repository,
-            ),
+            scheduler_hooks=scheduler_hooks,
             workspace_changes=workspace_changes,
             capacity_owner_mutations=capacity_reservation_repository,
         )
         compute_policies.aws_default_capacity = AwsDefaultCapacityBaseline(compute)
+        compute_policies.worker_state = scheduler_hooks
         aws_composition = aws_account_connection_composition_from_settings(
             context=context,
             pool_drainer=compute,

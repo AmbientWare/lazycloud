@@ -15,7 +15,7 @@ from database.repositories.compute import (
     WorkspaceComputePolicyRepository,
 )
 from database.repositories.identity import WorkspaceRepository
-from database.repositories.orchestration import PoolRepository, WorkerRepository
+from database.repositories.orchestration import PoolRepository
 from database.types import DatabaseSession
 from foundation.resources import parse_memory_mib
 from pydantic import ConfigDict, Field, JsonValue
@@ -25,7 +25,6 @@ from shared.compute_enrollment import (
     MachineBootstrapPhase,
     MachineReadinessPhase,
 )
-from shared.compute_fleet import ResourceStatus
 from shared.compute_policy import (
     AwsWorkspaceComputePolicy,
     ComputePlacement,
@@ -42,7 +41,10 @@ from shared.errors import ConflictError, InvalidInputError
 from shared.identity import WorkspaceStatus
 from shared.timestamps import utc_now
 
-from compute.agent_control import agent_machine_worker_id
+from compute.agent_control import (
+    MachineWorkerState,
+    machine_serves_workloads,
+)
 from compute.context import ComputeContext
 from compute.offers import ReservationStatus
 
@@ -166,6 +168,7 @@ class WorkspaceComputePolicyService:
     context: ComputeContext
     available_catalog: tuple[ComputeCatalogRegion, ...] = ()
     aws_default_capacity: AwsDefaultCapacityBaseline | None = None
+    worker_state: MachineWorkerState | None = None
 
     def get_policy(self, *, workspace: str) -> WorkspaceComputePolicy:
         with self.context.database.session() as session:
@@ -338,7 +341,9 @@ class WorkspaceComputePolicyService:
             pools = ComputePoolRepository(session).list_internal(workspace_id=workspace_id)
             instances = ComputeProviderInstanceRepository(session)
             enrollments = ComputeMachineEnrollmentRepository(session)
-            workers = WorkerRepository(session)
+            if self.worker_state is None:
+                msg = "workspace compute policy service requires scheduler worker state"
+                raise RuntimeError(msg)
             views = [
                 _compute_instance_view(
                     record,
@@ -346,7 +351,7 @@ class WorkspaceComputePolicyService:
                     workspace_id=workspace_id,
                     pool_name=pool.name,
                     enrollments=enrollments,
-                    workers=workers,
+                    worker_state=self.worker_state,
                 )
                 for pool in pools
                 for record in instances.list_for_pool(pool.id)
@@ -507,7 +512,7 @@ def _compute_instance_view(
     workspace_id: str,
     pool_name: str,
     enrollments: ComputeMachineEnrollmentRepository,
-    workers: WorkerRepository,
+    worker_state: MachineWorkerState,
 ) -> ComputeInstanceView:
     phase = record.bootstrap_phase
     failure_reason = record.bootstrap_failure_reason
@@ -526,19 +531,15 @@ def _compute_instance_view(
             record.machine_id,
             pool_name=pool_name,
         )
-        worker = workers.get(
-            agent_machine_worker_id(record.machine_id),
-            workspace_id=workspace_id,
-        )
-        if (
-            enrollment is not None
-            and enrollment.readiness_phase is MachineReadinessPhase.Ready
-            and worker is not None
-            and worker.status is ResourceStatus.Running
+        if machine_serves_workloads(
+            enrollment,
+            machine_id=record.machine_id,
+            worker_state=worker_state,
         ):
+            assert enrollment is not None
             phase = MachineBootstrapPhase.Ready
             failure_reason = None
-            observed_at = max(observed_at, enrollment.updated_at, worker.last_seen_at)
+            observed_at = max(observed_at, enrollment.updated_at)
         elif enrollment is not None and enrollment.readiness_phase in {
             MachineReadinessPhase.Blocked,
             MachineReadinessPhase.Offline,
