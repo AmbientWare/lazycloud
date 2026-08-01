@@ -36,6 +36,7 @@ from shared.container_requests import StopContainerReason
 from shared.containers import ContainerStatus
 from shared.deployment_records import DeploymentSpec
 from shared.deployments import DeploymentKind
+from shared.scheduling import WorkerUnavailableReason
 from storage.image_archive import ImageArchiveSettings
 from storage.retention_settings import RetentionSettings
 from tests.real_redis import RealRedisActors
@@ -406,6 +407,8 @@ class _ContainerWorkerLifecycle:
         *,
         remove_worker: bool = True,
         stop_reason: StopContainerReason = StopContainerReason.Unknown,
+        unavailable_reason: WorkerUnavailableReason = WorkerUnavailableReason.ShuttingDown,
+        unavailable_detail: str = "",
     ) -> WorkerShutdownResult:
         self.calls.append(f"shutdown:{remove_worker}:{stop_reason.value}")
         return WorkerShutdownResult(worker_id="worker-1")
