@@ -10,7 +10,6 @@ from compute.request_placement import (
 from scheduler.capacity_reservations import (
     CapacityAcquisitionStatus,
     CapacityProvisioningReservation,
-    CapacityReservationSource,
     ComputePoolCapacityController,
 )
 from scheduler.compute_placement import SchedulerComputePlacement
@@ -78,7 +77,6 @@ def test_scheduler_forwards_typed_ad_hoc_placement_to_capacity_owner() -> None:
         capacity_owner_id=_OWNER_ID,
         pool_name="internal-aws-cpu",
         owner_kind=CapacityOwnerKind.PooledProvider,
-        source=CapacityReservationSource.PlacementMiss,
         acquisition_shape=acquisition_shape,
         schedulable_shape=acquisition_shape.model_copy(update={"memory_mib": 15_500}),
         operation_id="33333333-3333-4333-8333-333333333333",

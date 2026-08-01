@@ -234,14 +234,6 @@ class SchedulerCapacityReservations(Protocol):
 
     def can_acquire(self, request: SchedulerWorkerRequest) -> bool: ...
 
-    def reserve_pending(
-        self,
-        request: SchedulerWorkerRequest,
-        worker: SchedulerWorkerRecord,
-        *,
-        now: datetime | None = None,
-    ) -> CapacityAcquisitionResult: ...
-
     def acquire(
         self,
         request: SchedulerWorkerRequest,
@@ -546,27 +538,6 @@ class SchedulerContainerRequestService:
             if outcome.decision is SchedulingDecision.ProvisionWorker:
                 results.append(self._acquire_capacity(claim, current_time))
                 continue
-            if (
-                outcome.decision is SchedulingDecision.WaitForWorker
-                and outcome.worker_id
-                and self.capacity_reservations is not None
-            ):
-                pending_worker = workers_by_id.get(outcome.worker_id)
-                if pending_worker is not None:
-                    try:
-                        self.capacity_reservations.reserve_pending(
-                            request,
-                            pending_worker,
-                            now=current_time,
-                        )
-                    except Exception as exc:
-                        outcome = outcome.model_copy(
-                            update={
-                                "reason": (
-                                    f"capacity reservation retry required: {type(exc).__name__}"
-                                )
-                            }
-                        )
             retry = self._plan_requeue(request, outcome, current_time)
             if retry.action is SchedulerRequeueAction.Fail:
                 failure_reason = self._fail_request(

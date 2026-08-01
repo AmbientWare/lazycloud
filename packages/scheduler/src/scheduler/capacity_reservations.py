@@ -79,11 +79,6 @@ class CapacityReservationStatus(StrEnum):
     Released = "released"
 
 
-class CapacityReservationSource(StrEnum):
-    PendingWorker = "pending_worker"
-    PlacementMiss = "placement_miss"
-
-
 class CapacityAcquisitionStatus(StrEnum):
     ExistingPending = "existing_pending"
     Requested = "requested"
@@ -155,7 +150,6 @@ class CapacityProvisioningReservation(ContractModel):
     capacity_owner_id: str
     pool_name: str
     owner_kind: CapacityOwnerKind
-    source: CapacityReservationSource
     status: CapacityReservationStatus = CapacityReservationStatus.Reserved
     acquisition_shape: CapacityRequestShape
     schedulable_shape: CapacityRequestShape | None = None
@@ -224,29 +218,6 @@ class CapacityReservationVersionConflictError(CapacityReservationConflictError):
 
 class CapacityReservationStateTransitionError(CapacityReservationConflictError):
     """A reservation attempted to leave the frozen lifecycle graph."""
-
-
-class PendingCapacityOwner(ContractModel):
-    capacity_owner_id: str
-    owner_kind: CapacityOwnerKind
-    pool_name: str
-    workspace_id: str = ""
-    registration_timeout_seconds: int = Field(default=600, ge=30, le=3_600)
-
-    def accepts(
-        self,
-        request: SchedulerWorkerRequest,
-        worker: SchedulerWorkerRecord,
-    ) -> bool:
-        return (
-            worker.capacity_owner_id == self.capacity_owner_id
-            and worker.pool_name == self.pool_name
-            and (not self.workspace_id or request.workspace_id == self.workspace_id)
-            and (
-                request.capacity_owner_id in {"", self.capacity_owner_id}
-                and request.pool_selector in {"", self.pool_name}
-            )
-        )
 
 
 class CapacityAcquisitionController(Protocol):
@@ -824,8 +795,6 @@ class RedisCapacityReservationRepository:
         request: SchedulerWorkerRequest,
         shape: CapacityRequestShape,
         registration_timeout: timedelta,
-        source: CapacityReservationSource = CapacityReservationSource.PlacementMiss,
-        target_worker_id: str = "",
         desired_unit: int = 0,
         now: datetime | None = None,
     ) -> CapacityReservationDecision:
@@ -842,30 +811,17 @@ class RedisCapacityReservationRepository:
             if reservation is not None:
                 self.release_terminal(reservation.id, now=current_time)
 
-        reservation = self._compatible_open_reservation(
-            capacity_owner_id,
-            request,
-            target_worker_id=target_worker_id,
-        )
+        reservation = self._compatible_open_reservation(capacity_owner_id, request)
         created = reservation is None
         if reservation is None:
-            if target_worker_id and any(
-                candidate.open and candidate.target_worker_id == target_worker_id
-                for candidate in self.list_for_owner(capacity_owner_id)
-            ):
-                raise CapacityReservationVersionConflictError(
-                    f"pending worker {target_worker_id} capacity is already reserved"
-                )
             reservation_id = str(uuid4())
             reservation = CapacityProvisioningReservation(
                 id=reservation_id,
                 capacity_owner_id=capacity_owner_id,
                 pool_name=pool_name,
                 owner_kind=owner_kind,
-                source=source,
                 acquisition_shape=shape,
                 operation_id=reservation_id,
-                target_worker_id=target_worker_id,
                 desired_unit=desired_unit,
                 registration_deadline_at=current_time + registration_timeout,
                 created_at=current_time,
@@ -1082,14 +1038,10 @@ class RedisCapacityReservationRepository:
         self,
         capacity_owner_id: str,
         request: SchedulerWorkerRequest,
-        *,
-        target_worker_id: str,
     ) -> CapacityProvisioningReservation | None:
         for reservation in self.list_for_owner(capacity_owner_id):
-            if (
-                not reservation.accepting_allocations
-                or reservation.target_worker_id != target_worker_id
-                or not reservation.allocation_shape.can_host(request)
+            if not reservation.accepting_allocations or not reservation.allocation_shape.can_host(
+                request
             ):
                 continue
             allocations = self.allocations_for(reservation.id)
@@ -1138,7 +1090,6 @@ class RedisCapacityReservationRepository:
 class CapacityReservationService:
     reservations: RedisCapacityReservationRepository
     controllers: Callable[[], Iterable[CapacityAcquisitionController]]
-    pending_owners: Callable[[], Iterable[PendingCapacityOwner]] = tuple
     allocation_owners: CapacityAllocationOwnerDirectory | None = None
 
     @contextmanager
@@ -1166,48 +1117,6 @@ class CapacityReservationService:
                 "capacity_owner_id": controller.capacity_owner_id,
             }
         )
-
-    def reserve_pending(
-        self,
-        request: SchedulerWorkerRequest,
-        worker: SchedulerWorkerRecord,
-        *,
-        now: datetime | None = None,
-    ) -> CapacityAcquisitionResult:
-        pending_owner = self._pending_owner_for_worker(request, worker)
-        if pending_owner is None:
-            return _unsupported_result(request, "pending worker has no matching capacity owner")
-        current_time = now or utc_now()
-        with self.reservations.mutation_lock(pending_owner.capacity_owner_id):
-            decision = self.reservations.reserve(
-                capacity_owner_id=pending_owner.capacity_owner_id,
-                pool_name=pending_owner.pool_name,
-                owner_kind=pending_owner.owner_kind,
-                request=request,
-                shape=_shape_from_worker(worker),
-                registration_timeout=timedelta(seconds=pending_owner.registration_timeout_seconds),
-                source=CapacityReservationSource.PendingWorker,
-                target_worker_id=worker.worker_id,
-                now=current_time,
-            )
-            reservation = decision.reservation
-            if decision.created:
-                reservation = self.reservations.update(
-                    reservation.model_copy(
-                        update={"status": CapacityReservationStatus.Provisioning}
-                    ),
-                    expected_resource_version=reservation.resource_version,
-                    now=current_time,
-                )
-            return CapacityAcquisitionResult(
-                status=CapacityAcquisitionStatus.ExistingPending,
-                capacity_owner_id=reservation.capacity_owner_id,
-                reservation_id=reservation.id,
-                operation_id=reservation.operation_id,
-                desired_unit=reservation.desired_unit,
-                target_worker_id=worker.worker_id,
-                reason="reserved matching pending worker capacity",
-            )
 
     def acquire(
         self,
@@ -1284,20 +1193,6 @@ class CapacityReservationService:
             owner_reservations = tuple(
                 self.reservations.list_for_owner(controller.capacity_owner_id)
             )
-            if reservation.source is CapacityReservationSource.PendingWorker:
-                # This reservation claims a worker that is already booting, so it
-                # asks the provider for nothing and carries no desired unit. The
-                # controller would refuse it on exactly that ground. `reconcile`
-                # skips it for the same reason.
-                return CapacityAcquisitionResult(
-                    status=CapacityAcquisitionStatus.ExistingPending,
-                    capacity_owner_id=reservation.capacity_owner_id,
-                    reservation_id=reservation.id,
-                    operation_id=reservation.operation_id,
-                    desired_unit=reservation.desired_unit,
-                    target_worker_id=reservation.target_worker_id,
-                    reason="pending worker capacity reservation is awaiting registration",
-                )
             if (
                 not decision.created
                 and reservation.status is not CapacityReservationStatus.Reserved
@@ -1570,9 +1465,6 @@ class CapacityReservationService:
                             )
                         reconciled.append(reservation)
                         continue
-                    if reservation.source is CapacityReservationSource.PendingWorker:
-                        reconciled.append(reservation)
-                        continue
                     if controller is None:
                         reconciled.append(reservation)
                         continue
@@ -1836,34 +1728,6 @@ class CapacityReservationService:
             None,
         )
 
-    def _pending_owner_for_worker(
-        self,
-        request: SchedulerWorkerRequest,
-        worker: SchedulerWorkerRecord,
-    ) -> PendingCapacityOwner | None:
-        candidates = [owner for owner in self.pending_owners() if owner.accepts(request, worker)]
-        if not candidates:
-            controller = self._controller_for_owner(worker.capacity_owner_id)
-            if controller is not None and (
-                request.capacity_owner_id in {"", controller.capacity_owner_id}
-                and request.pool_selector in {"", controller.pool_name}
-                and worker.pool_name == controller.pool_name
-            ):
-                candidates.append(
-                    PendingCapacityOwner(
-                        capacity_owner_id=controller.capacity_owner_id,
-                        owner_kind=controller.owner_kind,
-                        pool_name=controller.pool_name,
-                        registration_timeout_seconds=int(
-                            controller.registration_timeout.total_seconds()
-                        ),
-                    )
-                )
-        if not candidates:
-            return None
-        candidates.sort(key=lambda owner: owner.capacity_owner_id)
-        return candidates[0]
-
 
 def reservation_shape_for_request(
     request: SchedulerWorkerRequest,
@@ -1988,18 +1852,6 @@ def _schedulable_shape(
             "gpu_type": worker.gpu_type if worker.total_gpu_count > 0 else "",
             "gpu_count": worker.total_gpu_count,
         }
-    )
-
-
-def _shape_from_worker(worker: SchedulerWorkerRecord) -> CapacityRequestShape:
-    return CapacityRequestShape(
-        cpu_millicores=worker.total_cpu_millicores,
-        memory_mib=worker.total_memory_mib,
-        gpu_type=worker.gpu_type if worker.total_gpu_count > 0 else "",
-        gpu_count=worker.total_gpu_count,
-        runtime_class=worker.runtime_class,
-        runtime_classes=tuple(worker.runtime_classes),
-        preemptible=worker.preemptible,
     )
 
 
@@ -2150,13 +2002,11 @@ __all__ = [
     "CapacityReservationLeaseLostError",
     "CapacityReservationLockContendedError",
     "CapacityReservationService",
-    "CapacityReservationSource",
     "CapacityReservationStateTransitionError",
     "CapacityReservationStatus",
     "CapacityReservationVersionConflictError",
     "CapacityWorkerRepository",
     "ComputePoolCapacityController",
-    "PendingCapacityOwner",
     "RedisCapacityReservationRepository",
     "reservation_matches_worker",
     "reservation_shape_for_request",

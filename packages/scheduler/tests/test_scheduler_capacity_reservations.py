@@ -23,7 +23,6 @@ from scheduler.capacity_reservations import (
     CapacityReservationStateTransitionError,
     CapacityReservationStatus,
     ComputePoolCapacityController,
-    PendingCapacityOwner,
     RedisCapacityReservationRepository,
     reservation_shape_for_request,
 )
@@ -1109,98 +1108,6 @@ def test_cpu_memory_and_gpu_exhaustion_prevent_false_compatible_reuse(
         )
 
     assert first.reservation.id != second.reservation.id
-
-
-def test_acquiring_for_a_container_already_claiming_a_pending_worker_asks_no_provider(
-    real_redis_actors: _RealRedisActors,
-) -> None:
-    """A pending-worker claim carries no desired unit, so it must not be acquired.
-
-    `reserve_pending` persists the claim with no desired unit — it buys nothing,
-    it waits for a machine that is already booting. `reconcile` skips such a
-    reservation for that reason; the acquisition path did not, and drove it into
-    the controller, which refused it on exactly the ground that made it valid.
-    Every later attempt for that container raised until the registration
-    deadline, so one worker that failed to register turned into a failed task
-    with a Python type name for a reason.
-    """
-    pool = _managed_pool()
-    repository = _repository(real_redis_actors)
-    controller = ComputePoolCapacityController(
-        "workspace-1",
-        pool,
-        # Raises if the provider is consulted at all, which is the assertion.
-        _UnusedComputeCapacity(pool),
-        _WorkerRepository(),
-    )
-    owner = PendingCapacityOwner(
-        capacity_owner_id=OWNER_ID,
-        owner_kind=CapacityOwnerKind.ManagedPool,
-        pool_name=pool.name,
-        workspace_id="workspace-1",
-    )
-    service = CapacityReservationService(repository, lambda: [controller], lambda: [owner])
-    now = datetime(2026, 1, 1, tzinfo=UTC)
-    pending = _worker(OWNER_ID, created_at=now).model_copy(
-        update={"status": SchedulerWorkerStatus.Pending}
-    )
-    reserved = service.reserve_pending(_request("pending-claim"), pending, now=now)
-    assert reserved.status is CapacityAcquisitionStatus.ExistingPending
-
-    result = service.acquire(_request("pending-claim"), now=now + timedelta(seconds=1))
-
-    assert result.status is CapacityAcquisitionStatus.ExistingPending
-    assert result.target_worker_id == pending.worker_id
-
-
-def test_agent_and_disabled_pool_pending_workers_are_durably_reserved(
-    real_redis_actors: _RealRedisActors,
-) -> None:
-    repository = _repository(real_redis_actors)
-    controller = _Controller()
-    agent_owner = PendingCapacityOwner(
-        capacity_owner_id=OWNER_ID,
-        owner_kind=CapacityOwnerKind.WorkspaceAgent,
-        pool_name="default",
-        workspace_id="workspace-1",
-    )
-    service = CapacityReservationService(
-        repository,
-        lambda: [controller],
-        lambda: [agent_owner],
-    )
-    now = datetime(2026, 1, 1, tzinfo=UTC)
-    pending = _worker(OWNER_ID, created_at=now).model_copy(
-        update={"status": SchedulerWorkerStatus.Pending, "private_worker": True}
-    )
-
-    result = service.reserve_pending(_request("agent-pending"), pending, now=now)
-
-    assert result.status is CapacityAcquisitionStatus.ExistingPending
-    assert repository.allocation_for_request("agent-pending") is not None
-    waiting = service.reconcile([pending], now=now + timedelta(seconds=1))
-    assert waiting[-1].status is CapacityReservationStatus.Provisioning
-    assert controller.reconcile_calls == []
-    assert controller.ensure_calls == []
-    available = pending.model_copy(update={"status": SchedulerWorkerStatus.Available})
-    reconciled = service.reconcile([available], now=now + timedelta(seconds=2))
-    assert reconciled[-1].status is CapacityReservationStatus.Registered
-
-    disabled_pool = _managed_pool().model_copy(update={"scaling_enabled": False})
-    disabled = ComputePoolCapacityController(
-        "workspace-1",
-        disabled_pool,
-        _UnusedComputeCapacity(disabled_pool),
-        _WorkerRepository(),
-    )
-    disabled_service = CapacityReservationService(repository, lambda: [disabled])
-    disabled_result = disabled_service.reserve_pending(
-        _request("disabled-pending"),
-        pending.model_copy(update={"worker_id": "disabled-worker", "private_worker": False}),
-        now=now,
-    )
-    assert disabled_result.status is CapacityAcquisitionStatus.ExistingPending
-    assert repository.allocation_for_request("disabled-pending") is not None
 
 
 def test_concurrent_compatible_misses_deduplicate_after_lock_retry(

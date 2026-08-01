@@ -196,7 +196,6 @@ class SchedulerRuntime:
         capacity_reservations = CapacityReservationService(
             RedisCapacityReservationRepository(redis_client),
             capacity_controllers.capacity_acquisition_controllers,
-            capacity_controllers.pending_capacity_owners,
             DatabaseCapacityAllocationOwners(scheduler_services.context.database),
         )
         dispatch_requests = _container_requests_with_capacity(
