@@ -79,6 +79,7 @@ from shared.compute_policy import (
 from shared.containers import ContainerStatus
 from shared.contracts import ContractModel
 from shared.errors import (
+    CapacityLimitReachedError,
     ConflictError,
     DomainError,
     InvalidInputError,
@@ -2069,9 +2070,10 @@ class ComputeService:
                         ),
                     )
             if requested_machines > 0 and desired < requested_machines:
-                raise ManagedComputeLaunchError(
-                    "workspace pooled compute capacity limit reached",
-                    code="capacity_limit_reached",
+                raise CapacityLimitReachedError(
+                    f"workspace compute limit reached: {requested_machines} machines "
+                    f"requested, {desired} available within the workspace limit of "
+                    f"{workspace_machine_limit}"
                 )
             maximum = max(min(workspace_machine_limit, remaining), desired, 1)
             minimum = (
@@ -2891,9 +2893,9 @@ class ComputeService:
                     f"{compute_pool.capacity_owner_kind.value!r} capacity"
                 )
             elif plan.nodes > compute_pool.max_workers:
-                raise ConflictError(
-                    f"compute pool {plan.name!r} request exceeds its maximum of "
-                    f"{compute_pool.max_workers} workers"
+                raise CapacityLimitReachedError(
+                    f"compute pool {plan.name!r} limit reached: {plan.nodes} workers "
+                    f"requested, maximum is {compute_pool.max_workers}"
                 )
             offers = [
                 offer for offer in offers if _offer_matches_capacity_policy(offer, compute_pool)
@@ -5547,7 +5549,9 @@ def _plan_next_capacity_unit(
             request,
             CapacityAcquisitionStatus.AtLimit,
             desired_unit=max(current_units, 1),
-            reason="durable capacity owner maximum is exhausted",
+            reason=(
+                f"capacity limit reached: {current_units} units held, maximum is {max_units}"
+            ),
         )
     return _capacity_result(
         request,
