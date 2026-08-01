@@ -43,6 +43,7 @@ from starlette.types import Scope
 from api.control_runtime import ControlPlaneRuntime
 from api.server import include_api_routers, service_dependencies
 from api.server.host_routing import GeneratedInvokeHostRoutingMiddleware
+from api.server.rate_limit import UnauthenticatedRateLimitMiddleware
 from api.server.services import (
     ApiServices,
     EndpointApiService,
@@ -51,6 +52,7 @@ from api.server.services import (
 )
 from api.server.tcp_ingress import tcp_ingress_server_from_settings
 from api.server.worker_repository_service import WorkerRepositoryService
+from api.settings import PublicIngressSettings
 from api.web_static import mount_web_app
 from database import ControlPlaneRecoveryFence
 
@@ -209,9 +211,15 @@ def _create_app(runtime: ControlPlaneRuntime) -> FastAPI:
         lifespan=lifespan,
     )
     services_provider = _FastApiServicesProvider(app)
+    public_ingress = PublicIngressSettings()
     app.add_middleware(
         GeneratedInvokeHostRoutingMiddleware,
         services_provider=services_provider,
+    )
+    app.add_middleware(
+        UnauthenticatedRateLimitMiddleware,
+        redis=lambda: services_provider.current().redis(),
+        client_ip_header=public_ingress.client_ip_header,
     )
     app.add_middleware(
         GatewayRequestEventMiddleware,

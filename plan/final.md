@@ -288,7 +288,12 @@ confirm the workspace stops billing. `ERR-07`: hit a configured quota and get a
   concurrent attempts admitted exactly 8 and refused 192 immediately. Budget cut
   to 2s with a 1s connect bound so a black-holed endpoint cannot spend it twice.
   The live 200-request/health-latency contrast belongs to Phase 3.*
-- [ ] **INFRA-05** Rate-limit every unauthenticated route before exposure — *after INFRA-01, INFRA-02*
+- [x] **INFRA-05** Rate-limit every unauthenticated route before exposure — *after INFRA-01, INFRA-02*
+  — *verified live: `/auth/device` returned 10×201 then 429 with `retry-after: 60`,
+  and `device_authorizations` grew by 10 not 14 — refused requests never reach
+  the database. `/health` fails open when Redis is down, the provider-node prefix
+  fails closed, authenticated routes are untouched, and the Compose healthcheck
+  stays healthy.*
 - [ ] **INFRA-17** Close the remaining plaintext durable-secret gaps
 
 **Phase 2 acceptance.** Load-test `/gateway/provider-nodes/*` with an unverified
