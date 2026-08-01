@@ -881,21 +881,15 @@ class RemoteSchedulerWorkerRepository:
         return response.worker
 
     def prepare_source_cache(self) -> None:
-        """Purge every claimed cleanup target before this worker serves.
+        """Drive one cleanup round before this worker serves.
 
-        A target names workspace source the control plane has marked for
-        removal. Serving with one outstanding would leave that source
-        materializable, so the worker stays out until the purge succeeds.
+        A target names an object whose store bytes and row are already gone,
+        so nothing can request what remains cached here. A failed purge is
+        retried from the durable queue while the worker serves; only a round
+        that cannot run at all — an unreachable control plane or a lost cache
+        session — refuses registration.
         """
-        result = self.reconcile_source_cache()
-        if not result.failed_count:
-            return
-        detail = result.failure_detail or "no cause was recorded"
-        msg = (
-            f"source cache cleanup failed for {result.failed_count} target(s); "
-            f"this worker stays unavailable until it succeeds: {detail}"
-        )
-        raise WorkerRepositoryClientError(msg)
+        self.reconcile_source_cache()
 
     def toggle_worker_available(
         self,
@@ -922,9 +916,9 @@ class RemoteSchedulerWorkerRepository:
             WorkerCacheGenerationState.Initializing,
             WorkerCacheGenerationState.Draining,
         }:
-            result = self.reconcile_source_cache()
-            if result.failed_count:
-                raise WorkerRepositoryClientError("source cache cleanup failed")
+            # Each keepalive drives another cleanup round; a purge that still
+            # fails stays queued and the worker keeps serving.
+            self.reconcile_source_cache()
             response = self.client.set_worker_keep_alive(self._session_request())
         worker = response.worker
         if worker is None:

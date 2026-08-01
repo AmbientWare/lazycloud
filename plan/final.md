@@ -368,7 +368,7 @@ of these as a question, this section overrides it.
 | 2 | Agent artifact stays on the **release bucket** | BOOT-05 adds `--agent-url`; the 47.6 MB transfer never touches the control plane |
 | 3 | **Do the full `DomainError`/`ErrorResponse` code field now** — option (a) | ERR-06 is one cross-owner change: shared contracts, API sink, SDK/CLI renderer, and `apps/web` Zod schemas together, per `CLAUDE.md` |
 | 4 | **Headscale is on the roadmap** (future, for scalability) | BOOT-06 must not further entrench the Tailscale SaaS `/api/v2` shape. `TailscaleTailnetControl` keeps its seam. The `--login-server` gap closes by construction in BOOT-05, since the agent authenticates with the `control_url` the control plane returns |
-| 5 | Source-cache cleanup **no longer hard-gates availability** | **Not implemented — needs your call again.** See "Decision 5 revisited" below |
+| 5 | Source-cache cleanup **no longer hard-gates availability** | Implemented after a dedicated investigation settled the crux: targets are enqueued only after the store bytes and the object row are already gone, so a workload cannot reach the stale cache entry. A worker serves while failed purges retry from the durable queue (`Draining`); only a round that cannot run — unreachable control plane, lost cache session — blocks. The admin cleanup ledger still reports incomplete purges |
 | 6 | `ssm:SendCommand` goes to a **separate break-glass role** | INFRA-09 splits it out; the acceptance operator role does not hold RCE on nodes |
 | 7 | **No alerting for now** | INFRA-15 is deferred out of the programme. Signals still land durably (INFRA-14) and are scrapable (INFRA-12) — only paging is dropped. INFRA-19 loses its INFRA-15 dependency |
 | 8 | Delete the `lazycloud-shared` stack — **blocked, see below** | Recorded as INFRA-21 with a mandatory pre-check |
@@ -411,29 +411,23 @@ still in use. So the order is forced:
     exactly how prod-infra reached its current state.
   - **Acceptance**: both stacks absent; no orphaned VPC/NAT/ELB remaining.
 
-### Decision 5 revisited: the source-cache gate
+### Decision 5: resolved
 
-You asked me to loosen this and to check it was right for long-term
-production. On reading the mechanism I do not think it is, and I have left the
-gate in place rather than take it either way silently.
+An independent investigation settled the retention question the gate hinged on:
+cleanup targets are enqueued in the same transaction that deletes the object
+row, after the store bytes are verified gone (`storage/retention.py:262-301`),
+and mounts resolve per-request from that row (`execution/mounts.py:43-53`) —
+so a stale cache entry is unreachable by any workload, and idling the machine
+retains the bytes exactly as long as serving would. The gate was therefore
+converting a hygiene backlog into billed idle capacity for zero retention
+benefit, at registration **and** mid-service (`Draining` refused keepalive and
+dispatch).
 
-The reconcile calls `materializer.purge(workspace_id, [source_object_id])` on
-targets the control plane has claimed for cleanup
-(`source_cache_cleanup.py:180-215`). A target names **workspace source the
-platform has decided to remove**. Letting a worker serve with one outstanding
-means that source stays materializable on that machine for as long as the purge
-keeps failing — a data-retention question, not an availability one, and the
-reason I stopped: I cannot establish from here whether a stale object can still
-be referenced, and being wrong deletes nothing but retains something.
-
-What CAP-06 did deliver is the diagnosis: the failure is now attributed to its
-own step and reaches the control plane as `source_cache_unavailable` with a
-durable reason, so a stranded worker is visible instead of silent. That was the
-actual pain.
-
-If you still want the gate bounded, the safe shape is a bounded number of purge
-attempts **plus** a durable record and a refusal to materialize the specific
-objects that failed — not a blanket "serve anyway".
+Implemented: an incomplete round resolves to `Draining` and the worker serves;
+keepalive drives a retry round each interval; the durable queue keeps failing
+targets with backoff; the admin ledger still reports them. Only a round that
+cannot run at all — unreachable control plane, lost session fence — refuses
+service, which is what `source_cache_unavailable` now exclusively means.
 
 ## Deferred out of scope
 

@@ -867,7 +867,10 @@ class WorkerRepositoryService:
             generation_id=request.cache_generation_id,
             session_fence=request.cache_session_fence,
         )
-        if generation.state is not WorkerCacheGenerationState.Available:
+        if generation.state not in {
+            WorkerCacheGenerationState.Available,
+            WorkerCacheGenerationState.Draining,
+        }:
             self._project_source_cache_unavailable(request.worker_id)
             return WorkerKeepAliveResponse(source_cache_state=generation.state)
         try:
@@ -891,10 +894,7 @@ class WorkerRepositoryService:
             session_fence=request.cache_session_fence,
             limit=request.limit,
         )
-        if claim.generation_state in {
-            WorkerCacheGenerationState.Initializing,
-            WorkerCacheGenerationState.Draining,
-        }:
+        if claim.generation_state is WorkerCacheGenerationState.Initializing:
             self._project_source_cache_unavailable(request.worker_id)
         return ClaimSourceCacheCleanupResponse(targets=claim.targets)
 

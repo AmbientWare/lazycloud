@@ -463,9 +463,16 @@ class SourceCacheCleanupRepository:
                 )
             )
         )
-        if incomplete:
-            return None
-        row.state = WorkerCacheGenerationState.Available.value
+        # Targets are enqueued only after the store bytes are deleted and the
+        # object row is gone, so nothing can request what remains cached here.
+        # An incomplete round therefore means Draining — serving while the
+        # purge retries — not a refusal to serve. Idling the machine would
+        # keep the residue on disk exactly as long while billing for it.
+        row.state = (
+            WorkerCacheGenerationState.Draining.value
+            if incomplete
+            else WorkerCacheGenerationState.Available.value
+        )
         row.last_seen_at = now
         row.updated_at = now
         self.session.flush()
