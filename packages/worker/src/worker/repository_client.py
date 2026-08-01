@@ -880,6 +880,23 @@ class RemoteSchedulerWorkerRepository:
         self._available_worker = None
         return response.worker
 
+    def prepare_source_cache(self) -> None:
+        """Purge every claimed cleanup target before this worker serves.
+
+        A target names workspace source the control plane has marked for
+        removal. Serving with one outstanding would leave that source
+        materializable, so the worker stays out until the purge succeeds.
+        """
+        result = self.reconcile_source_cache()
+        if not result.failed_count:
+            return
+        detail = result.failure_detail or "no cause was recorded"
+        msg = (
+            f"source cache cleanup failed for {result.failed_count} target(s); "
+            f"this worker stays unavailable until it succeeds: {detail}"
+        )
+        raise WorkerRepositoryClientError(msg)
+
     def toggle_worker_available(
         self,
         worker_id: str,
@@ -887,14 +904,6 @@ class RemoteSchedulerWorkerRepository:
         ttl_seconds: int = 0,
     ) -> SchedulerWorkerRecord:
         _ = ttl_seconds
-        result = self.reconcile_source_cache()
-        if result.failed_count:
-            detail = result.failure_detail or "no cause was recorded"
-            msg = (
-                f"source cache cleanup failed for {result.failed_count} target(s); "
-                f"this worker stays unavailable until it succeeds: {detail}"
-            )
-            raise WorkerRepositoryClientError(msg)
         worker = self._available_worker
         if worker is None:
             msg = f"worker {worker_id!r} was not returned by repository"

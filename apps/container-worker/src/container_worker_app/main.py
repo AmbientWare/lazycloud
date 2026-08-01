@@ -538,6 +538,7 @@ def _run_retention_loop(
 
 _REGISTRATION_STEP_REASONS: dict[WorkerLifecycleAction, WorkerUnavailableReason] = {
     WorkerLifecycleAction.ValidateReadiness: WorkerUnavailableReason.ReadinessValidationFailed,
+    WorkerLifecycleAction.ActivateSourceCache: WorkerUnavailableReason.SourceCacheUnavailable,
     WorkerLifecycleAction.MarkAvailable: WorkerUnavailableReason.SourceCacheUnavailable,
 }
 

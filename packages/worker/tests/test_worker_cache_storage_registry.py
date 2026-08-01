@@ -122,6 +122,9 @@ class _FakeLifecycleRepo:
             msg = f"worker {worker_id!r} state is missing"
             raise RuntimeError(msg)
 
+    def prepare_source_cache(self) -> None:
+        self.actions.append("activated")
+
     def disable_worker(
         self,
         worker_id: str,

@@ -212,7 +212,11 @@ failure carries its cause to a durable place in every path we touched.
   touches no durable owner record — it requeues queued requests and deletes the
   state key. Test reworked to assert the cleanup obligation instead.*
 - [x] **CAP-05** Stop discarding the keep-alive source-cache outcome — *after CAP-02*
-- [ ] **CAP-06** Give `mark_available` one job — *after CAP-03*
+- [x] **CAP-06** Give `mark_available` one job — *after CAP-03*
+  — *split done: `activate-source-cache` is its own step, so an un-purgeable
+  target is blamed on it rather than on `mark-available`, and CAP-03 maps it to
+  `source_cache_unavailable`. **The gate was deliberately NOT loosened — see
+  below.***
 - [ ] **CAP-07** Reclassify "at limit" as backpressure
 - [ ] **CAP-08** Introduce one owned readiness predicate
 - [ ] **BOOT-03** Report bootstrap phases from the agent, not only from user-data
@@ -359,7 +363,7 @@ of these as a question, this section overrides it.
 | 2 | Agent artifact stays on the **release bucket** | BOOT-05 adds `--agent-url`; the 47.6 MB transfer never touches the control plane |
 | 3 | **Do the full `DomainError`/`ErrorResponse` code field now** — option (a) | ERR-06 is one cross-owner change: shared contracts, API sink, SDK/CLI renderer, and `apps/web` Zod schemas together, per `CLAUDE.md` |
 | 4 | **Headscale is on the roadmap** (future, for scalability) | BOOT-06 must not further entrench the Tailscale SaaS `/api/v2` shape. `TailscaleTailnetControl` keeps its seam. The `--login-server` gap closes by construction in BOOT-05, since the agent authenticates with the `control_url` the control plane returns |
-| 5 | Source-cache cleanup **no longer hard-gates availability** | CAP-06: bound by attempt count, let the worker serve while cleanup retries, record the failure durably. One un-purgeable object must not strand a machine |
+| 5 | Source-cache cleanup **no longer hard-gates availability** | **Not implemented — needs your call again.** See "Decision 5 revisited" below |
 | 6 | `ssm:SendCommand` goes to a **separate break-glass role** | INFRA-09 splits it out; the acceptance operator role does not hold RCE on nodes |
 | 7 | **No alerting for now** | INFRA-15 is deferred out of the programme. Signals still land durably (INFRA-14) and are scrapable (INFRA-12) — only paging is dropped. INFRA-19 loses its INFRA-15 dependency |
 | 8 | Delete the `lazycloud-shared` stack — **blocked, see below** | Recorded as INFRA-21 with a mandatory pre-check |
@@ -401,6 +405,30 @@ still in use. So the order is forced:
     balancers, or subnets accruing cost with no stack managing them — which is
     exactly how prod-infra reached its current state.
   - **Acceptance**: both stacks absent; no orphaned VPC/NAT/ELB remaining.
+
+### Decision 5 revisited: the source-cache gate
+
+You asked me to loosen this and to check it was right for long-term
+production. On reading the mechanism I do not think it is, and I have left the
+gate in place rather than take it either way silently.
+
+The reconcile calls `materializer.purge(workspace_id, [source_object_id])` on
+targets the control plane has claimed for cleanup
+(`source_cache_cleanup.py:180-215`). A target names **workspace source the
+platform has decided to remove**. Letting a worker serve with one outstanding
+means that source stays materializable on that machine for as long as the purge
+keeps failing — a data-retention question, not an availability one, and the
+reason I stopped: I cannot establish from here whether a stale object can still
+be referenced, and being wrong deletes nothing but retains something.
+
+What CAP-06 did deliver is the diagnosis: the failure is now attributed to its
+own step and reaches the control plane as `source_cache_unavailable` with a
+durable reason, so a stranded worker is visible instead of silent. That was the
+actual pain.
+
+If you still want the gate bounded, the safe shape is a bounded number of purge
+attempts **plus** a durable record and a refusal to materialize the specific
+objects that failed — not a blanket "serve anyway".
 
 ## Deferred out of scope
 

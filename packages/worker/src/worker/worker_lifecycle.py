@@ -34,6 +34,7 @@ DEFAULT_WORKER_USAGE_INTERVAL_SECONDS = 30.0
 
 class WorkerLifecycleAction(StrEnum):
     MarkAvailable = "mark-available"
+    ActivateSourceCache = "activate-source-cache"
     ValidateReadiness = "validate-readiness"
     KeepAlive = "keepalive"
     DisableScheduling = "disable-scheduling"
@@ -73,6 +74,8 @@ class WorkerLifecycleRepository(Protocol):
         *,
         ttl_seconds: int,
     ) -> SchedulerWorkerRecord | None: ...
+
+    def prepare_source_cache(self) -> None: ...
 
     def disable_worker(
         self,
@@ -262,6 +265,12 @@ class WorkerLifecycleOrchestrator:
         )
         if not added.ok:
             return [added]
+        activation = self._run_repository_step(
+            WorkerLifecycleAction.ActivateSourceCache,
+            lambda: repository.prepare_source_cache(),
+        )
+        if not activation.ok:
+            return [added, activation]
         readiness_validator = self.readiness_validator
         if readiness_validator is not None:
             readiness = self._run_repository_step(
@@ -273,7 +282,12 @@ class WorkerLifecycleOrchestrator:
         else:
             readiness = None
         available = self.mark_available()
-        return [added, *([readiness] if readiness is not None else []), available]
+        return [
+            added,
+            activation,
+            *([readiness] if readiness is not None else []),
+            available,
+        ]
 
     def keepalive(self) -> WorkerLifecycleStepResult:
         if self._draining:
