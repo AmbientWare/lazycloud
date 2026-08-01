@@ -164,6 +164,17 @@ def validate_provider_network_configuration(
     issues: list[str] = []
     if not _is_https_origin(gateway_origin):
         issues.append("gateway HTTP URL must be an HTTPS origin")
+    # A managed node enrols against the public origin, so a loopback or LAN
+    # address here is a pool that launches machines which can never report.
+    gateway_host = urlparse(gateway_origin).hostname or ""
+    if not gateway_host:
+        issues.append("gateway HTTP URL must include a host")
+    elif host_is_unreachable_from_a_remote_machine(gateway_host):
+        issues.append(
+            f"gateway public origin host {gateway_host!r} is unreachable from a remote "
+            "machine; set LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL to the deployment's public "
+            "ingress origin"
+        )
     # Nodes and workers dial the internal origin, not the public one. A Compose
     # service name or a LAN address resolves on the control-plane host and
     # nowhere else, and the machine that discovers that is an EC2 instance

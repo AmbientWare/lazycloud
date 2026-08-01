@@ -323,7 +323,11 @@ by the generated-invoke host routing), and edge path refusal for `/metrics` and
 
 
 - [ ] **INFRA-06** Stand up the public HTTPS ingress — *after INFRA-03, -04, -05*
-- [ ] **INFRA-07** Refuse to launch managed capacity against an unreachable public origin — *after INFRA-06*
+- [x] **INFRA-07** Refuse to launch managed capacity against an unreachable public origin
+  — *the plan listed three files; it collapses to one. Both composition sites
+  already funnel through `validate_provider_network_configuration`, which
+  checked the internal origin's reachability but only HTTPS on the public one —
+  so `https://127.0.0.1` passed. Now refused by name.*
 - [ ] **INFRA-15** Scrape, alert, and page on the tracks' failure signals — *after INFRA-12, CAP-02, CAP-08*
 
 **Phase 3 acceptance.** An EC2 instance in the connected account reaches the
