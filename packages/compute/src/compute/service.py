@@ -414,6 +414,18 @@ class ComputeService:
                 desired_unit=1,
                 reason="capacity owner is not managed by compute",
             )
+        degraded_reason = pool.provider_state.degraded_reason
+        if degraded_reason is not None:
+            # The pool exhausted its launch attempts. Only the reconciler path
+            # used to honour this, so acquisition kept buying machines that
+            # could not become workers — a bounded failure billed as an
+            # unbounded one. Clearing it is an explicit operator mutation.
+            return _capacity_result(
+                request,
+                CapacityAcquisitionStatus.TemporarilyUnavailable,
+                desired_unit=max(direct_units, 1),
+                reason=degraded_reason,
+            )
         if not policy.scaling_enabled:
             return _capacity_result(
                 request,
@@ -2093,7 +2105,6 @@ class ComputeService:
                 desired != current.desired_machines
                 or minimum != current.min_machines
                 or maximum != current.max_machines
-                or current.provider_state.degraded_reason is not None
                 or idle_timeout_seconds
                 != _pool_config_int(current, "idle_timeout_seconds", default=300)
             ):
@@ -2102,9 +2113,6 @@ class ComputeService:
                         "desired_machines": desired,
                         "min_machines": minimum,
                         "max_machines": maximum,
-                        "provider_state": current.provider_state.model_copy(
-                            update={"degraded_reason": None}
-                        ),
                         "config": {
                             **current.config,
                             "idle_timeout_seconds": idle_timeout_seconds,

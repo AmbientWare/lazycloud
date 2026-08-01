@@ -1775,3 +1775,74 @@ def _seed_connection(isolated_services: ApiServices) -> None:
                 updated_at=now,
             )
         )
+
+
+def test_degraded_pool_refuses_acquisition_and_placement_does_not_clear_it(
+    isolated_services: ApiServices,
+) -> None:
+    """A pool that exhausted its launch attempts must stop buying machines.
+
+    Only the reconciler honoured the durable degraded reason: acquisition never
+    read it, and preparing capacity for a placement cleared it outright. A pool
+    whose machines launch but never become workers therefore relaunched on every
+    scheduler tick, so a bounded bootstrap failure billed as an unbounded one.
+    """
+
+    _seed_connection(isolated_services)
+    provider = _PooledProvider()
+    compute = ComputeService(
+        isolated_services.context,
+        provider_resolver=_Resolver(provider),
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=_MutationLeases(),
+    )
+    pool = compute.prepare_pooled_capacity(
+        workspace="default",
+        requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
+        region="us-east-1",
+        desired_machines=0,
+        workspace_machine_limit=10,
+        root_volume_gib=200,
+    )
+    compute.reconcile_pooled_capacity()
+    with isolated_services.context.database.session() as session:
+        pools = ComputePoolRepository(session)
+        stored = pools.get(pool.id)
+        assert stored is not None
+        pools.upsert(
+            stored.model_copy(
+                update={
+                    "provider_state": stored.provider_state.model_copy(
+                        update={"degraded_reason": "bootstrap_launch_attempts_exhausted"}
+                    )
+                }
+            )
+        )
+    capacity_calls_before = list(provider.capacity_calls)
+
+    refused = compute.ensure_capacity(
+        CapacityAcquisitionRequest(
+            capacity_owner_id=pool.capacity_owner_id,
+            reservation_id=str(uuid4()),
+            operation_id=str(uuid4()),
+            shape=CapacityAcquisitionShape(cpu_millicores=4_000, memory_mib=32 * 1_024),
+        )
+    )
+
+    assert refused.status is CapacityAcquisitionStatus.TemporarilyUnavailable
+    assert refused.reason == "bootstrap_launch_attempts_exhausted"
+    assert provider.capacity_calls == capacity_calls_before
+
+    # Preparing capacity again is what a queued placement does every dispatch.
+    compute.prepare_pooled_capacity(
+        workspace="default",
+        requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
+        region="us-east-1",
+        desired_machines=1,
+        workspace_machine_limit=10,
+        root_volume_gib=200,
+    )
+    with isolated_services.context.database.session() as session:
+        after = ComputePoolRepository(session).get(pool.id)
+    assert after is not None
+    assert after.provider_state.degraded_reason == "bootstrap_launch_attempts_exhausted"
