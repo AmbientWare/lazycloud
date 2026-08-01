@@ -906,7 +906,6 @@ class AgentDaemonService:
                 if not runtime_ready:
                     self.state_store.mark_ready(state, stream_iteration=next_iteration)
                     runtime_ready = True
-                    self._report_bootstrap_phase(MachineBootstrapPhase.Ready)
                 iterations = next_iteration
                 if self.options.once:
                     return last_result

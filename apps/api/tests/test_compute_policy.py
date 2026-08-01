@@ -49,7 +49,11 @@ from shared.aws_connections import (
     AwsAccountConnectionPhase,
 )
 from shared.capacity import CapacityOwnerKind, CapacityOwnerSource
-from shared.compute_enrollment import MachineReadinessPhase
+from shared.compute_enrollment import (
+    MachineBootstrapPhase,
+    MachineReadinessPhase,
+    MachineServiceState,
+)
 from shared.compute_fleet import Machine, ResourceStatus, Worker
 from shared.compute_policy import (
     ComputeCapacityMode,
@@ -332,11 +336,16 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
     assert summary.cost.hourly_micros == 600_000
     assert instances_response.status_code == 200
     current = WorkspaceComputeInstanceListResponse.model_validate_json(instances_response.content)
+    # `status` reports the platform's verdict, not what the node claimed:
+    # a machine serves because its worker takes work.
     assert {item.status for item in current.data} == {
-        "ready",
+        "serving",
         "provisioning",
         "deleting",
     }
+    serving = next(item for item in current.data if item.status == "serving")
+    assert serving.service_state is MachineServiceState.Serving
+    assert serving.bootstrap_phase is not MachineBootstrapPhase.Failed
 
     with isolated_services.context.database.session() as session:
         instances = ComputeProviderInstanceRepository(session)

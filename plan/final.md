@@ -368,7 +368,14 @@ not the repo.
   branches on the scheduler record (a different type), carries the durable
   status forward without branching (`gateway/service.py:1663`), or renders it.
   The readiness branches were the two CAP-08 unified.*
-- [ ] **CAP-12** Split the persisted bootstrap phase from the derived verdict — *after CAP-08, BOOT-09*
+- [x] **CAP-12** Split the persisted bootstrap phase from the derived verdict — *after CAP-08*
+  — *the stated dependency was on the BOOT item owning `MachineBootstrapPhase`,
+  which is BOOT-03 (done), not BOOT-09 (a docstring cleanup) — my synthesis
+  mapped it wrong. **BOOT-03 also had to be adjusted**: it added an agent
+  `Ready` report, invalidating the CAP author's "no writer persists it" audit.
+  Removed — a node narrates progress up to `Joining`; whether it serves is the
+  scheduler's call. Contract, mapper, CLI and Zod moved together; web typecheck
+  green.*
 - [ ] **INFRA-20** Regenerate the Alembic baseline *(added in synthesis; see Gap above)*
 - [ ] **CAP-10** Delete `Worker.version` — *after CAP-09, INFRA-20*
 - [ ] **CAP-13** Delete the pending-worker reservation path — *after CAP-01; requires the restart measurement*

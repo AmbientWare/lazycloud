@@ -24,6 +24,7 @@ from shared.compute_enrollment import (
     MachineBootstrapFailureReason,
     MachineBootstrapPhase,
     MachineReadinessPhase,
+    MachineServiceState,
 )
 from shared.compute_policy import (
     AwsWorkspaceComputePolicy,
@@ -76,6 +77,7 @@ class ComputeInstanceView:
     record: ComputeProviderInstanceRecord
     region: str
     bootstrap_phase: MachineBootstrapPhase
+    service_state: MachineServiceState
     bootstrap_failure_reason: MachineBootstrapFailureReason | None
     bootstrap_failure_detail: str
     bootstrap_observed_at: datetime
@@ -392,14 +394,13 @@ class WorkspaceComputePolicyService:
             workspace_id = self.context.workspace(session, workspace).id
             connection = AwsAccountConnectionRepository(session).get_for_workspace(workspace_id)
         ready_instance_count = sum(
-            item.bootstrap_phase is MachineBootstrapPhase.Ready for item in instances
+            item.service_state is MachineServiceState.Serving for item in instances
         )
         pending_instance_count = sum(
-            item.bootstrap_phase
+            item.service_state
             in {
-                MachineBootstrapPhase.Requested,
-                MachineBootstrapPhase.Provisioning,
-                MachineBootstrapPhase.Joining,
+                MachineServiceState.Provisioning,
+                MachineServiceState.Joining,
             }
             for item in instances
         )
@@ -505,6 +506,27 @@ def _memory_mb(value: str | None) -> int:
     return parse_memory_mib(value) or 0
 
 
+_SERVICE_STATE_BY_PHASE: dict[MachineBootstrapPhase, MachineServiceState] = {
+    MachineBootstrapPhase.Requested: MachineServiceState.Provisioning,
+    MachineBootstrapPhase.Provisioning: MachineServiceState.Provisioning,
+    MachineBootstrapPhase.Booting: MachineServiceState.Joining,
+    MachineBootstrapPhase.Joining: MachineServiceState.Joining,
+    MachineBootstrapPhase.Failed: MachineServiceState.Failed,
+    MachineBootstrapPhase.Deleting: MachineServiceState.Deleting,
+}
+
+
+def _service_state(
+    phase: MachineBootstrapPhase,
+    *,
+    serving: bool,
+) -> MachineServiceState:
+    """What the platform concludes, from what the node reported plus who takes work."""
+    if serving:
+        return MachineServiceState.Serving
+    return _SERVICE_STATE_BY_PHASE[phase]
+
+
 def _compute_instance_view(
     record: ComputeProviderInstanceRecord,
     *,
@@ -517,6 +539,7 @@ def _compute_instance_view(
     phase = record.bootstrap_phase
     failure_reason = record.bootstrap_failure_reason
     observed_at = record.bootstrap_observed_at
+    serving = False
     if record.status == ReservationStatus.Terminating.value:
         phase = MachineBootstrapPhase.Deleting
     elif record.status == ReservationStatus.Failed.value:
@@ -537,7 +560,7 @@ def _compute_instance_view(
             worker_state=worker_state,
         ):
             assert enrollment is not None
-            phase = MachineBootstrapPhase.Ready
+            serving = True
             failure_reason = None
             observed_at = max(observed_at, enrollment.updated_at)
         elif enrollment is not None and enrollment.readiness_phase in {
@@ -558,6 +581,7 @@ def _compute_instance_view(
         record=record,
         region=region,
         bootstrap_phase=phase,
+        service_state=_service_state(phase, serving=serving),
         bootstrap_failure_reason=failure_reason,
         bootstrap_failure_detail=record.bootstrap_failure_detail,
         bootstrap_observed_at=observed_at,

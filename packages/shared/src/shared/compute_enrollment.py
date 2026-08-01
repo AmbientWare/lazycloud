@@ -43,11 +43,28 @@ class MachineReadinessPhase(StringEnum):
 
 
 class MachineBootstrapPhase(StringEnum):
+    """How far the node itself reports having got.
+
+    Progress a node can observe about itself. Whether it serves workloads is
+    not one of those things — that is `MachineServiceState`, derived from the
+    scheduler record.
+    """
+
     Requested = "requested"
     Provisioning = "provisioning"
     Booting = "booting"
     Joining = "joining"
-    Ready = "ready"
+    Failed = "failed"
+    Deleting = "deleting"
+
+
+class MachineServiceState(StringEnum):
+    """What the platform concludes about a machine, never what it claims."""
+
+    Provisioning = "provisioning"
+    Joining = "joining"
+    Serving = "serving"
+    Degraded = "degraded"
     Failed = "failed"
     Deleting = "deleting"
 

@@ -9,6 +9,7 @@ from shared.aws_connections import AwsAccountConnectionPhase
 from shared.compute_enrollment import (
     MachineBootstrapFailureReason,
     MachineBootstrapPhase,
+    MachineServiceState,
 )
 from shared.compute_policy import (
     AwsWorkspaceComputePolicy,
@@ -124,6 +125,7 @@ class WorkspaceComputeInstanceResponse(HttpModel):
     cpu_millicores: int = Field(default=0, ge=0)
     memory_mb: int = Field(default=0, ge=0)
     bootstrap_phase: MachineBootstrapPhase
+    service_state: MachineServiceState
     bootstrap_failure_reason: MachineBootstrapFailureReason | None = None
     bootstrap_failure_detail: str = ""
     bootstrap_observed_at: datetime

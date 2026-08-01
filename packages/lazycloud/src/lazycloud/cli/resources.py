@@ -501,7 +501,7 @@ def compute_instances(
             item.provider,
             item.region,
             item.instance_type or "",
-            item.bootstrap_phase.value,
+            item.service_state.value,
             (
                 item.bootstrap_failure_reason.value
                 if item.bootstrap_failure_reason is not None
@@ -514,7 +514,7 @@ def compute_instances(
     console.print(
         table(
             "Compute instances",
-            ["id", "provider", "region", "type", "phase", "reason", "detail"],
+            ["id", "provider", "region", "type", "state", "reason", "detail"],
             rows,
         )
     )

@@ -283,13 +283,6 @@ _BOOTSTRAP_PHASE_TRANSITIONS: dict[MachineBootstrapPhase, frozenset[MachineBoots
     ),
     MachineBootstrapPhase.Joining: frozenset(
         {
-            MachineBootstrapPhase.Ready,
-            MachineBootstrapPhase.Failed,
-            MachineBootstrapPhase.Deleting,
-        }
-    ),
-    MachineBootstrapPhase.Ready: frozenset(
-        {
             MachineBootstrapPhase.Failed,
             MachineBootstrapPhase.Deleting,
         }
