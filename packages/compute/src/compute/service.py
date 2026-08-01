@@ -6,10 +6,9 @@ import hmac
 import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from enum import Enum
 from math import ceil
-from typing import Protocol
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from database.repositories.compute import (
@@ -21,15 +20,12 @@ from database.repositories.compute import (
     ComputeJoinCredentialRepository,
     ComputeLedgerRecord,
     ComputeLedgerRepository,
-    ComputeMachineEnrollmentRecord,
-    ComputeMachineEnrollmentRepository,
     ComputePoolRepository,
     ComputeProviderInstanceRecord,
     ComputeProviderInstanceRepository,
     ComputeSolverDecisionRepository,
     ComputeSolverRunRecord,
     ComputeSolverRunRepository,
-    TailnetCleanupTombstoneRepository,
     WorkspaceComputePolicyRepository,
 )
 from database.repositories.identity import WorkspaceRepository
@@ -44,7 +40,7 @@ from database.types import DatabaseSession
 from foundation.ids import optional_uuid, try_uuid
 from observability.usage_exporter import UsageMetricsExporter
 from observability.workspace_changes import WorkspaceChangePublisher
-from pydantic import ConfigDict, Field, JsonValue, TypeAdapter
+from pydantic import Field, JsonValue, TypeAdapter
 from shared.app_identity import NAME
 from shared.capacity import (
     CapacityAcquisitionRequest,
@@ -62,11 +58,8 @@ from shared.capacity import (
 )
 from shared.compute_enrollment import (
     ComputeCredentialStatus,
-    ComputeMachineEnrollmentStatus,
     MachineBootstrapFailureReason,
     MachineBootstrapPhase,
-    MachineReadinessPhase,
-    TailnetEnrollmentPhase,
 )
 from shared.compute_fleet import Machine, Pool, ResourceStatus, Worker
 from shared.compute_policy import (
@@ -94,8 +87,6 @@ from shared.usage import UsageMetric, UsageUnit, usage_record_id
 from compute.agent_control import (
     ComputePrincipal,
     JoinTokenCreationPlan,
-    agent_machine_worker_id,
-    machine_serves_workloads,
     plan_join_token_creation,
 )
 from compute.aws_connections import AwsAccountPoolDrain
@@ -132,6 +123,27 @@ from compute.projection import (
     parse_ttl_seconds,
     validate_pool_resource_compatibility,
 )
+from compute.provider_machines import (
+    _LAUNCH_STATE_COMMITTED,
+    _LAUNCH_STATE_COMPENSATING,
+    _LAUNCH_STATE_INTENT,
+    LaunchedProviderInstance,
+    PreparedProviderLaunch,
+    ProviderMachineReconciler,
+    ProviderPoolBootstrapFactory,
+    _metadata_time,
+    _pool_config_int,
+    _provider_instance_metadata,
+    _provider_launch_state,
+    _provider_storage_volume_ids,
+    _provider_zero_capacity_converged,
+    _require_internal_pooled_pool,
+    _reservation_open,
+    _reservation_status_from_provider,
+    _utc,
+    _whole_hours,
+    _zero_sizing_state_update,
+)
 from compute.providers import (
     CapacityOwnerMutationLease,
     ComputeProviderResolver,
@@ -140,10 +152,8 @@ from compute.providers import (
     DirectMachineProvider,
     DirectMachineProviderRegistry,
     PooledCapacityProvider,
-    ProviderCapacityPhase,
     ProviderMachineReference,
     ProviderMachineStatus,
-    ProviderPoolBootstrap,
     ProviderPoolRequest,
     ProviderPoolSnapshot,
     ResolvedComputeProvider,
@@ -157,40 +167,11 @@ LOGGER = logging.getLogger(__name__)
 _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
 
 
-class _ProviderInstanceMetadataEnvelope(ContractModel):
-    model_config = ConfigDict(extra="ignore")
-
-    metadata: dict[str, JsonValue] = Field(default_factory=dict)
-
-
 class _CapacityRequestMetadata(ContractModel):
     selector: str = ""
     providers: list[str] = Field(default_factory=list)
     regions: list[str] = Field(default_factory=list)
     gpu: list[str] = Field(default_factory=list)
-
-
-class ProviderPoolBootstrapFactory(Protocol):
-    """What a booting node needs, and the credential lifetime behind it.
-
-    `release` is part of the protocol rather than a separate hook because the
-    tailnet key a pool's launch template carries lives in a row that cascades
-    away with the pool. Deleting the pool without revoking the key first would
-    drop the only record of a credential that still works.
-    """
-
-    def bootstrap(
-        self,
-        pool: ComputePoolRecord,
-        offer: ComputeOffer,
-        *,
-        writes_launch_template: bool,
-    ) -> ProviderPoolBootstrap: ...
-
-    def release(self, pool: ComputePoolRecord) -> None: ...
-
-
-PROVIDER_MACHINE_IDENTITY_SETTLE_SECONDS = 30
 
 
 class ManagedComputeLaunchError(DomainError):
@@ -228,34 +209,6 @@ class _PooledCapacityBaseline:
     min_free_cpu_millicores: int
     min_free_memory_mib: int
 
-
-@dataclass(frozen=True, slots=True)
-class LaunchedProviderInstance:
-    """A provider instance created during one launch flow, keyed to its owner."""
-
-    provider: str
-    provider_instance_id: str
-    machine_id: str
-    status: str
-    address: str
-    storage_volume_ids: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
-class PreparedProviderLaunch:
-    """Durable provider launch intent plus its one-time registration credential."""
-
-    provider: str
-    offer: ComputeOffer
-    machine: Machine
-    provider_record_id: str
-    registration_token: str = field(repr=False)
-
-
-_LAUNCH_STATE_INTENT = "intent"
-_LAUNCH_STATE_COMMITTED = "committed"
-_LAUNCH_STATE_COMPENSATING = "compensating"
-_LAUNCH_STATE_COMPENSATED = "compensated"
 
 _BOOTSTRAP_PHASE_TRANSITIONS: dict[MachineBootstrapPhase, frozenset[MachineBootstrapPhase]] = {
     MachineBootstrapPhase.Requested: frozenset(
@@ -313,6 +266,25 @@ class ComputeService:
 
     def __post_init__(self) -> None:
         self.source_cache_lifecycle = SourceCacheStorageLifecycleService(self.context)
+
+    @property
+    def provider_machines(self) -> ProviderMachineReconciler:
+        """Bound to this service's *current* configuration.
+
+        `reclaim` and `scheduler_hooks` are reassigned after construction, so a
+        reconciler captured once would answer from stale settings. The stale
+        machine ledger is passed by reference because it must survive across
+        calls; everything else is read fresh.
+        """
+        return ProviderMachineReconciler(
+            context=self.context,
+            reclaim=self.reclaim,
+            pool_bootstrap_factory=self.pool_bootstrap_factory,
+            workspace_changes=self.workspace_changes,
+            scheduler_hooks=self.scheduler_hooks,
+            source_cache_lifecycle=self.source_cache_lifecycle,
+            stale_first_seen=self._stale_first_seen,
+        )
 
     def record_provider_bootstrap_status(
         self,
@@ -1126,7 +1098,7 @@ class ComputeService:
                 desired_machines=desired_unit,
                 max_machines=current_pool.max_machines,
             )
-            self._apply_pooled_snapshot(
+            self.provider_machines._apply_pooled_snapshot(
                 current_pool.model_copy(update={"desired_machines": desired_unit}),
                 offer,
                 updated_snapshot,
@@ -1214,7 +1186,7 @@ class ComputeService:
                     )
                     destroyed = False
             else:
-                destroyed = self._terminate_provider_record(
+                destroyed = self.provider_machines._terminate_provider_record(
                     session,
                     record,
                     clients=clients,
@@ -1330,7 +1302,7 @@ class ComputeService:
             and snapshot.observed_machines <= release_target
         ):
             try:
-                self._apply_pooled_snapshot(
+                self.provider_machines._apply_pooled_snapshot(
                     current_pool.model_copy(update={"desired_machines": release_target}),
                     offer,
                     snapshot,
@@ -1367,7 +1339,7 @@ class ComputeService:
                 desired_machines=release_target,
                 max_machines=current_pool.max_machines,
             )
-            self._apply_pooled_snapshot(
+            self.provider_machines._apply_pooled_snapshot(
                 current_pool.model_copy(update={"desired_machines": release_target}),
                 offer,
                 updated_snapshot,
@@ -1599,7 +1571,7 @@ class ComputeService:
                         record=record,
                         now=current_time,
                     )
-                    self._terminate_provider_record(
+                    self.provider_machines._terminate_provider_record(
                         session,
                         record,
                         clients=clients,
@@ -1674,7 +1646,7 @@ class ComputeService:
                         now=current_time,
                         deleting_workspace_id=workspace_id,
                     )
-                    self._terminate_provider_record(
+                    self.provider_machines._terminate_provider_record(
                         session,
                         record,
                         clients=clients,
@@ -2434,7 +2406,7 @@ class ComputeService:
             if verify_provider_zero:
                 observed = provider.pooled.describe_pool(self._provider_pool_request(intent, offer))
                 if _provider_zero_capacity_converged(observed):
-                    return self._apply_pooled_snapshot(
+                    return self.provider_machines._apply_pooled_snapshot(
                         intent,
                         offer,
                         observed,
@@ -2442,7 +2414,7 @@ class ComputeService:
                         update_capacity=False,
                         now=current_time,
                     )
-                intent = self._persist_zero_capacity_repair(
+                intent = self.provider_machines._persist_zero_capacity_repair(
                     intent,
                     maximum=maximum,
                     observed=observed,
@@ -2455,7 +2427,7 @@ class ComputeService:
                 desired_machines=intent.desired_machines,
                 max_machines=intent.max_machines,
             )
-            return self._apply_pooled_snapshot(
+            return self.provider_machines._apply_pooled_snapshot(
                 intent,
                 offer,
                 snapshot,
@@ -2482,7 +2454,7 @@ class ComputeService:
         if provider.pooled is None:
             raise RuntimeError("internal compute pool does not use pooled capacity")
         snapshot = provider.pooled.describe_pool(self._provider_pool_request(pool, offer))
-        updated = self._apply_pooled_snapshot(
+        updated = self.provider_machines._apply_pooled_snapshot(
             pool,
             offer,
             snapshot,
@@ -2518,7 +2490,7 @@ class ComputeService:
         if self.scheduler_hooks is not None:
             self.scheduler_hooks.disable_machine(machine_id, "idle_pool_scale_down")
         target = max(pool.desired_machines - 1, pool.min_machines)
-        return self._apply_pooled_snapshot(
+        return self.provider_machines._apply_pooled_snapshot(
             pool.model_copy(update={"desired_machines": target}),
             offer,
             snapshot,
@@ -2596,7 +2568,7 @@ class ComputeService:
                 )
             if current.phase is ComputePoolPhase.Deleting:
                 snapshot = pooled.delete_pool(self._provider_pool_request(current, offer))
-                return self._apply_pooled_snapshot(
+                return self.provider_machines._apply_pooled_snapshot(
                     current,
                     offer,
                     snapshot,
@@ -2622,7 +2594,7 @@ class ComputeService:
                 # explicit capacity mutation clears the degraded reason.
                 pooled.describe_pool(request) if degraded else pooled.ensure_pool(request)
             )
-            return self._apply_pooled_snapshot(
+            return self.provider_machines._apply_pooled_snapshot(
                 current,
                 offer,
                 snapshot,
@@ -2664,7 +2636,7 @@ class ComputeService:
                     continue
                 if record.status == ReservationStatus.Terminating.value:
                     continue
-                failure = self._provider_bootstrap_failure_to_reclaim(
+                failure = self.provider_machines._provider_bootstrap_failure_to_reclaim(
                     session,
                     pool,
                     record,
@@ -2678,7 +2650,7 @@ class ComputeService:
         attempts_exhausted = False
         for record, failure in to_reclaim:
             with self.context.database.session() as session:
-                self._terminate_provider_record(
+                self.provider_machines._terminate_provider_record(
                     session,
                     record,
                     clients={},
@@ -2697,7 +2669,7 @@ class ComputeService:
                     self._provider_pool_request(current, offer),
                     record.instance_id,
                 )
-                current = self._apply_pooled_snapshot(
+                current = self.provider_machines._apply_pooled_snapshot(
                     current,
                     offer,
                     snapshot,
@@ -2768,7 +2740,7 @@ class ComputeService:
                 if provider.pooled is None:
                     raise RuntimeError("AWS capacity provider is not pooled")
                 snapshot = provider.pooled.delete_pool(self._provider_pool_request(durable, offer))
-                self._apply_pooled_snapshot(
+                self.provider_machines._apply_pooled_snapshot(
                     durable,
                     offer,
                     snapshot,
@@ -3046,7 +3018,7 @@ class ComputeService:
                         max_uses=join_token.state.max_uses,
                         expires_at=join_token.expires_at,
                     )
-                    launch_intent = self._record_provider_instance(
+                    launch_intent = self.provider_machines._record_provider_instance(
                         session,
                         pool_id=compute_pool.id,
                         capacity_request_id=capacity_request.id,
@@ -3173,7 +3145,7 @@ class ComputeService:
                 clients=clients,
             )
             try:
-                self._record_failed_launch_cleanup(
+                self.provider_machines._record_failed_launch_cleanup(
                     prepared_launches,
                     created_instances=created_instances,
                     attempted_machine_ids=attempted_machine_ids,
@@ -3340,68 +3312,6 @@ class ComputeService:
             instances = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
         return self._private_pool_state_from_records(pool, instances)
 
-    def reconcile_provider_capacity(self, *, now: datetime | None = None) -> list[PrivatePoolState]:
-        current_time = _utc(now)
-        self.reconcile_pooled_capacity(now=current_time)
-        workspace_id = self._workspace_id()
-        clients = self._provider_client_snapshot(workspace_id)
-        reconciled: list[PrivatePoolState] = []
-        changed_states: list[PrivatePoolState] = []
-        machine_changes: dict[str, WorkspaceChangeType] = {}
-        with self.context.database.session() as session:
-            compute_pools = ComputePoolRepository(session).records.list(workspace_id=workspace_id)
-            provider_instances = ComputeProviderInstanceRepository(session)
-            for compute_pool in compute_pools:
-                if compute_pool.visibility is ComputePoolVisibility.Internal:
-                    continue
-                instances = provider_instances.list_for_pool(compute_pool.id)
-                billing_changed, deleted_machine_ids = self._reconcile_pool_billing(
-                    session,
-                    workspace_id=workspace_id,
-                    pool=compute_pool,
-                    instances=instances,
-                    now=current_time,
-                    clients=clients,
-                )
-                if billing_changed:
-                    instances = provider_instances.list_for_pool(compute_pool.id)
-                provider_changed, updated_machine_ids, reclaimed_machine_ids = (
-                    self._reconcile_provider_machines(
-                        session,
-                        compute_pool,
-                        instances,
-                        clients=clients,
-                        now=current_time,
-                    )
-                )
-                changed = billing_changed or provider_changed
-                for machine_id in updated_machine_ids:
-                    machine_changes[machine_id] = WorkspaceChangeType.Updated
-                for machine_id in deleted_machine_ids | reclaimed_machine_ids:
-                    machine_changes[machine_id] = WorkspaceChangeType.Deleted
-                refreshed = provider_instances.list_for_pool(compute_pool.id)
-                state = self._private_pool_state_from_records(compute_pool, refreshed)
-                if changed and self.scheduler_hooks is not None:
-                    self.scheduler_hooks.register_pool(state)
-                reconciled.append(state)
-                if changed:
-                    changed_states.append(state)
-        for state in changed_states:
-            self._publish_change(
-                workspace_id=state.workspace_id,
-                topic=WorkspaceChangeTopic.ComputePools,
-                change=WorkspaceChangeType.Updated,
-                resource_id=state.name,
-            )
-        for machine_id, change in machine_changes.items():
-            self._publish_change(
-                workspace_id=workspace_id,
-                topic=WorkspaceChangeTopic.ComputeMachines,
-                change=change,
-                resource_id=machine_id,
-            )
-        return reconciled
-
     def terminate_pool_machine(
         self,
         pool_name: str,
@@ -3429,7 +3339,7 @@ class ComputeService:
             if record is None:
                 msg = f"active provider machine not found: {machine_id}"
                 raise KeyError(msg)
-            changed = self._terminate_provider_record(
+            changed = self.provider_machines._terminate_provider_record(
                 session,
                 record,
                 clients=clients,
@@ -3732,57 +3642,6 @@ class ComputeService:
             )
         return degraded
 
-    def _persist_zero_capacity_repair(
-        self,
-        pool: ComputePoolRecord,
-        *,
-        maximum: int,
-        observed: ProviderPoolSnapshot,
-        now: datetime,
-    ) -> ComputePoolRecord:
-        with self.context.database.session() as session:
-            pools = ComputePoolRepository(session)
-            current = _require_internal_pooled_pool(
-                pools.get_by_name(pool.workspace_id, pool.name, for_update=True),
-                pool_name=pool.name,
-            )
-            if (
-                current.capacity_owner_id != pool.capacity_owner_id
-                or current.generation != pool.generation
-                or current.desired_machines != 0
-            ):
-                raise ConflictError(
-                    f"compute pool {pool.name!r} zero-capacity repair was superseded"
-                )
-            sizing_states = PoolRepository(session)
-            sizing_state = sizing_states.get_sizing_state(
-                current.capacity_owner_id,
-                for_update=True,
-            )
-            if sizing_state is None:
-                raise ConflictError(
-                    f"compute pool sizing state does not exist: {current.capacity_owner_id}"
-                )
-            intent = pools.update_capacity(
-                current.id,
-                expected_generation=current.generation,
-                desired_machines=0,
-                max_machines=maximum,
-                observed_machines=observed.observed_machines,
-                phase=ComputePoolPhase.Updating,
-                provider_state=observed.provider_state,
-            )
-            if intent is None:
-                raise ConflictError(
-                    f"compute pool {pool.name!r} zero-capacity repair was superseded"
-                )
-            retired = sizing_states.compare_and_set_sizing_state(
-                _zero_sizing_state_update(sizing_state, now=now)
-            )
-            if retired is None:
-                raise ConflictError(f"compute pool {pool.name!r} sizing intent was superseded")
-            return intent
-
     def _release_pool_bootstrap(self, pool: ComputePoolRecord) -> None:
         """Revoke a deleted pool's tailnet key before its row cascades away.
 
@@ -3836,278 +3695,6 @@ class ComputeService:
             provider_state=pool.provider_state,
         )
 
-    def _apply_pooled_snapshot(
-        self,
-        pool: ComputePoolRecord,
-        offer: ComputeOffer,
-        snapshot: ProviderPoolSnapshot,
-        *,
-        provider: PooledCapacityProvider,
-        update_capacity: bool,
-        now: datetime | None = None,
-    ) -> ComputePoolRecord:
-        current_time = _utc(now)
-        phase = _compute_pool_phase(snapshot.phase)
-        # Providers never own the durable degraded reason: carry it from the
-        # durable intent so snapshot application cannot silently restore a pool
-        # that exhausted its launch attempts. Explicit capacity mutations clear
-        # the reason on the intent before the provider is consulted.
-        provider_state = snapshot.provider_state
-        if pool.provider_state.degraded_reason is not None:
-            provider_state = provider_state.model_copy(
-                update={"degraded_reason": pool.provider_state.degraded_reason}
-            )
-        provider_request = self._provider_pool_request(pool, offer)
-        observed_instance_ids = {item.provider_instance_id for item in snapshot.instances}
-        authoritative_zero = _provider_zero_capacity_converged(snapshot)
-        with self.context.database.session() as session:
-            prior_instances = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
-        destroyed_record_ids: set[str] = set()
-        for instance in prior_instances:
-            if instance.instance_id is not None and instance.instance_id in observed_instance_ids:
-                continue
-            missing_since = _metadata_time(
-                _provider_instance_metadata(instance),
-                "missing_since",
-            )
-            settled = (
-                authoritative_zero
-                or snapshot.phase is ProviderCapacityPhase.Deleted
-                or (
-                    missing_since is not None
-                    and (current_time - missing_since).total_seconds() >= 120
-                )
-            )
-            if not settled:
-                continue
-            storage_volume_ids = _provider_storage_volume_ids(instance)
-            if instance.instance_id is None:
-                if authoritative_zero and not storage_volume_ids:
-                    destroyed_record_ids.add(instance.id)
-                continue
-            if provider.machine_storage_destroyed(
-                provider_request,
-                instance.instance_id,
-                storage_volume_ids,
-            ):
-                destroyed_record_ids.add(instance.id)
-        unproved = {
-            item.id
-            for item in prior_instances
-            if _reservation_open(item.status) and item.id not in destroyed_record_ids
-        }
-        if unproved:
-            if snapshot.phase is ProviderCapacityPhase.Deleted:
-                phase = ComputePoolPhase.Deleting
-            elif snapshot.desired_machines != snapshot.observed_machines or authoritative_zero:
-                phase = ComputePoolPhase.Updating
-        if provider_state.degraded_reason is not None and phase not in {
-            ComputePoolPhase.Deleting,
-            ComputePoolPhase.Deleted,
-        }:
-            phase = ComputePoolPhase.Degraded
-        missing_machine_ids: set[str]
-        with self.context.database.session() as session:
-            repository = ComputePoolRepository(session)
-            if update_capacity:
-                updated = repository.update_capacity(
-                    pool.id,
-                    expected_generation=pool.generation,
-                    desired_machines=snapshot.desired_machines,
-                    max_machines=max(snapshot.max_machines, snapshot.desired_machines, 1),
-                    observed_machines=snapshot.observed_machines,
-                    phase=phase,
-                    provider_state=provider_state,
-                )
-            else:
-                updated = repository.apply_provider_state(
-                    pool.id,
-                    generation=pool.generation,
-                    observed_machines=snapshot.observed_machines,
-                    phase=phase,
-                    provider_state=provider_state,
-                )
-            if updated is None:
-                current = repository.get(pool.id)
-                if current is None:
-                    raise RuntimeError(f"compute pool disappeared during reconciliation: {pool.id}")
-                return current
-            missing_machine_ids = self._sync_pooled_instances(
-                session,
-                pool=updated,
-                offer=offer,
-                snapshot=snapshot,
-                now=current_time,
-                destroyed_record_ids=destroyed_record_ids,
-            )
-        for machine_id in missing_machine_ids:
-            self.retire_provider_pool_machine(
-                updated.workspace_id,
-                updated.name,
-                machine_id,
-                reason="provider instance storage destroyed",
-                now=current_time,
-            )
-        if self.scheduler_hooks is not None:
-            self.scheduler_hooks.register_internal_pool(updated, offer)
-        self._publish_change(
-            workspace_id=updated.workspace_id,
-            topic=WorkspaceChangeTopic.ComputePools,
-            change=WorkspaceChangeType.Updated,
-            resource_id=updated.id,
-        )
-        return updated
-
-    def _sync_pooled_instances(
-        self,
-        session: DatabaseSession,
-        *,
-        pool: ComputePoolRecord,
-        offer: ComputeOffer,
-        snapshot: ProviderPoolSnapshot,
-        now: datetime,
-        destroyed_record_ids: set[str],
-    ) -> set[str]:
-        repository = ComputeProviderInstanceRepository(session)
-        missing_machine_ids: set[str] = set()
-        current = repository.list_for_pool(pool.id, for_update=True)
-        by_instance_id = {
-            item.instance_id: item for item in current if item.instance_id is not None
-        }
-        observed = {item.provider_instance_id: item for item in snapshot.instances}
-        for instance_id, instance in observed.items():
-            existing = by_instance_id.get(instance_id)
-            # A provider may reuse an instance identity after a reclaimed
-            # launch settled terminally. One durable row exists per pool
-            # instance identity, so the closed row restarts as a fresh launch
-            # attempt instead of resurrecting the reclaimed record's state.
-            relaunched = existing is not None and not _reservation_open(existing.status)
-            metadata: dict[str, JsonValue] = (
-                _provider_instance_metadata(existing) if existing is not None else {}
-            )
-            metadata.pop("missing_since", None)
-            if relaunched:
-                for stale_key in (
-                    "terminating_reason",
-                    "terminated_reason",
-                    "status_message",
-                    "last_error",
-                    "provider_storage_destroyed_at",
-                ):
-                    metadata.pop(stale_key, None)
-            settled_existing = existing if existing is not None and not relaunched else None
-            provider_status = _reservation_status_from_provider(instance.status).value
-            bootstrap_phase = (
-                settled_existing.bootstrap_phase
-                if settled_existing is not None
-                else MachineBootstrapPhase.Provisioning
-            )
-            bootstrap_failure_reason = (
-                settled_existing.bootstrap_failure_reason if settled_existing is not None else None
-            )
-            if bootstrap_phase is MachineBootstrapPhase.Requested:
-                bootstrap_phase = MachineBootstrapPhase.Provisioning
-            if instance.status == ProviderMachineStatus.Unhealthy:
-                bootstrap_phase = MachineBootstrapPhase.Failed
-                bootstrap_failure_reason = MachineBootstrapFailureReason.ProviderStopped
-            launch_attempt = (
-                settled_existing.launch_attempt
-                if settled_existing is not None
-                else max((item.launch_attempt for item in current), default=0) + 1
-            )
-            bootstrap_observed_at = (
-                settled_existing.bootstrap_observed_at
-                if settled_existing is not None
-                and bootstrap_phase is settled_existing.bootstrap_phase
-                else now
-            )
-            payload: dict[str, JsonValue | datetime] = {
-                "provider": pool.provider_ref,
-                "offer_id": offer.id,
-                "status": provider_status,
-                "source": "workspace_policy",
-                "pool_id": pool.id,
-                "capacity_request_id": None,
-                "instance_type": offer.instance_type,
-                "instance_id": instance_id,
-                "machine_id": settled_existing.machine_id if settled_existing is not None else None,
-                "gpu": offer.gpu,
-                "gpu_count": offer.gpu_count,
-                "cpu_millicores": offer.cpu_millicores,
-                "memory_mb": offer.memory_mb,
-                "hourly_cost_micros": offer.hourly_cost_micros,
-                "committed_micros": 0,
-                "expires_at": None,
-                "billing_renewal_at": None,
-                "bootstrap_phase": bootstrap_phase,
-                "bootstrap_failure_reason": bootstrap_failure_reason,
-                "bootstrap_observed_at": bootstrap_observed_at,
-                "launch_attempt": launch_attempt,
-                "metadata": {
-                    **metadata,
-                    "architecture": offer.architecture,
-                    "runtime": offer.runtime,
-                    "region": offer.region,
-                    "storage_mb": offer.storage_mb,
-                    "availability_zone": instance.availability_zone,
-                    "storage_volume_ids": list(instance.storage_volume_ids),
-                },
-            }
-            if existing is None:
-                repository.records.create(payload, status=provider_status)
-            else:
-                repository.upsert(existing.model_copy(update=payload))
-        for existing in current:
-            if existing.instance_id is not None and existing.instance_id in observed:
-                continue
-            existing_metadata = _provider_instance_metadata(existing)
-            missing_since = _metadata_time(existing_metadata, "missing_since")
-            if missing_since is None:
-                existing_metadata["missing_since"] = now.isoformat()
-                missing_since = now
-            if (
-                (now - missing_since).total_seconds() < 120
-                and snapshot.phase is not ProviderCapacityPhase.Deleted
-                and not _provider_zero_capacity_converged(snapshot)
-            ):
-                repository.upsert(
-                    existing.model_copy(update={"metadata": existing_metadata, "updated_at": now})
-                )
-                continue
-            if existing.id not in destroyed_record_ids:
-                repository.upsert(
-                    existing.model_copy(update={"metadata": existing_metadata, "updated_at": now})
-                )
-                continue
-            if (
-                existing.machine_id
-                and not self.source_cache_lifecycle.record_machine_storage_destroyed_in_session(
-                    session,
-                    existing.machine_id,
-                    observed_at=now,
-                )
-            ):
-                repository.upsert(
-                    existing.model_copy(update={"metadata": existing_metadata, "updated_at": now})
-                )
-                continue
-            repository.upsert(
-                existing.model_copy(
-                    update={
-                        "status": ReservationStatus.Deleted.value,
-                        "metadata": {
-                            **existing_metadata,
-                            "terminated_reason": "provider_instance_missing",
-                            "provider_storage_destroyed_at": now.isoformat(),
-                        },
-                        "updated_at": now,
-                    }
-                )
-            )
-            if existing.machine_id:
-                missing_machine_ids.add(existing.machine_id)
-        return missing_machine_ids
-
     def _retire_proven_provider_pool_machines(
         self,
         pool: ComputePoolRecord,
@@ -4126,30 +3713,13 @@ class ComputeService:
                 )
                 is not None
             ):
-                self.retire_provider_pool_machine(
+                self.provider_machines.retire_provider_pool_machine(
                     pool.workspace_id,
                     pool.name,
                     record.machine_id,
                     reason="provider instance storage destroyed",
                     now=now,
                 )
-
-    def retire_provider_pool_machine(
-        self,
-        workspace_id: str,
-        pool_name: str,
-        machine_id: str,
-        *,
-        reason: str,
-        now: datetime | None = None,
-    ) -> tuple[str, ...]:
-        return self._retire_provider_pool_machines(
-            workspace_id,
-            pool_name,
-            machine_ids={machine_id},
-            reason=reason,
-            now=_utc(now),
-        )
 
     def retire_provider_pool_machines(
         self,
@@ -4159,126 +3729,12 @@ class ComputeService:
         reason: str,
         now: datetime | None = None,
     ) -> tuple[str, ...]:
-        return self._retire_provider_pool_machines(
+        return self.provider_machines._retire_provider_pool_machines(
             workspace_id,
             pool_name,
             machine_ids=None,
             reason=reason,
             now=_utc(now),
-        )
-
-    def _retire_provider_pool_machines(
-        self,
-        workspace_id: str,
-        pool_name: str,
-        *,
-        machine_ids: set[str] | None,
-        reason: str,
-        now: datetime,
-    ) -> tuple[str, ...]:
-        hot_state_retirements: list[ComputeMachineEnrollmentRecord] = []
-        join_token_hashes: set[str] = set()
-        changed_machine_ids: list[str] = []
-        with self.context.database.session() as session:
-            enrollments = ComputeMachineEnrollmentRepository(session)
-            machines = MachineRepository(session)
-            workers = WorkerRepository(session)
-            credentials = ComputeJoinCredentialRepository(session)
-            for enrollment in enrollments.list_for_pool(workspace_id, pool_name):
-                if machine_ids is not None and enrollment.machine_id not in machine_ids:
-                    continue
-                hot_state_retirements.append(enrollment)
-                if enrollment.status is not ComputeMachineEnrollmentStatus.Deleted:
-                    self._schedule_provider_machine_identity_cleanup(session, enrollment, now=now)
-                    enrollments.save(
-                        enrollment.model_copy(
-                            update={
-                                "status": ComputeMachineEnrollmentStatus.Deleted,
-                                "heartbeat_confirmed": False,
-                                "schedulable": False,
-                                "readiness_phase": MachineReadinessPhase.Revoked,
-                                "tailnet_phase": TailnetEnrollmentPhase.Revoked,
-                                "last_disconnect_at": now,
-                                "revoked_at": enrollment.revoked_at or now,
-                                "updated_at": now,
-                            }
-                        )
-                    )
-                    changed_machine_ids.append(enrollment.machine_id)
-                machine = machines.get(enrollment.machine_id, workspace_id=workspace_id)
-                if machine is not None and machine.status is not ResourceStatus.Deleted:
-                    machines.upsert(
-                        machine.model_copy(
-                            update={"status": ResourceStatus.Deleted, "updated_at": now}
-                        ),
-                        workspace_id=workspace_id,
-                    )
-                worker = workers.get(
-                    agent_machine_worker_id(enrollment.machine_id),
-                    workspace_id=workspace_id,
-                )
-                if worker is not None and worker.status is not ResourceStatus.Deleted:
-                    workers.upsert(
-                        worker.model_copy(update={"status": ResourceStatus.Deleted}),
-                        workspace_id=workspace_id,
-                    )
-            for credential in credentials.list_for_pool(
-                workspace_id,
-                pool_name,
-                for_update=True,
-            ):
-                join_token_hashes.add(credential.token_hash)
-                if credential.status is ComputeCredentialStatus.Active:
-                    credentials.save(credential.revoke(now=now))
-
-        if self.scheduler_hooks is not None:
-            for enrollment in hot_state_retirements:
-                self.scheduler_hooks.retire_machine(
-                    enrollment.workspace_id,
-                    enrollment.pool_name,
-                    enrollment.machine_id,
-                    reason,
-                )
-            for token_hash in join_token_hashes:
-                self.scheduler_hooks.revoke_pool_join_token(token_hash)
-        for machine_id in changed_machine_ids:
-            self._publish_change(
-                workspace_id=workspace_id,
-                topic=WorkspaceChangeTopic.ComputeMachines,
-                change=WorkspaceChangeType.Deleted,
-                resource_id=machine_id,
-            )
-        return tuple(changed_machine_ids)
-
-    @staticmethod
-    def _schedule_provider_machine_identity_cleanup(
-        session: DatabaseSession,
-        enrollment: ComputeMachineEnrollmentRecord,
-        *,
-        now: datetime,
-    ) -> None:
-        auth_key_ids = _unique_nonempty(
-            [enrollment.tailnet_auth_key_id, *enrollment.tailnet_cleanup_auth_key_ids]
-        )
-        device_ids = _unique_nonempty(
-            [enrollment.tailnet_device_id, *enrollment.tailnet_cleanup_device_ids]
-        )
-        generations = list(range(1, enrollment.tailnet_generation + 1))
-        if not generations and not auth_key_ids and not device_ids:
-            return
-        identity_expiry = enrollment.tailnet_auth_key_expires_at or now
-        not_before = max(now, _utc(identity_expiry)) + timedelta(
-            seconds=PROVIDER_MACHINE_IDENTITY_SETTLE_SECONDS
-        )
-        TailnetCleanupTombstoneRepository(session).schedule(
-            workspace_id=enrollment.workspace_id,
-            pool_name=enrollment.pool_name,
-            machine_id=enrollment.machine_id,
-            generations=generations,
-            auth_key_ids=auth_key_ids,
-            device_ids=device_ids,
-            not_before=not_before,
-            now=now,
         )
 
     def _ensure_compute_pool_record(
@@ -4444,149 +3900,6 @@ class ComputeService:
         )
         return MachineRepository(session).upsert(updated)
 
-    def _record_provider_instance(
-        self,
-        session: DatabaseSession,
-        *,
-        pool_id: str,
-        capacity_request_id: str,
-        machine: Machine,
-        offer: ComputeOffer,
-        remote_id: str,
-        status: str,
-        source: str,
-        ttl_seconds: int,
-        now: datetime,
-        registration_token_hash: str,
-        launch_state: str = _LAUNCH_STATE_COMMITTED,
-    ) -> ComputeProviderInstanceRecord:
-        expires_at = now + timedelta(seconds=ttl_seconds)
-        normalized_status = _reservation_status_from_provider(status).value
-        return ComputeProviderInstanceRepository(session).records.create(
-            {
-                "pool_id": pool_id,
-                "capacity_request_id": capacity_request_id,
-                "provider": offer.provider,
-                "offer_id": offer.id,
-                "instance_type": offer.instance_type,
-                "instance_id": remote_id,
-                "machine_id": machine.id,
-                "gpu": offer.gpu,
-                "gpu_count": offer.gpu_count,
-                "cpu_millicores": offer.cpu_millicores,
-                "memory_mb": offer.memory_mb,
-                "hourly_cost_micros": offer.hourly_cost_micros,
-                "committed_micros": offer.hourly_cost_micros * _whole_hours(ttl_seconds),
-                "source": source,
-                "status": normalized_status,
-                "expires_at": expires_at,
-                "billing_renewal_at": now + timedelta(hours=1),
-                "bootstrap_phase": MachineBootstrapPhase.Requested,
-                "bootstrap_failure_reason": None,
-                "bootstrap_observed_at": now,
-                "launch_attempt": 1,
-                "metadata": {
-                    "cloud": offer.cloud,
-                    "region": offer.region,
-                    "node_count": offer.node_count or 1,
-                    "storage_mb": offer.storage_mb,
-                    "commitment_started_at": now.isoformat(),
-                    "billing_cursor_at": now.isoformat(),
-                    "registration_token_hash": registration_token_hash,
-                    "launch_state": launch_state,
-                },
-                "created_at": now,
-                "updated_at": now,
-            },
-            status=normalized_status,
-        )
-
-    def _record_failed_launch_cleanup(
-        self,
-        prepared_launches: list[PreparedProviderLaunch],
-        *,
-        created_instances: list[LaunchedProviderInstance],
-        attempted_machine_ids: set[str],
-        terminated_machine_ids: set[str],
-        failure: str,
-    ) -> None:
-        created_by_machine = {item.machine_id: item for item in created_instances}
-        with self.context.database.session() as session:
-            provider_instances = ComputeProviderInstanceRepository(session)
-            machines = MachineRepository(session)
-            for prepared in prepared_launches:
-                record = provider_instances.records.get(prepared.provider_record_id)
-                if record is None:
-                    continue
-                created = created_by_machine.get(prepared.machine.id)
-                outcome_unknown = created is None and prepared.machine.id in attempted_machine_ids
-                terminated = prepared.machine.id in terminated_machine_ids
-                if outcome_unknown:
-                    provider_instances.upsert(
-                        record.model_copy(
-                            update={
-                                "bootstrap_phase": MachineBootstrapPhase.Failed,
-                                "bootstrap_failure_reason": (MachineBootstrapFailureReason.Unknown),
-                                "bootstrap_observed_at": utc_now(),
-                                "metadata": {
-                                    **_provider_instance_metadata(record),
-                                    "last_error": failure,
-                                    "launch_outcome": "unknown",
-                                },
-                                "updated_at": utc_now(),
-                            }
-                        )
-                    )
-                    continue
-                status = (
-                    ReservationStatus.Deleted.value
-                    if terminated
-                    else (
-                        ReservationStatus.Terminating.value
-                        if created is not None
-                        else ReservationStatus.Failed.value
-                    )
-                )
-                provider_instances.upsert(
-                    record.model_copy(
-                        update={
-                            "instance_id": (
-                                created.provider_instance_id
-                                if created is not None
-                                else record.instance_id
-                            ),
-                            "status": status,
-                            "bootstrap_phase": MachineBootstrapPhase.Failed,
-                            "bootstrap_failure_reason": MachineBootstrapFailureReason.Unknown,
-                            "bootstrap_observed_at": utc_now(),
-                            "metadata": {
-                                **_provider_instance_metadata(record),
-                                "storage_volume_ids": (
-                                    list(created.storage_volume_ids) if created is not None else []
-                                ),
-                                "launch_state": (
-                                    _LAUNCH_STATE_COMPENSATED
-                                    if terminated or created is None
-                                    else _LAUNCH_STATE_COMPENSATING
-                                ),
-                                "last_error": failure,
-                            },
-                            "updated_at": utc_now(),
-                        }
-                    )
-                )
-                self._revoke_provider_join_credential(session, record)
-                machine = machines.get_across_workspaces(prepared.machine.id)
-                if machine is not None:
-                    if terminated:
-                        machines.upsert(
-                            machine.model_copy(update={"status": ResourceStatus.Deleted})
-                        )
-                    elif created is None:
-                        machines.upsert(
-                            machine.model_copy(update={"status": ResourceStatus.Failed})
-                        )
-
     def _private_pool_state_from_records(
         self,
         pool: ComputePoolRecord,
@@ -4619,6 +3932,68 @@ class ComputeService:
             reserved_nodes=sum(max(item.node_count, 1) for item in open_reservations),
         )
 
+    def reconcile_provider_capacity(self, *, now: datetime | None = None) -> list[PrivatePoolState]:
+        current_time = _utc(now)
+        self.reconcile_pooled_capacity(now=current_time)
+        workspace_id = self._workspace_id()
+        clients = self._provider_client_snapshot(workspace_id)
+        reconciled: list[PrivatePoolState] = []
+        changed_states: list[PrivatePoolState] = []
+        machine_changes: dict[str, WorkspaceChangeType] = {}
+        with self.context.database.session() as session:
+            compute_pools = ComputePoolRepository(session).records.list(workspace_id=workspace_id)
+            provider_instances = ComputeProviderInstanceRepository(session)
+            for compute_pool in compute_pools:
+                if compute_pool.visibility is ComputePoolVisibility.Internal:
+                    continue
+                instances = provider_instances.list_for_pool(compute_pool.id)
+                billing_changed, deleted_machine_ids = self._reconcile_pool_billing(
+                    session,
+                    workspace_id=workspace_id,
+                    pool=compute_pool,
+                    instances=instances,
+                    now=current_time,
+                    clients=clients,
+                )
+                if billing_changed:
+                    instances = provider_instances.list_for_pool(compute_pool.id)
+                provider_changed, updated_machine_ids, reclaimed_machine_ids = (
+                    self.provider_machines._reconcile_provider_machines(
+                        session,
+                        compute_pool,
+                        instances,
+                        clients=clients,
+                        now=current_time,
+                    )
+                )
+                changed = billing_changed or provider_changed
+                for machine_id in updated_machine_ids:
+                    machine_changes[machine_id] = WorkspaceChangeType.Updated
+                for machine_id in deleted_machine_ids | reclaimed_machine_ids:
+                    machine_changes[machine_id] = WorkspaceChangeType.Deleted
+                refreshed = provider_instances.list_for_pool(compute_pool.id)
+                state = self._private_pool_state_from_records(compute_pool, refreshed)
+                if changed and self.scheduler_hooks is not None:
+                    self.scheduler_hooks.register_pool(state)
+                reconciled.append(state)
+                if changed:
+                    changed_states.append(state)
+        for state in changed_states:
+            self._publish_change(
+                workspace_id=state.workspace_id,
+                topic=WorkspaceChangeTopic.ComputePools,
+                change=WorkspaceChangeType.Updated,
+                resource_id=state.name,
+            )
+        for machine_id, change in machine_changes.items():
+            self._publish_change(
+                workspace_id=workspace_id,
+                topic=WorkspaceChangeTopic.ComputeMachines,
+                change=change,
+                resource_id=machine_id,
+            )
+        return reconciled
+
     def _reconcile_pool_billing(
         self,
         session: DatabaseSession,
@@ -4641,7 +4016,7 @@ class ComputeService:
             and _provider_launch_state(record) == _LAUNCH_STATE_COMPENSATING
         ]
         for record in launch_compensations:
-            terminated = self._terminate_provider_record(
+            terminated = self.provider_machines._terminate_provider_record(
                 session,
                 record,
                 clients=clients,
@@ -4674,7 +4049,7 @@ class ComputeService:
             )
         )
         for record in expired_instances:
-            terminated = self._terminate_provider_record(
+            terminated = self.provider_machines._terminate_provider_record(
                 session,
                 record,
                 clients=clients,
@@ -4721,7 +4096,7 @@ class ComputeService:
             required_budget = max(projected_commitment, current_spend)
             if required_budget > capacity.max_spend_micros:
                 for record in open_instances:
-                    terminated = self._terminate_provider_record(
+                    terminated = self.provider_machines._terminate_provider_record(
                         session,
                         record,
                         clients=clients,
@@ -4744,7 +4119,7 @@ class ComputeService:
         decision = self.billing.check_balance(workspace_id)
         if not decision.ok:
             for record in open_instances:
-                terminated = self._terminate_provider_record(
+                terminated = self.provider_machines._terminate_provider_record(
                     session,
                     record,
                     clients=clients,
@@ -4889,388 +4264,6 @@ class ComputeService:
         except Exception as exc:
             return str(exc)
         return ""
-
-    def _terminate_provider_record(
-        self,
-        session: DatabaseSession,
-        record: ComputeProviderInstanceRecord,
-        *,
-        clients: Mapping[str, DirectMachineProvider],
-        reason: str,
-        message: str,
-        bootstrap_failure_reason: MachineBootstrapFailureReason | None = None,
-        bootstrap_observed_at: datetime | None = None,
-        deleting_workspace_id: str | None = None,
-    ) -> bool:
-        if not _reservation_open(record.status):
-            return False
-        if bootstrap_failure_reason is not None:
-            record = record.model_copy(
-                update={
-                    "bootstrap_phase": MachineBootstrapPhase.Failed,
-                    "bootstrap_failure_reason": bootstrap_failure_reason,
-                    "bootstrap_failure_detail": message,
-                    "bootstrap_observed_at": _utc(bootstrap_observed_at),
-                    "updated_at": _utc(bootstrap_observed_at),
-                }
-            )
-            ComputeProviderInstanceRepository(session).upsert(record)
-        client = clients.get(record.provider)
-        status = ReservationStatus.Terminating.value
-        last_error = ""
-        provider_storage_destroyed_at: datetime | None = None
-        if client is not None:
-            try:
-                provider_instance_id = record.instance_id or record.id
-                client.terminate_machine(provider_instance_id)
-                if client.machine_storage_destroyed(
-                    provider_instance_id,
-                    _provider_storage_volume_ids(record),
-                ):
-                    provider_storage_destroyed_at = utc_now()
-                    cache_retired = (
-                        not record.machine_id
-                        or self.source_cache_lifecycle.record_machine_storage_destroyed_in_session(
-                            session,
-                            record.machine_id,
-                            observed_at=provider_storage_destroyed_at,
-                        )
-                    )
-                    if cache_retired:
-                        status = ReservationStatus.Deleted.value
-            except Exception as exc:
-                last_error = str(exc)
-        metadata: dict[str, JsonValue] = {
-            **_provider_instance_metadata(record),
-            "terminating_reason": reason,
-            "status_message": message,
-            "last_error": last_error,
-        }
-        if provider_storage_destroyed_at is not None:
-            metadata["provider_storage_destroyed_at"] = provider_storage_destroyed_at.isoformat()
-        updated = record.model_copy(
-            update={
-                "status": status,
-                "metadata": metadata,
-            }
-        )
-        ComputeProviderInstanceRepository(session).upsert(updated)
-        self._revoke_provider_join_credential(
-            session,
-            record,
-            deleting_workspace_id=deleting_workspace_id,
-        )
-        if record.machine_id and self.scheduler_hooks is not None:
-            self.scheduler_hooks.disable_machine(record.machine_id, reason)
-        if record.machine_id:
-            machine = MachineRepository(session).get_across_workspaces(record.machine_id)
-            if machine is not None and status == ReservationStatus.Deleted.value:
-                if deleting_workspace_id is not None:
-                    MachineRepository(session).mark_deleted_for_workspace_deletion(
-                        machine.id,
-                        workspace_id=deleting_workspace_id,
-                    )
-                else:
-                    MachineRepository(session).upsert(
-                        machine.model_copy(update={"status": ResourceStatus.Deleted})
-                    )
-        return status == ReservationStatus.Deleted.value
-
-    def _revoke_provider_join_credential(
-        self,
-        session: DatabaseSession,
-        record: ComputeProviderInstanceRecord,
-        *,
-        deleting_workspace_id: str | None = None,
-    ) -> None:
-        token_hash = str(_provider_instance_metadata(record).get("registration_token_hash") or "")
-        if token_hash == "":
-            return
-        credentials = ComputeJoinCredentialRepository(session)
-        credential = credentials.get_by_hash(token_hash, for_update=True)
-        if credential is not None and credential.status is ComputeCredentialStatus.Active:
-            revoked = credential.revoke(now=utc_now())
-            if deleting_workspace_id is not None:
-                credentials.save_for_workspace_deletion(revoked)
-            else:
-                credentials.save(revoked)
-
-    def _reconcile_provider_machines(
-        self,
-        session: DatabaseSession,
-        pool: ComputePoolRecord,
-        instances: list[ComputeProviderInstanceRecord],
-        *,
-        clients: Mapping[str, DirectMachineProvider],
-        now: datetime,
-    ) -> tuple[bool, set[str], set[str]]:
-        changed = False
-        updated_machine_ids: set[str] = set()
-        reclaimed_machine_ids: set[str] = set()
-        by_provider: dict[str, list[ComputeProviderInstanceRecord]] = {}
-        for record in instances:
-            if _reservation_open(record.status):
-                by_provider.setdefault(record.provider, []).append(record)
-        for provider_name, records in by_provider.items():
-            client = clients.get(provider_name)
-            if client is None:
-                continue
-            overdue_intents = [
-                record
-                for record in records
-                if _provider_launch_state(record) == _LAUNCH_STATE_INTENT
-                and self._launch_intent_overdue(record, now=now)
-            ]
-            overdue_machine_ids = {
-                record.machine_id for record in overdue_intents if record.machine_id
-            }
-            expected = {
-                record.machine_id
-                for record in records
-                if record.machine_id and record.machine_id not in overdue_machine_ids
-            }
-            probe = client.reconcile_machines(pool.name, expected, terminate_stale=False)
-            stale = set(probe.stale_machine_ids)
-            if overdue_machine_ids:
-                observed = {item.machine_id: item for item in probe.observed_machines}
-                provider_instances = ComputeProviderInstanceRepository(session)
-                machines = MachineRepository(session)
-                for record in overdue_intents:
-                    if record.machine_id is None:
-                        continue
-                    remote = observed.get(record.machine_id)
-                    updated = record.model_copy(
-                        update={
-                            "instance_id": (
-                                remote.provider_instance_id
-                                if remote is not None
-                                else record.instance_id
-                            ),
-                            "status": (
-                                ReservationStatus.Terminating.value
-                                if remote is not None
-                                else ReservationStatus.Failed.value
-                            ),
-                            "metadata": {
-                                **_provider_instance_metadata(record),
-                                "storage_volume_ids": (
-                                    list(remote.storage_volume_ids) if remote is not None else []
-                                ),
-                                "launch_state": (
-                                    _LAUNCH_STATE_COMPENSATING
-                                    if remote is not None
-                                    else _LAUNCH_STATE_COMPENSATED
-                                ),
-                            },
-                            "updated_at": utc_now(),
-                        }
-                    )
-                    provider_instances.upsert(updated)
-                    reclaimed = False
-                    if remote is not None:
-                        reclaimed = self._terminate_provider_record(
-                            session,
-                            updated,
-                            clients=clients,
-                            reason="abandoned_launch_intent",
-                            message="provider launch did not commit to durable active state",
-                        )
-                    self._revoke_provider_join_credential(session, record)
-                    machine = machines.get_across_workspaces(record.machine_id)
-                    if machine is not None:
-                        if reclaimed:
-                            machines.upsert(
-                                machine.model_copy(update={"status": ResourceStatus.Deleted})
-                            )
-                        elif remote is None:
-                            machines.upsert(
-                                machine.model_copy(update={"status": ResourceStatus.Failed})
-                            )
-                    if reclaimed:
-                        reclaimed_machine_ids.add(record.machine_id)
-                    else:
-                        updated_machine_ids.add(record.machine_id)
-                    changed = True
-                records = [
-                    record for record in records if record.machine_id not in overdue_machine_ids
-                ]
-            self._terminate_overdue_stale_machines(
-                client,
-                provider_name=provider_name,
-                pool_name=pool.name,
-                expected=expected,
-                stale=stale - overdue_machine_ids,
-                now=now,
-            )
-            missing = set(probe.missing_machine_ids)
-            for record in records:
-                if record.machine_id is not None and record.machine_id in missing:
-                    if _provider_launch_state(record) == _LAUNCH_STATE_INTENT:
-                        continue
-                    reclaimed = self._terminate_provider_record(
-                        session,
-                        record,
-                        clients=clients,
-                        reason="provider_machine_missing",
-                        message=(
-                            "provider active inventory is missing the machine; "
-                            "requesting termination and exact absence proof"
-                        ),
-                    )
-                    if reclaimed:
-                        reclaimed_machine_ids.add(record.machine_id)
-                    else:
-                        updated_machine_ids.add(record.machine_id)
-                    changed = True
-                    continue
-                bootstrap_failure = self._provider_bootstrap_failure_to_reclaim(
-                    session,
-                    pool,
-                    record,
-                    now=now,
-                )
-                if bootstrap_failure is not None:
-                    reclaimed = self._terminate_provider_record(
-                        session,
-                        record,
-                        clients=clients,
-                        reason="bootstrap_deadline_exceeded",
-                        message=(
-                            "machine did not produce an available worker before "
-                            "the bootstrap phase deadline"
-                        ),
-                        bootstrap_failure_reason=bootstrap_failure,
-                        bootstrap_observed_at=now,
-                    )
-                    if not reclaimed:
-                        continue
-                    changed = True
-                    if record.machine_id is not None:
-                        reclaimed_machine_ids.add(record.machine_id)
-                    LOGGER.warning(
-                        "reclaimed provider machine that did not become ready",
-                        extra={
-                            "provider": provider_name,
-                            "pool_name": pool.name,
-                            "machine_id": record.machine_id,
-                            "provider_instance_id": record.instance_id or record.id,
-                        },
-                    )
-        return changed, updated_machine_ids, reclaimed_machine_ids
-
-    def _provider_bootstrap_failure_to_reclaim(
-        self,
-        session: DatabaseSession,
-        pool: ComputePoolRecord,
-        record: ComputeProviderInstanceRecord,
-        *,
-        now: datetime,
-    ) -> MachineBootstrapFailureReason | None:
-        deadline = self.reclaim.phase_deadline_for(record.provider, record.bootstrap_phase)
-        if deadline is None:
-            return None
-        phase_started_at = _utc(record.bootstrap_observed_at or record.created_at)
-        if now - phase_started_at < deadline:
-            return None
-        if record.bootstrap_phase is MachineBootstrapPhase.Failed:
-            # The node named its own failure. Reclaim it under that reason rather
-            # than re-diagnosing it as a timeout it did not have.
-            return record.bootstrap_failure_reason or MachineBootstrapFailureReason.Unknown
-        if record.bootstrap_phase in {
-            MachineBootstrapPhase.Requested,
-            MachineBootstrapPhase.Provisioning,
-            MachineBootstrapPhase.Booting,
-        }:
-            return MachineBootstrapFailureReason.BootstrapTimedOut
-        if record.machine_id is None:
-            return MachineBootstrapFailureReason.BootstrapTimedOut
-        enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
-            pool.workspace_id,
-            record.machine_id,
-        )
-        if enrollment is None:
-            return MachineBootstrapFailureReason.BootstrapTimedOut
-        if self.scheduler_hooks is None:
-            msg = "provider bootstrap reclaim requires scheduler worker state"
-            raise RuntimeError(msg)
-        try:
-            serves = machine_serves_workloads(
-                enrollment,
-                machine_id=record.machine_id,
-                worker_state=self.scheduler_hooks,
-            )
-        except Exception:
-            # This answer decides whether a billable machine is terminated. An
-            # unreachable worker-state store is "unknown", and unknown machines
-            # are kept, not reclaimed.
-            LOGGER.exception(
-                "worker state was unreachable while reclaiming machine %s; keeping it",
-                record.machine_id,
-            )
-            return None
-        return None if serves else MachineBootstrapFailureReason.WorkerReadinessFailed
-
-    def _launch_intent_overdue(
-        self,
-        record: ComputeProviderInstanceRecord,
-        *,
-        now: datetime,
-    ) -> bool:
-        deadline = self.reclaim.launch_intent_settle_for(record.provider)
-        return now - _utc(record.created_at) >= deadline
-
-    def _terminate_overdue_stale_machines(
-        self,
-        client: DirectMachineProvider,
-        *,
-        provider_name: str,
-        pool_name: str,
-        expected: set[str],
-        stale: set[str],
-        now: datetime,
-    ) -> None:
-        """Terminate provider machines unknown to durable state, after a grace window.
-
-        Staleness is first observed, then enforced only once the machine has
-        stayed stale for the provider's configured grace window, so machines
-        created by a still-open launch transaction are never reaped mid-boot.
-        First-seen tracking is process-local: a restart only delays reclaim by
-        at most one grace window and can never terminate early.
-        """
-        for key in [
-            key
-            for key in self._stale_first_seen
-            if key[0] == provider_name and key[1] == pool_name and key[2] not in stale
-        ]:
-            del self._stale_first_seen[key]
-        if not stale:
-            return
-        grace = self.reclaim.stale_grace_for(provider_name)
-        overdue: set[str] = set()
-        for machine_id in stale:
-            first_seen = self._stale_first_seen.setdefault(
-                (provider_name, pool_name, machine_id),
-                now,
-            )
-            if now - first_seen >= grace:
-                overdue.add(machine_id)
-        if not overdue:
-            return
-        result = client.reconcile_machines(
-            pool_name,
-            expected | (stale - overdue),
-            terminate_stale=True,
-        )
-        for machine_id in result.terminated_machine_ids:
-            self._stale_first_seen.pop((provider_name, pool_name, machine_id), None)
-            LOGGER.warning(
-                "terminated stale provider machine unknown to durable state",
-                extra={
-                    "provider": provider_name,
-                    "pool_name": pool_name,
-                    "machine_id": machine_id,
-                },
-            )
 
     def _compensate_failed_launch(
         self,
@@ -5547,9 +4540,7 @@ def _plan_next_capacity_unit(
             request,
             CapacityAcquisitionStatus.AtLimit,
             desired_unit=max(current_units, 1),
-            reason=(
-                f"capacity limit reached: {current_units} units held, maximum is {max_units}"
-            ),
+            reason=(f"capacity limit reached: {current_units} units held, maximum is {max_units}"),
         )
     return _capacity_result(
         request,
@@ -5608,16 +4599,6 @@ def _resource_status_from_provider(status: str) -> ResourceStatus:
     if status == ProviderMachineStatus.Terminated:
         return ResourceStatus.Deleted
     return ResourceStatus.Created
-
-
-def _reservation_status_from_provider(status: str) -> ReservationStatus:
-    if status == ProviderMachineStatus.Active:
-        return ReservationStatus.Active
-    if status == ProviderMachineStatus.Unhealthy:
-        return ReservationStatus.Failed
-    if status == ProviderMachineStatus.Terminated:
-        return ReservationStatus.Deleted
-    return ReservationStatus.Pending
 
 
 def _provider_reservation_from_record(
@@ -5699,31 +4680,6 @@ def _compute_reservation_from_record(
 
 def _json_object(model: ContractModel) -> dict[str, JsonValue]:
     return _JSON_OBJECT_ADAPTER.validate_json(model.model_dump_json())
-
-
-def _provider_instance_metadata(
-    record: ComputeProviderInstanceRecord,
-) -> dict[str, JsonValue]:
-    return _ProviderInstanceMetadataEnvelope.model_validate_json(record.model_dump_json()).metadata
-
-
-def _provider_storage_volume_ids(record: ComputeProviderInstanceRecord) -> tuple[str, ...]:
-    value = _provider_instance_metadata(record).get("storage_volume_ids")
-    if not isinstance(value, list):
-        return ()
-    return tuple(item for item in value if isinstance(item, str) and item)
-
-
-def _provider_launch_state(record: ComputeProviderInstanceRecord) -> str:
-    return str(_provider_instance_metadata(record).get("launch_state") or "")
-
-
-def _metadata_time(metadata: Mapping[str, JsonValue], key: str) -> datetime | None:
-    value = metadata.get(key)
-    if not isinstance(value, str) or not value:
-        return None
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    return _utc(parsed)
 
 
 def _metadata_int(metadata: Mapping[str, JsonValue], key: str, *, default: int = 0) -> int:
@@ -5817,26 +4773,6 @@ def _policy_owned_desired_machines(
     return min(max(current_desired - released, floor), ceiling)
 
 
-def _reservation_open(status: str) -> bool:
-    return status not in {ReservationStatus.Deleted.value, ReservationStatus.Failed.value}
-
-
-def _require_internal_pooled_pool(
-    pool: ComputePoolRecord | None,
-    *,
-    pool_name: str,
-) -> ComputePoolRecord:
-    if pool is None:
-        raise NotFoundError(f"compute pool not found: {pool_name}")
-    if (
-        pool.visibility is not ComputePoolVisibility.Internal
-        or pool.capacity_mode is not ComputeCapacityMode.Pooled
-        or pool.capacity_owner_kind is not CapacityOwnerKind.PooledProvider
-    ):
-        raise InvalidInputError(f"compute pool {pool_name!r} is not provider-scaled")
-    return pool
-
-
 def _zero_capacity_converged(
     pool: ComputePoolRecord,
     sizing_state: CapacityPoolSizingState,
@@ -5856,74 +4792,8 @@ def _zero_capacity_converged(
     )
 
 
-def _zero_sizing_state_update(
-    sizing_state: CapacityPoolSizingState,
-    *,
-    now: datetime,
-) -> CapacityPoolSizingStateUpdate:
-    return CapacityPoolSizingStateUpdate(
-        capacity_owner_id=sizing_state.capacity_owner_id,
-        expected_revision=sizing_state.revision,
-        initial_target_reached=True,
-        operation_id="",
-        target_units=0,
-        operation_started_at=None,
-        last_scale_up_at=sizing_state.last_scale_up_at,
-        last_scale_down_at=now,
-        retry_after_at=None,
-        consecutive_failures=0,
-        terminal_reason="",
-    )
-
-
-def _provider_zero_capacity_converged(snapshot: ProviderPoolSnapshot) -> bool:
-    return (
-        snapshot.phase is ProviderCapacityPhase.Ready
-        and snapshot.desired_machines == 0
-        and snapshot.observed_machines == 0
-        and not snapshot.instances
-    )
-
-
-def _compute_pool_phase(phase: ProviderCapacityPhase) -> ComputePoolPhase:
-    return {
-        ProviderCapacityPhase.Provisioning: ComputePoolPhase.Provisioning,
-        ProviderCapacityPhase.Ready: ComputePoolPhase.Ready,
-        ProviderCapacityPhase.Degraded: ComputePoolPhase.Degraded,
-        ProviderCapacityPhase.Deleting: ComputePoolPhase.Deleting,
-        ProviderCapacityPhase.Deleted: ComputePoolPhase.Deleted,
-    }[phase]
-
-
-def _pool_config_int(pool: ComputePoolRecord, key: str, *, default: int) -> int:
-    value = pool.config.get(key)
-    if isinstance(value, bool):
-        return int(value)
-    if isinstance(value, int | float):
-        return int(value)
-    return default
-
-
 def _pool_gpu_capacity(pool: ComputePoolRecord) -> bool:
     return _pool_config_int(pool, "gpu_count", default=0) > 0
-
-
-def _unique_nonempty(values: list[str]) -> list[str]:
-    return list(dict.fromkeys(value.strip() for value in values if value.strip()))
-
-
-def _whole_hours(seconds: int) -> int:
-    if seconds <= 0:
-        return 0
-    return max((seconds + 3599) // 3600, 1)
-
-
-def _utc(value: datetime | None) -> datetime:
-    if value is None:
-        return utc_now()
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
 
 
 def _unix_seconds(value: datetime | None) -> int:
