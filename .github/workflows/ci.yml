@@ -88,3 +88,6 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: uv run --group dev python .github/scripts/validate_changed_scope.py --base "${BASE_SHA}"
+
+      - name: Validate blind exception handlers
+        run: uv run --group dev python .github/scripts/validate_blind_handlers.py
