@@ -1077,7 +1077,7 @@ def test_stale_source_cache_session_cannot_change_current_worker_availability(
         principal=principal,
         worker_id=worker_id,
         generation_id=generation_id,
-        storage_id="test-storage:worker-1",
+        storage_id="node:worker-1",
     )
     service.source_cache.activate(
         principal=principal,
@@ -1089,7 +1089,7 @@ def test_stale_source_cache_session_cannot_change_current_worker_availability(
         principal=principal,
         worker_id=worker_id,
         generation_id=generation_id,
-        storage_id="test-storage:worker-1",
+        storage_id="node:worker-1",
     )
 
     stale_request = WorkerCacheSessionRequest(
@@ -1282,7 +1282,7 @@ def test_worker_repository_rotates_worker_session_on_reregistration(
                 status=SchedulerWorkerStatus.Available,
             ).model_dump(mode="json"),
             "cache_generation_id": _test_cache_generation_id("worker-1"),
-            "cache_storage_id": "test-storage:worker-1",
+            "cache_storage_id": "node:worker-1",
         }
     )
     headers = {"Authorization": f"Bearer {bootstrap}"}
@@ -2349,7 +2349,7 @@ def _register_worker_session(
         json={
             "worker": registered_worker.model_dump(mode="json"),
             "cache_generation_id": generation_id,
-            "cache_storage_id": f"test-storage:{worker.worker_id}",
+            "cache_storage_id": f"node:{worker.worker_id}",
         },
         headers={"Authorization": f"Bearer {bootstrap_token}"},
     )
@@ -2386,7 +2386,7 @@ def _activate_test_source_cache(
         principal=principal,
         worker_id=worker_id,
         generation_id=str(uuid4()),
-        storage_id=f"test-storage:{worker_id}",
+        storage_id=f"node:{worker_id}",
     )
     activated = service.source_cache.activate(
         principal=principal,
