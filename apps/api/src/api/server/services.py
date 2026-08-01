@@ -1234,6 +1234,7 @@ def _compose_api_services(
         ProviderNodeEnrollmentService(
             gateway=gateway,
             compute=core.compute,
+            events=core.events,
             identity_verifier=AwsProviderNodeIdentityAdapter(
                 http_client=BoundedProviderNodeIdentityHttpClient(),
                 replay_guard=RedisProviderNodeIdentityReplayGuard(redis),

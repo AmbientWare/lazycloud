@@ -241,7 +241,11 @@ failure carries its cause to a durable place in every path we touched.
   — *no promtool on this host; validated structurally instead: every family
   typed and grouped, `_count`/`_sum` under a `summary`, extrema as their own
   gauges. Live scrape check rides Phase 4's stack.*
-- [ ] **INFRA-13** Carry a bounded diagnostic excerpt on the bootstrap-failure report — *after BOOT-03*
+- [x] **INFRA-13** Carry a bounded diagnostic excerpt on the bootstrap-failure report — *after BOOT-03*
+  — *the agent fills it with the active traceback (8 KiB bound); the server
+  sanitizes control characters, persists it as `bootstrap_failure_detail` after
+  identity verification, and leaves an `EventLevel.Error` durable event. The
+  broken-artifact live check belongs to Phase 4.*
 - [ ] **INFRA-14** Route capacity and enrolment error paths through the durable event channel
 
 **Why this matters more than it looks.** CAP-03 resolves the open question the

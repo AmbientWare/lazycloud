@@ -26,6 +26,7 @@ from shared.compute_policy import (
     ComputePoolVisibility,
 )
 from shared.errors import ConflictError, InvalidInputError, UpstreamUnavailableError
+from shared.events import EventLevel
 from shared.http.provider_nodes import (
     ProviderNodeBootstrapFailureRequest,
     ProviderNodeBootstrapFailureResponse,
@@ -35,6 +36,7 @@ from shared.http.provider_nodes import (
 from shared.provider_config import ProviderKind
 from shared.timestamps import utc_now
 
+from gateway.events import GatewayEventSink
 from gateway.http import JoinAgentRequest, JoinAgentResponse, LeaveAgentRequest
 from gateway.service import GatewayControlService
 
@@ -51,11 +53,19 @@ _ENROLLABLE_POOL_PHASES = {
 }
 
 
+_CONTROL_CHARACTERS = {chr(i) for i in range(32)} - {"\n", "\t"}
+
+
+def _sanitized_excerpt(excerpt: str) -> str:
+    return "".join(ch for ch in excerpt if ch not in _CONTROL_CHARACTERS)[:8192]
+
+
 @dataclass(frozen=True, slots=True)
 class ProviderNodeEnrollmentService:
     gateway: GatewayControlService
     compute: ComputeService
     identity_verifier: ProviderNodeIdentityVerifier
+    events: GatewayEventSink | None = None
 
     def enroll(self, request: ProviderNodeEnrollmentRequest) -> JoinAgentResponse:
         pool, connection = self._enrollment_target(request)
@@ -142,12 +152,31 @@ class ProviderNodeEnrollmentService:
             provider_instance_id=request.provider_instance_id,
             identity_proof_url=request.identity_proof_url,
         )
+        excerpt = _sanitized_excerpt(request.diagnostic_excerpt)
         observed = self.compute.record_provider_bootstrap_status(
             pool_id=pool.id,
             provider_instance_id=request.provider_instance_id,
             phase=MachineBootstrapPhase.Failed,
             failure_reason=request.failure_reason,
+            failure_detail=excerpt,
         )
+        if self.events is not None:
+            with suppress(Exception):
+                self.events.emit(
+                    "provider-node.bootstrap-failed",
+                    resource_type="provider-instance",
+                    resource_id=request.provider_instance_id,
+                    message=(
+                        f"bootstrap failed: {request.failure_reason.value} on pool {pool.name}"
+                    ),
+                    level=EventLevel.Error,
+                    data={
+                        "pool": pool.name,
+                        "failure_reason": request.failure_reason.value,
+                        "diagnostic_excerpt": excerpt,
+                    },
+                    workspace_id=pool.workspace_id,
+                )
         return ProviderNodeBootstrapFailureResponse(
             provider_instance_id=request.provider_instance_id,
             phase=observed.bootstrap_phase,

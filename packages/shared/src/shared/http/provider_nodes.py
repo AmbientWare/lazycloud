@@ -53,6 +53,9 @@ class ProviderNodeBootstrapFailureRequest(HttpModel):
     provider_instance_id: str = Field(pattern=r"^i-[0-9a-f]{8,17}$")
     identity_proof_url: str = Field(min_length=1, max_length=8192, repr=False)
     failure_reason: MachineBootstrapFailureReason
+    # Sensitive: a bootstrap log can carry a credential. Persisted only after
+    # the node's identity proof verifies; never logged at INFO.
+    diagnostic_excerpt: str = Field(default="", max_length=8192, repr=False)
 
 
 _REPORTABLE_BOOTSTRAP_PHASES = frozenset(

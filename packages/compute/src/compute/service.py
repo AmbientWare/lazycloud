@@ -328,6 +328,7 @@ class ComputeService:
         provider_instance_id: str,
         phase: MachineBootstrapPhase,
         failure_reason: MachineBootstrapFailureReason | None,
+        failure_detail: str = "",
         now: datetime | None = None,
     ) -> ComputeProviderInstanceRecord:
         if phase is MachineBootstrapPhase.Failed and failure_reason is None:
@@ -355,6 +356,7 @@ class ComputeService:
                 update={
                     "bootstrap_phase": phase,
                     "bootstrap_failure_reason": failure_reason,
+                    "bootstrap_failure_detail": failure_detail,
                     "bootstrap_observed_at": current_time,
                     "updated_at": current_time,
                 }

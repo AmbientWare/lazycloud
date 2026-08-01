@@ -10,6 +10,7 @@ import shutil
 import socket
 import subprocess
 import time
+import traceback
 import urllib.error
 from collections.abc import Callable
 from contextlib import suppress
@@ -796,6 +797,9 @@ class AgentDaemonService:
         if not self.options.provider_enrollment_request or self._bootstrap_failure_reported:
             return
         self._bootstrap_failure_reported = True
+        # The active exception is the diagnosis; the report is the only way it
+        # leaves a machine no one can reach.
+        excerpt = traceback.format_exc()[-8192:]
         with suppress(Exception):
             proof = self._provider_proof()
             self.client.record_provider_node_bootstrap_failure(
@@ -806,6 +810,7 @@ class AgentDaemonService:
                     provider_instance_id=proof.provider_instance_id,
                     identity_proof_url=proof.proof_url.get_secret_value(),
                     failure_reason=reason,
+                    diagnostic_excerpt=excerpt,
                 )
             )
 
