@@ -233,6 +233,9 @@ def test_stale_owner_cannot_publish_after_claim_takeover(isolated_services: ApiS
         def __init__(self) -> None:
             self.checks: list[tuple[str, str | None]] = []
 
+        def exists(self, key: str, *, bucket: str | None = None) -> bool:
+            return True
+
         def head(
             self,
             key: str,
@@ -327,6 +330,9 @@ def test_archive_publication_rejects_head_integrity_mismatch(
         )
 
     class IntegrityMismatchStore:
+        def exists(self, key: str, *, bucket: str | None = None) -> bool:
+            return True
+
         def head(self, key: str, *, bucket: str | None = None) -> S3ObjectInfo:
             return S3ObjectInfo(
                 bucket=bucket or "image-archives",

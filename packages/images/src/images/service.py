@@ -1391,13 +1391,13 @@ class ImageBuildService:
         settings = self.archive_settings
         if settings is None or self.archive_store is None:
             return False
-        try:
-            head = self.archive_store.head(
-                settings.physical_key(archive.object_key),
-                bucket=settings.bucket,
-            )
-        except Exception:
+        key = settings.physical_key(archive.object_key)
+        # An unreachable store must not read as "absent": the caller takes the
+        # archive row away from its owner on a False, and a build that cannot
+        # see the bytes has not established that they are gone.
+        if not self.archive_store.exists(key, bucket=settings.bucket):
             return False
+        head = self.archive_store.head(key, bucket=settings.bucket)
         return (
             head.size == archive.size_bytes
             and head.metadata.get("artifact-sha256") == archive.sha256
