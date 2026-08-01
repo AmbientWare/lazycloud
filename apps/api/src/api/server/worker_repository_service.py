@@ -50,7 +50,6 @@ from scheduler.state import (
 )
 from shared.app_identity import NAME
 from shared.cache_records import CacheEntry
-from shared.compute_fleet import ResourceStatus
 from shared.container_requests import StopContainerReason
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import (
@@ -751,11 +750,13 @@ class WorkerRepositoryService:
                     f"remote worker enrollment is unavailable: {worker.worker_id}"
                 )
             workers.upsert(
+                # Registration is inventory, not readiness. Whether this worker
+                # takes work is the scheduler record's answer, and asserting it
+                # here claimed it before the worker had validated anything.
                 durable_worker.model_copy(
                     update={
                         "machine_id": worker.machine_id,
                         "pool": worker.pool_name,
-                        "status": ResourceStatus.Running,
                         "last_seen_at": now,
                     }
                 ),

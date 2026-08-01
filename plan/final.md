@@ -363,7 +363,11 @@ first taking the restart measurement that item specifies. The failure-semantics
 author's judgement: it supports restructuring `packages/compute` specifically,
 not the repo.
 
-- [ ] **CAP-09** Stop asserting durable `Worker.status = Running` at registration — *after CAP-08*
+- [x] **CAP-09** Stop asserting durable `Worker.status = Running` at registration — *after CAP-08*
+  — *reader audit done as the plan required: every remaining reader either
+  branches on the scheduler record (a different type), carries the durable
+  status forward without branching (`gateway/service.py:1663`), or renders it.
+  The readiness branches were the two CAP-08 unified.*
 - [ ] **CAP-12** Split the persisted bootstrap phase from the derived verdict — *after CAP-08, BOOT-09*
 - [ ] **INFRA-20** Regenerate the Alembic baseline *(added in synthesis; see Gap above)*
 - [ ] **CAP-10** Delete `Worker.version` — *after CAP-09, INFRA-20*
