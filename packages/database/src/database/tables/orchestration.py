@@ -162,7 +162,6 @@ class WorkerTable(IdPayloadTable, DatabaseBase):
     )
     pool: Mapped[str] = mapped_column(String(240), nullable=False, default="default")
     status: Mapped[str] = mapped_column(String(80), nullable=False)
-    version: Mapped[str] = mapped_column(String(120), nullable=False, default="local")
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 

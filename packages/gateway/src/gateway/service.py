@@ -1665,9 +1665,6 @@ class GatewayControlService:
                             if durable_worker is not None
                             else ResourceStatus.Created
                         ),
-                        version=(
-                            durable_worker.version if durable_worker is not None else "pending"
-                        ),
                         labels={
                             **(durable_worker.labels if durable_worker is not None else {}),
                             "hostname": agent_state.hostname,

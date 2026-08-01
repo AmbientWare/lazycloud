@@ -3525,7 +3525,6 @@ class ComputeService:
         *,
         machine_id: str | None = None,
         pool: str = "default",
-        version: str = "local",
         labels: dict[str, str] | None = None,
     ) -> Worker:
         with self.context.database.session() as session:
@@ -3534,7 +3533,6 @@ class ComputeService:
                 {
                     "machine_id": optional_uuid(machine_id, field="machine_id"),
                     "pool": pool,
-                    "version": version,
                     "labels": labels or {},
                     "status": ResourceStatus.Running.value,
                 },
