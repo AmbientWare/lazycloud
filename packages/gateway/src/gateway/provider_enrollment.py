@@ -113,7 +113,7 @@ class ProviderNodeEnrollmentService:
                 phase=MachineBootstrapPhase.Joining,
                 failure_reason=None,
             )
-        except Exception:
+        except Exception as exc:
             # Leaving the agent deletes the machine, so the binding written above
             # has to go with it. A reference to a deleted machine fails the
             # foreign key on every later pool sync, which takes down enrollment
@@ -123,6 +123,27 @@ class ProviderNodeEnrollmentService:
                 self._release_machine_binding(pool.id, request.provider_instance_id, joined)
             with suppress(Exception):
                 self.gateway.leave_agent(LeaveAgentRequest(agent_token=joined.agent_token))
+            if self.events is not None:
+                # Recording the rollback must never replace the failure that
+                # caused it.
+                with suppress(Exception):
+                    self.events.emit(
+                        "provider-node.enrollment-rolled-back",
+                        resource_type="provider-instance",
+                        resource_id=request.provider_instance_id,
+                        message=(
+                            f"enrollment failed on pool {pool.name}; machine "
+                            f"binding and agent were rolled back "
+                            f"({type(exc).__name__})"
+                        ),
+                        level=EventLevel.Error,
+                        data={
+                            "pool": pool.name,
+                            "operation": "enroll",
+                            "error_type": type(exc).__name__,
+                        },
+                        workspace_id=pool.workspace_id,
+                    )
             raise
         return joined
 

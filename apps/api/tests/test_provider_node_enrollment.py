@@ -28,6 +28,7 @@ from control.service import ControlPlaneService
 from database.repositories.compute import (
     AwsAccountConnectionRepository,
     ComputePoolRepository,
+    ComputeProviderInstanceRepository,
 )
 from gateway.provider_enrollment import ProviderNodeEnrollmentService
 from provider_clients import AwsProviderNodeIdentityAdapter, ProviderNodeIdentityHttpResponse
@@ -52,6 +53,7 @@ from shared.compute_policy import (
     ComputePoolVisibility,
 )
 from shared.errors import InvalidInputError, UpstreamUnavailableError
+from shared.events import EventLevel
 from shared.http.provider_nodes import (
     ProviderNodeBootstrapFailureRequest,
     ProviderNodeBootstrapPhaseRequest,
@@ -266,6 +268,49 @@ def test_provider_node_bootstrap_failure_is_durable_after_identity_verification(
 
     assert observed.phase is MachineBootstrapPhase.Failed
     assert observed.failure_reason is MachineBootstrapFailureReason.AgentEnrollmentFailed
+
+
+def test_bootstrap_failure_excerpt_is_sanitized_persisted_and_leaves_an_event(
+    isolated_services: ApiServices,
+) -> None:
+    """The excerpt is the only diagnosis that leaves an unreachable machine.
+
+    It is accepted only behind identity verification, has its control
+    characters stripped before it becomes durable, and produces an error event
+    an operator can find without knowing which instance to ask about.
+    """
+    pool = _seed_connection_and_pool(isolated_services)
+    enrollment = replace(
+        _service(isolated_services, _PooledProvider()), events=isolated_services.events
+    )
+
+    enrollment.report_failure(
+        ProviderNodeBootstrapFailureRequest(
+            enrollment_request_id=pool.id,
+            provider=ProviderKind.Aws,
+            region=_REGION,
+            provider_instance_id=_INSTANCE_ID,
+            identity_proof_url=_presigned_url(),
+            failure_reason=MachineBootstrapFailureReason.AgentDownloadFailed,
+            diagnostic_excerpt="curl: (22) 404\x1b[31m for artifact\x00 url",
+        )
+    )
+
+    with isolated_services.context.database.session() as session:
+        record = ComputeProviderInstanceRepository(session).get_for_pool_instance(
+            pool.id,
+            _INSTANCE_ID,
+        )
+    assert record is not None
+    assert record.bootstrap_failure_detail == "curl: (22) 404[31m for artifact url"
+    events = [
+        event
+        for event in isolated_services.events.list()
+        if event.action == "provider-node.bootstrap-failed"
+    ]
+    assert len(events) == 1
+    assert events[0].level is EventLevel.Error
+    assert events[0].data["failure_reason"] == "agent_download_failed"
 
 
 def test_provider_node_bootstrap_phase_is_durable_after_identity_verification(

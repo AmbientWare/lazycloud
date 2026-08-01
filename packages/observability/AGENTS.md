@@ -6,3 +6,7 @@ coordination primitives, and optional exporters initialize lazily. No apps, SDK,
 worker/scheduler loops, or providers. Preserve accounting, ordering, cursor,
 workspace isolation, and loss-risk behavior through the real repository and
 API/stream.
+
+A broad exception handler on a capacity, enrolment, or billing path emits a
+durable `EventLevel.Error` event or re-raises — it does not swallow. Wrap the
+emit so a failure to record never replaces the failure being recorded.

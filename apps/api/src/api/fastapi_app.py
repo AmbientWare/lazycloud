@@ -18,6 +18,7 @@ from execution.volumes.control import VolumeControlService
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from gateway.events import (
+    GatewayEventSink,
     GatewayRequestEventMiddleware,
     authorization_header_from_scope,
 )
@@ -163,6 +164,7 @@ def _create_app(runtime: ControlPlaneRuntime) -> FastAPI:
                         interval_seconds=(
                             api_services.agent_route_reconciliation_settings.interval_seconds
                         ),
+                        event_sink=api_services.events,
                     )
                 )
                 cleanup.push_async_callback(
@@ -177,6 +179,7 @@ def _create_app(runtime: ControlPlaneRuntime) -> FastAPI:
                             api_services.aws_connections,
                             interval_seconds=reconciliation.interval_seconds,
                             limit=reconciliation.limit,
+                            event_sink=api_services.events,
                         )
                     )
                     cleanup.push_async_callback(
@@ -282,10 +285,30 @@ def create_production_app() -> FastAPI:
     return _create_app(runtime)
 
 
+def _emit_reconciliation_failure(
+    event_sink: GatewayEventSink | None,
+    loop_name: str,
+    exc: Exception,
+) -> None:
+    """A failed reconcile pass must outlive the log line that mentions it."""
+    if event_sink is None:
+        return
+    with suppress(Exception):
+        event_sink.emit(
+            f"reconciliation.{loop_name}.failed",
+            resource_type="reconciliation-loop",
+            resource_id=loop_name,
+            message=f"{loop_name} reconciliation failed ({type(exc).__name__}: {exc})",
+            level=EventLevel.Error,
+            data={"loop": loop_name, "error_type": type(exc).__name__},
+        )
+
+
 async def _reconcile_agent_routes(
     repository: WorkerRepositoryService,
     *,
     interval_seconds: float,
+    event_sink: GatewayEventSink | None = None,
 ) -> None:
     while True:
         try:
@@ -296,8 +319,9 @@ async def _reconcile_agent_routes(
                     result.scanned,
                     result.removed,
                 )
-        except Exception:
+        except Exception as exc:
             logger.exception("agent route registry reconciliation failed")
+            _emit_reconciliation_failure(event_sink, "agent-routes", exc)
         await asyncio.sleep(max(interval_seconds, 0.1))
 
 
@@ -306,6 +330,7 @@ async def _reconcile_aws_connections(
     *,
     interval_seconds: float,
     limit: int,
+    event_sink: GatewayEventSink | None = None,
 ) -> None:
     while True:
         try:
@@ -318,8 +343,9 @@ async def _reconcile_aws_connections(
                     batch.completed_count,
                     batch.failure_count,
                 )
-        except Exception:
+        except Exception as exc:
             logger.exception("AWS connection reconciliation failed")
+            _emit_reconciliation_failure(event_sink, "aws-connections", exc)
         await asyncio.sleep(max(interval_seconds, 0.1))
 
 

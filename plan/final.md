@@ -246,7 +246,14 @@ failure carries its cause to a durable place in every path we touched.
   sanitizes control characters, persists it as `bootstrap_failure_detail` after
   identity verification, and leaves an `EventLevel.Error` durable event. The
   broken-artifact live check belongs to Phase 4.*
-- [ ] **INFRA-14** Route capacity and enrolment error paths through the durable event channel
+- [x] **INFRA-14** Route capacity and enrolment error paths through the durable event channel
+  — *scoped as planned: the enrolment compensating rollback and both API
+  reconcile loops now leave `EventLevel.Error` durable events, each emit wrapped
+  so recording a failure never replaces it; the rule is recorded in
+  `packages/observability/AGENTS.md`. ComputeService holds no event sink and the
+  autoscaler has no broad handlers — those paths surface through the reasons and
+  events added by ERR-11/12 and CAP-02/03, and the wider swallow set is Phase
+  6's sweep.*
 
 **Why this matters more than it looks.** CAP-03 resolves the open question the
 capacity investigation could not answer from code: whether the worker
