@@ -545,7 +545,6 @@ class ComputePoolCapacityController:
                         "operation_id": "",
                         "operation_started_at": None,
                         "target_units": result.desired_unit,
-                        "terminal_reason": result.reason or "compute pool capacity is at limit",
                     }
                 ),
             )
@@ -1764,7 +1763,9 @@ class CapacityReservationService:
         next_status = {
             CapacityAcquisitionStatus.ExistingPending: CapacityReservationStatus.Provisioning,
             CapacityAcquisitionStatus.Requested: CapacityReservationStatus.Provisioning,
-            CapacityAcquisitionStatus.AtLimit: CapacityReservationStatus.Failed,
+            # Full is backpressure, not failure: the reservation keeps waiting
+            # and the pool keeps its place in selection.
+            CapacityAcquisitionStatus.AtLimit: reservation.status,
             CapacityAcquisitionStatus.TemporarilyUnavailable: reservation.status,
             CapacityAcquisitionStatus.Unsupported: CapacityReservationStatus.Failed,
         }[result.status]

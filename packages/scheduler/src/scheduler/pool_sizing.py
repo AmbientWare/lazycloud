@@ -94,7 +94,7 @@ def capacity_pool_operational_health(
         and state.retry_after_at > current_time
     ):
         return CapacityPoolOperationalHealth.Degraded
-    if state is not None and state.terminal_reason:
+    if state is not None and state.consecutive_failures > 0:
         return CapacityPoolOperationalHealth.Degraded
     if any(worker.status is SchedulerWorkerStatus.Available for worker in owner_workers):
         return CapacityPoolOperationalHealth.Healthy

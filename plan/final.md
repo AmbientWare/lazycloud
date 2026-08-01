@@ -217,7 +217,12 @@ failure carries its cause to a durable place in every path we touched.
   target is blamed on it rather than on `mark-available`, and CAP-03 maps it to
   `source_cache_unavailable`. **The gate was deliberately NOT loosened — see
   below.***
-- [ ] **CAP-07** Reclassify "at limit" as backpressure
+- [x] **CAP-07** Reclassify "at limit" as backpressure
+  — *a full pool's reservation now waits instead of failing (one open claim per
+  container, no churn), its sizing state carries no terminal reason, and health
+  keys on `consecutive_failures`/`retry_after_at` — the signals genuine failures
+  actually set via `sizing_failure_state`. Failover from a full pool is covered
+  by the existing priority-order test, which still passes.*
 - [ ] **CAP-08** Introduce one owned readiness predicate
 - [ ] **BOOT-03** Report bootstrap phases from the agent, not only from user-data
 - [ ] **INFRA-11** Emit HTTP request metrics from the gateway middleware
