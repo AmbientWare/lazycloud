@@ -214,6 +214,7 @@ def _create_app(runtime: ControlPlaneRuntime) -> FastAPI:
         GatewayRequestEventMiddleware,
         event_sink=_CurrentGatewayEventSink(services_provider),
         workspace_resolver=_CurrentWorkspaceResolver(services_provider),
+        metrics_sink=_CurrentGatewayMetricsSink(services_provider),
     )
 
     @app.exception_handler(DomainError)
@@ -356,6 +357,31 @@ class _CurrentGatewayEventSink:
             level=level,
             data=data,
             workspace_id=workspace_id,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _CurrentGatewayMetricsSink:
+    services_provider: _FastApiServicesProvider
+
+    def increment(
+        self,
+        name: str,
+        amount: float = 1,
+        *,
+        labels: dict[str, str] | None = None,
+    ) -> object:
+        return self.services_provider.current().metrics.increment(name, amount, labels=labels)
+
+    def observe_histogram(
+        self,
+        name: str,
+        value: float,
+        *,
+        labels: dict[str, str] | None = None,
+    ) -> object:
+        return self.services_provider.current().metrics.observe_histogram(
+            name, value, labels=labels
         )
 
 

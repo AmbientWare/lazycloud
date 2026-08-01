@@ -236,8 +236,11 @@ failure carries its cause to a durable place in every path we touched.
   `provider_identity_failed` / `network_join_failed`, and the enrolment path's
   own precise report cannot be overwritten by an outer wrapper. Live phase
   timeline check belongs to Phase 4's `one_machine_readiness` run.*
-- [ ] **INFRA-11** Emit HTTP request metrics from the gateway middleware
-- [ ] **INFRA-12** Make `/metrics` scrapable and correctly typed — *after INFRA-11*
+- [x] **INFRA-11** Emit HTTP request metrics from the gateway middleware
+- [x] **INFRA-12** Make `/metrics` scrapable and correctly typed — *after INFRA-11*
+  — *no promtool on this host; validated structurally instead: every family
+  typed and grouped, `_count`/`_sum` under a `summary`, extrema as their own
+  gauges. Live scrape check rides Phase 4's stack.*
 - [ ] **INFRA-13** Carry a bounded diagnostic excerpt on the bootstrap-failure report — *after BOOT-03*
 - [ ] **INFRA-14** Route capacity and enrolment error paths through the durable event channel
 

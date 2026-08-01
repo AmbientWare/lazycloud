@@ -63,18 +63,39 @@ class MetricsService:
             return MetricRepository(session).latest()
 
     def prometheus_text(self) -> str:
+        """Render the exposition format a scraper can actually parse.
+
+        The aggregate observations here are summaries, not histograms — there
+        are no buckets — so they are typed and suffixed as summaries, and the
+        min/max/last extrema are their own gauges rather than suffixes no
+        parser recognises.
+        """
         lines: list[str] = []
         latest = self.latest()
-        for sample in [*latest.counters, *latest.gauges]:
+        typed: set[str] = set()
+
+        def declare(name: str, kind: str) -> None:
+            if name not in typed:
+                typed.add(name)
+                lines.append(f"# TYPE {name} {kind}")
+
+        for sample in sorted(latest.counters, key=lambda item: item.name):
+            declare(sample.name, "counter")
             lines.append(f"{sample.name}{_metric_suffix(sample.labels)} {sample.value}")
-        for histogram in latest.histograms:
+        for sample in sorted(latest.gauges, key=lambda item: item.name):
+            declare(sample.name, "gauge")
+            lines.append(f"{sample.name}{_metric_suffix(sample.labels)} {sample.value}")
+        for histogram in sorted(latest.histograms, key=lambda item: item.name):
             suffix = _metric_suffix(histogram.labels)
+            declare(histogram.name, "summary")
             lines.append(f"{histogram.name}_count{suffix} {histogram.count}")
             lines.append(f"{histogram.name}_sum{suffix} {histogram.total}")
-            if histogram.minimum is not None:
-                lines.append(f"{histogram.name}_min{suffix} {histogram.minimum}")
-            if histogram.maximum is not None:
-                lines.append(f"{histogram.name}_max{suffix} {histogram.maximum}")
-            if histogram.last is not None:
-                lines.append(f"{histogram.name}_last{suffix} {histogram.last}")
+            for extremum, value in (
+                ("min", histogram.minimum),
+                ("max", histogram.maximum),
+                ("last", histogram.last),
+            ):
+                if value is not None:
+                    declare(f"{histogram.name}_{extremum}", "gauge")
+                    lines.append(f"{histogram.name}_{extremum}{suffix} {value}")
         return "\n".join(lines) + ("\n" if lines else "")
