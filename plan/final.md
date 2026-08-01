@@ -400,7 +400,7 @@ not the repo.
 - [ ] **CAP-15** Delete `CapacityPoolSizingState` and the `pools.sizing_*` columns — *after CAP-14, INFRA-20*
 - [ ] **CAP-16** Collapse the reservation status machine — *after CAP-15*
 - [ ] **CAP-17** Split `capacity_reservations.py` along its five-way seam — *after CAP-16*
-- [ ] **ERR-10** Collapse three at-limit conventions into one — *after ERR-07, CAP-14*
+- [x] **ERR-10** Collapse three at-limit conventions into one — *the three were worse than recorded: `prepare_pooled_capacity` raised a bare `ManagedComputeLaunchError`, which the MRO walk maps to **400**, not the 500 the plan assumed; `launch_pool_capacity` gave 409 coded `conflict`. The plan's prescription — make `CapacityAcquisitionStatus.AtLimit` the single internal representation — does not fit: that contract is reservation-scoped and neither raising site has a reservation, and the reservation path never reaches HTTP (the scheduler treats AtLimit as backpressure, per CAP-07). Unified on `CapacityLimitReachedError` instead: 409, code derived from the type name, message naming the limit and what is held. Verified 409 + `capacity_limit_reached` through the real status mapping*
 - [ ] **ERR-16** Extract provider reconciliation out of `ComputeService` — *after ERR-03, ERR-10, CAP-14*
 - [~] **ERR-15** Split `ProductionWorkerSettings` — **struck, with evidence**
   — *the class carries `extra="forbid"` and a YAML source. Split into sibling
