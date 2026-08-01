@@ -239,14 +239,20 @@ def test_provider_node_enrollment_rejects_cross_workspace_connection(
     assert default_pool.workspace_id != cross_workspace_pool.workspace_id
 
 
-def test_provider_node_enrollment_rejects_changed_pool_identity(
+def test_provider_node_enrollment_rejects_an_instance_the_pool_does_not_own(
     isolated_services: ApiServices,
 ) -> None:
-    pool = _seed_connection_and_pool(isolated_services)
-    enrollment = _service(isolated_services, _PooledProvider(resource_id="replacement-pool"))
+    """Membership is decided from durable inventory, not from a provider call.
 
-    with pytest.raises(UpstreamUnavailableError, match="identity changed"):
-        enrollment.enroll(_request(pool.id))
+    This route is unauthenticated, so it must not reach the customer's AWS
+    account to answer. An instance the reconciler has not recorded for this
+    pool is refused, and the one refresh it may request is rate limited.
+    """
+    pool = _seed_connection_and_pool(isolated_services)
+    enrollment = _service(isolated_services, _PooledProvider())
+
+    with pytest.raises(UpstreamUnavailableError, match="still refreshing"):
+        enrollment.enroll(_request(pool.id, provider_instance_id="i-0fedcba987654321f"))
 
 
 def test_provider_node_bootstrap_failure_is_durable_after_identity_verification(
@@ -409,13 +415,29 @@ def _seed_connection_and_pool(
                 updated_at=now,
             )
         )
-        return ComputePoolRepository(session).upsert(
+        pool = ComputePoolRepository(session).upsert(
             _pool(
                 workspace_id=workspace_id,
                 pool_id=str(uuid4()),
                 name="aws-capacity",
             )
         )
+        # The verifier reads the reconciler's durable inventory, never the
+        # provider, so a node this pool owns has to be in it.
+        ComputeProviderInstanceRepository(session).records.create(
+            {
+                "id": str(uuid4()),
+                "provider": pool.provider_ref,
+                "offer_id": _OFFER_ID,
+                "status": "active",
+                "source": "workspace_policy",
+                "pool_id": pool.id,
+                "instance_type": "i4i.xlarge",
+                "instance_id": _INSTANCE_ID,
+            },
+            status="active",
+        )
+        return pool
 
 
 def _pool(*, workspace_id: str, pool_id: str, name: str) -> ComputePoolRecord:
@@ -446,12 +468,16 @@ def _pool(*, workspace_id: str, pool_id: str, name: str) -> ComputePoolRecord:
     )
 
 
-def _request(pool_id: str) -> ProviderNodeEnrollmentRequest:
+def _request(
+    pool_id: str,
+    *,
+    provider_instance_id: str = _INSTANCE_ID,
+) -> ProviderNodeEnrollmentRequest:
     return ProviderNodeEnrollmentRequest(
         enrollment_request_id=pool_id,
         provider=ProviderKind.Aws,
         region=_REGION,
-        provider_instance_id=_INSTANCE_ID,
+        provider_instance_id=provider_instance_id,
         identity_proof_url=_presigned_url(),
         machine_fingerprint="provider-node-machine",
         hostname="ip-10-0-0-10",

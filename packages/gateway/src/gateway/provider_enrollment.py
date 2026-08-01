@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from compute.agent_control import ComputePrincipal, plan_join_token_creation
 from compute.provider_nodes import ProviderNodeIdentityProof, ProviderNodeIdentityVerifier
 from compute.service import ComputeService
+from coordination.rate_limit import try_consume
+from coordination.redis_client import RedisClient
 from database.repositories.compute import (
     AwsAccountConnectionRepository,
     ComputeJoinCredentialRepository,
@@ -54,6 +56,7 @@ _ENROLLABLE_POOL_PHASES = {
 
 
 _CONTROL_CHARACTERS = {chr(i) for i in range(32)} - {"\n", "\t"}
+_INVENTORY_REFRESH_WINDOW_SECONDS = 5
 
 
 def _sanitized_excerpt(excerpt: str) -> str:
@@ -66,6 +69,7 @@ class ProviderNodeEnrollmentService:
     compute: ComputeService
     identity_verifier: ProviderNodeIdentityVerifier
     events: GatewayEventSink | None = None
+    rate_limiter: RedisClient | None = None
 
     def enroll(self, request: ProviderNodeEnrollmentRequest) -> JoinAgentResponse:
         pool, connection = self._enrollment_target(request)
@@ -241,17 +245,16 @@ class ProviderNodeEnrollmentService:
         provider_instance_id: str,
         identity_proof_url: str,
     ) -> None:
-        expected_provider_resource_id = pool.provider_state.resource_id
-        current_pool, snapshot = self.compute.describe_internal_pool(
-            pool.workspace_id,
-            pool.name,
-        )
-        if (
-            not expected_provider_resource_id
-            or current_pool.id != pool.id
-            or snapshot.resource_id != expected_provider_resource_id
-        ):
-            raise UpstreamUnavailableError("provider pool identity changed during enrollment")
+        if not pool.provider_state.resource_id:
+            raise UpstreamUnavailableError("provider pool identity is not established")
+        known = self._known_instance_ids(pool)
+        if provider_instance_id not in known:
+            # An instance can report before the reconciler has observed it. Ask
+            # for one refresh — rate limited per pool, because this route is
+            # unauthenticated and the refresh calls the customer's AWS account.
+            if not self._request_inventory_refresh(pool):
+                raise UpstreamUnavailableError("provider inventory is still refreshing")
+            known = self._known_instance_ids(pool)
         self.identity_verifier.verify(
             ProviderNodeIdentityProof(
                 provider=provider,
@@ -259,10 +262,35 @@ class ProviderNodeEnrollmentService:
                 provider_instance_id=provider_instance_id,
                 proof_url=SecretStr(identity_proof_url),
             ),
-            pool=current_pool,
+            pool=pool,
             connection=connection,
-            provider_instance_ids=tuple(item.provider_instance_id for item in snapshot.instances),
+            provider_instance_ids=known,
         )
+
+    def _known_instance_ids(self, pool: ComputePoolRecord) -> tuple[str, ...]:
+        """Instances this pool owns, from durable inventory.
+
+        Read, never a provider call: this runs before the caller has proved who
+        it is, on a route anyone can reach.
+        """
+        with self.gateway.services.context.database.session() as session:
+            records = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
+        return tuple(record.instance_id for record in records if record.instance_id)
+
+    def _request_inventory_refresh(self, pool: ComputePoolRecord) -> bool:
+        redis = self.rate_limiter
+        if redis is None:
+            return False
+        if not try_consume(
+            redis,
+            f"provider-node:inventory-refresh:{pool.id}",
+            limit=1,
+            window_seconds=_INVENTORY_REFRESH_WINDOW_SECONDS,
+        ):
+            return False
+        with suppress(Exception):
+            self.compute.describe_internal_pool(pool.workspace_id, pool.name)
+        return True
 
     def _enrollment_target(
         self,

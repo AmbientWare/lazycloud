@@ -276,7 +276,13 @@ confirm the workspace stops billing. `ERR-07`: hit a configured quota and get a
 - [x] **INFRA-02** Resolve the client address from exactly one configured source
   — *forged `X-Forwarded-For` ignored when unconfigured; configured header
   wins and takes the last hop; unparseable values fall to the shared bucket.*
-- [ ] **INFRA-03** Stop calling AWS inside the provider-node request path — *after INFRA-01*
+- [x] **INFRA-03** Stop calling AWS inside the provider-node request path — *after INFRA-01*
+  — *membership now reads `ComputeProviderInstanceRepository.list_for_pool`; an
+  unknown instance buys at most one refresh per pool per 5s and is otherwise
+  refused with 503. The pool-identity check moved with it: a replaced ASG is
+  detected by the reconciler updating inventory, so the old live-describe
+  divergence test was retargeted to the invariant this layer actually enforces.
+  The unroutable-endpoint live proof belongs to Phase 3/4.*
 - [ ] **INFRA-04** Bound the STS proof verification so it cannot exhaust the API — *after INFRA-01, INFRA-03*
 - [ ] **INFRA-05** Rate-limit every unauthenticated route before exposure — *after INFRA-01, INFRA-02*
 - [ ] **INFRA-17** Close the remaining plaintext durable-secret gaps

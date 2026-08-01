@@ -1235,6 +1235,7 @@ def _compose_api_services(
             gateway=gateway,
             compute=core.compute,
             events=core.events,
+            rate_limiter=redis,
             identity_verifier=AwsProviderNodeIdentityAdapter(
                 http_client=BoundedProviderNodeIdentityHttpClient(),
                 replay_guard=RedisProviderNodeIdentityReplayGuard(redis),
