@@ -27,7 +27,7 @@ the control plane stops that sidecar, and Compose does **not** bring it back:
 
 ```bash
 docker compose up -d --force-recreate control-plane
-docker compose up -d tailnet-gateway          # required, every time
+docker compose up -d tailnet-gateway public-ingress   # required, every time
 ```
 
 Skip the second command and the control plane is silently off the tailnet: nodes
@@ -154,9 +154,14 @@ Confirm the target belongs to the task before each of these. None can be undone.
 
 ## Not yet covered
 
-- **Public ingress** — designed in `plan/14-ingress-design.md`, not deployed.
-  Until it exists there is no public origin and managed pools are configured
-  against the tailnet origin.
+- **Public ingress** — the `public-ingress` connector runs behind the
+  `public-ingress` Compose profile and reaches the origin on `127.0.0.1:9000`
+  through the control plane's namespace. Hostname routes are held in the
+  Cloudflare dashboard because the tunnel is token-managed, so the route
+  allowlist is not reviewed in this repository as `plan/14-ingress-design.md`
+  intended. That costs hardening, not exposure: `/metrics` requires admin and
+  `/worker-repository/*` requires a worker principal, both enforced at the
+  origin regardless of the edge.
 - **Prometheus, Alertmanager, alert meanings** — alerting is deferred
   (`plan/final.md`, decision 7). Metrics are exposed at the admin-gated
   `/metrics` and are correctly typed for a scraper; nothing scrapes them yet.

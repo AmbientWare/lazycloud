@@ -40,12 +40,19 @@ current test.
   refreshes the chain, so no fixed session expiry exists. A stack whose
   credentials do not resolve refuses to start rather than reporting healthy and
   failing every connection later.
-- `tailnet-gateway` runs in the control plane's network namespace, so recreating
-  `control-plane` destroys it and Compose does not bring it back. The stack then
-  reports every service healthy while the control plane is absent from the
-  tailnet, and remote nodes fail to resolve it as a peer minutes later. Follow
-  any `control-plane` recreate with `docker compose up -d tailnet-gateway`, and
+- `tailnet-gateway` and `public-ingress` both run in the control plane's network
+  namespace, so recreating `control-plane` destroys them and Compose does not
+  bring them back. The stack then reports every service healthy while the
+  control plane is absent from the tailnet and off the public origin; remote
+  nodes fail to resolve it as a peer minutes later. Follow any `control-plane`
+  recreate with `docker compose up -d tailnet-gateway public-ingress`, and
   confirm `tailscale status` reports `Online: True` before trusting a run.
+- `public-ingress` is a token-managed tunnel: its hostname routes live in the
+  Cloudflare dashboard, not in this repository. A connector with ready
+  connections and a hostname still returning 1033 means the hostname is not
+  mapped to this tunnel — check the tunnel's public hostnames before suspecting
+  the stack. `curl` the connector's `/ready` on `127.0.0.1:20241` from inside
+  the namespace to tell the two apart.
 - Read the control plane's tailnet name from the running sidecar rather than
   assuming it. A device that lost its name to a collision keeps the `-1` suffix,
   and `LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL` must match what the sidecar actually
