@@ -402,7 +402,16 @@ not the repo.
 - [ ] **CAP-17** Split `capacity_reservations.py` along its five-way seam — *after CAP-16*
 - [ ] **ERR-10** Collapse three at-limit conventions into one — *after ERR-07, CAP-14*
 - [ ] **ERR-16** Extract provider reconciliation out of `ComputeService` — *after ERR-03, ERR-10, CAP-14*
-- [ ] **ERR-15** Split `ProductionWorkerSettings`
+- [~] **ERR-15** Split `ProductionWorkerSettings` — **struck, with evidence**
+  — *the class carries `extra="forbid"` and a YAML source. Split into sibling
+  settings classes, each reads the same file and rejects the other classes'
+  keys — verified empirically, not reasoned: a partial class with
+  `extra="forbid"` raises on the siblings' keys. So the split costs
+  `extra="forbid"`, which is what makes a mistyped key in a 69-field
+  deployment config fail loudly instead of silently defaulting. Keeping both
+  would need a source that partitions keys per class — more machinery than the
+  one class it replaces, which is the opposite of the item's goal. The
+  justification was file size; the cost is a real guard. Not worth it.*
 
 ## Phase 6 — Blind-handler sweep (elective, large)
 
