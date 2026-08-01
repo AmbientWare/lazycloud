@@ -38,7 +38,7 @@ from lazycloud.session.task import TaskClient
 from pydantic import RootModel
 from shared.app_slug import validate_app_slug
 from shared.aws_connections import AwsAccountConnectionPhase
-from shared.compute_enrollment import MachineBootstrapPhase
+from shared.compute_enrollment import MachineServiceState
 from shared.http.apps import AppResponse
 from shared.http.aws_connections import AwsConnectionResponse
 from shared.http.compute_policy import WorkspaceComputeInstanceResponse
@@ -75,7 +75,7 @@ def _warm_baseline(client: ComputeClient, connection: AwsConnectionResponse) -> 
     ready = [
         item
         for item in connected
-        if item.bootstrap_phase is MachineBootstrapPhase.Ready and item.machine_id is not None
+        if item.service_state is MachineServiceState.Serving and item.machine_id is not None
     ]
     if (
         summary.instances.total != 1
