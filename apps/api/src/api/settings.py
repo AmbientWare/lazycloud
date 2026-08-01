@@ -45,6 +45,27 @@ class TcpIngressSettings(BaseSettings):
         return self
 
 
+class PublicIngressSettings(BaseSettings):
+    """How the API reads the true client behind the deployment's ingress.
+
+    Empty means no proxy: the socket peer is the client, and any forwarding
+    header is attacker-settable noise. The deployment sets the header name only
+    because its ingress strips and rewrites that header on every request.
+    """
+
+    client_ip_header: str = ""
+
+    model_config = SettingsConfigDict(
+        env_prefix=f"{ENV_PREFIX}_PUBLIC_INGRESS_",
+        extra="ignore",
+    )
+
+    @field_validator("client_ip_header")
+    @classmethod
+    def normalize_header(cls, value: str) -> str:
+        return value.strip().lower()
+
+
 class AgentRouteReconciliationSettings(BaseSettings):
     interval_seconds: float = Field(default=60.0, gt=0)
 

@@ -270,8 +270,12 @@ confirm the workspace stops billing. `ERR-07`: hit a configured quota and get a
 
 **Nothing in Phase 3 or 4 may begin until this phase is verified.** See Gate A.
 
-- [ ] **INFRA-01** Add a Redis rate-limiter primitive to coordination
-- [ ] **INFRA-02** Resolve the client address from exactly one configured source
+- [x] **INFRA-01** Add a Redis rate-limiter primitive to coordination
+  — *verified against live Redis: exactly 10 grants per window, TTL never
+  extended by later hits, slots token-fenced with dead-holder expiry.*
+- [x] **INFRA-02** Resolve the client address from exactly one configured source
+  — *forged `X-Forwarded-For` ignored when unconfigured; configured header
+  wins and takes the last hop; unparseable values fall to the shared bucket.*
 - [ ] **INFRA-03** Stop calling AWS inside the provider-node request path — *after INFRA-01*
 - [ ] **INFRA-04** Bound the STS proof verification so it cannot exhaust the API — *after INFRA-01, INFRA-03*
 - [ ] **INFRA-05** Rate-limit every unauthenticated route before exposure — *after INFRA-01, INFRA-02*
