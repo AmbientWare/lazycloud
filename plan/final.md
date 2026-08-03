@@ -365,6 +365,18 @@ duplicated bash SigV4, and roughly 350 lines of shell.
   the second. Local Compose can surface none of it: `compose.yaml:840,983` override
   `WORKER_REPOSITORY_URL` outright.
   Acceptance: `ready: 1` on `i-085fdc077ae093bc0` from an unmodified launch template.*
+- [x] **BOOT-04b** Stop the worker holding a node-wide lock across its egress probe —
+  *`reserve_probe_ip` never wrote the assignment, so the lock was the only thing keeping a
+  second slot off the same address, and it therefore spanned a network round trip while
+  acquisition retries three times. A slot that lost the race failed `ValidateReadiness` and
+  never reported itself available, which is what made a machine oscillate between serving and
+  joining roughly once a minute and kept the pool from holding a warm baseline. The probe now
+  records its address the way a container does. Measured after: eleven consecutive `ready=1`
+  samples, against four drop-outs in twelve before.
+  This is also where the first workload ran end to end — the example app deployed through the
+  public SDK, executed on `i-016ddfc783bfcefdb`, and returned
+  `{'marker': …, 'doubled': 42, 'status': 'complete'}`.
+  The same change deletes the slot-pool machinery, fifteen symbols with no callers anywhere.*
 - [ ] **BOOT-05** Reduce the bootstrap script to identity plus the published provisioner — *after BOOT-04*
 - [ ] **BOOT-08** Collapse the AMI bake onto the published install script — *after BOOT-05*
 - [ ] **BOOT-06** Delete the pool bootstrap key subsystem — *after BOOT-05*
