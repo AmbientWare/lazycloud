@@ -71,5 +71,10 @@ current test.
   and `LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL` must match what the sidecar actually
   holds. Do not delete a tailnet device to reclaim a nicer name: it invalidates
   the sidecar's identity and takes the control plane off the tailnet.
+- Give `LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL` the MagicDNS name, never the tailnet
+  IP. The address changes when the sidecar re-registers, and a stale one does not
+  fail at startup — the stack reports healthy and workers cannot reach the
+  control plane, which surfaces much later as nodes that never report. Confirm it
+  against `tailscale ip -4` in the sidecar after any change to that service.
 - The acceptance host may run AWS CLI v1: never pass v2-only flags such as
   `--no-cli-pager`; set `AWS_PAGER=""` in the subprocess environment instead.
