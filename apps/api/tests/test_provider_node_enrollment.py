@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from itertools import count
 from urllib.parse import parse_qsl, urlsplit
 from uuid import uuid4
 
@@ -31,6 +32,7 @@ from database.repositories.compute import (
     ComputeProviderInstanceRepository,
 )
 from gateway.provider_enrollment import ProviderNodeEnrollmentService
+from provider_aws import AWS_STS_PROOF_NONCE_KEY
 from provider_clients import AwsProviderNodeIdentityAdapter, ProviderNodeIdentityHttpResponse
 from scheduler.state import SchedulerWorkerRecord
 from shared.aws_connections import (
@@ -492,10 +494,16 @@ def _request(
     )
 
 
+_PROOF_NONCE = count(1)
+
+
 def _presigned_url() -> str:
     request = AWSRequest(
         method="GET",
-        url=(f"https://sts.{_REGION}.amazonaws.com/?Action=GetCallerIdentity&Version=2011-06-15"),
+        url=(
+            f"https://sts.{_REGION}.amazonaws.com/?Action=GetCallerIdentity&Version=2011-06-15"
+            f"&{AWS_STS_PROOF_NONCE_KEY}={next(_PROOF_NONCE):032x}"
+        ),
     )
     SigV4QueryAuth(
         Credentials(

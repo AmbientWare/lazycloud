@@ -1184,6 +1184,10 @@ mint_proof() {
   amz_date="${AMZ_DATE:-$(date -u +%Y%m%dT%H%M%SZ)}"
   date_stamp="${amz_date%%T*}"
   scope="${date_stamp}/${REGION}/sts/aws4_request"
+  # A fresh nonce per mint: the rest of the signed input is fixed for a given
+  # second, so two mints in the same second would otherwise be byte-identical
+  # and the control plane's replay guard would refuse the second as a replay.
+  nonce="${PROOF_NONCE:-$(od -An -tx1 -N16 /dev/urandom | tr -d ' \\n')}"
   query="Action=GetCallerIdentity"
   query="${query}&Version=2011-06-15"
   query="${query}&X-Amz-Algorithm=AWS4-HMAC-SHA256"
@@ -1192,6 +1196,7 @@ mint_proof() {
   query="${query}&X-Amz-Expires=30"
   query="${query}&X-Amz-Security-Token=$(uri_encode "$AWS_SESSION_TOKEN")"
   query="${query}&X-Amz-SignedHeaders=host"
+  query="${query}&X-Lazycloud-Nonce=${nonce}"
   canonical_request="GET
 /
 ${query}

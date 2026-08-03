@@ -39,6 +39,17 @@ _ROLE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9+=,.@_-]{1,64}$")
 _ROLE_PRINCIPAL_ID_PATTERN = re.compile(r"^[A-Z0-9]{16,128}$")
 _SECURITY_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9/+=,.@_-]{1,4096}$")
 
+AWS_STS_PROOF_NONCE_KEY = "X-Lazycloud-Nonce"
+"""Signed parameter that makes every proof distinct.
+
+Without it a proof is fully determined by the credentials and `X-Amz-Date`,
+which has one-second resolution, so two mints in the same second produce
+identical bytes. The replay guard keys on the proof digest, so the second
+presenter is refused as a replay — which is what happens when the bootstrap
+script's last report and the agent's first enrolment land in the same second.
+STS ignores the parameter; the signature covers it.
+"""
+
 _REQUIRED_QUERY_KEYS = frozenset(
     {
         "Action",
@@ -50,6 +61,7 @@ _REQUIRED_QUERY_KEYS = frozenset(
         "X-Amz-SignedHeaders",
         "X-Amz-Security-Token",
         "X-Amz-Signature",
+        AWS_STS_PROOF_NONCE_KEY,
     }
 )
 

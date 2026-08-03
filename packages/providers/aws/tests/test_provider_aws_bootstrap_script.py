@@ -21,6 +21,7 @@ _AGENT_BINARY_URL = (
     f"https://s3.us-east-1.amazonaws.com/releases/agents/0.1.0/{_AGENT_SHA256}/"
     "lazycloud-agent-linux-amd64"
 )
+_NONCE = "0123456789abcdef0123456789abcdef"
 _ACCESS_KEY = "ASIA0123456789ABCDEF"
 _SECRET_KEY = "0123456789abcdefghijklmnopqrstuvwxyzABCD"
 _SESSION_TOKEN = "temporary/session-token"
@@ -143,7 +144,10 @@ def test_shell_minted_sigv4_proof_matches_botocore_query_auth(tmp_path: Path) ->
 
     request = AWSRequest(
         method="GET",
-        url="https://sts.us-east-1.amazonaws.com/?Action=GetCallerIdentity&Version=2011-06-15",
+        url=(
+            "https://sts.us-east-1.amazonaws.com/?Action=GetCallerIdentity&Version=2011-06-15"
+            f"&X-Lazycloud-Nonce={_NONCE}"
+        ),
     )
     SigV4QueryAuth(
         Credentials(access_key=_ACCESS_KEY, secret_key=_SECRET_KEY, token=_SESSION_TOKEN),
@@ -170,6 +174,7 @@ def test_shell_minted_sigv4_proof_matches_botocore_query_auth(tmp_path: Path) ->
                 f'AWS_SECRET_ACCESS_KEY="{_SECRET_KEY}"',
                 f"AWS_SESSION_TOKEN='{_SESSION_TOKEN}'",
                 f'AMZ_DATE="{reference["X-Amz-Date"]}"',
+                f'PROOF_NONCE="{_NONCE}"',
                 "mint_proof",
                 "",
             ]

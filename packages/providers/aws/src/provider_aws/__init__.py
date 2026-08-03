@@ -99,6 +99,7 @@ from .provider_control import (
     AwsProviderControlErrorCode,
 )
 from .provider_node_identity import (
+    AWS_STS_PROOF_NONCE_KEY,
     AwsProviderNodeIdentityError,
     AwsProviderNodeIdentityErrorCode,
     AwsProviderNodeIdentityTarget,
@@ -132,6 +133,7 @@ __all__ = [
     "AWS_INSTANCE_CATALOG",
     "AWS_MANAGED_POOL_TAG",
     "AWS_MANAGED_POOL_TAG_VALUE",
+    "AWS_STS_PROOF_NONCE_KEY",
     "AwsAccountAuthorizationCleanupResult",
     "AwsAccountAuthorizationCleanupStatus",
     "AwsAccountAuthorizationValidation",
