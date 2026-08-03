@@ -350,6 +350,24 @@ The payoff. Deletes the pool bootstrap key, the tailnet-first boot path, the
 duplicated bash SigV4, and roughly 350 lines of shell.
 
 - [ ] **BOOT-04** Point managed-pool nodes at the public control-plane origin — *after BOOT-03, INFRA-06, Gate A*
+- [ ] **BOOT-04a** Give the worker the runtime origin, not the public one — *blocks BOOT-04's
+  `ready: 1`.* Enrolment over the public origin is proven: an EC2 node with no tailnet session
+  completed `bootstrap-phase → enroll → transport-credential → tailnet-device → agents/stream`,
+  all 200, and rotated to `lazycloud-agent-<machine_id>-g1`. It then stops at
+  `MachineServiceState.Joining` with the scheduler holding `status: pending`,
+  `unavailable_reason: null`.
+  `apps/agent/src/agent_app/daemon.py:997` passes `worker_repository_url=state.sanitized_gateway_url`
+  — the public origin once BOOT-04 lands — and the ingress refuses `/worker-repository/*` at the
+  edge by design, so `toggle-worker-available` never reaches the origin and the worker cannot
+  leave `pending`. Verified: that route returns 403 on the public origin and 401 (auth, reached)
+  on the tailnet origin. Local Compose hides this because `compose.yaml:840,983` override
+  `WORKER_REPOSITORY_URL`; a managed node has no override.
+  `operations.py:1374` already has the right shape (`runtime or public`). Unresolved before
+  implementing: `gateway_runtime_http_url` is absent from the agent's stored bootstrap on both
+  the local and the EC2 agent, although `GatewaySettings.runtime_callback_http_url` is populated
+  and both `gateway/service.py:1605,2039` pass it through `views.py:202`. Find where it is lost
+  first — preferring an empty value would leave the fix inert and cost another launch. Note the
+  pool's pinned agent binary (`branch-47a4731`) is 76 commits behind HEAD.
 - [ ] **BOOT-05** Reduce the bootstrap script to identity plus the published provisioner — *after BOOT-04*
 - [ ] **BOOT-08** Collapse the AMI bake onto the published install script — *after BOOT-05*
 - [ ] **BOOT-06** Delete the pool bootstrap key subsystem — *after BOOT-05*
