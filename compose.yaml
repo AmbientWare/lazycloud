@@ -583,18 +583,9 @@ services:
       start_period: 5s
 
   public-ingress:
-    # Shares the control plane's network namespace, so it reaches the origin on
-    # 127.0.0.1:9000 and nothing listens on a public port. Recreating
-    # `control-plane` destroys this sidecar and `tailnet-gateway` with it, and
-    # Compose brings back neither: follow every recreate with
-    # `docker compose up -d tailnet-gateway public-ingress`.
-    #
-    # Behind a profile because a stack without a tunnel is a valid local stack.
-    # Forgetting it on a connected deployment is loud, not silent: the network
-    # settings refuse a public origin no remote node could dial.
     profiles:
       - public-ingress
-    image: "${LAZYCLOUD_CLOUDFLARED_IMAGE:-cloudflare/cloudflared:latest}"
+    image: "${LAZYCLOUD_CLOUDFLARED_IMAGE:-cloudflare/cloudflared:2026.7.3}"
     restart: unless-stopped
     depends_on:
       control-plane:
@@ -602,12 +593,17 @@ services:
     network_mode: "service:control-plane"
     command:
       - tunnel
-      - --no-autoupdate
+      - --config
+      - /etc/cloudflared/cloudflared.yml
       - run
+    volumes:
+      # The route allowlist is reviewed in this repository, not held in the
+      # Cloudflare dashboard: the tunnel is created with `config_src: local`, so
+      # the edge pushes no ingress configuration and this file is the only
+      # source of what is exposed.
+      - "./deploy/public-ingress/cloudflared.yml:/etc/cloudflared/cloudflared.yml:ro"
+      - "${LAZYCLOUD_PUBLIC_INGRESS_CREDENTIALS_FILE:-/dev/null}:/etc/cloudflared/credentials.json:ro"
     environment:
-      # Read from the environment rather than passed as an argument, so the
-      # credential stays out of `docker ps` and shell history.
-      TUNNEL_TOKEN: "${LAZYCLOUD_PUBLIC_INGRESS_TUNNEL_TOKEN:?public ingress requires a tunnel token}"
       TUNNEL_METRICS: "127.0.0.1:20241"
 
   worker-token:

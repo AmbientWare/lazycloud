@@ -322,7 +322,16 @@ by the generated-invoke host routing), and edge path refusal for `/metrics` and
   already has (`workspace_changes.py:25`), inside INFRA-06.
 
 
-- [ ] **INFRA-06** Stand up the public HTTPS ingress — *after INFRA-03, -04, -05*
+- [x] **INFRA-06** Stand up the public HTTPS ingress — *`https://lazycloud.dev`
+  serves the origin through a locally-managed tunnel; the route allowlist is
+  `deploy/public-ingress/cloudflared.yml`, verified by `/metrics` and
+  `/worker-repository/*` returning 404 at the edge where the origin answers 401.
+  The design assumed a browser `cloudflared tunnel login`; the tunnel, both DNS
+  records, and the credentials were minted through the API instead, so the
+  procedure is reproducible. Credentials are `0444` inside a `0700` directory,
+  not `0400` — the container runs as uid 65532 and cannot read an operator-owned
+  `0400` file. The EC2-reaches-the-ingress half of Phase 3 acceptance is
+  BOOT-04's, which this unblocks.*
 - [x] **INFRA-07** Refuse to launch managed capacity against an unreachable public origin
   — *the plan listed three files; it collapses to one. Both composition sites
   already funnel through `validate_provider_network_configuration`, which

@@ -22,17 +22,18 @@ control-plane 9000` prints the mapping if it changes.
 
 ### The sidecar hazard
 
-`control-plane` shares its network namespace with `tailnet-gateway`. Recreating
-the control plane stops that sidecar, and Compose does **not** bring it back:
+`control-plane` shares its network namespace with `tailnet-gateway` and
+`public-ingress`. Recreating the control plane stops both, and Compose does
+**not** bring them back:
 
 ```bash
 docker compose up -d --force-recreate control-plane
 docker compose up -d tailnet-gateway public-ingress   # required, every time
 ```
 
-Skip the second command and the control plane is silently off the tailnet: nodes
-join, report nothing, and are reclaimed at their bootstrap deadline. When the
-public ingress lands (INFRA-06) it shares the same namespace and joins this rule.
+Skip the second command and the control plane is silently off the tailnet and
+off the public origin: nodes join, report nothing, and are reclaimed at their
+bootstrap deadline.
 
 A restarted gateway can also hold a stale netmap that lists deleted devices as
 online and omits new ones. If a node is on the tailnet but unreachable from the
@@ -126,13 +127,38 @@ PY
 Expect a `409` while a reconcile is in flight; retry. Watch it drain with
 `uv run lazycloud compute instances`.
 
+## Public ingress
+
+`https://lazycloud.dev` reaches the origin through the `public-ingress`
+connector. Routes are in `deploy/public-ingress/cloudflared.yml`, not the
+dashboard; `deploy/public-ingress/README.md` owns mint and rotation.
+
+Separate connector health from edge routing before anything else — the two
+fail identically from outside:
+
+```bash
+docker compose exec -T control-plane python -c \
+  "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:20241/ready',timeout=5).read().decode())"
+```
+
+`readyConnections` above zero means the connector is fine and the problem is at
+the edge or in DNS. A `530`/`1033` with a healthy connector is DNS: the
+hostname's record is not a proxied CNAME to this tunnel. Read the zone through
+the API — `dig` cannot distinguish a flattened apex CNAME from an unrelated
+proxied A record.
+
+Repeated `control stream encountered a failure while serving` with every
+network precheck passing means the tunnel no longer exists at Cloudflare, not a
+connectivity fault.
+
 ## Secrets and rotation
 
 | Secret | Where it lives | Rotate by |
 | --- | --- | --- |
 | Tailscale OAuth client | `.env`, `LAZYCLOUD_TAILNET_OAUTH_CLIENT_*` | Mint a new client owning the agent tag in the Tailscale admin console, update `.env`, recreate `control-plane` **and** `tailnet-gateway` |
 | Admin scrape token | `.env` | Reissue through the CLI; `/metrics` is admin-gated and must stay so |
-| Cloudflare tunnel credentials | pending INFRA-06 | — |
+| Cloudflare tunnel credentials | file named by `LAZYCLOUD_PUBLIC_INGRESS_CREDENTIALS_FILE` | Mint a second tunnel, repoint both DNS records, recreate `public-ingress`, then delete the old tunnel — see `deploy/public-ingress/README.md` |
+| Cloudflare API token | `.env`, `CLOUDFLARE_API_TOKEN` | Reissue in the Cloudflare dashboard; scoped to Tunnel:Edit, DNS:Edit, Zone:Read |
 
 Legacy credentials from the superseded architecture live outside the repo at
 `~/.lazycloud-legacy-secrets/secrets-backup/`. They are **not** rotated. Anything
@@ -154,14 +180,6 @@ Confirm the target belongs to the task before each of these. None can be undone.
 
 ## Not yet covered
 
-- **Public ingress** — the `public-ingress` connector runs behind the
-  `public-ingress` Compose profile and reaches the origin on `127.0.0.1:9000`
-  through the control plane's namespace. Hostname routes are held in the
-  Cloudflare dashboard because the tunnel is token-managed, so the route
-  allowlist is not reviewed in this repository as `plan/14-ingress-design.md`
-  intended. That costs hardening, not exposure: `/metrics` requires admin and
-  `/worker-repository/*` requires a worker principal, both enforced at the
-  origin regardless of the edge.
 - **Prometheus, Alertmanager, alert meanings** — alerting is deferred
   (`plan/final.md`, decision 7). Metrics are exposed at the admin-gated
   `/metrics` and are correctly typed for a scraper; nothing scrapes them yet.

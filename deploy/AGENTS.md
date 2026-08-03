@@ -47,12 +47,25 @@ current test.
   nodes fail to resolve it as a peer minutes later. Follow any `control-plane`
   recreate with `docker compose up -d tailnet-gateway public-ingress`, and
   confirm `tailscale status` reports `Online: True` before trusting a run.
-- `public-ingress` is a token-managed tunnel: its hostname routes live in the
-  Cloudflare dashboard, not in this repository. A connector with ready
-  connections and a hostname still returning 1033 means the hostname is not
-  mapped to this tunnel — check the tunnel's public hostnames before suspecting
-  the stack. `curl` the connector's `/ready` on `127.0.0.1:20241` from inside
-  the namespace to tell the two apart.
+- `public-ingress` is a locally-managed tunnel: the tunnel carries
+  `config_src: local`, so Cloudflare pushes no configuration and
+  `deploy/public-ingress/cloudflared.yml` is the only source of what is exposed.
+  Dashboard public hostnames do not apply and must not be added — they would
+  read as live routing while changing nothing. A connector with ready
+  connections and a hostname still returning 1033 is a DNS problem, not a route
+  problem: the hostname's record is not a proxied CNAME to this tunnel. `curl`
+  the connector's `/ready` on `127.0.0.1:20241` from inside the namespace to
+  separate connector health from edge routing.
+- Cloudflare DNS hides what it is doing at a zone apex. A proxied CNAME to
+  `<tunnel>.cfargotunnel.com` is flattened to Cloudflare anycast A records, so
+  `dig` cannot distinguish it from an unrelated proxied A record — read the zone
+  through the API before concluding anything about apex records. Auto-created
+  tunnel DNS silently declines to overwrite an existing record, and a record
+  pinned as a Cloudflare for SaaS fallback origin (SSL/TLS → Custom Hostnames)
+  cannot be deleted at all until that designation is removed.
+- `lazycloud.dev` carries live Google Workspace mail: five `MX` records, an SPF
+  `TXT`, and a site-verification `TXT`. They coexist with the apex CNAME only
+  because of CNAME flattening. Never clear the zone; delete records by id.
 - Read the control plane's tailnet name from the running sidecar rather than
   assuming it. A device that lost its name to a collision keeps the `-1` suffix,
   and `LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL` must match what the sidecar actually
