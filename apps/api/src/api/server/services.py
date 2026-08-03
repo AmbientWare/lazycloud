@@ -791,9 +791,12 @@ class ApiServices(ApiServiceCore):
             agent_version, agent_sha256 = agent_artifact_config.require_amd64()
             pool_bootstrap = pool_bootstrap_provisioner(
                 context,
-                # Nodes reach the control plane as a tailnet peer, not through
-                # the public ingress, so this is the runtime callback origin.
-                control_plane_url=gateway_config.runtime_callback_http_url,
+                # A node in a customer VPC holds no tailnet session when it
+                # first reports, so this is the public origin. The runtime
+                # callback origin stays worker-facing and is not interchangeable
+                # here. The scheduler must pass the same one: a disagreement
+                # shows up as launch templates alternating between versions.
+                control_plane_url=gateway_config.public_http_url,
                 agent_version=agent_version,
                 agent_sha256=agent_sha256,
                 agent_binary_url=aws_capacity_config.agent_binary_url,

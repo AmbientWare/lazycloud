@@ -249,9 +249,12 @@ class SchedulerAppServices:
         pool_bootstrap = (
             pool_bootstrap_provisioner(
                 context,
-                # Nodes reach the control plane as a tailnet peer, not through
-                # the public ingress, so this is the runtime callback origin.
-                control_plane_url=runtime_callback_origin,
+                # A node in a customer VPC holds no tailnet session when it
+                # first reports, so this is the public origin. The runtime
+                # callback origin stays worker-facing and is not interchangeable
+                # here. The API must pass the same one: a disagreement shows up
+                # as launch templates alternating between versions.
+                control_plane_url=gateway_origin,
                 agent_version=agent_version,
                 agent_sha256=agent_sha256,
                 agent_binary_url=capacity.aws_capacity.agent_binary_url,

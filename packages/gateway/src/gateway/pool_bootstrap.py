@@ -148,9 +148,9 @@ class PoolBootstrapProvisioner:
     """Everything a managed pool's nodes need at boot, in one place.
 
     Satisfies `compute.service.ProviderPoolBootstrapFactory`. The API and the
-    scheduler both build one so the pinned artifacts and the tailnet origin
-    cannot disagree between the process that creates a pool and the process
-    that reconciles it.
+    scheduler both build one so the pinned artifacts and the control-plane
+    origin cannot disagree between the process that creates a pool and the
+    process that reconciles it.
     """
 
     credentials: PoolBootstrapCredentialService
