@@ -118,6 +118,27 @@ Keep the output observable rather than piping a long run to `tail`, and prefer
 fail-fast (`pytest -x`) with narrow owner scopes so the first real failure
 surfaces immediately.
 
+### Never Wait On A State, Always Poll
+
+Waiting for a state to be reached is not allowed. A wait keyed on the outcome—a
+phase becoming `ready`, a row appearing, a worker registering—is keyed on
+exactly the thing that does not happen when something is wrong, so it consumes
+its whole timeout and then reports nothing about why.
+
+Poll instead, fast, and read several independent signals every cycle: the
+durable record, the logs at both ends, the external system's own view, and
+whether the request arrived at all. Print them whether or not they changed.
+Fast cycles are the point—they are how a wrong turn surfaces in seconds rather
+than at a deadline. No progress after a cycle or two is a finding to
+investigate immediately, not a reason to keep waiting; reach into the running
+thing (`docker compose exec`, SSM, `journalctl`) rather than waiting for it to
+report out.
+
+A terminal state may still end the loop early, but it is never what the loop
+depends on, and the loop always emits its signals on the way. A silent watcher
+that returns "still pending" after five minutes has produced nothing; the same
+five minutes of polling would have named the cause.
+
 Tests are optional evidence, not a completion ritual or count target. Add one
 only when it is the cheapest unique proof of a material contract, failure,
 authorization boundary, durable transition, data-loss risk, concurrency
