@@ -76,5 +76,11 @@ current test.
   fail at startup — the stack reports healthy and workers cannot reach the
   control plane, which surfaces much later as nodes that never report. Confirm it
   against `tailscale ip -4` in the sidecar after any change to that service.
+- Every deployment value naming the control plane has to carry the sidecar's real
+  device name, `-1` suffix included — `LAZYCLOUD_AWS_CAPACITY_AGENT_BINARY_URL`
+  as much as the runtime origin. Each is read on a different path, so fixing one
+  proves nothing about the rest: an agent-binary URL pointing at the pre-collision
+  name resolved nowhere and failed the boot at `ensure_agent`, long after the
+  runtime origin had been corrected. Grep the whole file for the bare name.
 - The acceptance host may run AWS CLI v1: never pass v2-only flags such as
   `--no-cli-pager`; set `AWS_PAGER=""` in the subprocess environment instead.
