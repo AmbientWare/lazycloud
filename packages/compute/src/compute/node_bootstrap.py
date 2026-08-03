@@ -436,19 +436,21 @@ tailnet_join() {
   if [ -z "$control_plane_address" ]; then
     control_plane_address="$(ts ip -4 "${CONTROL_PLANE_HOST%%.*}" 2>/dev/null | sed -n 1p)" || true
   fi
-  if [ -z "$control_plane_address" ]; then
-    bootstrap_error "control plane ${CONTROL_PLANE_HOST} is not a reachable tailnet peer"
+  # The origin is a tailnet peer or a public host. Pin the peer address when
+  # there is one; a public origin has none and needs none. Requiring a peer here
+  # would refuse every public origin, and it would refuse it at a step that
+  # cannot report, so the machine would die as an unexplained bootstrap timeout.
+  if [ -n "$control_plane_address" ]; then
+    CURL_RESOLVE=(--resolve "${CONTROL_PLANE_HOST}:${CONTROL_PLANE_PORT}:${control_plane_address}")
   fi
-  CURL_RESOLVE=(--resolve "${CONTROL_PLANE_HOST}:${CONTROL_PLANE_PORT}:${control_plane_address}")
-  # This script pins the address and needs no resolver, but the agent it hands
-  # off to resolves the same name through the system one. That works because
-  # Tailscale publishes public records for MagicDNS names on a tailnet with
-  # HTTPS certificates enabled — a tailnet property, not something this node
-  # controls. Check it here, where the failure is still attributable, rather
-  # than let the agent discover it as an unexplained enrollment timeout.
+  # Whatever this script pins, the agent it hands off to resolves the same name
+  # through the system resolver. For a MagicDNS name that works only on a tailnet
+  # with HTTPS certificates enabled — a tailnet property, not something this node
+  # controls. Check it here, where the failure is still attributable, rather than
+  # let the agent discover it as an unexplained enrollment timeout.
   if ! getent hosts "$CONTROL_PLANE_HOST" >/dev/null 2>&1; then
-    bootstrap_error "control plane ${CONTROL_PLANE_HOST} does not resolve; enable HTTPS \
-certificates on the tailnet so its MagicDNS names are publicly resolvable"
+    bootstrap_error "control plane ${CONTROL_PLANE_HOST} does not resolve; a tailnet \
+origin needs HTTPS certificates enabled so its MagicDNS names are publicly resolvable"
   fi
 }
 

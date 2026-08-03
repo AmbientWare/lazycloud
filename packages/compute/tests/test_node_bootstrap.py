@@ -111,6 +111,7 @@ def _run_bootstrap(
     tmp_path: Path,
     *,
     resolvable: bool = True,
+    publicly_resolvable: bool = True,
     control_plane_url: str = f"http://{_PEER}:9000",
 ) -> subprocess.CompletedProcess[str]:
     bash = _require_bash()
@@ -121,7 +122,7 @@ def _run_bootstrap(
     lines = _script(control_plane_url).rstrip("\n").split("\n")
     assert lines[-1] == "bootstrap_main"
     resolved = 'printf "100.64.0.9\\n"' if resolvable else "return 1"
-    driver = tmp_path / f"bootstrap-{resolvable}.sh"
+    driver = tmp_path / f"bootstrap-{resolvable}-{publicly_resolvable}.sh"
     driver.write_text(
         "\n".join(
             [
@@ -144,7 +145,7 @@ def _run_bootstrap(
                 '        cat "$key_arg" >>"$UP_LOG" ;;',
                 "  esac",
                 "}",
-                'getent() { [ "$2" = "' + _PEER + '" ]; }',
+                "getent() { " + ("true" if publicly_resolvable else "false") + "; }",
                 # Docker, the agent artifact, and the Tailscale download are
                 # proven elsewhere; this run is about the daemon's lifetime.
                 "ensure_docker() { :; }",
@@ -208,20 +209,39 @@ def test_the_generated_script_never_stops_the_daemon() -> None:
     assert TAILNET_STATE_FILE in script
 
 
-def test_a_control_plane_that_is_not_a_peer_stops_the_boot_and_names_it(
+def test_a_control_plane_that_resolves_no_way_at_all_stops_the_boot_and_names_it(
     tmp_path: Path,
 ) -> None:
     """Continuing would produce a node that reports healthy and reaches nothing.
 
-    Every later call in the boot addresses the control plane over the tailnet,
-    so a name that resolves to no peer has to fail here rather than as a
-    timeout attributed to whatever ran next.
+    This step runs before the first report, so a failure here is invisible to
+    the control plane and arrives as `bootstrap_timed_out`, which names nothing.
+    Refusing with the host in the message is the only attributable outcome.
     """
-    run = _run_bootstrap(tmp_path, resolvable=False)
+    run = _run_bootstrap(tmp_path, resolvable=False, publicly_resolvable=False)
 
     assert run.returncode != 0
     assert _PEER in run.stderr
-    assert "not a reachable tailnet peer" in run.stderr
+    assert "does not resolve" in run.stderr
+
+
+def test_a_public_control_plane_origin_boots_without_being_a_tailnet_peer(
+    tmp_path: Path,
+) -> None:
+    """Managed nodes are handed the public origin, which no peer lookup answers.
+
+    Requiring a peer refused every such node at a step that cannot report, so
+    the machine died as an unexplained timeout. The node still joins the tailnet
+    here — that is the data path — but reaching the control plane must not
+    depend on it.
+    """
+    run = _run_bootstrap(
+        tmp_path,
+        resolvable=False,
+        control_plane_url="https://lazycloud.example",
+    )
+
+    assert run.returncode == 0, run.stderr
 
 
 def test_a_control_plane_reached_at_its_tailnet_address_needs_no_resolver(
