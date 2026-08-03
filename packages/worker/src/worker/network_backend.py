@@ -6,6 +6,7 @@ import threading
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+from secrets import token_hex
 from typing import Protocol
 from urllib.parse import urlsplit
 
@@ -160,7 +161,7 @@ class HostNetworkCapabilities(ContractModel):
 
 class ProbeNetworkReservation(ContractModel):
     ip_address: str
-    lock_token: str
+    reservation_id: str
 
 
 class NetworkCommandRunner(Protocol):
@@ -273,18 +274,24 @@ class SchedulerNetworkIpAllocator:
             self.release_network_lock(token)
 
     def reserve_probe_ip(self) -> ProbeNetworkReservation:
-        token = self.acquire_network_lock()
-        try:
-            return ProbeNetworkReservation(
-                ip_address=self._next_available_ip(),
-                lock_token=token,
-            )
-        except Exception:
-            self.release_network_lock(token)
-            raise
+        """Record the probe's address the way a container's is recorded.
+
+        Returning while still holding the lock is what kept another slot from
+        taking the same address, but it also left the lock held for the whole
+        probe — a network round trip — and the lock is node-wide with only a few
+        short retries. A second slot validating readiness at the same time
+        exhausted them, failed readiness, and never reported itself available.
+        Writing the assignment reserves the address without the lock outliving
+        the allocation it protects.
+        """
+        reservation_id = f"netcheck-{token_hex(8)}"
+        return ProbeNetworkReservation(
+            ip_address=self.reserve_container_ip(reservation_id),
+            reservation_id=reservation_id,
+        )
 
     def release_probe_ip(self, reservation: ProbeNetworkReservation) -> None:
-        self.release_network_lock(reservation.lock_token)
+        self.release_container_ip(reservation.reservation_id)
 
     def _assigned_ips(self) -> set[str]:
         result: set[str] = set()

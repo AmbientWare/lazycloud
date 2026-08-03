@@ -57,7 +57,6 @@ DEFAULT_CONTAINER_LIBRARY_PATHS = (
 )
 NVIDIA_DRIVER_CAPABILITIES = "compute,utility,graphics,ngx,video"
 NETWORK_INTERFACE_NAME_MAX_LENGTH = 15
-NETWORK_SLOT_PREFIX = "network-slot"
 DEFAULT_CONTAINER_SUBNET = "192.168.0.0/20"
 DEFAULT_CONTAINER_IPV6_SUBNET = "fd00:abcd::/64"
 TAILNET_SUBNET = "100.64.0.0/10"
@@ -286,16 +285,6 @@ class ContainerNetworkSelection(ContractModel):
 class ContainerNetworkAddressMap(ContractModel):
     identity: ContainerNetworkIdentity
     addresses: dict[int, str]
-
-
-class ContainerNetworkSlotPlan(ContractModel):
-    slot_id: str
-    worker_id: str = ""
-    reservation_id: str
-    veth_host: str
-    veth_container: str
-    ipv4: str | None = None
-    ipv6: str | None = None
 
 
 class OciMount(ContractModel):
@@ -598,40 +587,6 @@ def container_veth_names(
     return (host_prefix + suffix, container_prefix + suffix)
 
 
-def network_slot_reservation_id(slot_id: str, worker_id: str = "") -> str:
-    if not slot_id:
-        msg = "slot_id is required"
-        raise ValueError(msg)
-    parts = [NETWORK_SLOT_PREFIX]
-    if worker_id:
-        parts.append(worker_id)
-    parts.append(slot_id)
-    return ":".join(parts)
-
-
-def parse_network_slot_reservation_id(value: str) -> tuple[str, str, bool]:
-    prefix = f"{NETWORK_SLOT_PREFIX}:"
-    if not value.startswith(prefix):
-        return ("", "", False)
-    rest = value[len(prefix) :]
-    if not rest:
-        return ("", "", False)
-    parts = rest.split(":")
-    slot_id = parts[-1]
-    if not slot_id:
-        return ("", "", False)
-    worker_id = parts[0] if len(parts) > 1 else ""
-    return (worker_id, slot_id, True)
-
-
-def container_ipv4_address_count(subnet: str = DEFAULT_CONTAINER_SUBNET) -> int:
-    network = ipaddress.ip_network(subnet, strict=False)
-    if network.version != 4:
-        msg = "container subnet must be IPv4"
-        raise ValueError(msg)
-    return network.num_addresses
-
-
 def container_ipv4_host_offset(ip: str, subnet: str = DEFAULT_CONTAINER_SUBNET) -> int:
     network = ipaddress.ip_network(subnet, strict=False)
     address = ipaddress.ip_address(ip)
@@ -653,25 +608,6 @@ def container_ipv6_address(
         msg = "container IPv6 subnet must be IPv6"
         raise ValueError(msg)
     return str(ipaddress.ip_address(int(network.network_address) + offset))
-
-
-def plan_network_slot(
-    container_id: str,
-    slot_id: str,
-    *,
-    worker_id: str = "",
-    ipv4: str | None = None,
-) -> ContainerNetworkSlotPlan:
-    veth_host, veth_container = container_veth_names(container_id)
-    return ContainerNetworkSlotPlan(
-        slot_id=slot_id,
-        worker_id=worker_id,
-        reservation_id=network_slot_reservation_id(slot_id, worker_id),
-        veth_host=veth_host,
-        veth_container=veth_container,
-        ipv4=ipv4,
-        ipv6=container_ipv6_address(ipv4) if ipv4 else None,
-    )
 
 
 def select_container_network(
