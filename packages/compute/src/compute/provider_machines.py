@@ -661,15 +661,19 @@ class ProviderMachineReconciler:
     ) -> ComputePoolRecord:
         current_time = _utc(now)
         phase = _compute_pool_phase(snapshot.phase)
-        # Providers never own the durable degraded reason: carry it from the
-        # durable intent so snapshot application cannot silently restore a pool
-        # that exhausted its launch attempts. Explicit capacity mutations clear
-        # the reason on the intent before the provider is consulted.
-        provider_state = snapshot.provider_state
-        if pool.provider_state.degraded_reason is not None:
-            provider_state = provider_state.model_copy(
-                update={"degraded_reason": pool.provider_state.degraded_reason}
-            )
+        # Providers never own the relaunch bookkeeping: carry it from the durable
+        # intent so snapshot application cannot silently restore a pool that
+        # exhausted its launch attempts, nor discard the baseline that recovery
+        # set. Explicit capacity mutations clear the reason on the intent before
+        # the provider is consulted. A provider describes machines it holds; it
+        # has never heard of either field, so its snapshot leaves both at their
+        # defaults and overwriting from it loses them.
+        provider_state = snapshot.provider_state.model_copy(
+            update={
+                "degraded_reason": pool.provider_state.degraded_reason,
+                "launch_attempt_baseline": pool.provider_state.launch_attempt_baseline,
+            }
+        )
         provider_request = provider_pool_request(self.pool_bootstrap_factory, pool, offer)
         observed_instance_ids = {item.provider_instance_id for item in snapshot.instances}
         authoritative_zero = _provider_zero_capacity_converged(snapshot)
