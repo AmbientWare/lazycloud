@@ -2670,7 +2670,8 @@ class ComputeService:
                     bootstrap_failure_reason=failure,
                     bootstrap_observed_at=now,
                 )
-            if record.launch_attempt >= self.reclaim.max_launch_attempts_for(record.provider):
+            streak = record.launch_attempt - current.provider_state.launch_attempt_baseline
+            if streak >= self.reclaim.max_launch_attempts_for(record.provider):
                 attempts_exhausted = True
             if record.instance_id is not None:
                 snapshot = pooled.release_machine(
@@ -3616,6 +3617,49 @@ class ComputeService:
                 f"compute pool {pool.name!r} offer is no longer available"
             )
         return provider, offer
+
+    def clear_capacity_degradation(
+        self,
+        workspace: str,
+        pool_name: str,
+    ) -> ComputePoolRecord:
+        """Let a pool that exhausted its relaunch attempts buy machines again.
+
+        Explicit because the degraded reason exists to stop a pool billing for
+        machines that never become workers; anything that cleared it as a side
+        effect would defeat it. The attempt baseline moves with it, since the
+        ordinal it is compared against never resets on its own and the pool
+        would degrade again on its next failure regardless of the cause.
+        """
+        with self.context.database.session() as session:
+            workspace_id = self.context.workspace(session, workspace).id
+            repository = ComputePoolRepository(session)
+            pool = repository.get_by_name(workspace_id, pool_name, for_update=True)
+            if pool is None:
+                raise NotFoundError(f"compute pool {pool_name!r} not found")
+            machines = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
+            highest = max(
+                (record.launch_attempt for record in machines),
+                default=pool.provider_state.launch_attempt_baseline,
+            )
+            cleared = repository.apply_provider_state(
+                pool.id,
+                generation=pool.generation,
+                observed_machines=pool.observed_machines,
+                phase=ComputePoolPhase.Ready,
+                provider_state=pool.provider_state.model_copy(
+                    update={"degraded_reason": None, "launch_attempt_baseline": highest}
+                ),
+            )
+        if cleared is None:
+            raise ConflictError(f"compute pool {pool_name!r} changed while clearing degradation")
+        self._publish_change(
+            workspace_id=cleared.workspace_id,
+            topic=WorkspaceChangeTopic.ComputePools,
+            change=WorkspaceChangeType.Updated,
+            resource_id=cleared.id,
+        )
+        return cleared
 
     def _mark_pooled_capacity_degraded(
         self,
