@@ -195,7 +195,11 @@ class ComputeReclaimSettings(BaseSettings):
     @field_validator("bootstrap_phase_deadline_seconds")
     @classmethod
     def normalize_phase_deadlines(cls, value: dict[str, int]) -> dict[str, int]:
-        return _validated_phase_deadlines(value)
+        # Merged onto the defaults rather than replacing them. A phase absent
+        # from this map has no deadline at all, so a deployment tuning one phase
+        # would silently unbound the other four — machines that die in those
+        # phases would then never be reclaimed and would bill until noticed.
+        return {**DEFAULT_BOOTSTRAP_PHASE_DEADLINE_SECONDS, **_validated_phase_deadlines(value)}
 
     @field_validator("provider_bootstrap_phase_deadline_seconds")
     @classmethod
