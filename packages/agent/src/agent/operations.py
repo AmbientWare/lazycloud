@@ -1322,16 +1322,11 @@ def agent_state_payload(
         "capacity_notice_at": (
             state.capacity_notice_at.isoformat() if state.capacity_notice_at is not None else None
         ),
-        "bootstrap": {
-            "gateway_public_http_url": bootstrap.gateway_public_http_url,
-            "gateway_grpc_host": bootstrap.gateway_grpc_host,
-            "gateway_grpc_port": bootstrap.gateway_grpc_port,
-            "gateway_grpc_tls": bootstrap.gateway_grpc_tls,
-            "transport": bootstrap.transport,
-            "image_local_cache_enabled": bootstrap.image_local_cache_enabled,
-            "image_registry_store": bootstrap.image_registry_store,
-            "image_clip_version": bootstrap.image_clip_version,
-        },
+        # Dumped whole rather than field by field. The hand-written list omitted
+        # `gateway_runtime_http_url`, so the origin survived in memory and was
+        # lost on the next restart: the worker then fell back to the public
+        # origin, which refuses worker RPC at the edge, and never left pending.
+        "bootstrap": bootstrap.model_dump(mode="json"),
         "updated_at": state.updated_at.isoformat(),
     }
 

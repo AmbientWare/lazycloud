@@ -994,7 +994,13 @@ class AgentDaemonService:
         applied = self.worker_controller.apply(
             plan,
             state.bootstrap,
-            worker_repository_url=state.sanitized_gateway_url,
+            # Worker RPC takes the runtime origin, never the public one: the
+            # ingress refuses `/worker-repository/*` at the edge, so a worker
+            # pointed at the public origin cannot report itself available and
+            # stays pending forever. Same precedence as `agent_gateway_env`.
+            worker_repository_url=(
+                state.bootstrap.gateway_runtime_http_url or state.sanitized_gateway_url
+            ),
         )
         route_count = self._reconcile_routes(state, stream, route_proxy)
         telemetry_sent = self._send_telemetry(
