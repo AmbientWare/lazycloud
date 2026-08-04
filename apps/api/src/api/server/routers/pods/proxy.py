@@ -60,17 +60,6 @@ from api.server.service_dependencies import control_plane_service, pod_service
 from api.server.services import ApiServices
 
 POD_PROXY_METHODS = ["CONNECT", "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "TRACE"]
-WEBSOCKET_BACKEND_HEADER_EXCLUDES = {
-    "connection",
-    "content-length",
-    "host",
-    "sec-websocket-accept",
-    "sec-websocket-extensions",
-    "sec-websocket-key",
-    "sec-websocket-protocol",
-    "sec-websocket-version",
-    "upgrade",
-}
 PortPath = Annotated[int, Path(ge=1, le=65535)]
 VersionPath = Annotated[int, Path(ge=1)]
 
@@ -624,9 +613,7 @@ async def _connect_backend_websocket(
     try:
         return await websockets.asyncio.client.connect(
             _pod_backend_websocket_url(request),
-            additional_headers=backend_websocket_headers(
-                request.headers, excluded=WEBSOCKET_BACKEND_HEADER_EXCLUDES
-            ),
+            additional_headers=backend_websocket_headers(request.headers),
             subprotocols=websocket_subprotocols(websocket) or None,
             open_timeout=(
                 PINNED_SANDBOX_CONNECT_TIMEOUT_SECONDS

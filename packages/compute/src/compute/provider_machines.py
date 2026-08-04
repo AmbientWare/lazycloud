@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Protocol
 
 from database.repositories.compute import (
@@ -59,7 +59,7 @@ from shared.errors import (
     NotFoundError,
 )
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
-from shared.timestamps import utc_now
+from shared.timestamps import to_utc, utc_now
 
 from compute.agent_control import (
     agent_machine_worker_id,
@@ -240,11 +240,7 @@ def _whole_hours(seconds: int) -> int:
 
 
 def _utc(value: datetime | None) -> datetime:
-    if value is None:
-        return utc_now()
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
+    return utc_now() if value is None else to_utc(value)
 
 
 def provider_pool_request(

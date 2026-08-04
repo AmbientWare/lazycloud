@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 from shared.identity import (
     AuthTokenRecord,
     DeviceAuthorizationStatus,
     TokenKind,
     TokenStatus,
 )
+from shared.timestamps import to_utc, to_utc_or_none
 
 from database.records.identity import DeviceAuthorizationRecord, SecretStorageRecord
 from database.tables.identity import DeviceAuthorizationTable, SecretTable, TokenTable
@@ -27,10 +26,10 @@ def auth_token_record_from_table(row: TokenTable) -> AuthTokenRecord:
         scopes=list(row.scopes),
         reusable=row.reusable,
         disabled_by_admin=row.disabled_by_admin,
-        created_at=_utc_datetime(row.created_at),
-        last_used_at=_utc_datetime_or_none(row.last_used_at),
-        expires_at=_utc_datetime_or_none(row.expires_at),
-        revoked_at=_utc_datetime_or_none(row.revoked_at),
+        created_at=to_utc(row.created_at),
+        last_used_at=to_utc_or_none(row.last_used_at),
+        expires_at=to_utc_or_none(row.expires_at),
+        revoked_at=to_utc_or_none(row.revoked_at),
     )
 
 
@@ -45,10 +44,10 @@ def device_authorization_record_from_table(
         client_name=row.client_name,
         status=DeviceAuthorizationStatus(row.status),
         workspace_id=str(row.workspace_id) if row.workspace_id is not None else None,
-        created_at=_utc_datetime(row.created_at),
-        updated_at=_utc_datetime(row.updated_at),
-        expires_at=_utc_datetime(row.expires_at),
-        consumed_at=_utc_datetime_or_none(row.consumed_at),
+        created_at=to_utc(row.created_at),
+        updated_at=to_utc(row.updated_at),
+        expires_at=to_utc(row.expires_at),
+        consumed_at=to_utc_or_none(row.consumed_at),
     )
 
 
@@ -59,17 +58,9 @@ def secret_storage_record_from_table(row: SecretTable) -> SecretStorageRecord:
         workspace_id=str(row.workspace_id),
         name=row.name,
         ciphertext=row.ciphertext,
-        created_at=_utc_datetime(row.created_at),
-        updated_at=_utc_datetime(row.updated_at),
+        created_at=to_utc(row.created_at),
+        updated_at=to_utc(row.updated_at),
     )
-
-
-def _utc_datetime(value: datetime) -> datetime:
-    return value.astimezone(UTC) if value.tzinfo is not None else value.replace(tzinfo=UTC)
-
-
-def _utc_datetime_or_none(value: datetime | None) -> datetime | None:
-    return _utc_datetime(value) if value is not None else None
 
 
 __all__ = [

@@ -4,7 +4,7 @@ import hashlib
 import ipaddress
 import secrets
 from collections.abc import Mapping
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import TYPE_CHECKING, Protocol
 from urllib.parse import urlparse
@@ -31,7 +31,7 @@ from shared.routing import (
     BackendRouteTransport,
     RoutePrewarmDecision,
 )
-from shared.timestamps import utc_now
+from shared.timestamps import to_utc, utc_now
 
 from compute.projection import (
     PoolConfig,
@@ -1440,8 +1440,4 @@ def _proxy_target_host(proxy_target: str) -> str:
 
 
 def _utc(value: datetime | None) -> datetime:
-    if value is None:
-        return utc_now()
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
+    return utc_now() if value is None else to_utc(value)

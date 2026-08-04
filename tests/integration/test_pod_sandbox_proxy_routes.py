@@ -296,6 +296,71 @@ def test_pod_websocket_proxies_subprotocol_text_binary_and_balances_demand(
     ]
 
 
+def test_pod_websocket_upgrade_withholds_proxy_credentials_from_the_backend(
+    isolated_services: ApiServices,
+    client_stack: ExitStack,
+) -> None:
+    control = ControlPlaneService(isolated_services.context)
+    stub = control.create_stub("credential-scope", kind=StubKind.Pod)
+    container = _create_container(isolated_services, stub, "socket")
+    scheduler = _FakeSchedulerContainers.running(
+        container,
+        address_maps={container.id: {8080: "route:socket"}},
+    )
+    backend_headers: list[dict[str, str]] = []
+    backend_errors: list[Exception] = []
+    backend_port = _available_loopback_port()
+    listener = socket.create_server(("127.0.0.1", backend_port))
+
+    def echo_backend(websocket: ServerConnection) -> None:
+        try:
+            request = websocket.request
+            if request is None:
+                raise RuntimeError("websocket backend request is unavailable")
+            backend_headers.append(
+                {key.lower(): value for key, value in request.headers.raw_items()}
+            )
+            websocket.send(f"echo:{websocket.recv()}")
+            websocket.close(code=1000, reason="complete")
+        except Exception as exc:  # pragma: no cover - reported on the test thread
+            backend_errors.append(exc)
+
+    backend_server = serve(echo_backend, sock=listener)
+    backend_thread = threading.Thread(target=backend_server.serve_forever, daemon=True)
+    backend_thread.start()
+    service = PodControlService(
+        isolated_services,
+        redis=isolated_services.redis(),
+        scheduler_containers=scheduler,
+        container_clients=SchedulerContainerClientFactory(scheduler_containers=scheduler),
+        pod_proxy_http_client=_RecordingProxyClient(),
+        pod_proxy_socket_client=_LoopbackSocketClient(backend_port),
+        pod_proxy_connections=_RecordingConnections(),
+    )
+    client = client_stack.enter_context(
+        TestClient(create_app(isolated_services, pod_service=service))
+    )
+
+    try:
+        with client.websocket_connect(
+            f"/pod/id/{stub.id}/8080/echo",
+            headers=_auth_headers(isolated_services)
+            | {
+                "proxy-authorization": "Basic cHJveHktY3JlZGVudGlhbA==",
+                "x-client-header": "kept",
+            },
+        ) as websocket:
+            websocket.send_text("hello")
+            assert websocket.receive_text() == "echo:hello"
+    finally:
+        backend_server.shutdown()
+        backend_thread.join(timeout=2)
+
+    assert backend_errors == []
+    assert backend_headers[0].get("x-client-header") == "kept"
+    assert "proxy-authorization" not in backend_headers[0]
+
+
 def test_pinned_sandbox_routes_never_wait_or_fall_through_to_a_sibling(
     isolated_services: ApiServices,
     client_stack: ExitStack,

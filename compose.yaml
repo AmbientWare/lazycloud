@@ -25,7 +25,7 @@ x-api-env: &api-env
 
 x-object-store-env: &object-store-env
   LAZYCLOUD_OBJECT_STORE_BUCKET: "${LAZYCLOUD_OBJECT_STORE_BUCKET:-lazycloud-objects}"
-  LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL: "http://object-store:9000"
+  LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL: "${LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL:-http://object-store:9000}"
   # Empty is meaningful and distinct from omitted: a connected-cloud deployment
   # sets these to "" so the object store resolves the platform role through the
   # SDK credential chain and presigns against the storage endpoint itself.

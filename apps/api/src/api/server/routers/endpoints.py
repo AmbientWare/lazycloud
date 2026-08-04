@@ -68,14 +68,6 @@ asgi_router = APIRouter(prefix="/api/v1/asgi", tags=["endpoint"])
 ENDPOINT_RESOURCE_NAME = "endpoint"
 ENDPOINT_METHODS = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "TRACE"]
 ASGI_METHODS = ["CONNECT", "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "TRACE"]
-WEBSOCKET_BACKEND_HEADER_EXCLUDES = HOP_BY_HOP_RESPONSE_HEADERS | {
-    "host",
-    "sec-websocket-accept",
-    "sec-websocket-extensions",
-    "sec-websocket-key",
-    "sec-websocket-protocol",
-    "sec-websocket-version",
-}
 
 
 @endpoint_router.post("/serve", response_model=StartEndpointServeResponse)
@@ -761,9 +753,7 @@ async def _connect_backend_websocket(
             request,
             protocol=EndpointBackendProtocol.WebSocket,
         ),
-        additional_headers=backend_websocket_headers(
-            session.headers, excluded=WEBSOCKET_BACKEND_HEADER_EXCLUDES
-        ),
+        additional_headers=backend_websocket_headers(session.headers),
         subprotocols=subprotocols or None,
         open_timeout=min(max(session.wait_timeout_seconds, 0.1), 10.0),
         proxy=None,

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from collections.abc import Set as AbstractSet
 
 from fastapi import Request, Response, WebSocket
+from foundation.http import HOP_BY_HOP_REQUEST_HEADERS
 from websockets.typing import Subprotocol
 
 HOP_BY_HOP_RESPONSE_HEADERS = {
@@ -16,6 +16,19 @@ HOP_BY_HOP_RESPONSE_HEADERS = {
     "trailer",
     "transfer-encoding",
     "upgrade",
+}
+
+# Hop-by-hop headers belong to the client-to-control-plane connection only, and
+# `proxy-authorization` among them is a credential the backend must never see.
+# The handshake headers describe that same first connection: the websockets
+# client mints its own for the backend leg, so forwarding the client's would
+# also duplicate them.
+_BACKEND_WEBSOCKET_HEADER_EXCLUDES = HOP_BY_HOP_REQUEST_HEADERS | {
+    "sec-websocket-accept",
+    "sec-websocket-extensions",
+    "sec-websocket-key",
+    "sec-websocket-protocol",
+    "sec-websocket-version",
 }
 
 
@@ -54,14 +67,10 @@ def websocket_subprotocols(websocket: WebSocket) -> list[Subprotocol]:
     return values
 
 
-def backend_websocket_headers(
-    headers: Mapping[str, list[str]],
-    *,
-    excluded: AbstractSet[str],
-) -> list[tuple[str, str]]:
+def backend_websocket_headers(headers: Mapping[str, list[str]]) -> list[tuple[str, str]]:
     forwarded: list[tuple[str, str]] = []
     for key, values in headers.items():
-        if key.lower() in excluded:
+        if key.lower() in _BACKEND_WEBSOCKET_HEADER_EXCLUDES:
             continue
         forwarded.extend((key, value) for value in values)
     return forwarded
