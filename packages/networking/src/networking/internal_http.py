@@ -82,8 +82,8 @@ class TailnetPeerAddresses:
     def peer_address(self, host: str, *, timeout_seconds: float) -> str:
         """Wait out a stale netmap and return the peer's address.
 
-        The caller remembers the answer per host, so the wait is paid once per
-        destination rather than on every request.
+        Called only after dialing the name has already failed, so the wait is
+        recovery rather than a toll on every request.
         """
         if not self.policy.covers(host):
             return ""
@@ -106,23 +106,18 @@ class TailnetPeerAddresses:
 class InternalHttpClient:
     """The single client for platform-internal HTTP.
 
-    Construct one per process and share it: connections are pooled, and a peer
-    address is resolved once per host rather than once per request.
+    Construct one per process and share it: connections are pooled, so a peer
+    that answers to its name is dialed without consulting the tailnet at all.
 
-    Whether a tailnet name is dialable depends on who is asking. A process that
-    holds a tailnet session resolves MagicDNS itself, so it is given no resolver
-    and dials the name. A worker container holds no session: the same name goes
-    to public DNS, which answers with whatever that name last resolved to
-    publicly, and the dial then times out against a stale address instead of
-    failing. Being handed a resolver *is* the statement that this process cannot
-    resolve tailnet names, so when there is one it is asked first.
+    The tailnet name is the route. Peer resolution is the recovery step, taken
+    only when connecting by name fails, because resolving first costs a
+    loopback hop and two `tailscale status` executions on every request and can
+    drive the node's own control session down under ordinary load.
     """
 
     timeout_seconds: float = DEFAULT_INTERNAL_HTTP_TIMEOUT_SECONDS
     addresses: TailnetPeerAddressResolver | None = None
     _client: httpx.Client | None = field(default=None, init=False, repr=False)
-    _peers: dict[str, str] = field(default_factory=dict[str, str], init=False, repr=False)
-    _peers_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     def _ensure_client(self) -> httpx.Client:
         if self._client is None:
@@ -135,21 +130,12 @@ class InternalHttpClient:
     def _peer_route(
         self, url: str, timeout_seconds: float
     ) -> tuple[str, dict[str, str], dict[str, str]] | None:
-        """Where to dial `url`, or None when its name is the route."""
+        """Where to redial `url` once its name did not connect, or None if it is not a peer."""
         parsed = urlparse(url)
         host = parsed.hostname or ""
         if not host or self.addresses is None:
             return None
-        with self._peers_lock:
-            address = self._peers.get(host)
-        if address is None:
-            address = self.addresses.peer_address(host, timeout_seconds=timeout_seconds)
-            if not address:
-                # Not a tailnet host. Remembering that costs nothing and keeps
-                # local service names off the resolver entirely.
-                address = ""
-            with self._peers_lock:
-                self._peers[host] = address
+        address = self.addresses.peer_address(host, timeout_seconds=timeout_seconds)
         if not address:
             return None
         port = f":{parsed.port}" if parsed.port else ""
@@ -158,22 +144,6 @@ class InternalHttpClient:
         # `Host` keeps the name the caller signed and routed against; SNI keeps
         # the certificate valid for it. Only the connection target changes.
         return dialed, {"Host": f"{host}{port}"}, {"sni_hostname": host}
-
-    def _dial(
-        self, url: str, timeout_seconds: float
-    ) -> tuple[str, dict[str, str], dict[str, str]]:
-        route = self._peer_route(url, timeout_seconds)
-        if route is None:
-            return url, {}, {}
-        return route
-
-    def _forget_peer_if_known(self, url: str) -> bool:
-        """Drop a remembered address, reporting whether there was one to drop."""
-        host = urlparse(url).hostname or ""
-        if not host:
-            return False
-        with self._peers_lock:
-            return bool(self._peers.pop(host, ""))
 
     def request(
         self,
@@ -186,8 +156,19 @@ class InternalHttpClient:
     ) -> httpx.Response:
         timeout = timeout_seconds or self.timeout_seconds
         merged = dict(headers or {})
-        for attempt in (0, 1):
-            dialed, host_headers, extensions = self._dial(url, timeout)
+        try:
+            return self._ensure_client().request(
+                method,
+                url,
+                headers=merged,
+                content=content,
+                timeout=timeout,
+            )
+        except _CONNECT_FAILURES as exc:
+            route = self._peer_route(url, timeout)
+            if route is None:
+                raise InternalHttpError(f"{method} {_safe_target(url)} failed: {exc}") from exc
+            dialed, host_headers, extensions = route
             try:
                 return self._ensure_client().request(
                     method,
@@ -197,16 +178,11 @@ class InternalHttpClient:
                     timeout=timeout,
                     extensions=extensions,
                 )
-            except _CONNECT_FAILURES as exc:
-                # A remembered address outlives the peer that had it. Forget it
-                # and resolve once more before giving up.
-                if attempt or not self._forget_peer_if_known(url):
-                    raise InternalHttpError(
-                        f"{method} {_safe_target(url)} failed: {exc}"
-                    ) from exc
-            except httpx.HTTPError as exc:
-                raise InternalHttpError(f"{method} {_safe_target(url)} failed: {exc}") from exc
-        raise InternalHttpError(f"{method} {_safe_target(url)} failed")
+            except httpx.HTTPError as retry_exc:
+                msg = f"{method} {_safe_target(url)} failed: {retry_exc}"
+                raise InternalHttpError(msg) from retry_exc
+        except httpx.HTTPError as exc:
+            raise InternalHttpError(f"{method} {_safe_target(url)} failed: {exc}") from exc
 
     @contextmanager
     def stream(
@@ -221,10 +197,14 @@ class InternalHttpClient:
         timeout = timeout_seconds or self.timeout_seconds
         merged = dict(headers or {})
         client = self._ensure_client()
-        opened = None
-        response = None
-        for attempt in (0, 1):
-            dialed, host_headers, extensions = self._dial(url, timeout)
+        opened = client.stream(method, url, headers=merged, content=content, timeout=timeout)
+        try:
+            response = opened.__enter__()
+        except _CONNECT_FAILURES as exc:
+            route = self._peer_route(url, timeout)
+            if route is None:
+                raise InternalHttpError(f"{method} {_safe_target(url)} failed: {exc}") from exc
+            dialed, host_headers, extensions = route
             opened = client.stream(
                 method,
                 dialed,
@@ -235,16 +215,11 @@ class InternalHttpClient:
             )
             try:
                 response = opened.__enter__()
-                break
-            except _CONNECT_FAILURES as exc:
-                if attempt or not self._forget_peer_if_known(url):
-                    raise InternalHttpError(
-                        f"{method} {_safe_target(url)} failed: {exc}"
-                    ) from exc
-            except httpx.HTTPError as exc:
-                raise InternalHttpError(f"{method} {_safe_target(url)} failed: {exc}") from exc
-        if opened is None or response is None:
-            raise InternalHttpError(f"{method} {_safe_target(url)} failed")
+            except httpx.HTTPError as retry_exc:
+                msg = f"{method} {_safe_target(url)} failed: {retry_exc}"
+                raise InternalHttpError(msg) from retry_exc
+        except httpx.HTTPError as exc:
+            raise InternalHttpError(f"{method} {_safe_target(url)} failed: {exc}") from exc
         try:
             yield response
         except httpx.HTTPError as exc:
