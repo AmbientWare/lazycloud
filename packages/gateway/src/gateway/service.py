@@ -220,7 +220,6 @@ from gateway.pool_state import GatewayPoolStateCoordinator
 from gateway.route_prewarm import RoutePrewarmService
 from gateway.stub_config import deployment_spec_from_stub, stub_config, stub_kind
 from gateway.views import (
-    agent_bootstrap_view,
     agent_pool_transport,
     agent_route_view,
     agent_telemetry_state,
@@ -1734,7 +1733,7 @@ class GatewayControlService:
             credential_id=agent_state.credential_id,
             credential_generation=agent_state.credential_generation,
             capacity_state=agent_state.capacity_state,
-            bootstrap=agent_bootstrap_view(bootstrap),
+            bootstrap=bootstrap,
         )
 
     def leave_agent(self, request: LeaveAgentRequest) -> LeaveAgentResponse:
@@ -2038,7 +2037,7 @@ class GatewayControlService:
             credential_id=response_state.credential_id,
             credential_generation=response_state.credential_generation,
             capacity_state=response_state.capacity_state,
-            bootstrap=agent_bootstrap_view(bootstrap),
+            bootstrap=bootstrap,
             routes=[self._agent_route_view(route) for route in snapshot.routes],
             slots=[agent_worker_slot_view(slot) for slot in agent_slots],
         )

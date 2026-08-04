@@ -31,9 +31,8 @@ from shared.routing import (
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from shared.tasks import Task
 
-from compute import agent_control, projection
+from compute import projection
 from gateway.http import (
-    AgentBootstrapConfig,
     AgentRoute,
     AgentWorkerSlot,
 )
@@ -182,23 +181,6 @@ def _machine_readiness_message(
         return "Machine access was revoked"
     return "Waiting for the agent to connect"
 
-
-def agent_bootstrap_view(config: agent_control.AgentBootstrapConfig) -> AgentBootstrapConfig:
-    return AgentBootstrapConfig(
-        gateway_public_http_url=config.gateway_public_http_url,
-        gateway_runtime_http_url=config.gateway_runtime_http_url,
-        gateway_grpc_host=config.gateway_grpc_host,
-        gateway_grpc_port=config.gateway_grpc_port,
-        gateway_grpc_tls=config.gateway_grpc_tls,
-        workspace_id=config.workspace_id,
-        pool_name=config.pool_name,
-        transport=config.transport,
-        executor=config.executor,
-        fallback=config.fallback,
-        image_registry_store=config.image_registry_store,
-        image_clip_version=config.image_clip_version,
-        image_local_cache_enabled=config.image_local_cache_enabled,
-    )
 
 
 def agent_route_view(
