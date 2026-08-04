@@ -122,13 +122,11 @@ def test_backend_route_dialer_waits_for_ready_route_and_writes_preface() -> None
     ("target", "transport", "failures", "resolved", "expected_addresses"),
     [
         (
-            # The name is dialed first; only when it fails does the peer address
-            # replace it.
             "agent.tailnet:29443",
             BackendRouteTransport.TsnetRestricted,
             1,
             "100.64.0.2",
-            ["agent.tailnet:29443", "100.64.0.2:29443"],
+            ["100.64.0.2:29443", "100.64.0.2:29443"],
         ),
         (
             "100.64.0.10:29443",
@@ -179,8 +177,9 @@ def test_backend_route_dialer_transport_retry_matrix(
 
     assert [address for address, _timeout in connector.calls] == expected_addresses
     if transport is BackendRouteTransport.TsnetRestricted:
-        # The netmap is consulted to recover a failed dial, never to make one.
-        assert bool(waiter.calls) is (failures > 0)
+        # A process holding a peer waiter cannot resolve tailnet names itself,
+        # so every attempt goes through the netmap rather than public DNS.
+        assert [call[0] for call in waiter.calls] == [target.rsplit(":", 1)[0]] * (failures + 1)
         assert connector.connections[0].writes == [
             backend_route_preface(route_id, ROUTE_AUTHENTICATOR.credential(route_id))
         ]
