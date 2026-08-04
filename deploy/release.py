@@ -34,7 +34,7 @@ import os
 import subprocess
 import sys
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 
@@ -49,6 +49,9 @@ _BOOTSTRAP_PROCESSES = ("control-plane", "scheduler")
 # Authored by the deployment rather than published by a release, and the one
 # bootstrap input both processes read that a release therefore cannot align.
 _GATEWAY_ORIGIN_VARIABLE = "LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL"
+# The whole of what a deployment copies out of a release. Every other release
+# fact is read from the manifest this names.
+_MANIFEST_URL_VARIABLE = "LAZYCLOUD_RELEASE_MANIFEST_URL"
 # The pooled reconcile runs on a 60s timer
 # (`scheduler.service.MANAGED_COMPUTE_RECONCILE_INTERVAL_SECONDS`), so a reading
 # taken sooner than that after a restart is the previous process's snapshot.
@@ -97,6 +100,16 @@ def _run(
 
 def _in_service(service: str, argv: Sequence[str], *, stdin: str | None = None) -> str:
     return _run(["docker", "compose", "exec", "-T", service, *argv], capture=True, stdin=stdin)
+
+
+def _parse_region_amis(entries: Sequence[str]) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    for entry in entries:
+        region, separator, ami_id = entry.partition("=")
+        if not separator or not region.strip() or not ami_id.strip():
+            raise ReleaseError(f"--cpu-ami takes REGION=AMI, not {entry!r}")
+        parsed[region.strip()] = ami_id.strip()
+    return parsed
 
 
 def source_revision(*, allow_dirty: bool) -> str:
@@ -165,8 +178,9 @@ def publish_release(
     bucket: str,
     region: str,
     aws_cli: str,
-) -> dict[str, str]:
-    """Stage, validate, publish, and verify; return the deployment environment."""
+    cpu_ami_ids: dict[str, str],
+) -> str:
+    """Stage, validate, publish, and verify; return the URL the manifest is served at."""
     bundle = _REPOSITORY_ROOT / "dist" / "connected-aws"
     _run(
         [
@@ -185,6 +199,8 @@ def publish_release(
             bucket,
             "--region",
             region,
+            "--cpu-ami-ids",
+            json.dumps(cpu_ami_ids, sort_keys=True, separators=(",", ":")),
             "--output",
             str(bundle),
         ]
@@ -196,22 +212,30 @@ def publish_release(
             argv += ["--aws-cli", aws_cli]
         _run(argv)
     manifest = json.loads(manifest_path.read_text())
-    return dict(manifest["deployment_environment"])
+    published_url = str(manifest["manifest_public_url"])
+    if not published_url:
+        raise ReleaseError(f"release {version} does not say where its manifest is served")
+    return published_url
 
 
-def repoint_deployment(environment: dict[str, str]) -> list[str]:
-    """Write the manifest's own values into `.env`, never a transcription of them."""
+def repoint_deployment(manifest_url: str) -> None:
+    """Point the deployment at the release, which is the whole of what it copies.
+
+    The release's facts are read from the manifest at runtime, so the only thing
+    written here is which manifest. Six values used to be transcribed instead,
+    and a deployment could then hold five from one release and one from another
+    with nothing able to notice.
+    """
     path = _REPOSITORY_ROOT / ".env"
     lines = path.read_text().splitlines(keepends=True)
-    written: set[str] = set()
+    entry = f"{_MANIFEST_URL_VARIABLE}='{manifest_url}'\n"
     for index, line in enumerate(lines):
-        key = line.split("=", 1)[0].strip()
-        if key in environment:
-            lines[index] = f"{key}='{environment[key]}'\n"
-            written.add(key)
-    lines += [f"{key}='{value}'\n" for key, value in environment.items() if key not in written]
+        if line.split("=", 1)[0].strip() == _MANIFEST_URL_VARIABLE:
+            lines[index] = entry
+            break
+    else:
+        lines.append(entry)
     path.write_text("".join(lines))
-    return sorted(environment)
 
 
 def restart_stack() -> None:
@@ -229,7 +253,7 @@ def process_environment(service: str) -> dict[str, str]:
     return dict(entry.split("=", 1) for entry in entries if "=" in entry)
 
 
-def guard_bootstrap_agreement(release_environment: Mapping[str, str]) -> None:
+def guard_bootstrap_agreement(manifest_url: str) -> None:
     """Prove both bootstrap composers read this release, and read the same one.
 
     `apps/api` and `apps/scheduler` each build a pool's launch-template bootstrap
@@ -238,21 +262,23 @@ def guard_bootstrap_agreement(release_environment: Mapping[str, str]) -> None:
     reconcile and no node is ever stable. A staleness number taken then measures
     nothing, so this is a precondition rather than another line of the report.
 
-    The comparison is each running container's own environment, keyed by the
-    variables this release publishes plus the origin the two call sites both warn
-    about. A container keeps the environment it was created with, so one process
+    A release's facts now reach both processes through one pointer, so agreement
+    is a comparison of that pointer and the origin the two call sites both warn
+    about. A container keeps the environment it was created with, so a process
     left on the previous release shows up here rather than an hour later as a
-    digest mismatch. What this cannot see: values that differ before settings
-    normalization and agree after it, and any configuration layer beneath the
-    environment.
+    digest mismatch. What this cannot see: any configuration layer beneath the
+    environment, and whether the two images carry the same code.
     """
-    names = sorted({*release_environment, _GATEWAY_ORIGIN_VARIABLE})
+    expected: dict[str, str | None] = {
+        _MANIFEST_URL_VARIABLE: manifest_url,
+        # No release publishes this, so it is checked for agreement only.
+        _GATEWAY_ORIGIN_VARIABLE: None,
+    }
     observed = {service: process_environment(service) for service in _BOOTSTRAP_PROCESSES}
     divergent: list[str] = []
     unloaded: list[str] = []
-    for name in names:
+    for name, published in expected.items():
         held = [observed[service].get(name, "") for service in _BOOTSTRAP_PROCESSES]
-        published = release_environment.get(name)
         if len(set(held)) != 1:
             detail = " ".join(
                 f"{service}={value or '(unset)'}"
@@ -470,6 +496,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--aws-cli", default="aws")
     parser.add_argument("--arch", action="append", dest="architectures")
     parser.add_argument(
+        "--cpu-ami",
+        action="append",
+        dest="cpu_amis",
+        metavar="REGION=AMI",
+        help=(
+            "the base image managed CPU nodes boot, per region. The release carries and "
+            "verifies it, so every deployment reading this release boots the same one; a "
+            "release naming none cannot run managed capacity"
+        ),
+    )
+    parser.add_argument(
         "--allow-dirty",
         action="store_true",
         help="publish from an uncommitted tree, whose version label cannot name its contents",
@@ -486,6 +523,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        cpu_ami_ids = _parse_region_amis(args.cpu_amis or [])
         version = source_revision(allow_dirty=args.allow_dirty)
         print(f"source revision: {version}", flush=True)
 
@@ -498,17 +536,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         worker_image = push_worker_image(args.worker_repository, version)
         print(f"published the worker image: {worker_image}", flush=True)
 
-        environment = publish_release(
+        manifest_url = publish_release(
             version=version,
             agent_dir=agent_dir,
             worker_image=worker_image,
             bucket=args.bucket,
             region=args.region,
             aws_cli=args.aws_cli,
+            cpu_ami_ids=cpu_ami_ids,
         )
         print("published and verified the release", flush=True)
 
-        print(f"repointed: {', '.join(repoint_deployment(environment))}", flush=True)
+        repoint_deployment(manifest_url)
+        print(f"repointed the deployment at {manifest_url}", flush=True)
 
         if args.skip_restart:
             print(
@@ -524,7 +564,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         # disagree the launch template alternates and every version a node
         # reports is meaningless.
         print("pool bootstrap inputs:", flush=True)
-        guard_bootstrap_agreement(environment)
+        guard_bootstrap_agreement(manifest_url)
 
         nodes = report_release_reach(since=read_reach().clock)
     except ReleaseError as error:

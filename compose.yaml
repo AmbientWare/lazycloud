@@ -104,17 +104,18 @@ x-artifact-retention-env: &artifact-retention-env
   LAZYCLOUD_RETENTION_IMAGE_SECONDS: "${LAZYCLOUD_RETENTION_IMAGE_SECONDS:-604800}"
   LAZYCLOUD_RETENTION_MAX_ITEMS_PER_CYCLE: "${LAZYCLOUD_RETENTION_MAX_ITEMS_PER_CYCLE:-100}"
 
+# The release a deployment points at publishes the agent artifact version and
+# digest, the URL serving it, the container-worker image, the customer
+# authorization template, and the baked CPU AMIs. Every process that composes a
+# pool bootstrap needs the same one.
+x-release-env: &release-env
+  LAZYCLOUD_RELEASE_MANIFEST_URL: "${LAZYCLOUD_RELEASE_MANIFEST_URL:-}"
+
 x-agent-binary-env: &agent-binary-env
   LAZYCLOUD_AGENT_BINARY_DIR: "${LAZYCLOUD_AGENT_BINARY_DIR:-/var/lib/lazycloud/agent-binarys}"
-  LAZYCLOUD_AGENT_BINARY_VERSION: "${LAZYCLOUD_AGENT_BINARY_VERSION:-}"
-  LAZYCLOUD_AGENT_BINARY_SHA256_BY_ARCH: "${LAZYCLOUD_AGENT_BINARY_SHA256_BY_ARCH:-{}}"
 
 x-aws-compute-env: &aws-compute-env
   LAZYCLOUD_AWS_CONNECTION_ENABLED: "${LAZYCLOUD_AWS_CONNECTION_ENABLED:-false}"
-  LAZYCLOUD_AWS_CONNECTION_TEMPLATE_URL: "${LAZYCLOUD_AWS_CONNECTION_TEMPLATE_URL:-}"
-  LAZYCLOUD_AWS_CAPACITY_WORKER_IMAGE_DIGEST: "${LAZYCLOUD_AWS_CAPACITY_WORKER_IMAGE_DIGEST:-}"
-  LAZYCLOUD_AWS_CAPACITY_AGENT_BINARY_URL: "${LAZYCLOUD_AWS_CAPACITY_AGENT_BINARY_URL:-}"
-  LAZYCLOUD_AWS_CAPACITY_CPU_AMI_IDS: "${LAZYCLOUD_AWS_CAPACITY_CPU_AMI_IDS:-{}}"
   LAZYCLOUD_AWS_CAPACITY_GPU_AMI_IDS: "${LAZYCLOUD_AWS_CAPACITY_GPU_AMI_IDS:-{}}"
   LAZYCLOUD_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN: "${LAZYCLOUD_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN:-}"
   LAZYCLOUD_AWS_CAPACITY_INSTANCE_HOURLY_MICROS: "${LAZYCLOUD_AWS_CAPACITY_INSTANCE_HOURLY_MICROS:-{}}"
@@ -465,6 +466,7 @@ services:
           *image-archive-env,
           *image-build-env,
           *artifact-retention-env,
+          *release-env,
           *agent-binary-env,
           *aws-compute-env,
           *aws-capacity-reconciliation-env,
@@ -766,6 +768,7 @@ services:
           *object-store-env,
           *image-archive-env,
           *artifact-retention-env,
+          *release-env,
           *agent-binary-env,
           *aws-compute-env,
           *usage-env,
