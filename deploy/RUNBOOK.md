@@ -17,6 +17,29 @@ Build **every** source-bearing image in one command. Building a subset produces
 a package-digest mismatch that the managed runtime rejects at container start,
 and the error names the digest rather than the stale image.
 
+## Publishing a release
+
+Do not perform the sequence by hand. It was written down here first and was
+still performed wrong — two images rebuilt out of nine, and the mismatch
+surfaced an hour later on a running EC2 node.
+
+```bash
+uv run python deploy/release.py \
+  --bucket "$AWS_RELEASE_ASSET_BUCKET" \
+  --worker-repository <registry>/lazycloud-container-worker
+```
+
+It refuses a dirty tree, because a version label that names a revision the
+artifacts do not contain is worse than no label. It builds every image and the
+agent executable from that one revision, publishes the worker image and the
+release, writes the manifest's own values into `.env` rather than a
+transcription of them, and puts the sidecars back afterwards.
+
+`--arch` defaults to `amd64`, which is what AWS node classes consume. Building
+`arm64` needs binfmt registered first (`docker run --privileged tonistiigi/binfmt
+--install arm64`), or the cross-architecture stage fails with `exec format
+error`.
+
 The API answers on host port **8000** (container port 9000). `docker compose port
 control-plane 9000` prints the mapping if it changes.
 
