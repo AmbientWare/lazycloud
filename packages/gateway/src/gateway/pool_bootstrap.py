@@ -55,7 +55,6 @@ class PoolBootstrapProvisioner:
         )
 
 
-
 def pool_bootstrap_provisioner(
     context: ServiceContext,
     *,

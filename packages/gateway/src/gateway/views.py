@@ -182,7 +182,6 @@ def _machine_readiness_message(
     return "Waiting for the agent to connect"
 
 
-
 def agent_route_view(
     route: AgentBackendRoute,
     *,
@@ -257,11 +256,6 @@ def _agent_worker_status(status: SchedulerWorkerStatus) -> WorkerStatus:
     if status is SchedulerWorkerStatus.Pending:
         return WorkerStatus.Pending
     return WorkerStatus.Disabled
-
-
-
-
-
 
 
 def stub_for_task(control_plane: ControlPlaneService, task: Task) -> StubRecord | None:

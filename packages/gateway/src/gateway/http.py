@@ -51,7 +51,6 @@ class SignPayloadResponse(HttpModel):
     timestamp: int = 0
 
 
-
 class JoinAgentRequest(HttpModel):
     join_token: str
     machine_fingerprint: str = ""

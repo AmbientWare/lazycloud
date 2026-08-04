@@ -101,7 +101,6 @@ class TailnetIdentityCleanup(Protocol):
 class TailnetControl(TailnetIdentityCleanup, Protocol):
     def issue_auth_key(self, *, machine_id: str, hostname: str) -> TailnetAuthKey: ...
 
-
     def verify_device(
         self,
         node_id: str,
@@ -221,7 +220,6 @@ class TailscaleTailnetControlConfig(BaseModel):
     def issuable_tags(self) -> tuple[str, ...]:
         """The tags this control plane may mint auth keys for."""
         return (self.agent_tag,)
-
 
 
 class _TailscaleResponseModel(BaseModel):

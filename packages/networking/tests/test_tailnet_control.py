@@ -86,7 +86,6 @@ def test_issues_single_use_persistent_tagged_key_and_caches_oauth_token() -> Non
     assert first.key.get_secret_value() not in repr(first)
 
 
-
 def test_verifies_device_identity_hostname_authorization_and_tag() -> None:
     control = _control(_device_handler())
 
