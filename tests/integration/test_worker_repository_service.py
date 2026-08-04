@@ -987,9 +987,10 @@ def test_worker_repository_stream_blocks_until_scheduler_assignment(
     containers = RedisSchedulerContainerRepository(redis)
     worker_id = "worker-1"
     container_id = str(uuid4())
+    capacity_owner_id = "11111111-1111-4111-8111-111111111111"
     workers.add_worker(
         SchedulerWorkerRecord(
-            capacity_owner_id="11111111-1111-4111-8111-111111111111",
+            capacity_owner_id=capacity_owner_id,
             worker_id=worker_id,
             machine_id="compose-machine",
             pool_name="default",
@@ -1014,6 +1015,7 @@ def test_worker_repository_stream_blocks_until_scheduler_assignment(
     isolated_services.compute.create_pool(
         "default",
         workspace=workspace_id,
+        capacity_owner_id=capacity_owner_id,
         worker_cpu_millicores=1000,
         worker_memory_mib=1024,
     )
