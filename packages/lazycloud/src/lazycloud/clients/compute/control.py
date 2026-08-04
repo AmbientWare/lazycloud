@@ -15,18 +15,6 @@ from shared.http.aws_connections import (
 from shared.http.compute import (
     MachineJoinCommandRequest,
     MachineJoinCommandResponse,
-    PoolCapacityExtendRequest,
-    PoolCapacityLaunchRequest,
-    PoolCapacityResponse,
-    PoolJoinCommandRequest,
-    PoolJoinCommandResponse,
-    PoolJoinTokenRequest,
-    PoolJoinTokenResponse,
-    PoolMachineListResponse,
-    PoolOfferListResponse,
-    PoolOfferQuery,
-    PoolScaleRequest,
-    PoolScaleResponse,
     WorkerDrainResponse,
     WorkerResponse,
 )
@@ -187,106 +175,6 @@ class ComputeClient:
             )
         )
 
-    def list_pool_offers(
-        self,
-        pool_name: str,
-        request: PoolOfferQuery,
-    ) -> PoolOfferListResponse:
-        query = urlencode(request.model_dump(mode="json"), doseq=True)
-        return PoolOfferListResponse.model_validate(
-            self.channel.get(f"{self._pools_path(f'/{pool_name}/offers')}&{query}")
-        )
-
-    def launch_pool_capacity(
-        self,
-        pool_name: str,
-        request: PoolCapacityLaunchRequest,
-    ) -> PoolCapacityResponse:
-        return PoolCapacityResponse.model_validate(
-            self.channel.post(
-                self._pools_path(f"/{pool_name}/capacity"),
-                request.model_dump(mode="json"),
-            )
-        )
-
-    def extend_pool_capacity(
-        self,
-        pool_name: str,
-        request: PoolCapacityExtendRequest,
-    ) -> PoolCapacityResponse:
-        return PoolCapacityResponse.model_validate(
-            self.channel.request(
-                "PATCH",
-                self._pools_path(f"/{pool_name}/capacity"),
-                payload=request.model_dump(mode="json"),
-            )
-        )
-
-    def scale_pool(
-        self,
-        pool_name: str,
-        request: PoolScaleRequest,
-    ) -> PoolScaleResponse:
-        return PoolScaleResponse.model_validate(
-            self.channel.request(
-                "PUT",
-                self._pools_path(f"/{pool_name}/scale"),
-                payload=request.model_dump(mode="json"),
-            )
-        )
-
-    def clear_pool_degradation(self, pool_name: str) -> PoolScaleResponse:
-        return PoolScaleResponse.model_validate(
-            self.channel.request(
-                "POST",
-                self._pools_path(f"/{pool_name}/clear-degradation"),
-            )
-        )
-
-    def get_pool_state(self, pool_name: str) -> PoolScaleResponse:
-        return PoolScaleResponse.model_validate(
-            self.channel.get(self._pools_path(f"/{pool_name}/state"))
-        )
-
-    def create_pool_join_token(
-        self,
-        pool_name: str,
-        request: PoolJoinTokenRequest,
-    ) -> PoolJoinTokenResponse:
-        return PoolJoinTokenResponse.model_validate(
-            self.channel.post(
-                self._pools_path(f"/{pool_name}/join-token"),
-                request.model_dump(mode="json"),
-            )
-        )
-
-    def revoke_pool_join_token(self, pool_name: str) -> None:
-        self.channel.request("DELETE", self._pools_path(f"/{pool_name}/join-token"))
-
-    def pool_join_command(
-        self,
-        pool_name: str,
-        request: PoolJoinCommandRequest,
-    ) -> PoolJoinCommandResponse:
-        return PoolJoinCommandResponse.model_validate(
-            self.channel.post(
-                self._pools_path(f"/{pool_name}/join-command"),
-                request.model_dump(mode="json"),
-            )
-        )
-
-    def list_pool_machines(
-        self,
-        pool_name: str,
-        *,
-        limit: int = 100,
-        cursor: str = "",
-    ) -> PoolMachineListResponse:
-        query = urlencode({"limit": limit, "cursor": cursor})
-        return PoolMachineListResponse.model_validate(
-            self.channel.get(f"{self._pools_path(f'/{pool_name}/machines')}&{query}")
-        )
-
     def cordon_worker(self, worker_id: str) -> WorkerResponse:
         return WorkerResponse.model_validate(
             self.channel.post(self._workers_path(f"/{worker_id}/cordon"))
@@ -307,9 +195,6 @@ class ComputeClient:
 
     def _machines_path(self, suffix: str) -> str:
         return self._path(f"/api/v1/machines{suffix}")
-
-    def _pools_path(self, suffix: str) -> str:
-        return self._path(f"/api/v1/pools{suffix}")
 
     def _workers_path(self, suffix: str) -> str:
         return self._path(f"/api/v1/workers{suffix}")

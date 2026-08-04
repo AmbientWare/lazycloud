@@ -17,8 +17,11 @@ from shared.http.compute import (
     MachineListResponse,
     MachineResponse,
     PoolCreateRequest,
+    PoolJoinCommandRequest,
+    PoolJoinCommandResponse,
     PoolListResponse,
     PoolResponse,
+    PoolScaleResponse,
     WorkerListResponse,
 )
 from shared.http.concurrency import (
@@ -276,6 +279,25 @@ class AdminApiClient:
 
     def delete_pool(self, name: str) -> None:
         self.channel.delete(self._workspace_path(f"/api/v1/pools/{url_path_segment(name)}"))
+
+    def clear_pool_degradation(self, name: str) -> PoolScaleResponse:
+        return PoolScaleResponse.model_validate(
+            self.channel.post(
+                self._workspace_path(f"/api/v1/pools/{url_path_segment(name)}/clear-degradation")
+            )
+        )
+
+    def pool_join_command(
+        self,
+        name: str,
+        request: PoolJoinCommandRequest,
+    ) -> PoolJoinCommandResponse:
+        return PoolJoinCommandResponse.model_validate(
+            self.channel.post(
+                self._workspace_path(f"/api/v1/pools/{url_path_segment(name)}/join-command"),
+                request.model_dump(mode="json"),
+            )
+        )
 
     def list_machines(self) -> MachineListResponse:
         return MachineListResponse.model_validate(

@@ -29,7 +29,6 @@ from lazycloud.cli.resources import (
     compute_app,
     container_app,
     machine_app,
-    pool_app,
     task_app,
 )
 from lazycloud.cli.secrets import secret_app
@@ -272,7 +271,6 @@ def _register_public_groups(registry: PublicCliRegistry) -> None:
     registry.add_group("deployment", deployment_app)
     registry.add_group("container", container_app)
     registry.add_group("machine", machine_app)
-    registry.add_group("pool", pool_app)
     registry.add_group("secret", secret_app)
     registry.add_group("volume", volume_app)
     registry.add_group("example", example_app)

@@ -12,9 +12,7 @@ from shared.http.compute import (
     ContainerResponse,
     ContainerWithAppPageResponse,
     MachineListResponse,
-    PoolCreateRequest,
     PoolListResponse,
-    PoolResponse,
     WorkerListResponse,
 )
 from shared.http.deployments import (
@@ -234,18 +232,6 @@ class ResourceControlClient:
             PoolListResponse,
             self.channel.get(self._path("/api/v1/pools")),
         )
-
-    def create_pool(self, request: PoolCreateRequest) -> PoolResponse:
-        return _validate_response(
-            PoolResponse,
-            self.channel.post(
-                self._path("/api/v1/pools"),
-                request.model_dump(mode="json"),
-            ),
-        )
-
-    def delete_pool(self, name: str) -> None:
-        self.channel.request("DELETE", self._path(f"/api/v1/pools/{url_path_segment(name)}"))
 
     def list_workers(self) -> WorkerListResponse:
         return _validate_response(
