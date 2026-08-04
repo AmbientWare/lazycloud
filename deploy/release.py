@@ -89,17 +89,31 @@ def build_agent(version: str, architectures: Sequence[str]) -> Path:
 
 
 def push_worker_image(repository: str, version: str) -> str:
-    """Publish the worker image and return the digest the node will pull."""
+    """Publish the worker image and return the digest the node will pull.
+
+    The reference comes from `docker manifest inspect`, not from `RepoDigests`.
+    Both name the same image, but only one of them qualifies the registry host,
+    and the release verifier compares the pinned reference against what
+    `docker manifest inspect` reports -- so pinning the other spelling publishes
+    a release that cannot verify itself.
+    """
     tag = f"{repository}:{version}"
     _run(["docker", "tag", "container-worker:local", tag])
     _run(["docker", "push", tag])
-    digest = _run(
+    local_digest = _run(
         ["docker", "inspect", tag, "--format", "{{index .RepoDigests 0}}"],
         capture=True,
     )
-    if "@sha256:" not in digest:
+    if "@sha256:" not in local_digest:
         raise ReleaseError(f"worker image {tag} has no published digest to pin")
-    return digest
+    payload = json.loads(
+        _run(["docker", "manifest", "inspect", "--verbose", local_digest], capture=True)
+    )
+    inspections = payload if isinstance(payload, list) else [payload]
+    references = {str(inspection["Ref"]) for inspection in inspections}
+    if len(references) != 1:
+        raise ReleaseError(f"worker image {tag} resolved to more than one reference: {references}")
+    return references.pop()
 
 
 def publish_release(
