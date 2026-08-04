@@ -186,7 +186,7 @@ def test_pool_scale_is_workspace_scoped_and_idempotently_returns_durable_capacit
     services = replace(services_with_compute, gateway_service=gateway)
     raw_token, _record = AuthService(isolated_services.context).create_token(
         "pool-scale",
-        kind=TokenKind.Workspace,
+        kind=TokenKind.Admin,
     )
     client = client_stack.enter_context(TestClient(create_app(services)))
     headers = {"Authorization": f"Bearer {raw_token}"}
@@ -226,7 +226,7 @@ def test_pool_scale_is_workspace_scoped_and_idempotently_returns_durable_capacit
         headers=headers,
     )
 
-    assert cross_workspace.status_code == 403
+    assert cross_workspace.status_code == 404
     assert invalid.status_code == 422
     assert blocked.status_code == 409
     assert blocked.json() == {
@@ -236,7 +236,7 @@ def test_pool_scale_is_workspace_scoped_and_idempotently_returns_durable_capacit
     assert first.status_code == 200, first.text
     assert repeated.status_code == 200, repeated.text
     assert state.status_code == 200, state.text
-    assert cross_workspace_state.status_code == 403
+    assert cross_workspace_state.status_code == 404
     expected = PoolScaleResponse(
         name=pool.name,
         desired_machines=0,

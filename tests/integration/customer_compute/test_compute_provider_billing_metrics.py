@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from identity.auth import AuthService
 from shared.compute_fleet import ResourceStatus
 from shared.errors import InvalidInputError, UpstreamUnavailableError
+from shared.identity import TokenKind
 from shared.timestamps import utc_now
 from tests.provider_fixtures import configure_test_provider
 
@@ -135,7 +136,10 @@ def test_gateway_maps_provider_offer_discovery_failure_to_503(
         raise RuntimeError("provider endpoint unavailable")
 
     monkeypatch.setattr(provider, "list_offers", fail_offer_discovery)
-    raw_token, token = AuthService(isolated_services.context).create_token("provider-failure")
+    raw_token, token = AuthService(isolated_services.context).create_token(
+        "provider-failure",
+        kind=TokenKind.Admin,
+    )
 
     with TestClient(create_app(isolated_services)) as client:
         try:
@@ -153,7 +157,10 @@ def test_gateway_maps_provider_offer_discovery_failure_to_503(
 def test_gateway_rejects_offer_discovery_without_configured_providers(
     isolated_services: ApiServices,
 ) -> None:
-    raw_token, token = AuthService(isolated_services.context).create_token("provider-empty")
+    raw_token, token = AuthService(isolated_services.context).create_token(
+        "provider-empty",
+        kind=TokenKind.Admin,
+    )
 
     with TestClient(create_app(isolated_services)) as client:
         try:

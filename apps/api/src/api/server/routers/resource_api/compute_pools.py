@@ -28,8 +28,8 @@ from shared.http.compute import (
     PoolScaleResponse,
 )
 
-from api.server.auth import read_workspace, write_token, write_workspace
-from api.server.dependencies import current_services
+from api.server.auth import admin_access, write_token
+from api.server.dependencies import current_services, current_workspace_id
 from api.server.service_dependencies import gateway_service
 from api.server.services import ApiServices
 
@@ -140,7 +140,8 @@ def _pool_query(
 
 @router.get("/api/v1/pools", response_model=PoolListResponse, operation_id="list_pools")
 def list_pools(
-    workspace_id: read_workspace,
+    _auth: admin_access,
+    workspace_id: Annotated[str, Depends(current_workspace_id)],
     services: ApiServices = Depends(current_services),
 ) -> PoolListResponse:
     return PoolListResponse(
@@ -159,8 +160,8 @@ def list_pools(
 )
 def create_pool(
     request: PoolCreateRequest,
-    token: write_token,
-    workspace_id: write_workspace,
+    _auth: admin_access,
+    workspace_id: Annotated[str, Depends(current_workspace_id)],
     services: ApiServices = Depends(current_services),
 ) -> PoolResponse:
     return PoolResponse.model_validate(
@@ -200,7 +201,8 @@ def create_pool(
 def scale_pool(
     pool_name: str,
     request: PoolScaleRequest,
-    workspace_id: write_workspace,
+    _auth: admin_access,
+    workspace_id: Annotated[str, Depends(current_workspace_id)],
     gateway: GatewayControlService = Depends(gateway_service),
 ) -> PoolScaleResponse:
     pool = gateway.scale_pool(
@@ -218,7 +220,8 @@ def scale_pool(
 )
 def get_pool_state(
     pool_name: str,
-    workspace_id: read_workspace,
+    _auth: admin_access,
+    workspace_id: Annotated[str, Depends(current_workspace_id)],
     gateway: GatewayControlService = Depends(gateway_service),
 ) -> PoolScaleResponse:
     return _pool_state_response(gateway.pool_state(pool_name, workspace_id=workspace_id))
@@ -231,7 +234,8 @@ def get_pool_state(
 )
 def clear_pool_degradation(
     pool_name: str,
-    workspace_id: write_workspace,
+    _auth: admin_access,
+    workspace_id: Annotated[str, Depends(current_workspace_id)],
     services: ApiServices = Depends(current_services),
 ) -> PoolScaleResponse:
     return _pool_state_response(
@@ -250,7 +254,8 @@ def clear_pool_degradation(
 )
 def delete_pool(
     name: str,
-    workspace_id: write_workspace,
+    _auth: admin_access,
+    workspace_id: Annotated[str, Depends(current_workspace_id)],
     gateway: GatewayControlService = Depends(gateway_service),
 ) -> None:
     gateway.delete_pool(name, workspace_id=workspace_id)
@@ -263,7 +268,8 @@ def delete_pool(
 )
 def list_pool_offers(
     pool_name: str,
-    workspace_id: read_workspace,
+    _auth: admin_access,
+    workspace_id: Annotated[str, Depends(current_workspace_id)],
     request: Annotated[PoolOfferQuery, Depends(_pool_query)],
     services: ApiServices = Depends(current_services),
 ) -> PoolOfferListResponse:
@@ -283,8 +289,9 @@ def list_pool_offers(
 def launch_pool_capacity(
     pool_name: str,
     request: PoolCapacityLaunchRequest,
+    _auth: admin_access,
     token: write_token,
-    workspace_id: write_workspace,
+    workspace_id: Annotated[str, Depends(current_workspace_id)],
     services: ApiServices = Depends(current_services),
 ) -> PoolCapacityResponse:
     state = services.compute.launch_pool_capacity(
@@ -304,7 +311,8 @@ def launch_pool_capacity(
 def extend_pool_capacity(
     pool_name: str,
     request: PoolCapacityExtendRequest,
-    workspace_id: write_workspace,
+    _auth: admin_access,
+    workspace_id: Annotated[str, Depends(current_workspace_id)],
     services: ApiServices = Depends(current_services),
 ) -> PoolCapacityResponse:
     state = services.compute.extend_pool_capacity(
@@ -325,8 +333,9 @@ def extend_pool_capacity(
 def create_pool_join_token(
     pool_name: str,
     request: PoolJoinTokenRequest,
+    _auth: admin_access,
     token: write_token,
-    workspace_id: write_workspace,
+    workspace_id: Annotated[str, Depends(current_workspace_id)],
     gateway: GatewayControlService = Depends(gateway_service),
 ) -> PoolJoinTokenResponse:
     plan = gateway.create_pool_join_token(
@@ -346,7 +355,8 @@ def create_pool_join_token(
 )
 def revoke_pool_join_token(
     pool_name: str,
-    workspace_id: write_workspace,
+    _auth: admin_access,
+    workspace_id: Annotated[str, Depends(current_workspace_id)],
     gateway: GatewayControlService = Depends(gateway_service),
 ) -> None:
     gateway.revoke_pool_join_token(pool_name, workspace_id=workspace_id)
@@ -360,8 +370,9 @@ def revoke_pool_join_token(
 def get_pool_join_command(
     pool_name: str,
     request: PoolJoinCommandRequest,
+    _auth: admin_access,
     token: write_token,
-    workspace_id: write_workspace,
+    workspace_id: Annotated[str, Depends(current_workspace_id)],
     gateway: GatewayControlService = Depends(gateway_service),
 ) -> PoolJoinCommandResponse:
     return gateway.pool_join_command(
@@ -379,7 +390,8 @@ def get_pool_join_command(
 )
 def list_pool_machines(
     pool_name: str,
-    workspace_id: read_workspace,
+    _auth: admin_access,
+    workspace_id: Annotated[str, Depends(current_workspace_id)],
     limit: Annotated[int, Query(ge=1, le=1000)] = 100,
     cursor: str = "",
     gateway: GatewayControlService = Depends(gateway_service),
