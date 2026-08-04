@@ -250,6 +250,6 @@ Confirm the target belongs to the task before each of these. None can be undone.
 
 ## Not yet covered
 
-- **Prometheus, Alertmanager, alert meanings** — alerting is deferred
-  (`plan/final.md`, decision 7). Metrics are exposed at the admin-gated
-  `/metrics` and are correctly typed for a scraper; nothing scrapes them yet.
+- **Prometheus, Alertmanager, alert meanings** — alerting is deferred. Metrics
+  are exposed at the admin-gated `/metrics` and are correctly typed for a
+  scraper; nothing scrapes them yet.
