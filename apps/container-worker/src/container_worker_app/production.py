@@ -1794,6 +1794,7 @@ def _client_network_backend(
         SchedulerNetworkIpAllocator(
             RemoteWorkerNetworkIpRepository(client),
             network_prefix=config.resolved_network_prefix,
+            worker_id=config.worker_id,
         )
     )
     return backend

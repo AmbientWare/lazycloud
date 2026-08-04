@@ -1858,6 +1858,12 @@ class WorkerRepositoryService:
         worker: SchedulerWorkerRecord,
         container_id: str,
     ) -> None:
+        if container_id == worker.worker_id:
+            # A worker reserving an address for itself, which readiness does
+            # before any container exists. The principal already proves this
+            # worker, and the prefix is already its own, so there is nothing
+            # further to authorize against.
+            return
         state = self.containers.get_container_state(container_id)
         if state is not None:
             if state.worker_id != worker.worker_id:

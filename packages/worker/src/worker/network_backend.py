@@ -6,7 +6,6 @@ import threading
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from secrets import token_hex
 from typing import Protocol
 from urllib.parse import urlsplit
 
@@ -218,6 +217,7 @@ class SchedulerNetworkIpAllocator:
     gateway: str = DEFAULT_CONTAINER_GATEWAY_ADDRESS
     lock_ttl_seconds: int = DEFAULT_NETWORK_LOCK_TTL_SECONDS
     lock_retries: int = DEFAULT_NETWORK_LOCK_RETRIES
+    worker_id: str = ""
     _next_offset: int = 0
 
     def acquire_network_lock(self) -> str:
@@ -283,11 +283,21 @@ class SchedulerNetworkIpAllocator:
         exhausted them, failed readiness, and never reported itself available.
         Writing the assignment reserves the address without the lock outliving
         the allocation it protects.
+
+        The reservation is keyed by the worker's own id, not an invented one.
+        A network mutation is authorized against the container it names, and a
+        worker probing its own readiness names no container -- an invented id
+        belonged to nothing, was refused, and left the worker unable to report
+        ready at all.
         """
-        reservation_id = f"netcheck-{token_hex(8)}"
+        if not self.worker_id:
+            # Falling back to an invented id would reserve an address the server
+            # refuses, and readiness would fail with the network named instead
+            # of the missing identity.
+            raise RuntimeError("worker id is required to reserve a readiness probe address")
         return ProbeNetworkReservation(
-            ip_address=self.reserve_container_ip(reservation_id),
-            reservation_id=reservation_id,
+            ip_address=self.reserve_container_ip(self.worker_id),
+            reservation_id=self.worker_id,
         )
 
     def release_probe_ip(self, reservation: ProbeNetworkReservation) -> None:
