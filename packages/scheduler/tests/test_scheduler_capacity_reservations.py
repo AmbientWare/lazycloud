@@ -891,7 +891,7 @@ def test_registration_expiry_calls_capacity_owner_release_and_records_failure(
     reconciled = service.reconcile([], now=now + timedelta(seconds=31))
 
     assert controller.release_calls == [acquired.reservation_id]
-    assert reconciled[-1].status is CapacityReservationStatus.Expired
+    assert reconciled[-1].status is CapacityReservationStatus.Failed
 
 
 def test_cancellation_releases_exact_owned_capacity_after_last_allocation(
@@ -1146,21 +1146,16 @@ def test_reservation_repository_rejects_registered_state_regression(
             registration_timeout=timedelta(minutes=10),
             now=now,
         )
-        provisioning = repository.update(
+        registered = repository.update(
             decision.reservation.model_copy(
-                update={"status": CapacityReservationStatus.Provisioning}
+                update={"status": CapacityReservationStatus.Registered}
             ),
             expected_resource_version=decision.reservation.resource_version,
             now=now,
         )
-        registered = repository.update(
-            provisioning.model_copy(update={"status": CapacityReservationStatus.Registered}),
-            expected_resource_version=provisioning.resource_version,
-            now=now,
-        )
         with pytest.raises(CapacityReservationStateTransitionError):
             repository.update(
-                registered.model_copy(update={"status": CapacityReservationStatus.Provisioning}),
+                registered.model_copy(update={"status": CapacityReservationStatus.Pending}),
                 expected_resource_version=registered.resource_version,
                 now=now,
             )

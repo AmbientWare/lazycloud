@@ -654,7 +654,6 @@ class SchedulerContainerRequestService:
             decision=(
                 SchedulingDecision.WaitForWorker if waiting else SchedulingDecision.ProvisionWorker
             ),
-            worker_id=result.target_worker_id or None,
             reason=result.reason,
             requeue_delay_seconds=max(
                 result.retry_delay_seconds,
@@ -668,7 +667,6 @@ class SchedulerContainerRequestService:
             return SchedulerContainerDispatchResult(
                 status=SchedulerContainerDispatchStatus.Failed,
                 container_id=request.container_id,
-                worker_id=result.target_worker_id,
                 reason=reason,
             )
         self._requeue(
@@ -680,7 +678,6 @@ class SchedulerContainerRequestService:
         return SchedulerContainerDispatchResult(
             status=SchedulerContainerDispatchStatus.Waiting,
             container_id=request.container_id,
-            worker_id=result.target_worker_id,
             reason=result.reason or result.status.value,
         )
 
