@@ -226,6 +226,7 @@ MACHINE_FINGERPRINT=""
 AGENT_HOSTNAME=""
 DEV="0"
 AGENT_BIN="${LAZYCLOUD_AGENT_BIN:-}"
+AGENT_URL="${LAZYCLOUD_AGENT_URL:-}"
 AGENT_VERSION="${LAZYCLOUD_AGENT_VERSION:-}"
 AGENT_SHA256="${LAZYCLOUD_AGENT_SHA256:-}"
 AGENT_AMD64_SHA256="${LAZYCLOUD_AGENT_AMD64_SHA256:-}"
@@ -294,6 +295,7 @@ parse_args() {
       --hostname) require_value "$1" "${2:-}"; AGENT_HOSTNAME="$2"; shift 2 ;;
       --dev) DEV="1"; shift ;;
       --agent-bin) require_value "$1" "${2:-}"; AGENT_BIN="$2"; shift 2 ;;
+      --agent-url) require_value "$1" "${2:-}"; AGENT_URL="$2"; shift 2 ;;
       --agent-version) require_value "$1" "${2:-}"; AGENT_VERSION="$2"; shift 2 ;;
       --agent-sha256) require_value "$1" "${2:-}"; AGENT_SHA256="$2"; shift 2 ;;
       --agent-amd64-sha256)
@@ -387,6 +389,17 @@ validate_input() {
     http://*|https://*) ;;
     *) fail "--gateway must start with http:// or https://" 2 ;;
   esac
+  if [ -n "$AGENT_URL" ]; then
+    # The artifact is public and unauthenticated, so it must not be reached
+    # over a scheme that would carry the enrolment credential in the clear.
+    case "$AGENT_URL" in
+      https://*) ;;
+      *) fail "--agent-url must start with https://" 2 ;;
+    esac
+    case "$AGENT_URL" in
+      *@*) fail "--agent-url must not embed credentials" 2 ;;
+    esac
+  fi
   if [ "$OS_NAME" != "linux" ]; then
     fail "unsupported operating system: $OS_NAME; customer machines require Linux" 1
   fi
@@ -625,6 +638,12 @@ install_agent() {
     AGENT_BIN="/usr/local/bin/__AGENT_NAME__"
   else
     AGENT_BIN="${HOME:-/tmp}/__HOME_DIR__/bin/__AGENT_NAME__"
+  fi
+  # A published artifact URL wins: a managed node pulls 47 MB per launch, and
+  # serving that from the control plane makes every scale-up its problem.
+  if [ -n "$AGENT_URL" ]; then
+    install_from_url "$AGENT_URL" "$AGENT_BIN"
+    return
   fi
   artifact_url="$GATEWAY/install/agent/$OS_NAME/$ARCH_NAME"
   if [ -n "$AGENT_VERSION" ]; then
