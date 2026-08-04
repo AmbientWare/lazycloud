@@ -283,7 +283,6 @@ def _spec() -> AwsManagedPoolSpec:
                 "lazycloud-agent-linux-amd64"
             ),
             worker_image_digest=f"registry.example.com/worker@sha256:{'b' * 64}",
-            tailnet_auth_key=SecretStr("tskey-auth-0123456789abcdef"),
         ),
     )
 
@@ -416,7 +415,6 @@ def _pool_request(provider_ref: str) -> ProviderPoolRequest:
                 "lazycloud-agent-linux-amd64"
             ),
             worker_image_digest=f"registry.example.com/worker@sha256:{'b' * 64}",
-            tailnet_auth_key=SecretStr("tskey-auth-0123456789abcdef"),
         ),
         provider_state=ComputePoolProviderState(),
     )

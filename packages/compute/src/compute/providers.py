@@ -7,7 +7,7 @@ from enum import StrEnum
 from typing import Protocol
 from uuid import NAMESPACE_URL, uuid5
 
-from pydantic import Field, JsonValue, SecretStr, field_validator, model_validator
+from pydantic import Field, JsonValue, field_validator, model_validator
 from shared.app_identity import MACHINE_ID_LABEL
 from shared.compute_fleet import Machine
 from shared.compute_policy import (
@@ -62,12 +62,6 @@ class ProviderPoolBootstrap(ContractModel):
     agent_sha256: str
     agent_binary_url: str
     worker_image_digest: str
-    # A node joins the tailnet from user-data and then reaches the control plane
-    # as a peer, so this key is what makes `control_plane_url` a tailnet origin
-    # rather than a public one. Blank is legal because resolving a pool for
-    # deletion builds this contract without minting a key; building a launch
-    # template without one is an error at the script assembler.
-    tailnet_auth_key: SecretStr = SecretStr("")
 
     @field_validator("control_plane_url")
     @classmethod

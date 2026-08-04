@@ -246,14 +246,7 @@ def provider_pool_request(
     pool_bootstrap_factory: ProviderPoolBootstrapFactory | None,
     pool: ComputePoolRecord,
     offer: ComputeOffer,
-    *,
-    writes_launch_template: bool = False,
 ) -> ProviderPoolRequest:
-    # Only a call that rewrites the provider's launch template needs a live
-    # tailnet bootstrap key; describing, releasing, and deleting build a
-    # request to address existing resources. Minting on those paths would
-    # issue credentials for a pool on its way out, and refreshing one would
-    # churn a launch-template version on every reconcile.
     if pool_bootstrap_factory is None or pool.provider_connection_id is None:
         raise RuntimeError("provider pool bootstrap is not configured")
     root_volume_gib = _pool_config_int(pool, "root_volume_gib", default=200)
@@ -268,11 +261,7 @@ def provider_pool_request(
         desired_machines=pool.desired_machines,
         max_machines=pool.max_machines,
         root_volume_gib=root_volume_gib,
-        bootstrap=pool_bootstrap_factory.bootstrap(
-            pool,
-            offer,
-            writes_launch_template=writes_launch_template,
-        ),
+        bootstrap=pool_bootstrap_factory.bootstrap(pool, offer),
         provider_state=pool.provider_state,
     )
 
@@ -302,23 +291,13 @@ class _ProviderInstanceMetadataEnvelope(ContractModel):
 
 
 class ProviderPoolBootstrapFactory(Protocol):
-    """What a booting node needs, and the credential lifetime behind it.
-
-    `release` is part of the protocol rather than a separate hook because the
-    tailnet key a pool's launch template carries lives in a row that cascades
-    away with the pool. Deleting the pool without revoking the key first would
-    drop the only record of a credential that still works.
-    """
+    """What a booting node needs to reach the control plane and enrol."""
 
     def bootstrap(
         self,
         pool: ComputePoolRecord,
         offer: ComputeOffer,
-        *,
-        writes_launch_template: bool,
     ) -> ProviderPoolBootstrap: ...
-
-    def release(self, pool: ComputePoolRecord) -> None: ...
 
 
 LOGGER = logging.getLogger(__name__)

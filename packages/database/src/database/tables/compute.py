@@ -399,25 +399,6 @@ class ComputeMachineEnrollmentTable(IdPayloadTable, DatabaseBase):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
-class PoolBootstrapCredentialTable(IdPayloadTable, DatabaseBase):
-    __tablename__ = "compute_pool_bootstrap_credentials"
-    __table_args__: tuple[SchemaItem, ...] = (
-        UniqueConstraint("pool_id", name="uq_compute_pool_bootstrap_credentials_pool"),
-    )
-
-    workspace_id: Mapped[str] = mapped_column(
-        uuid_type,
-        ForeignKey("workspaces.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    pool_id: Mapped[str] = mapped_column(
-        uuid_type,
-        ForeignKey("compute_pools.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-
-
 class TailnetCleanupTombstoneTable(IdPayloadTable, DatabaseBase):
     __tablename__ = "tailnet_cleanup_tombstones"
     __table_args__: tuple[SchemaItem, ...] = (

@@ -17,7 +17,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from shared.app_identity import AGENT_NAME, NAME
+from shared.app_identity import AGENT_NAME
 
 DEFAULT_TAILSCALE_API_URL = "https://api.tailscale.com"
 DEFAULT_TAILNET_AUTH_KEY_TTL_SECONDS = 300
@@ -25,9 +25,6 @@ DEFAULT_TAILNET_AUTH_KEY_TTL_SECONDS = 300
 # launch, so it is measured in days rather than the minutes a machine key needs
 # between issue and redemption. Ninety days with a seven-day refresh window
 # keeps the template stable while bounding how long a leaked key stays useful.
-DEFAULT_POOL_BOOTSTRAP_KEY_TTL_SECONDS = 90 * 24 * 60 * 60
-DEFAULT_POOL_BOOTSTRAP_KEY_REFRESH_SECONDS = 7 * 24 * 60 * 60
-DEFAULT_POOL_BOOTSTRAP_TAG = f"tag:{NAME}-bootstrap"
 DEFAULT_TAILNET_CONTROL_TIMEOUT_SECONDS = 10.0
 TAILSCALE_OAUTH_SCOPES = "auth_keys devices:core"
 TOKEN_REFRESH_SKEW_SECONDS = 30
@@ -109,7 +106,6 @@ class TailnetIdentityCleanup(Protocol):
 class TailnetControl(TailnetIdentityCleanup, Protocol):
     def issue_auth_key(self, *, machine_id: str, hostname: str) -> TailnetAuthKey: ...
 
-    def issue_pool_bootstrap_key(self, *, pool_id: str) -> TailnetAuthKey: ...
 
     def verify_device(
         self,
@@ -180,7 +176,6 @@ class TailscaleTailnetControlConfig(BaseModel):
     oauth_client_id: str = Field(min_length=1)
     oauth_client_secret: SecretStr
     agent_tag: str = Field(min_length=5)
-    pool_bootstrap_tag: str = Field(default=DEFAULT_POOL_BOOTSTRAP_TAG, min_length=5)
     auth_key_ttl_seconds: int = Field(
         default=DEFAULT_TAILNET_AUTH_KEY_TTL_SECONDS,
         ge=30,
@@ -189,11 +184,6 @@ class TailscaleTailnetControlConfig(BaseModel):
     # Deliberately a separate bound from `auth_key_ttl_seconds`: that key is
     # single-use and redeemed within seconds, and widening it would weaken every
     # machine identity to buy a launch template a longer life.
-    pool_bootstrap_key_ttl_seconds: int = Field(
-        default=DEFAULT_POOL_BOOTSTRAP_KEY_TTL_SECONDS,
-        ge=86_400,
-        le=DEFAULT_POOL_BOOTSTRAP_KEY_TTL_SECONDS,
-    )
     request_timeout_seconds: float = Field(
         default=DEFAULT_TAILNET_CONTROL_TIMEOUT_SECONDS,
         gt=0,
@@ -224,7 +214,7 @@ class TailscaleTailnetControlConfig(BaseModel):
             raise ValueError("Tailscale OAuth client secret is required")
         return value
 
-    @field_validator("agent_tag", "pool_bootstrap_tag")
+    @field_validator("agent_tag")
     @classmethod
     def tag_must_be_valid(cls, value: str) -> str:
         normalized = value.strip().lower()
@@ -235,15 +225,13 @@ class TailscaleTailnetControlConfig(BaseModel):
     @property
     def issuable_tags(self) -> tuple[str, ...]:
         """The tags this control plane may mint auth keys for."""
-        return (self.agent_tag, self.pool_bootstrap_tag)
+        return (self.agent_tag,)
 
     @model_validator(mode="after")
     def bootstrap_tag_must_be_distinct(self) -> Self:
         # The bootstrap tag exists to carry a narrower grant than the agent tag.
         # Collapsing them would silently hand every pre-enrolment node the
         # agent's full reach.
-        if self.agent_tag == self.pool_bootstrap_tag:
-            raise ValueError("Tailscale agent and pool bootstrap tags must be distinct")
         return self
 
 
@@ -369,43 +357,6 @@ class TailscaleTailnetControl:
             key=parsed.key,
             expires_at=parsed.expires,
         )
-
-    def issue_pool_bootstrap_key(self, *, pool_id: str) -> TailnetAuthKey:
-        """Mint the key a pool's launch template hands every node it starts.
-
-        One template serves every instance an autoscaling group launches, so
-        this key is necessarily reusable — unlike a machine key, which is bound
-        to an identity that does not exist until the node enrols. What keeps
-        that acceptable is the tag: it grants the control-plane port and nothing
-        else, and the node discards this identity for a single-use machine key
-        as soon as enrolment gives it one. `ephemeral` is what makes the
-        discarded device disappear rather than accumulate.
-        """
-        pool = _required_identifier(pool_id, "pool ID")
-        request = _CreateAuthKeyRequest(
-            capabilities=_AuthKeyCapabilities(
-                devices=_DeviceCapabilities(
-                    create=_DeviceCreateCapability(
-                        reusable=True,
-                        ephemeral=True,
-                        preauthorized=True,
-                        tags=(self.config.pool_bootstrap_tag,),
-                    )
-                )
-            ),
-            expirySeconds=self.config.pool_bootstrap_key_ttl_seconds,
-            description=f"pool bootstrap {pool}",
-        )
-        response = self._authenticated_request(
-            "POST",
-            "/api/v2/tailnet/-/keys",
-            content=request.model_dump_json(by_alias=True),
-            tag=self.config.pool_bootstrap_tag,
-        )
-        parsed = self._parse_response(
-            response, _CreateAuthKeyResponse, "pool bootstrap key creation"
-        )
-        return TailnetAuthKey(id=parsed.id, key=parsed.key, expires_at=parsed.expires)
 
     def revoke_auth_key(self, key_id: str) -> None:
         normalized = _required_identifier(key_id, "auth-key ID")

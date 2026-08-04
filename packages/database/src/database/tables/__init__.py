@@ -28,7 +28,6 @@ from database.tables.compute import (
     ComputeProviderInstanceTable,
     ComputeSolverDecisionTable,
     ComputeSolverRunTable,
-    PoolBootstrapCredentialTable,
     TailnetCleanupTombstoneTable,
     WorkspaceComputePolicyTable,
 )
@@ -125,7 +124,6 @@ __all__ = [
     "PayloadMixin",
     "PodProcessTable",
     "PodUrlTable",
-    "PoolBootstrapCredentialTable",
     "PoolTable",
     "ProviderTable",
     "QueueMessageTable",

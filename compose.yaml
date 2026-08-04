@@ -561,7 +561,6 @@ services:
       TS_STATE_DIR: "${LAZYCLOUD_COMPOSE_TAILNET_STATE_DIR:-/var/lib/tailscale}"
       TS_SOCKET: "${LAZYCLOUD_TAILNET_SOCKET_PATH:-/var/run/tailscale/tailscaled.sock}"
       TS_USERSPACE: "${LAZYCLOUD_TAILNET_USERSPACE_NETWORKING:-false}"
-      TS_SERVE_CONFIG: "/config/serve.json"
       TS_EXTRA_ARGS: "--advertise-tags=${LAZYCLOUD_TAILNET_CONTROL_PLANE_TAG:-tag:lazycloud-control-plane} --accept-dns=false --accept-routes=false --login-server=${LAZYCLOUD_TAILNET_CONTROL_URL:-https://controlplane.tailscale.com}"
     cap_add:
       - NET_ADMIN
@@ -571,7 +570,6 @@ services:
     volumes:
       - tailnet-gateway-state:/var/lib/tailscale
       - tailnet-gateway-socket:/var/run/tailscale
-      - ./deploy/tailnet-gateway:/config:ro
     healthcheck:
       test:
         - CMD-SHELL

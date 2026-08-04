@@ -226,7 +226,6 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
                 agent_binary_url=request.bootstrap.agent_binary_url,
                 worker_image_digest=request.bootstrap.worker_image_digest,
                 gpu_count=request.offer.gpu_count,
-                tailnet_auth_key=request.bootstrap.tailnet_auth_key,
             ),
         )
 

@@ -14,7 +14,6 @@ from provider_aws.managed_pool import (
     AwsManagedPoolSpec,
     aws_managed_pool_bootstrap_script,
 )
-from pydantic import SecretStr
 
 _AGENT_SHA256 = "a" * 64
 _AGENT_BINARY_URL = (
@@ -48,7 +47,6 @@ def _spec() -> AwsManagedPoolSpec:
             agent_sha256=_AGENT_SHA256,
             agent_binary_url=_AGENT_BINARY_URL,
             worker_image_digest=f"registry.example.com/worker@sha256:{'b' * 64}",
-            tailnet_auth_key=SecretStr("tskey-auth-0123456789abcdef"),
         ),
     )
 
@@ -61,9 +59,16 @@ def _require_tooling() -> tuple[str, str]:
     return bash, openssl
 
 
-def test_bootstrap_script_refuses_an_agent_binary_that_fails_digest_verification(
+def test_bootstrap_failure_reports_the_whole_provider_identity_payload(
     tmp_path: Path,
 ) -> None:
+    """A node that dies before the agent exists has no other voice.
+
+    The payload is pinned whole because the provider half of it is a shell
+    function the generic script splices in: dropping a field there would leave
+    every bootstrap report rejected, and the report is best-effort, so nothing
+    else would say so.
+    """
     bash, _ = _require_tooling()
     script = aws_managed_pool_bootstrap_script(_spec())
 
@@ -72,27 +77,24 @@ def test_bootstrap_script_refuses_an_agent_binary_that_fails_digest_verification
     )
     assert syntax.returncode == 0, syntax.stderr
 
-    # The gateway install route is never used, and the agent owns its own unit:
-    # a unit written here would leave a machine running the agent's while this
-    # script claimed a different restart policy, so a fix made here would never
-    # reach any machine.
-    assert "/install/agent" not in script
+    # Docker, Tailscale, the agent binary, and the unit are the installer's, and
+    # a unit written here would leave the machine running the agent's while this
+    # script claimed a different restart policy.
     assert "/etc/systemd/system/lazycloud-agent.service" not in script
+    assert "--agent-url" in script
 
-    agent_bin = tmp_path / "lazycloud-agent"
     curl_log = tmp_path / "curl.log"
     lines = script.rstrip("\n").split("\n")
     assert lines[-1] == "bootstrap_main"
-    driver = tmp_path / "ensure_agent.sh"
+    driver = tmp_path / "install_failure.sh"
     driver.write_text(
         "\n".join(
             [
                 *lines[:-1],
-                f'AGENT_BIN="{agent_bin}"',
                 f'CURL_LOG="{curl_log}"',
                 'mint_proof() { printf "https://sts.test/proof"; }',
-                # Stand in for the network: record every request and serve an
-                # agent artifact whose digest does not match AGENT_SHA256.
+                # Stand in for the network: record every request, and fail the
+                # installer download so the boot dies at the install step.
                 "curl() {",
                 '  local out="" data="" previous=""',
                 '  printf "%s\\n" "$*" >>"$CURL_LOG"',
@@ -103,39 +105,32 @@ def test_bootstrap_script_refuses_an_agent_binary_that_fails_digest_verification
                 "    esac",
                 '    previous="$argument"',
                 "  done",
-                '  if [ -n "$out" ]; then',
-                '    printf "tampered-agent-binary" >"$out"',
+                '  if [ -n "$data" ]; then',
+                '    printf "%s\\n" "$data" >>"$CURL_LOG"',
                 "    return 0",
                 "  fi",
-                '  printf "%s\\n" "$data" >>"$CURL_LOG"',
+                '  if [ -n "$out" ]; then',
+                "    return 22",
+                "  fi",
                 "  return 0",
                 "}",
-                "STEP=agent",
-                "ensure_agent",
+                "resolve_node_identity() { :; }",
+                "STEP=install",
+                'report_failure agent_enrollment_failed',
                 "",
             ]
         ),
         encoding="utf-8",
     )
 
-    run = subprocess.run([bash, driver.as_posix()], capture_output=True, text=True, check=False)
+    subprocess.run([bash, driver.as_posix()], capture_output=True, text=True, check=False)
     reported = curl_log.read_text(encoding="utf-8")
 
-    assert run.returncode != 0
-    assert not agent_bin.exists()
-    assert not list(tmp_path.glob("lazycloud-agent.download.*"))
-    # The artifact came from the pinned release URL, and the mismatch is
-    # reported as one bounded enrollment failure reason. The whole payload is
-    # pinned because the provider half of it is a shell function the generic
-    # script splices in: dropping a field there would leave every bootstrap
-    # report rejected, and the report is deliberately best-effort, so nothing
-    # else would say so.
-    assert _AGENT_BINARY_URL in reported
     assert (
         '{"enrollment_request_id":"12345678-1234-4123-8123-123456789abc"'
         ',"provider":"aws","region":"","provider_instance_id":""'
         ',"identity_proof_url":"https://sts.test/proof"'
-        ',"failure_reason":"agent_download_failed"}'
+        ',"failure_reason":"agent_enrollment_failed"}'
     ) in reported
 
 

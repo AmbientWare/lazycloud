@@ -16,13 +16,15 @@ module and a reviewed plan proves unrelated state is preserved.
 It creates a deny-by-default policy, a scoped agent OAuth client, and an
 ephemeral gateway enrollment key. The hosted Tailnet already must exist.
 
-Three tags carry three different reaches. `control_plane_tag` may dial an
-agent's route proxy; `agent_tag` may dial the control plane; `bootstrap_tag`
-belongs to a node that has not enrolled yet and may dial the control plane and
-nothing else. The agent OAuth client owns both `agent_tag` and `bootstrap_tag`
-because the control plane mints keys for both — changing that tag list replaces
-the client, so re-export `agent_oauth_client_id` and `agent_oauth_client_secret`
-to the deployment secret manager after any plan that does.
+Two tags carry two different reaches. `control_plane_tag` may dial an agent's
+route proxy; `agent_tag` may dial the control plane. A node that has not
+enrolled yet holds no tailnet identity at all: it reaches the control plane over
+the public origin and joins the tailnet with the machine key enrolment vends it.
+
+The agent OAuth client owns `agent_tag`, the only tag the control plane mints
+for — changing that tag list replaces the client, so re-export
+`agent_oauth_client_id` and `agent_oauth_client_secret` to the deployment secret
+manager after any plan that does.
 
 ## Backend and credentials
 

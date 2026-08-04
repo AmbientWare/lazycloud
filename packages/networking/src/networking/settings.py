@@ -17,9 +17,6 @@ from networking.tailnet import (
     TailnetRuntimeOptions,
 )
 from networking.tailnet_control import (
-    DEFAULT_POOL_BOOTSTRAP_KEY_REFRESH_SECONDS,
-    DEFAULT_POOL_BOOTSTRAP_KEY_TTL_SECONDS,
-    DEFAULT_POOL_BOOTSTRAP_TAG,
     DEFAULT_TAILNET_AUTH_KEY_TTL_SECONDS,
     DEFAULT_TAILSCALE_API_URL,
     TailscaleTailnetControlConfig,
@@ -69,22 +66,11 @@ class TailnetControlSettings(BaseSettings):
     oauth_client_secret: SecretStr = SecretStr("")
     agent_tag: str = "tag:lazycloud-agent"
     control_plane_tag: str = "tag:lazycloud-control-plane"
-    pool_bootstrap_tag: str = DEFAULT_POOL_BOOTSTRAP_TAG
     api_url: str = DEFAULT_TAILSCALE_API_URL
     auth_key_ttl_seconds: int = Field(
         default=DEFAULT_TAILNET_AUTH_KEY_TTL_SECONDS,
         ge=30,
         le=3600,
-    )
-    pool_bootstrap_key_ttl_seconds: int = Field(
-        default=DEFAULT_POOL_BOOTSTRAP_KEY_TTL_SECONDS,
-        ge=86_400,
-        le=DEFAULT_POOL_BOOTSTRAP_KEY_TTL_SECONDS,
-    )
-    pool_bootstrap_key_refresh_seconds: int = Field(
-        default=DEFAULT_POOL_BOOTSTRAP_KEY_REFRESH_SECONDS,
-        ge=3600,
-        le=DEFAULT_POOL_BOOTSTRAP_KEY_TTL_SECONDS,
     )
 
     model_config = SettingsConfigDict(
@@ -97,17 +83,17 @@ class TailnetControlSettings(BaseSettings):
     def normalize_text(cls, value: str) -> str:
         return value.strip()
 
-    @field_validator("agent_tag", "control_plane_tag", "pool_bootstrap_tag")
+    @field_validator("agent_tag", "control_plane_tag")
     @classmethod
     def normalize_tag(cls, value: str) -> str:
         return normalize_tailnet_tag(value)
 
-    def validated_tags(self) -> tuple[str, str, str]:
-        tags = (self.agent_tag, self.control_plane_tag, self.pool_bootstrap_tag)
+    def validated_tags(self) -> tuple[str, str]:
+        tags = (self.agent_tag, self.control_plane_tag)
         if len(set(tags)) != len(tags):
-            # Each tag carries a different grant. Sharing one collapses three
-            # postures into whichever is broadest.
-            raise ValueError("tailnet agent, control-plane, and bootstrap tags must be distinct")
+            # Each tag carries a different grant. Sharing one collapses both
+            # postures into whichever is broader.
+            raise ValueError("tailnet agent and control-plane tags must be distinct")
         return tags
 
     def to_control_config(self) -> TailscaleTailnetControlConfig:
@@ -121,9 +107,7 @@ class TailnetControlSettings(BaseSettings):
             oauth_client_id=oauth_client_id,
             oauth_client_secret=self.oauth_client_secret,
             agent_tag=self.agent_tag,
-            pool_bootstrap_tag=self.pool_bootstrap_tag,
             auth_key_ttl_seconds=self.auth_key_ttl_seconds,
-            pool_bootstrap_key_ttl_seconds=self.pool_bootstrap_key_ttl_seconds,
         )
 
 

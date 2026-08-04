@@ -78,10 +78,6 @@ class AwsManagedPoolBootstrap(AwsManagedPoolModel):
     agent_binary_url: str
     worker_image_digest: str = Field(pattern=_WORKER_IMAGE_PATTERN.pattern)
     gpu_count: int = Field(default=0, ge=0, le=8)
-    # A node joins the tailnet from user-data and reaches the control plane as a
-    # peer, so the key is required to build a launch template. Empty is legal on
-    # the model because pool deletion resolves a spec without minting one.
-    tailnet_auth_key: SecretStr = SecretStr("")
 
     @field_validator("control_plane_url")
     @classmethod
@@ -1270,7 +1266,6 @@ def aws_managed_pool_bootstrap_script(spec: AwsManagedPoolSpec) -> str:
         agent_sha256=bootstrap.agent_sha256,
         worker_image_digest=bootstrap.worker_image_digest,
         gpu_count=bootstrap.gpu_count,
-        tailnet_auth_key=bootstrap.tailnet_auth_key,
     )
     return node_bootstrap_script(settings, AWS_NODE_BOOTSTRAP_PROFILE)
 

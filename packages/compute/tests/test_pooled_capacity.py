@@ -1683,10 +1683,8 @@ class _Bootstrap:
         self,
         pool: ComputePoolRecord,
         offer: ComputeOffer,
-        *,
-        writes_launch_template: bool,
     ) -> ProviderPoolBootstrap:
-        del offer, writes_launch_template
+        del offer
         return ProviderPoolBootstrap(
             control_plane_url="https://control.example.com",
             enrollment_request_id=pool.id,

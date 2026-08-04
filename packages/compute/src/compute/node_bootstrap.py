@@ -38,7 +38,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, field_validator
 from shared.app_identity import (
     AGENT_NAME,
     AGENT_STATE_DIR,
@@ -48,7 +48,6 @@ from shared.app_identity import (
     TAILSCALED_STATE_NAME,
 )
 from shared.contracts import ContractModel
-from shared.tailscale_install import TAILSCALE_AMD64_SHA256, TAILSCALE_INSTALL_VERSION
 from shared.urls import normalize_http_origin
 
 # The socket the unit serves is the socket the agent is told to dial. Every
@@ -118,10 +117,9 @@ def validate_agent_binary_url(value: str) -> str:
 class NodeBootstrapSettings(ContractModel):
     """Everything a booting node needs that no provider owns.
 
-    `control_plane_url` is a tailnet origin for a managed pool. It is validated
-    only as an origin here because whether a given host is a peer is a fact
-    about the tailnet, not about the string; the node proves it by resolving the
-    peer during `tailnet_join` and refusing to continue if it cannot.
+    `control_plane_url` is the public origin: a node in a customer VPC holds no
+    tailnet session when it reports, and joins the tailnet only once the agent
+    has enrolled and been vended a credential.
     """
 
     control_plane_url: str
@@ -130,9 +128,6 @@ class NodeBootstrapSettings(ContractModel):
     agent_sha256: str = Field(pattern=_DIGEST_PATTERN)
     worker_image_digest: str = Field(pattern=_WORKER_IMAGE_PATTERN)
     gpu_count: int = Field(default=0, ge=0, le=8)
-    tailnet_auth_key: SecretStr
-    tailscale_version: str = TAILSCALE_INSTALL_VERSION
-    tailscale_sha256: str = TAILSCALE_AMD64_SHA256
 
     @field_validator("control_plane_url")
     @classmethod
@@ -173,33 +168,17 @@ class NodeBootstrapProfile:
 _BOOTSTRAP_SCRIPT_TEMPLATE = """#!/bin/bash
 set -Eeuo pipefail
 
+exec > >(tee -a /var/log/lazycloud-bootstrap.log) 2>&1
+
 CONTROL_PLANE_URL=__CONTROL_PLANE_URL__
 ENROLLMENT_REQUEST_ID=__ENROLLMENT_REQUEST_ID__
 AGENT_SHA256=__AGENT_SHA256__
 AGENT_BINARY_URL=__AGENT_BINARY_URL__
 WORKER_IMAGE_DIGEST=__WORKER_IMAGE_DIGEST__
 GPU_COUNT=__GPU_COUNT__
-TAILSCALE_VERSION=__TAILSCALE_VERSION__
-TAILSCALE_SHA256=__TAILSCALE_SHA256__
-TAILNET_AUTH_KEY=__TAILNET_AUTH_KEY__
-AGENT_BIN=__AGENT_BIN__
 AGENT_STATE_DIR=__AGENT_STATE_DIR__
-TAILNET_STATE_DIR=__TAILNET_STATE_DIR__
-TAILNET_STATE_FILE=__TAILNET_STATE_FILE__
-TAILNET_SOCKET=__TAILNET_SOCKET__
-TAILSCALE_BIN=__TAILSCALE_BIN__
-TAILSCALED_BIN=__TAILSCALED_BIN__
-TAILNET_SERVICE_NAME=__TAILNET_SERVICE_NAME__
-AGENT_SERVICE_NAME=__AGENT_SERVICE_NAME__
-TAILNET_SERVICE_PATH=__TAILNET_SERVICE_PATH__
 
 STEP=identity
-CONTROL_PLANE_HOST=""
-CONTROL_PLANE_PORT=""
-# Pins the control plane's dial address to its tailnet peer address while the
-# request keeps the name it was configured with, mirroring how every other
-# internal client on the platform reaches a peer.
-CURL_RESOLVE=()
 
 bootstrap_failed() {
   status=$?
@@ -207,11 +186,7 @@ bootstrap_failed() {
   reason=unknown
   case "$STEP" in
     identity) reason=provider_identity_failed ;;
-    tailscale) reason=runtime_install_failed ;;
-    tailnet) reason=network_join_failed ;;
-    docker) reason=runtime_install_failed ;;
-    agent) reason=agent_download_failed ;;
-    service) reason=agent_enrollment_failed ;;
+    install) reason=agent_enrollment_failed ;;
   esac
   report_failure "$reason"
   echo "worker bootstrap failed during ${STEP}; the control plane reclaims this instance" >&2
@@ -226,232 +201,17 @@ bootstrap_error() {
 
 # __PROVIDER_IDENTITY__
 
-# Bootstrap reports carry whatever the provider uses to prove this node's
-# identity and never abort the boot flow.
-report() {
-  endpoint="$1"
-  field="$2"
-  value="$3"
+# The only report this script still owns. Everything after the installer hands
+# off is the agent's to report, but a node that dies before the agent exists
+# has no other voice, and the control plane would see nothing but a deadline.
+report_failure() {
   payload="{\\"enrollment_request_id\\":\\"${ENROLLMENT_REQUEST_ID}\\""
   payload="${payload}$(report_identity_fields)"
-  payload="${payload},\\"${field}\\":\\"${value}\\"}"
-  curl -fsS "${CURL_RESOLVE[@]}" --retry 5 --retry-all-errors --retry-delay 2 -X POST \\
+  payload="${payload},\\"failure_reason\\":\\"$1\\"}"
+  curl -fsS --retry 5 --retry-all-errors --retry-delay 2 -X POST \\
     -H 'Content-Type: application/json' \\
     --data "$payload" \\
-    "${CONTROL_PLANE_URL}/gateway/provider-nodes/${endpoint}" >/dev/null
-}
-
-report_phase() {
-  report bootstrap-phase phase "$1" || true
-}
-
-report_failure() {
-  report bootstrap-failure failure_reason "$1" || true
-}
-
-ts() {
-  "$TAILSCALE_BIN" --socket="$TAILNET_SOCKET" "$@"
-}
-
-parse_control_plane_origin() {
-  scheme="${CONTROL_PLANE_URL%%://*}"
-  authority="${CONTROL_PLANE_URL#*://}"
-  authority="${authority%%/*}"
-  case "$authority" in
-    *:*)
-      CONTROL_PLANE_HOST="${authority%:*}"
-      CONTROL_PLANE_PORT="${authority##*:}"
-      ;;
-    *)
-      CONTROL_PLANE_HOST="$authority"
-      if [ "$scheme" = "https" ]; then
-        CONTROL_PLANE_PORT=443
-      else
-        CONTROL_PLANE_PORT=80
-      fi
-      ;;
-  esac
-  if [ -z "$CONTROL_PLANE_HOST" ]; then
-    bootstrap_error 'control-plane URL has no host'
-  fi
-}
-
-docker_ready() {
-  docker info >/dev/null 2>&1
-}
-
-tailscale_ready() {
-  command -v "$TAILSCALE_BIN" >/dev/null 2>&1 && \\
-    command -v "$TAILSCALED_BIN" >/dev/null 2>&1 && \\
-    [ "$("$TAILSCALE_BIN" version 2>/dev/null | sed -n 1p)" = "$TAILSCALE_VERSION" ] && \\
-    [ "$("$TAILSCALED_BIN" --version 2>/dev/null | sed -n 1p)" = "$TAILSCALE_VERSION" ]
-}
-
-agent_ready() {
-  [ -x "$AGENT_BIN" ] && \\
-    [ "$(sha256sum "$AGENT_BIN" 2>/dev/null | awk '{print $1}')" = "$AGENT_SHA256" ]
-}
-
-ensure_docker() {
-  if docker_ready; then
-    return
-  fi
-  if ! command -v docker >/dev/null 2>&1; then
-    if ! command -v dnf >/dev/null 2>&1; then
-      bootstrap_error 'no supported package manager for the container runtime'
-    fi
-    dnf install -y docker
-  fi
-  systemctl enable --now docker
-  for _ in {1..30}; do
-    if docker_ready; then
-      return
-    fi
-    sleep 2
-  done
-  bootstrap_error 'Docker daemon did not become ready'
-}
-
-ensure_tailscale() {
-  if tailscale_ready; then
-    return
-  fi
-  archive=$(mktemp)
-  extracted=$(mktemp -d)
-  curl -fsSL --retry 5 --retry-delay 2 \\
-    "https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_amd64.tgz" \\
-    -o "$archive"
-  if [ "$(sha256sum "$archive" | awk '{print $1}')" != "$TAILSCALE_SHA256" ]; then
-    rm -rf "$archive" "$extracted"
-    bootstrap_error 'Tailscale archive SHA-256 mismatch'
-  fi
-  tar -xzf "$archive" -C "$extracted"
-  release_dir="${extracted}/tailscale_${TAILSCALE_VERSION}_amd64"
-  install -m 0755 "$release_dir/tailscale" /usr/local/bin/tailscale
-  install -m 0755 "$release_dir/tailscaled" /usr/local/bin/tailscaled
-  rm -rf "$archive" "$extracted"
-  if ! tailscale_ready; then
-    bootstrap_error 'Tailscale failed its pinned version readiness check'
-  fi
-}
-
-ensure_agent() {
-  if agent_ready; then
-    return
-  fi
-  agent_download=$(mktemp "${AGENT_BIN}.download.XXXXXX")
-  curl -fsSL --retry 5 --retry-delay 2 "$AGENT_BINARY_URL" -o "$agent_download"
-  if [ "$(sha256sum "$agent_download" | awk '{print $1}')" != "$AGENT_SHA256" ]; then
-    rm -f "$agent_download"
-    bootstrap_error 'agent artifact SHA-256 mismatch'
-  fi
-  chmod 0755 "$agent_download"
-  mv -f "$agent_download" "$AGENT_BIN"
-}
-
-# The daemon runs for the node's lifetime under a unit this script owns, so the
-# agent can attach to it in sidecar mode instead of starting a rival. systemd
-# rejects a relative ExecStart, and `TAILSCALED_BIN` is resolved through PATH,
-# so the absolute path is taken here — a unit that fails to load leaves the node
-# off the tailnet with nothing else to explain it.
-ensure_tailnet_service() {
-  install -d -m 0700 "$TAILNET_STATE_DIR"
-  tailscaled_path="$(command -v "$TAILSCALED_BIN")"
-  if [ -z "$tailscaled_path" ]; then
-    bootstrap_error 'tailscaled is not on PATH after installation'
-  fi
-  cat >"${TAILNET_SERVICE_PATH}.tmp" <<UNIT
-[Unit]
-Description=LazyCloud node tailnet daemon
-Wants=network-online.target
-After=network-online.target
-StartLimitIntervalSec=0
-
-[Service]
-Type=notify
-ExecStartPre=${tailscaled_path} --cleanup
-ExecStart=${tailscaled_path} --state=${TAILNET_STATE_FILE} --socket=${TAILNET_SOCKET} --port=41641
-ExecStopPost=${tailscaled_path} --cleanup
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-  install -m 0644 "${TAILNET_SERVICE_PATH}.tmp" "$TAILNET_SERVICE_PATH"
-  rm -f "${TAILNET_SERVICE_PATH}.tmp"
-  systemctl daemon-reload
-  systemctl enable "$TAILNET_SERVICE_NAME"
-  systemctl restart "$TAILNET_SERVICE_NAME"
-  for _ in {1..60}; do
-    if ts status --json >/dev/null 2>&1; then
-      return
-    fi
-    sleep 1
-  done
-  bootstrap_error 'tailnet daemon did not finish loading its identity state'
-}
-
-# Joins the tailnet on the daemon the unit runs. The key reaches tailscale
-# through a 0600 file rather than a command line, which is world-readable
-# through /proc.
-is_tailnet_address() {
-  case "$1" in
-    100.*) ;;
-    *) return 1 ;;
-  esac
-  second="${1#100.}"
-  second="${second%%.*}"
-  [ "$second" -ge 64 ] 2>/dev/null && [ "$second" -le 127 ] 2>/dev/null
-}
-
-tailnet_join() {
-  parse_control_plane_origin
-  key_file="${TAILNET_STATE_DIR}/bootstrap.key"
-  (umask 077 && printf '%s\\n' "$TAILNET_AUTH_KEY" >"$key_file")
-  # DIAGNOSTIC, pending a decision before this merges: `--ssh` is what makes a
-  # node that fails after handoff inspectable at all. A pool node produces no
-  # console output, is not in SSM, and reports nothing once its agent cannot
-  # reach the control plane, so every failure in that window is silent. The ACL
-  # admits only tailnet members to the bootstrap tag.
-  if ! ts up --auth-key="file:${key_file}" \\
-    --hostname="bootstrap-$(node_fingerprint)" \\
-    --accept-dns=false \\
-    --accept-routes=false \\
-    --ssh \\
-    --reset; then
-    rm -f "$key_file"
-    bootstrap_error 'tailnet join was refused'
-  fi
-  rm -f "$key_file"
-  # An origin that is already the control plane's tailnet address resolves to
-  # itself. Nothing here or in the agent needs a resolver, so neither the peer
-  # lookup nor the MagicDNS check below applies.
-  if is_tailnet_address "$CONTROL_PLANE_HOST"; then
-    return 0
-  fi
-  # `|| true` on both: `pipefail` is set, so an unresolvable name would abort
-  # the script through the ERR trap before the refusal below could name it.
-  control_plane_address="$(ts ip -4 "$CONTROL_PLANE_HOST" 2>/dev/null | sed -n 1p)" || true
-  if [ -z "$control_plane_address" ]; then
-    control_plane_address="$(ts ip -4 "${CONTROL_PLANE_HOST%%.*}" 2>/dev/null | sed -n 1p)" || true
-  fi
-  # The origin is a tailnet peer or a public host. Pin the peer address when
-  # there is one; a public origin has none and needs none. Requiring a peer here
-  # would refuse every public origin, and it would refuse it at a step that
-  # cannot report, so the machine would die as an unexplained bootstrap timeout.
-  if [ -n "$control_plane_address" ]; then
-    CURL_RESOLVE=(--resolve "${CONTROL_PLANE_HOST}:${CONTROL_PLANE_PORT}:${control_plane_address}")
-  fi
-  # Whatever this script pins, the agent it hands off to resolves the same name
-  # through the system resolver. For a MagicDNS name that works only on a tailnet
-  # with HTTPS certificates enabled — a tailnet property, not something this node
-  # controls. Check it here, where the failure is still attributable, rather than
-  # let the agent discover it as an unexplained enrollment timeout.
-  if ! getent hosts "$CONTROL_PLANE_HOST" >/dev/null 2>&1; then
-    bootstrap_error "control plane ${CONTROL_PLANE_HOST} does not resolve; a tailnet \
-origin needs HTTPS certificates enabled so its MagicDNS names are publicly resolvable"
-  fi
+    "${CONTROL_PLANE_URL}/gateway/provider-nodes/bootstrap-failure" >/dev/null || true
 }
 
 bootstrap_main() {
@@ -460,33 +220,18 @@ bootstrap_main() {
   STEP=identity
   resolve_node_identity
 
-  # Tailscale before the first report: every report travels over the tailnet.
-  STEP=tailscale
-  ensure_tailscale
-  STEP=tailnet
-  ensure_tailnet_service
-  tailnet_join
-
-  report_phase booting
-
-  STEP=docker
-  ensure_docker
-  STEP=agent
-  ensure_agent
-
-  report_phase joining
-
-  # The agent must outlive cloud-init. Running it as a cloud-init child leaves
-  # the machine with no agent once that script module exits: it enrolls once,
-  # registers a worker, then disappears, so the worker never leaves `pending`.
-  #
-  # The agent installs its own unit. Writing one here too would make this script
-  # a second owner of the same file, and the two silently disagreed: a machine
-  # was found running the agent's unit while this script claimed a different
-  # restart policy, so a fix applied here never reached any machine.
-  STEP=service
-  "$AGENT_BIN" install-service \\
+  # Docker, Tailscale, the agent binary, and the systemd unit are the published
+  # installer's job. This script duplicated all four, and the copies drifted:
+  # it wrote a unit the agent also writes, and pinned a Tailscale version the
+  # installer pins per-architecture.
+  STEP=install
+  installer=/tmp/lazycloud-agent-install.sh
+  curl -fsS --retry 5 --retry-all-errors --retry-delay 2 \\
+    "${CONTROL_PLANE_URL}/install/agent" -o "$installer"
+  sh "$installer" \\
     --gateway "$CONTROL_PLANE_URL" \\
+    --agent-url "$AGENT_BINARY_URL" \\
+    --agent-sha256 "$AGENT_SHA256" \\
     --provider-enrollment-request "$ENROLLMENT_REQUEST_ID" \\
     "${PROVIDER_INSTALL_FLAGS[@]}" \\
     --machine-fingerprint "$(node_fingerprint)" \\
@@ -494,29 +239,7 @@ bootstrap_main() {
     --executor container \\
     --worker-image "$WORKER_IMAGE_DIGEST" \\
     --max-gpus "$GPU_COUNT" \\
-    --state-dir "$AGENT_STATE_DIR" \\
-    --tailnet-mode sidecar \\
-    --tailnet-socket "$TAILNET_SOCKET"
-
-  # Everything past this point is invisible from here: cloud-init exits, the
-  # unit is detached, and an agent that dies while enrolling leaves the machine
-  # silent until the bootstrap deadline expires as `bootstrap_timed_out`, which
-  # names nothing. Watch until the agent persists its identity, so a crash
-  # becomes a reported failure carrying the unit's own reason instead.
-  #
-  # Only `failed` ends the boot. An agent that is merely slow is the control
-  # plane's deadline to judge; refusing here on a guess would terminate healthy
-  # machines to improve a log message.
-  for _ in {1..20}; do
-    if [ -s "${AGENT_STATE_DIR}/agent-state.json" ]; then
-      return 0
-    fi
-    if [ "$(systemctl is-active "$AGENT_SERVICE_NAME" 2>/dev/null || true)" = failed ]; then
-      bootstrap_error "agent service failed: \\
-$(systemctl show -p Result --value "$AGENT_SERVICE_NAME" 2>/dev/null || true)"
-    fi
-    sleep 3
-  done
+    --state-dir "$AGENT_STATE_DIR"
 }
 
 bootstrap_main
@@ -534,10 +257,6 @@ def node_bootstrap_script(
     with `shlex.quote`d values — the script contains brace expansions and shell
     parameter expansions that any format-string mechanism would eat.
     """
-    auth_key = settings.tailnet_auth_key.get_secret_value()
-    if not auth_key.strip():
-        msg = "a node bootstrap script requires a tailnet auth key"
-        raise NodeBootstrapError(msg)
     missing = [
         symbol for symbol in _REQUIRED_PROVIDER_SYMBOLS if symbol not in profile.identity_shell
     ]
@@ -556,19 +275,7 @@ def node_bootstrap_script(
         "__AGENT_BINARY_URL__": settings.agent_binary_url,
         "__WORKER_IMAGE_DIGEST__": settings.worker_image_digest,
         "__GPU_COUNT__": str(settings.gpu_count),
-        "__TAILSCALE_VERSION__": settings.tailscale_version,
-        "__TAILSCALE_SHA256__": settings.tailscale_sha256,
-        "__TAILNET_AUTH_KEY__": auth_key,
-        "__AGENT_BIN__": AGENT_BIN_PATH,
         "__AGENT_STATE_DIR__": AGENT_STATE_DIR,
-        "__TAILNET_STATE_DIR__": TAILNET_STATE_DIR,
-        "__TAILNET_STATE_FILE__": TAILNET_STATE_FILE,
-        "__TAILNET_SOCKET__": TAILNET_SOCKET_PATH,
-        "__TAILSCALE_BIN__": TAILSCALE_BINARY,
-        "__AGENT_SERVICE_NAME__": AGENT_SERVICE_NAME,
-        "__TAILNET_SERVICE_NAME__": TAILNET_SERVICE_NAME,
-        "__TAILNET_SERVICE_PATH__": TAILNET_SERVICE_PATH,
-        "__TAILSCALED_BIN__": TAILSCALED_BINARY,
         **dict(profile.values),
     }
     for placeholder, value in values.items():

@@ -1599,7 +1599,6 @@ class ComputeService:
                     )
                     termination_errors.append(f"{record.provider}/{record.id}: {detail}")
                 if not termination_errors:
-                    self._release_pool_bootstrap(compute_pool)
                     compute_pool_repository.records.delete(
                         compute_pool.id,
                         workspace_id=workspace_id,
@@ -1679,7 +1678,6 @@ class ComputeService:
                     f"managed compute pool capacity could not be terminated: {details}"
                 )
             if compute_pool is not None:
-                self._release_pool_bootstrap(compute_pool)
                 compute_pool_repository.delete_for_workspace_deletion(
                     compute_pool.id,
                     workspace_id=workspace_id,
@@ -2431,7 +2429,7 @@ class ComputeService:
             snapshot = provider.pooled.set_pool_capacity(
                 # Creates the autoscaling group, and its launch template with
                 # it, when the pool has none yet.
-                self._provider_pool_request(intent, offer, writes_launch_template=True),
+                self._provider_pool_request(intent, offer),
                 desired_machines=intent.desired_machines,
                 max_machines=intent.max_machines,
             )
@@ -2591,11 +2589,7 @@ class ComputeService:
                 now=now,
             )
             degraded = current.provider_state.degraded_reason is not None
-            request = self._provider_pool_request(
-                current,
-                offer,
-                writes_launch_template=not degraded,
-            )
+            request = self._provider_pool_request(current, offer)
             snapshot = (
                 # A durably degraded pool stopped relaunching: observe and prove
                 # terminations without restoring provider capacity until an
@@ -3694,37 +3688,11 @@ class ComputeService:
             )
         return degraded
 
-    def _release_pool_bootstrap(self, pool: ComputePoolRecord) -> None:
-        """Revoke a deleted pool's tailnet key before its row cascades away.
-
-        Deletion is already committed to at this point, and a pool that never
-        launched managed capacity has no key: a revoke that fails must not
-        strand the pool in place, so the failure is recorded and the deletion
-        continues. The credential's own store retries.
-        """
-        if self.pool_bootstrap_factory is None:
-            return
-        try:
-            self.pool_bootstrap_factory.release(pool)
-        except Exception:
-            LOGGER.exception(
-                "tailnet bootstrap credential release failed for pool %s (%s)",
-                pool.name,
-                pool.id,
-            )
-
     def _provider_pool_request(
         self,
         pool: ComputePoolRecord,
         offer: ComputeOffer,
-        *,
-        writes_launch_template: bool = False,
     ) -> ProviderPoolRequest:
-        # Only a call that rewrites the provider's launch template needs a live
-        # tailnet bootstrap key; describing, releasing, and deleting build a
-        # request to address existing resources. Minting on those paths would
-        # issue credentials for a pool on its way out, and refreshing one would
-        # churn a launch-template version on every reconcile.
         if self.pool_bootstrap_factory is None or pool.provider_connection_id is None:
             raise RuntimeError("provider pool bootstrap is not configured")
         root_volume_gib = _pool_config_int(pool, "root_volume_gib", default=200)
@@ -3739,11 +3707,7 @@ class ComputeService:
             desired_machines=pool.desired_machines,
             max_machines=pool.max_machines,
             root_volume_gib=root_volume_gib,
-            bootstrap=self.pool_bootstrap_factory.bootstrap(
-                pool,
-                offer,
-                writes_launch_template=writes_launch_template,
-            ),
+            bootstrap=self.pool_bootstrap_factory.bootstrap(pool, offer),
             provider_state=pool.provider_state,
         )
 

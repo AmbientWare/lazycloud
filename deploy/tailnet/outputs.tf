@@ -20,7 +20,6 @@ output "runtime_configuration" {
   value = {
     LAZYCLOUD_TAILNET_AGENT_TAG          = var.agent_tag
     LAZYCLOUD_TAILNET_CONTROL_PLANE_TAG  = var.control_plane_tag
-    LAZYCLOUD_TAILNET_POOL_BOOTSTRAP_TAG = var.bootstrap_tag
   }
 }
 
