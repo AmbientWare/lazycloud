@@ -402,7 +402,7 @@ I am asserting these; the sibling documents did not exist when this was written.
     capacity untouched. Then zero the GPU knob and observe GPU release.
   - **Depends on**: none
 
-- [ ] **ERR-15** Split `ProductionWorkerSettings`
+- [ ] **ERR-15** Split `WorkerSettings`
   - **Files**: `apps/container-worker/src/container_worker_app/production.py:232-732`
   - **Change**: one `BaseSettings` class holds **69 fields across 500 lines** — 31%
     of the repository's entire 220-field configuration surface, against a median of

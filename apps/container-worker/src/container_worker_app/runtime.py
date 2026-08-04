@@ -15,10 +15,8 @@ from worker.scheduler_requests import WorkerSchedulerRequestResult
 from worker.status import WorkerSpindownPlan
 from worker.worker_lifecycle import WorkerLifecycleStepResult, WorkerShutdownResult
 
-from container_worker_app.production import (
-    ProductionWorkerSettings,
-    build_production_worker_process_services,
-)
+from container_worker_app.composition import build_worker_process_services
+from container_worker_app.settings import WorkerSettings
 
 
 class ContainerWorkerProcessor(Protocol):
@@ -78,25 +76,25 @@ class ContainerWorkerServices(Protocol):
 
 @dataclass(slots=True)
 class ContainerWorkerRuntime:
-    settings: ProductionWorkerSettings
+    settings: WorkerSettings
     services: ContainerWorkerServices
 
     @classmethod
     def production(
         cls,
         *,
-        settings: ProductionWorkerSettings,
+        settings: WorkerSettings,
     ) -> ContainerWorkerRuntime:
         return cls(
             settings=settings,
-            services=build_production_worker_process_services(settings=settings),
+            services=build_worker_process_services(settings=settings),
         )
 
     @classmethod
     def from_services(
         cls,
         *,
-        settings: ProductionWorkerSettings,
+        settings: WorkerSettings,
         services: ContainerWorkerServices,
     ) -> ContainerWorkerRuntime:
         return cls(settings=settings, services=services)

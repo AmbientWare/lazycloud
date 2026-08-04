@@ -16,11 +16,9 @@ from typing import Protocol, runtime_checkable
 from shared.app_identity import CONTAINER_WORKER_PROCESS_NAME
 from shared.container_requests import StopContainerReason
 from shared.process_liveness import HeartbeatFile, heartbeat_path
-from shared.routing import BackendRouteTransport
 from shared.scheduling import WorkerUnavailableReason
-from worker.events import WorkerPoolMode, WorkerStreamEventKind
+from worker.events import WorkerStreamEventKind
 from worker.repository_payloads import StreamWorkerEventsRequest
-from worker.runtime_config import OciRuntimeName
 from worker.scheduler_requests import WorkerSchedulerRequestResult
 from worker.worker_lifecycle import (
     DEFAULT_WORKER_KEEPALIVE_TTL_SECONDS,
@@ -29,13 +27,13 @@ from worker.worker_lifecycle import (
     WorkerLifecycleStepResult,
 )
 
-from container_worker_app.production import ProductionWorkerSettings
 from container_worker_app.runtime import (
     ContainerWorkerEventHandler,
     ContainerWorkerEventSource,
     ContainerWorkerRuntime,
     ContainerWorkerServices,
 )
+from container_worker_app.settings import WorkerSettings
 
 from .container_service_http import (
     ContainerServiceHttpServer,
@@ -52,13 +50,18 @@ MAX_WORKER_KEEPALIVE_INTERVAL_SECONDS = DEFAULT_WORKER_KEEPALIVE_TTL_SECONDS / 3
 
 
 class ContainerWorkerArguments(argparse.Namespace):
+    """What this invocation is, not how the worker is configured.
+
+    Capacity, runtimes, paths, and monitoring come from the worker configuration
+    file the launcher writes, so they are deliberately absent here: a second way
+    to set them is a second thing to reconcile when a worker misbehaves.
+    """
+
     worker_id: str | None = None
     pool_name: str | None = None
     machine_id: str | None = None
     pod_address: str | None = None
     container_service_port: int | None = None
-    runtime: str | None = None
-    pool_mode: str | None = None
     worker_repository_url: str | None = None
     worker_token: str | None = None
     worker_repository_timeout_seconds: float | None = None
@@ -66,29 +69,17 @@ class ContainerWorkerArguments(argparse.Namespace):
     keepalive_interval_seconds: float = DEFAULT_WORKER_KEEPALIVE_INTERVAL_SECONDS
     heartbeat_file: Path = heartbeat_path(CONTAINER_WORKER_PROCESS_NAME)
     worker_spindown_seconds: float | None = None
-    metrics_interval_seconds: float | None = None
-    metrics_enabled: bool | None = None
     container_cost_hook_endpoint: str | None = None
     container_cost_hook_token: str | None = None
     container_cost_hook_timeout_seconds: float | None = None
     gpu_devices: str | None = None
     nvidia_cdi_enabled: bool | None = None
     once: bool = False
-    persistent: bool | None = None
-    agent_worker: bool | None = None
-    agent_bridge_network: bool | None = None
     network_prefix: str | None = None
-    route_transport: str | None = None
     route_local_target_host: str | None = None
-    bundle_root: Path | None = None
-    image_cache_path: str | None = None
-    image_mount_root: str | None = None
     image_archive_extension: str | None = None
-    cache_root: Path | None = None
-    checkpoint_root: str | None = None
     checkpoint_bucket: str | None = None
     data_storage_bucket: str | None = None
-    workspace_storage_mode: str | None = None
     workspace_storage_base_mount_path: str | None = None
     workspace_storage_mountpoint_binary: str | None = None
 
@@ -180,8 +171,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--machine-id")
     parser.add_argument("--pod-address")
     parser.add_argument("--container-service-port", type=int)
-    parser.add_argument("--runtime", choices=[item.value for item in OciRuntimeName])
-    parser.add_argument("--pool-mode", choices=[item.value for item in WorkerPoolMode])
     parser.add_argument("--worker-repository-url")
     parser.add_argument("--worker-token")
     parser.add_argument("--worker-repository-timeout-seconds", type=float)
@@ -198,9 +187,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="worker lifecycle progress heartbeat file",
     )
     parser.add_argument("--worker-spindown-seconds", type=float)
-    parser.add_argument("--metrics-interval-seconds", type=float)
-    parser.add_argument("--metrics-enabled", action="store_true", default=None)
-    parser.add_argument("--no-metrics", action="store_false", dest="metrics_enabled")
     parser.add_argument("--container-cost-hook-endpoint")
     parser.add_argument("--container-cost-hook-token")
     parser.add_argument("--container-cost-hook-timeout-seconds", type=float)
@@ -213,24 +199,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--no-nvidia-cdi", action="store_false", dest="nvidia_cdi_enabled")
     parser.add_argument("--once", action="store_true")
-    parser.add_argument("--persistent", action="store_true", default=None)
-    parser.add_argument("--agent-worker", action="store_true", default=None)
-    parser.add_argument("--no-agent-worker", action="store_false", dest="agent_worker")
-    parser.add_argument("--agent-bridge-network", action="store_true", default=None)
-    parser.add_argument(
-        "--no-agent-bridge-network",
-        action="store_false",
-        dest="agent_bridge_network",
-    )
     parser.add_argument("--network-prefix")
-    parser.add_argument("--route-transport")
     parser.add_argument("--route-target", dest="route_local_target_host")
-    parser.add_argument("--bundle-root", type=Path)
-    parser.add_argument("--image-cache-path")
-    parser.add_argument("--image-mount-root")
     parser.add_argument("--image-archive-extension")
-    parser.add_argument("--cache-root", type=Path)
-    parser.add_argument("--checkpoint-root")
     parser.add_argument("--checkpoint-bucket")
     parser.add_argument("--data-storage-bucket")
     parser.add_argument("--workspace-storage-base-mount-path")
@@ -240,7 +211,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def run_container_worker(
     *,
-    settings: ProductionWorkerSettings,
+    settings: WorkerSettings,
     once: bool = False,
     interval_seconds: float = 0.1,
     keepalive_interval_seconds: float = DEFAULT_WORKER_KEEPALIVE_INTERVAL_SECONDS,
@@ -350,7 +321,7 @@ def run_container_worker(
                         if result.processed:
                             last_request_at = now
                         spindown = worker_services.lifecycle.spindown_plan(
-                            persistent=resolved_settings.resolved_persistent,
+                            persistent=resolved_settings.configuration.execution.persistent,
                             seconds_since_last_request=now - last_request_at,
                             spindown_seconds=resolved_settings.worker_spindown_seconds,
                         )
@@ -379,7 +350,9 @@ def run_container_worker(
                 # A worker that never became available holds no work and no
                 # capacity worth keeping. Leaving its record behind offers the
                 # scheduler a candidate that will never accept a container.
-                remove_worker=(registration_failed or not resolved_settings.resolved_persistent),
+                remove_worker=(
+                    registration_failed or not resolved_settings.configuration.execution.persistent
+                ),
                 stop_reason=(
                     StopContainerReason.Admin if shutdown_signal else StopContainerReason.Unknown
                 ),
@@ -611,113 +584,77 @@ def _parse_arguments(argv: list[str] | None = None) -> ContainerWorkerArguments:
     return arguments
 
 
-def _settings_from_args(args: ContainerWorkerArguments) -> ProductionWorkerSettings:
-    base = ProductionWorkerSettings()
-    return ProductionWorkerSettings(
-        configuration=base.configuration,
-        worker_id=_override(args.worker_id, base.worker_id),
-        pool_name=_override(args.pool_name, base.pool_name),
-        machine_id=_override(args.machine_id, base.machine_id),
-        pod_address=_override(args.pod_address, base.pod_address),
+def _settings_from_args(args: ContainerWorkerArguments) -> WorkerSettings:
+    loaded = WorkerSettings()
+    return WorkerSettings(
+        worker_id=_override(args.worker_id, loaded.worker_id),
+        pool_name=_override(args.pool_name, loaded.pool_name),
+        machine_id=_override(args.machine_id, loaded.machine_id),
+        pod_address=_override(args.pod_address, loaded.pod_address),
         container_service_port=_override(
             args.container_service_port,
-            base.container_service_port,
-        ),
-        runtime=(OciRuntimeName(args.runtime) if args.runtime is not None else base.runtime),
-        pool_mode=(
-            WorkerPoolMode(args.pool_mode) if args.pool_mode is not None else base.pool_mode
+            loaded.container_service_port,
         ),
         worker_repository_url=_override(
             args.worker_repository_url,
-            base.worker_repository_url,
+            loaded.worker_repository_url,
         ),
-        worker_token=_override(args.worker_token, base.worker_token),
+        worker_token=_override(args.worker_token, loaded.worker_token),
         worker_repository_timeout_seconds=_override(
             args.worker_repository_timeout_seconds,
-            base.worker_repository_timeout_seconds,
+            loaded.worker_repository_timeout_seconds,
         ),
         worker_spindown_seconds=_override(
             args.worker_spindown_seconds,
-            base.worker_spindown_seconds,
-        ),
-        metrics_interval_seconds=(
-            args.metrics_interval_seconds
-            if args.metrics_interval_seconds is not None
-            else base.metrics_interval_seconds
-        ),
-        metrics_enabled=(
-            args.metrics_enabled if args.metrics_enabled is not None else base.metrics_enabled
+            loaded.worker_spindown_seconds,
         ),
         container_cost_hook_endpoint=_override(
             args.container_cost_hook_endpoint,
-            base.container_cost_hook_endpoint,
+            loaded.container_cost_hook_endpoint,
         ),
         container_cost_hook_token=_override(
             args.container_cost_hook_token,
-            base.container_cost_hook_token,
+            loaded.container_cost_hook_token,
         ),
         container_cost_hook_timeout_seconds=_override(
             args.container_cost_hook_timeout_seconds,
-            base.container_cost_hook_timeout_seconds,
+            loaded.container_cost_hook_timeout_seconds,
         ),
-        gpu_devices=_override(args.gpu_devices, base.gpu_devices),
-        nvidia_cdi_enabled=_override(
-            args.nvidia_cdi_enabled,
-            base.nvidia_cdi_enabled,
-        ),
-        persistent=args.persistent if args.persistent is not None else base.persistent,
-        agent_worker=args.agent_worker if args.agent_worker is not None else base.agent_worker,
-        agent_bridge_network=(
-            args.agent_bridge_network
-            if args.agent_bridge_network is not None
-            else base.agent_bridge_network
-        ),
-        network_prefix=(
-            args.network_prefix if args.network_prefix is not None else base.network_prefix
-        ),
-        route_transport=(
-            BackendRouteTransport(args.route_transport)
-            if args.route_transport is not None
-            else base.route_transport
-        ),
+        gpu_devices=_override(args.gpu_devices, loaded.gpu_devices),
+        nvidia_cdi_enabled=_override(args.nvidia_cdi_enabled, loaded.nvidia_cdi_enabled),
+        network_prefix=_override(args.network_prefix, loaded.network_prefix),
         route_local_target_host=_override(
             args.route_local_target_host,
-            base.route_local_target_host,
-        ),
-        bundle_root=args.bundle_root if args.bundle_root is not None else base.bundle_root,
-        image_cache_path=(
-            args.image_cache_path if args.image_cache_path is not None else base.image_cache_path
-        ),
-        image_mount_root=(
-            args.image_mount_root if args.image_mount_root is not None else base.image_mount_root
+            loaded.route_local_target_host,
         ),
         image_archive_extension=_override(
             args.image_archive_extension,
-            base.image_archive_extension,
+            loaded.image_archive_extension,
         ),
-        cache_root=args.cache_root if args.cache_root is not None else base.cache_root,
-        checkpoint_root=(
-            args.checkpoint_root if args.checkpoint_root is not None else base.checkpoint_root
-        ),
-        checkpoint_bucket=_override(args.checkpoint_bucket, base.checkpoint_bucket),
-        data_storage_bucket=_override(args.data_storage_bucket, base.data_storage_bucket),
+        checkpoint_bucket=_override(args.checkpoint_bucket, loaded.checkpoint_bucket),
+        data_storage_bucket=_override(args.data_storage_bucket, loaded.data_storage_bucket),
         workspace_storage_base_mount_path=_override(
             args.workspace_storage_base_mount_path,
-            base.workspace_storage_base_mount_path,
+            loaded.workspace_storage_base_mount_path,
         ),
         workspace_storage_mountpoint_binary=_override(
             args.workspace_storage_mountpoint_binary,
-            base.workspace_storage_mountpoint_binary,
+            loaded.workspace_storage_mountpoint_binary,
         ),
     )
 
 
-def _override[T](value: T | None, default: T) -> T:
-    return default if value is None else value
+def _override[T](value: T | None, loaded: T) -> T:
+    """An argument this invocation passed, or what the settings sources produced.
+
+    Only the argument parser can say "absent"; every other layering already
+    happened in the settings sources.
+    """
+    return loaded if value is None else value
 
 
 def _start_container_service(
-    settings: ProductionWorkerSettings,
+    settings: WorkerSettings,
     services: ContainerWorkerServices,
 ) -> ContainerServiceHttpServer | None:
     if settings.container_service_port <= 0:

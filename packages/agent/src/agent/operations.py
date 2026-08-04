@@ -1456,7 +1456,6 @@ def build_agent_worker_config(
         network=WorkerNetworkConfiguration(
             route_transport=_agent_worker_route_transport(bootstrap.transport),
             agent_bridge_network=bool(slot.network_prefix),
-            network_prefix=slot.network_prefix,
         ),
         paths=WorkerPathConfiguration(
             bundle_root=Path(AGENT_CONTAINER_TMP_PATH) / "bundles",
@@ -1522,6 +1521,7 @@ def plan_worker_container(
         "CACHE_LOCALITY": slot.pool_name,
         "CACHE_NODE": slot.machine_id,
         "WORKER_SOURCE_CACHE_STORAGE_ID": f"machine:{slot.machine_id}",
+        "WORKER_NETWORK_PREFIX": slot.network_prefix,
         "WORKER_ROUTE_TARGET": target_host,
         WORKER_REPOSITORY_URL_ENV: normalize_gateway_url(worker_repository_url),
     }

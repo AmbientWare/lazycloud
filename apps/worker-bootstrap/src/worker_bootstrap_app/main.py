@@ -6,10 +6,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from container_worker_app.production import (
-    ProductionWorkerSettings,
-    planned_scheduler_worker_record_from_settings,
-)
+from container_worker_app.composition import planned_scheduler_worker_record_from_settings
+from container_worker_app.settings import WorkerSettings
 from coordination.redis_client import RedisClient
 from identity.auth import AuthError, AuthService, IdentityDatabaseContext
 from identity.credential_files import CredentialFilePublication
@@ -19,24 +17,21 @@ from scheduler.state import (
 )
 from shared.app_identity import WORKER_BOOTSTRAP_PROCESS_NAME
 from shared.identity import TokenKind
-from worker.events import WorkerPoolMode
-from worker.runtime_config import OciRuntimeName
 
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
 
 
 class WorkerBootstrapArguments(argparse.Namespace):
+    """Which worker to register, not what capacity it has.
+
+    Capacity, runtimes, and pool mode come from the worker configuration file
+    this machine already runs its worker from, so the record registered here
+    cannot disagree with the worker that later claims it.
+    """
+
     worker_id: str | None
     pool_name: str | None
     machine_id: str | None
-    runtime: str | None
-    pool_mode: str | None
-    cpu_millicores: int | None
-    memory_mib: int | None
-    gpu_type: str | None
-    gpu_count: int | None
-    requires_pool_selector: bool | None
-    preemptible: bool | None
     ttl_seconds: int
 
 
@@ -69,14 +64,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--worker-id")
     parser.add_argument("--pool", dest="pool_name", default=None)
     parser.add_argument("--machine-id")
-    parser.add_argument("--runtime", choices=[item.value for item in OciRuntimeName])
-    parser.add_argument("--pool-mode", choices=[item.value for item in WorkerPoolMode])
-    parser.add_argument("--cpu-millicores", type=int)
-    parser.add_argument("--memory-mib", type=int)
-    parser.add_argument("--gpu-type")
-    parser.add_argument("--gpu-count", type=int)
-    parser.add_argument("--requires-pool-selector", action="store_true", default=None)
-    parser.add_argument("--preemptible", action="store_true", default=None)
     parser.add_argument("--ttl-seconds", type=int, default=DEFAULT_PENDING_WORKER_STATE_TTL_SECONDS)
     return parser
 
@@ -91,11 +78,11 @@ def build_worker_token_parser() -> argparse.ArgumentParser:
 
 def bootstrap_scheduler_worker(
     *,
-    settings: ProductionWorkerSettings | None = None,
+    settings: WorkerSettings | None = None,
     redis: RedisClient | None = None,
     ttl_seconds: int = DEFAULT_PENDING_WORKER_STATE_TTL_SECONDS,
 ) -> WorkerBootstrapResult:
-    config = settings or ProductionWorkerSettings()
+    config = settings or WorkerSettings()
     repository = RedisSchedulerWorkerRepository(redis or RedisClient.from_settings())
     worker = repository.add_worker(
         planned_scheduler_worker_record_from_settings(config),
@@ -188,31 +175,22 @@ def main(argv: list[str] | None = None) -> None:
     print(json.dumps(result.to_dict(), sort_keys=True))
 
 
-def _settings_from_args(args: WorkerBootstrapArguments) -> ProductionWorkerSettings:
-    base = ProductionWorkerSettings()
-    return base.model_copy(
-        update={
-            "worker_id": args.worker_id if args.worker_id is not None else base.worker_id,
-            "pool_name": args.pool_name if args.pool_name is not None else base.pool_name,
-            "machine_id": args.machine_id if args.machine_id is not None else base.machine_id,
-            "runtime": OciRuntimeName(args.runtime) if args.runtime is not None else base.runtime,
-            "pool_mode": (
-                WorkerPoolMode(args.pool_mode) if args.pool_mode is not None else base.pool_mode
-            ),
-            "cpu_millicores": (
-                args.cpu_millicores if args.cpu_millicores is not None else base.cpu_millicores
-            ),
-            "memory_mib": args.memory_mib if args.memory_mib is not None else base.memory_mib,
-            "gpu_type": args.gpu_type if args.gpu_type is not None else base.gpu_type,
-            "gpu_count": args.gpu_count if args.gpu_count is not None else base.gpu_count,
-            "requires_pool_selector": (
-                args.requires_pool_selector
-                if args.requires_pool_selector is not None
-                else base.requires_pool_selector
-            ),
-            "preemptible": (args.preemptible if args.preemptible is not None else base.preemptible),
-        }
+def _settings_from_args(args: WorkerBootstrapArguments) -> WorkerSettings:
+    loaded = WorkerSettings()
+    return WorkerSettings(
+        worker_id=_override(args.worker_id, loaded.worker_id),
+        pool_name=_override(args.pool_name, loaded.pool_name),
+        machine_id=_override(args.machine_id, loaded.machine_id),
     )
+
+
+def _override[T](value: T | None, loaded: T) -> T:
+    """An argument this invocation passed, or what the settings sources produced.
+
+    Only the argument parser can say "absent"; every other layering already
+    happened in the settings sources.
+    """
+    return loaded if value is None else value
 
 
 def _valid_worker_token(

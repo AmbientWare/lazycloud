@@ -225,9 +225,7 @@ def test_container_worker_process_deregisters_on_shutdown_signal(
     monkeypatch.setattr(container_worker.signal, "signal", capture_signal)
 
     result = container_worker.run_container_worker(
-        settings=container_worker.ProductionWorkerSettings.model_validate(
-            {"worker_id": "worker-1"}
-        ),
+        settings=container_worker.WorkerSettings.model_validate({"worker_id": "worker-1"}),
         services=services,
         interval_seconds=0,
         keepalive_interval_seconds=15,
@@ -272,9 +270,7 @@ def test_container_worker_process_deregisters_when_startup_after_registration_fa
 
     with pytest.raises(RuntimeError, match="event loop unavailable"):
         container_worker.run_container_worker(
-            settings=container_worker.ProductionWorkerSettings.model_validate(
-                {"worker_id": "worker-1"}
-            ),
+            settings=container_worker.WorkerSettings.model_validate({"worker_id": "worker-1"}),
             services=services,
         )
 
@@ -305,11 +301,11 @@ def test_container_worker_process_spins_down_idle_nonpersistent_worker(
 
     result = container_worker.run_container_worker(
         services=services,
-        settings=container_worker.ProductionWorkerSettings.model_validate(
+        settings=container_worker.WorkerSettings.model_validate(
             {
                 "worker_id": "worker-1",
-                "persistent": False,
                 "worker_spindown_seconds": 300,
+                "configuration": {"execution": {"persistent": False}},
             }
         ),
     )

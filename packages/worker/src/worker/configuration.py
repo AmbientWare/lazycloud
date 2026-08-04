@@ -73,7 +73,6 @@ class WorkerExecutionConfiguration(ContractModel):
 class WorkerNetworkConfiguration(ContractModel):
     route_transport: BackendRouteTransport = BackendRouteTransport.TsnetRestricted
     agent_bridge_network: bool = False
-    network_prefix: str = ""
 
 
 class WorkerPathConfiguration(ContractModel):

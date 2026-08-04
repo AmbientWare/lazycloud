@@ -15,9 +15,10 @@ from container_worker_app.main import (
     _validate_keepalive_interval,
     run_container_worker,
 )
-from container_worker_app.production import ProductionWorkerSettings
+from container_worker_app.settings import WorkerSettings
 from shared.container_requests import StopContainerReason
 from shared.scheduling import WorkerUnavailableReason
+from worker.configuration import WorkerConfiguration, WorkerExecutionConfiguration
 from worker.repository_client import WorkerRepositoryClientError
 from worker.status import WorkerSpindownPlan
 from worker.worker_lifecycle import (
@@ -45,7 +46,7 @@ def test_worker_stops_when_repository_error_masks_signal_interrupt() -> None:
     services = _Services(processor=processor, lifecycle=lifecycle)
 
     result = run_container_worker(
-        settings=ProductionWorkerSettings(container_service_port=0),
+        settings=WorkerSettings(container_service_port=0),
         interval_seconds=60,
         services=services,
     )
@@ -66,7 +67,7 @@ def test_worker_renews_lease_while_pickup_is_blocked(tmp_path: Path) -> None:
 
     with pytest.raises(KeyboardInterrupt):
         run_container_worker(
-            settings=ProductionWorkerSettings(container_service_port=0),
+            settings=WorkerSettings(container_service_port=0),
             interval_seconds=0,
             keepalive_interval_seconds=0.01,
             heartbeat_file=heartbeat_file,
@@ -93,7 +94,7 @@ def test_worker_does_not_process_when_registration_fails() -> None:
 
     with pytest.raises(ContainerWorkerRegistrationError, match="cache activation failed"):
         run_container_worker(
-            settings=ProductionWorkerSettings(container_service_port=0),
+            settings=WorkerSettings(container_service_port=0),
             once=True,
             services=_Services(processor=processor, lifecycle=lifecycle),
         )
@@ -125,7 +126,12 @@ def test_a_worker_that_never_registered_leaves_no_record_behind() -> None:
 
     with pytest.raises(ContainerWorkerRegistrationError, match="network readiness failed"):
         run_container_worker(
-            settings=ProductionWorkerSettings(container_service_port=0, persistent=True),
+            settings=WorkerSettings(
+                container_service_port=0,
+                configuration=WorkerConfiguration(
+                    execution=WorkerExecutionConfiguration(persistent=True)
+                ),
+            ),
             once=True,
             services=_Services(processor=processor, lifecycle=lifecycle),
         )
