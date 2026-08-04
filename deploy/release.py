@@ -391,10 +391,19 @@ def _reach_settled(reading: ReachReading, *, since: datetime) -> bool:
     Only being rewritten by a post-restart reconcile can. A row that comes back
     from one still missing a version is a finding to report, not a reason to keep
     reading the same answer until a deadline.
+
+    A pool holding no instances settles immediately. Its own reading is only
+    ever used to supply the version its nodes are compared against, and a pool
+    at zero capacity is not reconciled at all -- waiting for a rewrite that the
+    control plane has no reason to perform would spend the whole budget and then
+    report a pool with nothing to check as unreachable.
     """
     return all(
-        pool.observed_at >= since
-        and all(instance.observed_at >= since for instance in pool.instances)
+        (not pool.instances)
+        or (
+            pool.observed_at >= since
+            and all(instance.observed_at >= since for instance in pool.instances)
+        )
         for pool in reading.pools
     )
 
@@ -402,9 +411,13 @@ def _reach_settled(reading: ReachReading, *, since: datetime) -> bool:
 def _reach_faults(reading: ReachReading, *, since: datetime) -> list[str]:
     faults: list[str] = []
     for pool in reading.pools:
+        if not pool.instances:
+            # Nothing booted from this pool, so there is nothing this release
+            # could have failed to reach.
+            continue
         if pool.observed_at < since:
             faults.append(f"{pool.name} has not been reconciled since the restart")
-        elif not pool.expected_template_version and pool.instances:
+        elif not pool.expected_template_version:
             faults.append(f"{pool.name} has no launch-template version on record")
         for instance in pool.instances:
             node = f"{pool.name}/{instance.instance_id}"
