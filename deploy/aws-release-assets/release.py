@@ -658,39 +658,85 @@ def _publish_object(
     elif not _is_missing_s3_object(existing):
         raise RuntimeError(f"could not inspect AWS release object: {_command_error(existing)}")
     else:
-        uploaded = subprocess.run(
-            [
-                aws_cli,
-                "s3api",
-                "put-object",
-                "--bucket",
-                bucket,
-                "--key",
-                release_object.object_key,
-                "--body",
-                str(source),
-                "--content-type",
-                release_object.content_type,
-                "--cache-control",
-                release_object.cache_control,
-                "--checksum-algorithm",
-                "SHA256",
-                "--checksum-sha256",
-                checksum,
-                "--if-none-match",
-                "*",
-                "--region",
-                region,
-                "--output",
-                "json",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
+        _put_object_with_retry(
+            source,
+            release_object,
+            bucket=bucket,
+            region=region,
+            aws_cli=aws_cli,
+            checksum=checksum,
         )
-        if uploaded.returncode != 0:
-            raise RuntimeError(f"could not publish AWS release object: {_command_error(uploaded)}")
     _verify_public_object(release_object)
+
+
+_UPLOAD_ATTEMPTS = 4
+_TRANSPORT_FAILURES = ("SSL validation failed", "Connection reset", "EndpointConnectionError")
+
+
+def _put_object_with_retry(
+    source: Path,
+    release_object: ReleaseObject,
+    *,
+    bucket: str,
+    region: str,
+    aws_cli: str,
+    checksum: str,
+) -> None:
+    """Upload one immutable object, retrying only a dropped connection.
+
+    A release object is a single PUT, and the agent executable is large enough
+    that the connection is dropped mid-body often enough to have failed two
+    separate publishes. Retrying is safe precisely because the write is
+    conditional: `--if-none-match *` fails if the object exists, so an attempt
+    that actually landed before the connection broke is reported as a
+    precondition failure rather than overwriting anything.
+
+    Only a transport failure is retried. An access denial, a checksum
+    rejection, or a genuine precondition failure means the next attempt would
+    fail the same way, so it is raised with the message AWS gave.
+    """
+    argv = [
+        aws_cli,
+        "s3api",
+        "put-object",
+        "--bucket",
+        bucket,
+        "--key",
+        release_object.object_key,
+        "--body",
+        str(source),
+        "--content-type",
+        release_object.content_type,
+        "--cache-control",
+        release_object.cache_control,
+        "--checksum-algorithm",
+        "SHA256",
+        "--checksum-sha256",
+        checksum,
+        "--if-none-match",
+        "*",
+        "--region",
+        region,
+        "--output",
+        "json",
+    ]
+    for attempt in range(1, _UPLOAD_ATTEMPTS + 1):
+        uploaded = subprocess.run(argv, check=False, capture_output=True, text=True)
+        if uploaded.returncode == 0:
+            return
+        detail = _command_error(uploaded)
+        if not any(failure in detail for failure in _TRANSPORT_FAILURES):
+            raise RuntimeError(f"could not publish AWS release object: {detail}")
+        if attempt == _UPLOAD_ATTEMPTS:
+            raise RuntimeError(
+                f"could not publish AWS release object after {_UPLOAD_ATTEMPTS} attempts, "
+                f"the connection dropped every time: {detail}"
+            )
+        print(
+            f"  upload attempt {attempt} of {_UPLOAD_ATTEMPTS} lost the connection, retrying: "
+            f"{release_object.object_key}",
+            flush=True,
+        )
 
 
 def _release_object_path(root: Path, release_object: ReleaseObject) -> Path:
