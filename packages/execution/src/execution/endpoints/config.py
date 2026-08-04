@@ -1,20 +1,21 @@
 from __future__ import annotations
 
 from foundation.resources import parse_memory_mib
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from shared.deployment_records import (
     DEFAULT_DISK,
     DEFAULT_MAX_PENDING_TASKS,
     resolve_http_wait_timeout_seconds,
 )
 from shared.lifecycle import LifecycleHooks
-from shared.mounts import MountAuthMode, validate_mount_auth
 from shared.tasks import RetryPolicy
 
 from execution.config import (
     ExecutionPythonVersion,
     ExecutionPythonVersionInput,
     ManagedPythonExecutable,
+    VolumeConfig,
+    VolumeMountInput,
     managed_python_executable,
 )
 
@@ -118,56 +119,6 @@ class EndpointMetadataConfig(BaseModel):
     workers: int = Field(default=1, ge=1)
 
 
-class EndpointVolumeProviderConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    read_only: bool = False
-    bucket_name: str = ""
-    prefix: str = ""
-    auth_mode: MountAuthMode = MountAuthMode.Ambient
-    access_key: str = ""
-    secret_key: str = ""
-    endpoint_url: str = ""
-    region: str = ""
-    force_path_style: bool = False
-
-    @model_validator(mode="after")
-    def credentials_match_auth_mode(self) -> EndpointVolumeProviderConfig:
-        validate_mount_auth(self.auth_mode, self.access_key, self.secret_key)
-        return self
-
-    def mount_values(self, *, read_only: bool) -> dict[str, str | bool | MountAuthMode]:
-        return {
-            "read_only": read_only or self.read_only,
-            "bucket_name": self.bucket_name,
-            "prefix": self.prefix,
-            "auth_mode": self.auth_mode,
-            "access_key": self.access_key,
-            "secret_key": self.secret_key,
-            "endpoint_url": self.endpoint_url,
-            "region": self.region,
-            "force_path_style": self.force_path_style,
-        }
-
-
-class EndpointVolumeConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore", strict=True)
-
-    id: str = ""
-    name: str = ""
-    mount_path: str = ""
-    read_only: bool = False
-    config: EndpointVolumeProviderConfig | None = None
-
-    def mount_input(self) -> dict[str, JsonValue]:
-        provider = self.config or EndpointVolumeProviderConfig()
-        return {
-            "id": self.name or self.id,
-            "mount_path": self.mount_path,
-            "config": provider.mount_values(read_only=self.read_only),
-        }
-
-
 class EndpointStubConfig(BaseModel):
     model_config = ConfigDict(extra="ignore", strict=True)
 
@@ -177,7 +128,7 @@ class EndpointStubConfig(BaseModel):
     task_policy: EndpointTaskPolicy = Field(default_factory=EndpointTaskPolicy)
     env: dict[str, str] = Field(default_factory=dict)
     secrets: list[str] = Field(default_factory=list)
-    volumes: list[EndpointVolumeConfig] = Field(default_factory=list)
+    volumes: list[VolumeConfig] = Field(default_factory=list)
     retry_policy: RetryPolicy | None = None
     lifecycle_hooks: LifecycleHooks = Field(default_factory=LifecycleHooks)
     max_pending_tasks: int | None = Field(default=None, ge=0)
@@ -221,7 +172,7 @@ class EndpointStubConfig(BaseModel):
         )
 
     @property
-    def volume_inputs(self) -> list[dict[str, JsonValue]]:
+    def volume_inputs(self) -> list[VolumeMountInput]:
         return [volume.mount_input() for volume in self.volumes]
 
 

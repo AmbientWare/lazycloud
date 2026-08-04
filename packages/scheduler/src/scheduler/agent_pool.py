@@ -8,7 +8,7 @@ from typing import Protocol
 from compute.agent_control import DEFAULT_PRIVATE_EXECUTOR, agent_machine_worker_id
 from compute.projection import PoolConfig, normalize_pool_config
 from compute.state import ComputeAgentTokenState, ComputePoolState
-from compute.telemetry import AgentTelemetryState, agent_machine_connected
+from compute.telemetry import agent_machine_connected, agent_telemetry_state
 from pydantic import Field
 from shared.capacity import CAPACITY_OWNER_ID_PATTERN
 from shared.compute_fleet import Pool
@@ -277,7 +277,7 @@ def agent_machine_schedulable(
         machine.workspace_id == config.workspace_id
         and machine.pool_name == config.pool_name
         and machine.executor == expected_executor
-        and agent_machine_connected(_agent_telemetry_state(machine), now=now)
+        and agent_machine_connected(agent_telemetry_state(machine), now=now)
     )
 
 
@@ -287,29 +287,6 @@ def _machine_gpu_types(machine: ComputeAgentTokenState, config: AgentPoolConfig)
         values.append(config.gpu_type)
     values.extend(gpu for gpu in machine.gpus if gpu)
     return list(dict.fromkeys(values))
-
-
-def _agent_telemetry_state(state: ComputeAgentTokenState) -> AgentTelemetryState:
-    return AgentTelemetryState(
-        workspace_id=state.workspace_id,
-        pool_name=state.pool_name,
-        machine_id=state.machine_id,
-        executor=state.executor,
-        os=state.os,
-        arch=state.arch,
-        hostname=state.hostname,
-        cpu_count=state.cpu_count,
-        cpu_millicores=state.cpu_millicores,
-        memory_mb=state.memory_mb,
-        gpus=state.gpus,
-        gpu_ids=state.gpu_ids,
-        gpu_count=state.gpu_count,
-        schedulable=state.schedulable,
-        preflight_error=any(not item.ok for item in state.preflight),
-        last_join_at=state.last_join_at,
-        last_heartbeat_at=state.last_heartbeat_at,
-        last_disconnect_at=state.last_disconnect_at,
-    )
 
 
 def _pool_config_from_metadata(state: ComputePoolState) -> PoolConfig:

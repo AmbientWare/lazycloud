@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 from foundation.resources import parse_memory_mib
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from shared.deployment_records import DEFAULT_DISK
 from shared.lifecycle import LifecycleHooks
-from shared.mounts import MountAuthMode, validate_mount_auth
 from shared.tasks import RetryPolicy
 
 from execution.config import (
     ExecutionPythonVersion,
     ExecutionPythonVersionInput,
     ManagedPythonExecutable,
+    VolumeConfig,
+    VolumeMountInput,
     managed_python_executable,
 )
 
@@ -94,54 +95,6 @@ class FunctionRuntimeConfig(BaseModel):
         return self.requires_gpu or bool(self.requested_gpu_type) or self.gpu_count > 0
 
 
-class FunctionVolumeProviderConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    read_only: bool = False
-    bucket_name: str = ""
-    prefix: str = ""
-    auth_mode: MountAuthMode = MountAuthMode.Ambient
-    access_key: str = ""
-    secret_key: str = ""
-    endpoint_url: str = ""
-    region: str = ""
-    force_path_style: bool = False
-
-    @model_validator(mode="after")
-    def credentials_match_auth_mode(self) -> FunctionVolumeProviderConfig:
-        validate_mount_auth(self.auth_mode, self.access_key, self.secret_key)
-        return self
-
-    def for_mount(self, *, read_only: bool) -> FunctionVolumeProviderConfig:
-        return self.model_copy(update={"read_only": read_only or self.read_only})
-
-
-class FunctionVolumeMountInput(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    id: str
-    mount_path: str
-    config: FunctionVolumeProviderConfig
-
-
-class FunctionVolumeConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore", strict=True)
-
-    id: str = ""
-    name: str = ""
-    mount_path: str = ""
-    read_only: bool = False
-    config: FunctionVolumeProviderConfig | None = None
-
-    def mount_input(self) -> FunctionVolumeMountInput:
-        provider = self.config or FunctionVolumeProviderConfig()
-        return FunctionVolumeMountInput(
-            id=self.name or self.id,
-            mount_path=self.mount_path,
-            config=provider.for_mount(read_only=self.read_only),
-        )
-
-
 class FunctionStubConfig(BaseModel):
     model_config = ConfigDict(extra="ignore", strict=True)
 
@@ -150,7 +103,7 @@ class FunctionStubConfig(BaseModel):
     runtime: FunctionRuntimeConfig = Field(default_factory=FunctionRuntimeConfig)
     env: dict[str, str] = Field(default_factory=dict)
     secrets: list[str] = Field(default_factory=list)
-    volumes: list[FunctionVolumeConfig] = Field(default_factory=list)
+    volumes: list[VolumeConfig] = Field(default_factory=list)
     retry_policy: RetryPolicy | None = None
     lifecycle_hooks: LifecycleHooks = Field(default_factory=LifecycleHooks)
 
@@ -167,7 +120,7 @@ class FunctionStubConfig(BaseModel):
         return [f"{name}={value}" for name, value in self.env.items()]
 
     @property
-    def volume_inputs(self) -> list[FunctionVolumeMountInput]:
+    def volume_inputs(self) -> list[VolumeMountInput]:
         return [volume.mount_input() for volume in self.volumes]
 
 

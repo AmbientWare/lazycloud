@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 from foundation.resources import parse_memory_mib
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from shared.deployment_records import DEFAULT_DISK
-from shared.mounts import MountAuthMode, validate_mount_auth
+
+from execution.config import (
+    VolumeConfig,
+    VolumeMountInput,
+)
 
 
 class PodImageConfig(BaseModel):
@@ -88,54 +92,6 @@ class PodRuntimeConfig(BaseModel):
         return self.requires_gpu or bool(self.requested_gpu_type) or self.gpu_count > 0
 
 
-class PodVolumeProviderConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    read_only: bool = False
-    bucket_name: str = ""
-    prefix: str = ""
-    auth_mode: MountAuthMode = MountAuthMode.Ambient
-    access_key: str = ""
-    secret_key: str = ""
-    endpoint_url: str = ""
-    region: str = ""
-    force_path_style: bool = False
-
-    @model_validator(mode="after")
-    def credentials_match_auth_mode(self) -> PodVolumeProviderConfig:
-        validate_mount_auth(self.auth_mode, self.access_key, self.secret_key)
-        return self
-
-    def for_mount(self, *, read_only: bool) -> PodVolumeProviderConfig:
-        return self.model_copy(update={"read_only": read_only or self.read_only})
-
-
-class PodVolumeMountInput(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    id: str
-    mount_path: str
-    config: PodVolumeProviderConfig
-
-
-class PodVolumeConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore", strict=True)
-
-    id: str = ""
-    name: str = ""
-    mount_path: str = ""
-    read_only: bool = False
-    config: PodVolumeProviderConfig | None = None
-
-    def mount_input(self) -> PodVolumeMountInput:
-        provider = self.config or PodVolumeProviderConfig()
-        return PodVolumeMountInput(
-            id=self.name or self.id,
-            mount_path=self.mount_path,
-            config=provider.for_mount(read_only=self.read_only),
-        )
-
-
 class PodStubConfig(BaseModel):
     model_config = ConfigDict(extra="ignore", strict=True)
 
@@ -146,7 +102,7 @@ class PodStubConfig(BaseModel):
     secrets: list[str] = Field(default_factory=list)
     command: list[str] = Field(default_factory=list)
     ports: dict[str, int] = Field(default_factory=dict)
-    volumes: list[PodVolumeConfig] = Field(default_factory=list)
+    volumes: list[VolumeConfig] = Field(default_factory=list)
 
     @property
     def effective_image_id(self) -> str:
@@ -165,7 +121,7 @@ class PodStubConfig(BaseModel):
         return list(self.ports.values())
 
     @property
-    def volume_inputs(self) -> list[PodVolumeMountInput]:
+    def volume_inputs(self) -> list[VolumeMountInput]:
         return [volume.mount_input() for volume in self.volumes]
 
 

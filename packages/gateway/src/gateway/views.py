@@ -13,7 +13,11 @@ from compute.state import (
     ComputeAgentWorkerSlotState,
     ComputePoolState,
 )
-from compute.telemetry import AgentTelemetryState, agent_machine_connected, agent_machine_last_seen
+from compute.telemetry import (
+    agent_machine_connected,
+    agent_machine_last_seen,
+    agent_telemetry_state,
+)
 from control.service import ControlPlaneService, StubRecord
 from pydantic import JsonValue, TypeAdapter
 from shared.compute_enrollment import (
@@ -298,29 +302,6 @@ def agent_worker_record(worker: SchedulerWorkerRecord) -> WorkerRecord:
         total_memory=worker.total_memory_mib,
         gpu=worker.gpu_type,
         total_gpu_count=worker.total_gpu_count,
-    )
-
-
-def agent_telemetry_state(state: ComputeAgentTokenState) -> AgentTelemetryState:
-    return AgentTelemetryState(
-        workspace_id=state.workspace_id,
-        pool_name=state.pool_name,
-        machine_id=state.machine_id,
-        executor=state.executor,
-        os=state.os,
-        arch=state.arch,
-        hostname=state.hostname,
-        cpu_count=state.cpu_count,
-        cpu_millicores=state.cpu_millicores,
-        memory_mb=state.memory_mb,
-        gpus=state.gpus,
-        gpu_ids=state.gpu_ids,
-        gpu_count=state.gpu_count,
-        schedulable=state.schedulable,
-        preflight_error=any(not item.ok for item in state.preflight),
-        last_join_at=state.last_join_at,
-        last_heartbeat_at=state.last_heartbeat_at,
-        last_disconnect_at=state.last_disconnect_at,
     )
 
 

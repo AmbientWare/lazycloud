@@ -3,9 +3,10 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Annotated, Literal
 
-from pydantic import BeforeValidator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, model_validator
 from shared.enums import StringEnum
 from shared.image_building.authoring import PythonVersion
+from shared.mounts import MountAuthMode, validate_mount_auth
 
 type ManagedPythonExecutable = Literal[
     "python3.10",
@@ -75,3 +76,51 @@ def env_sequence_mapping(values: Iterable[str]) -> dict[str, str]:
         if separator:
             env[key] = item
     return env
+
+
+class VolumeProviderConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    read_only: bool = False
+    bucket_name: str = ""
+    prefix: str = ""
+    auth_mode: MountAuthMode = MountAuthMode.Ambient
+    access_key: str = ""
+    secret_key: str = ""
+    endpoint_url: str = ""
+    region: str = ""
+    force_path_style: bool = False
+
+    @model_validator(mode="after")
+    def credentials_match_auth_mode(self) -> VolumeProviderConfig:
+        validate_mount_auth(self.auth_mode, self.access_key, self.secret_key)
+        return self
+
+    def for_mount(self, *, read_only: bool) -> VolumeProviderConfig:
+        return self.model_copy(update={"read_only": read_only or self.read_only})
+
+
+class VolumeMountInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    id: str
+    mount_path: str
+    config: VolumeProviderConfig
+
+
+class VolumeConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    id: str = ""
+    name: str = ""
+    mount_path: str = ""
+    read_only: bool = False
+    config: VolumeProviderConfig | None = None
+
+    def mount_input(self) -> VolumeMountInput:
+        provider = self.config or VolumeProviderConfig()
+        return VolumeMountInput(
+            id=self.name or self.id,
+            mount_path=self.mount_path,
+            config=provider.for_mount(read_only=self.read_only),
+        )
