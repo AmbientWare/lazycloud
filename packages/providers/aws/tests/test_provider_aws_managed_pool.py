@@ -596,9 +596,9 @@ def test_managed_pool_artifact_change_versions_template_and_updates_group() -> N
     upgraded = provisioner.ensure(upgraded_spec, created.resource_ids)
     repeated = provisioner.ensure(upgraded_spec, upgraded.resource_ids)
 
-    assert created.resource_ids.launch_template_version == 1
-    assert upgraded.resource_ids.launch_template_version == 2
-    assert repeated.resource_ids.launch_template_version == 2
+    assert created.resource_ids.launch_template_latest_version == 1
+    assert upgraded.resource_ids.launch_template_latest_version == 2
+    assert repeated.resource_ids.launch_template_latest_version == 2
     assert sorted(ec2.launch_versions) == [1, 2]
     assert ec2.default_launch_version == 2
     assert autoscaling.launch_template == {

@@ -180,6 +180,7 @@ def list_workspace_compute_instances(
                 bootstrap_failure_detail=item.bootstrap_failure_detail,
                 bootstrap_observed_at=item.bootstrap_observed_at,
                 launch_attempt=item.record.launch_attempt,
+                booted_template_version=item.booted_template_version,
                 created_at=item.record.created_at,
             )
             for item in service.instances(workspace=workspace_id)

@@ -130,6 +130,14 @@ class WorkspaceComputeInstanceResponse(HttpModel):
     bootstrap_failure_detail: str = ""
     bootstrap_observed_at: datetime
     launch_attempt: int = Field(default=1, ge=1)
+    booted_template_version: str = ""
+    """Provider launch-configuration version the node booted with.
+
+    Empty when the provider reports none. A pool rolls its configuration
+    forward without disturbing running nodes, so nodes of the same pool
+    legitimately differ here, and this is what says which release each one
+    is on.
+    """
     created_at: datetime
 
 

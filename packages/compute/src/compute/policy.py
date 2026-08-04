@@ -48,6 +48,7 @@ from compute.agent_control import (
 )
 from compute.context import ComputeContext
 from compute.offers import ReservationStatus
+from compute.provider_machines import _provider_booted_template_version
 
 
 class _DeploymentPoolMetadata(ContractModel):
@@ -81,6 +82,7 @@ class ComputeInstanceView:
     bootstrap_failure_reason: MachineBootstrapFailureReason | None
     bootstrap_failure_detail: str
     bootstrap_observed_at: datetime
+    booted_template_version: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -585,6 +587,7 @@ def _compute_instance_view(
         bootstrap_failure_reason=failure_reason,
         bootstrap_failure_detail=record.bootstrap_failure_detail,
         bootstrap_observed_at=observed_at,
+        booted_template_version=_provider_booted_template_version(record),
     )
 
 

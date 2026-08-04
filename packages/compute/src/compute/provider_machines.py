@@ -148,6 +148,11 @@ def _provider_launch_state(record: ComputeProviderInstanceRecord) -> str:
     return str(_provider_instance_metadata(record).get("launch_state") or "")
 
 
+def _provider_booted_template_version(record: ComputeProviderInstanceRecord) -> str:
+    value = _provider_instance_metadata(record).get("booted_template_version")
+    return value if isinstance(value, str) else ""
+
+
 def _metadata_time(metadata: Mapping[str, JsonValue], key: str) -> datetime | None:
     value = metadata.get(key)
     if not isinstance(value, str) or not value:
@@ -571,6 +576,7 @@ class ProviderMachineReconciler:
                     "storage_mb": offer.storage_mb,
                     "availability_zone": instance.availability_zone,
                     "storage_volume_ids": list(instance.storage_volume_ids),
+                    "booted_template_version": instance.booted_template_version,
                 },
             }
             if existing is None:

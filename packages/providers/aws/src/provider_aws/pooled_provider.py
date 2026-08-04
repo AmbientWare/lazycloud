@@ -257,6 +257,7 @@ def _snapshot(
             ),
             availability_zone=instance.availability_zone,
             storage_volume_ids=volume_ids.get(instance.instance_id, ()),
+            booted_template_version=instance.booted_template_version,
         )
         for instance in snapshot.instances
     ]

@@ -154,14 +154,17 @@ class AwsManagedPoolPhase(StrEnum):
 
 class AwsManagedPoolResourceIds(AwsManagedPoolModel):
     launch_template_id: str | None = None
-    launch_template_version: int | None = None
+    # The newest version of the template, which is what the next ensure or scale
+    # pins the group to. Instances already running keep the version they booted
+    # from, so this never answers what a node is running.
+    launch_template_latest_version: int | None = None
     autoscaling_group_name: str | None = None
 
     @property
     def complete(self) -> bool:
         return (
             self.launch_template_id is not None
-            and self.launch_template_version is not None
+            and self.launch_template_latest_version is not None
             and self.autoscaling_group_name is not None
         )
 
@@ -171,6 +174,10 @@ class AwsManagedPoolInstance(AwsManagedPoolModel):
     lifecycle_state: str
     health_status: str
     availability_zone: str
+    # The template version the group launched this instance with, empty when the
+    # group reports none. Rolling the group forward leaves running instances on
+    # the version they booted with, so this and the group's reference diverge.
+    booted_template_version: str = ""
 
 
 class AwsManagedPoolSnapshot(AwsManagedPoolModel):
@@ -551,16 +558,17 @@ class _LaunchTemplateVersions(_Response):
     values: tuple[_LaunchTemplateVersion, ...] = Field(default=(), alias="LaunchTemplateVersions")
 
 
+class _GroupLaunchTemplate(_Response):
+    id: str = Field(alias="LaunchTemplateId")
+    version: str = Field(alias="Version")
+
+
 class _GroupInstance(_Response):
     instance_id: str = Field(alias="InstanceId")
     lifecycle_state: str = Field(default="", alias="LifecycleState")
     health_status: str = Field(default="", alias="HealthStatus")
     availability_zone: str = Field(default="", alias="AvailabilityZone")
-
-
-class _GroupLaunchTemplate(_Response):
-    id: str = Field(alias="LaunchTemplateId")
-    version: str = Field(alias="Version")
+    launch_template: _GroupLaunchTemplate | None = Field(default=None, alias="LaunchTemplate")
 
 
 class _Group(_Response):
@@ -613,7 +621,7 @@ class AwsManagedPoolProvisioner:
                 state.model_copy(
                     update={
                         "launch_template_id": launch_template_id,
-                        "launch_template_version": launch_template_version,
+                        "launch_template_latest_version": launch_template_version,
                     }
                 )
             )
@@ -662,7 +670,7 @@ class AwsManagedPoolProvisioner:
         group = self._describe_group(spec.autoscaling_group_name)
         return AwsManagedPoolResourceIds(
             launch_template_id=launch_template.id if launch_template is not None else None,
-            launch_template_version=(
+            launch_template_latest_version=(
                 launch_template.latest_version if launch_template is not None else None
             ),
             autoscaling_group_name=group.name if group is not None else None,
@@ -678,7 +686,7 @@ class AwsManagedPoolProvisioner:
             raise ValueError("invalid managed pool capacity")
         group = self._require_group(spec)
         resources = self.discover(spec)
-        if resources.launch_template_id is None or resources.launch_template_version is None:
+        if resources.launch_template_id is None or resources.launch_template_latest_version is None:
             raise AwsProviderControlError(
                 AwsProviderControlErrorCode.ResourceNotFound,
                 operation="scale managed pool",
@@ -694,7 +702,7 @@ class AwsManagedPoolProvisioner:
             VPCZoneIdentifier=",".join(spec.subnet_ids),
             LaunchTemplate={
                 "LaunchTemplateId": resources.launch_template_id,
-                "Version": str(resources.launch_template_version),
+                "Version": str(resources.launch_template_latest_version),
             },
         )
 
@@ -734,15 +742,7 @@ class AwsManagedPoolProvisioner:
                 resource_ids=state,
                 desired_nodes=0,
                 max_nodes=group.maximum,
-                instances=tuple(
-                    AwsManagedPoolInstance(
-                        instance_id=item.instance_id,
-                        lifecycle_state=item.lifecycle_state,
-                        health_status=item.health_status,
-                        availability_zone=item.availability_zone,
-                    )
-                    for item in group.instances
-                ),
+                instances=_instances(group),
             )
         if state.launch_template_id is not None:
             self._ignore_missing(
@@ -1292,19 +1292,26 @@ def _validate_group_tags(group: _Group, spec: AwsManagedPoolSpec) -> None:
         )
 
 
-def _snapshot(
-    group: _Group,
-    state: AwsManagedPoolResourceIds,
-) -> AwsManagedPoolSnapshot:
-    instances = tuple(
+def _instances(group: _Group) -> tuple[AwsManagedPoolInstance, ...]:
+    return tuple(
         AwsManagedPoolInstance(
             instance_id=item.instance_id,
             lifecycle_state=item.lifecycle_state,
             health_status=item.health_status,
             availability_zone=item.availability_zone,
+            booted_template_version=(
+                item.launch_template.version if item.launch_template is not None else ""
+            ),
         )
         for item in group.instances
     )
+
+
+def _snapshot(
+    group: _Group,
+    state: AwsManagedPoolResourceIds,
+) -> AwsManagedPoolSnapshot:
+    instances = _instances(group)
     ready_nodes = sum(
         instance.lifecycle_state == "InService" and instance.health_status == "Healthy"
         for instance in instances

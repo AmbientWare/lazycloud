@@ -102,6 +102,11 @@ class ProviderPoolInstance(ContractModel):
     address: str = ""
     availability_zone: str = ""
     storage_volume_ids: tuple[str, ...] = ()
+    # Version of the provider-side launch configuration this instance booted
+    # with, empty when the provider reports none. A pool rolls its configuration
+    # forward without disturbing running instances, so this is the only value
+    # that identifies the release a node is actually on.
+    booted_template_version: str = ""
 
 
 class ProviderPoolSnapshot(ContractModel):
