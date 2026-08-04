@@ -426,12 +426,18 @@ validate_input() {
   if [ "$ARCH_NAME" != "amd64" ] && [ "$ARCH_NAME" != "arm64" ]; then
     fail "unsupported architecture: $ARCH_NAME; expected amd64 or arm64" 1
   fi
+  # A digest is only meaningful next to the artifact it describes. A version
+  # names one by deriving its URL; --agent-url names one outright, so it
+  # satisfies the same requirement without a version to derive anything from.
   if [ -n "$AGENT_VERSION" ] || [ -n "$AGENT_SHA256" ]; then
-    if [ -z "$AGENT_VERSION" ] || [ -z "$AGENT_SHA256" ]; then
-      fail "--agent-version and --agent-sha256 must be provided together" 2
+    if [ -z "$AGENT_SHA256" ] || { [ -z "$AGENT_VERSION" ] && [ -z "$AGENT_URL" ]; }; then
+      fail "--agent-sha256 needs the artifact it describes: pass --agent-version or --agent-url" 2
     fi
+    # Only checked when a version is what names the artifact; --agent-url
+    # carries no version and needs none.
     case "$AGENT_VERSION" in
-      *[!A-Za-z0-9._-]*|'') fail "--agent-version contains invalid characters" 2 ;;
+      '') [ -n "$AGENT_URL" ] || fail "--agent-version is required" 2 ;;
+      *[!A-Za-z0-9._-]*) fail "--agent-version contains invalid characters" 2 ;;
     esac
     case "$AGENT_SHA256" in
       *[!0-9a-f]*|'') fail "--agent-sha256 must be a lowercase SHA-256 digest" 2 ;;
