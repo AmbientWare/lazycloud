@@ -75,10 +75,10 @@ state into the deployment secret manager:
 | `agent_oauth_client_secret` | `LAZYCLOUD_TAILNET_OAUTH_CLIENT_SECRET` |
 | `gateway_auth_key` | `LAZYCLOUD_TAILNET_AUTH_KEY` |
 
-`runtime_configuration` carries the three tag names, which must match the
-deployment's `LAZYCLOUD_TAILNET_AGENT_TAG`, `LAZYCLOUD_TAILNET_CONTROL_PLANE_TAG`,
-and `LAZYCLOUD_TAILNET_POOL_BOOTSTRAP_TAG`. A tag the policy does not grant
-produces nodes that join the tailnet and cannot reach anything.
+`runtime_configuration` carries both tag names, which must match the
+deployment's `LAZYCLOUD_TAILNET_AGENT_TAG` and
+`LAZYCLOUD_TAILNET_CONTROL_PLANE_TAG`. A tag the policy does not grant produces
+nodes that join the tailnet and cannot reach anything.
 
 Generate `LAZYCLOUD_BACKEND_ROUTE_AUTH_KEY` separately in the application
 secret manager.
