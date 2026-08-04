@@ -154,6 +154,7 @@ def validate_provider_network_configuration(
     *,
     gateway_origin: str,
     internal_origin: str,
+    presigned_origin: str = "",
     runtime: TailnetRuntimeSettings,
     control: TailnetControlSettings,
     backend_route: BackendRouteSettings,
@@ -187,6 +188,18 @@ def validate_provider_network_configuration(
             f"internal control-plane origin host {internal_host!r} is unreachable from a "
             "remote machine; set LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL to the control plane's "
             "tailnet origin"
+        )
+    # The third origin a remote node dials. Unlike the other two it is not used
+    # during enrolment, so a wrong value here starts a machine that joins,
+    # reports ready, accepts work, and only then fails to read its image.
+    presigned_host = urlparse(presigned_origin).hostname or ""
+    if presigned_origin and not presigned_host:
+        issues.append("object store presigned endpoint must include a host")
+    elif presigned_host and host_is_unreachable_from_a_remote_machine(presigned_host):
+        issues.append(
+            f"object store presigned endpoint host {presigned_host!r} is unreachable from a "
+            "remote machine; set LAZYCLOUD_OBJECT_STORE_PRESIGNED_ENDPOINT_URL to the control "
+            "plane's tailnet origin"
         )
     if runtime.mode is TailnetRuntimeMode.Disabled:
         issues.append("tailnet runtime mode must be sidecar or managed")

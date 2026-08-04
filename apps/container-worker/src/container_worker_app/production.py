@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import http.client
 import os
 import posixpath
 import re
@@ -735,6 +734,7 @@ class ProductionWorkerSettings(BaseSettings):
 @dataclass(slots=True)
 class BrokeredImageArchiveSourceLoader:
     repository: WorkerRepositoryHttpClient
+    internal_http: InternalHttpClient = field(default_factory=InternalHttpClient)
     timeout_seconds: float = 60.0
 
     def load_source_image_archive(
@@ -785,6 +785,7 @@ class BrokeredImageArchiveSourceLoader:
         target = Path(archive_path)
         try:
             bytes_written = download_image_archive(
+                self.internal_http,
                 url,
                 target,
                 archive_size_bytes=archive_size_bytes,
@@ -1017,6 +1018,7 @@ def _remove_image_mount_path(path: Path) -> None:
 @dataclass(slots=True)
 class RemoteCheckpointPersister:
     repository: WorkerRepositoryHttpClient
+    internal_http: InternalHttpClient
     checkpoint_bucket: str
     cache_namespace: str = DEFAULT_CHECKPOINT_CACHE_NAMESPACE
     cache: WorkerContentCache | None = None
@@ -1051,6 +1053,7 @@ class RemoteCheckpointPersister:
                 msg = "checkpoint archive upload URL was not returned"
                 raise RuntimeError(msg)
             _put_presigned_checkpoint_archive(
+                self.internal_http,
                 prepared.upload_url,
                 archive_path,
                 content_length=size_bytes,
@@ -1090,52 +1093,44 @@ class RemoteCheckpointPersister:
 
 
 def _put_presigned_checkpoint_archive(
+    internal_http: InternalHttpClient,
     url: str,
     path: Path,
     *,
     content_length: int,
 ) -> None:
-    parsed = urlparse(url)
-    if parsed.scheme not in {"http", "https"}:
-        msg = f"unsupported checkpoint upload URL scheme: {parsed.scheme}"
+    scheme = urlparse(url).scheme
+    if scheme not in {"http", "https"}:
+        msg = f"unsupported checkpoint upload URL scheme: {scheme}"
         raise ValueError(msg)
-    connection_class = (
-        http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
-    )
-    connection = connection_class(parsed.hostname or "", parsed.port, timeout=300)
-    target = parsed.path or "/"
-    if parsed.query:
-        target = f"{target}?{parsed.query}"
     try:
         with path.open("rb") as source:
-            connection.request(
+            response = internal_http.request(
                 "PUT",
-                target,
-                body=source,
+                url,
                 headers={
                     "content-type": "application/x-tar",
                     "content-length": str(content_length),
                 },
+                content=source,
+                timeout_seconds=300,
             )
-            response = connection.getresponse()
-            response.read(4096)
-            if response.status < 200 or response.status >= 300:
-                raise _PresignedTransferError(
-                    f"checkpoint archive upload returned HTTP {response.status}"
-                )
+        if response.status_code < 200 or response.status_code >= 300:
+            raise _PresignedTransferError(
+                f"checkpoint archive upload returned HTTP {response.status_code}"
+            )
     except _PresignedTransferError:
         raise
     except Exception as exc:
         raise _PresignedTransferError(
             f"checkpoint archive upload failed: {type(exc).__name__}"
         ) from None
-    finally:
-        connection.close()
 
 
 @dataclass(slots=True)
 class RemoteCheckpointRestoreSource:
     repository: WorkerRepositoryHttpClient
+    internal_http: InternalHttpClient
     checkpoint_bucket: str
     timeout_seconds: float = 300.0
     download_urls: dict[str, str] = field(default_factory=dict)
@@ -1163,6 +1158,7 @@ class RemoteCheckpointRestoreSource:
         temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
         try:
             _download_presigned_url(
+                self.internal_http,
                 url,
                 temporary,
                 timeout_seconds=self.timeout_seconds,
@@ -1321,6 +1317,7 @@ def build_production_worker_process_services(
         cache_root=config.resolved_source_cache_root,
         cache_max_bytes=config.configuration.source_cache.max_bytes,
         cache_max_entries=config.configuration.source_cache.max_entries,
+        http=internal_http,
     )
     source_cache_identity = WorkerSourceCacheIdentity.open(
         source_materializer.cache_root,
@@ -1352,11 +1349,12 @@ def build_production_worker_process_services(
         image_mount_root=Path(config.resolved_image_mount_root),
         scratch_root=config.configuration.paths.container_rootfs_root,
     )
-    cache_server = _worker_content_cache(config)
+    cache_server = _worker_content_cache(config, internal_http)
     checkpoint_state_sink = RemoteCheckpointStateSink(repository)
     automatic_checkpoint_leases = RemoteAutomaticCheckpointCreationLeaseCoordinator(repository)
     checkpoint_restore_source = RemoteCheckpointRestoreSource(
         repository,
+        internal_http,
         checkpoint_bucket=config.checkpoint_bucket,
     )
     checkpoints = RuntimeCheckpointCreator(
@@ -1364,6 +1362,7 @@ def build_production_worker_process_services(
         state_sink=checkpoint_state_sink,
         persister=RemoteCheckpointPersister(
             repository,
+            internal_http,
             checkpoint_bucket=config.checkpoint_bucket,
             cache_namespace=config.checkpoint_cache_namespace,
             cache=cache_server,
@@ -1401,7 +1400,10 @@ def build_production_worker_process_services(
         ),
     )
     image_build_credential_loader = RemoteImageBuildCredentialLoader(repository)
-    archive_source_loader = image_source_loader or BrokeredImageArchiveSourceLoader(repository)
+    archive_source_loader = image_source_loader or BrokeredImageArchiveSourceLoader(
+        repository,
+        internal_http,
+    )
     cache_metadata = (
         CacheServerImageArchiveMetadataProvider(cache_server) if cache_server is not None else None
     )
@@ -1431,7 +1433,7 @@ def build_production_worker_process_services(
         target_root=Path(config.resolved_image_cache_path),
         extension=config.image_archive_extension,
     )
-    image_archive_publisher = RepositoryWorkerImageArchivePublisher(repository)
+    image_archive_publisher = RepositoryWorkerImageArchivePublisher(repository, internal_http)
     request_mounts = mountpoint_backend or WorkerRequestMountManager(
         mountpoint_binary=config.workspace_storage_mountpoint_binary
     )
@@ -1509,7 +1511,7 @@ def build_production_worker_process_services(
         image_builder=BuildahWorkerImageBuilder(
             archiver=image_archiver,
             scratch=image_build_scratch,
-            context_loader=RepositoryImageBuildContextLoader(repository),
+            context_loader=RepositoryImageBuildContextLoader(repository, internal_http),
         ),
         image_archive_publisher=image_archive_publisher,
         image_build_credential_loader=image_build_credential_loader,
@@ -1575,11 +1577,13 @@ def _container_cost_resolver(
 
 def _worker_content_cache(
     config: ProductionWorkerSettings,
+    internal_http: InternalHttpClient,
 ) -> FileCacheServer | WorkerCacheHttpClient | None:
     if config.cache_endpoint:
         return WorkerCacheHttpClient(
             WorkerCacheEndpoint(url=config.cache_endpoint),
             service_token=_cache_service_token(config),
+            http=internal_http,
         )
     if config.resolved_cache_root is not None:
         return FileCacheServer(config.resolved_cache_root)
@@ -1863,6 +1867,7 @@ def _oci_spec_document(spec: OciRuntimeContainerSpec) -> dict[str, JsonValue]:
 
 
 def _download_presigned_url(
+    internal_http: InternalHttpClient,
     url: str,
     target: Path,
     *,
@@ -1876,32 +1881,21 @@ def _download_presigned_url(
     if parsed.hostname is None:
         msg = f"{resource_name} URL hostname is required"
         raise ValueError(msg)
-    connection_class = (
-        http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
-    )
-    connection = connection_class(parsed.hostname, parsed.port, timeout=timeout_seconds)
-    request_target = parsed.path or "/"
-    if parsed.query:
-        request_target = f"{request_target}?{parsed.query}"
     try:
-        connection.request("GET", request_target)
-        response = connection.getresponse()
-        if response.status < 200 or response.status >= 300:
-            response.read(4096)
-            raise _PresignedTransferError(
-                f"{resource_name} download returned HTTP {response.status}"
-            )
-        with target.open("wb") as output:
-            while chunk := response.read(PRESIGNED_DOWNLOAD_CHUNK_SIZE_BYTES):
-                output.write(chunk)
+        with internal_http.stream("GET", url, timeout_seconds=timeout_seconds) as response:
+            if response.status_code < 200 or response.status_code >= 300:
+                raise _PresignedTransferError(
+                    f"{resource_name} download returned HTTP {response.status_code}"
+                )
+            with target.open("wb") as output:
+                for chunk in response.iter_bytes(PRESIGNED_DOWNLOAD_CHUNK_SIZE_BYTES):
+                    output.write(chunk)
     except _PresignedTransferError:
         raise
     except Exception as exc:
         raise _PresignedTransferError(
             f"{resource_name} download failed: {type(exc).__name__}"
         ) from None
-    finally:
-        connection.close()
 
 
 class _PresignedTransferError(RuntimeError):

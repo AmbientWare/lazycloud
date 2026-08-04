@@ -44,6 +44,7 @@ def test_remote_provider_gate_reports_all_missing_security_requirements() -> Non
             ProviderNetworkClass.Remote,
             gateway_origin="https://user@control.example.test/path",
             internal_origin="http://control-plane:9000",
+            presigned_origin="http://object-store:9002",
             runtime=runtime,
             control=control,
             backend_route=route,
@@ -55,6 +56,10 @@ def test_remote_provider_gate_reports_all_missing_security_requirements() -> Non
     # else. Accepting it here produces remote machines that enrol, report
     # healthy, and then fail every call they make.
     assert "'control-plane' is unreachable from a remote machine" in message
+    # The presigned endpoint is the third origin a remote node dials, and the
+    # only one it does not use while enrolling: a local value here produces a
+    # machine that joins and reports ready before failing to read its image.
+    assert "'object-store' is unreachable from a remote machine" in message
     assert "tailnet hostname is required" in message
     assert "tailnet sidecar socket path is required" in message
     assert "tailnet agent, control-plane, and bootstrap tags must be distinct" in message

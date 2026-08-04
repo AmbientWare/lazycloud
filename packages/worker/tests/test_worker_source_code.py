@@ -4,8 +4,10 @@ import io
 import os
 import zipfile
 from pathlib import Path
+from typing import cast
 
 import pytest
+from networking.internal_http import InternalHttpClient
 from shared.container_requests import WORKER_USER_CODE_VOLUME, RequestMount
 from worker.events import ContainerRequestContext
 from worker.source_code import (
@@ -14,8 +16,6 @@ from worker.source_code import (
     SourceCodeMaterializationError,
     SourceCodePackageMaterializer,
 )
-
-from worker import source_code
 
 
 def test_source_materializer_cleans_only_the_terminal_container_paths(tmp_path: Path) -> None:
@@ -132,26 +132,17 @@ def test_source_download_error_never_discloses_capability_query(
 ) -> None:
     sentinel = "never-log-this-source-signature"
 
-    class FailingConnection:
-        def __init__(
-            self,
-            host: str,
-            port: int | None = None,
-            timeout: float | None = None,
-        ) -> None:
-            _ = host, port, timeout
+    class _FailingHttp:
+        """An internal client whose failure carries the signed URL."""
 
-        def request(self, *args: object, **kwargs: object) -> None:
+        def request(self, *args: object, **kwargs: object) -> object:
             _ = args, kwargs
             raise RuntimeError(f"failed request with {sentinel}")
 
-        def close(self) -> None:
-            return
-
-    monkeypatch.setattr(source_code.http.client, "HTTPSConnection", FailingConnection)
     materializer = SourceCodePackageMaterializer(
         cache_root=tmp_path / "cache",
         workspace_root=tmp_path / "workspaces",
+        http=cast(InternalHttpClient, _FailingHttp()),
     )
     mount = RequestMount(
         mount_path=WORKER_USER_CODE_VOLUME,

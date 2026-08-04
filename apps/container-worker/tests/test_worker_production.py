@@ -11,6 +11,7 @@ from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
+from typing import cast
 
 import container_worker_app.production as production
 import pytest
@@ -21,6 +22,7 @@ from container_worker_app.production import (
     TarImageArchiveMounter,
     build_production_worker_process_services,
 )
+from networking.internal_http import InternalHttpClient
 from pydantic import JsonValue
 from worker.checkpoints import CheckpointPersistenceAction, CheckpointPersistencePlan
 from worker.container_checkpoints import TarContainerImageArchiver
@@ -431,7 +433,13 @@ def test_remote_checkpoint_persister_streams_archive_to_presigned_url(
     )
     uploaded: list[bytes] = []
 
-    def capture_upload(_url: str, path: Path, *, content_length: int) -> None:
+    def capture_upload(
+        _http: InternalHttpClient,
+        _url: str,
+        path: Path,
+        *,
+        content_length: int,
+    ) -> None:
         uploaded.append(path.read_bytes() if path.stat().st_size == content_length else b"")
 
     monkeypatch.setattr(
@@ -452,6 +460,7 @@ def test_remote_checkpoint_persister_streams_archive_to_presigned_url(
 
     result = RemoteCheckpointPersister(
         WorkerRepositoryHttpClient(transport),
+        InternalHttpClient(),
         checkpoint_bucket="checkpoint-bucket",
         cache_namespace="checkpoints",
     ).persist_checkpoint(plan)
@@ -476,37 +485,35 @@ def test_checkpoint_transfer_errors_never_disclose_capability_query(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    del monkeypatch
     sentinel = "never-log-this-checkpoint-signature"
 
-    class FailingConnection:
-        def __init__(
-            self,
-            host: str,
-            port: int | None = None,
-            timeout: float | None = None,
-        ) -> None:
-            _ = host, port, timeout
+    class _FailingHttp:
+        """An internal client whose failure carries the signed URL."""
 
-        def request(self, *args: object, **kwargs: object) -> None:
+        def request(self, *args: object, **kwargs: object) -> object:
             _ = args, kwargs
             raise RuntimeError(f"failed request with {sentinel}")
 
-        def close(self) -> None:
-            return
+        def stream(self, *args: object, **kwargs: object) -> object:
+            _ = args, kwargs
+            raise RuntimeError(f"failed request with {sentinel}")
 
-    monkeypatch.setattr(production.http.client, "HTTPSConnection", FailingConnection)
+    failing = cast(InternalHttpClient, _FailingHttp())
     capability = f"https://objects.example.test/archive?X-Amz-Signature={sentinel}"
     checkpoint = tmp_path / "checkpoint.tar"
     checkpoint.write_bytes(b"checkpoint")
 
     with pytest.raises(RuntimeError) as upload_error:
         production._put_presigned_checkpoint_archive(
+            failing,
             capability,
             checkpoint,
             content_length=checkpoint.stat().st_size,
         )
     with pytest.raises(RuntimeError) as download_error:
         production._download_presigned_url(
+            failing,
             capability,
             tmp_path / "download.tar",
             timeout_seconds=5,

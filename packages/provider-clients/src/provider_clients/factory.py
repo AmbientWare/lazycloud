@@ -51,6 +51,7 @@ class ConfiguredComputeProviderRegistry(DirectMachineProviderRegistry):
     tailnet_runtime: TailnetRuntimeSettings
     tailnet_control: TailnetControlSettings
     backend_route: BackendRouteSettings
+    presigned_origin: str = ""
     _cache: dict[tuple[str, str], _CachedProviderClient] = field(
         default_factory=dict,
         init=False,
@@ -112,6 +113,7 @@ def configured_compute_provider_registry(
     *,
     gateway_origin: str,
     internal_origin: str,
+    presigned_origin: str = "",
     tailnet_runtime: TailnetRuntimeSettings,
     tailnet_control: TailnetControlSettings,
     backend_route: BackendRouteSettings,
@@ -120,6 +122,7 @@ def configured_compute_provider_registry(
         provider_service=provider_service,
         gateway_origin=gateway_origin,
         internal_origin=internal_origin,
+        presigned_origin=presigned_origin,
         tailnet_runtime=tailnet_runtime,
         tailnet_control=tailnet_control,
         backend_route=backend_route,
@@ -131,6 +134,7 @@ def _provider_client_from_record(
     *,
     gateway_origin: str,
     internal_origin: str,
+    presigned_origin: str = "",
     tailnet_runtime: TailnetRuntimeSettings,
     tailnet_control: TailnetControlSettings,
     backend_route: BackendRouteSettings,
@@ -139,6 +143,7 @@ def _provider_client_from_record(
         ProviderNetworkClass.Remote,
         gateway_origin=gateway_origin,
         internal_origin=internal_origin,
+        presigned_origin=presigned_origin,
         runtime=tailnet_runtime,
         control=tailnet_control,
         backend_route=backend_route,
