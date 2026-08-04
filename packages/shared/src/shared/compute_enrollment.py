@@ -102,7 +102,6 @@ class TailnetCleanupTombstone(ContractModel):
     updated_at: datetime
 
 
-
 class PreflightSeverity(StringEnum):
     Info = "info"
     Warning = "warning"

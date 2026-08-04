@@ -90,10 +90,7 @@ from storage.retention_settings import RetentionSettings
 from storage.service import CacheStorage, ObjectStorage
 from storage.volume_filesystem import (
     WorkspaceVolumeFilesystem,
-    WorkspaceVolumeStore,
-    WorkspaceVolumeStoreResolver,
-    workspace_presign_endpoint,
-    workspace_volume_store,
+    workspace_volume_store_resolver,
 )
 from storage.volume_metering import PersistentVolumeMeteringService
 from storage_client.s3 import S3ObjectStoreClient, S3ObjectStoreSettings
@@ -204,9 +201,10 @@ class SchedulerAppServices:
         volume_metering = PersistentVolumeMeteringService.from_settings(
             context,
             filesystem=WorkspaceVolumeFilesystem(
-                resolve_store=_workspace_volume_store_resolver(
-                    control_plane,
-                    storage.object_store,
+                resolve_store=workspace_volume_store_resolver(
+                    lambda workspace_id: control_plane.get_workspace(workspace_id).storage,
+                    default_endpoint_url=storage.object_store.endpoint_url,
+                    default_presigned_endpoint_url=storage.object_store.presigned_endpoint_url,
                 )
             ),
             interval_seconds=storage.volume_metering.interval_seconds,
@@ -450,21 +448,3 @@ def scheduler_tailnet_services(
         else UnavailableTailnetCleanupService(cleanup_store)
     )
     return active_control, cleanup
-
-
-def _workspace_volume_store_resolver(
-    control_plane: ControlPlaneService,
-    object_store: S3ObjectStoreSettings,
-) -> WorkspaceVolumeStoreResolver:
-    def resolve(workspace_id: str) -> WorkspaceVolumeStore:
-        storage = control_plane.get_workspace(workspace_id).storage
-        return workspace_volume_store(
-            storage,
-            presigned_endpoint_url=workspace_presign_endpoint(
-                storage,
-                default_endpoint_url=object_store.endpoint_url,
-                default_presigned_endpoint_url=object_store.presigned_endpoint_url,
-            ),
-        )
-
-    return resolve

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from shared.image_building.authoring import ImageSpec
+from shared.image_building.requirements import sanitize_python_packages
 
 from images.building.commands import _normalize_step, _step_has_content
 from images.building.models import ImageBuildWorkPlan, ImageBuildWorkReason
-from images.building.requirements import sanitize_python_packages
 
 
 def image_build_work_plan(image: ImageSpec) -> ImageBuildWorkPlan:

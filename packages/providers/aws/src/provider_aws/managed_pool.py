@@ -31,10 +31,13 @@ from pydantic import (
 from shared.urls import normalize_http_origin
 
 from .account_connection import AwsAccountConnectionTarget
+from .boto3_clients import has_operations, is_boto3_client_factory
 from .instance_catalog import aws_instance_catalog_entry, aws_managed_capacity_resource_name
 from .provider_control import (
     AwsProviderControlError,
     AwsProviderControlErrorCode,
+    invalid_response_error,
+    upstream_error,
 )
 
 AWS_MANAGED_POOL_TAG = "cloud-pool:managed-by"
@@ -366,14 +369,6 @@ class AwsManagedPoolSessionFactory(Protocol):
     ) -> AwsManagedPoolSession: ...
 
 
-class _Boto3ClientFactory(Protocol):
-    def client(self, service_name: str) -> object: ...
-
-
-def _is_boto3_client_factory(value: object) -> TypeGuard[_Boto3ClientFactory]:
-    return callable(getattr(value, "client", None))
-
-
 @dataclass(frozen=True, slots=True)
 class _Boto3ManagedPoolSession:
     session: Session
@@ -391,7 +386,7 @@ class _Boto3ManagedPoolSession:
         self, service_name: Literal["sts", "ec2", "autoscaling"]
     ) -> AwsManagedPoolStsClient | AwsManagedPoolEc2Client | AwsManagedPoolAutoScalingClient:
         source: object = self.session
-        if not _is_boto3_client_factory(source):
+        if not is_boto3_client_factory(source):
             raise RuntimeError("boto3 session lacks the client factory operation")
         if service_name == "sts":
             candidate = source.client("sts")
@@ -409,16 +404,12 @@ class _Boto3ManagedPoolSession:
         return candidate
 
 
-def _has_operations(value: object, operations: tuple[str, ...]) -> bool:
-    return all(callable(getattr(value, operation, None)) for operation in operations)
-
-
 def _is_sts_client(value: object) -> TypeGuard[AwsManagedPoolStsClient]:
-    return _has_operations(value, ("assume_role",))
+    return has_operations(value, ("assume_role",))
 
 
 def _is_ec2_client(value: object) -> TypeGuard[AwsManagedPoolEc2Client]:
-    return _has_operations(
+    return has_operations(
         value,
         (
             "create_launch_template",
@@ -434,7 +425,7 @@ def _is_ec2_client(value: object) -> TypeGuard[AwsManagedPoolEc2Client]:
 
 
 def _is_autoscaling_client(value: object) -> TypeGuard[AwsManagedPoolAutoScalingClient]:
-    return _has_operations(
+    return has_operations(
         value,
         (
             "create_auto_scaling_group",
@@ -519,7 +510,7 @@ class Boto3AwsManagedPoolClientProvider:
         except ClientError as exc:
             raise _client_error(exc, operation="assume account connection role") from exc
         except BotoCoreError as exc:
-            raise _upstream_error(exc, operation="assume account connection role") from exc
+            raise upstream_error(exc, operation="assume account connection role") from exc
         assumed = self.session_factory(
             region_name=target.region,
             aws_access_key_id=credentials.access_key.get_secret_value(),
@@ -822,7 +813,7 @@ class AwsManagedPoolProvisioner:
             operation="describe launch template version",
         ).values
         if len(versions) != 1:
-            raise _invalid(
+            raise invalid_response_error(
                 "describe launch template version",
                 "AWS returned an unexpected launch template version set",
             )
@@ -900,7 +891,7 @@ class AwsManagedPoolProvisioner:
                 )
         refreshed = self._describe_group(spec.autoscaling_group_name)
         if refreshed is None:
-            raise _invalid(
+            raise invalid_response_error(
                 "ensure Auto Scaling Group", "AWS did not return the managed Auto Scaling Group"
             )
         return refreshed
@@ -916,7 +907,7 @@ class AwsManagedPoolProvisioner:
             operation="describe Auto Scaling Group",
         )
         if len(payload.values) > 1 or (payload.values and payload.values[0].name != name):
-            raise _invalid(
+            raise invalid_response_error(
                 "describe Auto Scaling Group",
                 "AWS returned an Auto Scaling Group outside the requested scope",
             )
@@ -949,7 +940,7 @@ class AwsManagedPoolProvisioner:
                 return None
             raise
         if len(payload.values) > 1:
-            raise _invalid(
+            raise invalid_response_error(
                 "describe launch template", "AWS returned duplicate named launch templates"
             )
         return payload.values[0] if payload.values else None
@@ -1286,7 +1277,7 @@ def _validate_group_tags(group: _Group, spec: AwsManagedPoolSpec) -> None:
         tags.get(AWS_MANAGED_POOL_TAG) != AWS_MANAGED_POOL_TAG_VALUE
         or tags.get("cloud-pool:key") != spec.resource_key
     ):
-        raise _invalid(
+        raise invalid_response_error(
             "validate Auto Scaling Group ownership",
             "named Auto Scaling Group is not owned by this pool",
         )
@@ -1350,13 +1341,7 @@ def _validate[ResponseT: BaseModel](
     try:
         return model.model_validate(response)
     except ValidationError as exc:
-        raise _invalid(operation, "AWS returned an invalid response") from exc
-
-
-def _invalid(operation: str, detail: str) -> AwsProviderControlError:
-    return AwsProviderControlError(
-        AwsProviderControlErrorCode.InvalidResponse, operation=operation, detail=detail
-    )
+        raise invalid_response_error(operation, "AWS returned an invalid response") from exc
 
 
 def _client_error_code(exc: ClientError) -> str:
@@ -1400,12 +1385,6 @@ def _client_error(exc: ClientError, *, operation: str) -> AwsProviderControlErro
     )
 
 
-def _upstream_error(exc: BotoCoreError, *, operation: str) -> AwsProviderControlError:
-    return AwsProviderControlError(
-        AwsProviderControlErrorCode.UpstreamUnavailable, operation=operation, detail=str(exc)
-    )
-
-
 def _aws_call(
     operation: str,
     method: object,
@@ -1418,13 +1397,15 @@ def _aws_call(
     except ClientError as exc:
         raise _client_error(exc, operation=operation) from exc
     except BotoCoreError as exc:
-        raise _upstream_error(exc, operation=operation) from exc
+        raise upstream_error(exc, operation=operation) from exc
     if not isinstance(response, Mapping):
-        raise _invalid(operation, "AWS returned a non-object response")
+        raise invalid_response_error(operation, "AWS returned a non-object response")
     try:
         return _AWS_RESPONSE.validate_python(response)
     except ValidationError as exc:
-        raise _invalid(operation, "AWS returned an unsupported response value") from exc
+        raise invalid_response_error(
+            operation, "AWS returned an unsupported response value"
+        ) from exc
 
 
 def _default_session(

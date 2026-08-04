@@ -75,6 +75,7 @@ def test_pod_id_proxy_preserves_request_and_selects_port_ready_container(
     proxy_client = _RecordingProxyClient()
     service = PodControlService(
         isolated_services,
+        redis=isolated_services.redis(),
         scheduler_containers=scheduler,
         container_clients=SchedulerContainerClientFactory(scheduler_containers=scheduler),
         pod_proxy_http_client=proxy_client,
@@ -128,6 +129,7 @@ def test_pod_proxy_records_demand_before_waiting_for_scale_from_zero(
     proxy_client = _RecordingProxyClient()
     service = PodControlService(
         isolated_services,
+        redis=isolated_services.redis(),
         scheduler_containers=scheduler,
         container_clients=SchedulerContainerClientFactory(scheduler_containers=scheduler),
         pod_proxy_http_client=proxy_client,
@@ -223,6 +225,7 @@ def test_pod_websocket_proxies_subprotocol_text_binary_and_balances_demand(
     socket_client = _LoopbackSocketClient(backend_port)
     service = PodControlService(
         isolated_services,
+        redis=isolated_services.redis(),
         scheduler_containers=scheduler,
         container_clients=SchedulerContainerClientFactory(scheduler_containers=scheduler),
         pod_proxy_http_client=_RecordingProxyClient(),
@@ -317,6 +320,7 @@ def test_pinned_sandbox_routes_never_wait_or_fall_through_to_a_sibling(
     connections = _RecordingConnections()
     service = PodControlService(
         isolated_services,
+        redis=isolated_services.redis(),
         scheduler_containers=scheduler,
         container_clients=SchedulerContainerClientFactory(scheduler_containers=scheduler),
         pod_proxy_http_client=proxy_client,
@@ -393,6 +397,7 @@ def test_pinned_sandbox_route_metadata_is_ready_exact_and_address_bound(
     proxy_client = _RecordingProxyClient()
     service = PodControlService(
         isolated_services,
+        redis=isolated_services.redis(),
         scheduler_containers=scheduler,
         container_clients=SchedulerContainerClientFactory(scheduler_containers=scheduler),
         pod_proxy_http_client=proxy_client,
@@ -454,6 +459,7 @@ def test_pinned_sandbox_backend_failures_are_bounded_and_typed(
     socket_client = _FailingSocketClient()
     service = PodControlService(
         isolated_services,
+        redis=isolated_services.redis(),
         scheduler_containers=scheduler,
         container_clients=SchedulerContainerClientFactory(scheduler_containers=scheduler),
         pod_proxy_http_client=proxy_client,
@@ -510,6 +516,7 @@ def test_sandbox_proxy_supports_id_deployment_and_public_path_forms(
     proxy_client = _RecordingProxyClient()
     service = PodControlService(
         isolated_services,
+        redis=isolated_services.redis(),
         scheduler_containers=scheduler,
         container_clients=SchedulerContainerClientFactory(scheduler_containers=scheduler),
         pod_proxy_http_client=proxy_client,
@@ -563,6 +570,7 @@ def test_pod_proxy_returns_service_unavailable_when_port_is_missing(
     proxy_client = _RecordingProxyClient()
     service = PodControlService(
         isolated_services,
+        redis=isolated_services.redis(),
         scheduler_containers=scheduler,
         container_clients=SchedulerContainerClientFactory(scheduler_containers=scheduler),
         pod_proxy_http_client=proxy_client,
@@ -619,6 +627,7 @@ def test_pod_and_sandbox_private_routes_use_token_workspace(
     proxy_client = _RecordingProxyClient()
     service = PodControlService(
         isolated_services,
+        redis=isolated_services.redis(),
         scheduler_containers=scheduler,
         container_clients=SchedulerContainerClientFactory(scheduler_containers=scheduler),
         pod_proxy_http_client=proxy_client,
@@ -685,6 +694,7 @@ def test_cross_workspace_public_app_does_not_publish_a_private_sandbox(
     proxy_client = _RecordingProxyClient()
     service = PodControlService(
         isolated_services,
+        redis=isolated_services.redis(),
         scheduler_containers=scheduler,
         container_clients=SchedulerContainerClientFactory(scheduler_containers=scheduler),
         pod_proxy_http_client=proxy_client,

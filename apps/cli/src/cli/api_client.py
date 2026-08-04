@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from urllib.parse import quote, urlencode
+from urllib.parse import urlencode
 
 from lazycloud.cli.components.context import current_workspace
 from lazycloud.control import resolve_control_client_config
@@ -81,6 +81,7 @@ from shared.http.workspaces import (
     WorkspaceSetRequest,
 )
 from shared.http_transport import HttpChannel
+from shared.urls import url_path_segment
 from shared.usage import UsageMetric
 
 type QueryScalar = str | int | float | bool | None
@@ -117,7 +118,7 @@ class AdminApiClient:
         return WorkspaceResponse.model_validate(
             self.channel.request(
                 "PUT",
-                f"/api/v1/workspaces/{_segment(name)}",
+                f"/api/v1/workspaces/{url_path_segment(name)}",
                 payload=request.model_dump(mode="json"),
             )
         )
@@ -131,7 +132,7 @@ class AdminApiClient:
 
     def get_workspace(self, workspace_id_or_name: str) -> WorkspaceResponse:
         return WorkspaceResponse.model_validate(
-            self.channel.get(f"/api/v1/workspaces/{_segment(workspace_id_or_name)}")
+            self.channel.get(f"/api/v1/workspaces/{url_path_segment(workspace_id_or_name)}")
         )
 
     def get_source_cache_cleanup_status(
@@ -140,7 +141,7 @@ class AdminApiClient:
     ) -> SourceCacheCleanupStatusResponse:
         return SourceCacheCleanupStatusResponse.model_validate(
             self.channel.get(
-                f"/api/v1/workspaces/{_segment(workspace_id_or_name)}/source-cache-cleanup"
+                f"/api/v1/workspaces/{url_path_segment(workspace_id_or_name)}/source-cache-cleanup"
             )
         )
 
@@ -182,7 +183,7 @@ class AdminApiClient:
         return ConcurrencyAcquireResponse.model_validate(
             self.channel.post(
                 self._workspace_path(
-                    f"/api/v1/concurrency-limits/{_segment(limit_id_or_name)}/acquire"
+                    f"/api/v1/concurrency-limits/{url_path_segment(limit_id_or_name)}/acquire"
                 )
             )
         )
@@ -191,7 +192,7 @@ class AdminApiClient:
         return ConcurrencyAcquireResponse.model_validate(
             self.channel.post(
                 self._workspace_path(
-                    f"/api/v1/concurrency-limits/{_segment(limit_id_or_name)}/release"
+                    f"/api/v1/concurrency-limits/{url_path_segment(limit_id_or_name)}/release"
                 )
             )
         )
@@ -209,11 +210,13 @@ class AdminApiClient:
 
     def revoke_token(self, token_id: str) -> AuthTokenResponse:
         return AuthTokenResponse.model_validate(
-            self.channel.post(self._workspace_path(f"/api/v1/tokens/{_segment(token_id)}/revoke"))
+            self.channel.post(
+                self._workspace_path(f"/api/v1/tokens/{url_path_segment(token_id)}/revoke")
+            )
         )
 
     def delete_token(self, token_id: str) -> None:
-        self.channel.delete(self._workspace_path(f"/api/v1/tokens/{_segment(token_id)}"))
+        self.channel.delete(self._workspace_path(f"/api/v1/tokens/{url_path_segment(token_id)}"))
 
     def run_container(self, request: ContainerRunRequest) -> ContainerResponse:
         return ContainerResponse.model_validate(
@@ -241,18 +244,22 @@ class AdminApiClient:
 
     def get_container(self, container_id: str) -> ContainerDetailResponse:
         return ContainerDetailResponse.model_validate(
-            self.channel.get(self._workspace_path(f"/api/v1/containers/{_segment(container_id)}"))
+            self.channel.get(
+                self._workspace_path(f"/api/v1/containers/{url_path_segment(container_id)}")
+            )
         )
 
     def stop_container(self, container_id: str) -> ContainerResponse:
         return ContainerResponse.model_validate(
             self.channel.post(
-                self._workspace_path(f"/api/v1/containers/{_segment(container_id)}/stop")
+                self._workspace_path(f"/api/v1/containers/{url_path_segment(container_id)}/stop")
             )
         )
 
     def delete_container(self, container_id: str) -> None:
-        self.channel.delete(self._workspace_path(f"/api/v1/containers/{_segment(container_id)}"))
+        self.channel.delete(
+            self._workspace_path(f"/api/v1/containers/{url_path_segment(container_id)}")
+        )
 
     def list_pools(self) -> PoolListResponse:
         return PoolListResponse.model_validate(
@@ -268,7 +275,7 @@ class AdminApiClient:
         )
 
     def delete_pool(self, name: str) -> None:
-        self.channel.delete(self._workspace_path(f"/api/v1/pools/{_segment(name)}"))
+        self.channel.delete(self._workspace_path(f"/api/v1/pools/{url_path_segment(name)}"))
 
     def list_machines(self) -> MachineListResponse:
         return MachineListResponse.model_validate(
@@ -284,13 +291,15 @@ class AdminApiClient:
         )
 
     def delete_machine(self, machine_id: str) -> None:
-        self.channel.delete(self._workspace_path(f"/api/v1/machines/{_segment(machine_id)}"))
+        self.channel.delete(
+            self._workspace_path(f"/api/v1/machines/{url_path_segment(machine_id)}")
+        )
 
     def list_workers(self) -> WorkerListResponse:
         return WorkerListResponse.model_validate(self.channel.get("/api/v1/workers"))
 
     def delete_worker(self, worker_id: str) -> None:
-        self.channel.delete(f"/api/v1/workers/{_segment(worker_id)}")
+        self.channel.delete(f"/api/v1/workers/{url_path_segment(worker_id)}")
 
     def list_deployments(
         self,
@@ -306,7 +315,9 @@ class AdminApiClient:
 
     def get_deployment(self, deployment_id: str) -> DeploymentResponse:
         return DeploymentResponse.model_validate(
-            self.channel.get(self._workspace_path(f"/api/v1/deployments/{_segment(deployment_id)}"))
+            self.channel.get(
+                self._workspace_path(f"/api/v1/deployments/{url_path_segment(deployment_id)}")
+            )
         )
 
     def logs(self, request: LogQueryRequest) -> LogQueryResponse:
@@ -378,7 +389,7 @@ class AdminApiClient:
         )
 
     def delete_provider(self, name: str) -> None:
-        self.channel.delete(self._workspace_path(f"/api/v1/providers/{_segment(name)}"))
+        self.channel.delete(self._workspace_path(f"/api/v1/providers/{url_path_segment(name)}"))
 
     def create_image_build(self, request: ImageBuildRequest) -> ImageBuildResponse:
         return ImageBuildResponse.model_validate(
@@ -399,7 +410,7 @@ class AdminApiClient:
         )
 
     def delete_cron_job(self, name: str) -> None:
-        self.channel.delete(self._workspace_path(f"/api/v1/cron-jobs/{_segment(name)}"))
+        self.channel.delete(self._workspace_path(f"/api/v1/cron-jobs/{url_path_segment(name)}"))
 
     def list_cron_job_runs(self) -> CronJobRunListResponse:
         return CronJobRunListResponse.model_validate(self.channel.get("/api/v1/cron-job-runs"))
@@ -477,7 +488,7 @@ class AdminApiClient:
         return AutoscalerControlResponse.model_validate(
             self.channel.post(
                 self._workspace_path(
-                    f"/api/v1/scheduler/autoscalers/{_segment(stub_id_or_name)}/{action}"
+                    f"/api/v1/scheduler/autoscalers/{url_path_segment(stub_id_or_name)}/{action}"
                 )
             )
         )
@@ -498,20 +509,20 @@ class AdminApiClient:
     def heartbeat_agent(self, agent_id: str) -> AgentResponse:
         return AgentResponse.model_validate(
             self.channel.post(
-                self._workspace_path(f"/api/v1/agents/{_segment(agent_id)}/heartbeat")
+                self._workspace_path(f"/api/v1/agents/{url_path_segment(agent_id)}/heartbeat")
             )
         )
 
     def lease_agent(self, agent_id: str, request: AgentLeaseRequest) -> AgentLeaseResponse:
         return AgentLeaseResponse.model_validate(
             self.channel.post(
-                self._workspace_path(f"/api/v1/agents/{_segment(agent_id)}/leases"),
+                self._workspace_path(f"/api/v1/agents/{url_path_segment(agent_id)}/leases"),
                 request.model_dump(mode="json"),
             )
         )
 
     def delete_agent(self, agent_id: str) -> None:
-        self.channel.delete(self._workspace_path(f"/api/v1/agents/{_segment(agent_id)}"))
+        self.channel.delete(self._workspace_path(f"/api/v1/agents/{url_path_segment(agent_id)}"))
 
     def list_leases(self, *, include_inactive: bool) -> AgentLeaseListResponse:
         return AgentLeaseListResponse.model_validate(
@@ -522,7 +533,9 @@ class AdminApiClient:
 
     def release_lease(self, lease_id: str) -> AgentLeaseResponse:
         return AgentLeaseResponse.model_validate(
-            self.channel.post(self._workspace_path(f"/api/v1/leases/{_segment(lease_id)}/release"))
+            self.channel.post(
+                self._workspace_path(f"/api/v1/leases/{url_path_segment(lease_id)}/release")
+            )
         )
 
     def list_objects(self, *, bucket: str | None, prefix: str) -> ObjectListResponse:
@@ -541,13 +554,17 @@ class AdminApiClient:
     def read_object(self, bucket: str, key: str) -> ObjectContentResponse:
         return ObjectContentResponse.model_validate(
             self.channel.get(
-                self._workspace_path(f"/api/v1/objects/{_segment(bucket)}/{_segment(key)}")
+                self._workspace_path(
+                    f"/api/v1/objects/{url_path_segment(bucket)}/{url_path_segment(key)}"
+                )
             )
         )
 
     def delete_object(self, bucket: str, key: str) -> None:
         self.channel.delete(
-            self._workspace_path(f"/api/v1/objects/{_segment(bucket)}/{_segment(key)}")
+            self._workspace_path(
+                f"/api/v1/objects/{url_path_segment(bucket)}/{url_path_segment(key)}"
+            )
         )
 
     def list_cache(self) -> CacheEntryListResponse:
@@ -560,11 +577,11 @@ class AdminApiClient:
 
     def read_cache_entry(self, namespace: str, key: str) -> CacheContentResponse:
         return CacheContentResponse.model_validate(
-            self.channel.get(f"/api/v1/cache/{_segment(namespace)}/{_segment(key)}")
+            self.channel.get(f"/api/v1/cache/{url_path_segment(namespace)}/{url_path_segment(key)}")
         )
 
     def delete_cache_entry(self, namespace: str, key: str) -> None:
-        self.channel.delete(f"/api/v1/cache/{_segment(namespace)}/{_segment(key)}")
+        self.channel.delete(f"/api/v1/cache/{url_path_segment(namespace)}/{url_path_segment(key)}")
 
     def list_usage_records(
         self,
@@ -620,10 +637,6 @@ class AdminApiClient:
 
 def admin_api_client(workspace: str | None = None) -> AdminApiClient:
     return AdminApiClient.from_profile(workspace=workspace)
-
-
-def _segment(value: str) -> str:
-    return quote(value, safe="")
 
 
 def _query_path(path: str, params: Mapping[str, QueryScalar]) -> str:

@@ -242,6 +242,30 @@ class WorkspaceVolumeStoreResolver(Protocol):
     def __call__(self, workspace_id: str) -> WorkspaceVolumeStore: ...
 
 
+class WorkspaceStorageLookup(Protocol):
+    def __call__(self, workspace_id: str) -> WorkspaceStorageConfig: ...
+
+
+def workspace_volume_store_resolver(
+    lookup: WorkspaceStorageLookup,
+    *,
+    default_endpoint_url: str | None,
+    default_presigned_endpoint_url: str | None,
+) -> WorkspaceVolumeStoreResolver:
+    def resolve(workspace_id: str) -> WorkspaceVolumeStore:
+        storage = lookup(workspace_id)
+        return workspace_volume_store(
+            storage,
+            presigned_endpoint_url=workspace_presign_endpoint(
+                storage,
+                default_endpoint_url=default_endpoint_url,
+                default_presigned_endpoint_url=default_presigned_endpoint_url,
+            ),
+        )
+
+    return resolve
+
+
 def workspace_volume_store(
     storage: WorkspaceStorageConfig,
     *,
@@ -732,9 +756,11 @@ __all__ = [
     "VolumeFilesystemEntry",
     "VolumeNamespace",
     "VolumeObjectClient",
+    "WorkspaceStorageLookup",
     "WorkspaceVolumeFilesystem",
     "WorkspaceVolumeStore",
     "WorkspaceVolumeStoreResolver",
     "workspace_presign_endpoint",
     "workspace_volume_store",
+    "workspace_volume_store_resolver",
 ]

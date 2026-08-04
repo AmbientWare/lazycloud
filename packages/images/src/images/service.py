@@ -37,6 +37,7 @@ from images.building import (
     ImageBuildSessionPlan,
     ImageBuildStreamEventPlan,
     build_image_plan,
+    image_build_stream_event_key,
     plan_image_build_cancellation,
     plan_image_build_complete_event,
     plan_image_build_failure_event,
@@ -991,12 +992,12 @@ class ImageBuildService:
     ) -> list[ImageBuildStreamEventPlan]:
         emitted: list[ImageBuildStreamEventPlan] = []
         existing_events = self.stream_events(build_id, workspace_id=workspace_id)
-        seen = {_stream_event_key(event) for event in existing_events}
+        seen = {image_build_stream_event_key(event) for event in existing_events}
         seen_messages = {event.message for event in existing_events if event.message}
         for event in result.events:
             if event.done:
                 continue
-            if _stream_event_key(event) in seen or (
+            if image_build_stream_event_key(event) in seen or (
                 event.message and not event.done and event.message in seen_messages
             ):
                 continue
@@ -1008,7 +1009,7 @@ class ImageBuildService:
                     sensitive_values=sensitive_values,
                 )
             )
-            seen.add(_stream_event_key(event))
+            seen.add(image_build_stream_event_key(event))
             if event.message:
                 seen_messages.add(event.message)
 
@@ -1959,20 +1960,6 @@ def _build_id_from_container_id(container_id: str) -> str:
     if not container_id.startswith("build-"):
         return ""
     return container_id.removeprefix("build-")
-
-
-def _stream_event_key(
-    event: ImageBuildStreamEventPlan,
-) -> tuple[str, str, str, str, str, bool, str]:
-    return (
-        event.kind.value,
-        event.build_id,
-        event.message,
-        event.status.value,
-        event.phase.value,
-        event.done,
-        event.error,
-    )
 
 
 def _is_terminal_build_status(status: BuildStatus) -> bool:

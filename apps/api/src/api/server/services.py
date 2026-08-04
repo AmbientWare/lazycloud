@@ -208,10 +208,7 @@ from storage.service import CacheStorage, ObjectByteClient, ObjectStorage
 from storage.volume_filesystem import (
     VolumeFilesystem,
     WorkspaceVolumeFilesystem,
-    WorkspaceVolumeStore,
-    WorkspaceVolumeStoreResolver,
-    workspace_presign_endpoint,
-    workspace_volume_store,
+    workspace_volume_store_resolver,
 )
 from storage.volume_metering import PersistentVolumeMeteringService
 from storage_client.s3 import S3ObjectStoreClient, S3ObjectStoreSettings
@@ -730,7 +727,11 @@ class ApiServices(ApiServiceCore):
             workspace_changes=workspace_changes,
         )
         resolved_volume_filesystem = volume_filesystem or WorkspaceVolumeFilesystem(
-            resolve_store=_workspace_volume_store_resolver(control_plane, object_store_config)
+            resolve_store=workspace_volume_store_resolver(
+                lambda workspace_id: control_plane.get_workspace(workspace_id).storage,
+                default_endpoint_url=object_store_config.endpoint_url,
+                default_presigned_endpoint_url=object_store_config.presigned_endpoint_url,
+            )
         )
         worker_repository = RedisSchedulerWorkerRepository(redis)
         container_repository = RedisSchedulerContainerRepository(redis)
@@ -1527,24 +1528,6 @@ def _workspace_storage_client(storage: WorkspaceStorageConfig) -> S3ObjectStoreC
             force_path_style=storage.force_path_style,
         )
     )
-
-
-def _workspace_volume_store_resolver(
-    control_plane: ControlPlaneService,
-    object_store: S3ObjectStoreSettings,
-) -> WorkspaceVolumeStoreResolver:
-    def resolve(workspace_id: str) -> WorkspaceVolumeStore:
-        storage = control_plane.get_workspace(workspace_id).storage
-        return workspace_volume_store(
-            storage,
-            presigned_endpoint_url=workspace_presign_endpoint(
-                storage,
-                default_endpoint_url=object_store.endpoint_url,
-                default_presigned_endpoint_url=object_store.presigned_endpoint_url,
-            ),
-        )
-
-    return resolve
 
 
 def _workspace_bucket_client(client: ObjectByteClient) -> WorkspaceBucketClient | None:

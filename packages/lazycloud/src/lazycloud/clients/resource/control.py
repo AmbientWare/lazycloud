@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol, TypeVar
-from urllib.parse import quote, urlencode
+from urllib.parse import urlencode
 
 from pydantic import BaseModel, JsonValue
 from shared.containers import ContainerStatus
@@ -26,6 +26,7 @@ from shared.http.errors import HttpResponseDecodeError
 from shared.http.tasks import TaskPageResponse, TaskResponse, TaskStopResponse
 from shared.http_transport import HttpChannel
 from shared.tasks import TaskStatus
+from shared.urls import url_path_segment
 
 ResponseT = TypeVar("ResponseT", bound=BaseModel)
 
@@ -107,25 +108,27 @@ class ResourceControlClient:
 
     def app(self, app_id: str) -> AppResponse:
         return _validate_response(
-            AppResponse, self.channel.get(self._path(f"/api/v1/apps/{_segment(app_id)}"))
+            AppResponse, self.channel.get(self._path(f"/api/v1/apps/{url_path_segment(app_id)}"))
         )
 
     def pause_app(self, app_id: str) -> AppResponse:
         return _validate_response(
-            AppResponse, self.channel.post(self._path(f"/api/v1/apps/{_segment(app_id)}/pause"))
+            AppResponse,
+            self.channel.post(self._path(f"/api/v1/apps/{url_path_segment(app_id)}/pause")),
         )
 
     def resume_app(self, app_id: str) -> AppResponse:
         return _validate_response(
-            AppResponse, self.channel.post(self._path(f"/api/v1/apps/{_segment(app_id)}/resume"))
+            AppResponse,
+            self.channel.post(self._path(f"/api/v1/apps/{url_path_segment(app_id)}/resume")),
         )
 
     def delete_app(self, app_id: str) -> None:
-        self.channel.request("DELETE", self._path(f"/api/v1/apps/{_segment(app_id)}"))
+        self.channel.request("DELETE", self._path(f"/api/v1/apps/{url_path_segment(app_id)}"))
 
     def task(self, task_id: str) -> TaskResponse:
         return _validate_response(
-            TaskResponse, self.channel.get(self._path(f"/api/v1/tasks/{_segment(task_id)}"))
+            TaskResponse, self.channel.get(self._path(f"/api/v1/tasks/{url_path_segment(task_id)}"))
         )
 
     def stop_tasks(self, task_ids: Sequence[str]) -> TaskStopResponse:
@@ -164,7 +167,7 @@ class ResourceControlClient:
     def deployment(self, deployment_id: str) -> DeploymentResponse:
         return _validate_response(
             DeploymentResponse,
-            self.channel.get(self._path(f"/api/v1/deployments/{_segment(deployment_id)}")),
+            self.channel.get(self._path(f"/api/v1/deployments/{url_path_segment(deployment_id)}")),
         )
 
     def stop_deployment(self, deployment_id: str) -> DeploymentResponse:
@@ -178,7 +181,7 @@ class ResourceControlClient:
         return _validate_response(
             DeploymentResponse,
             self.channel.post(
-                self._path(f"/api/v1/deployments/{_segment(deployment_id)}/scale"),
+                self._path(f"/api/v1/deployments/{url_path_segment(deployment_id)}/scale"),
                 request.model_dump(mode="json"),
             ),
         )
@@ -186,7 +189,7 @@ class ResourceControlClient:
     def delete_deployment(self, deployment_id: str) -> None:
         self.channel.request(
             "DELETE",
-            self._path(f"/api/v1/deployments/{_segment(deployment_id)}"),
+            self._path(f"/api/v1/deployments/{url_path_segment(deployment_id)}"),
         )
 
     def list_containers(
@@ -215,7 +218,9 @@ class ResourceControlClient:
     def stop_container(self, container_id: str) -> ContainerResponse:
         return _validate_response(
             ContainerResponse,
-            self.channel.post(self._path(f"/api/v1/containers/{_segment(container_id)}/stop")),
+            self.channel.post(
+                self._path(f"/api/v1/containers/{url_path_segment(container_id)}/stop")
+            ),
         )
 
     def list_machines(self) -> MachineListResponse:
@@ -240,7 +245,7 @@ class ResourceControlClient:
         )
 
     def delete_pool(self, name: str) -> None:
-        self.channel.request("DELETE", self._path(f"/api/v1/pools/{_segment(name)}"))
+        self.channel.request("DELETE", self._path(f"/api/v1/pools/{url_path_segment(name)}"))
 
     def list_workers(self) -> WorkerListResponse:
         return _validate_response(
@@ -252,16 +257,14 @@ class ResourceControlClient:
         return _validate_response(
             DeploymentResponse,
             self.channel.post(
-                self._path(f"/api/v1/deployments/{_segment(deployment_id)}/{_segment(action)}")
+                self._path(
+                    f"/api/v1/deployments/{url_path_segment(deployment_id)}/{url_path_segment(action)}"
+                )
             ),
         )
 
     def _path(self, path: str) -> str:
         return f"{path}?{urlencode({'workspace': self.workspace})}"
-
-
-def _segment(value: str) -> str:
-    return quote(value, safe="")
 
 
 def _validate_response(model: type[ResponseT], value: object) -> ResponseT:

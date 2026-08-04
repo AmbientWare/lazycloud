@@ -3,7 +3,16 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, model_validator
+from foundation.resources import parse_memory_mib
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
+from shared.deployment_records import DEFAULT_DISK
 from shared.enums import StringEnum
 from shared.image_building.authoring import PythonVersion
 from shared.mounts import MountAuthMode, validate_mount_auth
@@ -124,3 +133,71 @@ class VolumeConfig(BaseModel):
             mount_path=self.mount_path,
             config=provider.for_mount(read_only=self.read_only),
         )
+
+
+class ContainerResourceConfig(BaseModel):
+    """The resource request every workload kind states the same way.
+
+    Each kind adds its own scheduling fields on top; what a container asks the
+    platform for — CPU, memory, disk, GPU, runtime — does not vary by kind, so
+    one reading of `cpu=0.25` or `memory="512Mi"` has to hold for all of them.
+    """
+
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    cpu: int | float | None = Field(default=None, ge=0)
+    cpu_millicores: int = Field(default=0, ge=0)
+    memory: str | int | None = None
+    memory_mib: int = Field(default=0, ge=0)
+    disk: str | int = DEFAULT_DISK
+    gpu: str | None = None
+    gpu_type: str | None = None
+    gpu_count: int = Field(default=0, ge=0)
+    image_id: str | None = None
+    pool_selector: str | None = None
+    runtime: str = "runc"
+    runtime_class: str | None = None
+    docker_enabled: bool = False
+    preemptible: bool = False
+    gpu_limit: int = Field(default=0, ge=0)
+    cpu_limit_millicores: int = Field(default=0, ge=0)
+
+    @field_validator("disk", mode="before")
+    @classmethod
+    def disk_defaults_to_the_platform_ceiling(cls, value: object) -> object:
+        # Every container has a ceiling, so an absent value is the default
+        # rather than 'unlimited'.
+        if value is None or value == "":
+            return DEFAULT_DISK
+        return value
+
+    @field_validator("memory")
+    @classmethod
+    def memory_must_be_valid(cls, value: str | int | None) -> str | int | None:
+        parsed = parse_memory_mib(value)
+        if parsed is not None and parsed < 0:
+            msg = "memory must be non-negative"
+            raise ValueError(msg)
+        return value
+
+    @property
+    def requested_cpu_millicores(self) -> int:
+        if self.cpu_millicores:
+            return self.cpu_millicores
+        return int(float(self.cpu) * 1000) if self.cpu is not None else 0
+
+    @property
+    def requested_memory_mib(self) -> int:
+        if self.memory_mib:
+            return self.memory_mib
+        return parse_memory_mib(self.memory) or 0
+
+    @property
+    def requested_disk_mib(self) -> int:
+        # Reuses the memory parser: the units are the same and disk accepts the
+        # same "10Gi" strings users already write for memory.
+        return parse_memory_mib(self.disk) or 0
+
+    @property
+    def requested_gpu_type(self) -> str:
+        return self.gpu or self.gpu_type or ""

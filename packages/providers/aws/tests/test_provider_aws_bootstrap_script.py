@@ -116,7 +116,7 @@ def test_bootstrap_failure_reports_the_whole_provider_identity_payload(
                 "}",
                 "resolve_node_identity() { :; }",
                 "STEP=install",
-                'report_failure agent_enrollment_failed',
+                "report_failure agent_enrollment_failed",
                 "",
             ]
         ),
