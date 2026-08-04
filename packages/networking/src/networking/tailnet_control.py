@@ -4,7 +4,7 @@ import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import Protocol, Self
+from typing import Protocol
 from urllib.parse import quote, urlparse
 
 import httpx
@@ -15,16 +15,11 @@ from pydantic import (
     SecretStr,
     ValidationError,
     field_validator,
-    model_validator,
 )
 from shared.app_identity import AGENT_NAME
 
 DEFAULT_TAILSCALE_API_URL = "https://api.tailscale.com"
 DEFAULT_TAILNET_AUTH_KEY_TTL_SECONDS = 300
-# A pool bootstrap key is baked into a launch template that outlives any single
-# launch, so it is measured in days rather than the minutes a machine key needs
-# between issue and redemption. Ninety days with a seven-day refresh window
-# keeps the template stable while bounding how long a leaked key stays useful.
 DEFAULT_TAILNET_CONTROL_TIMEOUT_SECONDS = 10.0
 TAILSCALE_OAUTH_SCOPES = "auth_keys devices:core"
 TOKEN_REFRESH_SKEW_SECONDS = 30
@@ -227,12 +222,6 @@ class TailscaleTailnetControlConfig(BaseModel):
         """The tags this control plane may mint auth keys for."""
         return (self.agent_tag,)
 
-    @model_validator(mode="after")
-    def bootstrap_tag_must_be_distinct(self) -> Self:
-        # The bootstrap tag exists to carry a narrower grant than the agent tag.
-        # Collapsing them would silently hand every pre-enrolment node the
-        # agent's full reach.
-        return self
 
 
 class _TailscaleResponseModel(BaseModel):

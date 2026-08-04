@@ -1628,8 +1628,8 @@ def _tailnet_identity_is_this_machine(status: TailnetStatus, machine_id: str) ->
 
     The generation is deliberately not matched: the agent does not know which
     generation the control plane last handed out, and demanding an exact name
-    would rotate the identity on every restart. The prefix is enough to tell a
-    machine-scoped session from a pool bootstrap one, which is the distinction
+    would rotate the identity on every restart. The prefix is enough to tell
+    this machine's session from another machine's, which is the distinction
     that decides whether a rotation is owed.
     """
     machine = machine_id.strip()

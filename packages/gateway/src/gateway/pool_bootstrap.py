@@ -1,16 +1,9 @@
-"""The tailnet key a managed pool's launch template hands every node it starts.
+"""What a managed pool's launch template tells every node it starts.
 
-A node has to reach the control plane before it has an agent or an identity,
-and it now does that over the tailnet rather than a public origin. Since one
-autoscaling group launches N instances from one launch template, the key in that
-template cannot be bound to a machine that does not exist yet: it is reusable,
-and the tag is what keeps it narrow. The node trades it for a single-use,
-machine-scoped key the moment enrolment gives it an identity.
-
-The key is durable because the launch template outlives any single launch — an
-autoscaling group that scales up days later boots from the same user-data. It is
-refreshed rather than reissued per reconcile, because every change to user-data
-forces a new launch-template version.
+The control-plane origin, the agent artifact and its digest, and the worker
+image the node will run. A node carries no credential in its user-data: it
+reports over the public origin, and enrolment vends it the single-use machine
+key it joins the tailnet with.
 """
 
 from __future__ import annotations

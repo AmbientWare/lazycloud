@@ -21,10 +21,8 @@ SHELL_LOG_PATH = f"/tmp/{NAME}-shell.log"
 AGENT_CONTAINER_TMP_PATH = f"/tmp/{NAME}"
 AGENT_CONTAINER_LOG_PATH = f"/var/log/{NAME}"
 AGENT_STATE_DIR = f"{STATE_DIR}/agent"
-# The agent spawns its own tailscaled under its state directory. A node's
-# bootstrap joins the tailnet before the agent exists and must land on the
-# identical paths, or the agent starts a second daemon against the same state
-# file and TUN device instead of resuming the session the bootstrap opened.
+# The agent spawns its own tailscaled under its state directory; nothing else on
+# the node opens a tailnet session, so these paths have one owner.
 AGENT_TAILNET_DIR_NAME = "tailnet"
 TAILSCALED_SOCKET_NAME = "tailscaled.sock"
 TAILSCALED_STATE_NAME = "tailscaled.state"

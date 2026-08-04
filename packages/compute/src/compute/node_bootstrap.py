@@ -1,33 +1,22 @@
 """The node bootstrap script every managed pool runs, and the seam a provider fills.
 
 A machine launched into a managed pool has to reach the control plane before it
-has an agent, an identity, or a network. Most of what it does to get there is
-the same everywhere: install a container runtime, install Tailscale, download
-and verify the agent, report progress, and hand off to the agent's own service.
-Only three things are provider-specific — how the node learns its own id, how it
-proves that identity, and which flags the agent needs to verify the proof.
-
-So the script lives here and the provider supplies a shell fragment. The
+has an agent, an identity, or a network. Almost none of that is
+provider-specific, and the part that is comes first: how the node learns its own
+id, how it proves that identity, and which flags the agent needs to verify the
+proof. So the script lives here and the provider supplies a shell fragment. The
 alternative was a copy per cloud, which is how the script would drift.
 
-The node joins the tailnet before its first control-plane call. That ordering is
-the point of the module: enrolment used to require a publicly reachable origin,
-which meant Tailscale Funnel carried the boot path and timed out under the image
-transfer that immediately followed it. With a pool-scoped key already in
-user-data, the node is a tailnet peer by the time it reports `booting`, and the
-control plane is addressed as a peer for the rest of its life.
+Everything after identity belongs to the published agent installer, which this
+script downloads and runs. It installs the container runtime, installs
+Tailscale, verifies and installs the agent, and writes the agent's systemd unit.
+This script owning copies of those steps is what let them disagree with the
+installer in production.
 
-`tailscaled` is installed as a systemd unit this script owns and started once,
-before the join. Nothing stops it: the agent attaches to that same daemon in
-sidecar mode rather than running one of its own, so the node holds a single
-tailnet session from first boot until it is terminated.
-
-An earlier version stopped the daemon before handing off, on the theory that
-`tailscale up --reset` persists `WantRunning=true` and the agent would resume
-the same node key. That is false for the pool bootstrap key, which is
-`ephemeral`: stopping the daemon makes the control server delete the device, so
-the agent came up holding a revoked key and enrolled over a tailnet it was no
-longer on. There is no session to resume, which is why there is no handoff.
+The node reports to the public origin, because it holds no tailnet identity
+until it enrols. Enrolment vends it a single-use machine key, and the agent
+joins the tailnet with that; there is no pool-scoped key in user-data and no
+tailnet session before the agent exists.
 """
 
 from __future__ import annotations
