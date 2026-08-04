@@ -12,7 +12,7 @@ from compute.projection import PoolConfig
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
 from shared.compute_fleet import ResourceStatus
-from shared.errors import ConflictError, InvalidInputError
+from shared.errors import InvalidInputError, UpstreamUnavailableError
 from shared.timestamps import utc_now
 from tests.provider_fixtures import configure_test_provider
 
@@ -97,7 +97,7 @@ def test_compute_launch_reconcile_billing_and_termination(isolated_services: Api
 def test_compute_rejects_unavailable_provider_and_mixed_gpu_pool(
     isolated_services: ApiServices,
 ) -> None:
-    try:
+    with pytest.raises(UpstreamUnavailableError) as unavailable:
         isolated_services.compute.launch_pool_capacity(
             PoolConfig(
                 name="gpu",
@@ -108,13 +108,11 @@ def test_compute_rejects_unavailable_provider_and_mixed_gpu_pool(
                 max_spend=1.0,
             )
         )
-    except ConflictError as exc:
-        assert "provider_unavailable" in str(exc)
-    else:
-        raise AssertionError("expected missing provider to be rejected")
+
+    assert unavailable.value.code == "provider_unavailable"
 
     configure_test_provider(isolated_services, "generic", [])
-    try:
+    with pytest.raises(InvalidInputError, match="single GPU type"):
         isolated_services.compute.launch_pool_capacity(
             PoolConfig(
                 name="mixed",
@@ -125,10 +123,6 @@ def test_compute_rejects_unavailable_provider_and_mixed_gpu_pool(
                 max_spend=1.0,
             )
         )
-    except InvalidInputError as exc:
-        assert "single GPU type" in str(exc)
-    else:
-        raise AssertionError("expected mixed GPU launch to be rejected")
 
 
 def test_gateway_maps_provider_offer_discovery_failure_to_503(

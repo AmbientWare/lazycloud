@@ -227,6 +227,7 @@ AGENT_HOSTNAME=""
 DEV="0"
 AGENT_BIN="${LAZYCLOUD_AGENT_BIN:-}"
 AGENT_URL="${LAZYCLOUD_AGENT_URL:-}"
+INSTALL_ONLY="0"
 AGENT_VERSION="${LAZYCLOUD_AGENT_VERSION:-}"
 AGENT_SHA256="${LAZYCLOUD_AGENT_SHA256:-}"
 AGENT_AMD64_SHA256="${LAZYCLOUD_AGENT_AMD64_SHA256:-}"
@@ -268,6 +269,10 @@ main() {
   ensure_docker
   ensure_tailscale
   install_agent
+  if [ "$INSTALL_ONLY" = "1" ]; then
+    say "Installed __AGENT_NAME__ runtime without enrolling"
+    return
+  fi
   run_agent
 }
 
@@ -296,6 +301,7 @@ parse_args() {
       --dev) DEV="1"; shift ;;
       --agent-bin) require_value "$1" "${2:-}"; AGENT_BIN="$2"; shift 2 ;;
       --agent-url) require_value "$1" "${2:-}"; AGENT_URL="$2"; shift 2 ;;
+      --install-only) INSTALL_ONLY="1"; shift ;;
       --agent-version) require_value "$1" "${2:-}"; AGENT_VERSION="$2"; shift 2 ;;
       --agent-sha256) require_value "$1" "${2:-}"; AGENT_SHA256="$2"; shift 2 ;;
       --agent-amd64-sha256)
@@ -370,14 +376,26 @@ resolve_agent_artifact_digest() {
 }
 
 validate_input() {
-  if [ -z "$GATEWAY" ]; then
-    fail "--gateway is required" 2
-  fi
-  if [ -n "$JOIN_TOKEN" ] && [ -n "$PROVIDER_ENROLLMENT_REQUEST" ]; then
-    fail "--join-token and --provider-enrollment-request cannot be combined" 2
-  fi
-  if [ -z "$JOIN_TOKEN" ] && [ -z "$PROVIDER_ENROLLMENT_REQUEST" ]; then
-    fail "--join-token or --provider-enrollment-request is required" 2
+  # An image bake installs the runtime and never enrols: there is no control
+  # plane to name and no credential to carry, and demanding either would mean
+  # baking a machine identity into an image every instance boots from.
+  if [ "$INSTALL_ONLY" = "1" ]; then
+    if [ -n "$JOIN_TOKEN" ] || [ -n "$PROVIDER_ENROLLMENT_REQUEST" ]; then
+      fail "--install-only cannot be combined with an enrollment credential" 2
+    fi
+    if [ -z "$AGENT_URL" ]; then
+      fail "--install-only requires --agent-url" 2
+    fi
+  else
+    if [ -z "$GATEWAY" ]; then
+      fail "--gateway is required" 2
+    fi
+    if [ -n "$JOIN_TOKEN" ] && [ -n "$PROVIDER_ENROLLMENT_REQUEST" ]; then
+      fail "--join-token and --provider-enrollment-request cannot be combined" 2
+    fi
+    if [ -z "$JOIN_TOKEN" ] && [ -z "$PROVIDER_ENROLLMENT_REQUEST" ]; then
+      fail "--join-token or --provider-enrollment-request is required" 2
+    fi
   fi
   if [ -n "$PROVIDER_ENROLLMENT_REQUEST" ]; then
     if [ "$PROVIDER" != "aws" ] || [ "$PROVIDER_INSTANCE_IDENTITY" != "imds-v2" ]; then
@@ -385,10 +403,12 @@ validate_input() {
 --provider-instance-identity imds-v2" 2
     fi
   fi
-  case "$GATEWAY" in
-    http://*|https://*) ;;
-    *) fail "--gateway must start with http:// or https://" 2 ;;
-  esac
+  if [ -n "$GATEWAY" ]; then
+    case "$GATEWAY" in
+      http://*|https://*) ;;
+      *) fail "--gateway must start with http:// or https://" 2 ;;
+    esac
+  fi
   if [ -n "$AGENT_URL" ]; then
     # The artifact is public and unauthenticated, so it must not be reached
     # over a scheme that would carry the enrolment credential in the clear.

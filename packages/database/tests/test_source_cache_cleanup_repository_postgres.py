@@ -231,15 +231,14 @@ def test_postgresql_source_cache_cleanup_lifecycle_is_fenced_and_restart_safe(
                 source_object_ids=[str(uuid4())],
                 now=started_at + timedelta(minutes=8),
             )
-            assert (
-                repository.activate_if_drained(
-                    generation_id,
-                    worker_id="worker-a",
-                    session_fence=2,
-                    now=started_at + timedelta(minutes=8),
-                )
-                is None
+            draining_again = repository.activate_if_drained(
+                generation_id,
+                worker_id="worker-a",
+                session_fence=2,
+                now=started_at + timedelta(minutes=8),
             )
+            assert draining_again is not None
+            assert draining_again.state is WorkerCacheGenerationState.Draining
             mixed_summary = repository.summarize(workspace_id=workspace.id)
             assert mixed_summary.pending_count == 1
             assert mixed_summary.claimed_count == 0

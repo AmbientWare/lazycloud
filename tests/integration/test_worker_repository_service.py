@@ -802,7 +802,12 @@ def test_worker_repository_api_authenticates_and_streams_container_requests(
     token = _worker_token(isolated_services, "workspace-a")
     control = ControlPlaneService(isolated_services.context)
     workspace = control.upsert_workspace("workspace-a")
-    isolated_services.compute.create_pool("pool", workspace=workspace.id)
+    isolated_services.compute.create_pool(
+        "pool",
+        workspace=workspace.id,
+        worker_cpu_millicores=1000,
+        worker_memory_mib=1024,
+    )
     stub = control.create_stub("worker-request", workspace=workspace.id)
     container_id = str(uuid4())
     with isolated_services.context.database.session() as session:
@@ -1006,7 +1011,12 @@ def test_worker_repository_stream_blocks_until_scheduler_assignment(
                 workspace_id=workspace_id,
             )
         )
-    isolated_services.compute.create_pool("default", workspace=workspace_id)
+    isolated_services.compute.create_pool(
+        "default",
+        workspace=workspace_id,
+        worker_cpu_millicores=1000,
+        worker_memory_mib=1024,
+    )
     service = _worker_repository_service(isolated_services, redis)
     principal = WorkerRepositoryPrincipal(
         workspace_id="control-workspace",
