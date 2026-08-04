@@ -366,6 +366,19 @@ def pool_scale(
 
 
 @pool_app.command(
+    "clear-degraded",
+    help="Let a pool that exhausted its relaunch attempts buy machines again.",
+)
+def pool_clear_degraded(
+    ctx: typer.Context,
+    name: str,
+    workspace: Annotated[str | None, typer.Option("--workspace")] = None,
+) -> None:
+    response = compute_client(workspace=workspace).clear_pool_degradation(name)
+    _print_pool_state(ctx, response)
+
+
+@pool_app.command(
     "status",
     help="Inspect a managed pool's durable and observed capacity state.",
 )

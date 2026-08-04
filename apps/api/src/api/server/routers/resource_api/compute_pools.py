@@ -224,6 +224,24 @@ def get_pool_state(
     return _pool_state_response(gateway.pool_state(pool_name, workspace_id=workspace_id))
 
 
+@router.post(
+    "/api/v1/pools/{pool_name}/clear-degradation",
+    response_model=PoolScaleResponse,
+    operation_id="clear_pool_degradation",
+)
+def clear_pool_degradation(
+    pool_name: str,
+    workspace_id: write_workspace,
+    services: ApiServices = Depends(current_services),
+) -> PoolScaleResponse:
+    return _pool_state_response(
+        services.compute.clear_capacity_degradation(
+            workspace=workspace_id,
+            pool_name=pool_name,
+        )
+    )
+
+
 @router.delete(
     "/api/v1/pools/{name}",
     status_code=status.HTTP_204_NO_CONTENT,

@@ -235,6 +235,14 @@ class ComputeClient:
             )
         )
 
+    def clear_pool_degradation(self, pool_name: str) -> PoolScaleResponse:
+        return PoolScaleResponse.model_validate(
+            self.channel.request(
+                "POST",
+                self._pools_path(f"/{pool_name}/clear-degradation"),
+            )
+        )
+
     def get_pool_state(self, pool_name: str) -> PoolScaleResponse:
         return PoolScaleResponse.model_validate(
             self.channel.get(self._pools_path(f"/{pool_name}/state"))
