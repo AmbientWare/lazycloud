@@ -40,6 +40,41 @@ transcription of them, and puts the sidecars back afterwards.
 --install arm64`), or the cross-architecture stage fails with `exec format
 error`.
 
+### Did it reach the nodes
+
+Publishing replaces no running instance. An Auto Scaling group whose launch
+template moves v1→v2 leaves every InService node on v1 by design, so the last
+thing the command does is say which release each node is actually running, and
+exit non-zero when that is not this one.
+
+First it compares the two processes that each compose a pool's bootstrap —
+`control-plane` and `scheduler` — over the variables the release publishes plus
+`LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL`, read from the environment each container
+actually holds. While those disagree the launch template alternates on every
+reconcile and no node settles on either version, so nothing said about nodes
+afterwards would mean anything. Both holding the *previous* release fails here
+too: it is the shape a restart that did not take leaves behind.
+
+Then, per pool, it prints every node's booted launch-template version against
+the pool's current one and repeats the reading until the record has been
+rewritten by a reconcile newer than the restart — up to three minutes, since
+the pooled reconcile runs on a 60s timer. Rows print every cycle whether or not
+anything is stale; a report that prints only problems reads the same as one that
+failed to look.
+
+It only reads, and only the platform's own durable record: the control plane
+owns the writes that would replace a node (see **Draining capacity**), and
+re-querying EC2 would test EC2 rather than the release. The pool's current
+launch-template version is the one value with no HTTP surface — it lives in the
+pool's provider state — so both halves of the comparison come from one query at
+one instant. A version the record cannot supply fails the report rather than
+passing it.
+
+`--skip-restart` skips the guard and the report along with the restart. The
+release is published but this stack has not loaded it, so every node would read
+as stale when nothing is wrong, and the closing line says published rather than
+live.
+
 The API answers on host port **8000** (container port 9000). `docker compose port
 control-plane 9000` prints the mapping if it changes.
 
