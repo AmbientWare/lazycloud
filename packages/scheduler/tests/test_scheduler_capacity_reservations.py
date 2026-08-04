@@ -465,10 +465,12 @@ def test_capacity_service_requests_one_unit_then_reuses_the_durable_intent(
     assert set(controller.ensure_calls) == {first.reservation_id}
 
 
-def test_resolve_request_binds_and_fences_the_selected_capacity_owner() -> None:
+def test_resolve_request_binds_and_fences_the_selected_capacity_owner(
+    real_redis_actors: _RealRedisActors,
+) -> None:
     controller = _OwnerAgnosticController()
     service = CapacityReservationService(
-        RedisCapacityReservationRepository(RedisClient.from_settings()),
+        _repository(real_redis_actors),
         lambda: [controller],
     )
     unbound = _request("unbound").model_copy(

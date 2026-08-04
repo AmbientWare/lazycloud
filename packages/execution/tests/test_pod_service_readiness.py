@@ -126,7 +126,7 @@ def test_mark_container_running_preserves_compute_foreign_keys_and_runtime_assig
                 runtime_worker_id="compose-container-worker",
             )
         )
-    service = PodControlService(isolated_services)
+    service = PodControlService(isolated_services, redis=isolated_services.redis())
 
     service._mark_container_running(
         container,
@@ -184,7 +184,7 @@ def test_sandbox_exposure_rejects_cross_workspace_stub_before_worker_callback(
         raise AssertionError("worker callback must not run for invalid ownership")
 
     monkeypatch.setattr(PodControlService, "_client", reject_worker_callback)
-    service = PodControlService(isolated_services)
+    service = PodControlService(isolated_services, redis=isolated_services.redis())
 
     with pytest.raises(NotFoundError):
         service.sandbox_expose_port(

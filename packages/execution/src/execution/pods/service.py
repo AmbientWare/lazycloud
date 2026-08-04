@@ -134,6 +134,7 @@ TERMINAL_CONTAINER_STATUSES = frozenset(
 @dataclass(slots=True)
 class PodControlService:
     services: ExecutionServices
+    redis: RedisClient
     gateway_http_url: str = "http://127.0.0.1:9000"
     scheduler_containers: ContainerSchedulingDirectory | None = None
     container_clients: SchedulerContainerClientFactory[PodContainerControlClient] | None = None
@@ -143,7 +144,6 @@ class PodControlService:
     container_connect_timeout_seconds: float = DEFAULT_POD_CONNECTION_TIMEOUT_SECONDS
     pod_proxy_start_timeout_seconds: float = DEFAULT_POD_PROXY_TIMEOUT_SECONDS
     poll_interval_seconds: float = POD_CONTAINER_DISCOVERY_INTERVAL_MS / 1000
-    redis: RedisClient = field(default_factory=RedisClient.from_settings)
     control_plane: ControlPlaneService = field(init=False)
 
     def __post_init__(self) -> None:

@@ -180,7 +180,7 @@ class SchedulerRuntime:
         endpoint_dispatches = EndpointDispatchAutoscalingReader(
             EndpointDispatchStateRepository(execution_services)
         )
-        pod_control = PodControlService(execution_services)
+        pod_control = PodControlService(execution_services, redis=redis_client)
         preemption_recovery = PreemptedContainerService(
             services=execution_services,
             stubs=scheduler_services.scheduler_workloads,
