@@ -1632,14 +1632,15 @@ class ComputeService:
             workspace_id = self.context.workspace(session, workspace).id
         clients = self._provider_client_snapshot(workspace_id)
         with self.context.database.session() as session:
-            compute_pool_repository = ComputePoolRepository(session)
-            compute_pool = compute_pool_repository.get_by_name(workspace_id, name)
+            compute_pool = ComputePoolRepository(session).get_by_name(workspace_id, name)
             if compute_pool is not None:
                 provider_instances = ComputeProviderInstanceRepository(session)
                 current_time = utc_now()
                 for record in provider_instances.list_for_pool(compute_pool.id):
                     if not _reservation_open(record.status):
                         continue
+                    # Usage is metered from the record, so the final segment has to
+                    # be billed before the provider release settles the record.
                     self._record_managed_usage(
                         session,
                         workspace_id=workspace_id,
@@ -1654,6 +1655,17 @@ class ComputeService:
                         reason="pool_deleted",
                         message="managed compute pool deleted",
                     )
+        if compute_pool is not None and _owns_provider_pool_capacity(compute_pool):
+            release_error = self._release_provider_pool_capacity(compute_pool)
+            if release_error:
+                termination_errors.append(release_error)
+        with self.context.database.session() as session:
+            compute_pool_repository = ComputePoolRepository(session)
+            compute_pool = (
+                compute_pool_repository.get(compute_pool.id) if compute_pool is not None else None
+            )
+            if compute_pool is not None:
+                provider_instances = ComputeProviderInstanceRepository(session)
                 for record in provider_instances.list_for_pool(compute_pool.id):
                     if not _reservation_open(record.status):
                         continue
@@ -1697,6 +1709,69 @@ class ComputeService:
                 resource_id=machine_id,
             )
 
+    def _release_provider_pool_capacity(self, pool: ComputePoolRecord) -> str:
+        """Delete this pool's provider-side capacity, answering why it is still held.
+
+        An empty answer is the only state in which the durable record may be
+        deleted. Once the row is gone nothing in the product can name the pool's
+        provider resources again, so a group that outlives its record keeps
+        launching billable machines that no reconciler will ever take back.
+
+        The deleting intent is persisted before the provider is asked, because a
+        failure after the provider call would otherwise leave a pool the
+        reconciler restores to its previous size.
+        """
+
+        with self.context.database.session() as session:
+            repository = ComputePoolRepository(session)
+            current = repository.get(pool.id, for_update=True)
+            if current is None:
+                return ""
+            if (
+                current.phase not in {ComputePoolPhase.Deleting, ComputePoolPhase.Deleted}
+                or current.desired_machines
+                or current.min_machines
+            ):
+                current = repository.upsert(
+                    current.model_copy(
+                        update={
+                            "desired_machines": 0,
+                            "min_machines": 0,
+                            "generation": current.generation + 1,
+                            "phase": ComputePoolPhase.Deleting,
+                            "status": ComputePoolPhase.Deleting.value,
+                        }
+                    )
+                )
+        try:
+            durable, provider, offer = self._internal_pool_provider(
+                current.workspace_id,
+                current.name,
+            )
+            pooled = provider.pooled
+            if pooled is None:
+                raise RuntimeError(f"compute pool {current.name!r} provider is not pooled")
+            released = self.provider_machines._apply_pooled_snapshot(
+                durable,
+                offer,
+                pooled.delete_pool(self._provider_pool_request(durable, offer)),
+                provider=pooled,
+                update_capacity=False,
+            )
+        except Exception as exc:
+            LOGGER.exception(
+                "provider pool capacity release failed for pool %s (%s)",
+                current.name,
+                current.id,
+            )
+            return f"{current.provider_ref}/{current.name}: {exc}"
+        if released.phase is not ComputePoolPhase.Deleted:
+            return (
+                f"{current.provider_ref}/{current.name}: provider capacity release is "
+                f"in progress ({released.phase.value})"
+            )
+        return ""
+
     def delete_pool_for_workspace_deletion(self, name: str, *, workspace_id: str) -> None:
         """Delete one existing pool without reopening a Deleting workspace."""
         termination_errors: list[str] = []
@@ -1736,6 +1811,19 @@ class ComputeService:
                             or "provider unavailable"
                         )
                         termination_errors.append(f"{record.provider}/{record.id}: {detail}")
+                if (
+                    _owns_provider_pool_capacity(compute_pool)
+                    and compute_pool.phase is not ComputePoolPhase.Deleted
+                ):
+                    # Workspace deletion only begins once the provider account is
+                    # disconnected, so nothing here can still reach the provider to
+                    # release a pool. The deleted phase the drain recorded is the
+                    # only proof the provider holds nothing, and dropping the row
+                    # without it orphans an Auto Scaling group no record can name.
+                    termination_errors.append(
+                        f"{compute_pool.provider_ref}/{compute_pool.name}: provider pool "
+                        f"capacity is still held ({compute_pool.phase.value})"
+                    )
             if termination_errors:
                 details = "; ".join(termination_errors)
                 raise UpstreamUnavailableError(
@@ -4838,6 +4926,20 @@ def _zero_capacity_converged(pool: ComputePoolRecord) -> bool:
         pool.desired_machines == 0
         and pool.observed_machines == 0
         and pool.phase is ComputePoolPhase.Ready
+    )
+
+
+def _owns_provider_pool_capacity(pool: ComputePoolRecord) -> bool:
+    """Answer whether a provider holds a pool object of its own for this record.
+
+    Only a pool bound to a provider connection has one. Every other pool's
+    machines are launched individually and are fully accounted for by their own
+    provider instance records.
+    """
+
+    return (
+        pool.capacity_owner_kind is CapacityOwnerKind.PooledProvider
+        and pool.provider_connection_id is not None
     )
 
 

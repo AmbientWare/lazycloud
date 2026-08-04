@@ -97,6 +97,7 @@ class _PooledProvider:
     lingering_storage: set[str] = field(default_factory=set)
     before_capacity: Callable[[ProviderPoolRequest], None] | None = None
     capacity_failure: Exception | None = None
+    delete_failure: Exception | None = None
 
     def list_offers(self) -> Iterable[ComputeOffer]:
         return (_offer(),)
@@ -142,6 +143,8 @@ class _PooledProvider:
         return self._snapshot(request.model_copy(update={"desired_machines": self.desired}))
 
     def delete_pool(self, request: ProviderPoolRequest) -> ProviderPoolSnapshot:
+        if self.delete_failure is not None:
+            raise self.delete_failure
         self.delete_calls.append(request)
         self.desired = 0
         return self._snapshot(request, phase=ProviderCapacityPhase.Deleted)
@@ -1038,6 +1041,58 @@ def test_connection_drain_deletes_hidden_capacity_idempotently(
     assert reconciled == []
     assert len(provider.ensure_calls) == 1
     assert len(provider.delete_calls) == 1
+
+
+def test_pool_delete_takes_the_provider_pool_with_it_or_keeps_the_pool_owned(
+    isolated_services: ApiServices,
+) -> None:
+    """Deleting a pool has to delete the capacity the provider holds for it.
+
+    A pool sitting at zero machines still owns a provider pool, and the durable
+    record is the only thing that can name it. Deleting the record while that
+    pool survives leaves a group nothing reconciles, still able to launch
+    billable machines no pool can be billed for, so a release that fails keeps
+    the pool owned for the next attempt.
+    """
+
+    _seed_connection(isolated_services)
+    provider = _PooledProvider()
+    compute = ComputeService(
+        isolated_services.context,
+        provider_resolver=_Resolver(provider),
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=_MutationLeases(),
+    )
+    pool = compute.prepare_pooled_capacity(
+        workspace="default",
+        requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
+        region="us-east-1",
+        desired_machines=0,
+        workspace_machine_limit=10,
+        root_volume_gib=200,
+    )
+    compute.reconcile_pooled_capacity()
+    provider.delete_failure = RuntimeError("provider pool deletion failed")
+
+    with pytest.raises(UpstreamUnavailableError, match="provider pool deletion failed"):
+        compute.delete_pool(pool.name, workspace=pool.workspace_id)
+
+    with isolated_services.context.database.session() as session:
+        retained = ComputePoolRepository(session).get(pool.id)
+        retained_policy = PoolRepository(session).get(pool.name, workspace_id=pool.workspace_id)
+    assert retained is not None
+    assert retained_policy is not None
+    assert provider.delete_calls == []
+
+    provider.delete_failure = None
+    compute.delete_pool(pool.name, workspace=pool.workspace_id)
+
+    with isolated_services.context.database.session() as session:
+        deleted = ComputePoolRepository(session).get(pool.id)
+        deleted_policy = PoolRepository(session).get(pool.name, workspace_id=pool.workspace_id)
+    assert [request.pool_id for request in provider.delete_calls] == [pool.id]
+    assert deleted is None
+    assert deleted_policy is None
 
 
 def test_pooled_scale_down_waits_for_exact_volume_absence(
