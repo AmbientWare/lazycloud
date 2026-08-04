@@ -207,14 +207,15 @@ after exhausting meaningful local evidence; never replace it with a mock or
 local-only backend. Fix failures caused by the change or blocking its outcome
 and report unrelated failures separately.
 
-For live testing, whichever Tailnet the user selects or supplies for the run is
-approved; do not reject it because its account name appears personal, shared,
-or otherwise non-dedicated. Treat every provided Tailnet as shared external
-state: inspect the current configuration before mutation, scope changes to
-explicitly LazyCloud-owned test tags, grants, clients, keys, routes, and
-devices, preserve every unrelated user and resource, and prove cleanup is
-equally scoped. Never replace the complete Tailnet policy or delete or rotate a
-resource that is not proven to belong to the current test.
+A target the owner explicitly selects or supplies for a run is approved; do not
+refuse it because its account or network name looks personal or shared. Treat
+every external system a live run touches—provider account, cluster, tailnet, DNS
+zone, registry—as shared state you do not own. Read its current configuration
+before mutating it, scope every change to resources the run created and can name
+exactly, preserve every unrelated user and resource, and prove cleanup is
+equally scoped. Never replace a whole policy or configuration document, and
+never delete or rotate a resource that is not proven to belong to the current
+run.
 
 ## Product Phase And Destructive Work
 

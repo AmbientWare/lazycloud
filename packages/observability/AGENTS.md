@@ -1,12 +1,16 @@
 # Observability Package
 
-Own durable events, usage/accounting, metrics, log/event streams, telemetry
-setup, and billing evidence. SQL access stays repository-backed, hot streams use
-coordination primitives, and optional exporters initialize lazily. No apps, SDK,
-worker/scheduler loops, or providers. Preserve accounting, ordering, cursor,
-workspace isolation, and loss-risk behavior through the real repository and
-API/stream.
+Durable events, usage and accounting, metrics, log and event streams, telemetry
+setup, and the evidence billing is built on.
 
-A broad exception handler on a capacity, enrolment, or billing path emits a
-durable `EventLevel.Error` event or re-raises — it does not swallow. Wrap the
-emit so a failure to record never replaces the failure being recorded.
+SQL access stays repository-backed, hot streams use coordination primitives, and
+optional exporters initialize lazily so an unconfigured one costs nothing. Apps,
+SDK, worker and scheduler loops, and providers stay outside.
+
+Accounting, ordering, cursor semantics, and workspace isolation are correctness
+properties here rather than conveniences: a dropped or misattributed event is a
+billing defect.
+
+A broad exception handler on a capacity, enrollment, or billing path either
+records a durable error event or re-raises—it never swallows. Wrap the recording
+itself, so that failing to record can never replace the failure being recorded.

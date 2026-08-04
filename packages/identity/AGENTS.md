@@ -1,8 +1,13 @@
 # Identity Package
 
-Own authentication, authorization, tokens, bootstrap, and workspace identity.
-Authorization decisions stay deterministic; durable access uses explicit
-database repositories and runtime context uses narrow protocols. Preserve
-tenant scope and admin/worker/machine token semantics. Keep focused evidence for
-distinct scope, token-kind, revocation, forgery, single-use, and secret-leak
-outcomes through a real issuer and protected request.
+Authentication, authorization, tokens, bootstrap, and workspace identity.
+
+Authorization decisions stay deterministic and inspectable: the same principal
+and the same resource yield the same answer, with no ambient state quietly
+deciding it. Durable access uses explicit database repositories, and runtime
+context arrives through narrow protocols.
+
+Tenant scope and the distinctions between admin, worker, and machine tokens are
+load-bearing—preserve them explicitly rather than deriving them. Treat token
+scope, token kind, revocation, forgery resistance, single use, and secret
+non-disclosure as separate properties that each have to hold on their own.

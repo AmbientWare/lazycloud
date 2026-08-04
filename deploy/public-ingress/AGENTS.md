@@ -1,26 +1,21 @@
-# Public ingress
+# Public Ingress
 
-`cloudflared.yml` is the whole public surface. The tunnel is locally managed
-(`config_src: local`), so the dashboard pushes nothing and adding a public
-hostname there changes no routing while appearing to. Any change to what the
-internet can reach is a change to this file and is reviewed here.
+The `cloudflared` sidecar that puts the control plane on the public internet.
+`cloudflared.yml` is the entire public surface: the tunnel is locally managed, so
+nothing outside this file adds or removes a route. `README.md` covers operating
+and rotating it.
 
-- The ingress list is ordered and first-match-wins. A rule appended after the
-  catch-all is dead. `path` is an anchored Go regex.
-- An edge refusal removes a surface; it never replaces the origin's
-  authorization. Do not relax an origin check because a prefix is blocked here.
-- `*.lazycloud.dev` must forward every path. Generated invoke hosts are rewritten
-  to the stub's handler path by the control plane's host-routing middleware, so a
-  path filter breaks user applications rather than restricting them.
-- The base host must stay the apex. Universal SSL covers exactly one wildcard
-  level, so a base of `api.lazycloud.dev` puts invoke hosts at
-  `*.api.lazycloud.dev`, outside the certificate.
-- The tunnel id in this file is an identifier and belongs in the repository. The
-  tunnel secret lives only in the credentials file named by
-  `LAZYCLOUD_PUBLIC_INGRESS_CREDENTIALS_FILE`, outside the repository.
-- The container runs as uid 65532. A credentials file at mode `0400` owned by
-  the operator cannot be read inside it; the parent directory holds the
-  restriction instead. See `README.md`.
-- This sidecar shares the control plane's network namespace, so recreating
-  `control-plane` destroys it and Compose does not bring it back. See
-  `deploy/AGENTS.md`.
+- A change to this file is a change to what the internet can reach. Review it as
+  one, and keep it small enough to review that way.
+- The ingress list is ordered and first match wins, so a rule placed after the
+  catch-all is dead.
+- Refusing something at the edge removes a surface; it never replaces the
+  origin's own authorization. Do not relax an origin check because a prefix is
+  blocked here.
+- The wildcard host forwards every path. Generated per-application hosts are
+  rewritten to their handler path upstream, so a path filter here breaks user
+  applications rather than restricting them.
+- A wildcard certificate covers exactly one label, which is why the base host
+  stays at the zone apex.
+- The tunnel identifier belongs in the repository; the tunnel secret lives only
+  in the credentials file the deployment points at, outside the repository.
