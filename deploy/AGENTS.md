@@ -45,8 +45,25 @@ current test.
   bring them back. The stack then reports every service healthy while the
   control plane is absent from the tailnet and off the public origin; remote
   nodes fail to resolve it as a peer minutes later. Follow any `control-plane`
-  recreate with `docker compose up -d tailnet-gateway public-ingress`, and
-  confirm `tailscale status` reports `Online: True` before trusting a run.
+  recreate with `docker compose up -d --force-recreate tailnet-gateway
+  public-ingress`. Plain `up -d` is not enough: the sidecar can stay attached to
+  the namespace of a control plane that no longer exists, and it stays healthy
+  there.
+- `tailscale status` reporting `Online: True` does not mean the control plane is
+  reachable. It describes the sidecar's own session, which is healthy whether or
+  not anything is listening behind it — a sidecar attached to a dead namespace
+  reports `Online: True` while every dial to the runtime origin times out. The
+  check that distinguishes them is from inside the shared namespace:
+  `docker compose exec tailnet-gateway wget -qO- http://127.0.0.1:9000/healthz`.
+  A refusal there means the sidecar and the control plane are in different
+  namespaces, whatever the tailnet says.
+- Resetting local state means Postgres, Redis, and the agent together. Redis is
+  keyed by durable IDs, so a recreated database leaves the scheduler refusing
+  every reconcile with `capacity owner … has multiple agent pool configs`, and
+  the agent's `/var/lib/lazycloud/agent` is a host bind mount whose enrollment
+  and worker slots outlive both. Clear `slots/`, `agent-state.json`,
+  `active-worker-slots.json`, and `runtime-ready.json`; leave `images/` alone
+  unless the image cache is the thing being tested.
 - `public-ingress` is a locally-managed tunnel: the tunnel carries
   `config_src: local`, so Cloudflare pushes no configuration and
   `deploy/public-ingress/cloudflared.yml` is the only source of what is exposed.
