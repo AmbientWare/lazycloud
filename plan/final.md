@@ -337,7 +337,6 @@ by the generated-invoke host routing), and edge path refusal for `/metrics` and
   already funnel through `validate_provider_network_configuration`, which
   checked the internal origin's reachability but only HTTPS on the public one —
   so `https://127.0.0.1` passed. Now refused by name.*
-- [ ] **INFRA-15** Scrape, alert, and page on the tracks' failure signals — *after INFRA-12, CAP-02, CAP-08*
 
 **Phase 3 acceptance.** An EC2 instance in the connected account reaches the
 ingress and completes enrolment. Sustained load equal to a full pool launch does
@@ -349,7 +348,18 @@ answer here.
 The payoff. Deletes the pool bootstrap key, the tailnet-first boot path, the
 duplicated bash SigV4, and roughly 350 lines of shell.
 
-- [ ] **BOOT-04** Point managed-pool nodes at the public control-plane origin — *after BOOT-03, INFRA-06, Gate A*
+- [x] **BOOT-04** Point managed-pool nodes at the public control-plane origin — *both
+  composition sites changed together: the API and the scheduler reconcile the same pools, so
+  different origins would surface as launch templates alternating on every reconcile.
+  `internal_origin` stays on the runtime callback origin at every site — that one is
+  worker-facing and not interchangeable with this. `tailnet_join` had refused any
+  control-plane origin that is not a reachable peer, and it runs before the first report, so
+  the refusal reached no one: `i-098695f2d2ee81c7d` ran, made zero provider-node calls, and
+  surfaced 5 minutes later as `bootstrap_timed_out`. It now pins the peer address when there
+  is one and skips it when there is not, with a single refusal covering both origins. The node
+  still joins the tailnet — that is the data path, unchanged; only reaching the control plane
+  stops depending on it. Accepted on real hardware; the run is BOOT-04a's `ready: 1` on
+  `i-085fdc077ae093bc0`.*
 - [x] **BOOT-04a** Give the worker the runtime origin, not the public one — *five defects stood
   between enrolment and a serving worker, each found on live nodes.*
   `agent_state_payload` listed the bootstrap fields by hand and omitted
@@ -377,13 +387,57 @@ duplicated bash SigV4, and roughly 350 lines of shell.
   public SDK, executed on `i-016ddfc783bfcefdb`, and returned
   `{'marker': …, 'doubled': 42, 'status': 'complete'}`.
   The same change deletes the slot-pool machinery, fifteen symbols with no callers anywhere.*
-- [ ] **BOOT-05** Reduce the bootstrap script to identity plus the published provisioner — *after BOOT-04*
-- [ ] **BOOT-08** Collapse the AMI bake onto the published install script — *after BOOT-05*
-- [ ] **BOOT-06** Delete the pool bootstrap key subsystem — *after BOOT-05*
-- [ ] **BOOT-07** Remove the bootstrap tag from the tailnet policy — *after BOOT-06*
-- [ ] **BOOT-09** Delete the tailnet-first rationale from surviving docstrings — *after BOOT-07*
-- [ ] **INFRA-08** Delete Tailscale Serve and Funnel — *after INFRA-06*
-- [ ] **INFRA-10** Prove the SSM agent is enabled in the baked AMI — *after INFRA-09, BOOT-08*
+- [x] **BOOT-05** Reduce the bootstrap script to identity plus the published provisioner — *the
+  script installed Docker, installed Tailscale, downloaded the agent, and wrote a systemd unit;
+  the published installer does all four and the copies had drifted — the script wrote a unit the
+  agent also writes, and pinned one Tailscale version where the installer pins per architecture.
+  It now resolves provider identity and runs the installer. `--agent-url` takes a published
+  artifact — HTTPS, no credentials, since the object is public and the enrolment credential must
+  not travel with the request; the existing SHA-256 verification covers it unchanged. The
+  gateway-derived URL stays for the self-hosted path, which has no release bucket behind it.
+  Against the plan the script keeps one report: the agent narrates its own phases only once it
+  exists, and a node that dies at identity or install has no other voice, so the control plane
+  would see nothing but a deadline.*
+- [x] **BOOT-08** Collapse the AMI bake onto the published install script — *the bake user-data
+  was a second copy of the installer's Docker, Tailscale, and agent steps, pinning its own
+  Tailscale version and verifying its own digest. It now embeds the install script this
+  repository generates and runs it `--install-only`, so an image cannot be built from a different
+  installer than the one shipped beside it. `--install-only` relaxes both enrolment gates — a
+  bake has no control plane to name and no credential to carry, and requiring either would bake a
+  machine identity into an image every instance boots from — refuses a credential outright, and
+  requires `--agent-url`, since an image built against the gateway route would pin itself to one
+  control plane. The bootstrap script gained the log redirect it never had.*
+- [x] **BOOT-06** Delete the pool bootstrap key subsystem — *the key existed so a node could join
+  the tailnet from user-data and report as a peer, which needed a reusable key in every launch
+  template, a table to store it, a service to mint and revoke it, a third tailnet tag to scope it,
+  and an OAuth client owning two tags. A node now reports over the public origin — which is what
+  it already did, since a machine in a customer VPC holds no tailnet session at its first report
+  — and joins with the single-use machine key enrolment vends it. All of it is gone, along with
+  the bootstrap tests that drove the tailnet join, resolver pinning, and key delivery; the
+  digest-verification proof moved with the download it covered.*
+- [x] **BOOT-07** Remove the bootstrap tag from the tailnet policy — *`tag:lazycloud-bootstrap`,
+  its owner entry, its grant to the control-plane port, and its SSH/proxy denials are out of
+  `deploy/tailnet/policy.json.tftpl`, with the `bootstrap_tag` variable and output. Landed inside
+  BOOT-06, which removed the only thing that ever carried the tag.*
+- [x] **BOOT-09** Delete the tailnet-first rationale from surviving docstrings — *every one of
+  them explained why a node joined the tailnet before it had an identity: the module docstrings,
+  the shared state-path comment about two daemons racing for one socket, the key TTL sized for a
+  launch template, and a validator guarding a tag that no longer exists. The agent identity check
+  kept its reasoning but not its example — the session it distinguishes from is another machine's,
+  not a pool bootstrap's.*
+- [x] **INFRA-08** Delete Tailscale Serve and Funnel — *the premise this item was written on was
+  false. `plan/14-ingress-design.md:342-352` recorded the `:443` Serve handler as proxying to
+  `127.0.0.1:9000`, "a path no consumer uses", and scheduled the deletion for "any time after
+  INFRA-06" because the path was inert. It was live and public: the Funnel is how a managed node
+  pulled the 47.6 MB agent binary, so it served that artifact to anyone who asked. It could only
+  be deleted once BOOT-05's `--agent-url` moved the artifact to the release bucket, and it landed
+  as BOOT-05's last step rather than on its own schedule. `serve.json`, `TS_SERVE_CONFIG`, and the
+  `/config` mount are gone.*
+- [x] **INFRA-10** Prove the SSM agent is enabled in the baked AMI — *enabled and then asserted
+  rather than assumed, in the same bake as BOOT-08, and recorded in the node image marker so a
+  machine can be asked what it has. A pool node writes no console output and reports nothing once
+  its agent cannot reach the control plane, so an image that silently lacks SSM leaves that entire
+  window unreachable.*
 - [ ] **INFRA-16** Retire the pool bootstrap key material BOOT-06 leaves behind — *after BOOT-06*
 
 **Watch item.** BOOT-05 must keep the 47.6 MB agent artifact off the control
@@ -433,7 +487,7 @@ not the repo.
 - [x] **CAP-10** Delete `Worker.version` — *written once as "pending", copied forward, never read for a decision. Field, `register_worker` parameter, both write sites and the `workers` column removed; `agents.version` is a different column and stays. Acceptance met on a fresh bootstrap: stack healthy, no `version` on `workers`, a worker registered*
 - [x] **CAP-13** Delete the pending-worker reservation path — *2d8db15. The restart measurement was answered by inspection, not experiment: `list_workers` rebuilds the scheduler's worker set from Redis every tick and the reservation lives in the same Redis, so the "durable survives a restart, in-memory does not" premise was false. The Pending record is written at enrolment, so the claim never fires during a machine boot — PlacementMiss already dedups that window. CAP-01's guard went with it, along with `source`, the `reserve()` `target_worker_id` parameter, `PendingCapacityOwner`, and a stranding race between the two reservation kinds*
 - [x] **CAP-14** Collapse acquisition to one idempotent entry point — *68aaea2. The risk it named is answered: compute commits the operation row with the pool row locked **before** the provider call, the unique constraint on `reservation_id` holds, and the provider idempotency key derives from the operation id — so the scheduler-side persist was fencing something already fenced. `plan_acquisition`, `ensure_acquisition` and `reconcile` become one `ensure_capacity`, and `CapacityAcquisitionPlanningRequest` plus the caller-supplied `desired_unit` are gone. Pool sizing keeps its committed floor through `minimum_unit`, which CAP-15 removes with that caller. Acceptance: a retry reuses one operation row (`get_by_reservation` raises on a second) and launches exactly one machine*
-- [~] **CAP-15** Delete `CapacityPoolSizingState` and the `pools.sizing_*` columns — *investigated, and the investigation found a live defect that outranked the item. The plan assumed the sizing backoff is what stops a broken pool relaunching billable machines. It is not: it only covers the case where the **provider call itself fails**, so no machine launches. In the case that actually costs money — the machine launches and never becomes a worker — the provider call succeeds, no sizing failure is recorded, and the backoff never engages. That path was bounded only by `max_launch_attempts` → degraded, which **only the reconciler honoured**: acquisition never read the flag and placement cleared it on every dispatch claim. Fixed in 04bd830 (with a focused test, mutation-verified), independent of this item. What remains for CAP-15 proper: derive the provider-call backoff from `compute_capacity_operations` — noting those rows do **not** record bootstrap reclaims, so they can only cover the provider-call case — then drop the columns. Its acceptance (30 min against an always-failing pool) needs the connected AWS environment*
+- [~] **CAP-15** Delete `CapacityPoolSizingState` and the `pools.sizing_*` columns — *investigated, and the investigation found a live defect that outranked the item. The plan assumed the sizing backoff is what stops a broken pool relaunching billable machines. It is not: it only covers the case where the **provider call itself fails**, so no machine launches. In the case that actually costs money — the machine launches and never becomes a worker — the provider call succeeds, no sizing failure is recorded, and the backoff never engages. That path was bounded only by `max_launch_attempts` → degraded, which **only the reconciler honoured**: acquisition never read the flag and placement cleared it on every dispatch claim. Fixed in 04bd830 (with a focused test, mutation-verified), independent of this item. What remains for CAP-15 proper: derive the provider-call backoff from `compute_capacity_operations` — noting those rows do **not** record bootstrap reclaims, so they can only cover the provider-call case — then drop the columns. Its acceptance (30 min against an always-failing pool) needs the connected AWS environment. **That remaining scope is not executable as written.** `sizing_last_scale_down_at` is written by `pool_drain.py:265-274`, and neither call that reaches it writes a `compute_capacity_operations` row — `terminate_pool_machine` (`compute/service.py:3318`) and `release_internal_pool_machine` (`:2472`) both act on the provider-instance records directly. Scale-down history therefore cannot be derived from that table at all until drain is first made to record there, which is work this item does not carry today. The deletion table at `plan/11-capacity-scheduling.md:633-634` is also missing `pool_drain.py`, which is a writer of the state being deleted*
 - [ ] **CAP-16** Collapse the reservation status machine — *after CAP-15*
 - [ ] **CAP-17** Split `capacity_reservations.py` along its five-way seam — *after CAP-16*
 - [x] **ERR-10** Collapse three at-limit conventions into one — *the three were worse than recorded: `prepare_pooled_capacity` raised a bare `ManagedComputeLaunchError`, which the MRO walk maps to **400**, not the 500 the plan assumed; `launch_pool_capacity` gave 409 coded `conflict`. The plan's prescription — make `CapacityAcquisitionStatus.AtLimit` the single internal representation — does not fit: that contract is reservation-scoped and neither raising site has a reservation, and the reservation path never reaches HTTP (the scheduler treats AtLimit as backpressure, per CAP-07). Unified on `CapacityLimitReachedError` instead: 409, code derived from the type name, message naming the limit and what is held. Verified 409 + `capacity_limit_reached` through the real status mapping*
