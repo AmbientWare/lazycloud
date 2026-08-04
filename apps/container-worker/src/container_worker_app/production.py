@@ -61,7 +61,6 @@ from worker.checkpoints import (
     CheckpointPersistencePlan,
 )
 from worker.configuration import (
-    DEFAULT_WORKER_CONFIG_PATH,
     WORKER_CONFIG_PATH_ENV,
     WorkerConfiguration,
 )
@@ -246,7 +245,10 @@ class ProductionWorkerSettings(BaseSettings):
         file_secret_settings: PydanticBaseSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
         del cls, dotenv_settings
-        config_path = os.environ.get(WORKER_CONFIG_PATH_ENV, DEFAULT_WORKER_CONFIG_PATH).strip()
+        # No default path: the agent and Compose both name the file explicitly,
+        # and an unset variable has to mean "read no YAML" so a stray file at a
+        # well-known path cannot decide a worker's capacity.
+        config_path = os.environ.get(WORKER_CONFIG_PATH_ENV, "").strip()
         yaml_settings = YamlConfigSettingsSource(
             settings_cls,
             yaml_file=config_path or None,

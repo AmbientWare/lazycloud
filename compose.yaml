@@ -832,7 +832,7 @@ services:
     environment: &container-worker-environment
       <<: *container-worker-tuning
       LAZYCLOUD_HOME: "${LAZYCLOUD_COMPOSE_CONTAINER_HOME:-/var/lib/lazycloud}"
-      WORKER_CONFIG_PATH: "${WORKER_CONFIG_PATH:-/etc/lazycloud/worker/worker.yaml}"
+      LAZYCLOUD_WORKER_CONFIG_PATH: "${LAZYCLOUD_WORKER_CONFIG_PATH:-/etc/lazycloud/worker/worker.yaml}"
       WORKER_REPOSITORY_URL: "${WORKER_REPOSITORY_URL:-http://control-plane:9000}"
       WORKER_TOKEN: "${LAZYCLOUD_CONTAINER_WORKER_TOKEN:-}"
       WORKER_CONTAINER_SERVICE_TOKEN: "${LAZYCLOUD_CONTAINER_SERVICE_TOKEN:-}"
@@ -975,7 +975,7 @@ services:
     environment:
       <<: *container-worker-tuning
       LAZYCLOUD_HOME: "${LAZYCLOUD_COMPOSE_CONTAINER_HOME:-/var/lib/lazycloud}"
-      WORKER_CONFIG_PATH: "${WORKER_CONFIG_PATH:-/etc/lazycloud/worker/worker.yaml}"
+      LAZYCLOUD_WORKER_CONFIG_PATH: "${LAZYCLOUD_WORKER_CONFIG_PATH:-/etc/lazycloud/worker/worker.yaml}"
       WORKER_REPOSITORY_URL: "${WORKER_REPOSITORY_URL:-http://control-plane:9000}"
       WORKER_TOKEN: "${LAZYCLOUD_CONTAINER_WORKER_TOKEN:-}"
       WORKER_CONTAINER_SERVICE_TOKEN: "${LAZYCLOUD_CONTAINER_SERVICE_TOKEN:-}"

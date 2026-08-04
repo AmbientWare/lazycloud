@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from networking.settings import (
+    NETWORKING_CONFIG_FILE,
     BackendRouteSettings,
     ProviderNetworkClass,
     TailnetControlSettings,
@@ -9,7 +12,41 @@ from networking.settings import (
     validate_provider_network_configuration,
 )
 from networking.tailnet import TailnetRuntimeMode
+from networking.tailnet_control import DEFAULT_TAILSCALE_API_URL
 from pydantic import SecretStr, ValidationError
+from shared.settings import CONFIG_DIR_ENV
+
+
+def test_tailnet_settings_layer_yaml_under_env_and_never_carry_credentials(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = tmp_path / NETWORKING_CONFIG_FILE
+    config.write_text(
+        "tailnet:\n  control:\n    api_url: https://yaml.tailscale.example.test\n",
+        encoding="utf-8",
+    )
+
+    # A file nothing addresses is a file nothing reads. The failure this guards
+    # against is a config file left on one machine quietly changing results
+    # everywhere it exists and nowhere it does not.
+    assert TailnetControlSettings().api_url == DEFAULT_TAILSCALE_API_URL
+
+    monkeypatch.setenv(CONFIG_DIR_ENV, str(tmp_path))
+    assert TailnetControlSettings().api_url == "https://yaml.tailscale.example.test"
+
+    monkeypatch.setenv("LAZYCLOUD_TAILNET_API_URL", "https://env.tailscale.example.test")
+    assert TailnetControlSettings().api_url == "https://env.tailscale.example.test"
+
+    from_init = TailnetControlSettings(api_url="https://init.tailscale.example.test")
+    assert from_init.api_url == "https://init.tailscale.example.test"
+
+    config.write_text(
+        "tailnet:\n  control:\n    oauth_client_id: tenant-client\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="oauth_client_id"):
+        TailnetControlSettings()
 
 
 def test_tailnet_control_rejects_partial_cleanup_credentials() -> None:

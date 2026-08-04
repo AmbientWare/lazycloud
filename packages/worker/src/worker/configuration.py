@@ -5,7 +5,7 @@ from typing import Self
 
 import yaml
 from pydantic import Field, field_validator, model_validator
-from shared.app_identity import NAME, WORKER_CHECKPOINT_ROOT
+from shared.app_identity import ENV_PREFIX, NAME, WORKER_CHECKPOINT_ROOT
 from shared.contracts import ContractModel
 from shared.routing import BackendRouteTransport
 
@@ -26,7 +26,10 @@ from worker.source_code import (
     DEFAULT_SOURCE_CACHE_MAX_ENTRIES,
 )
 
-WORKER_CONFIG_PATH_ENV = "WORKER_CONFIG_PATH"
+# The prefix is load-bearing: the suite clears LAZYCLOUD_-prefixed variables, so
+# an unprefixed name would let a file left at the default path on one developer's
+# machine decide what the tests observe.
+WORKER_CONFIG_PATH_ENV = f"{ENV_PREFIX}_WORKER_CONFIG_PATH"
 DEFAULT_WORKER_CONFIG_PATH = f"/etc/{NAME}/worker/worker.yaml"
 WORKER_CONFIGURATION_SECTION = "configuration"
 

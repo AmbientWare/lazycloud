@@ -7,8 +7,9 @@ from urllib.parse import urlparse
 
 from compute.agent_control import TailnetConfig, host_is_unreachable_from_a_remote_machine
 from pydantic import Field, SecretStr, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import SettingsConfigDict
 from shared.app_identity import CONTROL_PLANE_TAILNET_HOSTNAME, ENV_PREFIX
+from shared.settings import YamlLayeredSettings
 
 from networking.dialer import BackendRouteDialerConfig
 from networking.routing import BackendRouteAuthenticator
@@ -24,20 +25,25 @@ from networking.tailnet_control import (
 
 _TAILNET_TAG_PATTERN = re.compile(r"tag:[a-z0-9][a-z0-9-]{0,62}")
 
+NETWORKING_CONFIG_FILE = "networking.yaml"
+
 
 class ProviderNetworkClass(StrEnum):
     ClusterLocal = "cluster_local"
     Remote = "remote"
 
 
-class TailnetRuntimeSettings(TailnetRuntimeOptions, BaseSettings):
+class TailnetRuntimeSettings(TailnetRuntimeOptions, YamlLayeredSettings):
     hostname: str = CONTROL_PLANE_TAILNET_HOSTNAME
     socket_path: str = "/var/run/tailscale/tailscaled.sock"
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_TAILNET_",
-        extra="ignore",
+        extra="forbid",
     )
+
+    yaml_file_name = NETWORKING_CONFIG_FILE
+    yaml_section = "tailnet.runtime"
 
     @field_validator(
         "control_url",
@@ -61,7 +67,7 @@ class TailnetRuntimeSettings(TailnetRuntimeOptions, BaseSettings):
         return TailnetConfig(control_url=self.control_url)
 
 
-class TailnetControlSettings(BaseSettings):
+class TailnetControlSettings(YamlLayeredSettings):
     oauth_client_id: str = ""
     oauth_client_secret: SecretStr = SecretStr("")
     agent_tag: str = "tag:lazycloud-agent"
@@ -75,8 +81,14 @@ class TailnetControlSettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_TAILNET_",
-        extra="ignore",
+        extra="forbid",
     )
+
+    yaml_file_name = NETWORKING_CONFIG_FILE
+    yaml_section = "tailnet.control"
+    # The client id is half of an OAuth credential even though its type is not
+    # secret, and it identifies the tenant the other half unlocks.
+    env_only_fields = frozenset({"oauth_client_id"})
 
     @field_validator("oauth_client_id", "api_url")
     @classmethod
@@ -111,13 +123,16 @@ class TailnetControlSettings(BaseSettings):
         )
 
 
-class BackendRouteSettings(BaseSettings):
+class BackendRouteSettings(YamlLayeredSettings):
     auth_key: SecretStr = SecretStr("")
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_BACKEND_ROUTE_",
-        extra="ignore",
+        extra="forbid",
     )
+
+    yaml_file_name = NETWORKING_CONFIG_FILE
+    yaml_section = "backend_route"
 
     def to_authenticator(self) -> BackendRouteAuthenticator:
         return BackendRouteAuthenticator(self.auth_key)
@@ -247,6 +262,7 @@ def _is_https_api_url(value: str) -> bool:
 
 
 __all__ = [
+    "NETWORKING_CONFIG_FILE",
     "BackendRouteSettings",
     "ProviderNetworkClass",
     "TailnetControlSettings",
