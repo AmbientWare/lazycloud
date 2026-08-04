@@ -14,11 +14,11 @@ from shared.checkpoints import AutomaticCheckpointCreationLease, CheckpointRecor
 from shared.container_requests import StopContainerReason
 from shared.contracts import ContractModel
 from shared.realtime.contracts import CloudEventRecord, ContainerMetricsPayload
+from shared.routing import AgentBackendRoute
 from shared.scheduling import (
     ContainerIpAssignment,
     ContainerStatusUpdatePlan,
     NetworkIpMutationPlan,
-    SchedulerBackendRoute,
     SchedulerContainerAddress,
     SchedulerContainerAddressMap,
     SchedulerContainerState,
@@ -1110,7 +1110,7 @@ class RemoteSchedulerContainerRepository:
         container_id: str,
         address: str,
         *,
-        route: SchedulerBackendRoute | None = None,
+        route: AgentBackendRoute | None = None,
     ) -> SchedulerContainerAddress:
         response = self.client.set_worker_address(
             SetWorkerAddressRequest(container_id=container_id, address=address, route=route)
@@ -1125,7 +1125,7 @@ class RemoteSchedulerContainerRepository:
         container_id: str,
         address: str,
         *,
-        route: SchedulerBackendRoute | None = None,
+        route: AgentBackendRoute | None = None,
     ) -> SchedulerContainerAddress:
         response = self.client.set_container_address(
             SetContainerAddressRequest(container_id=container_id, address=address, route=route)
@@ -1140,7 +1140,7 @@ class RemoteSchedulerContainerRepository:
         container_id: str,
         address_map: dict[int, str],
         *,
-        routes: list[SchedulerBackendRoute] | None = None,
+        routes: list[AgentBackendRoute] | None = None,
     ) -> SchedulerContainerAddressMap:
         response = self.client.set_container_address_map(
             SetContainerAddressMapRequest(

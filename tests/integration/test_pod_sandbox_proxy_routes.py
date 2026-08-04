@@ -36,8 +36,7 @@ from scheduler.state import (
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.deployment_records import Deployment, DeploymentSpec
 from shared.deployments import DeploymentKind
-from shared.routing import BackendRouteState
-from shared.scheduling import SchedulerBackendRoute
+from shared.routing import AgentBackendRoute, BackendRouteState
 from starlette.websockets import WebSocketDisconnect
 from tests.url_constants import TEST_DOMAIN, TEST_URL
 from websockets.sync.server import ServerConnection, serve
@@ -381,7 +380,7 @@ def test_pinned_sandbox_route_metadata_is_ready_exact_and_address_bound(
         container,
         address_maps={container.id: {8080: "route://owned-route"}},
     )
-    route = SchedulerBackendRoute(
+    route = AgentBackendRoute(
         route_id="owned-route",
         workspace_id=container.workspace_id,
         container_id=container.id,

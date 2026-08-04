@@ -18,7 +18,6 @@ from shared.routing import (
     BackendRouteTransport,
 )
 from shared.scheduling import (
-    SchedulerBackendRoute,
     SchedulerContainerAddress,
     SchedulerContainerAddressMap,
 )
@@ -117,7 +116,7 @@ class SchedulerContainerRouteRepository(Protocol):
         container_id: str,
         address: str,
         *,
-        route: SchedulerBackendRoute | None = None,
+        route: AgentBackendRoute | None = None,
     ) -> SchedulerContainerAddress: ...
 
     def set_container_address(
@@ -125,7 +124,7 @@ class SchedulerContainerRouteRepository(Protocol):
         container_id: str,
         address: str,
         *,
-        route: SchedulerBackendRoute | None = None,
+        route: AgentBackendRoute | None = None,
     ) -> SchedulerContainerAddress: ...
 
     def set_container_address_map(
@@ -133,7 +132,7 @@ class SchedulerContainerRouteRepository(Protocol):
         container_id: str,
         address_map: dict[int, str],
         *,
-        routes: list[SchedulerBackendRoute] | None = None,
+        routes: list[AgentBackendRoute] | None = None,
     ) -> SchedulerContainerAddressMap: ...
 
     def get_container_address_map(self, container_id: str) -> SchedulerContainerAddressMap: ...
@@ -185,7 +184,7 @@ class WorkerRoutePublicationResult(ContractModel):
     worker_address: str = ""
     primary_target: str = ""
     address_map: dict[int, str] = Field(default_factory=dict)
-    routes: list[SchedulerBackendRoute] = Field(default_factory=list)
+    routes: list[AgentBackendRoute] = Field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -203,7 +202,7 @@ class SchedulerWorkerAddressPublisher:
             raise ValueError(msg)
 
         route = self._worker_route(request, address)
-        scheduler_route = _scheduler_route(route)
+        scheduler_route = route
         self.containers.set_worker_address(
             request.container_id,
             address,
@@ -263,7 +262,7 @@ class SchedulerContainerRoutePublisher:
 
         routes = [
             scheduler_route
-            for scheduler_route in (_scheduler_route(route) for route in plan.routes)
+            for scheduler_route in (route for route in plan.routes)
             if scheduler_route is not None
         ]
         primary_route = next(
@@ -379,7 +378,7 @@ class SchedulerSandboxPortPublisher:
         if address_map is not None:
             scheduler_routes = [
                 scheduler_route
-                for scheduler_route in (_scheduler_route(route) for route in routes or [])
+                for scheduler_route in (route for route in routes or [])
                 if scheduler_route is not None
             ]
             updated_ports = {route.port for route in scheduler_routes}
@@ -629,28 +628,6 @@ class WorkerContainerEventPublisher:
                 payload=payload.model_dump(mode="json"),
             )
         )
-
-
-def _scheduler_route(route: AgentBackendRoute | None) -> SchedulerBackendRoute | None:
-    if route is None:
-        return None
-    return SchedulerBackendRoute(
-        route_id=route.route_id,
-        workspace_id=route.workspace_id,
-        pool_name=route.pool_name,
-        machine_id=route.machine_id,
-        worker_id=route.worker_id,
-        container_id=route.container_id,
-        kind=_enum_value(route.kind),
-        port=route.port,
-        protocol=_enum_value(route.protocol),
-        transport=_enum_value(route.transport),
-        local_target=route.local_target,
-        proxy_target=route.proxy_target,
-        state=_enum_value(route.state),
-        error=route.error,
-        updated_at=route.updated_at,
-    )
 
 
 def _runtime_status_is_live(status: str) -> bool:

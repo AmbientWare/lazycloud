@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from compute.state import (
-    ComputeAgentRouteState,
     ComputeAgentTokenState,
     ComputeAgentWorkerSlotState,
     ComputeJoinTokenState,
@@ -11,6 +10,7 @@ from compute.state import (
     RedisComputeStateRepository,
 )
 from coordination.redis_client import RedisClient
+from shared.routing import AgentBackendRoute
 from tests.redis_fakes import FakeRedis
 
 
@@ -72,7 +72,7 @@ def test_compute_state_repository_tracks_pools_agents_slots_and_ttls() -> None:
     assert repo.list_agent_worker_slot_states("ws-1", "default", "machine-1") == [saved_slot]
     assert repo.delete_agent_worker_slot_state("ws-1", "default", "machine-1", "worker-1")
 
-    route = ComputeAgentRouteState(
+    route = AgentBackendRoute(
         route_id="route-1",
         workspace_id="ws-1",
         pool_name="default",
@@ -127,7 +127,7 @@ def test_compute_state_repository_tracks_pools_agents_slots_and_ttls() -> None:
         created_at=now,
         updated_at=now,
     )
-    cleanup_route = ComputeAgentRouteState(
+    cleanup_route = AgentBackendRoute(
         route_id="cleanup-route",
         workspace_id="ws-1",
         pool_name="cleanup",

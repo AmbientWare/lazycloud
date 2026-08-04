@@ -36,7 +36,6 @@ from compute.agent_control import (
 from compute.projection import PoolConfig
 from compute.service import ComputeService
 from compute.state import (
-    ComputeAgentRouteState,
     ComputeAgentTokenState,
     ComputeAgentWorkerSlotState,
     ComputeJoinTokenState,
@@ -171,7 +170,6 @@ from shared.objects import ObjectRecord
 from shared.realtime.contracts import EventRecordType
 from shared.routing import AgentBackendRoute
 from shared.scheduling import (
-    SchedulerBackendRoute,
     SchedulerContainerStatus,
     SchedulerWorkerRecord,
     SchedulerWorkerStatus,
@@ -222,10 +220,8 @@ from gateway.pool_state import GatewayPoolStateCoordinator
 from gateway.route_prewarm import RoutePrewarmService
 from gateway.stub_config import deployment_spec_from_stub, stub_config, stub_kind
 from gateway.views import (
-    agent_backend_route,
     agent_bootstrap_view,
     agent_pool_transport,
-    agent_route_state,
     agent_route_view,
     agent_telemetry_state,
     agent_worker_record,
@@ -1952,7 +1948,7 @@ class GatewayControlService:
             )
             plan = plan_route_status_update(
                 state,
-                agent_backend_route(route) if route is not None else None,
+                route if route is not None else None,
                 AgentRouteStatusRequest(
                     route_id=request.route_id,
                     state=request.state,
@@ -1963,10 +1959,8 @@ class GatewayControlService:
             )
             if not plan.accepted or plan.updated is None:
                 raise InvalidInputError(plan.err_msg or "agent route status update rejected")
-            self.compute_states.save_agent_route_state(agent_route_state(plan.updated))
-            self.scheduler_container_lookup.update_backend_route(
-                _scheduler_backend_route(plan.updated)
-            )
+            self.compute_states.save_agent_route_state(plan.updated)
+            self.scheduler_container_lookup.update_backend_route(plan.updated)
             if plan.should_emit_event:
                 event_data: dict[str, JsonValue] = dict(plan.event_attrs)
                 self.services.events.emit(
@@ -2001,7 +1995,7 @@ class GatewayControlService:
             slots = []
             if provided is not None:
                 routes = [
-                    agent_backend_route(route)
+                    route
                     for route in self.compute_states.list_agent_route_states(
                         provided.workspace_id,
                         provided.pool_name,
@@ -2124,7 +2118,7 @@ class GatewayControlService:
             changed=changed,
         )
 
-    def _agent_route_view(self, route: ComputeAgentRouteState | AgentBackendRoute) -> AgentRoute:
+    def _agent_route_view(self, route: AgentBackendRoute | AgentBackendRoute) -> AgentRoute:
         if self.route_authenticator is None:
             raise RuntimeError("backend route authenticator is not configured")
         return agent_route_view(
@@ -3034,26 +3028,6 @@ def _machine_enrollment_snapshot(
         last_join_at=state.last_join_at or utc_now(),
         last_heartbeat_at=state.last_heartbeat_at,
         last_disconnect_at=state.last_disconnect_at,
-    )
-
-
-def _scheduler_backend_route(route: AgentBackendRoute) -> SchedulerBackendRoute:
-    return SchedulerBackendRoute(
-        route_id=route.route_id,
-        workspace_id=route.workspace_id,
-        pool_name=route.pool_name,
-        machine_id=route.machine_id,
-        worker_id=route.worker_id,
-        container_id=route.container_id,
-        kind=str(getattr(route.kind, "value", route.kind)),
-        port=route.port,
-        protocol=str(getattr(route.protocol, "value", route.protocol)),
-        transport=str(getattr(route.transport, "value", route.transport)),
-        local_target=route.local_target,
-        proxy_target=route.proxy_target,
-        state=str(getattr(route.state, "value", route.state)),
-        error=route.error,
-        updated_at=route.updated_at,
     )
 
 

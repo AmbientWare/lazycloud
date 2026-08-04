@@ -68,10 +68,9 @@ from shared.http.pods import (
 )
 from shared.http.workspace_changes import WorkspaceChangeType
 from shared.paths import DEFAULT_SANDBOX_WORKDIR
-from shared.routing import BackendRouteState, parse_backend_route_address
+from shared.routing import AgentBackendRoute, BackendRouteState, parse_backend_route_address
 from shared.scheduling import (
     ContainerSchedulingDirectory,
-    SchedulerBackendRoute,
     SchedulerContainerState,
     SchedulerContainerStatus,
 )
@@ -1344,7 +1343,7 @@ def _task_status_for_container(status: ContainerStatus) -> str:
             return TaskStatus.Failed.value
 
 
-def _route_id_for_port(routes: Iterable[SchedulerBackendRoute], port: int) -> str:
+def _route_id_for_port(routes: Iterable[AgentBackendRoute], port: int) -> str:
     for route in routes:
         if route.port == port:
             return route.route_id
@@ -1352,7 +1351,7 @@ def _route_id_for_port(routes: Iterable[SchedulerBackendRoute], port: int) -> st
 
 
 def _owned_route_id_for_port(
-    routes: Iterable[SchedulerBackendRoute],
+    routes: Iterable[AgentBackendRoute],
     *,
     address: str,
     port: int,

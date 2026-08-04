@@ -53,6 +53,7 @@ from scheduler.pool_state import SchedulerPoolStateService
 from scheduler.service import Scheduler, SchedulerStateStores, SchedulerWorkloadControls
 from scheduler.state import (
     DEFAULT_CONTAINER_REQUEST_CLAIM_LEASE_SECONDS,
+    AgentBackendRoute,
     CapacityReservationDispatchAllocation,
     ConcurrencyCounter,
     ConcurrencyReservation,
@@ -64,7 +65,6 @@ from scheduler.state import (
     RedisSchedulerWorkerRepository,
     RedisWorkerNetworkIpRepository,
     RedisWorkerPoolStateRepository,
-    SchedulerBackendRoute,
     SchedulerContainerRequestClaim,
     SchedulerContainerState,
     SchedulerRepositoryError,
@@ -1238,7 +1238,7 @@ def test_scheduler_container_repository_state_indexes_and_concurrency_release(
     _assert_redis_ttl(redis, repo.keys.container_exit_code("container-1"), 86_400)
     _assert_redis_ttl(redis, repo.keys.container_termination_reason("container-1"), 86_400)
 
-    route = SchedulerBackendRoute(
+    route = AgentBackendRoute(
         route_id="route-1",
         workspace_id="ws-1",
         pool_name="default",

@@ -17,7 +17,6 @@ from networking.routing import (
     build_backend_route_dial_plan,
 )
 from pydantic import SecretStr
-from scheduler.state import SchedulerBackendRoute
 from shared.routing import AgentBackendRoute, BackendRouteState, BackendRouteTransport
 
 ROUTE_AUTH_KEY = SecretStr("0123456789abcdef0123456789abcdef")
@@ -262,7 +261,7 @@ def test_shell_backend_uses_authoritative_route_with_raw_address(
         container_id="container",
         stub_id="stub",
         address="192.168.0.85:2222",
-        route=SchedulerBackendRoute(
+        route=AgentBackendRoute(
             route_id=route_id,
             container_id="container",
             port=2222,
@@ -314,7 +313,7 @@ def test_shell_backend_authenticates_tailnet_route_before_shell_protocol(
         container_id="container",
         stub_id="stub",
         address=f"route://{route_id}",
-        route=SchedulerBackendRoute.model_validate(route.model_dump(mode="json")),
+        route=AgentBackendRoute.model_validate(route.model_dump(mode="json")),
         worker_port=2222,
         buffer_size_bytes=32 * 1024,
         dial_timeout_seconds=1,

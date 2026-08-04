@@ -8,8 +8,8 @@ from typing import Protocol
 from pydantic import Field
 from shared.contracts import ContractModel
 from shared.errors import ConflictError, NotFoundError
+from shared.routing import AgentBackendRoute
 from shared.scheduling import (
-    SchedulerBackendRoute,
     SchedulerContainerState,
     SchedulerContainerStatus,
     SchedulerWorkerRecord,
@@ -48,8 +48,8 @@ class SchedulerWorkerContainerRepository(Protocol):
 
     def update_backend_route(
         self,
-        route: SchedulerBackendRoute,
-    ) -> SchedulerBackendRoute | None: ...
+        route: AgentBackendRoute,
+    ) -> AgentBackendRoute | None: ...
 
 
 class SchedulerWorkerContainerStopper(Protocol):

@@ -1073,7 +1073,7 @@ def plan_agent_stream_snapshot(
 
 
 def agent_routes_for_stream(routes: list[AgentBackendRoute]) -> list[AgentBackendRoute]:
-    return [route for route in routes if _route_state(route.state) is not BackendRouteState.Closing]
+    return [route for route in routes if route.state is not BackendRouteState.Closing]
 
 
 def plan_route_status_update(
@@ -1092,7 +1092,7 @@ def plan_route_status_update(
     ):
         return AgentRouteStatusPlan(accepted=False, err_msg="route does not belong to this agent")
 
-    previous_state = _route_state(route.state)
+    previous_state = route.state
     previous_proxy_target = route.proxy_target
     previous_error = route.error
     update_state = _route_state(request.state) if request.state else previous_state
@@ -1104,11 +1104,11 @@ def plan_route_status_update(
             "updated_at": int(_utc(now).timestamp()),
         }
     )
-    state_changed = previous_state is not _route_state(updated.state)
+    state_changed = previous_state is not updated.state
     proxy_changed = previous_proxy_target != updated.proxy_target
     error_changed = previous_error != updated.error
     should_emit = state_changed or proxy_changed or error_changed
-    should_prewarm = _route_state(updated.state) is BackendRouteState.Ready and (
+    should_prewarm = updated.state is BackendRouteState.Ready and (
         previous_state is not BackendRouteState.Ready or proxy_changed
     )
     return AgentRouteStatusPlan(
@@ -1149,7 +1149,7 @@ def plan_route_prewarm_attempt(
     current_time = _utc(now)
     proxy_target = route.proxy_target.strip()
     next_attempts = dict(attempts or {})
-    if _route_state(route.state) is not BackendRouteState.Ready:
+    if route.state is not BackendRouteState.Ready:
         return RoutePrewarmAttemptPlan(
             decision=RoutePrewarmDecision.NotReady,
             should_attempt=False,

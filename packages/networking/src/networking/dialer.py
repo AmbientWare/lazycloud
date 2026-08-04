@@ -116,7 +116,7 @@ class BackendRouteDialer:
         route_id = route.route_id
         if deadline is None:
             deadline = time.monotonic() + self.config.timeout_seconds
-        state = _route_state(route.state)
+        state = route.state
         if state is not BackendRouteState.Ready:
             msg = f"backend route {route_id} is {state.value}"
             raise RuntimeError(msg)
@@ -150,7 +150,7 @@ class BackendRouteDialer:
             if route is None:
                 msg = f"backend route {route_id} not found"
                 raise RuntimeError(msg)
-            state = _route_state(route.state)
+            state = route.state
             if state is BackendRouteState.Ready:
                 if not route.proxy_target:
                     msg = f"backend route {route_id} has no proxy target"
@@ -275,11 +275,6 @@ def _backend_route_id(plan: BackendDialPlan) -> str:
     value = plan.metadata.get(BACKEND_ROUTE_ID_METADATA_KEY, "")
     return value.strip() if isinstance(value, str) else ""
 
-
-def _route_state(value: BackendRouteState | str) -> BackendRouteState:
-    if isinstance(value, BackendRouteState):
-        return value
-    return BackendRouteState(str(value))
 
 
 def _route_transport(value: BackendRouteTransport | str) -> BackendRouteTransport:

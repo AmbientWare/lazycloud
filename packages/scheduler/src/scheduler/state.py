@@ -17,13 +17,13 @@ from coordination.token_lock import (
 from pydantic import Field, field_validator
 from shared.container_requests import StopContainerReason
 from shared.contracts import ContractModel
+from shared.routing import AgentBackendRoute
 from shared.scheduling import (
     DEFAULT_CONTAINER_STATE_TTL_SECONDS,
     ContainerIpAssignment,
     ContainerStatusUpdatePlan,
     NetworkIpMutationAction,
     NetworkIpMutationPlan,
-    SchedulerBackendRoute,
     SchedulerContainerAddress,
     SchedulerContainerAddressMap,
     SchedulerContainerState,
@@ -1933,7 +1933,7 @@ class RedisSchedulerContainerRepository:
         container_id: str,
         address: str,
         *,
-        route: SchedulerBackendRoute | None = None,
+        route: AgentBackendRoute | None = None,
     ) -> SchedulerContainerAddress:
         record = SchedulerContainerAddress(
             container_id=container_id,
@@ -1956,9 +1956,9 @@ class RedisSchedulerContainerRepository:
         container_id: str,
         address_map: dict[int, str],
         *,
-        routes: list[SchedulerBackendRoute] | None = None,
+        routes: list[AgentBackendRoute] | None = None,
     ) -> SchedulerContainerAddressMap:
-        route_records: list[SchedulerBackendRoute] = []
+        route_records: list[AgentBackendRoute] = []
         for route in routes or []:
             route_record = _route_for_container(route, container_id=container_id)
             if route_record is not None:
@@ -1985,7 +1985,7 @@ class RedisSchedulerContainerRepository:
         container_id: str,
         address: str,
         *,
-        route: SchedulerBackendRoute | None = None,
+        route: AgentBackendRoute | None = None,
     ) -> SchedulerContainerAddress:
         record = SchedulerContainerAddress(
             container_id=container_id,
@@ -2003,7 +2003,7 @@ class RedisSchedulerContainerRepository:
             return None
         return redis_serialization.load_model_json(SchedulerContainerAddress, raw)
 
-    def update_backend_route(self, route: SchedulerBackendRoute) -> SchedulerBackendRoute | None:
+    def update_backend_route(self, route: AgentBackendRoute) -> AgentBackendRoute | None:
         route_record = _route_for_container(route, container_id=route.container_id)
         if route_record is None:
             return None
@@ -3037,10 +3037,10 @@ def plan_move_network_container_ip(
 
 
 def _route_for_container(
-    route: SchedulerBackendRoute | None,
+    route: AgentBackendRoute | None,
     *,
     container_id: str,
-) -> SchedulerBackendRoute | None:
+) -> AgentBackendRoute | None:
     if route is None:
         return None
     if route.container_id == container_id:
@@ -3049,8 +3049,8 @@ def _route_for_container(
 
 
 def _same_route(
-    left: SchedulerBackendRoute | None,
-    right: SchedulerBackendRoute | None,
+    left: AgentBackendRoute | None,
+    right: AgentBackendRoute | None,
 ) -> bool:
     if left is None or right is None:
         return False

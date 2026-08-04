@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-from enum import StrEnum
-
 from compute.agent_control import (
     WorkerRecord,
     WorkerStatus,
 )
 from compute.projection import PoolConfig, PrivatePoolState
 from compute.state import (
-    ComputeAgentRouteState,
     ComputeAgentTokenState,
     ComputeAgentWorkerSlotState,
     ComputePoolState,
@@ -30,10 +27,6 @@ from shared.errors import NotFoundError
 from shared.http.compute import PoolMachineMetricsResponse, PoolMachineResponse
 from shared.routing import (
     AgentBackendRoute,
-    BackendRouteKind,
-    BackendRouteProtocol,
-    BackendRouteState,
-    BackendRouteTransport,
 )
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from shared.tasks import Task
@@ -208,8 +201,18 @@ def agent_bootstrap_view(config: agent_control.AgentBootstrapConfig) -> AgentBoo
     )
 
 
-def agent_backend_route(route: ComputeAgentRouteState) -> AgentBackendRoute:
-    return AgentBackendRoute(
+def agent_route_view(
+    route: AgentBackendRoute,
+    *,
+    proxy_auth_token: str = "",
+) -> AgentRoute:
+    """Project a backend route onto the agent wire contract.
+
+    Written out field by field rather than copied wholesale: the wire contract
+    is public, so a field added to the domain route must be an explicit
+    decision to publish it.
+    """
+    return AgentRoute(
         route_id=route.route_id,
         workspace_id=route.workspace_id,
         pool_name=route.pool_name,
@@ -223,50 +226,6 @@ def agent_backend_route(route: ComputeAgentRouteState) -> AgentBackendRoute:
         local_target=route.local_target,
         proxy_target=route.proxy_target,
         state=route.state,
-        error=route.error,
-        updated_at=route.updated_at,
-    )
-
-
-def agent_route_state(route: AgentBackendRoute) -> ComputeAgentRouteState:
-    return ComputeAgentRouteState(
-        route_id=route.route_id,
-        workspace_id=route.workspace_id,
-        pool_name=route.pool_name,
-        machine_id=route.machine_id,
-        worker_id=route.worker_id,
-        container_id=route.container_id,
-        kind=_enum_value(route.kind),
-        port=route.port,
-        protocol=_enum_value(route.protocol),
-        transport=_enum_value(route.transport),
-        local_target=route.local_target,
-        proxy_target=route.proxy_target,
-        state=_enum_value(route.state),
-        error=route.error,
-        updated_at=route.updated_at,
-    )
-
-
-def agent_route_view(
-    route: ComputeAgentRouteState | AgentBackendRoute,
-    *,
-    proxy_auth_token: str = "",
-) -> AgentRoute:
-    return AgentRoute(
-        route_id=route.route_id,
-        workspace_id=route.workspace_id,
-        pool_name=route.pool_name,
-        machine_id=route.machine_id,
-        worker_id=route.worker_id,
-        container_id=route.container_id,
-        kind=_backend_route_kind(route.kind),
-        port=route.port,
-        protocol=_backend_route_protocol(route.protocol),
-        transport=_backend_route_transport(route.transport),
-        local_target=route.local_target,
-        proxy_target=route.proxy_target,
-        state=_backend_route_state(route.state),
         error=route.error,
         updated_at=route.updated_at,
         proxy_auth_token=proxy_auth_token,
@@ -318,32 +277,9 @@ def _agent_worker_status(status: SchedulerWorkerStatus) -> WorkerStatus:
     return WorkerStatus.Disabled
 
 
-def _enum_value(value: StrEnum | str) -> str:
-    return value.value if isinstance(value, StrEnum) else value
 
 
-def _backend_route_kind(value: BackendRouteKind | str) -> BackendRouteKind:
-    if isinstance(value, BackendRouteKind):
-        return value
-    return BackendRouteKind(value)
 
-
-def _backend_route_protocol(value: BackendRouteProtocol | str) -> BackendRouteProtocol:
-    if isinstance(value, BackendRouteProtocol):
-        return value
-    return BackendRouteProtocol(value)
-
-
-def _backend_route_transport(value: BackendRouteTransport | str) -> BackendRouteTransport:
-    if isinstance(value, BackendRouteTransport):
-        return value
-    return BackendRouteTransport(value)
-
-
-def _backend_route_state(value: BackendRouteState | str) -> BackendRouteState:
-    if isinstance(value, BackendRouteState):
-        return value
-    return BackendRouteState(value)
 
 
 def stub_for_task(control_plane: ControlPlaneService, task: Task) -> StubRecord | None:

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
 
-from compute.state import ComputeAgentRouteState, RedisComputeStateRepository
+from compute.state import RedisComputeStateRepository
 from control.deployment_resources import DeploymentResourceService
 from coordination.event_bus import (
     EventBusEvent,
@@ -64,8 +64,8 @@ from shared.identity import AuthScope, TokenStatus
 from shared.image_building.records import BuildStatus
 from shared.objects import ObjectRecord
 from shared.realtime.contracts import EventRecordType
+from shared.routing import AgentBackendRoute
 from shared.scheduling import (
-    SchedulerBackendRoute,
     SchedulerContainerStatus,
     SchedulerWorkerRecord,
     SchedulerWorkerRequest,
@@ -1107,16 +1107,16 @@ class WorkerRepositoryService:
             address=self.containers.get_worker_address(request.container_id)
         )
 
-    def _publish_agent_routes(self, routes: list[SchedulerBackendRoute]) -> None:
+    def _publish_agent_routes(self, routes: list[AgentBackendRoute]) -> None:
         if self.redis is None:
             return
         repository = RedisComputeStateRepository(self.redis)
         for route in routes:
             if not (route.route_id and route.workspace_id and route.pool_name and route.machine_id):
                 continue
-            repository.save_agent_route_state(_compute_agent_route_state(route))
+            repository.save_agent_route_state(route)
 
-    def _unpublish_agent_routes(self, routes: list[SchedulerBackendRoute]) -> None:
+    def _unpublish_agent_routes(self, routes: list[AgentBackendRoute]) -> None:
         if self.redis is None:
             return
         repository = RedisComputeStateRepository(self.redis)
@@ -1133,7 +1133,7 @@ class WorkerRepositoryService:
                 route_id,
             )
 
-    def _container_agent_routes(self, container_id: str) -> list[SchedulerBackendRoute]:
+    def _container_agent_routes(self, container_id: str) -> list[AgentBackendRoute]:
         routes = list(self.containers.get_container_address_map(container_id).routes)
         address = self.containers.get_container_address(container_id)
         if address is not None and address.route is not None:
@@ -2268,26 +2268,6 @@ def _container_startup_failure_error(payload: ContainerLifecyclePayload) -> str:
     if detail:
         return f"container startup failed during {payload.id}: {detail}"
     return f"container startup failed during {payload.id}"
-
-
-def _compute_agent_route_state(route: SchedulerBackendRoute) -> ComputeAgentRouteState:
-    return ComputeAgentRouteState(
-        route_id=route.route_id,
-        workspace_id=route.workspace_id,
-        pool_name=route.pool_name,
-        machine_id=route.machine_id,
-        worker_id=route.worker_id,
-        container_id=route.container_id,
-        kind=route.kind,
-        port=route.port,
-        protocol=route.protocol,
-        transport=route.transport,
-        local_target=route.local_target,
-        proxy_target=route.proxy_target,
-        state=route.state,
-        error=route.error,
-        updated_at=route.updated_at,
-    )
 
 
 def _runtime_container_status_from_scheduler(
