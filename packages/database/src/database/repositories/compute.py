@@ -100,6 +100,7 @@ class ComputeCapacityOperationRecord(ContractModel):
     join_attempt: int = Field(default=1, ge=1)
     shape: dict[str, JsonValue] = Field(default_factory=dict)
     failure_code: CapacityFailureCode | None = None
+    failure_count: int = Field(default=0, ge=0)
     last_error: str = Field(default="", max_length=TERMINAL_REASON_MAX_LENGTH)
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
@@ -716,6 +717,21 @@ class ComputeCapacityOperationRepository:
             .order_by(ComputeCapacityOperationTable.created_at, ComputeCapacityOperationTable.id)
         )
         return [ComputeCapacityOperationRecord.model_validate(row.payload) for row in rows]
+
+    def peak_desired_unit(self, capacity_owner_id: str) -> int:
+        """Highest unit this owner has ever been driven to, released rows included.
+
+        Released operations stay readable precisely so this stays monotonic: it
+        is the durable answer to "has the pool ever reached its initial size",
+        which is what stops the sizer from buying back every machine the drain
+        controller retires.
+        """
+        highest = self.session.scalar(
+            select(func.max(ComputeCapacityOperationTable.desired_unit)).where(
+                ComputeCapacityOperationTable.capacity_owner_id == capacity_owner_id
+            )
+        )
+        return int(highest or 0)
 
     def upsert(self, record: ComputeCapacityOperationRecord) -> ComputeCapacityOperationRecord:
         current = self.get(record.capacity_owner_id, record.operation_id, for_update=True)

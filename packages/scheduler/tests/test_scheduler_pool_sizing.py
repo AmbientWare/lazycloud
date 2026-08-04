@@ -7,7 +7,7 @@ from scheduler.pool_sizing import (
     effective_pool_headroom,
     plan_worker_pool_sizing,
 )
-from shared.capacity import CapacityOwnerKind, CapacityOwnerSource, CapacityPoolSizingState
+from shared.capacity import CapacityOwnerKind, CapacityOwnerSource, CapacityPoolSizingSnapshot
 from shared.compute_fleet import Pool
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 
@@ -36,14 +36,10 @@ def _pool(**updates: object) -> Pool:
     return Pool.model_validate(values)
 
 
-def _state(**updates: object) -> CapacityPoolSizingState:
-    values: dict[str, object] = {
-        "capacity_owner_id": OWNER_ID,
-        "pool_name": "cpu",
-        "workspace_id": "workspace-1",
-    }
+def _state(**updates: object) -> CapacityPoolSizingSnapshot:
+    values: dict[str, object] = {"capacity_owner_id": OWNER_ID}
     values.update(updates)
-    return CapacityPoolSizingState.model_validate(values)
+    return CapacityPoolSizingSnapshot.model_validate(values)
 
 
 def _worker(
@@ -119,7 +115,7 @@ def test_initial_floor_and_free_headroom_request_only_one_unit_per_reconcile() -
         headroom=headroom,
         registered_units=2,
         authoritative_units=2,
-        state=_state(initial_target_reached=True),
+        state=_state(),
         now=NOW,
     )
 
@@ -131,14 +127,14 @@ def test_initial_floor_and_free_headroom_request_only_one_unit_per_reconcile() -
     assert below_headroom.reason == "effective free headroom is below the configured minimum"
 
 
-def test_pending_target_and_durable_cooldown_prevent_duplicate_scale_up() -> None:
+def test_pending_target_and_derived_cooldown_prevent_duplicate_scale_up() -> None:
     headroom = effective_pool_headroom(_pool(), [])
     waiting_registration = plan_worker_pool_sizing(
         _pool(),
         headroom=headroom,
         registered_units=0,
         authoritative_units=1,
-        state=_state(operation_id="operation-1", target_units=1),
+        state=_state(desired_units=1),
         now=NOW,
     )
     cooldown = plan_worker_pool_sizing(
@@ -146,10 +142,7 @@ def test_pending_target_and_durable_cooldown_prevent_duplicate_scale_up() -> Non
         headroom=headroom,
         registered_units=1,
         authoritative_units=1,
-        state=_state(
-            initial_target_reached=True,
-            last_scale_up_at=NOW - timedelta(seconds=5),
-        ),
+        state=_state(last_requested_at=NOW - timedelta(seconds=5)),
         now=NOW,
     )
 
@@ -157,3 +150,39 @@ def test_pending_target_and_durable_cooldown_prevent_duplicate_scale_up() -> Non
     assert waiting_registration.target_units == 1
     assert cooldown.action is WorkerPoolSizingAction.Wait
     assert cooldown.retry_after_seconds == 25
+
+
+def test_recorded_failures_alone_reproduce_the_exponential_scale_up_backoff() -> None:
+    # A pool whose launches keep failing must not buy another machine a tick
+    # later just because the scheduler restarted. Nothing but the failure count
+    # and time recorded against the capacity operation is available to it.
+    pool = _pool(initial_workers=0, min_workers=0, registration_timeout_seconds=60)
+    headroom = effective_pool_headroom(pool, [])
+    intervals = [
+        plan_worker_pool_sizing(
+            pool,
+            headroom=headroom,
+            registered_units=1,
+            authoritative_units=1,
+            state=_state(consecutive_failures=failures, last_failure_at=NOW),
+            now=NOW,
+        ).retry_after_seconds
+        for failures in (1, 2, 3, 8)
+    ]
+
+    assert intervals == [5, 10, 20, 60]
+
+
+def test_a_pool_drained_to_its_minimum_is_not_bought_back_to_its_initial_size() -> None:
+    workers = [_worker("kept", SchedulerWorkerStatus.Available)]
+    plan = plan_worker_pool_sizing(
+        _pool(min_free_cpu_millicores=0, min_free_memory_mib=0),
+        headroom=effective_pool_headroom(_pool(), workers),
+        registered_units=1,
+        authoritative_units=1,
+        state=_state(peak_desired_units=2),
+        now=NOW,
+    )
+
+    assert plan.action is WorkerPoolSizingAction.None_
+    assert plan.initial_target_reached

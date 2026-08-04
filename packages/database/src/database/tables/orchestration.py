@@ -53,11 +53,6 @@ class PoolTable(NamedWorkspacePayloadTable, DatabaseBase):
             "AND registration_timeout_seconds BETWEEN 30 AND 3600",
             name="ck_pools_lifecycle_timeouts",
         ),
-        CheckConstraint(
-            "sizing_revision >= 0 AND sizing_target_units >= 0 "
-            "AND sizing_consecutive_failures >= 0",
-            name="ck_pools_sizing_state",
-        ),
     )
 
     provider: Mapped[str] = mapped_column(String(120), nullable=False, default="local")
@@ -83,26 +78,6 @@ class PoolTable(NamedWorkspacePayloadTable, DatabaseBase):
     scale_up_cooldown_seconds: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
     scale_down_cooldown_seconds: Mapped[int] = mapped_column(Integer, default=60, nullable=False)
     registration_timeout_seconds: Mapped[int] = mapped_column(Integer, default=600, nullable=False)
-    sizing_revision: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    sizing_initial_target_reached: Mapped[bool] = mapped_column(
-        Boolean, default=False, nullable=False
-    )
-    sizing_operation_id: Mapped[str] = mapped_column(String(80), default="", nullable=False)
-    sizing_target_units: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    sizing_operation_started_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    sizing_last_scale_up_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    sizing_last_scale_down_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    sizing_retry_after_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    sizing_consecutive_failures: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    sizing_terminal_reason: Mapped[str] = mapped_column(String(500), default="", nullable=False)
 
 
 class AutoscalerStateTable(NamedWorkspacePayloadTable, DatabaseBase):

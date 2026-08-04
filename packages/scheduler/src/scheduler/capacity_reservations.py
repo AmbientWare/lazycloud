@@ -18,7 +18,7 @@ from shared.capacity import CapacityAcquisitionRequest as ComputeCapacityRequest
 from shared.capacity import CapacityAcquisitionResult as ComputeCapacityResult
 from shared.capacity import CapacityAcquisitionShape as ComputeCapacityShape
 from shared.capacity import CapacityAcquisitionStatus as ComputeCapacityStatus
-from shared.capacity import CapacityOwnerKind, CapacityPoolSizingState
+from shared.capacity import CapacityOwnerKind, CapacityPoolSizingSnapshot
 from shared.capacity import CapacityReleaseRequest as ComputeCapacityReleaseRequest
 from shared.compute_fleet import Pool
 from shared.compute_policy import ComputePlacementSource
@@ -34,7 +34,6 @@ from shared.timestamps import utc_now
 
 from scheduler.pool_sizing import (
     CapacityPoolOperationalHealth,
-    CapacityPoolSizingStateService,
     WorkerPoolSizingAction,
     WorkerPoolSizingAllocation,
     WorkerPoolSizingPlan,
@@ -43,8 +42,7 @@ from scheduler.pool_sizing import (
     capacity_pool_selection_key,
     effective_pool_headroom,
     plan_worker_pool_sizing,
-    sizing_failure_state,
-    sizing_state_update,
+    scale_up_retry_at,
 )
 from scheduler.state import (
     CapacityReservationDispatchAllocation,
@@ -294,7 +292,9 @@ class CapacityWorkerRepository(Protocol):
     def list_workers(self) -> list[SchedulerWorkerRecord]: ...
 
 
-class ComputeCapacityService(CapacityPoolSizingStateService, Protocol):
+class ComputeCapacityService(Protocol):
+    def pool_sizing_snapshot(self, capacity_owner_id: str) -> CapacityPoolSizingSnapshot: ...
+
     def ensure_capacity(
         self,
         request: ComputeCapacityRequest,
@@ -340,11 +340,11 @@ class ComputePoolCapacityController:
         *,
         now: datetime,
     ) -> CapacityPoolOperationalHealth:
+        _ = now
         return capacity_pool_operational_health(
             self.capacity_owner_id,
             self.workers.list_workers(),
-            state=self.compute.get_pool_sizing_state(self.capacity_owner_id),
-            now=now,
+            state=self.compute.pool_sizing_snapshot(self.capacity_owner_id),
         )
 
     def accepts(self, request: SchedulerWorkerRequest) -> bool:
@@ -396,10 +396,11 @@ class ComputePoolCapacityController:
             allocations=allocations,
         )
         registered_units = headroom.available_workers + headroom.unclaimed_pending_workers
-        state = _sizing_state(self.pool, self.compute, registered_units)
+        state = self.compute.pool_sizing_snapshot(self.capacity_owner_id)
         authoritative_units = max(
             registered_units,
-            state.target_units if state.operation_id else 0,
+            state.desired_units,
+            state.pending_desired_units,
             *(reservation.desired_unit for reservation in reservations),
         )
         plan = plan_worker_pool_sizing(
@@ -410,32 +411,32 @@ class ComputePoolCapacityController:
             state=state,
             now=now,
         )
-        state = _record_sizing_observation(self.compute, state, plan)
-        if state.operation_id and registered_units < state.target_units:
-            if state.retry_after_at is not None and state.retry_after_at > now:
-                return plan
-            return self._ensure_sizing_operation(state, plan, now=now)
+        retry_at = scale_up_retry_at(self.pool, state)
+        if retry_at is not None and retry_at > now:
+            return plan
+        if state.pending_operation_id:
+            # Compute committed to this unit but the provider never acknowledged
+            # it. Re-drive that operation id; a fresh one would buy a second
+            # machine for the same unit.
+            return self._ensure_sizing_operation(
+                state.pending_operation_id,
+                minimum_unit=state.pending_desired_units,
+                plan=plan,
+            )
         if plan.action is not WorkerPoolSizingAction.ScaleUp:
             return plan
-        operation_id = str(uuid4())
-        state = _save_sizing_state(
-            self.compute,
-            state.model_copy(
-                update={
-                    "operation_id": operation_id,
-                    "target_units": plan.target_units,
-                    "operation_started_at": now,
-                }
-            ),
+        return self._ensure_sizing_operation(
+            str(uuid4()),
+            minimum_unit=plan.target_units,
+            plan=plan,
         )
-        return self._ensure_sizing_operation(state, plan, now=now)
 
     def _ensure_sizing_operation(
         self,
-        state: CapacityPoolSizingState,
-        plan: WorkerPoolSizingPlan,
+        operation_id: str,
         *,
-        now: datetime,
+        minimum_unit: int,
+        plan: WorkerPoolSizingPlan,
     ) -> WorkerPoolSizingPlan:
         shape = ComputeCapacityShape(
             cpu_millicores=self.pool.worker_cpu_millicores,
@@ -449,40 +450,24 @@ class ComputePoolCapacityController:
             result = self.compute.ensure_capacity(
                 ComputeCapacityRequest(
                     capacity_owner_id=self.capacity_owner_id,
-                    reservation_id=state.operation_id,
-                    operation_id=state.operation_id,
+                    reservation_id=operation_id,
+                    operation_id=operation_id,
                     shape=shape,
                 ),
-                minimum_unit=state.target_units,
-            )
-            state = _save_sizing_state(
-                self.compute,
-                state.model_copy(update={"target_units": result.desired_unit}),
+                minimum_unit=minimum_unit,
             )
         except Exception:
             LOGGER.exception("compute pool sizing failed for %s", self.pool.name)
-            _save_sizing_state(
-                self.compute,
-                sizing_failure_state(state, self.pool, now=now).model_copy(
-                    update={"terminal_reason": "compute pool sizing operation failed"}
-                ),
-            )
             return plan.model_copy(
                 update={
                     "action": WorkerPoolSizingAction.Wait,
-                    "reason": "compute pool sizing operation failed and entered durable backoff",
+                    "reason": "compute pool sizing operation failed",
                 }
             )
         if result.status in {
             ComputeCapacityStatus.TemporarilyUnavailable,
             ComputeCapacityStatus.Unsupported,
         }:
-            _save_sizing_state(
-                self.compute,
-                sizing_failure_state(state, self.pool, now=now).model_copy(
-                    update={"terminal_reason": result.reason}
-                ),
-            )
             return plan.model_copy(
                 update={
                     "action": WorkerPoolSizingAction.Wait,
@@ -490,16 +475,6 @@ class ComputePoolCapacityController:
                 }
             )
         if result.status is ComputeCapacityStatus.AtLimit:
-            _save_sizing_state(
-                self.compute,
-                state.model_copy(
-                    update={
-                        "operation_id": "",
-                        "operation_started_at": None,
-                        "target_units": result.desired_unit,
-                    }
-                ),
-            )
             return plan.model_copy(
                 update={
                     "action": WorkerPoolSizingAction.None_,
@@ -507,22 +482,6 @@ class ComputePoolCapacityController:
                     "reason": result.reason or "compute pool capacity is at limit",
                 }
             )
-        _save_sizing_state(
-            self.compute,
-            state.model_copy(
-                update={
-                    "target_units": result.desired_unit,
-                    "last_scale_up_at": (
-                        now
-                        if result.status is ComputeCapacityStatus.Requested
-                        else state.last_scale_up_at
-                    ),
-                    "retry_after_at": None,
-                    "consecutive_failures": 0,
-                    "terminal_reason": "",
-                }
-            ),
-        )
         return plan.model_copy(update={"target_units": result.desired_unit})
 
     def ensure_capacity(
@@ -1666,51 +1625,6 @@ def _request_has_strict_pool(request: SchedulerWorkerRequest) -> bool:
         bool(request.pool_selector)
         and request.placement_source is ComputePlacementSource.AttachedPool
     )
-
-
-def _sizing_state(
-    pool: Pool,
-    states: CapacityPoolSizingStateService,
-    registered_units: int,
-) -> CapacityPoolSizingState:
-    state = states.get_pool_sizing_state(pool.capacity_owner_id)
-    if state.pool_name != pool.name:
-        raise ValueError("worker-pool sizing state belongs to a different pool")
-    updates: dict[str, str | int | bool | datetime | None] = {}
-    if not state.initial_target_reached and registered_units >= pool.initial_workers:
-        updates["initial_target_reached"] = True
-    if state.operation_id and registered_units >= state.target_units:
-        updates.update(
-            {
-                "operation_id": "",
-                "target_units": 0,
-                "operation_started_at": None,
-                "retry_after_at": None,
-                "consecutive_failures": 0,
-            }
-        )
-    if not updates:
-        return state
-    return _save_sizing_state(states, state.model_copy(update=updates))
-
-
-def _record_sizing_observation(
-    states: CapacityPoolSizingStateService,
-    state: CapacityPoolSizingState,
-    plan: WorkerPoolSizingPlan,
-) -> CapacityPoolSizingState:
-    if state.initial_target_reached == plan.initial_target_reached:
-        return state
-    return _save_sizing_state(
-        states, state.model_copy(update={"initial_target_reached": plan.initial_target_reached})
-    )
-
-
-def _save_sizing_state(
-    states: CapacityPoolSizingStateService,
-    state: CapacityPoolSizingState,
-) -> CapacityPoolSizingState:
-    return states.compare_and_set_pool_sizing_state(sizing_state_update(state))
 
 
 def reservation_matches_worker(

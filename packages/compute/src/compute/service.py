@@ -50,8 +50,7 @@ from shared.capacity import (
     CapacityFailureCode,
     CapacityOwnerKind,
     CapacityOwnerSource,
-    CapacityPoolSizingState,
-    CapacityPoolSizingStateUpdate,
+    CapacityPoolSizingSnapshot,
     CapacityReleaseRequest,
     capacity_failure_message,
     capacity_owner_for_provider,
@@ -142,7 +141,6 @@ from compute.provider_machines import (
     _reservation_status_from_provider,
     _utc,
     _whole_hours,
-    _zero_sizing_state_update,
 )
 from compute.providers import (
     CapacityOwnerMutationLease,
@@ -165,6 +163,19 @@ from compute.source_cache_storage import SourceCacheStorageLifecycleService
 LOGGER = logging.getLogger(__name__)
 
 _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
+
+_UNCONFIRMED_OPERATION_STATUSES = frozenset(
+    {
+        _LAUNCH_STATE_INTENT,
+        CapacityAcquisitionStatus.TemporarilyUnavailable.value,
+    }
+)
+"""Owning operations the provider has not acknowledged, so the unit is unbought.
+
+An operation that reached `requested` is already counted by the provider's own
+desired machines; one of these is not counted anywhere else and has to be
+re-driven under its original id or the retry buys a second machine.
+"""
 
 
 class _CapacityRequestMetadata(ContractModel):
@@ -951,6 +962,7 @@ class ComputeService:
                         "status": CapacityAcquisitionStatus.Requested.value,
                         "provider_instance_id": remote.provider_instance_id,
                         "last_error": "",
+                        "failure_count": 0,
                         "updated_at": utc_now(),
                     }
                 )
@@ -1099,6 +1111,7 @@ class ComputeService:
                             update={
                                 "status": CapacityAcquisitionStatus.Requested.value,
                                 "last_error": "",
+                                "failure_count": 0,
                                 "updated_at": utc_now(),
                             }
                         )
@@ -1141,6 +1154,7 @@ class ComputeService:
                     update={
                         "status": CapacityAcquisitionStatus.Requested.value,
                         "last_error": "",
+                        "failure_count": 0,
                         "updated_at": utc_now(),
                     }
                 )
@@ -1415,6 +1429,10 @@ class ComputeService:
                             "status": CapacityAcquisitionStatus.TemporarilyUnavailable.value,
                             "last_error": reason,
                             "failure_code": failure_code,
+                            # The count is what the sizer's exponential backoff is
+                            # computed from after a restart; the scheduler holds
+                            # no copy of it.
+                            "failure_count": operation.failure_count + 1,
                             "updated_at": utc_now(),
                         }
                     )
@@ -1532,25 +1550,71 @@ class ComputeService:
             records = PoolRepository(session).list_across_workspaces_with_workspace()
         return sorted(records, key=lambda item: (item[0], item[1].name))
 
-    def get_pool_sizing_state(self, capacity_owner_id: str) -> CapacityPoolSizingState:
-        with self.context.database.session() as session:
-            state = PoolRepository(session).get_sizing_state(capacity_owner_id)
-        if state is None:
-            raise ConflictError(f"compute pool capacity owner does not exist: {capacity_owner_id}")
-        return state
+    def pool_sizing_snapshot(self, capacity_owner_id: str) -> CapacityPoolSizingSnapshot:
+        """Answer how big this pool is, was asked to be, and how badly that went.
 
-    def compare_and_set_pool_sizing_state(
-        self,
-        update: CapacityPoolSizingStateUpdate,
-    ) -> CapacityPoolSizingState:
+        Every field is derived here rather than stored, from the provider's own
+        desired count, the pool's capacity operation rows, and its machine
+        records. A pending operation is one compute committed to but has not
+        confirmed with the provider; the caller must re-drive that exact
+        operation id rather than open a new one, because the provider
+        idempotency key is derived from it.
+
+        Capacity leaving the pool is read from the machine records rather than
+        the operation rows, because the two paths that retire a machine —
+        `release_internal_pool_machine` and `terminate_pool_machine` — act on
+        those records directly and write no operation row at all. Anchoring the
+        scale-down cooldown on the operations would silently lose every
+        drain-initiated release.
+        """
         with self.context.database.session() as session:
-            state = PoolRepository(session).compare_and_set_sizing_state(update)
-        if state is None:
-            raise ConflictError(
-                f"compute pool sizing state changed: {update.capacity_owner_id} "
-                f"revision {update.expected_revision}"
-            )
-        return state
+            pool = ComputePoolRepository(session).get_by_capacity_owner_id(capacity_owner_id)
+            if pool is None:
+                raise ConflictError(
+                    f"compute pool capacity owner does not exist: {capacity_owner_id}"
+                )
+            operations = ComputeCapacityOperationRepository(session)
+            open_operations = operations.list_open_for_owner(capacity_owner_id)
+            peak_desired_units = operations.peak_desired_unit(capacity_owner_id)
+            all_operations = operations.list_for_owner(capacity_owner_id)
+            machines = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
+        open_machines = [record for record in machines if _reservation_open(record.status)]
+        desired_units = (
+            pool.desired_machines
+            if pool.capacity_owner_kind is CapacityOwnerKind.PooledProvider
+            else len(open_machines)
+        )
+        pending = next(
+            (
+                operation
+                for operation in reversed(open_operations)
+                if operation.owns_capacity and operation.status in _UNCONFIRMED_OPERATION_STATUSES
+            ),
+            None,
+        )
+        failed = (
+            pending
+            if pending is not None
+            and pending.status == CapacityAcquisitionStatus.TemporarilyUnavailable.value
+            else None
+        )
+        return CapacityPoolSizingSnapshot(
+            capacity_owner_id=capacity_owner_id,
+            desired_units=desired_units,
+            peak_desired_units=peak_desired_units,
+            pending_operation_id=pending.operation_id if pending is not None else "",
+            pending_desired_units=pending.desired_unit if pending is not None else 0,
+            last_requested_at=max(
+                (operation.created_at for operation in all_operations),
+                default=None,
+            ),
+            last_released_at=max(
+                (record.updated_at for record in machines if not _reservation_open(record.status)),
+                default=None,
+            ),
+            consecutive_failures=max(failed.failure_count, 1) if failed is not None else 0,
+            last_failure_at=failed.updated_at if failed is not None else None,
+        )
 
     def list_pools_for_workspace_deletion(self, workspace_id: str) -> list[Pool]:
         with self.context.database.session() as session:
@@ -2352,16 +2416,6 @@ class ComputeService:
                     f"workspace pooled compute capacity limit is {available} machines"
                 )
             maximum = max(available, desired_machines, 1)
-            sizing_states = PoolRepository(session)
-            sizing_state = (
-                sizing_states.get_sizing_state(pool.capacity_owner_id, for_update=True)
-                if desired_machines == 0
-                else None
-            )
-            if desired_machines == 0 and sizing_state is None:
-                raise ConflictError(
-                    f"compute pool sizing state does not exist: {pool.capacity_owner_id}"
-                )
             if desired_machines == 0:
                 operations = ComputeCapacityOperationRepository(session)
                 for operation in operations.list_open_for_owner(pool.capacity_owner_id):
@@ -2371,15 +2425,12 @@ class ComputeService:
                                 "status": "released",
                                 "release_desired_unit": 0,
                                 "last_error": "",
+                                "failure_count": 0,
                                 "updated_at": current_time,
                             }
                         )
                     )
-            if (
-                desired_machines == 0
-                and sizing_state is not None
-                and _zero_capacity_converged(pool, sizing_state)
-            ):
+            if desired_machines == 0 and _zero_capacity_converged(pool):
                 verify_provider_zero = True
                 intent = pool
             else:
@@ -2396,14 +2447,6 @@ class ComputeService:
                     raise ConflictError(
                         f"compute pool {pool_name!r} capacity intent was superseded"
                     )
-                if sizing_state is not None:
-                    retired = sizing_states.compare_and_set_sizing_state(
-                        _zero_sizing_state_update(sizing_state, now=current_time)
-                    )
-                    if retired is None:
-                        raise ConflictError(
-                            f"compute pool {pool_name!r} sizing intent was superseded"
-                        )
 
         try:
             provider, offer = self._resolved_internal_pool_provider(intent)
@@ -2424,7 +2467,6 @@ class ComputeService:
                     intent,
                     maximum=maximum,
                     observed=observed,
-                    now=current_time,
                 )
             snapshot = provider.pooled.set_pool_capacity(
                 # Creates the autoscaling group, and its launch template with
@@ -4789,22 +4831,13 @@ def _policy_owned_desired_machines(
     return min(max(current_desired - released, floor), ceiling)
 
 
-def _zero_capacity_converged(
-    pool: ComputePoolRecord,
-    sizing_state: CapacityPoolSizingState,
-) -> bool:
+def _zero_capacity_converged(pool: ComputePoolRecord) -> bool:
+    """Durable state already says zero, so only the provider is still in doubt."""
+
     return (
         pool.desired_machines == 0
         and pool.observed_machines == 0
         and pool.phase is ComputePoolPhase.Ready
-        and sizing_state.initial_target_reached
-        and sizing_state.operation_id == ""
-        and sizing_state.target_units == 0
-        and sizing_state.operation_started_at is None
-        and sizing_state.last_scale_down_at is not None
-        and sizing_state.retry_after_at is None
-        and sizing_state.consecutive_failures == 0
-        and sizing_state.terminal_reason == ""
     )
 
 

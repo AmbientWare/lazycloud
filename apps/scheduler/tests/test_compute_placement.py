@@ -19,8 +19,7 @@ from shared.capacity import (
     CapacityAcquisitionResult,
     CapacityOwnerKind,
     CapacityOwnerSource,
-    CapacityPoolSizingState,
-    CapacityPoolSizingStateUpdate,
+    CapacityPoolSizingSnapshot,
     CapacityReleaseRequest,
 )
 from shared.capacity import (
@@ -118,14 +117,8 @@ class _RecordingCapacity:
 class _RequestedComputeCapacity:
     plans: list[CapacityAcquisitionRequest] = field(default_factory=list)
 
-    def get_pool_sizing_state(self, capacity_owner_id: str) -> CapacityPoolSizingState:
-        raise AssertionError(f"unexpected sizing state read for {capacity_owner_id}")
-
-    def compare_and_set_pool_sizing_state(
-        self,
-        update: CapacityPoolSizingStateUpdate,
-    ) -> CapacityPoolSizingState:
-        raise AssertionError(f"unexpected sizing state mutation for {update.capacity_owner_id}")
+    def pool_sizing_snapshot(self, capacity_owner_id: str) -> CapacityPoolSizingSnapshot:
+        raise AssertionError(f"unexpected sizing snapshot read for {capacity_owner_id}")
 
     def ensure_capacity(
         self,

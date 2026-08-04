@@ -59,7 +59,6 @@ from shared.capacity import (
     CapacityAcquisitionRequest,
     CapacityAcquisitionShape,
     CapacityAcquisitionStatus,
-    CapacityPoolSizingStateUpdate,
     CapacityReleaseRequest,
 )
 from shared.compute_enrollment import (
@@ -507,7 +506,7 @@ def test_aws_default_capacity_is_one_durable_floor_preserved_by_placement(
     assert drained.desired_machines == 0
 
 
-def test_scale_zero_persists_intent_and_retires_sizing_before_provider_mutation(
+def test_scale_zero_persists_intent_and_releases_operations_before_provider_mutation(
     isolated_services: ApiServices,
 ) -> None:
     _seed_connection(isolated_services)
@@ -529,20 +528,6 @@ def test_scale_zero_persists_intent_and_retires_sizing_before_provider_mutation(
     )
     compute.reconcile_pooled_capacity()
     started_at = datetime(2026, 7, 22, 12, tzinfo=UTC)
-    sizing = compute.get_pool_sizing_state(pool.capacity_owner_id)
-    compute.compare_and_set_pool_sizing_state(
-        CapacityPoolSizingStateUpdate(
-            capacity_owner_id=pool.capacity_owner_id,
-            expected_revision=sizing.revision,
-            operation_id="pending-scale-up",
-            target_units=1,
-            operation_started_at=started_at - timedelta(minutes=3),
-            last_scale_up_at=started_at - timedelta(minutes=3),
-            retry_after_at=started_at + timedelta(minutes=2),
-            consecutive_failures=3,
-            terminal_reason="capacity retry pending",
-        )
-    )
     before = compute.get_internal_pool(pool.workspace_id, pool.name)
     guard_observations: list[int] = []
 
@@ -553,23 +538,14 @@ def test_scale_zero_persists_intent_and_retires_sizing_before_provider_mutation(
     def inspect_durable_intent(request: ProviderPoolRequest) -> None:
         with isolated_services.context.database.session() as session:
             durable = ComputePoolRepository(session).get(request.pool_id)
-            retired = PoolRepository(session).get_sizing_state(request.pool_id)
+            open_operations = ComputeCapacityOperationRepository(session).list_open_for_owner(
+                pool.capacity_owner_id
+            )
         assert durable is not None
         assert durable.desired_machines == 0
         assert durable.generation == before.generation + 1
         assert durable.phase is ComputePoolPhase.Updating
-        assert retired is not None
-        assert retired.initial_target_reached
-        assert retired.operation_id == ""
-        assert retired.target_units == 0
-        assert retired.operation_started_at is None
-        assert retired.last_scale_up_at is not None
-        assert retired.last_scale_up_at.replace(tzinfo=UTC) == started_at - timedelta(minutes=3)
-        assert retired.last_scale_down_at is not None
-        assert retired.last_scale_down_at.replace(tzinfo=UTC) == started_at
-        assert retired.retry_after_at is None
-        assert retired.consecutive_failures == 0
-        assert retired.terminal_reason == ""
+        assert open_operations == []
 
     provider.before_capacity = inspect_durable_intent
     scaled = compute.scale_internal_pool(
@@ -618,13 +594,9 @@ def test_scale_zero_retains_degraded_intent_and_repairs_provider_failure(
         )
 
     degraded = compute.get_internal_pool(pool.workspace_id, pool.name)
-    sizing = compute.get_pool_sizing_state(pool.capacity_owner_id)
     assert degraded.desired_machines == 0
     assert degraded.observed_machines == 1
     assert degraded.phase is ComputePoolPhase.Degraded
-    assert sizing.initial_target_reached
-    assert sizing.operation_id == ""
-    assert sizing.target_units == 0
     provider.capacity_failure = None
 
     repaired = compute.scale_internal_pool(
@@ -709,9 +681,11 @@ def test_scale_zero_skips_provider_only_after_durable_convergence(
         before_mutation=_allow_scale,
     )
 
-    assert provider.capacity_calls == [(0, 10)]
-    assert len(provider.describe_calls) == 1
-    assert provider.describe_calls[0].desired_machines == 0
+    # Control-plane startup drives every workspace through this path on every
+    # boot. A pool already durably at zero must cost a describe and nothing else
+    # — no capacity write, no generation churn.
+    assert provider.capacity_calls == []
+    assert [request.desired_machines for request in provider.describe_calls] == [0, 0]
     assert second.generation == generation
     assert second == first
 
@@ -760,8 +734,8 @@ def test_scale_zero_repairs_fresh_provider_drift_without_restoring_nonzero_inten
         before_mutation=_allow_scale,
     )
 
-    assert len(provider.describe_calls) == 1
-    assert provider.capacity_calls == [(0, 10), (0, 10)]
+    assert len(provider.describe_calls) == 2
+    assert provider.capacity_calls == [(0, 10)]
     assert repaired.generation == converged.generation + 1
     assert repaired.desired_machines == 0
     assert repaired.observed_machines == 0

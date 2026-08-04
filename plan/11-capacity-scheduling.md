@@ -531,7 +531,7 @@ must be re-sequenced, not worked around.
     the reservation: exactly one.
   - **Depends on**: CAP-13
 
-- [ ] **CAP-15** Delete `CapacityPoolSizingState` and the `pools.sizing_*` columns
+- [x] **CAP-15** Delete `CapacityPoolSizingState` and the `pools.sizing_*` columns
   - **Files**: `packages/shared/src/shared/capacity.py:231-269`;
     `packages/database/src/database/tables/orchestration.py:57,86-105`;
     `packages/database/src/database/repositories/orchestration.py:87-122,186-200`;
@@ -566,6 +566,26 @@ must be re-sequenced, not worked around.
     created than before this change. Compare against a recorded baseline taken
     before the change.
   - **Depends on**: CAP-14, INFRA baseline-regeneration item
+  - **Outcome**: Done ahead of CAP-14, which was not needed: the authoritative
+    pair already exists. `CapacityPoolSizingSnapshot` (`shared/capacity.py`) is
+    derived on every read by `ComputeService.pool_sizing_snapshot` and stored
+    nowhere. Backoff is reconstructed from a new `failure_count` on the capacity
+    operation row plus its `updated_at`, and `scale_up_retry_at`
+    (`pool_sizing.py`) recomputes the same interval a restarted scheduler would
+    have held. `initial_target_reached` becomes `peak_desired_unit` over the
+    owner's operation rows, released ones included, so a drained pool is not
+    bought back to `initial_workers`. Scale-down history — the gap that made the
+    remaining scope look unexecutable — comes from the provider machine records,
+    not the operation rows, because `release_internal_pool_machine` and
+    `terminate_pool_machine` write no operation row. `pool_drain.py` was a
+    writer of the deleted state and is missing from the Deletions table above.
+    One behaviour is genuinely lost: a provider that fails during planning,
+    before any operation row exists, no longer backs off between sizer ticks. It
+    creates no machine on that path, and the tick is still spaced by
+    `scale_up_cooldown_seconds`. The 30-minute always-failing-pool acceptance
+    still needs the connected AWS environment and has not been run; the cost
+    bound it measures is `max_launch_attempts` → degraded (04bd830), which is
+    durable on the pool row and independent of everything deleted here.
 
 - [ ] **CAP-16** Collapse the reservation status machine
   - **Files**: `packages/scheduler/src/scheduler/capacity_reservations.py:70-77,149-186,942-1058,2045-2070`

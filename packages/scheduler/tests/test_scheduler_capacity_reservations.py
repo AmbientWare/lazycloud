@@ -47,8 +47,7 @@ from shared.capacity import CapacityAcquisitionResult as ComputeCapacityResult
 from shared.capacity import (
     CapacityOwnerKind,
     CapacityOwnerSource,
-    CapacityPoolSizingState,
-    CapacityPoolSizingStateUpdate,
+    CapacityPoolSizingSnapshot,
     CapacityReleaseRequest,
 )
 from shared.compute_fleet import Pool
@@ -235,41 +234,17 @@ class _WorkerRepository:
 
 
 @dataclass(slots=True)
-class _SizingStates:
+class _SizingSnapshots:
     pool: Pool
-    revision: int = 0
-    state: CapacityPoolSizingState | None = None
 
-    def get_pool_sizing_state(self, capacity_owner_id: str) -> CapacityPoolSizingState:
+    def pool_sizing_snapshot(self, capacity_owner_id: str) -> CapacityPoolSizingSnapshot:
         if capacity_owner_id != self.pool.capacity_owner_id:
             raise ValueError("unknown capacity owner")
-        if self.state is None:
-            self.state = CapacityPoolSizingState(
-                capacity_owner_id=capacity_owner_id,
-                pool_name=self.pool.name,
-                workspace_id="workspace-1",
-            )
-        return self.state
-
-    def compare_and_set_pool_sizing_state(
-        self,
-        update: CapacityPoolSizingStateUpdate,
-    ) -> CapacityPoolSizingState:
-        current = self.get_pool_sizing_state(update.capacity_owner_id)
-        if current.revision != update.expected_revision:
-            raise ValueError("sizing revision changed")
-        self.state = CapacityPoolSizingState(
-            capacity_owner_id=current.capacity_owner_id,
-            pool_name=current.pool_name,
-            workspace_id=current.workspace_id,
-            revision=current.revision + 1,
-            **update.model_dump(exclude={"capacity_owner_id", "expected_revision"}),
-        )
-        return self.state
+        return CapacityPoolSizingSnapshot(capacity_owner_id=capacity_owner_id)
 
 
 @dataclass(slots=True)
-class _UnusedComputeCapacity(_SizingStates):
+class _UnusedComputeCapacity(_SizingSnapshots):
     def ensure_capacity(
         self,
         request: ComputeCapacityRequest,

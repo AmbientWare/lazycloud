@@ -26,17 +26,12 @@ from database.repositories.compute import (
 )
 from database.repositories.orchestration import (
     MachineRepository,
-    PoolRepository,
     WorkerRepository,
 )
 from database.types import DatabaseSession
 from observability.workspace_changes import WorkspaceChangePublisher
 from pydantic import ConfigDict, Field, JsonValue
-from shared.capacity import (
-    CapacityOwnerKind,
-    CapacityPoolSizingState,
-    CapacityPoolSizingStateUpdate,
-)
+from shared.capacity import CapacityOwnerKind
 from shared.compute_enrollment import (
     ComputeCredentialStatus,
     ComputeMachineEnrollmentStatus,
@@ -179,26 +174,6 @@ def _require_internal_pooled_pool(
     ):
         raise InvalidInputError(f"compute pool {pool_name!r} is not provider-scaled")
     return pool
-
-
-def _zero_sizing_state_update(
-    sizing_state: CapacityPoolSizingState,
-    *,
-    now: datetime,
-) -> CapacityPoolSizingStateUpdate:
-    return CapacityPoolSizingStateUpdate(
-        capacity_owner_id=sizing_state.capacity_owner_id,
-        expected_revision=sizing_state.revision,
-        initial_target_reached=True,
-        operation_id="",
-        target_units=0,
-        operation_started_at=None,
-        last_scale_up_at=sizing_state.last_scale_up_at,
-        last_scale_down_at=now,
-        retry_after_at=None,
-        consecutive_failures=0,
-        terminal_reason="",
-    )
 
 
 def _provider_zero_capacity_converged(snapshot: ProviderPoolSnapshot) -> bool:
@@ -1198,7 +1173,6 @@ class ProviderMachineReconciler:
         *,
         maximum: int,
         observed: ProviderPoolSnapshot,
-        now: datetime,
     ) -> ComputePoolRecord:
         with self.context.database.session() as session:
             pools = ComputePoolRepository(session)
@@ -1214,15 +1188,6 @@ class ProviderMachineReconciler:
                 raise ConflictError(
                     f"compute pool {pool.name!r} zero-capacity repair was superseded"
                 )
-            sizing_states = PoolRepository(session)
-            sizing_state = sizing_states.get_sizing_state(
-                current.capacity_owner_id,
-                for_update=True,
-            )
-            if sizing_state is None:
-                raise ConflictError(
-                    f"compute pool sizing state does not exist: {current.capacity_owner_id}"
-                )
             intent = pools.update_capacity(
                 current.id,
                 expected_generation=current.generation,
@@ -1236,11 +1201,6 @@ class ProviderMachineReconciler:
                 raise ConflictError(
                     f"compute pool {pool.name!r} zero-capacity repair was superseded"
                 )
-            retired = sizing_states.compare_and_set_sizing_state(
-                _zero_sizing_state_update(sizing_state, now=now)
-            )
-            if retired is None:
-                raise ConflictError(f"compute pool {pool.name!r} sizing intent was superseded")
             return intent
 
     @staticmethod
