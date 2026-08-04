@@ -71,7 +71,7 @@ from execution.functions.service import FunctionControlService
 from execution.tasks import TaskService
 from identity.auth import AuthService
 from identity.authz import AuthzRequirement
-from identity.rpc import sign_payload
+from identity.signatures import sign_payload
 from networking.routing import BackendRouteAuthenticator
 from networking.tailnet_cleanup import TailnetCleanupCoordinator
 from networking.tailnet_control import (
@@ -196,7 +196,6 @@ from gateway.http import (
 )
 from gateway.http import (
     AgentRoute,
-    AgentTelemetryConfig,
     AgentTelemetryRequest,
     AgentTelemetryResponse,
     AuthorizeRequest,
@@ -228,7 +227,6 @@ from gateway.views import (
     agent_pool_transport,
     agent_route_state,
     agent_route_view,
-    agent_telemetry_payload,
     agent_telemetry_state,
     agent_worker_record,
     agent_worker_slot_view,
@@ -1604,7 +1602,6 @@ class GatewayControlService:
                     self.agent_image,
                     gateway_runtime_http_url=self.runtime_callback_http_url,
                     tailnet=self.tailnet,
-                    telemetry=agent_telemetry_payload(AgentTelemetryConfig()),
                     executor=agent_state.executor,
                 )
                 consumes_use = existing is None
@@ -2038,7 +2035,6 @@ class GatewayControlService:
                 self.agent_image,
                 gateway_runtime_http_url=self.runtime_callback_http_url,
                 tailnet=self.tailnet,
-                telemetry=agent_telemetry_payload(AgentTelemetryConfig()),
                 executor=response_state.executor,
             )
         except (KeyError, ValueError) as exc:

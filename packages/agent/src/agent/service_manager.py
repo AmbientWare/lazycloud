@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import re
 import sys
-from datetime import datetime
 from enum import StrEnum
 from html import escape
 from pathlib import Path
@@ -17,7 +16,6 @@ from shared.app_identity import (
 )
 from shared.compute_enrollment import PreflightSeverity
 from shared.contracts import ContractModel
-from shared.timestamps import utc_now
 
 DEFAULT_AGENT_SERVICE_NAME = AGENT_NAME
 DEFAULT_AGENT_SERVICE_DESCRIPTION = AGENT_SERVICE_DESCRIPTION
@@ -27,12 +25,6 @@ DEFAULT_SYSTEMD_UNIT_DIR = "/etc/systemd/system"
 DEFAULT_LAUNCHD_SYSTEM_DIR = "/Library/LaunchDaemons"
 DEFAULT_LAUNCHD_USER_DIR = "Library/LaunchAgents"
 DEFAULT_LAUNCHD_LABEL_PREFIX = AGENT_LAUNCHD_LABEL_PREFIX
-TELEMETRY_BATCH_SIZE = 128
-TELEMETRY_BUFFER_SIZE = 1024
-TRANSPORT_FULL_SNAPSHOT_EVERY = 5
-TRANSPORT_FAILURE_THRESHOLD = 3
-TRANSPORT_FAILURE_INTERVAL_SECONDS = 600
-MAX_TRANSPORT_ATTR_LENGTH = 240
 UNLIMITED_CGROUP_V1_SENTINEL = 1 << 62
 
 _INVALID_SERVICE_NAME_CHARS = re.compile(r"[^a-zA-Z0-9_.@-]+")
@@ -78,19 +70,6 @@ class PreflightCheckName(StrEnum):
     NetworkManager = "network-manager"
     Fuse = "fuse"
     NvidiaRuntime = "nvidia-runtime"
-
-
-class TransportKind(StrEnum):
-    Local = "local"
-    Http = "http"
-    Tunnel = "tunnel"
-    Tailnet = "tailnet"
-
-
-class TransportSnapshotFailureKind(StrEnum):
-    Canceled = "canceled"
-    DeadlineExceeded = "deadline_exceeded"
-    StatusUnavailable = "status_unavailable"
 
 
 class PreflightCheck(ContractModel):
@@ -206,105 +185,6 @@ class AgentServiceOperationResult(ContractModel):
     binary_removed: bool = False
 
 
-class TransportPeerStatus(ContractModel):
-    online: bool = False
-    active: bool = False
-    direct: bool = False
-    relay: str = ""
-    last_handshake_age_ms: int | None = None
-
-
-class TransportStatusSnapshot(ContractModel):
-    backend_state: str = ""
-    health: list[str] = Field(default_factory=list)
-    self_dns: str = ""
-    self_online: bool = False
-    self_relay: str = ""
-    tailnet_ips: list[str] = Field(default_factory=list)
-    peers: list[TransportPeerStatus] = Field(default_factory=list)
-
-
-class TransportFailureDecision(ContractModel):
-    emit: bool
-    kind: TransportSnapshotFailureKind | None = None
-    message: str = ""
-    attrs: dict[str, str] = Field(default_factory=dict)
-
-
-class AgentLogRecord(ContractModel):
-    source: str = "agent"
-    worker_id: str = ""
-    level: str = "info"
-    stream: str = "stdout"
-    line: str
-    timestamp_unix_nano: int = Field(default_factory=lambda: _unix_nano(utc_now()))
-
-
-class AgentEventRecord(ContractModel):
-    event_type: str
-    action: str
-    status: str = ""
-    message: str = ""
-    attrs: dict[str, str] = Field(default_factory=dict)
-    timestamp_unix_nano: int = Field(default_factory=lambda: _unix_nano(utc_now()))
-
-
-class AgentMetricSnapshot(ContractModel):
-    timestamp_unix_nano: int = Field(default_factory=lambda: _unix_nano(utc_now()))
-    cpu_utilization_pct: float = 0.0
-    memory_used_mb: int = 0
-    memory_total_mb: int = 0
-    memory_utilization_pct: float = 0.0
-    disk_used_mb: int = 0
-    disk_total_mb: int = 0
-    disk_usage_pct: float = 0.0
-    disk_path: str = "/"
-    network_recv_bytes: int = 0
-    network_sent_bytes: int = 0
-    network_recv_packets: int = 0
-    network_sent_packets: int = 0
-    worker_count: int = 0
-    container_count: int = 0
-    free_gpu_count: int = 0
-
-
-class AgentTelemetryRequest(ContractModel):
-    agent_token: str = ""
-    logs: list[AgentLogRecord] = Field(default_factory=list)
-    events: list[AgentEventRecord] = Field(default_factory=list)
-    metrics: AgentMetricSnapshot | None = None
-
-
-class AgentTelemetryBatch(ContractModel):
-    logs: list[AgentLogRecord] = Field(default_factory=list)
-    events: list[AgentEventRecord] = Field(default_factory=list)
-    metrics: AgentMetricSnapshot | None = None
-
-    def add(self, request: AgentTelemetryRequest | None) -> None:
-        if request is None:
-            return
-        self.logs.extend(request.logs)
-        self.events.extend(request.events)
-        if request.metrics is not None:
-            self.metrics = request.metrics
-
-    def size(self) -> int:
-        return telemetry_record_count(self.logs, self.events, self.metrics)
-
-    def request(self, agent_token: str) -> AgentTelemetryRequest:
-        return AgentTelemetryRequest(
-            agent_token=agent_token,
-            logs=self.logs,
-            events=self.events,
-            metrics=self.metrics,
-        )
-
-
-class LineBufferPlan(ContractModel):
-    lines: list[str] = Field(default_factory=list)
-    remainder: str = ""
-
-
 class ServiceUnit(ContractModel):
     name: str
     command: list[str]
@@ -317,12 +197,6 @@ class ServiceInstallPlan(ContractModel):
     platform: ServicePlatform
     unit: ServiceUnit
     commands: list[list[str]]
-
-
-class LogWrite(ContractModel):
-    stream: str = "system"
-    message: str
-    created_at: datetime = Field(default_factory=utc_now)
 
 
 def detect_platform() -> ServicePlatform:
@@ -819,198 +693,6 @@ def machine_fingerprint(
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def system_memory_mb_from_linux_meminfo(text: str) -> int:
-    for line in text.splitlines():
-        fields = line.split()
-        if len(fields) >= 2 and fields[0] == "MemTotal:":
-            return int(fields[1]) // 1024
-    return 0
-
-
-def system_memory_mb_from_darwin_sysctl(text: str) -> int:
-    stripped = text.strip()
-    return int(stripped) // 1024 // 1024 if stripped.isdigit() else 0
-
-
-def normalize_transport(value: str | TransportKind) -> TransportKind:
-    raw = value.value if isinstance(value, TransportKind) else value
-    normalized = raw.strip().lower().replace("_", "-")
-    if normalized in {"", "tailnet", "tsnet", "tailscale"}:
-        return TransportKind.Tailnet
-    if normalized == "http":
-        return TransportKind.Http
-    if normalized == "local":
-        return TransportKind.Local
-    if normalized == "tunnel":
-        return TransportKind.Tunnel
-    msg = f"unsupported agent transport: {raw}"
-    raise ValueError(msg)
-
-
-def transport_snapshot_full(tick: int) -> bool:
-    return tick == 1 or (tick > 0 and tick % TRANSPORT_FULL_SNAPSHOT_EVERY == 0)
-
-
-def transport_snapshot_attrs(
-    snapshot: TransportStatusSnapshot,
-    *,
-    proxy_target: str,
-    full: bool,
-) -> dict[str, str]:
-    attrs = {
-        "proxy_target": proxy_target,
-        "backend_state": snapshot.backend_state,
-        "full_snapshot": str(full).lower(),
-        "health_count": str(len(snapshot.health)),
-    }
-    health = join_attr_values(snapshot.health)
-    if health:
-        attrs["health"] = health
-    if full:
-        attrs["peer_count"] = str(len(snapshot.peers))
-    if snapshot.self_dns:
-        attrs["self_dns"] = snapshot.self_dns.rstrip(".")
-        attrs["self_online"] = str(snapshot.self_online).lower()
-        if snapshot.self_relay:
-            attrs["self_relay"] = snapshot.self_relay
-    if snapshot.tailnet_ips:
-        attrs["tailnet_ips"] = ",".join(snapshot.tailnet_ips)
-    if full:
-        attrs.update(transport_peer_stats_attrs(snapshot.peers))
-    return attrs
-
-
-def transport_peer_stats_attrs(peers: list[TransportPeerStatus]) -> dict[str, str]:
-    online = sum(1 for peer in peers if peer.online)
-    active = sum(1 for peer in peers if peer.active)
-    direct = sum(1 for peer in peers if peer.direct)
-    relayed = sum(1 for peer in peers if not peer.direct and peer.relay)
-    recent = sum(
-        1
-        for peer in peers
-        if peer.last_handshake_age_ms is not None and peer.last_handshake_age_ms <= 120_000
-    )
-    ages = [
-        peer.last_handshake_age_ms
-        for peer in peers
-        if peer.last_handshake_age_ms is not None and peer.last_handshake_age_ms >= 0
-    ]
-    attrs = {
-        "online_peer_count": str(online),
-        "direct_peer_count": str(direct),
-        "relay_peer_count": str(relayed),
-        "active_peer_count": str(active),
-        "recent_handshake_peer_count": str(recent),
-    }
-    if ages:
-        attrs["newest_handshake_age_ms"] = str(min(ages))
-    relay_regions = sorted({peer.relay for peer in peers if peer.relay})
-    if relay_regions:
-        attrs["relay_regions"] = ",".join(relay_regions)
-    return attrs
-
-
-def join_attr_values(values: list[str], *, max_len: int = MAX_TRANSPORT_ATTR_LENGTH) -> str:
-    joined = "; ".join(values)
-    if len(joined) > max_len:
-        return joined[: max_len - 3] + "..."
-    return joined
-
-
-def transport_snapshot_failure(
-    error_message: str,
-    *,
-    canceled: bool = False,
-    deadline: bool = False,
-) -> tuple[TransportSnapshotFailureKind | None, str]:
-    if not error_message and not canceled and not deadline:
-        return (None, "")
-    if canceled:
-        return (TransportSnapshotFailureKind.Canceled, "")
-    if deadline or "deadline exceeded" in error_message.lower():
-        return (TransportSnapshotFailureKind.DeadlineExceeded, "transport snapshot timed out")
-    return (TransportSnapshotFailureKind.StatusUnavailable, "transport snapshot unavailable")
-
-
-def should_emit_transport_failure(
-    *,
-    proxy_target: str,
-    failure_count: int,
-    last_failure_event_age_seconds: int | None,
-    error_message: str,
-    deadline: bool = False,
-    canceled: bool = False,
-) -> TransportFailureDecision:
-    kind, message = transport_snapshot_failure(
-        error_message,
-        deadline=deadline,
-        canceled=canceled,
-    )
-    if not message or kind is None:
-        return TransportFailureDecision(emit=False, kind=kind, message=message)
-    if failure_count < TRANSPORT_FAILURE_THRESHOLD:
-        return TransportFailureDecision(emit=False, kind=kind, message=message)
-    if (
-        last_failure_event_age_seconds is not None
-        and last_failure_event_age_seconds < TRANSPORT_FAILURE_INTERVAL_SECONDS
-    ):
-        return TransportFailureDecision(emit=False, kind=kind, message=message)
-    return TransportFailureDecision(
-        emit=True,
-        kind=kind,
-        message=message,
-        attrs={
-            "proxy_target": proxy_target,
-            "error_kind": kind.value,
-            "failure_count": str(failure_count),
-            "snapshot_error": "true",
-        },
-    )
-
-
-def telemetry_record_count(
-    logs: list[AgentLogRecord],
-    events: list[AgentEventRecord],
-    metrics: AgentMetricSnapshot | None,
-) -> int:
-    return len(logs) + len(events) + (1 if metrics is not None else 0)
-
-
-def agent_telemetry_request_size(request: AgentTelemetryRequest | None) -> int:
-    if request is None:
-        return 0
-    size = telemetry_record_count(request.logs, request.events, request.metrics)
-    return size or 1
-
-
-def split_line_buffer(
-    chunks: list[str],
-    *,
-    prefix: str = "",
-    suffix: str = "",
-    flush_final: bool = False,
-    trim_carriage_return: bool = True,
-) -> LineBufferPlan:
-    buffer = ""
-    lines: list[str] = []
-    for chunk in chunks:
-        buffer += chunk
-        while "\n" in buffer or "\r" in buffer:
-            newline_positions = [pos for pos in (buffer.find("\n"), buffer.find("\r")) if pos >= 0]
-            pos = min(newline_positions)
-            line = buffer[:pos]
-            if trim_carriage_return:
-                line = line.rstrip("\r")
-            if line or prefix or suffix:
-                lines.append(f"{prefix}{line}{suffix}")
-            buffer = buffer[pos + 1 :]
-    if flush_final and buffer:
-        line = buffer.rstrip("\r") if trim_carriage_return else buffer
-        lines.append(f"{prefix}{line}{suffix}")
-        buffer = ""
-    return LineBufferPlan(lines=lines, remainder=buffer)
-
-
 def bytes_to_mib(value: int) -> int:
     return value // 1024 // 1024
 
@@ -1066,14 +748,3 @@ def _preflight_check(
         severity=severity,
         message=message,
     )
-
-
-def _unix_nano(value: datetime) -> int:
-    return int(value.timestamp() * 1_000_000_000)
-
-
-def append_log(path: Path, entry: LogWrite) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(f"{entry.created_at.isoformat()} [{entry.stream}] {entry.message}\n")
-    return path

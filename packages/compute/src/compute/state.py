@@ -165,7 +165,6 @@ class ComputeAgentRouteState(ContractModel):
     state: str = "opening"
     error: str = ""
     updated_at: int = 0
-    metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
     @field_validator("port")
     @classmethod

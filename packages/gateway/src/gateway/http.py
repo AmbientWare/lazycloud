@@ -51,19 +51,6 @@ class SignPayloadResponse(HttpModel):
     timestamp: int = 0
 
 
-class AgentTelemetrySinkConfig(HttpModel):
-    destination: str = ""
-    credential: str = ""
-    stream_prefix: str = ""
-
-
-class AgentTelemetryConfig(HttpModel):
-    enabled: bool = False
-    stream_prefix: str = ""
-    logs: AgentTelemetrySinkConfig | None = None
-    events: AgentTelemetrySinkConfig | None = None
-
-
 class AgentBootstrapConfig(HttpModel):
     gateway_public_http_url: str = ""
     gateway_runtime_http_url: str = ""
@@ -75,11 +62,9 @@ class AgentBootstrapConfig(HttpModel):
     transport: BackendRouteTransport = BackendRouteTransport.TsnetRestricted
     executor: str = ""
     fallback: PrivatePoolFallback = PrivatePoolFallback.Internal
-    disabled_services: list[str] = Field(default_factory=list)
     image_registry_store: str = ""
     image_clip_version: int = 2
     image_local_cache_enabled: bool = True
-    telemetry: AgentTelemetryConfig = Field(default_factory=AgentTelemetryConfig)
 
 
 class JoinAgentRequest(HttpModel):
@@ -277,10 +262,8 @@ __all__ = [
     "AgentLogRecord",
     "AgentMetricSnapshot",
     "AgentRoute",
-    "AgentTelemetryConfig",
     "AgentTelemetryRequest",
     "AgentTelemetryResponse",
-    "AgentTelemetrySinkConfig",
     "AgentWorkerSlot",
     "AuthorizeRequest",
     "AuthorizeResponse",

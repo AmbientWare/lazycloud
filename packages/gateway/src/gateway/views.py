@@ -38,7 +38,6 @@ from compute import agent_control, projection
 from gateway.http import (
     AgentBootstrapConfig,
     AgentRoute,
-    AgentTelemetryConfig,
     AgentWorkerSlot,
 )
 
@@ -187,16 +186,7 @@ def _machine_readiness_message(
     return "Waiting for the agent to connect"
 
 
-def agent_telemetry_payload(config: AgentTelemetryConfig) -> dict[str, JsonValue]:
-    return _JSON_OBJECT.validate_python(config.model_dump(mode="json", exclude_none=True))
-
-
 def agent_bootstrap_view(config: agent_control.AgentBootstrapConfig) -> AgentBootstrapConfig:
-    telemetry = (
-        AgentTelemetryConfig.model_validate(config.telemetry)
-        if isinstance(config.telemetry, dict)
-        else AgentTelemetryConfig()
-    )
     return AgentBootstrapConfig(
         gateway_public_http_url=config.gateway_public_http_url,
         gateway_runtime_http_url=config.gateway_runtime_http_url,
@@ -208,11 +198,9 @@ def agent_bootstrap_view(config: agent_control.AgentBootstrapConfig) -> AgentBoo
         transport=config.transport,
         executor=config.executor,
         fallback=config.fallback,
-        disabled_services=list(config.disabled_services),
         image_registry_store=config.image_registry_store,
         image_clip_version=config.image_clip_version,
         image_local_cache_enabled=config.image_local_cache_enabled,
-        telemetry=telemetry,
     )
 
 

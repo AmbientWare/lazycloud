@@ -12,7 +12,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 from foundation.network import worker_network_prefix
 from foundation.shell import shell_quote
-from pydantic import Field, JsonValue, field_validator
+from pydantic import Field, field_validator
 from shared.capacity import CAPACITY_OWNER_ID_PATTERN
 from shared.compute_enrollment import (
     AgentCapacityState,
@@ -54,14 +54,6 @@ AGENT_STREAM_HEARTBEAT_SECONDS = 10.0
 AGENT_STREAM_EVENT_COALESCE_SECONDS = 0.025
 ROUTE_PREWARM_INTERVAL_SECONDS = 30.0
 ROUTE_PREWARM_TIMEOUT_SECONDS = 3.0
-DEFAULT_DISABLED_AGENT_SERVICES = (
-    "redis",
-    "postgres",
-    "juicefs",
-    "fluent-bit",
-    "configman",
-    "k3s",
-)
 
 
 class JoinTokenDecision(StrEnum):
@@ -230,8 +222,6 @@ class AgentBootstrapConfig(ContractModel):
     image_registry_store: str = ""
     image_clip_version: int = 2
     image_local_cache_enabled: bool = True
-    telemetry: dict[str, JsonValue] = Field(default_factory=dict)
-    disabled_services: tuple[str, ...] = DEFAULT_DISABLED_AGENT_SERVICES
 
 
 class AgentStreamTimingPlan(ContractModel):
@@ -971,7 +961,6 @@ def build_agent_bootstrap_config(
     *,
     gateway_runtime_http_url: str,
     tailnet: TailnetConfig,
-    telemetry: dict[str, JsonValue] | None = None,
     executor: str = DEFAULT_PRIVATE_EXECUTOR,
 ) -> AgentBootstrapConfig:
     normalized = normalize_pool_config(pool_state.config or PoolConfig(name=pool_state.name))
@@ -1000,7 +989,6 @@ def build_agent_bootstrap_config(
         image_registry_store=image.registry_store,
         image_clip_version=image.clip_version,
         image_local_cache_enabled=image.local_cache_enabled,
-        telemetry=telemetry or {},
     )
 
 
