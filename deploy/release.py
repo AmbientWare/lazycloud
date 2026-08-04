@@ -29,9 +29,24 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+
 _REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 _AGENT_BUILD = "deploy/agent-binary/build.py"
 _RELEASE = "deploy/aws-release-assets/release.py"
+
+
+class ManifestInspection(BaseModel):
+    """The one field of `docker manifest inspect --verbose` this needs."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    reference: str = Field(alias="Ref")
+
+
+_MANIFEST_INSPECTION: TypeAdapter[ManifestInspection | list[ManifestInspection]] = TypeAdapter(
+    ManifestInspection | list[ManifestInspection]
+)
 
 
 class ReleaseError(RuntimeError):
@@ -106,11 +121,11 @@ def push_worker_image(repository: str, version: str) -> str:
     )
     if "@sha256:" not in local_digest:
         raise ReleaseError(f"worker image {tag} has no published digest to pin")
-    payload = json.loads(
+    inspected = _MANIFEST_INSPECTION.validate_json(
         _run(["docker", "manifest", "inspect", "--verbose", local_digest], capture=True)
     )
-    inspections = payload if isinstance(payload, list) else [payload]
-    references = {str(inspection["Ref"]) for inspection in inspections}
+    inspections = inspected if isinstance(inspected, list) else [inspected]
+    references = {inspection.reference for inspection in inspections}
     if len(references) != 1:
         raise ReleaseError(f"worker image {tag} resolved to more than one reference: {references}")
     return references.pop()
