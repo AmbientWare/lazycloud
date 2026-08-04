@@ -37,6 +37,11 @@ DEFAULT_INTERNAL_HTTP_TIMEOUT_SECONDS = 30.0
 # pay for that on every request.
 DEFAULT_PEER_WAIT_SECONDS = 10.0
 
+# The failures worth resolving a peer for, and the only ones it is safe to retry
+# after: httpx raises these before it reads the request body, so a redial does
+# not have to replay a stream it has already consumed.
+_CONNECT_FAILURES = (httpx.ConnectError, httpx.ConnectTimeout)
+
 
 class InternalHttpError(RuntimeError):
     """An internal hop could not be completed."""
@@ -75,6 +80,11 @@ class TailnetPeerAddresses:
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     def peer_address(self, host: str, *, timeout_seconds: float) -> str:
+        """Wait out a stale netmap and return the peer's address.
+
+        Called only after dialing the name has already failed, so the wait is
+        recovery rather than a toll on every request.
+        """
         if not self.policy.covers(host):
             return ""
         budget = min(self.wait_seconds, max(timeout_seconds, 0.001))
@@ -87,9 +97,6 @@ class TailnetPeerAddresses:
                 msg = f"tailnet peer {host} did not become reachable: {exc}"
                 raise InternalHttpError(msg) from exc
         if not address:
-            # Never fall back to dialing the name. It resolves publicly on some
-            # networks and not others, so a silent fallback turns a missing peer
-            # into a slow failure attributed to something else entirely.
             msg = f"tailnet peer {host} has no reachable address"
             raise InternalHttpError(msg)
         return address
@@ -99,8 +106,13 @@ class TailnetPeerAddresses:
 class InternalHttpClient:
     """The single client for platform-internal HTTP.
 
-    Construct one per process and share it: connections are pooled, and pooling
-    keeps peer resolution off the hot path once a peer is known.
+    Construct one per process and share it: connections are pooled, so a peer
+    that answers to its name is dialed without consulting the tailnet at all.
+
+    The tailnet name is the route. Peer resolution is the recovery step, taken
+    only when connecting by name fails, because resolving first costs a
+    loopback hop and two `tailscale status` executions on every request and can
+    drive the node's own control session down under ordinary load.
     """
 
     timeout_seconds: float = DEFAULT_INTERNAL_HTTP_TIMEOUT_SECONDS
@@ -115,17 +127,17 @@ class InternalHttpClient:
             )
         return self._client
 
-    def _routed(
+    def _peer_route(
         self, url: str, timeout_seconds: float
-    ) -> tuple[str, dict[str, str], dict[str, str]]:
-        """The URL to dial, the headers that preserve the caller's host, and TLS extensions."""
+    ) -> tuple[str, dict[str, str], dict[str, str]] | None:
+        """Where to redial `url` once its name did not connect, or None if it is not a peer."""
         parsed = urlparse(url)
         host = parsed.hostname or ""
         if not host or self.addresses is None:
-            return url, {}, {}
+            return None
         address = self.addresses.peer_address(host, timeout_seconds=timeout_seconds)
         if not address:
-            return url, {}, {}
+            return None
         port = f":{parsed.port}" if parsed.port else ""
         literal = f"[{address}]" if ":" in address else address
         dialed = urlunparse(parsed._replace(netloc=f"{literal}{port}"))
@@ -143,17 +155,32 @@ class InternalHttpClient:
         timeout_seconds: float | None = None,
     ) -> httpx.Response:
         timeout = timeout_seconds or self.timeout_seconds
-        dialed, host_headers, extensions = self._routed(url, timeout)
-        merged = {**dict(headers or {}), **host_headers}
+        merged = dict(headers or {})
         try:
             return self._ensure_client().request(
                 method,
-                dialed,
+                url,
                 headers=merged,
                 content=content,
                 timeout=timeout,
-                extensions=extensions,
             )
+        except _CONNECT_FAILURES as exc:
+            route = self._peer_route(url, timeout)
+            if route is None:
+                raise InternalHttpError(f"{method} {_safe_target(url)} failed: {exc}") from exc
+            dialed, host_headers, extensions = route
+            try:
+                return self._ensure_client().request(
+                    method,
+                    dialed,
+                    headers={**merged, **host_headers},
+                    content=content,
+                    timeout=timeout,
+                    extensions=extensions,
+                )
+            except httpx.HTTPError as retry_exc:
+                msg = f"{method} {_safe_target(url)} failed: {retry_exc}"
+                raise InternalHttpError(msg) from retry_exc
         except httpx.HTTPError as exc:
             raise InternalHttpError(f"{method} {_safe_target(url)} failed: {exc}") from exc
 
@@ -168,20 +195,37 @@ class InternalHttpClient:
         timeout_seconds: float | None = None,
     ) -> Iterator[httpx.Response]:
         timeout = timeout_seconds or self.timeout_seconds
-        dialed, host_headers, extensions = self._routed(url, timeout)
-        merged = {**dict(headers or {}), **host_headers}
+        merged = dict(headers or {})
+        client = self._ensure_client()
+        opened = client.stream(method, url, headers=merged, content=content, timeout=timeout)
         try:
-            with self._ensure_client().stream(
+            response = opened.__enter__()
+        except _CONNECT_FAILURES as exc:
+            route = self._peer_route(url, timeout)
+            if route is None:
+                raise InternalHttpError(f"{method} {_safe_target(url)} failed: {exc}") from exc
+            dialed, host_headers, extensions = route
+            opened = client.stream(
                 method,
                 dialed,
-                headers=merged,
+                headers={**merged, **host_headers},
                 content=content,
                 timeout=timeout,
                 extensions=extensions,
-            ) as response:
-                yield response
+            )
+            try:
+                response = opened.__enter__()
+            except httpx.HTTPError as retry_exc:
+                msg = f"{method} {_safe_target(url)} failed: {retry_exc}"
+                raise InternalHttpError(msg) from retry_exc
         except httpx.HTTPError as exc:
             raise InternalHttpError(f"{method} {_safe_target(url)} failed: {exc}") from exc
+        try:
+            yield response
+        except httpx.HTTPError as exc:
+            raise InternalHttpError(f"{method} {_safe_target(url)} failed: {exc}") from exc
+        finally:
+            opened.__exit__(None, None, None)
 
     def close(self) -> None:
         client = self._client

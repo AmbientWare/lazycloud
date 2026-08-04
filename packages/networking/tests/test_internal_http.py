@@ -67,8 +67,9 @@ def test_a_tailnet_host_is_dialed_at_its_peer_address_but_keeps_its_host_header(
 ) -> None:
     """The signature on an object-store URL covers Host, so only the address may move."""
     peer = "control-plane.tailnet-example.ts.net"
+    runtime = _Peers(peer, "127.0.0.1")
     addresses = TailnetPeerAddresses(
-        runtime=_Peers(peer, "127.0.0.1"),
+        runtime=runtime,
         policy=TailnetHostPolicy(dns_suffix="tailnet-example.ts.net"),
     )
     client = InternalHttpClient(addresses=addresses, timeout_seconds=5.0)
@@ -82,6 +83,32 @@ def test_a_tailnet_host_is_dialed_at_its_peer_address_but_keeps_its_host_header(
     # Reached a server that only listens on loopback, while the request still
     # named the peer.
     assert response.text == f"{peer}:{echo_server}"
+    # The name does not resolve, so the address came from the recovery path.
+    assert runtime.waited == [peer]
+
+
+def test_a_reachable_tailnet_name_is_dialed_without_consulting_the_netmap(
+    echo_server: int,
+) -> None:
+    """Resolving first would put a netmap round trip in front of every request.
+
+    Three failed lookups in a minute take the node's own control session down,
+    so ordinary traffic to a healthy peer must not touch the netmap at all.
+    """
+    runtime = _Peers("localhost", "127.0.0.1")
+    addresses = TailnetPeerAddresses(
+        runtime=runtime,
+        policy=TailnetHostPolicy(dns_suffix="localhost"),
+    )
+    client = InternalHttpClient(addresses=addresses, timeout_seconds=5.0)
+
+    try:
+        response = client.request("GET", f"http://localhost:{echo_server}/")
+    finally:
+        client.close()
+
+    assert response.status_code == 200
+    assert runtime.waited == []
 
 
 def test_a_host_outside_the_tailnet_is_dialed_as_written(echo_server: int) -> None:

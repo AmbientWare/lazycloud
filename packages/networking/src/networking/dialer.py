@@ -174,20 +174,34 @@ class BackendRouteDialer:
     ) -> BackendConnection:
         host = proxy_target_host(route.proxy_target)
         last_error: OSError | None = None
+        # The proxy target is dialed as written until that fails. Waiting on the
+        # peer first would put a netmap round trip in front of every connection
+        # to a peer that answers to its name perfectly well.
+        resolve_peer = False
         while _remaining_seconds(deadline) > 0:
             remaining = _remaining_seconds(deadline)
             if (
-                transport is BackendRouteTransport.TsnetRestricted
+                resolve_peer
+                and transport is BackendRouteTransport.TsnetRestricted
                 and host
                 and self.tailnet_peer_waiter is not None
             ):
                 wait_timeout = max(remaining - tailnet_dial_reserve_seconds(remaining), 0.001)
                 self.tailnet_peer_waiter.wait_for_peer(host, wait_timeout)
-            target = self._resolved_tailnet_target(route.proxy_target, transport, host)
+            target = (
+                self._resolved_tailnet_target(route.proxy_target, transport, host)
+                if resolve_peer
+                else route.proxy_target
+            )
             try:
                 return self.connector.connect(target, _remaining_seconds(deadline))
             except OSError as exc:
                 last_error = exc
+                if not resolve_peer:
+                    # The name did not connect. Every later attempt goes through
+                    # the netmap, which is where a stale peer gets corrected.
+                    resolve_peer = True
+                    continue
                 if _remaining_seconds(deadline) <= self.config.ready_poll_seconds:
                     break
                 time.sleep(self.config.ready_poll_seconds)
@@ -274,7 +288,6 @@ def _write_route_preface(
 def _backend_route_id(plan: BackendDialPlan) -> str:
     value = plan.metadata.get(BACKEND_ROUTE_ID_METADATA_KEY, "")
     return value.strip() if isinstance(value, str) else ""
-
 
 
 def _route_transport(value: BackendRouteTransport | str) -> BackendRouteTransport:
