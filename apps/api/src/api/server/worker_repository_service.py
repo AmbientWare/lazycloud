@@ -1114,21 +1114,36 @@ class WorkerRepositoryService:
         for route in routes:
             if not (route.route_id and route.workspace_id and route.pool and route.machine_id):
                 continue
-            repository.save_agent_route_state(route)
+            # The owner is stamped from the worker record rather than taken from
+            # the request: hot state is keyed by it, and a worker declaring which
+            # unit owns it could write into another unit's namespace.
+            worker = self.workers.get_worker(route.worker_id)
+            if worker is None or not worker.capacity_owner_id:
+                continue
+            repository.save_agent_route_state(
+                route.model_copy(update={"capacity_owner_id": worker.capacity_owner_id})
+            )
 
     def _unpublish_agent_routes(self, routes: list[AgentBackendRoute]) -> None:
         if self.redis is None:
             return
         repository = RedisComputeStateRepository(self.redis)
-        unique_routes = {
-            (route.workspace_id, route.pool, route.machine_id, route.route_id)
-            for route in routes
-            if route.route_id and route.workspace_id and route.pool and route.machine_id
-        }
-        for workspace_id, pool, machine_id, route_id in sorted(unique_routes):
+        # Deleted under the same owner key the publish path wrote, resolved the
+        # same way, or the route outlives its container.
+        unique_routes: set[tuple[str, str, str, str]] = set()
+        for route in routes:
+            if not (route.route_id and route.workspace_id and route.pool and route.machine_id):
+                continue
+            worker = self.workers.get_worker(route.worker_id)
+            if worker is None or not worker.capacity_owner_id:
+                continue
+            unique_routes.add(
+                (route.workspace_id, worker.capacity_owner_id, route.machine_id, route.route_id)
+            )
+        for workspace_id, capacity_owner_id, machine_id, route_id in sorted(unique_routes):
             repository.delete_agent_route_state(
                 workspace_id,
-                pool,
+                capacity_owner_id,
                 machine_id,
                 route_id,
             )
