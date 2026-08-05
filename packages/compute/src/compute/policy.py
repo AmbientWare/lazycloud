@@ -26,6 +26,7 @@ from shared.compute_enrollment import (
     MachineServiceState,
 )
 from shared.compute_policy import (
+    LAZYCLOUD_MACHINE_POOL,
     AwsWorkspaceComputePolicy,
     ComputePlacement,
     ComputePlacementSource,
@@ -308,6 +309,52 @@ class WorkspaceComputePolicyService:
                 region=region,
                 provider_ref=f"aws:{connection.id}",
             )
+
+    def default_machine_pool(self, *, workspace: str) -> str:
+        """Scheduling group a workload lands in when it names none."""
+        return self.machine_pool_for_target(workspace=workspace, target=None)
+
+    def machine_pool_for_target(
+        self,
+        *,
+        workspace: str,
+        target: ComputePlacementTarget | None,
+    ) -> str:
+        """Resolve a placement target to the group that serves it.
+
+        The platform's own fleet answers to `lazycloud`; a workspace pointed at
+        its connected account answers to whatever group that connection stamps
+        on the units it provisions.
+        """
+        with self.context.database.session() as session:
+            workspace_id = self.context.workspace(session, workspace).id
+            policy = self._policy_in_session(session, workspace_id)
+            resolved = target if target is not None else policy.default_placement
+            if resolved is not ComputePlacementTarget.Aws:
+                return LAZYCLOUD_MACHINE_POOL
+            connection = AwsAccountConnectionRepository(session).get_for_workspace(workspace_id)
+            if connection is None or not connection.accepts_placement:
+                raise ConflictError("AWS placement requires a ready workspace connection")
+            return connection.machine_pool
+
+    def connection_for_machine_pool(
+        self,
+        *,
+        workspace: str,
+        machine_pool: str,
+    ) -> AwsAccountConnection | None:
+        """The ready connection whose units feed this group, if one does.
+
+        A group nobody provisions into is legal — naming a group creates it —
+        so this answering None means the group is fed by joined machines alone
+        and there is nothing to provision.
+        """
+        with self.context.database.session() as session:
+            workspace_id = self.context.workspace(session, workspace).id
+            connection = AwsAccountConnectionRepository(session).get_for_workspace(workspace_id)
+        if connection is None or not connection.accepts_placement:
+            return None
+        return connection if connection.machine_pool == machine_pool else None
 
     def resolve_deployment_placement(
         self,

@@ -103,25 +103,12 @@ class PoolScaleResponse(HttpModel):
 
 
 class MachineCreateRequest(HttpModel):
-    pool: str = "default"
     provider: str = "local"
     cpu: float | None = None
     memory: str | None = None
     gpu: str | None = None
     address: str | None = None
     labels: dict[str, str] = Field(default_factory=dict)
-
-
-class MachineRegisterRequest(HttpModel):
-    token: str = ""
-    machine_id: str
-    hostname: str = ""
-    provider_name: str = "local"
-    pool_name: str = "default"
-    cpu: str = ""
-    memory: str = ""
-    gpu_count: str = "0"
-    private_ip: str = ""
 
 
 class MachineResponse(HttpModel):
@@ -142,10 +129,6 @@ class MachineListResponse(HttpModel):
     machines: list[MachineResponse] = Field(default_factory=list)
 
 
-class MachineGpuCountsResponse(HttpModel):
-    gpus: dict[str, int] = Field(default_factory=dict)
-
-
 class MachineJoinCommandRequest(HttpModel):
     """Request the join command for the workspace's implicit self-hosted fleet.
 
@@ -159,22 +142,6 @@ class MachineJoinCommandRequest(HttpModel):
 class MachineJoinCommandResponse(HttpModel):
     command: str = ""
     expires_at: datetime
-
-
-class MachineRemoteConfigResponse(HttpModel):
-    endpoint: str = "local"
-    state_home: str
-    pools: list[str] = Field(default_factory=list)
-    providers: list[str] = Field(default_factory=list)
-
-
-class MachineRegisterResponse(HttpModel):
-    machine: MachineResponse
-    config: MachineRemoteConfigResponse
-
-
-class MachineConfigResponse(HttpModel):
-    config: MachineRemoteConfigResponse
 
 
 class WorkerContainerResponse(HttpModel):
@@ -431,15 +398,10 @@ __all__ = [
     "ContainerStopAllResponse",
     "ContainerWithAppPageResponse",
     "ContainerWithAppResponse",
-    "MachineConfigResponse",
     "MachineCreateRequest",
-    "MachineGpuCountsResponse",
     "MachineJoinCommandRequest",
     "MachineJoinCommandResponse",
     "MachineListResponse",
-    "MachineRegisterRequest",
-    "MachineRegisterResponse",
-    "MachineRemoteConfigResponse",
     "MachineResponse",
     "PoolCapacityExtendRequest",
     "PoolCapacityLaunchRequest",

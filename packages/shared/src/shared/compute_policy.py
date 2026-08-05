@@ -13,6 +13,9 @@ from shared.routing import BackendRouteTransport, PrivatePoolFallback
 from shared.timestamps import utc_now
 
 _UUID_PATTERN = r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+
+LAZYCLOUD_MACHINE_POOL = "lazycloud"
+"""Scheduling group the platform's own fleet stamps on its machines."""
 _AWS_REGION_PATTERN = r"^(us-gov|us|af|ap|ca|cn|eu|il|me|mx|sa)-[a-z0-9-]+-[0-9]+$"
 
 
@@ -279,6 +282,7 @@ def _unique_nonempty(values: Sequence[str]) -> tuple[str, ...]:
 
 
 __all__ = [
+    "LAZYCLOUD_MACHINE_POOL",
     "AwsWorkspaceComputePolicy",
     "ComputeCapacityMode",
     "ComputePlacement",

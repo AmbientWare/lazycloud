@@ -20,7 +20,7 @@ from shared.capacity import CapacityAcquisitionShape as ComputeCapacityShape
 from shared.capacity import CapacityAcquisitionStatus as ComputeCapacityStatus
 from shared.capacity import CapacityOwnerKind, CapacityPoolSizingSnapshot
 from shared.capacity import CapacityReleaseRequest as ComputeCapacityReleaseRequest
-from shared.compute_policy import ComputePlacementSource, ComputePoolRecord
+from shared.compute_policy import ComputePoolRecord
 from shared.contracts import ContractModel
 from shared.errors import ConflictError
 from shared.scheduling import (
@@ -189,7 +189,8 @@ class CapacityProvisioningReservation(ContractModel):
 
 class CapacityAcquisitionResult(ContractModel):
     status: CapacityAcquisitionStatus
-    capacity_owner_id: str
+    capacity_owner_id: str = ""
+    """Unit that served the request, empty when none accepted it."""
     reservation_id: str
     operation_id: str
     desired_unit: int = Field(default=0, ge=0)
@@ -347,6 +348,12 @@ class ComputePoolCapacityController:
         )
 
     def accepts(self, request: SchedulerWorkerRequest) -> bool:
+        """Whether this unit is a candidate for the request.
+
+        A named group admits every unit feeding it, which is what gives the
+        acquisition loop more than one candidate to fail over between. A request
+        that names no group falls back to the units marked default-eligible.
+        """
         if not self.pool.scaling_enabled:
             return False
         if self.owner_kind not in {
@@ -356,13 +363,8 @@ class ComputePoolCapacityController:
             return False
         if request.workspace_id != self.workspace_id:
             return False
-        if request.capacity_owner_id and request.capacity_owner_id != self.capacity_owner_id:
-            return False
-        if request.capacity_owner_id:
-            if request.pool_selector and request.pool_selector != self.pool.name:
-                return False
-        elif _request_has_strict_pool(request):
-            if request.pool_selector != self.pool.name:
+        if request.pool_selector:
+            if request.pool_selector != self.pool.machine_pool:
                 return False
         elif not self.pool.default_eligible:
             return False
@@ -996,24 +998,6 @@ class CapacityReservationService:
     def can_acquire(self, request: SchedulerWorkerRequest) -> bool:
         return self._controller_for_request(request) is not None
 
-    def resolve_request(self, request: SchedulerWorkerRequest) -> SchedulerWorkerRequest:
-        controller = self._controller_for_request(request)
-        if controller is None:
-            return request
-        if request.capacity_owner_id and request.capacity_owner_id != controller.capacity_owner_id:
-            raise ValueError("request capacity owner does not match its selected pool")
-        if (
-            request.capacity_owner_id == controller.capacity_owner_id
-            and request.pool_selector == controller.pool_name
-        ):
-            return request
-        return request.model_copy(
-            update={
-                "pool_selector": controller.pool_name,
-                "capacity_owner_id": controller.capacity_owner_id,
-            }
-        )
-
     def acquire(
         self,
         request: SchedulerWorkerRequest,
@@ -1024,7 +1008,6 @@ class CapacityReservationService:
         if not controllers:
             return _unsupported_result(request, "no capacity owner accepts the request")
         current_time = now or utc_now()
-        strict = bool(request.capacity_owner_id) or _request_has_strict_pool(request)
         last_result: CapacityAcquisitionResult | None = None
         for controller in controllers:
             try:
@@ -1034,11 +1017,9 @@ class CapacityReservationService:
                     now=current_time,
                 )
             except Exception:
-                if strict:
-                    raise
                 continue
             last_result = result
-            if strict or result.status in {
+            if result.status in {
                 CapacityAcquisitionStatus.ExistingPending,
                 CapacityAcquisitionStatus.Requested,
             }:
@@ -1562,9 +1543,6 @@ class CapacityReservationService:
         ]
         if not candidates:
             return []
-        if request.capacity_owner_id or _request_has_strict_pool(request):
-            candidates.sort(key=lambda controller: controller.capacity_owner_id)
-            return candidates
         current_time = utc_now()
         candidates.sort(
             key=lambda controller: capacity_pool_selection_key(
@@ -1616,13 +1594,6 @@ def reservation_shape_for_request(
         runtime_classes=tuple(dict.fromkeys(runtime for runtime in worker_runtimes if runtime)),
         docker_enabled=request.docker_enabled,
         preemptible=worker_preemptible,
-    )
-
-
-def _request_has_strict_pool(request: SchedulerWorkerRequest) -> bool:
-    return (
-        bool(request.pool_selector)
-        and request.placement_source is ComputePlacementSource.AttachedPool
     )
 
 

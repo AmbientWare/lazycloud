@@ -10,6 +10,7 @@ from api.server.dependencies import (
     require_app_requirement,
     require_app_scope,
     require_app_token,
+    require_machine_workspace,
     require_workspace_scope,
     require_workspace_token,
 )
@@ -42,10 +43,15 @@ type machine_access = Annotated[
     None,
     Depends(require_app_requirement(machine_requirement())),
 ]
+type machine_workspace = Annotated[
+    str,
+    Depends(require_machine_workspace(machine_requirement())),
+]
 
 __all__ = [
     "admin_access",
     "machine_access",
+    "machine_workspace",
     "read_access",
     "read_app_token",
     "read_token",

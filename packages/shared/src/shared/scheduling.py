@@ -6,7 +6,7 @@ from typing import Protocol, runtime_checkable
 from pydantic import Field, JsonValue, field_validator
 
 from shared.capacity import CAPACITY_OWNER_ID_PATTERN
-from shared.compute_policy import ComputePlacementSource, ComputePlacementTarget
+from shared.compute_policy import ComputePlacementTarget
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
 from shared.routing import AgentBackendRoute
@@ -68,9 +68,13 @@ class SchedulerWorkerRequest(ContractModel):
     gpu_request: list[str] = Field(default_factory=list)
     gpu_count: int = 0
     pool_selector: str = ""
-    capacity_owner_id: str = ""
+    """Scheduling group this request must land in, empty to take the default.
+
+    A group may be fed by several units, so the request names the group and the
+    capacity controllers arbitrate which unit serves it. Naming the unit here
+    would pin the request to one candidate and suppress failover.
+    """
     requested_placement: ComputePlacementTarget | None = None
-    placement_source: ComputePlacementSource | None = None
     architecture: str = "amd64"
     provider_runtime: str = "runc"
     runtime_class: str = ""

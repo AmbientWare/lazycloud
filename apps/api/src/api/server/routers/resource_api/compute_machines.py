@@ -6,22 +6,20 @@ from fastapi import APIRouter, Depends, Query, Response, status
 from gateway.machine_lifecycle import MachineLifecycleService
 from gateway.service import SELF_HOSTED_FLEET_POOL_NAME, GatewayControlService
 from shared.http.compute import (
-    MachineConfigResponse,
     MachineCreateRequest,
-    MachineGpuCountsResponse,
     MachineJoinCommandRequest,
     MachineJoinCommandResponse,
     MachineListResponse,
-    MachineRegisterRequest,
-    MachineRegisterResponse,
-    MachineRemoteConfigResponse,
     MachineResponse,
     PoolMachineListResponse,
 )
 
-from api.server.auth import machine_access, read_workspace, write_token, write_workspace
+from api.server.auth import (
+    read_workspace,
+    write_token,
+    write_workspace,
+)
 from api.server.dependencies import current_services
-from api.server.routers.resource_api.common import _management
 from api.server.service_dependencies import gateway_service, machine_lifecycle_service
 from api.server.services import ApiServices
 
@@ -42,21 +40,23 @@ def list_machines(
 
 
 @router.get(
-    "/api/v1/machines/self-hosted",
+    "/api/v1/machines/pool",
     response_model=PoolMachineListResponse,
-    operation_id="list_self_hosted_machines",
+    operation_id="list_pool_machines_by_group",
 )
-def list_self_hosted_machines(
+def list_machines_in_pool(
     workspace_id: read_workspace,
+    pool: str = SELF_HOSTED_FLEET_POOL_NAME,
     limit: Annotated[int, Query(ge=1, le=1000)] = 100,
     cursor: str = "",
     gateway: GatewayControlService = Depends(gateway_service),
 ) -> PoolMachineListResponse:
+    """Machines in one scheduling group, self-hosted by default."""
     machines = sorted(
         (
             item
             for item in gateway.machine_views(workspace_id)
-            if item.pool_name == SELF_HOSTED_FLEET_POOL_NAME and item.id > cursor
+            if item.pool_name == pool and item.id > cursor
         ),
         key=lambda item: item.id,
     )
@@ -64,82 +64,6 @@ def list_self_hosted_machines(
     return PoolMachineListResponse(
         data=selected,
         next=selected[-1].id if len(machines) > limit else "",
-    )
-
-
-@router.get(
-    "/api/v1/machines/gpus",
-    response_model=MachineGpuCountsResponse,
-    operation_id="get_machine_gpu_counts",
-)
-def api_v1_gpu_counts(
-    workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
-) -> MachineGpuCountsResponse:
-    return MachineGpuCountsResponse(gpus=_management(services).gpu_counts(workspace_id))
-
-
-@router.post(
-    "/api/v1/machines/register",
-    response_model=MachineRegisterResponse,
-    operation_id="register_machine",
-)
-def api_v1_register_machine(
-    request: MachineRegisterRequest,
-    _auth: machine_access,
-    services: ApiServices = Depends(current_services),
-) -> MachineRegisterResponse:
-    machine = _management(services).register_machine(
-        machine_id=request.machine_id,
-        provider_name=request.provider_name,
-        pool_name=request.pool_name,
-        hostname=request.hostname,
-        cpu=request.cpu,
-        memory=request.memory,
-        gpu_count=request.gpu_count,
-        private_ip=request.private_ip,
-        token=request.token,
-    )
-    return MachineRegisterResponse(
-        machine=MachineResponse.model_validate(machine),
-        config=MachineRemoteConfigResponse.model_validate(_management(services).machine_config()),
-    )
-
-
-@router.get(
-    "/api/v1/machines/config",
-    response_model=MachineConfigResponse,
-    operation_id="get_machine_config",
-)
-def api_v1_machine_config(
-    _auth: machine_access,
-    services: ApiServices = Depends(current_services),
-) -> MachineConfigResponse:
-    return MachineConfigResponse(
-        config=MachineRemoteConfigResponse.model_validate(_management(services).machine_config())
-    )
-
-
-@router.get(
-    "/api/v1/machines/list",
-    response_model=MachineListResponse,
-    operation_id="list_ready_machines",
-)
-def api_v1_list_pool_machines(
-    provider_name: str | None = None,
-    pool_name: str | None = None,
-    *,
-    _auth: machine_access,
-    services: ApiServices = Depends(current_services),
-) -> MachineListResponse:
-    return MachineListResponse(
-        machines=[
-            MachineResponse.model_validate(item)
-            for item in _management(services).list_ready_machines(
-                provider_name=provider_name,
-                pool_name=pool_name,
-            )
-        ]
     )
 
 
@@ -175,7 +99,9 @@ def create_machine(
     return MachineResponse.model_validate(
         services.compute.create_machine(
             workspace=workspace_id,
-            pool=request.pool,
+            pool=services.workspace_compute_policy_service.default_machine_pool(
+                workspace=workspace_id
+            ),
             provider=request.provider,
             cpu=request.cpu,
             memory=request.memory,

@@ -3477,7 +3477,7 @@ class ComputeService:
         self,
         *,
         workspace: str = "default",
-        pool: str = "default",
+        pool: str,
         provider: str = "local",
         cpu: float | None = None,
         memory: str | None = None,

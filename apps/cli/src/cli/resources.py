@@ -456,7 +456,6 @@ def pool_join(
 
 def machine_create(
     ctx: typer.Context,
-    pool_name: Annotated[str, typer.Option("--pool")] = "default",
     provider: Annotated[str, typer.Option("--provider")] = "local",
     cpu: Annotated[float | None, typer.Option("--cpu")] = None,
     memory: Annotated[str | None, typer.Option("--memory")] = None,
@@ -464,7 +463,6 @@ def machine_create(
 ) -> None:
     response = admin_api_client().create_machine(
         MachineCreateRequest(
-            pool=pool_name,
             provider=provider,
             cpu=cpu,
             memory=memory,
