@@ -20,8 +20,10 @@ from database.repositories.compute import ComputeJoinCredentialRepository
 from foundation.ids import try_uuid
 from pydantic import JsonValue, TypeAdapter
 from shared.compute_enrollment import ComputeCredentialStatus
-from shared.compute_fleet import Machine, Pool
+from shared.compute_fleet import Machine
+from shared.compute_policy import ComputePoolRecord
 from shared.errors import InvalidInputError, NotFoundError
+from shared.routing import BackendRouteTransport, PrivatePoolFallback
 from shared.timestamps import utc_now
 
 from compute import projection
@@ -31,7 +33,7 @@ _JSON_OBJECT = TypeAdapter(dict[str, JsonValue])
 
 
 class GatewayComputeService(Protocol):
-    def list_pools(self, *, workspace: str = "default") -> Iterable[Pool]: ...
+    def list_pools(self, *, workspace: str = "default") -> Iterable[ComputePoolRecord]: ...
 
     def list_machines(self, *, workspace: str = "default") -> Iterable[Machine]: ...
 
@@ -40,11 +42,15 @@ class GatewayComputeService(Protocol):
         name: str,
         *,
         provider: str,
-        min_workers: int,
-        max_workers: int,
-        labels: dict[str, str] | None = None,
+        min_machines: int,
+        max_machines: int,
+        worker_gpu_type: str = "",
+        worker_gpu_count: int = 0,
+        priority: int = 0,
+        transport: BackendRouteTransport = BackendRouteTransport.TsnetRestricted,
+        fallback: PrivatePoolFallback = PrivatePoolFallback.Internal,
         workspace: str = "default",
-    ) -> Pool: ...
+    ) -> ComputePoolRecord: ...
 
 
 @dataclass(slots=True)
@@ -53,14 +59,19 @@ class GatewayPoolStateCoordinator:
     compute: GatewayComputeService
     compute_states: RedisComputeStateRepository
 
-    def pool_by_name(self, name: str, *, workspace_id: str) -> Pool:
+    def pool_by_name(self, name: str, *, workspace_id: str) -> ComputePoolRecord:
         for pool in self.compute.list_pools(workspace=workspace_id):
             if pool.name == name:
                 return pool
         msg = f"pool not found: {name}"
         raise NotFoundError(msg)
 
-    def create_or_update_pool(self, config: projection.PoolConfig, *, workspace_id: str) -> Pool:
+    def create_or_update_pool(
+        self,
+        config: projection.PoolConfig,
+        *,
+        workspace_id: str,
+    ) -> ComputePoolRecord:
         if not config.name:
             msg = "pool name is required"
             raise InvalidInputError(msg)
@@ -73,31 +84,23 @@ class GatewayPoolStateCoordinator:
             msg = "pool config is required"
             raise InvalidInputError(msg)
         provider = (normalized.providers[0] if normalized.providers else "") or "agent"
-        labels: dict[str, str] = {
-            "selector": normalized.selector,
-            "mode": normalized.mode.value,
-            "transport": normalized.transport.value,
-            "fallback": normalized.fallback.value,
-            "priority": str(normalized.priority),
-            "offer_id": normalized.offer_id,
-            "gpu": normalized.gpu[0] if normalized.gpu else "",
-            "ttl": normalized.ttl,
-            "max_spend": str(normalized.max_spend),
-            "regions": ",".join(normalized.regions),
-            "providers": ",".join(normalized.providers),
-        }
+        gpu_type = normalized.gpu[0] if normalized.gpu else ""
         return self.compute.create_pool(
             normalized.name,
             provider=provider,
-            min_workers=0,
-            max_workers=max(normalized.nodes, 1),
-            labels={key: value for key, value in labels.items() if value},
+            min_machines=0,
+            max_machines=max(normalized.nodes, 1),
+            worker_gpu_type=gpu_type,
+            worker_gpu_count=1 if gpu_type else 0,
+            priority=normalized.priority,
+            transport=normalized.transport,
+            fallback=normalized.fallback,
             workspace=workspace_id,
         )
 
     def ensure_compute_pool_state(
         self,
-        pool: Pool,
+        pool: ComputePoolRecord,
         *,
         workspace_id: str,
         config: projection.PoolConfig | None = None,
@@ -118,8 +121,8 @@ class GatewayPoolStateCoordinator:
             name=pool.name,
             capacity_owner_id=pool.capacity_owner_id,
             provider=pool.provider,
-            max_machines=max(pool.max_workers, 1),
-            desired_machines=pool.max_workers,
+            max_machines=max(pool.max_machines, 1),
+            desired_machines=pool.max_machines,
             active_machines=len(
                 [
                     machine

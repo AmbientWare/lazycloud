@@ -62,8 +62,9 @@ from database.repositories.compute import (
     ComputeMachineEnrollmentCreate,
     ComputeMachineEnrollmentRecord,
     ComputeMachineEnrollmentRepository,
+    ComputePoolRepository,
 )
-from database.repositories.orchestration import MachineRepository, PoolRepository, WorkerRepository
+from database.repositories.orchestration import MachineRepository, WorkerRepository
 from database.tailnet_cleanup import DatabaseTailnetCleanupStore
 from execution.containers.service import ContainerService
 from execution.functions.service import FunctionControlService
@@ -105,7 +106,7 @@ from shared.compute_enrollment import (
     MachineReadinessPhase,
     TailnetEnrollmentPhase,
 )
-from shared.compute_fleet import Machine, Pool, ResourceStatus, Worker
+from shared.compute_fleet import Machine, ResourceStatus, Worker
 from shared.compute_policy import ComputePoolRecord
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.deployment_records import resolve_authorized, resolve_max_pending_tasks, resolve_retries
@@ -1138,7 +1139,12 @@ class GatewayControlService:
             expires_at=plan.expires_at,
         )
 
-    def _resolve_self_hosted_fleet(self, workspace_id: str, *, gpu: list[str]) -> Pool:
+    def _resolve_self_hosted_fleet(
+        self,
+        workspace_id: str,
+        *,
+        gpu: list[str],
+    ) -> ComputePoolRecord:
         try:
             current = self.pool_state_coordinator.pool_by_name(
                 SELF_HOSTED_FLEET_POOL_NAME,
@@ -1258,7 +1264,7 @@ class GatewayControlService:
         with self.services.context.database.session() as session:
             self_hosted_pool_names = {
                 pool.name
-                for pool in PoolRepository(session).list(workspace_id=workspace_id)
+                for pool in ComputePoolRepository(session).list_for_workspace(workspace_id)
                 if pool.provider == "agent"
             }
         if not self_hosted_pool_names:

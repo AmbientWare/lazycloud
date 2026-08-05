@@ -4,7 +4,7 @@ from compute.agent_control import (
     WorkerRecord,
     WorkerStatus,
 )
-from compute.projection import PoolConfig, PrivatePoolState
+from compute.projection import ComputePoolMode, PoolConfig, PrivatePoolState
 from compute.state import (
     ComputeAgentTokenState,
     ComputeAgentWorkerSlotState,
@@ -22,7 +22,8 @@ from shared.compute_enrollment import (
     ComputePreflightCheck,
     MachineReadinessPhase,
 )
-from shared.compute_fleet import Machine, Pool, ResourceStatus
+from shared.compute_fleet import Machine, ResourceStatus
+from shared.compute_policy import ComputePoolRecord
 from shared.errors import NotFoundError
 from shared.http.compute import PoolMachineMetricsResponse, PoolMachineResponse
 from shared.routing import (
@@ -40,21 +41,19 @@ from gateway.http import (
 _JSON_OBJECT = TypeAdapter(dict[str, JsonValue])
 
 
-def pool_config_from_pool(pool: Pool) -> PoolConfig:
-    provider = pool.provider or "local"
+def pool_config_from_pool(pool: ComputePoolRecord) -> PoolConfig:
+    """Project a provisioning unit into the config its agents are given."""
     return PoolConfig(
         name=pool.name,
-        providers=[provider],
-        gpu=[pool.labels["gpu"]] if pool.labels.get("gpu") else [],
-        nodes=pool.max_workers,
-        ttl=pool.labels.get("ttl", ""),
-        max_spend=float(pool.labels.get("max_spend", "0") or 0),
-        selector=pool.labels.get("selector", pool.name),
-        mode=pool.labels.get("mode", "private"),
-        transport=pool.labels.get("transport", ""),
-        fallback=pool.labels.get("fallback", ""),
-        priority=int(pool.labels.get("priority", "0") or 0),
-        offer_id=pool.labels.get("offer_id", ""),
+        providers=[pool.provider],
+        gpu=[pool.worker_gpu_type] if pool.worker_gpu_type else [],
+        nodes=pool.max_machines,
+        selector=pool.selector or pool.name,
+        mode=ComputePoolMode.Private,
+        transport=pool.transport,
+        fallback=pool.fallback,
+        priority=pool.priority,
+        offer_id=pool.offer_id,
     )
 
 
