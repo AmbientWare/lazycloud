@@ -241,7 +241,10 @@ def test_connection_status_is_available_when_aws_mutations_are_disabled(
     assert status_response.status_code == 200
     assert status_response.json() == {"connection": None}
     assert connect_response.status_code == 503
-    assert connect_response.json() == {"detail": "AWS account connections are not enabled"}
+    assert connect_response.json() == {
+        "detail": "AWS account connections are not enabled",
+        "code": "upstream_unavailable",
+    }
 
 
 def test_unfinished_setup_can_be_canceled_without_active_authorization(

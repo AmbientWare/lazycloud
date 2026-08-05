@@ -3,7 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from container_worker_app.production import ProductionWorkerSettings
+import yaml
+from container_worker_app.settings import WorkerSettings
 from pydantic import ValidationError
 from worker.configuration import (
     WORKER_CONFIG_PATH_ENV,
@@ -20,28 +21,38 @@ def test_worker_settings_precedence_is_init_then_env_then_yaml(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """A launcher's environment beats the configuration file, and an argument beats both.
+
+    The launcher sets per-worker identity in the environment while the file it
+    writes carries the configuration, so an environment value that lost to the
+    file would give the worker another worker's network.
+    """
     config_path = tmp_path / "worker.yaml"
-    config_path.write_text(
+    document = yaml.safe_load(
         serialize_worker_configuration(
             WorkerConfiguration(
                 execution=WorkerExecutionConfiguration(
                     capacity=WorkerCapacityConfiguration(cpu_millicores=2000),
                 )
             )
-        ),
-        encoding="utf-8",
+        )
     )
+    document["network_prefix"] = "yaml-prefix"
+    config_path.write_text(yaml.safe_dump(document), encoding="utf-8")
     monkeypatch.setenv(WORKER_CONFIG_PATH_ENV, str(config_path))
 
-    from_yaml = ProductionWorkerSettings()
-    assert from_yaml.resolved_cpu_millicores == 2000
+    from_yaml = WorkerSettings()
+    assert from_yaml.network_prefix == "yaml-prefix"
+    assert from_yaml.configuration.execution.capacity.cpu_millicores == 2000
 
-    monkeypatch.setenv("WORKER_CPU_MILLICORES", "3000")
-    from_env = ProductionWorkerSettings()
-    assert from_env.resolved_cpu_millicores == 3000
+    monkeypatch.setenv("WORKER_NETWORK_PREFIX", "env-prefix")
+    from_env = WorkerSettings()
+    assert from_env.network_prefix == "env-prefix"
+    assert from_env.configuration.execution.capacity.cpu_millicores == 2000
 
-    from_init = ProductionWorkerSettings(cpu_millicores=4000)
-    assert from_init.resolved_cpu_millicores == 4000
+    from_init = WorkerSettings(network_prefix="init-prefix")
+    assert from_init.network_prefix == "init-prefix"
+    assert from_init.configuration.execution.capacity.cpu_millicores == 2000
 
 
 def test_worker_settings_reject_unknown_yaml_fields(
@@ -56,7 +67,7 @@ def test_worker_settings_reject_unknown_yaml_fields(
     monkeypatch.setenv(WORKER_CONFIG_PATH_ENV, str(config_path))
 
     with pytest.raises(ValidationError, match="unexpected"):
-        ProductionWorkerSettings()
+        WorkerSettings()
 
 
 @pytest.mark.parametrize(

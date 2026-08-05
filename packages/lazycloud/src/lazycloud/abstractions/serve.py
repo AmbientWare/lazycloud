@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import threading
 import time
 from collections.abc import Iterator, Mapping
@@ -32,6 +33,8 @@ from lazycloud.transport_retry import (
     TransientRetry,
     is_transient_transport_error,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 DEFAULT_ATTACH_POLL_SECONDS = 0.5
 DEFAULT_SYNC_POLL_SECONDS = 0.5
@@ -585,6 +588,8 @@ def _preview_container_active(
         try:
             response = client.list_containers(cursor=cursor or None)
         except Exception:
+            # Treated as active so a listing outage never ends a live preview.
+            LOGGER.debug("preview container listing failed", exc_info=True)
             return True
         for item in response.data:
             container = item.container

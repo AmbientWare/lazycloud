@@ -24,22 +24,24 @@ from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from shared.app_identity import ENV_PREFIX, NAME, OBJECT_STORE_BUCKET
 from shared.contracts import ContractModel
+from shared.deployment_settings import MissingDeploymentSettingError
 from typing_extensions import TypeVar
 
-# Zero-configuration defaults target the root Compose stack from a host shell:
-# the object store publishes host port 9002 with these local-dev credentials
+# Local-dev credentials matching the root Compose object store
 # (`compose.yaml` object-store defaults). Every containerized deployment path
 # sets the `LAZYCLOUD_OBJECT_STORE_*` environment explicitly (Compose
 # `x-object-store-env` and the provider bootstrap), so these defaults only
 # apply on the host.
-LOCAL_OBJECT_STORE_ENDPOINT_URL = "http://localhost:9002"
 LOCAL_OBJECT_STORE_ACCESS_KEY_ID = f"{NAME}-local"
 LOCAL_OBJECT_STORE_SECRET_ACCESS_KEY = f"{NAME}-local-secret"
 
 
 class S3ObjectStoreSettings(BaseSettings):
     bucket: str = OBJECT_STORE_BUCKET
-    endpoint_url: str | None = LOCAL_OBJECT_STORE_ENDPOINT_URL
+    # Which store this talks to is a deployment fact, so absence is rejected
+    # rather than defaulted. A caller whose store is AWS itself says so by
+    # passing `None`; that is a statement, and silence is not.
+    endpoint_url: str | None = None
     presigned_endpoint_url: str | None = None
     region_name: str = "us-east-1"
     access_key_id: str = Field(default=LOCAL_OBJECT_STORE_ACCESS_KEY_ID, repr=False)
@@ -55,6 +57,18 @@ class S3ObjectStoreSettings(BaseSettings):
         env_prefix=f"{ENV_PREFIX}_OBJECT_STORE_",
         extra="ignore",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def require_endpoint_url(cls, values: dict[str, object]) -> dict[str, object]:
+        # Presence, not truth: the declared `None` is unreachable by omission,
+        # and only a caller that names it gets it.
+        if "endpoint_url" not in values:
+            raise MissingDeploymentSettingError(
+                f"{ENV_PREFIX}_OBJECT_STORE_ENDPOINT_URL",
+                purpose="the object store this process reads and writes objects through",
+            )
+        return values
 
     @field_validator("credential_expires_at", mode="before")
     @classmethod

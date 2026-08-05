@@ -4,6 +4,7 @@ import http.client
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from secrets import token_hex
 from typing import Protocol
 from urllib.parse import quote
 
@@ -13,7 +14,7 @@ from botocore.credentials import Credentials
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
 from .instance_catalog import aws_partition_for_region
-from .provider_node_identity import AwsStsGetCallerIdentityProof
+from .provider_node_identity import AWS_STS_PROOF_NONCE_KEY, AwsStsGetCallerIdentityProof
 
 AWS_IMDS_HOST = "169.254.169.254"
 AWS_IMDS_TOKEN_TTL_SECONDS = 21_600
@@ -158,7 +159,7 @@ class AwsEc2ProviderNodeIdentityProofProvider:
         if expiration.tzinfo is None or expiration.astimezone(UTC) <= datetime.now(UTC):
             raise AwsProviderNodeProofError("EC2 instance role credentials are expired")
 
-        request = AWSRequest(method="GET", url=_regional_sts_url(region))
+        request = AWSRequest(method="GET", url=_regional_sts_url(region, nonce=token_hex(16)))
         SigV4QueryAuth(
             Credentials(
                 access_key=credentials.access_key_id.get_secret_value(),
@@ -231,10 +232,13 @@ def _validated_region(value: str) -> str:
     return region
 
 
-def _regional_sts_url(region: str) -> str:
+def _regional_sts_url(region: str, *, nonce: str) -> str:
     partition = aws_partition_for_region(region)
     dns_suffix = "amazonaws.com.cn" if partition == "aws-cn" else "amazonaws.com"
-    return f"https://sts.{region}.{dns_suffix}/?Action=GetCallerIdentity&Version=2011-06-15"
+    return (
+        f"https://sts.{region}.{dns_suffix}/?Action=GetCallerIdentity&Version=2011-06-15"
+        f"&{AWS_STS_PROOF_NONCE_KEY}={nonce}"
+    )
 
 
 __all__ = [

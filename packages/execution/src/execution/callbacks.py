@@ -13,7 +13,7 @@ from typing import Protocol
 from urllib.parse import SplitResult, urlsplit
 
 from control.service import ControlPlaneService
-from identity.rpc import sign_payload
+from identity.signatures import sign_payload
 from observability.events import EventService
 from shared.callbacks import normalize_callback_url
 from shared.deployments import StubKind

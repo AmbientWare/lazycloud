@@ -54,6 +54,7 @@ def test_canonical_capacity_routes_enforce_workspace_and_admin_authority(
     )
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
     workspace_headers = {"Authorization": f"Bearer {workspace_token}"}
+    admin_headers = {"Authorization": f"Bearer {admin_token}"}
 
     assert client.get("/api/v1/pools/example/offers").status_code == 401
     assert client.post("/api/v1/workers/missing/cordon").status_code == 401
@@ -67,43 +68,27 @@ def test_canonical_capacity_routes_enforce_workspace_and_admin_authority(
     assert (
         client.post(
             "/api/v1/workers/missing/cordon",
-            headers={"Authorization": f"Bearer {admin_token}"},
-        ).status_code
-        == 404
-    )
-    assert (
-        client.post(
-            "/api/v1/pools/missing/join-token",
-            headers=workspace_headers,
-            json={},
-        ).status_code
-        == 404
-    )
-    assert (
-        client.post(
-            "/api/v1/pools/missing/join-command",
-            headers=workspace_headers,
-            json={},
-        ).status_code
-        == 404
-    )
-    assert (
-        client.get(
-            "/api/v1/pools/missing/machines",
-            headers=workspace_headers,
+            headers=admin_headers,
         ).status_code
         == 404
     )
     assert (
         client.delete(
-            "/api/v1/pools/missing/join-token",
+            "/api/v1/pools/missing",
             headers=workspace_headers,
+        ).status_code
+        == 403
+    )
+    assert (
+        client.delete(
+            "/api/v1/pools/missing",
+            headers=admin_headers,
         ).status_code
         == 404
     )
 
 
-def test_capacity_public_route_adds_nodes_and_patch_extends_the_aggregate(
+def test_capacity_route_adds_nodes_and_patch_extends_the_aggregate(
     isolated_services: ApiServices,
     client_stack: ExitStack,
 ) -> None:
@@ -125,7 +110,7 @@ def test_capacity_public_route_adds_nodes_and_patch_extends_the_aggregate(
     )
     raw_token, _record = AuthService(isolated_services.context).create_token(
         "capacity-route",
-        kind=TokenKind.Workspace,
+        kind=TokenKind.Admin,
     )
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
     headers = {"Authorization": f"Bearer {raw_token}"}

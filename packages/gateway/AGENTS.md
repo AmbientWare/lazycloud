@@ -1,8 +1,13 @@
 # Gateway Package
 
-Own gateway control, backend dialing/prewarming, view projection, private-pool
-gateway state, and request-event middleware behind explicit protocols. Broad
-FastAPI routing and process wiring remain in apps. RPC contracts live in
-`shared.http.gateway`; typed errors replace soft envelopes, while deliberate
-per-event streaming statuses remain valid. Preserve workspace isolation,
-authorization, reconnect, framing, and route cleanup through the real stream.
+Gateway control, backend dialing and prewarming, view projection, private-pool
+gateway state, and request-event middleware, all behind explicit protocols.
+
+Broad HTTP routing and process wiring stay in apps. RPC contracts live in
+`shared.http.gateway`. Failures are typed errors rather than soft envelopes,
+though a per-event status inside a stream is legitimate domain data.
+
+Workspace isolation, authorization, reconnect behavior, framing, and route
+cleanup are the invariants that matter here. A stream is a long-lived
+authorization decision, not a single one made at connect time, and a route that
+outlives its backend is a route that sends traffic nowhere.

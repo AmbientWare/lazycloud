@@ -16,6 +16,16 @@ module and a reviewed plan proves unrelated state is preserved.
 It creates a deny-by-default policy, a scoped agent OAuth client, and an
 ephemeral gateway enrollment key. The hosted Tailnet already must exist.
 
+Two tags carry two different reaches. `control_plane_tag` may dial an agent's
+route proxy; `agent_tag` may dial the control plane. A node that has not
+enrolled yet holds no tailnet identity at all: it reaches the control plane over
+the public origin and joins the tailnet with the machine key enrolment vends it.
+
+The agent OAuth client owns `agent_tag`, the only tag the control plane mints
+for — changing that tag list replaces the client, so re-export
+`agent_oauth_client_id` and `agent_oauth_client_secret` to the deployment secret
+manager after any plan that does.
+
 ## Backend and credentials
 
 Terraform state contains secrets. Supply a standard remote backend owned by the
@@ -64,6 +74,11 @@ state into the deployment secret manager:
 | `agent_oauth_client_id` | `LAZYCLOUD_TAILNET_OAUTH_CLIENT_ID` |
 | `agent_oauth_client_secret` | `LAZYCLOUD_TAILNET_OAUTH_CLIENT_SECRET` |
 | `gateway_auth_key` | `LAZYCLOUD_TAILNET_AUTH_KEY` |
+
+`runtime_configuration` carries both tag names, which must match the
+deployment's `LAZYCLOUD_TAILNET_AGENT_TAG` and
+`LAZYCLOUD_TAILNET_CONTROL_PLANE_TAG`. A tag the policy does not grant produces
+nodes that join the tailnet and cannot reach anything.
 
 Generate `LAZYCLOUD_BACKEND_ROUTE_AUTH_KEY` separately in the application
 secret manager.

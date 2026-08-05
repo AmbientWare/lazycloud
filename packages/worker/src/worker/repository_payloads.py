@@ -10,11 +10,11 @@ from shared.contracts import ContractModel
 from shared.identity import AuthTokenRecord, TokenKind
 from shared.image_building.credentials import normalize_registry_host
 from shared.realtime.contracts import CloudEventRecord, ContainerMetricsPayload
+from shared.routing import AgentBackendRoute
 from shared.scheduling import (
     ContainerIpAssignment,
     ContainerStatusUpdatePlan,
     NetworkIpMutationPlan,
-    SchedulerBackendRoute,
     SchedulerContainerAddress,
     SchedulerContainerAddressMap,
     SchedulerContainerState,
@@ -26,6 +26,7 @@ from shared.scheduling import (
     WorkerRemovalResult,
     WorkerRepositoryLockRecord,
     WorkerRepositoryLockRelease,
+    WorkerUnavailableReason,
 )
 from shared.source_cache_cleanup import (
     SourceCacheCleanupTargetRecord,
@@ -122,6 +123,12 @@ class AcknowledgeWorkerEventResponse(WorkerRepositoryResponse):
 
 class WorkerIdRequest(ContractModel):
     worker_id: str
+
+
+class DisableWorkerRequest(ContractModel):
+    worker_id: str
+    reason: WorkerUnavailableReason
+    detail: str = Field(default="", max_length=512)
 
 
 class AddWorkerRequest(ContractModel):
@@ -265,7 +272,7 @@ class DeleteContainerStateResponse(WorkerRepositoryResponse):
 class SetWorkerAddressRequest(ContractModel):
     container_id: str
     address: str
-    route: SchedulerBackendRoute | None = None
+    route: AgentBackendRoute | None = None
 
 
 class SetWorkerAddressResponse(WorkerRepositoryResponse):
@@ -275,7 +282,7 @@ class SetWorkerAddressResponse(WorkerRepositoryResponse):
 class SetContainerAddressRequest(ContractModel):
     container_id: str
     address: str
-    route: SchedulerBackendRoute | None = None
+    route: AgentBackendRoute | None = None
 
 
 class SetContainerAddressResponse(WorkerRepositoryResponse):
@@ -285,7 +292,7 @@ class SetContainerAddressResponse(WorkerRepositoryResponse):
 class SetContainerAddressMapRequest(ContractModel):
     container_id: str
     address_map: dict[int, str] = Field(default_factory=dict)
-    routes: list[SchedulerBackendRoute] = Field(default_factory=list)
+    routes: list[AgentBackendRoute] = Field(default_factory=list)
 
 
 class SetContainerAddressMapResponse(WorkerRepositoryResponse):

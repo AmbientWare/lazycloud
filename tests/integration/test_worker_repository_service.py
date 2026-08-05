@@ -24,7 +24,6 @@ from compute.agent_control import (
     agent_machine_worker_id,
 )
 from compute.state import (
-    ComputeAgentRouteState,
     RedisComputeStateRepository,
 )
 from control.service import ControlPlaneService
@@ -69,7 +68,6 @@ from scheduler.state import (
     RedisSchedulerWorkerRepository,
     RedisWorkerNetworkIpRepository,
     RedisWorkerPoolStateRepository,
-    SchedulerBackendRoute,
     SchedulerContainerState,
     SchedulerWorkerRecord,
     SchedulerWorkerRequest,
@@ -85,7 +83,7 @@ from shared.identity import AuthScope, TokenKind, WorkspaceStorageConfig
 from shared.image_building.authoring import ImageSpec
 from shared.image_building.records import ImageRecord
 from shared.objects import ObjectRecord
-from shared.routing import BackendRouteState, BackendRouteTransport
+from shared.routing import AgentBackendRoute, BackendRouteState, BackendRouteTransport
 from shared.source_cache_cleanup import (
     WorkerCacheGenerationRecord,
     WorkerCacheGenerationState,
@@ -804,7 +802,12 @@ def test_worker_repository_api_authenticates_and_streams_container_requests(
     token = _worker_token(isolated_services, "workspace-a")
     control = ControlPlaneService(isolated_services.context)
     workspace = control.upsert_workspace("workspace-a")
-    isolated_services.compute.create_pool("pool", workspace=workspace.id)
+    isolated_services.compute.create_pool(
+        "pool",
+        workspace=workspace.id,
+        worker_cpu_millicores=1000,
+        worker_memory_mib=1024,
+    )
     stub = control.create_stub("worker-request", workspace=workspace.id)
     container_id = str(uuid4())
     with isolated_services.context.database.session() as session:
@@ -984,9 +987,10 @@ def test_worker_repository_stream_blocks_until_scheduler_assignment(
     containers = RedisSchedulerContainerRepository(redis)
     worker_id = "worker-1"
     container_id = str(uuid4())
+    capacity_owner_id = "11111111-1111-4111-8111-111111111111"
     workers.add_worker(
         SchedulerWorkerRecord(
-            capacity_owner_id="11111111-1111-4111-8111-111111111111",
+            capacity_owner_id=capacity_owner_id,
             worker_id=worker_id,
             machine_id="compose-machine",
             pool_name="default",
@@ -1008,7 +1012,13 @@ def test_worker_repository_stream_blocks_until_scheduler_assignment(
                 workspace_id=workspace_id,
             )
         )
-    isolated_services.compute.create_pool("default", workspace=workspace_id)
+    isolated_services.compute.create_pool(
+        "default",
+        workspace=workspace_id,
+        capacity_owner_id=capacity_owner_id,
+        worker_cpu_millicores=1000,
+        worker_memory_mib=1024,
+    )
     service = _worker_repository_service(isolated_services, redis)
     principal = WorkerRepositoryPrincipal(
         workspace_id="control-workspace",
@@ -1077,7 +1087,7 @@ def test_stale_source_cache_session_cannot_change_current_worker_availability(
         principal=principal,
         worker_id=worker_id,
         generation_id=generation_id,
-        storage_id="test-storage:worker-1",
+        storage_id="node:worker-1",
     )
     service.source_cache.activate(
         principal=principal,
@@ -1089,7 +1099,7 @@ def test_stale_source_cache_session_cannot_change_current_worker_availability(
         principal=principal,
         worker_id=worker_id,
         generation_id=generation_id,
-        storage_id="test-storage:worker-1",
+        storage_id="node:worker-1",
     )
 
     stale_request = WorkerCacheSessionRequest(
@@ -1282,7 +1292,7 @@ def test_worker_repository_rotates_worker_session_on_reregistration(
                 status=SchedulerWorkerStatus.Available,
             ).model_dump(mode="json"),
             "cache_generation_id": _test_cache_generation_id("worker-1"),
-            "cache_storage_id": "test-storage:worker-1",
+            "cache_storage_id": "node:worker-1",
         }
     )
     headers = {"Authorization": f"Bearer {bootstrap}"}
@@ -2049,7 +2059,7 @@ def test_worker_repository_container_cleanup_unpublishes_every_port_route(
         )
     )
     routes = [
-        SchedulerBackendRoute(
+        AgentBackendRoute(
             route_id=f"compose-machine:compose-container-worker:{container_id}:container:{port}",
             workspace_id=workspace_id,
             pool_name="default",
@@ -2057,10 +2067,10 @@ def test_worker_repository_container_cleanup_unpublishes_every_port_route(
             worker_id="compose-container-worker",
             container_id=container_id,
             port=port,
-            transport="direct",
+            transport=BackendRouteTransport.Direct,
             local_target=f"10.0.0.2:{port}",
             proxy_target=f"10.0.0.2:{port}",
-            state="ready",
+            state=BackendRouteState.Ready,
         )
         for port in (8080, 9090, 2222)
     ]
@@ -2122,7 +2132,7 @@ def test_worker_repository_reconciles_orphan_routes_without_removing_active_rout
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
     container_id = "531a1b89-6f97-4080-80b3-13122218a55b"
-    active_route = SchedulerBackendRoute(
+    active_route = AgentBackendRoute(
         route_id=f"machine-1:worker-1:{container_id}:container:9090",
         workspace_id=workspace_id,
         pool_name="default",
@@ -2130,10 +2140,10 @@ def test_worker_repository_reconciles_orphan_routes_without_removing_active_rout
         worker_id="worker-1",
         container_id=container_id,
         port=9090,
-        transport="direct",
+        transport=BackendRouteTransport.Direct,
         local_target="10.0.0.2:9090",
         proxy_target="10.0.0.2:9090",
-        state="ready",
+        state=BackendRouteState.Ready,
     )
     containers.set_container_state(
         SchedulerContainerState(
@@ -2151,7 +2161,7 @@ def test_worker_repository_reconciles_orphan_routes_without_removing_active_rout
             routes=[active_route],
         )
     )
-    orphan_route = ComputeAgentRouteState(
+    orphan_route = AgentBackendRoute(
         route_id="missing-worker:missing-container:container:9090",
         workspace_id=workspace_id,
         pool_name="default",
@@ -2159,7 +2169,7 @@ def test_worker_repository_reconciles_orphan_routes_without_removing_active_rout
         worker_id="missing-worker",
         container_id="missing-container",
         port=9090,
-        state="ready",
+        state=BackendRouteState.Ready,
     )
     compute_states.save_agent_route_state(orphan_route)
 
@@ -2210,7 +2220,7 @@ def test_agent_route_status_update_reconciles_scheduler_backend_route(
         machine_fingerprint="route-machine",
     )
     worker_id = agent_machine_worker_id(machine_id)
-    route = SchedulerBackendRoute(
+    route = AgentBackendRoute(
         route_id=f"{machine_id}:{worker_id}:container-1:container:8001",
         workspace_id=workspace_id,
         pool_name="pool-a",
@@ -2218,9 +2228,9 @@ def test_agent_route_status_update_reconciles_scheduler_backend_route(
         worker_id=worker_id,
         container_id="container-1",
         port=8001,
-        transport="tsnet_restricted",
+        transport=BackendRouteTransport.TsnetRestricted,
         local_target="192.168.0.4:8001",
-        state="opening",
+        state=BackendRouteState.Opening,
     )
     service = _worker_repository_service(isolated_services, redis)
     service.set_container_address(
@@ -2349,7 +2359,7 @@ def _register_worker_session(
         json={
             "worker": registered_worker.model_dump(mode="json"),
             "cache_generation_id": generation_id,
-            "cache_storage_id": f"test-storage:{worker.worker_id}",
+            "cache_storage_id": f"node:{worker.worker_id}",
         },
         headers={"Authorization": f"Bearer {bootstrap_token}"},
     )
@@ -2386,7 +2396,7 @@ def _activate_test_source_cache(
         principal=principal,
         worker_id=worker_id,
         generation_id=str(uuid4()),
-        storage_id=f"test-storage:{worker_id}",
+        storage_id=f"node:{worker_id}",
     )
     activated = service.source_cache.activate(
         principal=principal,
@@ -2536,6 +2546,9 @@ class _FakeObjectStorage:
     ) -> ObjectRecord:
         del object_id, workspace_id
         raise KeyError("fake object records are not configured")
+
+    def exists(self, key: str, *, bucket: str | None = None) -> bool:
+        return (bucket or "default", key) in self.files
 
     def head(self, key: str, *, bucket: str | None = None) -> S3ObjectInfo:
         resolved_bucket = bucket or "default"

@@ -234,14 +234,6 @@ class SchedulerCapacityReservations(Protocol):
 
     def can_acquire(self, request: SchedulerWorkerRequest) -> bool: ...
 
-    def reserve_pending(
-        self,
-        request: SchedulerWorkerRequest,
-        worker: SchedulerWorkerRecord,
-        *,
-        now: datetime | None = None,
-    ) -> CapacityAcquisitionResult: ...
-
     def acquire(
         self,
         request: SchedulerWorkerRequest,
@@ -431,6 +423,7 @@ class SchedulerContainerRequestService:
                 },
             )
         except Exception:
+            LOGGER.debug("scheduling telemetry was not recorded", exc_info=True)
             return
 
     def dispatch_ready(
@@ -546,27 +539,6 @@ class SchedulerContainerRequestService:
             if outcome.decision is SchedulingDecision.ProvisionWorker:
                 results.append(self._acquire_capacity(claim, current_time))
                 continue
-            if (
-                outcome.decision is SchedulingDecision.WaitForWorker
-                and outcome.worker_id
-                and self.capacity_reservations is not None
-            ):
-                pending_worker = workers_by_id.get(outcome.worker_id)
-                if pending_worker is not None:
-                    try:
-                        self.capacity_reservations.reserve_pending(
-                            request,
-                            pending_worker,
-                            now=current_time,
-                        )
-                    except Exception as exc:
-                        outcome = outcome.model_copy(
-                            update={
-                                "reason": (
-                                    f"capacity reservation retry required: {type(exc).__name__}"
-                                )
-                            }
-                        )
             retry = self._plan_requeue(request, outcome, current_time)
             if retry.action is SchedulerRequeueAction.Fail:
                 failure_reason = self._fail_request(
@@ -656,13 +628,22 @@ class SchedulerContainerRequestService:
                 reason=f"capacity-owner mutation is in progress: {exc}",
             )
         except Exception as exc:
+            # The reason reaches the caller as a task error, and a type name
+            # alone cannot be acted on: it names neither the capacity owner nor
+            # what the acquisition rejected. Keep the caller's contract and put
+            # the exception where it can be read.
+            LOGGER.exception(
+                "capacity acquisition failed for container %s on capacity owner %s",
+                request.container_id,
+                request.capacity_owner_id,
+            )
             result = CapacityAcquisitionResult(
                 status=CapacityAcquisitionStatus.TemporarilyUnavailable,
                 capacity_owner_id=request.capacity_owner_id,
                 reservation_id=request.container_id,
                 operation_id=request.container_id,
                 retry_delay_seconds=DEFAULT_PROVISIONING_HANDOFF.total_seconds(),
-                reason=f"capacity acquisition failed: {type(exc).__name__}",
+                reason=f"capacity acquisition failed: {type(exc).__name__}: {exc}",
             )
         waiting = result.status in {
             CapacityAcquisitionStatus.ExistingPending,
@@ -673,7 +654,6 @@ class SchedulerContainerRequestService:
             decision=(
                 SchedulingDecision.WaitForWorker if waiting else SchedulingDecision.ProvisionWorker
             ),
-            worker_id=result.target_worker_id or None,
             reason=result.reason,
             requeue_delay_seconds=max(
                 result.retry_delay_seconds,
@@ -687,7 +667,6 @@ class SchedulerContainerRequestService:
             return SchedulerContainerDispatchResult(
                 status=SchedulerContainerDispatchStatus.Failed,
                 container_id=request.container_id,
-                worker_id=result.target_worker_id,
                 reason=reason,
             )
         self._requeue(
@@ -699,7 +678,6 @@ class SchedulerContainerRequestService:
         return SchedulerContainerDispatchResult(
             status=SchedulerContainerDispatchStatus.Waiting,
             container_id=request.container_id,
-            worker_id=result.target_worker_id,
             reason=result.reason or result.status.value,
         )
 

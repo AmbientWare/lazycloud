@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from compute.state import RedisComputeStateRepository
-from shared.capacity import CapacityOwnerKind, capacity_owner_for_provider
+from shared.capacity import CapacityOwnerKind
 
 from scheduler.agent_pool import (
     AgentPoolConfig,
@@ -15,7 +15,6 @@ from scheduler.capacity_reservations import (
     CapacityAcquisitionController,
     CapacityWorkerRepository,
     ComputePoolCapacityController,
-    PendingCapacityOwner,
 )
 from scheduler.pool_drain import (
     WorkerPoolDrainContainerRepository,
@@ -69,28 +68,6 @@ class SchedulerCapacityControllerProvider:
                 )
         controllers.sort(key=lambda item: item.capacity_owner_id)
         return controllers
-
-    def pending_capacity_owners(self) -> list[PendingCapacityOwner]:
-        owners: dict[str, PendingCapacityOwner] = {}
-        for workspace_id, pool in self.services.compute.list_pools_across_workspaces():
-            owners[pool.capacity_owner_id] = PendingCapacityOwner(
-                capacity_owner_id=pool.capacity_owner_id,
-                owner_kind=pool.capacity_owner_kind,
-                pool_name=pool.name,
-                workspace_id=workspace_id,
-                registration_timeout_seconds=pool.registration_timeout_seconds,
-            )
-        for state in self.compute_states.list_all_pool_states():
-            if state.capacity_owner_id in owners:
-                continue
-            owner_kind, _source = capacity_owner_for_provider(state.provider)
-            owners[state.capacity_owner_id] = PendingCapacityOwner(
-                capacity_owner_id=state.capacity_owner_id,
-                owner_kind=owner_kind,
-                pool_name=state.name,
-                workspace_id=state.workspace_id,
-            )
-        return [owners[key] for key in sorted(owners)]
 
     def worker_pool_drain_controllers(self) -> list[WorkerPoolDrainController]:
         controllers: list[WorkerPoolDrainController] = []

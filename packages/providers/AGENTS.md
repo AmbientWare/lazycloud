@@ -1,12 +1,15 @@
 # Provider Adapters
 
-Provider packages are thin external adapters with `provider-*` distributions,
-`provider_*` imports, and sources under `packages/providers/<name>`. AWS is the
-only accepted machine provider. A new provider requires disposable live create,
-agent registration, workload, deletion, and leak-audit acceptance; mocks are not
-a support gate.
+Thin adapters over external infrastructure providers—one distribution per
+provider, sources under `packages/providers/<name>`, with `provider-*`
+distribution names and `provider_*` imports.
 
-Provider-neutral decisions remain in domain packages; adapters never import
-apps, SDK, process composition, database sessions, or workflow services and
-never expose credentials. External lifecycle changes require disposable
-provider acceptance and cleanup.
+An adapter translates provider-neutral requests into provider calls and back.
+Provider-neutral decisions stay in the domain packages. Adapters never import
+apps, SDK, process composition, database sessions, or workflow services, and
+never expose credentials.
+
+Supporting a provider is a claim about external behavior, so it is proved against
+the real provider: disposable create, agent registration, a real workload,
+deletion, and an audit that nothing was left running. A mock is not a support
+gate. Changes to external lifecycle carry the same bar, cleanup included.

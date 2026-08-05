@@ -39,6 +39,8 @@ from provider_aws import aws_account_connection_template_identity
 from provider_clients import configured_aws_compute_catalog
 from provider_clients.settings import AwsAccountConnectionSettings, AwsCapacitySettings
 from pydantic import SecretStr
+from scheduler.compute_hooks import SchedulerComputeHooks
+from scheduler.state import RedisSchedulerWorkerRepository
 from shared.aws_connections import (
     AwsAccountAuthorizationGeneration,
     AwsAccountAuthorizationMode,
@@ -47,7 +49,11 @@ from shared.aws_connections import (
     AwsAccountConnectionPhase,
 )
 from shared.capacity import CapacityOwnerKind, CapacityOwnerSource
-from shared.compute_enrollment import MachineReadinessPhase
+from shared.compute_enrollment import (
+    MachineBootstrapPhase,
+    MachineReadinessPhase,
+    MachineServiceState,
+)
 from shared.compute_fleet import Machine, ResourceStatus, Worker
 from shared.compute_policy import (
     ComputeCapacityMode,
@@ -63,6 +69,7 @@ from shared.http.compute_policy import (
     WorkspaceComputePolicyResponse,
     WorkspaceComputeSummaryResponse,
 )
+from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from tests.url_constants import EXAMPLE_COM_URL
 
 
@@ -303,6 +310,19 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
                 )
             )
 
+    hooks = isolated_services.compute.scheduler_hooks
+    assert isinstance(hooks, SchedulerComputeHooks)
+    workers = hooks.workers
+    assert isinstance(workers, RedisSchedulerWorkerRepository)
+    workers.add_worker(
+        SchedulerWorkerRecord(
+            worker_id=agent_machine_worker_id(ready_machine_id),
+            pool_name="current-aws-inventory",
+            capacity_owner_id="11111111-1111-4111-8111-111111111111",
+            machine_id=ready_machine_id,
+            status=SchedulerWorkerStatus.Available,
+        )
+    )
     client = _client(isolated_services, request)
     summary_response = client.get("/api/v1/compute/summary")
     instances_response = client.get("/api/v1/compute/instances")
@@ -316,11 +336,16 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
     assert summary.cost.hourly_micros == 600_000
     assert instances_response.status_code == 200
     current = WorkspaceComputeInstanceListResponse.model_validate_json(instances_response.content)
+    # `status` reports the platform's verdict, not what the node claimed:
+    # a machine serves because its worker takes work.
     assert {item.status for item in current.data} == {
-        "ready",
+        "serving",
         "provisioning",
         "deleting",
     }
+    serving = next(item for item in current.data if item.status == "serving")
+    assert serving.service_state is MachineServiceState.Serving
+    assert serving.bootstrap_phase is not MachineBootstrapPhase.Failed
 
     with isolated_services.context.database.session() as session:
         instances = ComputeProviderInstanceRepository(session)

@@ -139,6 +139,16 @@ class ComputePoolProviderState(ContractModel):
     Set when bootstrap relaunch attempts are exhausted; cleared by an explicit
     capacity mutation (public scale or workspace policy update).
     """
+    launch_attempt_baseline: int = Field(default=0, ge=0)
+    """Attempt ordinal the current failure streak counts from.
+
+    `launch_attempt` is a per-pool ordinal that only ever increases, so
+    comparing it directly against the relaunch limit means a pool that once
+    exhausted its attempts stays exhausted for every machine it launches
+    afterwards. Recovery raises this to the ordinal reached at that moment, so
+    the limit measures the streak since recovery rather than the pool's whole
+    history.
+    """
 
 
 class ComputePoolRecord(CapacityOwnerIdentity):

@@ -211,8 +211,10 @@ class WorkerSourceCacheReconciler:
                     failed_count += 1
                     if not failure_detail:
                         failure_detail = f"{type(exc).__name__}: {exc}"[:500]
-        if failed_count == 0:
-            self.repository.activate_source_cache()
+        # The server resolves the round: drained becomes Available, an
+        # incomplete round becomes Draining and keeps serving while the failed
+        # targets are retried. Only an RPC failure propagates.
+        self.repository.activate_source_cache()
         return WorkerSourceCacheReconcileResult(
             claimed_count=claimed_count,
             completed_count=completed_count,

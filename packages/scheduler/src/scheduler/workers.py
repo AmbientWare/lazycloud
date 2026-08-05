@@ -8,12 +8,13 @@ from typing import Protocol
 from pydantic import Field
 from shared.contracts import ContractModel
 from shared.errors import ConflictError, NotFoundError
+from shared.routing import AgentBackendRoute
 from shared.scheduling import (
-    SchedulerBackendRoute,
     SchedulerContainerState,
     SchedulerContainerStatus,
     SchedulerWorkerRecord,
     WorkerRemovalResult,
+    WorkerUnavailableReason,
 )
 
 
@@ -26,7 +27,13 @@ class SchedulerWorkerAdminRepository(Protocol):
 
     def toggle_worker_available(self, worker_id: str) -> SchedulerWorkerRecord: ...
 
-    def disable_worker(self, worker_id: str) -> SchedulerWorkerRecord: ...
+    def disable_worker(
+        self,
+        worker_id: str,
+        *,
+        reason: WorkerUnavailableReason,
+        detail: str = "",
+    ) -> SchedulerWorkerRecord: ...
 
     def remove_worker(
         self,
@@ -41,8 +48,8 @@ class SchedulerWorkerContainerRepository(Protocol):
 
     def update_backend_route(
         self,
-        route: SchedulerBackendRoute,
-    ) -> SchedulerBackendRoute | None: ...
+        route: AgentBackendRoute,
+    ) -> AgentBackendRoute | None: ...
 
 
 class SchedulerWorkerContainerStopper(Protocol):
@@ -107,7 +114,9 @@ class SchedulerWorkerAdminService:
 
     def cordon_worker(self, worker_id: str) -> SchedulerWorkerView:
         self.get_worker(worker_id)
-        return self._worker_view(self.workers.disable_worker(worker_id))
+        return self._worker_view(
+            self.workers.disable_worker(worker_id, reason=WorkerUnavailableReason.OperatorCordon)
+        )
 
     def uncordon_worker(self, worker_id: str) -> SchedulerWorkerView:
         self.get_worker(worker_id)
@@ -119,7 +128,7 @@ class SchedulerWorkerAdminService:
 
     def drain_worker(self, worker_id: str) -> SchedulerWorkerDrainResult:
         self.get_worker(worker_id)
-        disabled = self.workers.disable_worker(worker_id)
+        disabled = self.workers.disable_worker(worker_id, reason=WorkerUnavailableReason.Draining)
         active_container_ids = [
             container.container_id for container in _active_containers(self.containers, worker_id)
         ]

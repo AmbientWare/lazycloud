@@ -1,12 +1,17 @@
 # Documentation
 
-`docs/` is a Mintlify MDX project configured by `docs.json`; every page must be
-in navigation and reusable content belongs in `snippets/`.
+`docs/` is a Mintlify MDX project configured by `docs.json`. Every page is
+reachable from navigation, and content used in more than one place lives in
+`snippets/`.
 
-Document only current public `lazycloud` SDK/CLI behavior grounded in code and
-real help/output. LazyCloud is a hosted platform: document connecting compute
-you own, never installing or operating the platform itself. Keep examples
-runnable and configuration truth with its typed owner, and leave internal
-operator CLI details out. Document secret names and injection—not values.
-Remove stale pages and claims rather than creating a parallel metadata
-registry.
+Document only current public SDK and CLI behavior, grounded in the code and in
+real help output rather than in intent. LazyCloud is a hosted platform: what a
+reader connects is compute they own, so installing or operating the platform
+itself is not documented here, and neither is the internal operator CLI.
+
+Keep examples runnable. Keep configuration truth with its typed owner and
+reference it instead of restating it, so there is one place to be wrong. Document
+secret names and how they are injected—never their values.
+
+When behavior goes away, delete the page that described it rather than building a
+parallel registry of what is still true.

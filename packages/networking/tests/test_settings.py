@@ -24,7 +24,7 @@ def test_tailnet_control_rejects_partial_cleanup_credentials() -> None:
 
 def test_remote_provider_gate_reports_all_missing_security_requirements() -> None:
     # Sidecar with nothing configured: a managed runtime without an auth key is
-    # now rejected at construction, so that case can no longer reach this gate.
+    # rejected at construction and cannot reach this gate.
     runtime = TailnetRuntimeSettings(
         mode=TailnetRuntimeMode.Sidecar,
         hostname="",
@@ -43,6 +43,8 @@ def test_remote_provider_gate_reports_all_missing_security_requirements() -> Non
         validate_provider_network_configuration(
             ProviderNetworkClass.Remote,
             gateway_origin="https://user@control.example.test/path",
+            internal_origin="http://control-plane:9000",
+            presigned_origin="http://object-store:9002",
             runtime=runtime,
             control=control,
             backend_route=route,
@@ -50,6 +52,14 @@ def test_remote_provider_gate_reports_all_missing_security_requirements() -> Non
 
     message = str(error.value)
     assert "gateway HTTP URL must be an HTTPS origin" in message
+    # A Compose service name resolves on the control-plane host and nowhere
+    # else. Accepting it here produces remote machines that enrol, report
+    # healthy, and then fail every call they make.
+    assert "'control-plane' is unreachable from a remote machine" in message
+    # The presigned endpoint is the third origin a remote node dials, and the
+    # only one it does not use while enrolling: a local value here produces a
+    # machine that joins and reports ready before failing to read its image.
+    assert "'object-store' is unreachable from a remote machine" in message
     assert "tailnet hostname is required" in message
     assert "tailnet sidecar socket path is required" in message
     assert "tailnet agent and control-plane tags must be distinct" in message

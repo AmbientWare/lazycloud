@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 import pytest
 from lazycloud.cli.main import build_public_cli
 from shared.http.compute_policy import (
+    WorkspaceComputePolicyPatchRequest,
     WorkspaceComputePolicyResponse,
     WorkspaceComputePolicyUpdateRequest,
     WorkspaceComputeSummaryResponse,
@@ -38,6 +39,7 @@ def _policy() -> WorkspaceComputePolicyResponse:
 @dataclass(slots=True)
 class _ComputeClient:
     updates: list[WorkspaceComputePolicyUpdateRequest] = field(default_factory=list)
+    patches: list[WorkspaceComputePolicyPatchRequest] = field(default_factory=list)
 
     def summary(self) -> WorkspaceComputeSummaryResponse:
         return WorkspaceComputeSummaryResponse.model_validate(
@@ -68,6 +70,21 @@ class _ComputeClient:
                 "revision": request.expected_revision + 1,
                 "default_placement": request.default_placement,
                 "aws": request.aws,
+            }
+        )
+
+    def patch_policy(
+        self,
+        request: WorkspaceComputePolicyPatchRequest,
+    ) -> WorkspaceComputePolicyResponse:
+        self.patches.append(request)
+        base = _policy()
+        changed = request.aws.model_dump(exclude_none=True)
+        return base.model_copy(
+            update={
+                "revision": request.expected_revision + 1,
+                "default_placement": request.default_placement or base.default_placement,
+                "aws": base.aws.model_copy(update=changed),
             }
         )
 
@@ -144,9 +161,10 @@ def test_compute_policy_update_sends_revisioned_guardrails(
     )
 
     assert result.exit_code == 0, result.output
-    assert len(client.updates) == 1
-    request = client.updates[0]
+    assert len(client.patches) == 1
+    request = client.patches[0]
     assert request.expected_revision == 4
+    assert request.default_placement is not None
     assert request.default_placement.value == "aws"
     assert request.aws.default_region == "us-west-2"
     assert request.aws.default_instance_type == "g6.xlarge"

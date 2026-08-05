@@ -12,7 +12,6 @@ from lazycloud.json_contracts import JsonValue, parse_json_object
 from networking.dialer import SocketBackendConnector
 from scheduler.fleet import SchedulerContainerStatus
 from scheduler.state import (
-    SchedulerBackendRoute,
     SchedulerContainerAddress,
     SchedulerContainerAddressMap,
     SchedulerContainerState,
@@ -187,7 +186,7 @@ class _SchedulerContainersWithRoute:
         return SchedulerContainerAddress(
             container_id=container_id,
             address="worker.internal:9001",
-            route=SchedulerBackendRoute(route_id="route-worker"),
+            route=AgentBackendRoute(route_id="route-worker"),
         )
 
     def get_container_address_map(self, container_id: str) -> SchedulerContainerAddressMap:

@@ -20,6 +20,7 @@ _AGENT_BINARY_URL = (
     f"https://s3.us-east-1.amazonaws.com/releases/agents/0.1.0/{_AGENT_SHA256}/"
     "lazycloud-agent-linux-amd64"
 )
+_NONCE = "0123456789abcdef0123456789abcdef"
 _ACCESS_KEY = "ASIA0123456789ABCDEF"
 _SECRET_KEY = "0123456789abcdefghijklmnopqrstuvwxyzABCD"
 _SESSION_TOKEN = "temporary/session-token"
@@ -58,9 +59,16 @@ def _require_tooling() -> tuple[str, str]:
     return bash, openssl
 
 
-def test_bootstrap_script_refuses_an_agent_binary_that_fails_digest_verification(
+def test_bootstrap_failure_reports_the_whole_provider_identity_payload(
     tmp_path: Path,
 ) -> None:
+    """A node that dies before the agent exists has no other voice.
+
+    The payload is pinned whole because the provider half of it is a shell
+    function the generic script splices in: dropping a field there would leave
+    every bootstrap report rejected, and the report is best-effort, so nothing
+    else would say so.
+    """
     bash, _ = _require_tooling()
     script = aws_managed_pool_bootstrap_script(_spec())
 
@@ -69,27 +77,24 @@ def test_bootstrap_script_refuses_an_agent_binary_that_fails_digest_verification
     )
     assert syntax.returncode == 0, syntax.stderr
 
-    # The gateway install route is never used, and the agent owns its own unit:
-    # when this script wrote one too, a machine ran the agent's unit while this
-    # script claimed a different restart policy, so a fix made here never
-    # reached any machine.
-    assert "/install/agent" not in script
+    # Docker, Tailscale, the agent binary, and the unit are the installer's, and
+    # a unit written here would leave the machine running the agent's while this
+    # script claimed a different restart policy.
     assert "/etc/systemd/system/lazycloud-agent.service" not in script
+    assert "--agent-url" in script
 
-    agent_bin = tmp_path / "lazycloud-agent"
     curl_log = tmp_path / "curl.log"
     lines = script.rstrip("\n").split("\n")
     assert lines[-1] == "bootstrap_main"
-    driver = tmp_path / "ensure_agent.sh"
+    driver = tmp_path / "install_failure.sh"
     driver.write_text(
         "\n".join(
             [
                 *lines[:-1],
-                f'AGENT_BIN="{agent_bin}"',
                 f'CURL_LOG="{curl_log}"',
                 'mint_proof() { printf "https://sts.test/proof"; }',
-                # Stand in for the network: record every request and serve an
-                # agent artifact whose digest does not match AGENT_SHA256.
+                # Stand in for the network: record every request, and fail the
+                # installer download so the boot dies at the install step.
                 "curl() {",
                 '  local out="" data="" previous=""',
                 '  printf "%s\\n" "$*" >>"$CURL_LOG"',
@@ -100,31 +105,33 @@ def test_bootstrap_script_refuses_an_agent_binary_that_fails_digest_verification
                 "    esac",
                 '    previous="$argument"',
                 "  done",
-                '  if [ -n "$out" ]; then',
-                '    printf "tampered-agent-binary" >"$out"',
+                '  if [ -n "$data" ]; then',
+                '    printf "%s\\n" "$data" >>"$CURL_LOG"',
                 "    return 0",
                 "  fi",
-                '  printf "%s\\n" "$data" >>"$CURL_LOG"',
+                '  if [ -n "$out" ]; then',
+                "    return 22",
+                "  fi",
                 "  return 0",
                 "}",
-                "STEP=agent",
-                "ensure_agent",
+                "resolve_node_identity() { :; }",
+                "STEP=install",
+                "report_failure agent_enrollment_failed",
                 "",
             ]
         ),
         encoding="utf-8",
     )
 
-    run = subprocess.run([bash, driver.as_posix()], capture_output=True, text=True, check=False)
+    subprocess.run([bash, driver.as_posix()], capture_output=True, text=True, check=False)
     reported = curl_log.read_text(encoding="utf-8")
 
-    assert run.returncode != 0
-    assert not agent_bin.exists()
-    assert not list(tmp_path.glob("lazycloud-agent.download.*"))
-    # The artifact came from the pinned release URL, and the mismatch is
-    # reported as one bounded enrollment failure reason.
-    assert _AGENT_BINARY_URL in reported
-    assert '"failure_reason":"agent_download_failed"' in reported
+    assert (
+        '{"enrollment_request_id":"12345678-1234-4123-8123-123456789abc"'
+        ',"provider":"aws","region":"","provider_instance_id":""'
+        ',"identity_proof_url":"https://sts.test/proof"'
+        ',"failure_reason":"agent_enrollment_failed"}'
+    ) in reported
 
 
 def test_shell_minted_sigv4_proof_matches_botocore_query_auth(tmp_path: Path) -> None:
@@ -132,7 +139,10 @@ def test_shell_minted_sigv4_proof_matches_botocore_query_auth(tmp_path: Path) ->
 
     request = AWSRequest(
         method="GET",
-        url="https://sts.us-east-1.amazonaws.com/?Action=GetCallerIdentity&Version=2011-06-15",
+        url=(
+            "https://sts.us-east-1.amazonaws.com/?Action=GetCallerIdentity&Version=2011-06-15"
+            f"&X-Lazycloud-Nonce={_NONCE}"
+        ),
     )
     SigV4QueryAuth(
         Credentials(access_key=_ACCESS_KEY, secret_key=_SECRET_KEY, token=_SESSION_TOKEN),
@@ -159,6 +169,7 @@ def test_shell_minted_sigv4_proof_matches_botocore_query_auth(tmp_path: Path) ->
                 f'AWS_SECRET_ACCESS_KEY="{_SECRET_KEY}"',
                 f"AWS_SESSION_TOKEN='{_SESSION_TOKEN}'",
                 f'AMZ_DATE="{reference["X-Amz-Date"]}"',
+                f'PROOF_NONCE="{_NONCE}"',
                 "mint_proof",
                 "",
             ]

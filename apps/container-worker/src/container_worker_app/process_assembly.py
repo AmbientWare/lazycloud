@@ -182,7 +182,7 @@ class WorkerProcessServices:
     retention: WorkerRetentionService | None = None
 
 
-def build_worker_process_services(
+def assemble_worker_process_services(
     *,
     identity: WorkerRouteIdentity,
     dependencies: WorkerProcessExecutionDependencies,

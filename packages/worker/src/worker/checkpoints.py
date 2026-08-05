@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import posixpath
+import tarfile
 from enum import StrEnum
+from pathlib import Path
 
 from pydantic import Field, JsonValue
 from shared.app_identity import CHECKPOINT_SIGNAL_ROOT
@@ -29,6 +31,11 @@ CHECKPOINT_SIGNAL_FILE_NAME = "READY_FOR_CHECKPOINT"
 CHECKPOINT_COMPLETE_FILE_NAME = "CHECKPOINT_COMPLETE"
 CHECKPOINT_CONTAINER_ID_FILE_NAME = "CONTAINER_ID"
 CHECKPOINT_CONTAINER_HOSTNAME_FILE_NAME = "CONTAINER_HOSTNAME"
+# Checkpoint archives are gigabytes and the read is sequential, so the chunk size
+# only trades syscall count against transient allocation on a worker that is also
+# running user containers under a memory cap; measured throughput is flat from
+# 1 MiB to 8 MiB. This matches the presigned transfer chunk used on the same file.
+CHECKPOINT_ARCHIVE_HASH_CHUNK_BYTES = 1024 * 1024
 
 
 class WorkerCheckpointStatus(StrEnum):
@@ -546,8 +553,34 @@ def checkpoint_origin_key(checkpoint_id: str) -> str:
     return posixpath.join(CHECKPOINT_ORIGIN_PREFIX, checkpoint_id + CHECKPOINT_ARCHIVE_EXTENSION)
 
 
-def checkpoint_archive_hash(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
+def create_checkpoint_archive(
+    checkpoint_path: Path,
+    archive_path: Path,
+    *,
+    checkpoint_id: str,
+) -> None:
+    """Pack a checkpoint directory under its own id.
+
+    Restore extracts the archive and looks for exactly this member name, so the
+    layout is part of the checkpoint contract rather than a caller's choice.
+    """
+    with tarfile.open(archive_path, "w") as archive:
+        archive.add(checkpoint_path, arcname=checkpoint_id)
+
+
+def checkpoint_archive_hash_and_size(path: Path) -> tuple[str, int]:
+    """Digest and size of a checkpoint archive, as `validate_checkpoint_archive` compares them.
+
+    Creation, restore verification, and remote persistence all have to agree
+    byte for byte, so they read the archive through this one function.
+    """
+    digest = hashlib.sha256()
+    size = 0
+    with path.open("rb") as source:
+        while chunk := source.read(CHECKPOINT_ARCHIVE_HASH_CHUNK_BYTES):
+            digest.update(chunk)
+            size += len(chunk)
+    return digest.hexdigest(), size
 
 
 def validate_checkpoint_archive(

@@ -99,7 +99,7 @@ class Map(MutableMapping[str, Any]):
         self.control_client.set(
             self.name,
             key,
-            _serialize(value),
+            encode_value(value),
             ttl_seconds=effective_ttl,
         )
         return True
@@ -158,10 +158,6 @@ def _normalize_ttl(value: int) -> int:
         msg = f"map item ttl cannot exceed {MAX_MAP_TTL_SECONDS} seconds"
         raise ValueError(msg)
     return value
-
-
-def _serialize(value: Any) -> bytes:
-    return encode_value(value)
 
 
 def _deserialize(value: bytes) -> Any:

@@ -66,6 +66,10 @@ class ImageBuildRegistryClient(Protocol):
 
 @runtime_checkable
 class ImageBuildArchiveObjectStore(Protocol):
+    # Separate from `head` because a store that cannot answer is not a store
+    # that answered "absent", and only the implementation can tell them apart.
+    def exists(self, key: str, *, bucket: str | None = None) -> bool: ...
+
     def head(
         self,
         key: str,

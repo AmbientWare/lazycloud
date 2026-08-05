@@ -15,9 +15,6 @@ from shared.env import truthy_env_value
 from shared.scheduling import SchedulerContainerStatus, SchedulerWorkerStatus
 from shared.timestamps import utc_now
 
-from scheduler.pool_sizing import (
-    sizing_state_update,
-)
 from scheduler.state import WorkerPoolLockKind, WorkerPoolLockPlan
 
 DEFAULT_WORKER_POOL_DRAIN_OWNER = "scheduler"
@@ -182,19 +179,21 @@ class ManagedComputeWorkerPoolDrainController:
                 pool_name=self.pool_name,
                 reason="worker-pool drain disabled",
             )
-        sizing_state = self.compute.get_pool_sizing_state(self.capacity_owner_id)
-        if sizing_state.operation_id:
+        sizing_state = self.compute.pool_sizing_snapshot(self.capacity_owner_id)
+        if sizing_state.pending_operation_id or sizing_state.desired_units > (
+            self.state.active_machines
+        ):
             return WorkerPoolDrainResult(
                 capacity_owner_id=self.capacity_owner_id,
                 pool_name=self.pool_name,
-                reason="worker-pool sizing operation is awaiting registration",
+                reason="worker-pool capacity is awaiting registration",
             )
         latest_mutation = max(
             (
                 changed_at
                 for changed_at in (
-                    sizing_state.last_scale_up_at,
-                    sizing_state.last_scale_down_at,
+                    sizing_state.last_requested_at,
+                    sizing_state.last_released_at,
                 )
                 if changed_at is not None
             ),
@@ -262,17 +261,6 @@ class ManagedComputeWorkerPoolDrainController:
             desired_replicas = updated.reserved_nodes
             observed_replicas = updated.reserved_nodes
             reason = "terminated idle provider machine"
-        self.compute.compare_and_set_pool_sizing_state(
-            sizing_state_update(
-                sizing_state.model_copy(
-                    update={
-                        "last_scale_down_at": current_time,
-                        "target_units": desired_replicas,
-                        "terminal_reason": "",
-                    }
-                )
-            )
-        )
         return WorkerPoolDrainResult(
             capacity_owner_id=self.capacity_owner_id,
             pool_name=self.pool_name,

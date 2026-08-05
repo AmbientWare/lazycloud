@@ -8,7 +8,6 @@ from compute.billing import BillingCreditRequest, BillingDecision, ManagedUsage
 from compute.offers import ComputeOffer
 from compute.projection import PoolConfig
 from compute.state import (
-    ComputeAgentRouteState,
     ComputeAgentTokenState,
     ComputeAgentWorkerSlotState,
     ComputePoolState,
@@ -27,6 +26,7 @@ from scheduler.state import (
     SchedulerWorkerRecord,
 )
 from shared.errors import UpstreamUnavailableError
+from shared.routing import AgentBackendRoute
 from tests.provider_fixtures import RecordingDirectMachineProvider, configure_test_provider
 from tests.real_redis import RealRedisActors
 
@@ -139,7 +139,7 @@ def test_delete_pool_cleans_private_agent_state(
         )
     )
     compute_states.save_agent_route_state(
-        ComputeAgentRouteState(
+        AgentBackendRoute(
             route_id="route-one",
             workspace_id=workspace_id,
             pool_name="cleanup-pool",

@@ -7,10 +7,8 @@ from pathlib import Path
 from agent.binary import AgentBinarySettings
 from compute.aws_connections import AwsAccountConnectionDirectory
 from compute.billing import managed_billing_client
-from compute.offers import ComputeOffer
 from compute.policy import WorkspaceComputePolicyService
 from compute.provider_config import ProviderConfigService
-from compute.providers import ProviderPoolBootstrap
 from compute.reclaim import ComputeReclaimPolicy
 from compute.request_placement import ComputeCapacityPlacementService
 from compute.service import ComputeService
@@ -34,6 +32,7 @@ from execution.collections.service import CollectionService
 from execution.containers.scheduling import ContainerSchedulingPersistenceService
 from execution.containers.service import ContainerService
 from execution.tasks import TaskService
+from gateway.pool_bootstrap import pool_bootstrap_provisioner
 from networking.settings import (
     BackendRouteSettings,
     TailnetControlSettings,
@@ -82,7 +81,6 @@ from scheduler.state import (
     RedisSchedulerWorkerRepository,
 )
 from shared.checkpoints import checkpoint_recent_stub_key
-from shared.compute_policy import ComputePoolRecord
 from storage.image_archive import ImageArchiveSettings, ResolvedImageArchiveSettings
 from storage.retention import (
     RetentionResult,
@@ -92,10 +90,7 @@ from storage.retention_settings import RetentionSettings
 from storage.service import CacheStorage, ObjectStorage
 from storage.volume_filesystem import (
     WorkspaceVolumeFilesystem,
-    WorkspaceVolumeStore,
-    WorkspaceVolumeStoreResolver,
-    workspace_presign_endpoint,
-    workspace_volume_store,
+    workspace_volume_store_resolver,
 )
 from storage.volume_metering import PersistentVolumeMeteringService
 from storage_client.s3 import S3ObjectStoreClient, S3ObjectStoreSettings
@@ -167,6 +162,7 @@ class SchedulerAppServices:
         create_schema: bool = True,
         redis_client: RedisClient,
         gateway_origin: str,
+        runtime_callback_origin: str,
         observability: SchedulerObservabilitySettings,
         storage: SchedulerStorageSettings,
         network: SchedulerNetworkSettings,
@@ -205,9 +201,10 @@ class SchedulerAppServices:
         volume_metering = PersistentVolumeMeteringService.from_settings(
             context,
             filesystem=WorkspaceVolumeFilesystem(
-                resolve_store=_workspace_volume_store_resolver(
-                    control_plane,
-                    storage.object_store,
+                resolve_store=workspace_volume_store_resolver(
+                    lambda workspace_id: control_plane.get_workspace(workspace_id).storage,
+                    default_endpoint_url=storage.object_store.endpoint_url,
+                    default_presigned_endpoint_url=storage.object_store.presigned_endpoint_url,
                 )
             ),
             interval_seconds=storage.volume_metering.interval_seconds,
@@ -235,6 +232,8 @@ class SchedulerAppServices:
                 capacity.agent_binaries,
                 connections=AwsAccountConnectionDirectory(context).list_for_workspace,
                 gateway_origin=gateway_origin,
+                internal_origin=runtime_callback_origin,
+                presigned_origin=storage.object_store.presigned_endpoint_url or "",
                 tailnet_runtime=network.tailnet_runtime,
                 tailnet_control=network.tailnet_control,
                 backend_route=network.backend_routes,
@@ -246,25 +245,37 @@ class SchedulerAppServices:
             capacity.agent_binaries.require_amd64() if provider_resolver is not None else ("", "")
         )
 
-        def pool_bootstrap(
-            pool: ComputePoolRecord,
-            offer: ComputeOffer,
-        ) -> ProviderPoolBootstrap:
-            del offer
-            return ProviderPoolBootstrap(
+        pool_bootstrap = (
+            pool_bootstrap_provisioner(
+                context,
+                # A node in a customer VPC holds no tailnet session when it
+                # first reports, so this is the public origin. The runtime
+                # callback origin stays worker-facing and is not interchangeable
+                # here. The API must pass the same one: a disagreement shows up
+                # as launch templates alternating between versions.
                 control_plane_url=gateway_origin,
-                enrollment_request_id=pool.id,
                 agent_version=agent_version,
                 agent_sha256=agent_sha256,
                 agent_binary_url=capacity.aws_capacity.agent_binary_url,
                 worker_image_digest=capacity.aws_capacity.worker_image_digest,
+                tailnet_control=network.tailnet_control,
             )
+            if provider_resolver is not None
+            else None
+        )
 
+        scheduler_hooks = SchedulerComputeHooks(
+            RedisComputeStateRepository(redis),
+            worker_repository,
+        )
+        compute_policies.worker_state = scheduler_hooks
         compute = ComputeService(
             context,
             provider_registry=configured_compute_provider_registry(
                 provider_service,
                 gateway_origin=gateway_origin,
+                internal_origin=runtime_callback_origin,
+                presigned_origin=storage.object_store.presigned_endpoint_url or "",
                 tailnet_runtime=network.tailnet_runtime,
                 tailnet_control=network.tailnet_control,
                 backend_route=network.backend_routes,
@@ -273,10 +284,7 @@ class SchedulerAppServices:
             pool_bootstrap_factory=pool_bootstrap if provider_resolver is not None else None,
             billing=billing,
             usage_exporter=usage_exporter,
-            scheduler_hooks=SchedulerComputeHooks(
-                RedisComputeStateRepository(redis),
-                worker_repository,
-            ),
+            scheduler_hooks=scheduler_hooks,
             workspace_changes=workspace_changes,
             reclaim=capacity.reclaim,
             capacity_owner_mutations=RedisCapacityReservationRepository(redis),
@@ -440,21 +448,3 @@ def scheduler_tailnet_services(
         else UnavailableTailnetCleanupService(cleanup_store)
     )
     return active_control, cleanup
-
-
-def _workspace_volume_store_resolver(
-    control_plane: ControlPlaneService,
-    object_store: S3ObjectStoreSettings,
-) -> WorkspaceVolumeStoreResolver:
-    def resolve(workspace_id: str) -> WorkspaceVolumeStore:
-        storage = control_plane.get_workspace(workspace_id).storage
-        return workspace_volume_store(
-            storage,
-            presigned_endpoint_url=workspace_presign_endpoint(
-                storage,
-                default_endpoint_url=object_store.endpoint_url,
-                default_presigned_endpoint_url=object_store.presigned_endpoint_url,
-            ),
-        )
-
-    return resolve

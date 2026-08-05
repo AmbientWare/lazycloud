@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from shared.routing import AgentBackendRoute
-from shared.scheduling import SchedulerBackendRoute
 
 from scheduler.state import (
     RedisSchedulerContainerRepository,
@@ -23,10 +22,10 @@ class SchedulerBackendRouteResolver:
     def get_backend_route(self, route_id: str) -> AgentBackendRoute | None:
         route = self._scheduler_route(route_id)
         if route is not None:
-            return _agent_route_from_scheduler(route)
+            return route
         return self.database_routes.get(route_id)
 
-    def _scheduler_route(self, route_id: str) -> SchedulerBackendRoute | None:
+    def _scheduler_route(self, route_id: str) -> AgentBackendRoute | None:
         if self.containers is None:
             return None
         container_id = _container_id_from_route_id(route_id)
@@ -56,26 +55,6 @@ class SchedulerBackendRouteResolver:
 def _container_id_from_route_id(route_id: str) -> str:
     parts = route_id.split(":")
     return parts[2] if len(parts) == 5 else ""
-
-
-def _agent_route_from_scheduler(route: SchedulerBackendRoute) -> AgentBackendRoute:
-    return AgentBackendRoute(
-        route_id=route.route_id,
-        workspace_id=route.workspace_id,
-        pool_name=route.pool_name,
-        machine_id=route.machine_id,
-        worker_id=route.worker_id,
-        container_id=route.container_id,
-        kind=route.kind,
-        port=route.port,
-        protocol=route.protocol,
-        transport=route.transport,
-        local_target=route.local_target,
-        proxy_target=route.proxy_target,
-        state=route.state,
-        error=route.error,
-        updated_at=route.updated_at,
-    )
 
 
 __all__ = ["SchedulerBackendRouteResolver"]

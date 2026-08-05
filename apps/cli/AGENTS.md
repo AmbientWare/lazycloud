@@ -1,7 +1,9 @@
 # Operator CLI App
 
-Own internal `lazycloud-admin`: admin, diagnostics, local-service, and
-backend-backed commands that are not public SDK features. It remains a superset
-of `lazycloud`; shared public workflows use `lazycloud.cli`. Keep commands thin,
-machine-readable output stable and secret-safe, and public/operator surfaces in
-sync when a capability belongs in both.
+`lazycloud-admin`, the internal operator CLI: administration, diagnostics,
+local-service, and backend-backed commands that are not public SDK features.
+
+It is a superset of the public `lazycloud` CLI, and shared public workflows are
+reused from the public CLI package rather than reimplemented here. Commands stay
+thin, machine-readable output stays stable and free of secrets, and a capability
+that belongs on both surfaces lands on both in the same change.

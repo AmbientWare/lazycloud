@@ -1,12 +1,15 @@
 # Container Worker App
 
-Own worker settings, dependency assembly, process loop, and container-service
+Worker settings, dependency assembly, the process loop, and the container-service
 HTTP adapter. Execution behavior belongs in `packages/worker`.
 
-Production workers reach control-plane state and credential vending only
-through the authenticated worker-repository API. They retain worker-owned OCI,
-cache, mounted-storage, filesystem, and presigned-transfer data paths; never add
-direct database, Redis, scheduler, identity, control, observability, or image
-service access. Validate repository URL/token before registration and never
-fall back to persistence after connection loss. Runner/shared contract changes
-require rebuilding the versioned worker image before containerized acceptance.
+A worker runs outside the control plane's trust boundary, and its dependency
+graph has to reflect that. It reaches control-plane state and credentials only
+through the authenticated worker-repository API—never the database, a cache, a
+queue, or a control-plane service directly—while keeping its own image, cache,
+mounted-storage, filesystem, and direct-transfer data paths.
+
+Validate connection details before registering, and treat a lost connection as a
+failure to report rather than a reason to fall back to a local substitute. A
+worker that keeps running against local state after losing the control plane is
+a worker whose work no longer exists anywhere.

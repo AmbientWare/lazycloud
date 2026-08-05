@@ -28,9 +28,10 @@ from hashlib import sha256
 from pathlib import Path
 from urllib.request import pathname2url
 
+from agent.operations import build_agent_install_script
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from shared.app_identity import AGENT_NAME
-from shared.tailscale_install import TAILSCALE_AMD64_SHA256, TAILSCALE_INSTALL_VERSION
+from shared.tailscale_install import TAILSCALE_INSTALL_VERSION
 
 _AGENT_FILENAME = "lazycloud-agent-linux-amd64"
 _AL2023_SSM_PARAMETER = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
@@ -615,47 +616,32 @@ _BAKE_USER_DATA_TEMPLATE = """#!/bin/bash
 set -Eeuo pipefail
 exec >/var/log/lazycloud-bake.log 2>&1
 
-TAILSCALE_VERSION=__TAILSCALE_VERSION__
-TAILSCALE_SHA256=__TAILSCALE_SHA256__
-AGENT_BINARY_URL=__AGENT_BINARY_URL__
-AGENT_SHA256=__AGENT_SHA256__
-AGENT_BIN=__AGENT_BIN__
 WORKER_IMAGE_DIGEST=__WORKER_IMAGE_DIGEST__
 RELEASE_VERSION=__RELEASE_VERSION__
+AGENT_SHA256=__AGENT_SHA256__
+TAILSCALE_VERSION=__TAILSCALE_VERSION__
 
-dnf install -y docker
-systemctl enable --now docker
-for _ in {1..30}; do
-  if docker info >/dev/null 2>&1; then
-    break
-  fi
-  sleep 2
-done
-docker info >/dev/null
+# The installer this image was built from, embedded rather than fetched: a bake
+# has no control plane to ask, and an image whose runtime came from a different
+# installer than the one shipped alongside it is exactly the drift this
+# replaced.
+cat > /tmp/lazycloud-agent-install.sh <<'INSTALLER_EOF'
+__INSTALL_SCRIPT__
+INSTALLER_EOF
 
-archive=$(mktemp)
-extracted=$(mktemp -d)
-curl -fsSL --retry 5 --retry-delay 2 \\
-  "https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_amd64.tgz" \\
-  -o "$archive"
-echo "${TAILSCALE_SHA256}  ${archive}" | sha256sum -c -
-tar -xzf "$archive" -C "$extracted"
-release_dir="${extracted}/tailscale_${TAILSCALE_VERSION}_amd64"
-install -m 0755 "$release_dir/tailscale" /usr/local/bin/tailscale
-install -m 0755 "$release_dir/tailscaled" /usr/local/bin/tailscaled
-rm -rf "$archive" "$extracted"
-test "$(tailscale version | sed -n 1p)" = "$TAILSCALE_VERSION"
+sh /tmp/lazycloud-agent-install.sh --install-only --agent-url __AGENT_BINARY_URL__
+rm -f /tmp/lazycloud-agent-install.sh
 
-agent_download=$(mktemp)
-curl -fsSL --retry 5 --retry-delay 2 "$AGENT_BINARY_URL" -o "$agent_download"
-echo "${AGENT_SHA256}  ${agent_download}" | sha256sum -c -
-install -m 0755 "$agent_download" "$AGENT_BIN"
-rm -f "$agent_download"
+systemctl enable --now amazon-ssm-agent
+# A pool node produces no console output and reports nothing once its agent
+# cannot reach the control plane. Without SSM every failure in that window is
+# silent, so a bake that cannot offer it is not worth shipping.
+systemctl is-enabled amazon-ssm-agent
 
 docker pull "$WORKER_IMAGE_DIGEST"
 
 cat > /etc/lazycloud-node-image.json <<MARKER
-{"release_version":"${RELEASE_VERSION}","agent_sha256":"${AGENT_SHA256}","tailscale_version":"${TAILSCALE_VERSION}","worker_image":"${WORKER_IMAGE_DIGEST}"}
+{"release_version":"${RELEASE_VERSION}","agent_sha256":"${AGENT_SHA256}","tailscale_version":"${TAILSCALE_VERSION}","worker_image":"${WORKER_IMAGE_DIGEST}","ssm_agent":true}
 MARKER
 
 shutdown -h now
@@ -665,17 +651,24 @@ shutdown -h now
 def _bake_user_data(request: _BakeRequest) -> str:
     values = {
         "__TAILSCALE_VERSION__": TAILSCALE_INSTALL_VERSION,
-        "__TAILSCALE_SHA256__": TAILSCALE_AMD64_SHA256,
         "__AGENT_BINARY_URL__": request.agent_url,
         "__AGENT_SHA256__": request.agent.sha256,
-        "__AGENT_BIN__": f"/usr/local/bin/{AGENT_NAME}",
         "__WORKER_IMAGE_DIGEST__": request.worker_image,
         "__RELEASE_VERSION__": request.release_version,
     }
     script = _BAKE_USER_DATA_TEMPLATE
     for placeholder, value in values.items():
         script = script.replace(placeholder, shlex.quote(value))
-    return script
+    installer = build_agent_install_script(
+        binary_name=AGENT_NAME,
+        artifact_version=request.release_version,
+        sha256_by_arch={"amd64": request.agent.sha256},
+    )
+    if "INSTALLER_EOF" in installer:
+        msg = "agent install script contains the bake heredoc terminator"
+        raise SystemExit(msg)
+    # Substituted last and unquoted: it is a heredoc body, not a shell word.
+    return script.replace("__INSTALL_SCRIPT__", installer)
 
 
 def _run_aws(

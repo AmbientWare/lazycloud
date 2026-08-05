@@ -10,9 +10,11 @@ from typing import Protocol, Self, TypeGuard, cast
 from boto3.session import Session
 from botocore.exceptions import BotoCoreError, ClientError
 
+from .boto3_clients import is_boto3_client_factory
 from .provider_control import (
     AwsProviderControlError,
     AwsProviderControlErrorCode,
+    upstream_error,
 )
 
 _ACCOUNT_ID_PATTERN = re.compile(r"^[0-9]{12}$")
@@ -84,7 +86,7 @@ class Boto3AwsCapacityImageSharing:
             except ClientError as exc:
                 raise _client_error(exc, operation="share capacity image") from exc
             except BotoCoreError as exc:
-                raise _upstream_error(exc, operation="share capacity image") from exc
+                raise upstream_error(exc, operation="share capacity image") from exc
         return normalized
 
 
@@ -103,7 +105,7 @@ def _image_visibility(
     except ClientError as exc:
         raise _client_error(exc, operation="describe capacity images") from exc
     except BotoCoreError as exc:
-        raise _upstream_error(exc, operation="describe capacity images") from exc
+        raise upstream_error(exc, operation="describe capacity images") from exc
     images: object = described.get("Images")
     if not isinstance(images, list):
         return {}
@@ -122,14 +124,6 @@ def _image_visibility(
     return visibility
 
 
-class _Boto3ClientFactory(Protocol):
-    def client(self, service_name: str) -> object: ...
-
-
-def _is_boto3_client_factory(value: object) -> TypeGuard[_Boto3ClientFactory]:
-    return callable(getattr(value, "client", None))
-
-
 def _is_capacity_image_client(value: object) -> TypeGuard[AwsCapacityImageEc2Client]:
     return callable(getattr(value, "modify_image_attribute", None)) and callable(
         getattr(value, "describe_images", None)
@@ -138,7 +132,7 @@ def _is_capacity_image_client(value: object) -> TypeGuard[AwsCapacityImageEc2Cli
 
 def _default_ec2_client(*, region_name: str) -> AwsCapacityImageEc2Client:
     source: object = Session(region_name=region_name)
-    if not _is_boto3_client_factory(source):
+    if not is_boto3_client_factory(source):
         raise RuntimeError("boto3 session lacks the client factory operation")
     candidate = source.client("ec2")
     if not _is_capacity_image_client(candidate):
@@ -161,14 +155,6 @@ def _client_error(exc: ClientError, *, operation: str) -> AwsProviderControlErro
         error_code,
         operation=operation,
         detail=message.strip() or code.strip() or "AWS request failed",
-    )
-
-
-def _upstream_error(exc: BotoCoreError, *, operation: str) -> AwsProviderControlError:
-    return AwsProviderControlError(
-        AwsProviderControlErrorCode.UpstreamUnavailable,
-        operation=operation,
-        detail=str(exc),
     )
 
 

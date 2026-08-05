@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 from collections.abc import Callable
@@ -24,6 +25,8 @@ from worker.tools import (
     network_io_delta,
     process_io_delta,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 
 class ContainerMetricsSink(Protocol):
@@ -121,6 +124,7 @@ class WorkerContainerMetricsService:
         except Exception:
             # Metrics are reported best effort; a usage read must never take the
             # container down.
+            LOGGER.debug("disk usage read failed for %s", container_id, exc_info=True)
             return 0
 
     def publish_sample(

@@ -6,7 +6,7 @@ from enum import Enum
 from types import UnionType
 from typing import Any, get_args, get_origin
 
-from shared.app_identity import ADMIN_CLI_NAME
+from shared.app_identity import CLI_NAME
 
 import lazycloud
 
@@ -70,9 +70,9 @@ def render_sdk_reference(
         "  registry login, default `docker run` and `docker build` to host networking for",
         "  gVisor-safe Docker-in-sandbox behavior, and can generate Compose override",
         "  files with host networking.",
-        "- Private pool operations are available through `Client().private_pools` and the",
-        f"  `{ADMIN_CLI_NAME} pool` CLI commands: `join-command`, `join --print-only`,",
-        "  `join-token`, `revoke-join-token`, `extend`, and `machines`.",
+        f"- Attach your own hardware with `{CLI_NAME} machine join`, list it with",
+        f"  `{CLI_NAME} machine list`, and detach it with `{CLI_NAME} machine remove`.",
+        "  `Client().compute.machine_join_command(...)` returns the same join command.",
         "",
         "## Public Modules",
         "",

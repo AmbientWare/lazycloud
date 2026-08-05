@@ -1,0 +1,30 @@
+tunnel: 641c34fa-65dc-48b5-bf42-f77d7fa57cad
+credentials-file: /etc/cloudflared/credentials.json
+
+originRequest:
+  connectTimeout: 10s
+  noTLSVerify: false
+  # Log streaming holds a response open and writes heartbeat comments; buffering
+  # the body would defeat it.
+  disableChunkedEncoding: false
+
+ingress:
+  # Ordered, first match wins. `path` is an anchored Go regex matched against
+  # the request path. The two internal-only prefixes are refused here so the
+  # origin never sees them, independent of the authorization it also enforces.
+  - hostname: lazycloud.dev
+    path: ^/metrics$
+    service: http_status:404
+  - hostname: lazycloud.dev
+    path: ^/worker-repository(/|$)
+    service: http_status:404
+  - hostname: lazycloud.dev
+    service: http://127.0.0.1:9000
+
+  # Generated invoke hosts (<stub>.lazycloud.dev). Every path forwards: the
+  # control plane's host-routing middleware rewrites them to the stub's handler
+  # path, so a path filter here would break user applications.
+  - hostname: "*.lazycloud.dev"
+    service: http://127.0.0.1:9000
+
+  - service: http_status:404

@@ -15,8 +15,10 @@ from container_worker_app.main import (
     _validate_keepalive_interval,
     run_container_worker,
 )
-from container_worker_app.production import ProductionWorkerSettings
+from container_worker_app.settings import WorkerSettings
 from shared.container_requests import StopContainerReason
+from shared.scheduling import WorkerUnavailableReason
+from worker.configuration import WorkerConfiguration, WorkerExecutionConfiguration
 from worker.repository_client import WorkerRepositoryClientError
 from worker.status import WorkerSpindownPlan
 from worker.worker_lifecycle import (
@@ -44,7 +46,7 @@ def test_worker_stops_when_repository_error_masks_signal_interrupt() -> None:
     services = _Services(processor=processor, lifecycle=lifecycle)
 
     result = run_container_worker(
-        settings=ProductionWorkerSettings(container_service_port=0),
+        settings=WorkerSettings(container_service_port=0),
         interval_seconds=60,
         services=services,
     )
@@ -65,7 +67,7 @@ def test_worker_renews_lease_while_pickup_is_blocked(tmp_path: Path) -> None:
 
     with pytest.raises(KeyboardInterrupt):
         run_container_worker(
-            settings=ProductionWorkerSettings(container_service_port=0),
+            settings=WorkerSettings(container_service_port=0),
             interval_seconds=0,
             keepalive_interval_seconds=0.01,
             heartbeat_file=heartbeat_file,
@@ -92,7 +94,7 @@ def test_worker_does_not_process_when_registration_fails() -> None:
 
     with pytest.raises(ContainerWorkerRegistrationError, match="cache activation failed"):
         run_container_worker(
-            settings=ProductionWorkerSettings(container_service_port=0),
+            settings=WorkerSettings(container_service_port=0),
             once=True,
             services=_Services(processor=processor, lifecycle=lifecycle),
         )
@@ -101,7 +103,15 @@ def test_worker_does_not_process_when_registration_fails() -> None:
     assert lifecycle.keepalive_calls == 0
 
 
-def test_persistent_worker_registration_rollback_preserves_owner_identity() -> None:
+def test_a_worker_that_never_registered_leaves_no_record_behind() -> None:
+    """Registration failure must not leave a candidate the scheduler will try.
+
+    A persistent worker kept its record on this path. The record declares
+    capacity and is admitted to the scheduling candidate set, so a container
+    could be told to wait for a worker that had already exited. Identity is
+    carried by `WORKER_ID`, not by the record, so nothing is lost by removing
+    one that never became available.
+    """
     processor = _UnexpectedProcessor()
     lifecycle = _Lifecycle(
         registration_steps=[
@@ -116,13 +126,18 @@ def test_persistent_worker_registration_rollback_preserves_owner_identity() -> N
 
     with pytest.raises(ContainerWorkerRegistrationError, match="network readiness failed"):
         run_container_worker(
-            settings=ProductionWorkerSettings(container_service_port=0, persistent=True),
+            settings=WorkerSettings(
+                container_service_port=0,
+                configuration=WorkerConfiguration(
+                    execution=WorkerExecutionConfiguration(persistent=True)
+                ),
+            ),
             once=True,
             services=_Services(processor=processor, lifecycle=lifecycle),
         )
 
     assert processor.calls == 0
-    assert lifecycle.shutdown_remove_worker == [False]
+    assert lifecycle.shutdown_remove_worker == [True]
 
 
 @dataclass(slots=True)
@@ -166,6 +181,7 @@ class _Lifecycle:
     shutdown_calls: int = 0
     shutdown_remove_worker: list[bool] = field(default_factory=list)
     shutdown_reasons: list[StopContainerReason] = field(default_factory=list)
+    shutdown_unavailable: list[tuple[WorkerUnavailableReason, str]] = field(default_factory=list)
     keepalive_calls: int = 0
     renewed: threading.Event | None = None
     events: list[str] = field(default_factory=list)
@@ -200,10 +216,13 @@ class _Lifecycle:
         *,
         remove_worker: bool = True,
         stop_reason: StopContainerReason = StopContainerReason.Unknown,
+        unavailable_reason: WorkerUnavailableReason = WorkerUnavailableReason.ShuttingDown,
+        unavailable_detail: str = "",
     ) -> WorkerShutdownResult:
         self.shutdown_calls += 1
         self.shutdown_remove_worker.append(remove_worker)
         self.shutdown_reasons.append(stop_reason)
+        self.shutdown_unavailable.append((unavailable_reason, unavailable_detail))
         self.events.append("shutdown")
         return WorkerShutdownResult(worker_id="worker-1")
 

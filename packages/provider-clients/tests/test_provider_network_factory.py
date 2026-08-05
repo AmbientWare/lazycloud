@@ -64,6 +64,7 @@ def _client(record: ProviderConfig) -> AwsProvider:
     client = _provider_client_from_record(
         record,
         gateway_origin="https://control.example.com",
+        internal_origin="http://lazycloud-control-plane.tailnet-example.ts.net:9000",
         tailnet_runtime=runtime,
         tailnet_control=control,
         backend_route=backend_route,
@@ -97,6 +98,7 @@ def test_registry_reads_one_durable_aws_snapshot_per_resolution() -> None:
     registry = configured_compute_provider_registry(
         loader,
         gateway_origin="https://control.example.com",
+        internal_origin="http://lazycloud-control-plane.tailnet-example.ts.net:9000",
         tailnet_runtime=runtime,
         tailnet_control=control,
         backend_route=backend_route,

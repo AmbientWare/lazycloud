@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import timedelta
@@ -36,6 +37,8 @@ from sqlalchemy.orm import Session
 from control.context import ControlContext
 from control.deployment_cleanup import AppDeploymentLifecycleService
 from control.sandbox_urls import rewrite_persisted_sandbox_url_visibility
+
+LOGGER = logging.getLogger(__name__)
 
 _RECONCILE_CLAIM_SECONDS = 30
 
@@ -268,6 +271,7 @@ class AppService:
             try:
                 reconciled.append(self._run_claimed(app, claim_id=claim_id))
             except Exception:
+                LOGGER.exception("app %s failed to reconcile", app.id)
                 reconciled.append(
                     self._get_including_deleted(app.id, workspace_id=app.workspace_id)
                 )

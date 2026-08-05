@@ -23,10 +23,13 @@ from pydantic import (
 )
 
 from .account_connection_policy import validate_aws_account_connection_template_policy
+from .boto3_clients import has_operations, is_boto3_client_factory
 from .instance_catalog import aws_console_host, aws_partition_for_region
 from .provider_control import (
     AwsProviderControlError,
     AwsProviderControlErrorCode,
+    invalid_response_error,
+    upstream_error,
 )
 
 AWS_ACCOUNT_CONNECTION_TEMPLATE_VERSION = "2026-07-24.v11"
@@ -532,14 +535,6 @@ class AwsConnectionSessionFactory(Protocol):
     ) -> AwsConnectionSession: ...
 
 
-class _Boto3ClientFactory(Protocol):
-    def client(self, service_name: str) -> object: ...
-
-
-def _is_boto3_client_factory(value: object) -> TypeGuard[_Boto3ClientFactory]:
-    return callable(getattr(value, "client", None))
-
-
 @dataclass(frozen=True, slots=True)
 class _Boto3ConnectionSession:
     session: Session
@@ -568,7 +563,7 @@ class _Boto3ConnectionSession:
         | AwsConnectionCloudFormationClient
     ):
         source: object = self.session
-        if not _is_boto3_client_factory(source):
+        if not is_boto3_client_factory(source):
             raise RuntimeError("boto3 session lacks the client factory operation")
         if service_name == "sts":
             candidate = source.client("sts")
@@ -589,16 +584,12 @@ class _Boto3ConnectionSession:
         raise RuntimeError(f"boto3 {service_name} client lacks required operations")
 
 
-def _has_operations(value: object, operations: tuple[str, ...]) -> bool:
-    return all(callable(getattr(value, operation, None)) for operation in operations)
-
-
 def _is_sts_client(value: object) -> TypeGuard[AwsConnectionStsClient]:
-    return _has_operations(value, ("assume_role", "get_caller_identity"))
+    return has_operations(value, ("assume_role", "get_caller_identity"))
 
 
 def _is_iam_client(value: object) -> TypeGuard[AwsConnectionIamClient]:
-    return _has_operations(
+    return has_operations(
         value,
         (
             "add_role_to_instance_profile",
@@ -617,13 +608,13 @@ def _is_iam_client(value: object) -> TypeGuard[AwsConnectionIamClient]:
 
 
 def _is_ec2_client(value: object) -> TypeGuard[AwsConnectionEc2Client]:
-    return _has_operations(value, ("describe_regions",))
+    return has_operations(value, ("describe_regions",))
 
 
 def _is_cloudformation_client(
     value: object,
 ) -> TypeGuard[AwsConnectionCloudFormationClient]:
-    return _has_operations(value, ("delete_stack", "describe_stacks"))
+    return has_operations(value, ("delete_stack", "describe_stacks"))
 
 
 class _AwsResponseModel(BaseModel):
@@ -729,23 +720,23 @@ class Boto3AwsAccountConnectionValidator:
         except ClientError as exc:
             raise _client_error(exc, operation="validate account connection") from exc
         except BotoCoreError as exc:
-            raise _upstream_error(exc, operation="validate account connection") from exc
+            raise upstream_error(exc, operation="validate account connection") from exc
         if caller.account_id != target.account_id:
-            raise _invalid(
+            raise invalid_response_error(
                 "validate account connection identity", "assumed role returned another account"
             )
         if profile.arn != target.node_instance_profile_arn:
-            raise _invalid(
+            raise invalid_response_error(
                 "validate shared node instance profile",
                 "AWS returned an instance profile outside the connection scope",
             )
         if tuple(role.arn for role in profile.roles) != (target.node_role_arn,):
-            raise _invalid(
+            raise invalid_response_error(
                 "validate shared node instance profile",
                 "shared node instance profile must contain exactly the configured node role",
             )
         if tuple(region.name for region in regions) != (target.region,):
-            raise _invalid(
+            raise invalid_response_error(
                 "validate AWS region access", "AWS region is unavailable to the connection"
             )
         partition = caller.arn.split(":", maxsplit=2)[1]
@@ -785,30 +776,30 @@ class Boto3AwsAccountConnectionValidator:
         except ClientError as exc:
             raise _client_error(exc, operation="validate account authorization") from exc
         except BotoCoreError as exc:
-            raise _upstream_error(exc, operation="validate account authorization") from exc
+            raise upstream_error(exc, operation="validate account authorization") from exc
         if caller.account_id != pending.account_id:
-            raise _invalid(
+            raise invalid_response_error(
                 "validate authorization identity", "assumed role returned another account"
             )
         if tuple(region.name for region in regions) != (pending.region,):
-            raise _invalid(
+            raise invalid_response_error(
                 "validate authorization region access",
                 "AWS region is unavailable to the authorization",
             )
         if len(stacks) != 1 or stacks[0].stack_name != pending.stack_name:
-            raise _invalid(
+            raise invalid_response_error(
                 "validate authorization stack",
                 "AWS returned a stack outside the pending generation scope",
             )
         stack = stacks[0]
         if stack.status not in _READY_AUTHORIZATION_STACK_STATUSES:
-            raise _invalid(
+            raise invalid_response_error(
                 "validate authorization stack",
                 f"authorization stack is not ready ({stack.status})",
             )
         outputs = {output.key: output.value for output in stack.outputs}
         if outputs.get("ConnectionRoleArn") != pending.role_arn:
-            raise _invalid(
+            raise invalid_response_error(
                 "validate authorization stack",
                 "authorization stack role does not match the pending generation",
             )
@@ -816,7 +807,7 @@ class Boto3AwsAccountConnectionValidator:
         subnet_ids = tuple(value for value in outputs.get("SubnetIds", "").split(",") if value)
         security_group_id = outputs.get("SecurityGroupId", "")
         if not vpc_id or len(subnet_ids) < 2 or not security_group_id:
-            raise _invalid(
+            raise invalid_response_error(
                 "validate authorization stack",
                 "authorization stack did not return the managed network outputs",
             )
@@ -873,14 +864,14 @@ class Boto3AwsAccountConnectionValidator:
         except ClientError as exc:
             raise _client_error(exc, operation="validate existing account authorization") from exc
         except BotoCoreError as exc:
-            raise _upstream_error(exc, operation="validate existing account authorization") from exc
+            raise upstream_error(exc, operation="validate existing account authorization") from exc
         if caller.account_id != authorization.account_id:
-            raise _invalid(
+            raise invalid_response_error(
                 "validate existing authorization identity",
                 "assumed role returned another account",
             )
         if tuple(region.name for region in regions) != (authorization.region,):
-            raise _invalid(
+            raise invalid_response_error(
                 "validate existing authorization region access",
                 "AWS region is unavailable to the authorization",
             )
@@ -963,7 +954,7 @@ class Boto3AwsNodeBucketAccessControl:
                 return
             raise _client_error(exc, operation="reconcile connected bucket access") from exc
         except BotoCoreError as exc:
-            raise _upstream_error(exc, operation="reconcile connected bucket access") from exc
+            raise upstream_error(exc, operation="reconcile connected bucket access") from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -1098,7 +1089,7 @@ class Boto3AwsAccountAuthorizationControl:
                 )
             raise error from exc
         except BotoCoreError as exc:
-            raise _upstream_error(exc, operation="delete managed authorization stack") from exc
+            raise upstream_error(exc, operation="delete managed authorization stack") from exc
         return AwsAccountAuthorizationCleanupResult(
             status=AwsAccountAuthorizationCleanupStatus.Pending,
             role_assumable=True,
@@ -1218,6 +1209,25 @@ class AwsAccountConnectionPlanner:
 def aws_account_connection_template_bytes() -> bytes:
     template = _connection_template()
     return (json.dumps(template, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+
+def require_resolvable_aws_credentials() -> None:
+    """Refuse a connected deployment whose credentials resolve to nothing.
+
+    Without this a stack with no AWS configuration mounted starts, reports
+    healthy, and cannot validate a single connection — surfacing much later as a
+    connection stuck in `awaiting_authorization`, which names nothing about
+    credentials. Resolution is deferred, so a role chain costs no call here.
+    """
+    try:
+        credentials = Session().get_credentials()
+    except BotoCoreError as exc:
+        raise ValueError(f"connected AWS credentials are unavailable: {exc}") from exc
+    if credentials is None:
+        raise ValueError(
+            "connected AWS is enabled but no credentials resolve; mount the role-chain "
+            "configuration directory with LAZYCLOUD_COMPOSE_AWS_CONFIG_DIR"
+        )
 
 
 def aws_account_connection_template_identity() -> AwsAccountConnectionTemplateIdentity:
@@ -1758,7 +1768,7 @@ def _assert_external_id_enforced(
                 continue
             raise _client_error(exc, operation="verify authorization external ID") from exc
         except BotoCoreError as exc:
-            raise _upstream_error(exc, operation="verify authorization external ID") from exc
+            raise upstream_error(exc, operation="verify authorization external ID") from exc
         raise AwsAccountAuthorizationValidationError(
             AwsAccountAuthorizationValidationErrorCode.ExternalIdNotEnforced,
             "AWS authorization role accepted AssumeRole without the exact external ID",
@@ -1833,7 +1843,7 @@ def _ensure_node_diagnostics_policy(
     except ClientError as exc:
         raise _client_error(exc, operation="ensure managed node diagnostics policy") from exc
     except BotoCoreError as exc:
-        raise _upstream_error(exc, operation="ensure managed node diagnostics policy") from exc
+        raise upstream_error(exc, operation="ensure managed node diagnostics policy") from exc
 
 
 def _ensure_node_identity(
@@ -1869,9 +1879,11 @@ def _ensure_node_identity(
         except ClientError as exc:
             raise _client_error(exc, operation="create managed node role") from exc
         except BotoCoreError as exc:
-            raise _upstream_error(exc, operation="create managed node role") from exc
+            raise upstream_error(exc, operation="create managed node role") from exc
     if role.arn != identity.role_arn:
-        raise _invalid("ensure managed node role", "AWS returned a role outside connection scope")
+        raise invalid_response_error(
+            "ensure managed node role", "AWS returned a role outside connection scope"
+        )
     _ensure_node_diagnostics_policy(client, role_name=identity.role_name)
 
     profile = _get_instance_profile_if_present(
@@ -1891,9 +1903,9 @@ def _ensure_node_identity(
         except ClientError as exc:
             raise _client_error(exc, operation="create managed node instance profile") from exc
         except BotoCoreError as exc:
-            raise _upstream_error(exc, operation="create managed node instance profile") from exc
+            raise upstream_error(exc, operation="create managed node instance profile") from exc
     if profile.arn != identity.instance_profile_arn:
-        raise _invalid(
+        raise invalid_response_error(
             "ensure managed node instance profile",
             "AWS returned an instance profile outside connection scope",
         )
@@ -1907,19 +1919,19 @@ def _ensure_node_identity(
         except ClientError as exc:
             raise _client_error(exc, operation="attach managed node role") from exc
         except BotoCoreError as exc:
-            raise _upstream_error(exc, operation="attach managed node role") from exc
+            raise upstream_error(exc, operation="attach managed node role") from exc
         profile = _get_instance_profile_if_present(
             client,
             profile_name=identity.instance_profile_name,
         )
         if profile is None:
-            raise _invalid(
+            raise invalid_response_error(
                 "ensure managed node instance profile",
                 "managed node profile was not observable after role attachment",
             )
         role_arns = tuple(item.arn for item in profile.roles)
     if role_arns != (identity.role_arn,):
-        raise _invalid(
+        raise invalid_response_error(
             "ensure managed node instance profile",
             "managed node instance profile contains another role",
         )
@@ -1938,7 +1950,7 @@ def _delete_node_identity(
         if profile is not None:
             for role in profile.roles:
                 if role.arn != identity.role_arn:
-                    raise _invalid(
+                    raise invalid_response_error(
                         "delete managed node identity",
                         "managed node profile contains another role",
                     )
@@ -1955,7 +1967,7 @@ def _delete_node_identity(
         if not _iam_role_not_found(exc):
             raise _client_error(exc, operation="delete managed node identity") from exc
     except BotoCoreError as exc:
-        raise _upstream_error(exc, operation="delete managed node identity") from exc
+        raise upstream_error(exc, operation="delete managed node identity") from exc
     profile_exists = (
         _get_instance_profile_if_present(
             client,
@@ -1987,7 +1999,7 @@ def _get_role_if_present(
             return None
         raise _client_error(exc, operation="get managed IAM role") from exc
     except BotoCoreError as exc:
-        raise _upstream_error(exc, operation="get managed IAM role") from exc
+        raise upstream_error(exc, operation="get managed IAM role") from exc
 
 
 def _get_instance_profile_if_present(
@@ -2006,7 +2018,7 @@ def _get_instance_profile_if_present(
             return None
         raise _client_error(exc, operation="get managed node instance profile") from exc
     except BotoCoreError as exc:
-        raise _upstream_error(exc, operation="get managed node instance profile") from exc
+        raise upstream_error(exc, operation="get managed node instance profile") from exc
 
 
 def _assumed_connection_session(
@@ -2025,7 +2037,7 @@ def _assumed_connection_session(
     except ClientError as exc:
         raise _client_error(exc, operation="assume account connection role") from exc
     except BotoCoreError as exc:
-        raise _upstream_error(exc, operation="assume account connection role") from exc
+        raise upstream_error(exc, operation="assume account connection role") from exc
     credentials = _validated(
         _AssumeRoleResponse,
         assumed,
@@ -2068,7 +2080,7 @@ def _assumed_active_authorization_session(
     except ClientError as exc:
         raise _client_error(exc, operation="assume account connection role") from exc
     except BotoCoreError as exc:
-        raise _upstream_error(exc, operation="assume account connection role") from exc
+        raise upstream_error(exc, operation="assume account connection role") from exc
     credentials = _validated(
         _AssumeRoleResponse,
         assumed,
@@ -2124,14 +2136,14 @@ def _describe_authorization_stack_if_present(
             return None
         raise _client_error(exc, operation="observe managed authorization stack") from exc
     except BotoCoreError as exc:
-        raise _upstream_error(exc, operation="observe managed authorization stack") from exc
+        raise upstream_error(exc, operation="observe managed authorization stack") from exc
     stacks = _validated(
         _DescribeStacksResponse,
         response,
         operation="observe managed authorization stack",
     ).stacks
     if len(stacks) != 1 or stacks[0].stack_name != authorization.stack_name:
-        raise _invalid(
+        raise invalid_response_error(
             "observe managed authorization stack",
             "AWS returned a stack outside the authorization generation scope",
         )
@@ -2139,7 +2151,7 @@ def _describe_authorization_stack_if_present(
     if isinstance(authorization, AwsActiveAccountAuthorization) and (
         stack.stack_id != authorization.stack_id
     ):
-        raise _invalid(
+        raise invalid_response_error(
             "observe managed authorization stack",
             "AWS returned a stack outside the validated authorization scope",
         )
@@ -2163,7 +2175,7 @@ def _delete_role(client: AwsConnectionIamClient, *, role_name: str) -> None:
             operation="list predecessor authorization policies",
         )
         if policies.truncated:
-            raise _invalid(
+            raise invalid_response_error(
                 "list predecessor authorization policies",
                 "AWS paginated the predecessor inline policies unexpectedly",
             )
@@ -2175,7 +2187,7 @@ def _delete_role(client: AwsConnectionIamClient, *, role_name: str) -> None:
             return
         raise _client_error(exc, operation="clean predecessor authorization role") from exc
     except BotoCoreError as exc:
-        raise _upstream_error(exc, operation="clean predecessor authorization role") from exc
+        raise upstream_error(exc, operation="clean predecessor authorization role") from exc
 
 
 def _cloudformation_stack_not_found(exc: ClientError) -> bool:
@@ -2325,15 +2337,7 @@ def _validated[ResponseT: BaseModel](
     try:
         return model.model_validate(response)
     except ValidationError as exc:
-        raise _invalid(operation, "AWS returned an invalid response") from exc
-
-
-def _invalid(operation: str, detail: str) -> AwsProviderControlError:
-    return AwsProviderControlError(
-        AwsProviderControlErrorCode.InvalidResponse,
-        operation=operation,
-        detail=detail,
-    )
+        raise invalid_response_error(operation, "AWS returned an invalid response") from exc
 
 
 def _client_error(exc: ClientError, *, operation: str) -> AwsProviderControlError:
@@ -2355,14 +2359,6 @@ def _client_error(exc: ClientError, *, operation: str) -> AwsProviderControlErro
         error_code,
         operation=operation,
         detail=message.strip() or code.strip() or "AWS request failed",
-    )
-
-
-def _upstream_error(exc: BotoCoreError, *, operation: str) -> AwsProviderControlError:
-    return AwsProviderControlError(
-        AwsProviderControlErrorCode.UpstreamUnavailable,
-        operation=operation,
-        detail=str(exc),
     )
 
 

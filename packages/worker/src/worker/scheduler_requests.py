@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import threading
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -37,6 +38,8 @@ from worker.status import (
     WorkerCancelledRequestPlan,
     plan_worker_cancelled_request,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 MIB = 1024 * 1024
 
@@ -325,7 +328,11 @@ class WorkerSchedulerRequestProcessor:
                     ttl_seconds=DEFAULT_CONTAINER_STATE_TTL_SECONDS,
                 )
             except Exception:
-                pass
+                LOGGER.warning(
+                    "could not record %s as failed",
+                    request.container_id,
+                    exc_info=True,
+                )
             return WorkerSchedulerRequestResult(
                 worker_id=self.worker_id,
                 status=WorkerSchedulerRequestStatus.Error,

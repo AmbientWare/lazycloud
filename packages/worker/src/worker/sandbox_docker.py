@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
@@ -18,6 +19,8 @@ from worker.container_service.protocols import (
     WorkerSandboxProcessManagerFactory,
 )
 from worker.sandbox_server import SandboxLogStream
+
+LOGGER = logging.getLogger(__name__)
 
 DOCKER_DAEMON_COMMAND = [
     "dockerd",
@@ -264,6 +267,7 @@ class WorkerSandboxDockerService:
         try:
             self._run(instance, ["docker", "info"], name="docker info")
         except Exception:
+            LOGGER.debug("docker readiness probe failed", exc_info=True)
             return False
         return True
 

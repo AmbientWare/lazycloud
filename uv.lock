@@ -195,7 +195,7 @@ requires-dist = [
     { name = "observability", editable = "packages/observability" },
     { name = "operations", editable = "packages/operations" },
     { name = "provider-clients", editable = "packages/provider-clients" },
-    { name = "pydantic-settings", specifier = ">=2,<3" },
+    { name = "pydantic-settings", specifier = ">=2.4,<3" },
     { name = "scheduler", editable = "packages/scheduler" },
     { name = "storage", editable = "packages/storage" },
     { name = "storage-client", editable = "packages/storage-client" },
@@ -293,12 +293,14 @@ version = "0.1.0"
 source = { editable = "packages/cache" }
 dependencies = [
     { name = "lazycloud-shared" },
+    { name = "networking" },
     { name = "pydantic" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "lazycloud-shared", editable = "packages/shared" },
+    { name = "networking", editable = "packages/networking" },
     { name = "pydantic", specifier = ">=2.8,<3" },
 ]
 
@@ -555,6 +557,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "foundation" },
     { name = "lazycloud-shared" },
+    { name = "networking" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "storage-client" },
@@ -568,6 +571,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115,<1" },
     { name = "foundation", editable = "packages/foundation" },
     { name = "lazycloud-shared", editable = "packages/shared" },
+    { name = "networking", editable = "packages/networking" },
     { name = "pydantic", specifier = ">=2.8,<3" },
     { name = "pydantic-settings", specifier = ">=2.4,<3" },
     { name = "storage-client", editable = "packages/storage-client" },
@@ -2233,6 +2237,7 @@ dependencies = [
     { name = "cache" },
     { name = "foundation" },
     { name = "lazycloud-shared" },
+    { name = "networking" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "pyyaml" },
@@ -2244,6 +2249,7 @@ requires-dist = [
     { name = "cache", editable = "packages/cache" },
     { name = "foundation", editable = "packages/foundation" },
     { name = "lazycloud-shared", editable = "packages/shared" },
+    { name = "networking", editable = "packages/networking" },
     { name = "pydantic", specifier = ">=2.8,<3" },
     { name = "pydantic-settings", specifier = ">=2.4,<3" },
     { name = "pyyaml", specifier = ">=6,<7" },

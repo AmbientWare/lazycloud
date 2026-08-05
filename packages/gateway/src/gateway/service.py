@@ -36,7 +36,6 @@ from compute.agent_control import (
 from compute.projection import PoolConfig
 from compute.service import ComputeService
 from compute.state import (
-    ComputeAgentRouteState,
     ComputeAgentTokenState,
     ComputeAgentWorkerSlotState,
     ComputeJoinTokenState,
@@ -71,7 +70,7 @@ from execution.functions.service import FunctionControlService
 from execution.tasks import TaskService
 from identity.auth import AuthService
 from identity.authz import AuthzRequirement
-from identity.rpc import sign_payload
+from identity.signatures import sign_payload
 from networking.routing import BackendRouteAuthenticator
 from networking.tailnet_cleanup import TailnetCleanupCoordinator
 from networking.tailnet_control import (
@@ -171,10 +170,10 @@ from shared.objects import ObjectRecord
 from shared.realtime.contracts import EventRecordType
 from shared.routing import AgentBackendRoute
 from shared.scheduling import (
-    SchedulerBackendRoute,
     SchedulerContainerStatus,
     SchedulerWorkerRecord,
     SchedulerWorkerStatus,
+    WorkerUnavailableReason,
 )
 from shared.source_cache_cleanup import (
     WorkerCacheStorageDestructionEvidence,
@@ -195,7 +194,6 @@ from gateway.http import (
 )
 from gateway.http import (
     AgentRoute,
-    AgentTelemetryConfig,
     AgentTelemetryRequest,
     AgentTelemetryResponse,
     AuthorizeRequest,
@@ -222,12 +220,8 @@ from gateway.pool_state import GatewayPoolStateCoordinator
 from gateway.route_prewarm import RoutePrewarmService
 from gateway.stub_config import deployment_spec_from_stub, stub_config, stub_kind
 from gateway.views import (
-    agent_backend_route,
-    agent_bootstrap_view,
     agent_pool_transport,
-    agent_route_state,
     agent_route_view,
-    agent_telemetry_payload,
     agent_telemetry_state,
     agent_worker_record,
     agent_worker_slot_view,
@@ -1013,7 +1007,10 @@ class GatewayControlService:
                 if desired_machines == 0:
                     for worker in self.scheduler_worker_lookup.list_workers():
                         if worker.capacity_owner_id == owner.capacity_owner_id:
-                            self.scheduler_worker_lookup.disable_worker(worker.worker_id)
+                            self.scheduler_worker_lookup.disable_worker(
+                                worker.worker_id,
+                                reason=WorkerUnavailableReason.MachineRetired,
+                            )
 
             return self.services.compute.scale_internal_pool(
                 workspace_id,
@@ -1600,7 +1597,6 @@ class GatewayControlService:
                     self.agent_image,
                     gateway_runtime_http_url=self.runtime_callback_http_url,
                     tailnet=self.tailnet,
-                    telemetry=agent_telemetry_payload(AgentTelemetryConfig()),
                     executor=agent_state.executor,
                 )
                 consumes_use = existing is None
@@ -1660,9 +1656,6 @@ class GatewayControlService:
                             durable_worker.status
                             if durable_worker is not None
                             else ResourceStatus.Created
-                        ),
-                        version=(
-                            durable_worker.version if durable_worker is not None else "pending"
                         ),
                         labels={
                             **(durable_worker.labels if durable_worker is not None else {}),
@@ -1740,7 +1733,7 @@ class GatewayControlService:
             credential_id=agent_state.credential_id,
             credential_generation=agent_state.credential_generation,
             capacity_state=agent_state.capacity_state,
-            bootstrap=agent_bootstrap_view(bootstrap),
+            bootstrap=bootstrap,
         )
 
     def leave_agent(self, request: LeaveAgentRequest) -> LeaveAgentResponse:
@@ -1954,7 +1947,7 @@ class GatewayControlService:
             )
             plan = plan_route_status_update(
                 state,
-                agent_backend_route(route) if route is not None else None,
+                route if route is not None else None,
                 AgentRouteStatusRequest(
                     route_id=request.route_id,
                     state=request.state,
@@ -1965,10 +1958,8 @@ class GatewayControlService:
             )
             if not plan.accepted or plan.updated is None:
                 raise InvalidInputError(plan.err_msg or "agent route status update rejected")
-            self.compute_states.save_agent_route_state(agent_route_state(plan.updated))
-            self.scheduler_container_lookup.update_backend_route(
-                _scheduler_backend_route(plan.updated)
-            )
+            self.compute_states.save_agent_route_state(plan.updated)
+            self.scheduler_container_lookup.update_backend_route(plan.updated)
             if plan.should_emit_event:
                 event_data: dict[str, JsonValue] = dict(plan.event_attrs)
                 self.services.events.emit(
@@ -2003,7 +1994,7 @@ class GatewayControlService:
             slots = []
             if provided is not None:
                 routes = [
-                    agent_backend_route(route)
+                    route
                     for route in self.compute_states.list_agent_route_states(
                         provided.workspace_id,
                         provided.pool_name,
@@ -2037,7 +2028,6 @@ class GatewayControlService:
                 self.agent_image,
                 gateway_runtime_http_url=self.runtime_callback_http_url,
                 tailnet=self.tailnet,
-                telemetry=agent_telemetry_payload(AgentTelemetryConfig()),
                 executor=response_state.executor,
             )
         except (KeyError, ValueError) as exc:
@@ -2047,7 +2037,7 @@ class GatewayControlService:
             credential_id=response_state.credential_id,
             credential_generation=response_state.credential_generation,
             capacity_state=response_state.capacity_state,
-            bootstrap=agent_bootstrap_view(bootstrap),
+            bootstrap=bootstrap,
             routes=[self._agent_route_view(route) for route in snapshot.routes],
             slots=[agent_worker_slot_view(slot) for slot in agent_slots],
         )
@@ -2127,7 +2117,7 @@ class GatewayControlService:
             changed=changed,
         )
 
-    def _agent_route_view(self, route: ComputeAgentRouteState | AgentBackendRoute) -> AgentRoute:
+    def _agent_route_view(self, route: AgentBackendRoute | AgentBackendRoute) -> AgentRoute:
         if self.route_authenticator is None:
             raise RuntimeError("backend route authenticator is not configured")
         return agent_route_view(
@@ -3037,26 +3027,6 @@ def _machine_enrollment_snapshot(
         last_join_at=state.last_join_at or utc_now(),
         last_heartbeat_at=state.last_heartbeat_at,
         last_disconnect_at=state.last_disconnect_at,
-    )
-
-
-def _scheduler_backend_route(route: AgentBackendRoute) -> SchedulerBackendRoute:
-    return SchedulerBackendRoute(
-        route_id=route.route_id,
-        workspace_id=route.workspace_id,
-        pool_name=route.pool_name,
-        machine_id=route.machine_id,
-        worker_id=route.worker_id,
-        container_id=route.container_id,
-        kind=str(getattr(route.kind, "value", route.kind)),
-        port=route.port,
-        protocol=str(getattr(route.protocol, "value", route.protocol)),
-        transport=str(getattr(route.transport, "value", route.transport)),
-        local_target=route.local_target,
-        proxy_target=route.proxy_target,
-        state=str(getattr(route.state, "value", route.state)),
-        error=route.error,
-        updated_at=route.updated_at,
     )
 
 

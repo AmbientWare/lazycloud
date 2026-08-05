@@ -25,6 +25,7 @@ from worker.repository_payloads import (
     ClaimSourceCacheCleanupResponse,
     DeleteContainerStateRequest,
     DeleteContainerStateResponse,
+    DisableWorkerRequest,
     GetCacheOriginCredentialsResponse,
     GetCheckpointRestoreRequest,
     GetCheckpointRestoreResponse,
@@ -289,7 +290,7 @@ def toggle_worker_available(
 
 @router.post("/worker-repository/disable-worker", response_model=WorkerRecordResponse)
 def disable_worker(
-    request: WorkerIdRequest,
+    request: DisableWorkerRequest,
     service: WorkerRepo,
     principal: WorkerPrincipal,
 ) -> WorkerRecordResponse:

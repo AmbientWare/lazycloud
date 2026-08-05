@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from pathlib import Path
 from types import TracebackType
 
@@ -14,16 +12,6 @@ from lazycloud.cli.handler_workflows import HandlerLoadError, load_handler_objec
 from lazycloud.cli.main import normalize_global_flags
 from lazycloud.json_contracts import JsonValue, parse_json_object, parse_json_value
 from shared.app_identity import CLI_NAME
-from shared.http.compute import (
-    PoolCapacityExtendRequest,
-    PoolCapacityResponse,
-    PoolJoinCommandRequest,
-    PoolJoinCommandResponse,
-    PoolJoinTokenRequest,
-    PoolJoinTokenResponse,
-    PoolMachineListResponse,
-    PoolMachineResponse,
-)
 
 cli = build_admin_cli()
 
@@ -92,61 +80,6 @@ def test_cli_runtime_error_output_modes_are_stable_and_traceback_free(
         assert "Unexpected error" in captured.err
         assert "invalid token" in captured.err
         assert "--debug" in captured.err
-
-
-@dataclass
-class _FakePoolComputeClient:
-    extend_requests: list[tuple[str, PoolCapacityExtendRequest]] = field(default_factory=list)
-    token_requests: list[tuple[str, PoolJoinTokenRequest]] = field(default_factory=list)
-    revoked_pools: list[str] = field(default_factory=list)
-    command_requests: list[tuple[str, PoolJoinCommandRequest]] = field(default_factory=list)
-    machine_pools: list[str] = field(default_factory=list)
-
-    def extend_pool_capacity(
-        self,
-        pool_name: str,
-        request: PoolCapacityExtendRequest,
-    ) -> PoolCapacityResponse:
-        self.extend_requests.append((pool_name, request))
-        return PoolCapacityResponse(name=pool_name, max_spend_micros=10_000_000)
-
-    def create_pool_join_token(
-        self,
-        pool_name: str,
-        request: PoolJoinTokenRequest,
-    ) -> PoolJoinTokenResponse:
-        self.token_requests.append((pool_name, request))
-        return PoolJoinTokenResponse(
-            token="join-token",
-            expires_at=datetime(2026, 1, 1, 0, 30, tzinfo=UTC),
-        )
-
-    def revoke_pool_join_token(self, pool_name: str) -> None:
-        self.revoked_pools.append(pool_name)
-
-    def pool_join_command(
-        self,
-        pool_name: str,
-        request: PoolJoinCommandRequest,
-    ) -> PoolJoinCommandResponse:
-        self.command_requests.append((pool_name, request))
-        return PoolJoinCommandResponse(
-            command=f"{CLI_NAME} agent join --token join-token",
-            expires_at=datetime(2026, 1, 1, 0, 30, tzinfo=UTC),
-        )
-
-    def list_pool_machines(
-        self,
-        pool_name: str,
-        *,
-        limit: int = 100,
-        cursor: str = "",
-    ) -> PoolMachineListResponse:
-        del limit, cursor
-        self.machine_pools.append(pool_name)
-        return PoolMachineListResponse(
-            data=[PoolMachineResponse(id="machine-1", pool_name=pool_name, status="ready")]
-        )
 
 
 def _json_object(raw: str, name: str) -> dict[str, JsonValue]:

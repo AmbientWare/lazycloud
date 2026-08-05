@@ -25,11 +25,15 @@ dist/agent-binarys/
 The Docker build runs `--help` on each target executable in both its build
 environment and Amazon Linux 2023 before export. The stager then computes each
 SHA-256 digest and records it in `manifest.json`.
-Mount the output root read-only at `LAZYCLOUD_AGENT_BINARY_DIR`. Set
-`LAZYCLOUD_AGENT_BINARY_VERSION` to the directory name and
-`LAZYCLOUD_AGENT_BINARY_SHA256_BY_ARCH` to a JSON object containing the
-manifest's `linux/amd64` and `linux/arm64` digests. Attached hosts select and
-verify the digest for their architecture; AWS node classes consume `amd64`.
+Mount the output root read-only at `LAZYCLOUD_AGENT_BINARY_DIR`. The mount is
+the deployment's; which version it holds and what that version must hash to are
+facts of the release that filled it, so neither is set by hand. The control
+plane resolves both from the release manifest at
+`LAZYCLOUD_RELEASE_MANIFEST_URL` (see `deploy/aws-release-assets/README.md`)
+and serves that version out of this directory — a mount holding a different
+version than the release published serves nothing. Attached hosts select and
+verify the digest for their architecture; a connected-AWS release publishes
+`linux/amd64`, which is what AWS node classes consume.
 
 The release workflow uploads this directory as a GitHub Actions artifact. It
 does not publish the executables to a package index, object store, or release.

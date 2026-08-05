@@ -100,6 +100,7 @@ class ComputeCapacityOperationRecord(ContractModel):
     join_attempt: int = Field(default=1, ge=1)
     shape: dict[str, JsonValue] = Field(default_factory=dict)
     failure_code: CapacityFailureCode | None = None
+    failure_count: int = Field(default=0, ge=0)
     last_error: str = Field(default="", max_length=TERMINAL_REASON_MAX_LENGTH)
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
@@ -126,6 +127,7 @@ class ComputeProviderInstanceRecord(ContractModel):
     billing_renewal_at: datetime | None = None
     bootstrap_phase: MachineBootstrapPhase = MachineBootstrapPhase.Requested
     bootstrap_failure_reason: MachineBootstrapFailureReason | None = None
+    bootstrap_failure_detail: str = ""
     bootstrap_observed_at: datetime = Field(default_factory=utc_now)
     launch_attempt: int = Field(default=1, ge=1)
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
@@ -376,7 +378,12 @@ class ComputePoolRepository:
         )
 
     def upsert(self, record: ComputePoolRecord) -> ComputePoolRecord:
-        record = ComputePoolRecord.model_validate(record.model_dump(mode="python"))
+        # The immutability comparison below is by identity, and it runs before the
+        # store's own validation, so the record has to be typed by the time it
+        # gets there or an unchanged owner reads as a changed one. `dict(record)`
+        # rather than `model_dump`: dumping serializes, and a drifted record would
+        # raise the serializer warning here instead of where it was introduced.
+        record = ComputePoolRecord.model_validate(dict(record))
         current = self.get(record.id, for_update=True)
         if current is not None and (
             current.capacity_owner_id != record.capacity_owner_id
@@ -518,7 +525,7 @@ class ComputePoolRepository:
                 "provider_state": provider_state,
             }
         )
-        return self.upsert(ComputePoolRecord.model_validate(updated))
+        return self.upsert(updated)
 
     def apply_provider_state(
         self,
@@ -540,7 +547,7 @@ class ComputePoolRepository:
                 "provider_state": provider_state,
             }
         )
-        return self.upsert(ComputePoolRecord.model_validate(updated))
+        return self.upsert(updated)
 
     def _write_columns(self, record: ComputePoolRecord) -> None:
         row = self.session.scalars(
@@ -710,6 +717,21 @@ class ComputeCapacityOperationRepository:
             .order_by(ComputeCapacityOperationTable.created_at, ComputeCapacityOperationTable.id)
         )
         return [ComputeCapacityOperationRecord.model_validate(row.payload) for row in rows]
+
+    def peak_desired_unit(self, capacity_owner_id: str) -> int:
+        """Highest unit this owner has ever been driven to, released rows included.
+
+        Released operations stay readable precisely so this stays monotonic: it
+        is the durable answer to "has the pool ever reached its initial size",
+        which is what stops the sizer from buying back every machine the drain
+        controller retires.
+        """
+        highest = self.session.scalar(
+            select(func.max(ComputeCapacityOperationTable.desired_unit)).where(
+                ComputeCapacityOperationTable.capacity_owner_id == capacity_owner_id
+            )
+        )
+        return int(highest or 0)
 
     def upsert(self, record: ComputeCapacityOperationRecord) -> ComputeCapacityOperationRecord:
         current = self.get(record.capacity_owner_id, record.operation_id, for_update=True)

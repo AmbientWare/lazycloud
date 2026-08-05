@@ -374,4 +374,4 @@ VOLUME ["/var/lib/lazycloud"]
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
     CMD python -c "import shutil; from pathlib import Path; import container_worker_app.main; required=('tini','runc','buildah','skopeo','docker','ip','iptables','geesefs','mount-s3','lazycloud-sandbox-supervisor'); missing=[name for name in required if shutil.which(name) is None]; missing.extend(path for path in ('/usr/lib/podman/netavark','/usr/lib/podman/aardvark-dns') if not Path(path).exists()); raise SystemExit(1 if missing else 0)"
 ENTRYPOINT ["tini", "--"]
-CMD ["lazycloud-container-worker", "--persistent"]
+CMD ["lazycloud-container-worker"]

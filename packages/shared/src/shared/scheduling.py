@@ -9,6 +9,7 @@ from shared.capacity import CAPACITY_OWNER_ID_PATTERN
 from shared.compute_policy import ComputePlacementSource, ComputePlacementTarget
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
+from shared.routing import AgentBackendRoute
 from shared.timestamps import utc_now
 
 DEFAULT_CONTAINER_STATE_TTL_SECONDS = 900
@@ -102,12 +103,27 @@ class SchedulerWorkerRequest(ContractModel):
         )
 
 
+class WorkerUnavailableReason(StringEnum):
+    """Typed diagnosis for a worker leaving the schedulable set."""
+
+    RegistrationFailed = "registration_failed"
+    ReadinessValidationFailed = "readiness_validation_failed"
+    SourceCacheUnavailable = "source_cache_unavailable"
+    Draining = "draining"
+    MachineRetired = "machine_retired"
+    AgentDisconnected = "agent_disconnected"
+    OperatorCordon = "operator_cordon"
+    ShuttingDown = "shutting_down"
+
+
 class SchedulerWorkerRecord(ContractModel):
     worker_id: str
     pool_name: str
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     machine_id: str = ""
     status: SchedulerWorkerStatus = SchedulerWorkerStatus.Pending
+    unavailable_reason: WorkerUnavailableReason | None = None
+    unavailable_detail: str = Field(default="", max_length=512)
     gpu_type: str = ""
     runtime_class: str = ""
     runtime_classes: list[str] = Field(default_factory=list)
@@ -167,42 +183,16 @@ class SchedulerContainerState(ContractModel):
         return value
 
 
-class SchedulerBackendRoute(ContractModel):
-    route_id: str
-    workspace_id: str = ""
-    pool_name: str = ""
-    machine_id: str = ""
-    worker_id: str = ""
-    container_id: str = ""
-    kind: str = "container"
-    port: int = 0
-    protocol: str = "tcp"
-    transport: str = "tsnet_restricted"
-    local_target: str = ""
-    proxy_target: str = ""
-    state: str = "opening"
-    error: str = ""
-    updated_at: int = 0
-
-    @field_validator("port")
-    @classmethod
-    def route_port_cannot_be_negative(cls, value: int) -> int:
-        if value < 0:
-            msg = "backend route port cannot be negative"
-            raise ValueError(msg)
-        return value
-
-
 class SchedulerContainerAddress(ContractModel):
     container_id: str
     address: str = ""
-    route: SchedulerBackendRoute | None = None
+    route: AgentBackendRoute | None = None
 
 
 class SchedulerContainerAddressMap(ContractModel):
     container_id: str
     address_map: dict[int, str] = Field(default_factory=dict)
-    routes: list[SchedulerBackendRoute] = Field(default_factory=list)
+    routes: list[AgentBackendRoute] = Field(default_factory=list)
 
 
 class WorkerCapacityPlan(ContractModel):

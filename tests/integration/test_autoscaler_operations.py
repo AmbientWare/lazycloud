@@ -169,7 +169,7 @@ def _autoscaler_operations(
         gateway_http_url=gateway_http_url,
     )
     endpoints = EndpointControlService(services, gateway_http_url=gateway_http_url)
-    pods = PodControlService(services)
+    pods = PodControlService(services, redis=redis)
     return AutoscalerOperationsService(
         services,
         task_queue_autoscaler=TaskQueueAutoscalingService(

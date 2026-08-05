@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from itertools import count
 from urllib.parse import parse_qsl, urlsplit
 from uuid import uuid4
 
@@ -28,8 +29,10 @@ from control.service import ControlPlaneService
 from database.repositories.compute import (
     AwsAccountConnectionRepository,
     ComputePoolRepository,
+    ComputeProviderInstanceRepository,
 )
 from gateway.provider_enrollment import ProviderNodeEnrollmentService
+from provider_aws import AWS_STS_PROOF_NONCE_KEY
 from provider_clients import AwsProviderNodeIdentityAdapter, ProviderNodeIdentityHttpResponse
 from scheduler.state import SchedulerWorkerRecord
 from shared.aws_connections import (
@@ -52,6 +55,7 @@ from shared.compute_policy import (
     ComputePoolVisibility,
 )
 from shared.errors import InvalidInputError, UpstreamUnavailableError
+from shared.events import EventLevel
 from shared.http.provider_nodes import (
     ProviderNodeBootstrapFailureRequest,
     ProviderNodeBootstrapPhaseRequest,
@@ -237,14 +241,20 @@ def test_provider_node_enrollment_rejects_cross_workspace_connection(
     assert default_pool.workspace_id != cross_workspace_pool.workspace_id
 
 
-def test_provider_node_enrollment_rejects_changed_pool_identity(
+def test_provider_node_enrollment_rejects_an_instance_the_pool_does_not_own(
     isolated_services: ApiServices,
 ) -> None:
-    pool = _seed_connection_and_pool(isolated_services)
-    enrollment = _service(isolated_services, _PooledProvider(resource_id="replacement-pool"))
+    """Membership is decided from durable inventory, not from a provider call.
 
-    with pytest.raises(UpstreamUnavailableError, match="identity changed"):
-        enrollment.enroll(_request(pool.id))
+    This route is unauthenticated, so it must not reach the customer's AWS
+    account to answer. An instance the reconciler has not recorded for this
+    pool is refused, and the one refresh it may request is rate limited.
+    """
+    pool = _seed_connection_and_pool(isolated_services)
+    enrollment = _service(isolated_services, _PooledProvider())
+
+    with pytest.raises(UpstreamUnavailableError, match="still refreshing"):
+        enrollment.enroll(_request(pool.id, provider_instance_id="i-0fedcba987654321f"))
 
 
 def test_provider_node_bootstrap_failure_is_durable_after_identity_verification(
@@ -266,6 +276,49 @@ def test_provider_node_bootstrap_failure_is_durable_after_identity_verification(
 
     assert observed.phase is MachineBootstrapPhase.Failed
     assert observed.failure_reason is MachineBootstrapFailureReason.AgentEnrollmentFailed
+
+
+def test_bootstrap_failure_excerpt_is_sanitized_persisted_and_leaves_an_event(
+    isolated_services: ApiServices,
+) -> None:
+    """The excerpt is the only diagnosis that leaves an unreachable machine.
+
+    It is accepted only behind identity verification, has its control
+    characters stripped before it becomes durable, and produces an error event
+    an operator can find without knowing which instance to ask about.
+    """
+    pool = _seed_connection_and_pool(isolated_services)
+    enrollment = replace(
+        _service(isolated_services, _PooledProvider()), events=isolated_services.events
+    )
+
+    enrollment.report_failure(
+        ProviderNodeBootstrapFailureRequest(
+            enrollment_request_id=pool.id,
+            provider=ProviderKind.Aws,
+            region=_REGION,
+            provider_instance_id=_INSTANCE_ID,
+            identity_proof_url=_presigned_url(),
+            failure_reason=MachineBootstrapFailureReason.AgentDownloadFailed,
+            diagnostic_excerpt="curl: (22) 404\x1b[31m for artifact\x00 url",
+        )
+    )
+
+    with isolated_services.context.database.session() as session:
+        record = ComputeProviderInstanceRepository(session).get_for_pool_instance(
+            pool.id,
+            _INSTANCE_ID,
+        )
+    assert record is not None
+    assert record.bootstrap_failure_detail == "curl: (22) 404[31m for artifact url"
+    events = [
+        event
+        for event in isolated_services.events.list()
+        if event.action == "provider-node.bootstrap-failed"
+    ]
+    assert len(events) == 1
+    assert events[0].level is EventLevel.Error
+    assert events[0].data["failure_reason"] == "agent_download_failed"
 
 
 def test_provider_node_bootstrap_phase_is_durable_after_identity_verification(
@@ -364,13 +417,29 @@ def _seed_connection_and_pool(
                 updated_at=now,
             )
         )
-        return ComputePoolRepository(session).upsert(
+        pool = ComputePoolRepository(session).upsert(
             _pool(
                 workspace_id=workspace_id,
                 pool_id=str(uuid4()),
                 name="aws-capacity",
             )
         )
+        # The verifier reads the reconciler's durable inventory, never the
+        # provider, so a node this pool owns has to be in it.
+        ComputeProviderInstanceRepository(session).records.create(
+            {
+                "id": str(uuid4()),
+                "provider": pool.provider_ref,
+                "offer_id": _OFFER_ID,
+                "status": "active",
+                "source": "workspace_policy",
+                "pool_id": pool.id,
+                "instance_type": "i4i.xlarge",
+                "instance_id": _INSTANCE_ID,
+            },
+            status="active",
+        )
+        return pool
 
 
 def _pool(*, workspace_id: str, pool_id: str, name: str) -> ComputePoolRecord:
@@ -401,12 +470,16 @@ def _pool(*, workspace_id: str, pool_id: str, name: str) -> ComputePoolRecord:
     )
 
 
-def _request(pool_id: str) -> ProviderNodeEnrollmentRequest:
+def _request(
+    pool_id: str,
+    *,
+    provider_instance_id: str = _INSTANCE_ID,
+) -> ProviderNodeEnrollmentRequest:
     return ProviderNodeEnrollmentRequest(
         enrollment_request_id=pool_id,
         provider=ProviderKind.Aws,
         region=_REGION,
-        provider_instance_id=_INSTANCE_ID,
+        provider_instance_id=provider_instance_id,
         identity_proof_url=_presigned_url(),
         machine_fingerprint="provider-node-machine",
         hostname="ip-10-0-0-10",
@@ -421,10 +494,16 @@ def _request(pool_id: str) -> ProviderNodeEnrollmentRequest:
     )
 
 
+_PROOF_NONCE = count(1)
+
+
 def _presigned_url() -> str:
     request = AWSRequest(
         method="GET",
-        url=(f"https://sts.{_REGION}.amazonaws.com/?Action=GetCallerIdentity&Version=2011-06-15"),
+        url=(
+            f"https://sts.{_REGION}.amazonaws.com/?Action=GetCallerIdentity&Version=2011-06-15"
+            f"&{AWS_STS_PROOF_NONCE_KEY}={next(_PROOF_NONCE):032x}"
+        ),
     )
     SigV4QueryAuth(
         Credentials(
@@ -461,19 +540,35 @@ def _offer() -> ComputeOffer:
     )
 
 
-def _bootstrap(pool: ComputePoolRecord, offer: ComputeOffer) -> ProviderPoolBootstrap:
-    del offer
-    return ProviderPoolBootstrap(
-        control_plane_url="https://control.example.com",
-        enrollment_request_id=pool.id,
-        agent_version="0.1.0",
-        agent_sha256="a" * 64,
-        agent_binary_url=(
-            f"https://s3.us-east-1.amazonaws.com/releases/agents/0.1.0/{'a' * 64}/"
-            "lazycloud-agent-linux-amd64"
-        ),
-        worker_image_digest=f"registry.example.com/worker@sha256:{'b' * 64}",
-    )
+class _Bootstrap:
+    """A pool bootstrap provisioner with no tailnet behind it."""
+
+    def __init__(self) -> None:
+        self.released: list[str] = []
+
+    def bootstrap(
+        self,
+        pool: ComputePoolRecord,
+        offer: ComputeOffer,
+    ) -> ProviderPoolBootstrap:
+        del offer
+        return ProviderPoolBootstrap(
+            control_plane_url="https://control.example.com",
+            enrollment_request_id=pool.id,
+            agent_version="0.1.0",
+            agent_sha256="a" * 64,
+            agent_binary_url=(
+                f"https://s3.us-east-1.amazonaws.com/releases/agents/0.1.0/{'a' * 64}/"
+                "lazycloud-agent-linux-amd64"
+            ),
+            worker_image_digest=f"registry.example.com/worker@sha256:{'b' * 64}",
+        )
+
+    def release(self, pool: ComputePoolRecord) -> None:
+        self.released.append(pool.id)
+
+
+_bootstrap = _Bootstrap()
 
 
 def test_degraded_pool_still_accepts_provider_node_enrollment(

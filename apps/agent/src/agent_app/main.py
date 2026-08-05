@@ -155,6 +155,10 @@ def main(argv: list[str] | None = None) -> None:
     except (OSError, RuntimeError, ValueError) as exc:
         parser.exit(1, f"error: {exc}\n")
     print(result.model_dump_json())
+    if isinstance(result, AgentDaemonRunResult) and result.authority_revoked:
+        # A revoked agent has finished for good. Exiting non-zero is what tells
+        # the service manager this was not a clean stop to be restarted.
+        parser.exit(1)
 
 
 def _add_service_options(

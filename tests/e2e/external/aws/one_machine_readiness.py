@@ -13,7 +13,7 @@ from collections.abc import Sequence
 
 from lazycloud.cli.control import compute_client
 from shared.aws_connections import AwsAccountConnectionPhase
-from shared.compute_enrollment import MachineBootstrapPhase
+from shared.compute_enrollment import MachineServiceState
 from shared.compute_policy import AwsWorkspaceComputePolicy, ComputePlacementTarget
 from shared.http.compute_policy import (
     WorkspaceComputeInstanceResponse,
@@ -72,7 +72,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ready = [
             item
             for item in connected
-            if item.bootstrap_phase is MachineBootstrapPhase.Ready and item.machine_id is not None
+            if item.service_state is MachineServiceState.Serving and item.machine_id is not None
         ]
         if (
             summary.instances.total == 1

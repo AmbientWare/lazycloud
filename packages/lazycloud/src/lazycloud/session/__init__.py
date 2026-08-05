@@ -25,10 +25,6 @@ from lazycloud.session.deployment import (
     DeploymentResourceClient,
     DeploymentSubmission,
 )
-from lazycloud.session.private_pool import (
-    PrivatePoolClient,
-    PrivatePoolControlClient,
-)
 from lazycloud.session.task import (
     FunctionCall,
     Task,
@@ -65,11 +61,6 @@ class Client:
         repr=False,
     )
     task_control_client: TaskControlClient | None = field(default=None, init=False, repr=False)
-    private_pool_client: PrivatePoolControlClient | None = field(
-        default=None,
-        init=False,
-        repr=False,
-    )
     compute_control_client: ComputeControlChannel | None = field(
         default=None,
         init=False,
@@ -90,7 +81,6 @@ class Client:
         deployment_client: DeploymentControlClient | None = None,
         deployment_resource_client: DeploymentResourceClient | None = None,
         task_control_client: TaskControlClient | None = None,
-        private_pool_client: PrivatePoolControlClient | None = None,
         compute_control_client: ComputeControlChannel | None = None,
         observability_client: ObservabilityClient | None = None,
         endpoint: str | None = None,
@@ -100,7 +90,6 @@ class Client:
         self.deployment_client = deployment_client
         self.deployment_resource_client = deployment_resource_client
         self.task_control_client = task_control_client
-        self.private_pool_client = private_pool_client
         self.compute_control_client = compute_control_client
         self.observability_client = observability_client
         if endpoint is not None:
@@ -198,22 +187,6 @@ class Client:
 
     def subscribe_task(self, task_id: str) -> TaskSubscription:
         return self.task_client.subscribe(task_id)
-
-    @property
-    def private_pools(self) -> PrivatePoolClient:
-        config = self._config()
-        return PrivatePoolClient(
-            client=self.private_pool_client,
-            capacity_client=(
-                ComputeClient(channel=self.compute_control_client, workspace=config.workspace)
-                if self.compute_control_client is not None
-                else None
-            ),
-            workspace=config.workspace,
-            endpoint=self.endpoint,
-            token=self.token,
-            timeout_seconds=self.timeout_seconds,
-        )
 
     @property
     def compute(self) -> ComputeClient:
@@ -354,8 +327,6 @@ __all__ = [
     "DeploymentControlClient",
     "DeploymentSubmission",
     "FunctionCall",
-    "PrivatePoolClient",
-    "PrivatePoolControlClient",
     "Task",
     "TaskBatch",
     "TaskClient",

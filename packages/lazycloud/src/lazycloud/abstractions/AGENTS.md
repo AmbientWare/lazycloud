@@ -1,10 +1,16 @@
 # SDK Abstractions
 
-Own decorator-facing resource objects over narrow client protocols. Each
-abstraction translates `RuntimeError` (including `HttpApiError`) once into its
-typed operation error with the cause preserved. Invocation targeting uses
-`resolve_invocation_target`; an already bound `stub_id` wins over name
-resolution. Depend only on shared, SDK clients/session, and sibling
-abstractions. Progress uses terminal hooks, never direct printing. Exercise
-targeting/serve/deployment-binding changes through a representative public
-deploy plus remote operation.
+The decorator-facing resource objects a user holds, built over narrow client
+protocols.
+
+Each abstraction translates a transport error into its own typed operation error
+exactly once, preserving the cause. Translating twice loses the original;
+translating nowhere leaks transport detail into user code.
+
+Invocation targeting goes through the shared resolver, and an already-bound
+identifier wins over name resolution—a handle the user already has must not
+silently retarget.
+
+Depend only on `shared`, the SDK clients and session, and sibling abstractions.
+Report progress through terminal hooks, never by printing directly: a library
+that writes to stdout is a library nothing can embed.

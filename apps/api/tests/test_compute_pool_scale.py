@@ -186,7 +186,7 @@ def test_pool_scale_is_workspace_scoped_and_idempotently_returns_durable_capacit
     services = replace(services_with_compute, gateway_service=gateway)
     raw_token, _record = AuthService(isolated_services.context).create_token(
         "pool-scale",
-        kind=TokenKind.Workspace,
+        kind=TokenKind.Admin,
     )
     client = client_stack.enter_context(TestClient(create_app(services)))
     headers = {"Authorization": f"Bearer {raw_token}"}
@@ -226,16 +226,17 @@ def test_pool_scale_is_workspace_scoped_and_idempotently_returns_durable_capacit
         headers=headers,
     )
 
-    assert cross_workspace.status_code == 403
+    assert cross_workspace.status_code == 404
     assert invalid.status_code == 422
     assert blocked.status_code == 409
     assert blocked.json() == {
-        "detail": f"compute pool {pool.name!r} has active capacity reservations"
+        "detail": f"compute pool {pool.name!r} has active capacity reservations",
+        "code": "conflict",
     }
     assert first.status_code == 200, first.text
     assert repeated.status_code == 200, repeated.text
     assert state.status_code == 200, state.text
-    assert cross_workspace_state.status_code == 403
+    assert cross_workspace_state.status_code == 404
     expected = PoolScaleResponse(
         name=pool.name,
         desired_machines=0,
@@ -288,16 +289,32 @@ def _seed_connection(services: ApiServices) -> str:
     return workspace_id
 
 
-def _bootstrap(pool: ComputePoolRecord, offer: ComputeOffer) -> ProviderPoolBootstrap:
-    del offer
-    return ProviderPoolBootstrap(
-        control_plane_url="https://control.example.com",
-        enrollment_request_id=pool.id,
-        agent_version="0.1.0",
-        agent_sha256="a" * 64,
-        agent_binary_url=(
-            f"https://s3.us-east-1.amazonaws.com/releases/agents/0.1.0/{'a' * 64}/"
-            "lazycloud-agent-linux-amd64"
-        ),
-        worker_image_digest=f"registry.example.com/worker@sha256:{'b' * 64}",
-    )
+class _Bootstrap:
+    """A pool bootstrap provisioner with no tailnet behind it."""
+
+    def __init__(self) -> None:
+        self.released: list[str] = []
+
+    def bootstrap(
+        self,
+        pool: ComputePoolRecord,
+        offer: ComputeOffer,
+    ) -> ProviderPoolBootstrap:
+        del offer
+        return ProviderPoolBootstrap(
+            control_plane_url="https://control.example.com",
+            enrollment_request_id=pool.id,
+            agent_version="0.1.0",
+            agent_sha256="a" * 64,
+            agent_binary_url=(
+                f"https://s3.us-east-1.amazonaws.com/releases/agents/0.1.0/{'a' * 64}/"
+                "lazycloud-agent-linux-amd64"
+            ),
+            worker_image_digest=f"registry.example.com/worker@sha256:{'b' * 64}",
+        )
+
+    def release(self, pool: ComputePoolRecord) -> None:
+        self.released.append(pool.id)
+
+
+_bootstrap = _Bootstrap()

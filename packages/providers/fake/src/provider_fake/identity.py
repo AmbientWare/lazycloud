@@ -18,6 +18,7 @@ from itertools import count
 from botocore.auth import SigV4QueryAuth
 from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials
+from provider_aws.provider_node_identity import AWS_STS_PROOF_NONCE_KEY
 
 _STS_ROLE_PRINCIPAL_ID = "AROA0123456789ABCDEFG"
 
@@ -27,16 +28,19 @@ _PROOF_NONCE = count(1)
 def fake_presigned_proof_url(region: str, instance_id: str) -> str:
     """Presign a dummy STS GetCallerIdentity URL exactly as a node agent would.
 
-    Credentials are derived from the instance id plus a per-call nonce, so
-    every proof — including several for one instance signed within the same
-    second (phase reports, then enrollment) — hashes uniquely for the
-    single-use replay guard.
+    Uniqueness comes from the signed nonce parameter, as it does in production.
+    Deriving it from the credentials instead — which a real instance role cannot
+    vary — is what let a node mint two identical proofs within one second and be
+    refused by its own replay guard, with nothing here to catch it.
     """
     request = AWSRequest(
         method="GET",
-        url=(f"https://sts.{region}.amazonaws.com/?Action=GetCallerIdentity&Version=2011-06-15"),
+        url=(
+            f"https://sts.{region}.amazonaws.com/?Action=GetCallerIdentity&Version=2011-06-15"
+            f"&{AWS_STS_PROOF_NONCE_KEY}={next(_PROOF_NONCE):032x}"
+        ),
     )
-    seed = hashlib.sha256(f"{instance_id}:{next(_PROOF_NONCE)}".encode()).hexdigest()
+    seed = hashlib.sha256(instance_id.encode()).hexdigest()
     SigV4QueryAuth(
         Credentials(
             access_key=f"ASIA{seed[:16].upper()}",

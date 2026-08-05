@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from compute.policy import WorkspaceComputePolicyService
 from fastapi import APIRouter, Depends
-from shared.compute_policy import WorkspaceComputePolicy
+from shared.compute_policy import AwsWorkspaceComputePolicy, WorkspaceComputePolicy
 from shared.http.compute_policy import (
     ComputeCapacitySummaryResponse,
     ComputeCatalogInstanceResponse,
@@ -13,6 +13,7 @@ from shared.http.compute_policy import (
     ResolvedComputePlacementResponse,
     WorkspaceComputeInstanceListResponse,
     WorkspaceComputeInstanceResponse,
+    WorkspaceComputePolicyPatchRequest,
     WorkspaceComputePolicyResponse,
     WorkspaceComputePolicyUpdateRequest,
     WorkspaceComputeSummaryResponse,
@@ -58,6 +59,29 @@ def update_workspace_compute_policy(
             expected_revision=request.expected_revision,
             default_placement=request.default_placement,
             aws=request.aws,
+        )
+    )
+
+
+@router.patch(
+    "/policy",
+    response_model=WorkspaceComputePolicyResponse,
+    operation_id="patch_workspace_compute_policy",
+)
+def patch_workspace_compute_policy(
+    request: WorkspaceComputePolicyPatchRequest,
+    workspace_id: write_workspace,
+    service: WorkspaceComputePolicyService = Depends(workspace_compute_policy_service),
+) -> WorkspaceComputePolicyResponse:
+    current = service.get_policy(workspace=workspace_id)
+    changed = request.aws.model_dump(exclude_none=True)
+    merged = current.aws.model_copy(update=changed) if changed else current.aws
+    return _policy_response(
+        service.update_policy(
+            workspace=workspace_id,
+            expected_revision=request.expected_revision,
+            default_placement=request.default_placement or current.default_placement,
+            aws=AwsWorkspaceComputePolicy.model_validate(dict(merged)),
         )
     )
 
@@ -145,15 +169,18 @@ def list_workspace_compute_instances(
                 provider=item.record.provider,
                 region=item.region,
                 instance_type=item.record.instance_type,
-                status=item.bootstrap_phase.value,
+                status=item.service_state.value,
                 gpu=item.record.gpu,
                 gpu_count=item.record.gpu_count,
                 cpu_millicores=item.record.cpu_millicores,
                 memory_mb=item.record.memory_mb,
                 bootstrap_phase=item.bootstrap_phase,
+                service_state=item.service_state,
                 bootstrap_failure_reason=item.bootstrap_failure_reason,
+                bootstrap_failure_detail=item.bootstrap_failure_detail,
                 bootstrap_observed_at=item.bootstrap_observed_at,
                 launch_attempt=item.record.launch_attempt,
+                booted_template_version=item.booted_template_version,
                 created_at=item.record.created_at,
             )
             for item in service.instances(workspace=workspace_id)

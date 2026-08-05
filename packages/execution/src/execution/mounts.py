@@ -52,7 +52,6 @@ def source_code_mounts(
     if record is None:
         return []
 
-    download_url = ""
     try:
         download_url = object_storage.generate_presigned_get_url_for_workspace(
             workspace_id=workspace_id,
@@ -60,8 +59,12 @@ def source_code_mounts(
             key=record.key,
             expires_seconds=900,
         )
-    except Exception:
-        download_url = ""
+    except Exception as exc:
+        # Without a URL the worker reads `local_path`, which exists only on a
+        # machine that happens to share the filesystem. That is not a weaker
+        # tier, it is a different machine's disk.
+        msg = f"source code download URL is unavailable: {type(exc).__name__}"
+        raise UpstreamUnavailableError(msg) from exc
 
     return [
         RequestMount(

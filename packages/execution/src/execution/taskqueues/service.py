@@ -93,7 +93,7 @@ class TaskQueuePreemptedResult:
 @dataclass(slots=True)
 class TaskQueueControlService:
     services: ExecutionServices
-    redis: RedisClient = field(default_factory=RedisClient.from_settings)
+    redis: RedisClient
     gateway_http_url: str = ""
     control_plane: ControlPlaneService = field(init=False)
 

@@ -43,6 +43,7 @@ from images.building.lifecycle import (
     image_build_container_ttl_key,
     image_build_log_phase,
     image_build_scheduler_container_state_key,
+    image_build_stream_event_key,
     plan_image_build_cancellation,
     plan_image_build_complete_event,
     plan_image_build_failure_event,
@@ -96,10 +97,6 @@ from images.building.references import (
     image_build_source_plan,
     parse_image_source_reference,
     pin_dockerfile_base_images,
-)
-from images.building.requirements import (
-    load_requirements_file,
-    sanitize_python_packages,
 )
 from images.building.work import image_build_work_plan, image_has_build_work
 
@@ -159,9 +156,9 @@ __all__ = [
     "image_build_log_phase",
     "image_build_scheduler_container_state_key",
     "image_build_source_plan",
+    "image_build_stream_event_key",
     "image_build_work_plan",
     "image_has_build_work",
-    "load_requirements_file",
     "marshal_registry_credentials",
     "parse_image_source_reference",
     "pin_dockerfile_base_images",
@@ -186,6 +183,5 @@ __all__ = [
     "render_pip_install_command",
     "render_uv_project_sync_command",
     "resolve_base_image_digest",
-    "sanitize_python_packages",
     "unmarshal_registry_credentials",
 ]

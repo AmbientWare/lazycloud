@@ -64,6 +64,17 @@ variable "agent_proxy_port" {
   }
 }
 
+variable "control_plane_port" {
+  description = "TCP port the control plane serves to agents and workers over the tailnet."
+  type        = number
+  default     = 9000
+
+  validation {
+    condition     = var.control_plane_port >= 1024 && var.control_plane_port <= 65535
+    error_message = "control_plane_port must be an unprivileged TCP port."
+  }
+}
+
 variable "gateway_auth_key_expiry_seconds" {
   description = "Lifetime of the reusable gateway enrollment key. Rotate the deployed secret before this expires."
   type        = number

@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from agent.binary import AgentBinarySettings
 from compute.reclaim import ComputeReclaimSettings
 from gateway.settings import GatewaySettings
 from images.settings import ImageBuildContainerSettings
@@ -21,7 +21,7 @@ from observability.settings import (
     VolumeMeteringSettings,
     WorkspaceChangeStreamSettings,
 )
-from provider_clients.settings import AwsAccountConnectionSettings, AwsCapacitySettings
+from provider_clients.release import resolve_deployment_release
 from shared.app_identity import SCHEDULER_PROCESS_NAME
 from shared.process_liveness import HeartbeatFile, heartbeat_path
 from storage.image_archive import ImageArchiveSettings
@@ -204,6 +204,10 @@ def build_scheduler_runtime(
     interval_seconds: float = 1.0,
 ) -> SchedulerRuntime:
     scheduler_settings = SchedulerProcessSettings()
+    # The API launches nodes from the same release facts; a scheduler resolving a
+    # different one shows up as launch templates alternating between versions.
+    release = resolve_deployment_release()
+    print(f"scheduler {release.describe()}", file=sys.stderr, flush=True)
     return SchedulerRuntime.create(
         public_gateway_http_url=public_gateway_http_url,
         runtime_callback_http_url=runtime_callback_http_url,
@@ -225,9 +229,9 @@ def build_scheduler_runtime(
             backend_routes=BackendRouteSettings(),
         ),
         capacity=SchedulerCapacitySettings(
-            aws_connections=AwsAccountConnectionSettings(),
-            aws_capacity=AwsCapacitySettings(),
-            agent_binaries=AgentBinarySettings(),
+            aws_connections=release.aws_connections,
+            aws_capacity=release.aws_capacity,
+            agent_binaries=release.agent_binaries,
             reclaim=ComputeReclaimSettings().to_policy(),
         ),
         interval_seconds=interval_seconds,

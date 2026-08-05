@@ -10,12 +10,8 @@ from shared.contracts import ContractModel
 from shared.routing import BackendRouteTransport
 
 from compute.telemetry import (
-    AgentMachineMetrics,
-    AgentMachineStatus,
     AgentTelemetryState,
     agent_machine_connected,
-    agent_machine_last_seen,
-    agent_machine_status,
 )
 
 DEFAULT_PRIVATE_TRANSPORT = "tsnet_restricted"
@@ -31,20 +27,6 @@ class PrivatePoolFallback(StrEnum):
     Internal = "internal"
     Wait = "wait"
     Fail = "fail"
-
-
-class WorkerStatus(StrEnum):
-    Pending = "pending"
-    Available = "available"
-    Disabled = "disabled"
-    Unknown = "unknown"
-
-
-class MachineStatus(StrEnum):
-    Registered = "registered"
-    Pending = "pending"
-    Available = "available"
-    Disabled = "disabled"
 
 
 class ComputePoolSource(StrEnum):
@@ -200,33 +182,6 @@ class PrivatePoolProjection(ContractModel):
     machine_count: int = 0
     ready_machine_count: int = 0
     reserved_nodes: int = 0
-
-
-class WorkerCapacityState(ContractModel):
-    status: WorkerStatus = WorkerStatus.Unknown
-    machine_id: str = ""
-    pool_name: str = ""
-    total_cpu_millicores: int = 0
-    free_cpu_millicores: int = 0
-    total_memory_mb: int = 0
-    free_memory_mb: int = 0
-    total_gpu_count: int = 0
-    free_gpu_count: int = 0
-    active_container_ids: list[str] = Field(default_factory=list)
-
-
-class MachineProjection(ContractModel):
-    id: str
-    cpu_millicores: int = 0
-    memory_mb: int = 0
-    gpu: str = ""
-    gpu_count: int = 0
-    status: MachineStatus
-    pool_name: str = ""
-    provider_name: str = "agent"
-    created: str = ""
-    last_keepalive: str = ""
-    metrics: AgentMachineMetrics
 
 
 def normalize_backend_route_transport(value: str) -> BackendRouteTransport:
@@ -413,94 +368,6 @@ def project_private_pool(
         ),
         reserved_nodes=state.reserved_nodes,
     )
-
-
-def project_agent_machine(
-    state: AgentTelemetryState | None,
-    *,
-    worker: WorkerCapacityState | None = None,
-    now: datetime | None = None,
-) -> MachineProjection:
-    if state is None:
-        return MachineProjection(
-            id="",
-            status=MachineStatus.Registered,
-            metrics=AgentMachineMetrics(),
-        )
-    last_seen = agent_machine_last_seen(state)
-    return MachineProjection(
-        id=state.machine_id,
-        cpu_millicores=state.cpu_millicores,
-        memory_mb=state.memory_mb,
-        gpu=",".join(state.gpus),
-        gpu_count=state.gpu_count,
-        status=agent_machine_public_status(state, worker=worker, now=now),
-        pool_name=state.pool_name,
-        created=format_compute_time(state.last_join_at),
-        last_keepalive=format_compute_time(last_seen),
-        metrics=project_agent_machine_metrics(state, worker=worker),
-    )
-
-
-def project_agent_machine_metrics(
-    state: AgentTelemetryState,
-    *,
-    worker: WorkerCapacityState | None = None,
-) -> AgentMachineMetrics:
-    total_cpu = state.cpu_millicores
-    total_memory = state.metrics.memory_total_mb or state.memory_mb
-    if worker is not None:
-        total_cpu = worker.total_cpu_millicores or total_cpu
-        total_memory = worker.total_memory_mb or total_memory
-        return state.metrics.model_copy(
-            update={
-                "cpu_utilization_pct": capacity_utilization_pct(
-                    worker.total_cpu_millicores,
-                    worker.free_cpu_millicores,
-                ),
-                "memory_utilization_pct": capacity_utilization_pct(
-                    worker.total_memory_mb,
-                    worker.free_memory_mb,
-                ),
-                "memory_used_mb": max(worker.total_memory_mb - worker.free_memory_mb, 0),
-                "memory_total_mb": total_memory,
-                "worker_count": 1,
-                "container_count": len(worker.active_container_ids),
-                "free_gpu_count": worker.free_gpu_count,
-            }
-        )
-    return state.metrics.model_copy(
-        update={
-            "memory_total_mb": total_memory,
-            "free_gpu_count": state.metrics.free_gpu_count,
-        }
-    )
-
-
-def agent_machine_public_status(
-    state: AgentTelemetryState,
-    *,
-    worker: WorkerCapacityState | None = None,
-    now: datetime | None = None,
-) -> MachineStatus:
-    if agent_machine_status(state, now=now) is AgentMachineStatus.PreflightFail:
-        return MachineStatus.Disabled
-    if not agent_machine_connected(state, now=now):
-        return MachineStatus.Registered
-    if worker is None:
-        return MachineStatus.Registered
-    if worker.status is WorkerStatus.Available:
-        return MachineStatus.Available
-    if worker.status is WorkerStatus.Disabled:
-        return MachineStatus.Disabled
-    return MachineStatus.Pending
-
-
-def capacity_utilization_pct(total: int, free: int) -> float:
-    if total <= 0:
-        return 0.0
-    used = max(total - free, 0)
-    return used * 100 / total
 
 
 def dollars_to_micros(value: float) -> int:

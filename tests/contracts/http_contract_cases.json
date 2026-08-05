@@ -73,6 +73,7 @@
       },
       "name": "valid_detail",
       "normalized": {
+        "code": "",
         "detail": "workspace access denied"
       }
     },

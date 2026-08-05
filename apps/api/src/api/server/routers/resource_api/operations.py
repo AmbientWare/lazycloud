@@ -130,10 +130,6 @@ def dispatch_scheduler_containers(
     _auth: admin_access,
     services: ApiServices = Depends(current_services),
 ) -> SchedulerContainerDispatchListResponse:
-    # Inject the container request service the deployment already builds. Without
-    # it this route raised "scheduler container request service was not injected",
-    # so the one command that reports why a request will not place was unusable
-    # exactly when it was needed.
     scheduler = Scheduler(
         services,
         workloads=SchedulerWorkloadControls(containers=services.scheduler_container_requests),

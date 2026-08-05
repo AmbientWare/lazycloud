@@ -15,7 +15,7 @@ from pydantic import JsonValue
 from shared.deployment_records import DeploymentSpec
 from shared.errors import ExpiredCursorError
 from shared.identity import TokenKind
-from shared.realtime.contracts import EventRecordType
+from shared.realtime.contracts import EventRecordType, create_cloud_event_record
 from shared.realtime.streams import LogStreamQuery
 from tests.real_redis import RealRedisActors
 
@@ -86,6 +86,33 @@ def test_redis_log_read_honors_clamp(real_redis_actors: RealRedisActors) -> None
     with pytest.raises(ExpiredCursorError):
         repo.read_logs(LogStreamQuery(workspace_id="workspace-1", seq_num=0, clamp=False))
     assert [log_record_from_redis(record).message for record in clamped] == ["retained"]
+
+
+def test_redis_log_batch_reads_back_in_capture_order(
+    real_redis_actors: RealRedisActors,
+) -> None:
+    # One Lua script stamps every entry it appends with the same millisecond, so a
+    # capture longer than ten lines is where entry-ID ordering stops agreeing with
+    # text ordering and a reader can hand the user a scrambled page.
+    repo = RedisEventStreamRepository(real_redis_actors.client())
+    messages = tuple(f"line-{index}" for index in range(24))
+    repo.append_container_log_batch(
+        container_id="container-1",
+        capture_id="capture-1",
+        first_sequence=0,
+        events=tuple(
+            create_cloud_event_record(
+                EventRecordType.ContainerLog,
+                _container_log_data(message=message),
+                event_id=f"batch-{message}",
+            )
+            for message in messages
+        ),
+    )
+
+    records = repo.read_logs(LogStreamQuery(workspace_id="workspace-1"))
+
+    assert [log_record_from_redis(record).message for record in records] == list(messages)
 
 
 def test_redis_event_repository_deletes_only_workspace_streams(
@@ -273,6 +300,31 @@ def _services_with_redis(
     return services
 
 
+def _container_log_data(
+    *,
+    message: str,
+    workspace_id: str = "workspace-1",
+    stub_id: str = "stub-1",
+    app_id: str = "app-1",
+    task_id: str = "task-1",
+    container_id: str = "container-1",
+    machine_id: str = "machine-1",
+    worker_id: str = "worker-1",
+) -> dict[str, JsonValue]:
+    return {
+        "workspace_id": workspace_id,
+        "stub_id": stub_id,
+        "app_id": app_id,
+        "task_id": task_id,
+        "container_id": container_id,
+        "machine_id": machine_id,
+        "worker_id": worker_id,
+        "message": message,
+        "stream": "stdout",
+        "timestamp": "2026-06-20T10:00:00Z",
+    }
+
+
 def _append_container_log(
     repo: RedisEventStreamRepository,
     *,
@@ -287,18 +339,16 @@ def _append_container_log(
 ) -> None:
     repo.append_event(
         EventRecordType.ContainerLog,
-        {
-            "workspace_id": workspace_id,
-            "stub_id": stub_id,
-            "app_id": app_id,
-            "task_id": task_id,
-            "container_id": container_id,
-            "machine_id": machine_id,
-            "worker_id": worker_id,
-            "message": message,
-            "stream": "stdout",
-            "timestamp": "2026-06-20T10:00:00Z",
-        },
+        _container_log_data(
+            message=message,
+            workspace_id=workspace_id,
+            stub_id=stub_id,
+            app_id=app_id,
+            task_id=task_id,
+            container_id=container_id,
+            machine_id=machine_id,
+            worker_id=worker_id,
+        ),
         event_id=f"event-{message.replace(' ', '-')}",
     )
 

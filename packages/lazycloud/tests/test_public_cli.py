@@ -17,18 +17,6 @@ from shared.http.compute import (
     ContainerWithAppResponse,
     MachineJoinCommandRequest,
     MachineJoinCommandResponse,
-    PoolCapacityExtendRequest,
-    PoolCapacityLaunchRequest,
-    PoolCapacityResponse,
-    PoolJoinCommandRequest,
-    PoolJoinCommandResponse,
-    PoolJoinTokenRequest,
-    PoolJoinTokenResponse,
-    PoolMachineListResponse,
-    PoolMachineResponse,
-    PoolOfferListResponse,
-    PoolOfferQuery,
-    PoolOfferResponse,
 )
 from shared.http.gateway import AttachToContainerResponse
 from shared.http.secrets import GetSecretResponse, SecretWireRecord
@@ -61,96 +49,6 @@ class FakeMachineJoinComputeClient:
 
     def remove_machine(self, machine_id: str) -> None:
         self.removed_machine_ids.append(machine_id)
-
-
-@dataclass
-class FakePoolComputeClient:
-    offer_requests: list[tuple[str, PoolOfferQuery]] = field(default_factory=list)
-    launch_requests: list[tuple[str, PoolCapacityLaunchRequest]] = field(default_factory=list)
-    extend_requests: list[tuple[str, PoolCapacityExtendRequest]] = field(default_factory=list)
-    token_requests: list[tuple[str, PoolJoinTokenRequest]] = field(default_factory=list)
-    command_requests: list[tuple[str, PoolJoinCommandRequest]] = field(default_factory=list)
-    revoked_pool_names: list[str] = field(default_factory=list)
-    machine_pool_names: list[str] = field(default_factory=list)
-
-    def list_pool_offers(
-        self,
-        pool_name: str,
-        request: PoolOfferQuery,
-    ) -> PoolOfferListResponse:
-        self.offer_requests.append((pool_name, request))
-        return PoolOfferListResponse(
-            data=[
-                PoolOfferResponse(
-                    id="cpu-large",
-                    provider="provider-a",
-                    instance_type="cpu-large",
-                    region="lab",
-                )
-            ]
-        )
-
-    def launch_pool_capacity(
-        self,
-        pool_name: str,
-        request: PoolCapacityLaunchRequest,
-    ) -> PoolCapacityResponse:
-        self.launch_requests.append((pool_name, request))
-        return PoolCapacityResponse(
-            name=pool_name,
-            reserved_nodes=request.node_count,
-            max_spend_micros=int(request.max_spend * 1_000_000),
-        )
-
-    def extend_pool_capacity(
-        self,
-        pool_name: str,
-        request: PoolCapacityExtendRequest,
-    ) -> PoolCapacityResponse:
-        self.extend_requests.append((pool_name, request))
-        return PoolCapacityResponse(
-            name=pool_name,
-            reserved_nodes=2,
-            max_spend_micros=int(request.max_spend * 1_000_000),
-        )
-
-    def create_pool_join_token(
-        self,
-        pool_name: str,
-        request: PoolJoinTokenRequest,
-    ) -> PoolJoinTokenResponse:
-        self.token_requests.append((pool_name, request))
-        return PoolJoinTokenResponse(
-            token="join-token",
-            expires_at=datetime(2026, 7, 20, tzinfo=UTC),
-        )
-
-    def revoke_pool_join_token(self, pool_name: str) -> None:
-        self.revoked_pool_names.append(pool_name)
-
-    def pool_join_command(
-        self,
-        pool_name: str,
-        request: PoolJoinCommandRequest,
-    ) -> PoolJoinCommandResponse:
-        self.command_requests.append((pool_name, request))
-        return PoolJoinCommandResponse(
-            command="agent join --token join-token",
-            expires_at=datetime(2026, 7, 20, tzinfo=UTC),
-        )
-
-    def list_pool_machines(
-        self,
-        pool_name: str,
-        *,
-        limit: int = 100,
-        cursor: str = "",
-    ) -> PoolMachineListResponse:
-        del limit, cursor
-        self.machine_pool_names.append(pool_name)
-        return PoolMachineListResponse(
-            data=[PoolMachineResponse(id="machine-1", pool_name=pool_name, status="ready")]
-        )
 
 
 @dataclass

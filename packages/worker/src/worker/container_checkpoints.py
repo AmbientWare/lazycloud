@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import shutil
 import tarfile
@@ -25,6 +24,8 @@ from worker.checkpoints import (
     CheckpointStatePayload,
     WorkerCheckpointStatus,
     build_checkpoint_plan,
+    checkpoint_archive_hash_and_size,
+    create_checkpoint_archive,
     create_checkpoint_state_payload,
     plan_checkpoint_persistence,
 )
@@ -163,8 +164,8 @@ class FilesystemCheckpointPersister:
         if plan.remove_existing_archive:
             archive_path.unlink(missing_ok=True)
         archive_path.parent.mkdir(parents=True, exist_ok=True)
-        _create_tar(checkpoint_path, archive_path, arcname=plan.checkpoint_id)
-        cache_hash, size_bytes = _file_hash_and_size(archive_path)
+        create_checkpoint_archive(checkpoint_path, archive_path, checkpoint_id=plan.checkpoint_id)
+        cache_hash, size_bytes = checkpoint_archive_hash_and_size(archive_path)
         try:
             if plan.upload_to_origin_storage:
                 self.uploader.upload_file(plan.origin_key, archive_path)
@@ -585,21 +586,6 @@ def _ensure_object(target: JsonObject, key: str) -> JsonObject:
     replacement: JsonObject = {}
     target[key] = replacement
     return replacement
-
-
-def _create_tar(source: Path, destination: Path, *, arcname: str) -> None:
-    with tarfile.open(destination, "w") as archive:
-        archive.add(source, arcname=arcname)
-
-
-def _file_hash_and_size(path: Path) -> tuple[str, int]:
-    hasher = hashlib.sha256()
-    size = 0
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            size += len(chunk)
-            hasher.update(chunk)
-    return hasher.hexdigest(), size
 
 
 def _iter_archive_members(source_path: Path) -> Iterable[Path]:

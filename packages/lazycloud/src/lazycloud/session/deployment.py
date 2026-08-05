@@ -277,7 +277,7 @@ class DeploymentClient(ControlClientConfigMixin):
         archive_prefix: tuple[str, ...] = ()
         # The source archive falls back to the working directory, so the handler is
         # checked against that same root even when no root was named. Validating only
-        # on an explicit root let an unimportable handler deploy successfully and fail
+        # on an explicit root lets an unimportable handler deploy successfully and fail
         # at request time, where the failure carries no diagnosis.
         selected_sync = self.sync_source if sync_source is None else sync_source
         validation_root = (

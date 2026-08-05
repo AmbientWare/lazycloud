@@ -773,7 +773,11 @@ def test_app_and_deployment_http_actions_follow_authorization_and_lifecycle_stat
 
 def _put_task_queue_run(services: ApiServices, stub_id: str) -> str:
     payload = pickle.dumps(TaskQueueInvocationEnvelope(args=(42,), kwargs={}))
-    return TaskQueueControlService(services).task_queue_put(stub_id, payload).task_id
+    return (
+        TaskQueueControlService(services, redis=services.redis())
+        .task_queue_put(stub_id, payload)
+        .task_id
+    )
 
 
 def _task_queue_message_count(services: ApiServices, stub_id: str) -> int:

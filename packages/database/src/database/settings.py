@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from pydantic import Field
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from shared.app_identity import ENV_PREFIX, NAME
+from shared.app_identity import ENV_PREFIX
+from shared.deployment_settings import MissingDeploymentSettingError
 
 
 class DatabaseApplicationName(StrEnum):
@@ -18,10 +19,9 @@ class DatabaseApplicationName(StrEnum):
 
 
 class DatabaseSettings(BaseSettings):
-    url: str = Field(
-        default=f"postgresql+psycopg://{NAME}:{NAME}@localhost:5432/{NAME}",
-        description="SQLAlchemy database URL for the production control-plane database.",
-    )
+    # Blank marks "nobody said", not a database. Which database a process reads
+    # and writes is a deployment fact, so there is nothing to fall back to.
+    url: str = ""
     echo: bool = False
     pool_size: int = 5
     max_overflow: int = 10
@@ -33,3 +33,12 @@ class DatabaseSettings(BaseSettings):
         env_prefix=f"{ENV_PREFIX}_DATABASE_",
         extra="ignore",
     )
+
+    @model_validator(mode="after")
+    def require_url(self) -> DatabaseSettings:
+        if not self.url.strip():
+            raise MissingDeploymentSettingError(
+                f"{ENV_PREFIX}_DATABASE_URL",
+                purpose="the control-plane PostgreSQL database this process reads and writes",
+            )
+        return self

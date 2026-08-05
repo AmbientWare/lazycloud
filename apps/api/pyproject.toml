@@ -22,7 +22,7 @@ dependencies = [
     "observability",
     "operations",
     "provider-clients",
-    "pydantic-settings>=2,<3",
+    "pydantic-settings>=2.4,<3",
     "scheduler",
     "storage",
     "storage-client",

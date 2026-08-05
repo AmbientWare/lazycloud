@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from urllib.parse import ParseResult, urlparse, urlsplit, urlunparse
+from urllib.parse import ParseResult, quote, urlparse, urlsplit, urlunparse
 
 from pydantic import Field
 
@@ -22,6 +22,12 @@ class StubUrlTarget(ContractModel):
     deployment_subdomain: str = ""
     public: bool = False
     ports: list[int] = Field(default_factory=list)
+
+
+def url_path_segment(value: str) -> str:
+    """Escape one value so it occupies exactly one path segment of a REST URL."""
+
+    return quote(value, safe="")
 
 
 def normalize_http_origin(value: str, *, field_name: str = "HTTP origin") -> str:

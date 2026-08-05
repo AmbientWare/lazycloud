@@ -45,12 +45,19 @@ DEFAULT_BOOTSTRAP_PHASE_DEADLINE_SECONDS: dict[str, int] = {
     MachineBootstrapPhase.Provisioning.value: 300,
     MachineBootstrapPhase.Booting.value: 300,
     MachineBootstrapPhase.Joining.value: 300,
+    MachineBootstrapPhase.Failed.value: 300,
 }
 """Machines stuck in one bootstrap phase are reclaimed after 5 minutes.
 
 Each phase deadline restarts on an observed phase transition, so a healthy but
 slow bootstrap gets the full window per phase while a machine that dies in any
 single phase is bounded to minutes, not a billed hour.
+
+`Failed` is bounded for the same reason and on the same clock. Without it a
+machine that reported why it failed ran and billed until someone noticed, while
+one that died silently was reclaimed in five minutes — so the boot path that
+reported nothing cost less than the one that reported everything. The window is
+what a machine gets to be looked at, not a licence to keep it.
 """
 
 DEFAULT_MAX_LAUNCH_ATTEMPTS = 3
@@ -188,7 +195,11 @@ class ComputeReclaimSettings(BaseSettings):
     @field_validator("bootstrap_phase_deadline_seconds")
     @classmethod
     def normalize_phase_deadlines(cls, value: dict[str, int]) -> dict[str, int]:
-        return _validated_phase_deadlines(value)
+        # Merged onto the defaults rather than replacing them. A phase absent
+        # from this map has no deadline at all, so a deployment tuning one phase
+        # would silently unbound the other four — machines that die in those
+        # phases would then never be reclaimed and would bill until noticed.
+        return {**DEFAULT_BOOTSTRAP_PHASE_DEADLINE_SECONDS, **_validated_phase_deadlines(value)}
 
     @field_validator("provider_bootstrap_phase_deadline_seconds")
     @classmethod

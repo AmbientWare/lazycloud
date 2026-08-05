@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -36,6 +37,7 @@ from images.building import (
     ImageBuildSessionPlan,
     ImageBuildStreamEventPlan,
     build_image_plan,
+    image_build_stream_event_key,
     plan_image_build_cancellation,
     plan_image_build_complete_event,
     plan_image_build_failure_event,
@@ -73,6 +75,8 @@ from images.publication import (
     ImageBuildPublicationPublishStatus,
     image_build_publication_from_execution,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 DEFAULT_IMAGE_BUILD_DUPLICATE_WAIT_TIMEOUT_SECONDS = 900.0
 DEFAULT_IMAGE_BUILD_DUPLICATE_WAIT_POLL_SECONDS = 0.5
@@ -811,6 +815,7 @@ class ImageBuildService:
                             workspace_id=workspace_id,
                         )
                 except Exception:
+                    LOGGER.debug("build claim heartbeat failed", exc_info=True)
                     continue
                 if not active:
                     return
@@ -987,12 +992,12 @@ class ImageBuildService:
     ) -> list[ImageBuildStreamEventPlan]:
         emitted: list[ImageBuildStreamEventPlan] = []
         existing_events = self.stream_events(build_id, workspace_id=workspace_id)
-        seen = {_stream_event_key(event) for event in existing_events}
+        seen = {image_build_stream_event_key(event) for event in existing_events}
         seen_messages = {event.message for event in existing_events if event.message}
         for event in result.events:
             if event.done:
                 continue
-            if _stream_event_key(event) in seen or (
+            if image_build_stream_event_key(event) in seen or (
                 event.message and not event.done and event.message in seen_messages
             ):
                 continue
@@ -1004,7 +1009,7 @@ class ImageBuildService:
                     sensitive_values=sensitive_values,
                 )
             )
-            seen.add(_stream_event_key(event))
+            seen.add(image_build_stream_event_key(event))
             if event.message:
                 seen_messages.add(event.message)
 
@@ -1391,13 +1396,13 @@ class ImageBuildService:
         settings = self.archive_settings
         if settings is None or self.archive_store is None:
             return False
-        try:
-            head = self.archive_store.head(
-                settings.physical_key(archive.object_key),
-                bucket=settings.bucket,
-            )
-        except Exception:
+        key = settings.physical_key(archive.object_key)
+        # An unreachable store must not read as "absent": the caller takes the
+        # archive row away from its owner on a False, and a build that cannot
+        # see the bytes has not established that they are gone.
+        if not self.archive_store.exists(key, bucket=settings.bucket):
             return False
+        head = self.archive_store.head(key, bucket=settings.bucket)
         return (
             head.size == archive.size_bytes
             and head.metadata.get("artifact-sha256") == archive.sha256
@@ -1955,20 +1960,6 @@ def _build_id_from_container_id(container_id: str) -> str:
     if not container_id.startswith("build-"):
         return ""
     return container_id.removeprefix("build-")
-
-
-def _stream_event_key(
-    event: ImageBuildStreamEventPlan,
-) -> tuple[str, str, str, str, str, bool, str]:
-    return (
-        event.kind.value,
-        event.build_id,
-        event.message,
-        event.status.value,
-        event.phase.value,
-        event.done,
-        event.error,
-    )
 
 
 def _is_terminal_build_status(status: BuildStatus) -> bool:

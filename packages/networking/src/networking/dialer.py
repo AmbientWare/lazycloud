@@ -46,6 +46,23 @@ class TailnetPeerResolver(Protocol):
     def resolve_peer_host(self, host: str) -> str: ...
 
 
+class TailnetPeerLookup(TailnetPeerWaiter, TailnetPeerResolver, Protocol):
+    """Whatever can answer where a peer lives.
+
+    Separate from the runtime because the answer does not have to come from a
+    tailnet client: a worker holds none and asks the agent instead, and requiring
+    a lifecycle it does not own would exclude it for no reason.
+    """
+
+
+class TailnetPeerRuntime(TailnetPeerLookup, Protocol):
+    """A tailnet client that resolves peers and owns its own lifecycle."""
+
+    def start(self) -> None: ...
+
+    def close(self) -> None: ...
+
+
 class BackendRouteDialerConfig(ContractModel):
     timeout_seconds: float = Field(default=DEFAULT_BACKEND_ROUTE_DIAL_TIMEOUT_SECONDS, gt=0)
     ready_poll_seconds: float = Field(default=DEFAULT_BACKEND_ROUTE_READY_POLL_SECONDS, gt=0)
@@ -99,7 +116,7 @@ class BackendRouteDialer:
         route_id = route.route_id
         if deadline is None:
             deadline = time.monotonic() + self.config.timeout_seconds
-        state = _route_state(route.state)
+        state = route.state
         if state is not BackendRouteState.Ready:
             msg = f"backend route {route_id} is {state.value}"
             raise RuntimeError(msg)
@@ -133,7 +150,7 @@ class BackendRouteDialer:
             if route is None:
                 msg = f"backend route {route_id} not found"
                 raise RuntimeError(msg)
-            state = _route_state(route.state)
+            state = route.state
             if state is BackendRouteState.Ready:
                 if not route.proxy_target:
                     msg = f"backend route {route_id} has no proxy target"
@@ -157,20 +174,34 @@ class BackendRouteDialer:
     ) -> BackendConnection:
         host = proxy_target_host(route.proxy_target)
         last_error: OSError | None = None
+        # The proxy target is dialed as written until that fails. Waiting on the
+        # peer first would put a netmap round trip in front of every connection
+        # to a peer that answers to its name perfectly well.
+        resolve_peer = False
         while _remaining_seconds(deadline) > 0:
             remaining = _remaining_seconds(deadline)
             if (
-                transport is BackendRouteTransport.TsnetRestricted
+                resolve_peer
+                and transport is BackendRouteTransport.TsnetRestricted
                 and host
                 and self.tailnet_peer_waiter is not None
             ):
                 wait_timeout = max(remaining - tailnet_dial_reserve_seconds(remaining), 0.001)
                 self.tailnet_peer_waiter.wait_for_peer(host, wait_timeout)
-            target = self._resolved_tailnet_target(route.proxy_target, transport, host)
+            target = (
+                self._resolved_tailnet_target(route.proxy_target, transport, host)
+                if resolve_peer
+                else route.proxy_target
+            )
             try:
                 return self.connector.connect(target, _remaining_seconds(deadline))
             except OSError as exc:
                 last_error = exc
+                if not resolve_peer:
+                    # The name did not connect. Every later attempt goes through
+                    # the netmap, which is where a stale peer gets corrected.
+                    resolve_peer = True
+                    continue
                 if _remaining_seconds(deadline) <= self.config.ready_poll_seconds:
                     break
                 time.sleep(self.config.ready_poll_seconds)
@@ -257,12 +288,6 @@ def _write_route_preface(
 def _backend_route_id(plan: BackendDialPlan) -> str:
     value = plan.metadata.get(BACKEND_ROUTE_ID_METADATA_KEY, "")
     return value.strip() if isinstance(value, str) else ""
-
-
-def _route_state(value: BackendRouteState | str) -> BackendRouteState:
-    if isinstance(value, BackendRouteState):
-        return value
-    return BackendRouteState(str(value))
 
 
 def _route_transport(value: BackendRouteTransport | str) -> BackendRouteTransport:

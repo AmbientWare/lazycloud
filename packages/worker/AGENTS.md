@@ -1,9 +1,14 @@
 # Worker Package
 
-Own container execution sequencing, runtime configuration, networking, mounts,
-metrics/OOM, events, supervision, checkpoints, and finalization behind narrow
-protocols. Process entrypoints, API/SDK, app state, and broad composition remain
-outside. Worker-repository payloads live in `worker.repository_payloads`; its
-client raises HTTP errors instead of soft results. Preserve OCI, credentials,
-retries, events, terminal state, and cleanup through a real worker/container
-when startup, materialization, or repository contracts change.
+Container execution: sequencing, runtime configuration, networking, mounts,
+metrics and OOM handling, events, supervision, checkpoints, and finalization—all
+behind narrow protocols.
+
+Process entrypoints, API and SDK code, app state, and broad composition stay
+outside. Worker-repository payloads live here with the worker, and the client
+raises HTTP errors rather than returning soft results.
+
+A worker holds credentials, runs untrusted code, and can die at any point in a
+long sequence. Every stage has to be explicit about what it acquired and what
+releases it: image handling, credential scope, retries, event emission, terminal
+state, and cleanup.

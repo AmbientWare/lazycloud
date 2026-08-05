@@ -110,8 +110,8 @@ class WorkerContainerRuntimeMonitor:
             else None
         )
         # Rebind the configured service to this container's source rather than
-        # rebuilding it: listing fields by hand silently dropped the disk usage
-        # reader, so occupancy read as zero for every container.
+        # rebuilding it: a hand-listed field set silently omits the disk usage
+        # reader, so occupancy reads as zero for every container.
         metrics = (
             replace(self.metrics, source=source)
             if self.metrics is not None and source is not None

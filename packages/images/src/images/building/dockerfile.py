@@ -11,12 +11,12 @@ from shared.image_building.authoring import ImageBuildStepKind, ImageSpec
 from shared.image_building.context import fingerprint_build_context
 from shared.image_building.credentials import image_secret_names
 from shared.image_building.planning import ImageBuildPlan
+from shared.image_building.requirements import sanitize_python_packages
 
 from images.building.commands import _normalize_step, plan_image_build_commands
 from images.building.constants import DEFAULT_IMAGE_BASE
 from images.building.models import ImageInstallCommandMode, PythonRuntimeSetupAction
 from images.building.python_runtime import plan_python_runtime_setup
-from images.building.requirements import sanitize_python_packages
 
 IMAGE_BUILD_IDENTITY_CONTRACT_VERSION = 2
 

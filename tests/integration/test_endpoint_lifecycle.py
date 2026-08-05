@@ -4,7 +4,7 @@ import asyncio
 import threading
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -15,9 +15,7 @@ import uvicorn
 import websockets.asyncio.server
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
-from compute.state import RedisComputeStateRepository
 from control.service import ControlPlaneService, StubRecord
-from coordination.redis_client import RedisClient
 from execution.endpoints.dispatch import (
     ENDPOINT_DISPATCH_TASK_KEY,
     EndpointDispatchRecord,
@@ -30,7 +28,6 @@ from execution.endpoints.service import (
     EndpointWebSocketDispatchRejected,
 )
 from fastapi.testclient import TestClient
-from gateway.service import GatewayControlService
 from identity.auth import AuthService
 from pydantic import JsonValue
 from runner.serve import EndpointServeRunner, RunnerASGIApplication
@@ -561,13 +558,6 @@ def _stub_for_deployment(services: ApiServices, deployment_id: str) -> StubRecor
     ]
     assert len(matches) == 1
     return matches[0]
-
-
-def _gateway_service(services: ApiServices) -> GatewayControlService:
-    return replace(
-        services.gateway_service,
-        compute_state=RedisComputeStateRepository(RedisClient.from_settings()),
-    )
 
 
 def _json_object(value: JsonValue) -> dict[str, JsonValue]:

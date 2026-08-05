@@ -1,8 +1,9 @@
 locals {
   policy = templatefile("${path.module}/policy.json.tftpl", {
-    agent_tag         = var.agent_tag
-    control_plane_tag = var.control_plane_tag
-    agent_proxy_port  = var.agent_proxy_port
+    agent_tag          = var.agent_tag
+    control_plane_tag  = var.control_plane_tag
+    agent_proxy_port   = var.agent_proxy_port
+    control_plane_port = var.control_plane_port
   })
 }
 
@@ -18,12 +19,19 @@ resource "tailscale_acl" "customer_compute" {
     }
 
     precondition {
-      condition     = var.agent_tag != var.control_plane_tag
+      condition     = length(distinct([var.agent_tag, var.control_plane_tag])) == 2
       error_message = "agent_tag and control_plane_tag must be distinct."
     }
   }
 }
 
+# An OAuth client may only mint auth keys for tags it owns. A node now enrols
+# over the public origin and joins the tailnet with the machine key it is vended
+# afterwards, so the agent tag is the only one this client ever mints for.
+#
+# Changing `tags` replaces the client: re-export
+# LAZYCLOUD_TAILNET_OAUTH_CLIENT_ID and _SECRET in the same change, or the
+# control plane cannot mint keys at all.
 resource "tailscale_oauth_client" "agent_lifecycle" {
   description = "LazyCloud ${var.environment} customer compute"
   scopes      = ["auth_keys", "devices:core"]

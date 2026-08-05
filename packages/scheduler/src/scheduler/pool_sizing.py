@@ -6,11 +6,7 @@ from enum import StrEnum
 from typing import Protocol
 
 from pydantic import Field
-from shared.capacity import (
-    CapacityPoolPolicy,
-    CapacityPoolSizingState,
-    CapacityPoolSizingStateUpdate,
-)
+from shared.capacity import CapacityPoolPolicy, CapacityPoolSizingSnapshot
 from shared.compute_fleet import Pool
 from shared.contracts import ContractModel
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
@@ -70,31 +66,14 @@ class WorkerPoolSizingAllocation(Protocol):
     gpu_count: int
 
 
-class CapacityPoolSizingStateService(Protocol):
-    def get_pool_sizing_state(self, capacity_owner_id: str) -> CapacityPoolSizingState: ...
-
-    def compare_and_set_pool_sizing_state(
-        self,
-        update: CapacityPoolSizingStateUpdate,
-    ) -> CapacityPoolSizingState: ...
-
-
 def capacity_pool_operational_health(
     capacity_owner_id: str,
     workers: Iterable[SchedulerWorkerRecord],
     *,
-    state: CapacityPoolSizingState | None = None,
-    now: datetime | None = None,
+    state: CapacityPoolSizingSnapshot | None = None,
 ) -> CapacityPoolOperationalHealth:
-    current_time = now or utc_now()
     owner_workers = [worker for worker in workers if worker.capacity_owner_id == capacity_owner_id]
-    if (
-        state is not None
-        and state.retry_after_at is not None
-        and state.retry_after_at > current_time
-    ):
-        return CapacityPoolOperationalHealth.Degraded
-    if state is not None and state.terminal_reason:
+    if state is not None and state.consecutive_failures > 0:
         return CapacityPoolOperationalHealth.Degraded
     if any(worker.status is SchedulerWorkerStatus.Available for worker in owner_workers):
         return CapacityPoolOperationalHealth.Healthy
@@ -169,13 +148,18 @@ def plan_worker_pool_sizing(
     headroom: WorkerPoolEffectiveHeadroom,
     registered_units: int,
     authoritative_units: int,
-    state: CapacityPoolSizingState,
+    state: CapacityPoolSizingSnapshot,
     now: datetime | None = None,
 ) -> WorkerPoolSizingPlan:
     current_time = now or utc_now()
     sizing_state = state
+    # Whether the pool ever reached its initial size has to outlive the workers
+    # that proved it, or an idle pool drained to its minimum would be bought
+    # straight back up to `initial_workers` on the next tick. The peak unit any
+    # capacity operation ever asked for is that memory, and released rows keep it.
     initial_target_reached = (
-        sizing_state.initial_target_reached or registered_units >= pool.initial_workers
+        registered_units >= pool.initial_workers
+        or sizing_state.peak_desired_units >= pool.initial_workers
     )
     current_units = max(registered_units, authoritative_units)
     baseline = max(
@@ -192,17 +176,6 @@ def plan_worker_pool_sizing(
             headroom=headroom,
             initial_target_reached=initial_target_reached,
             reason="worker-pool scaling is disabled",
-        )
-    if sizing_state.operation_id and registered_units < sizing_state.target_units:
-        return WorkerPoolSizingPlan(
-            action=WorkerPoolSizingAction.Wait,
-            capacity_owner_id=pool.capacity_owner_id,
-            pool_name=pool.name,
-            current_units=current_units,
-            target_units=sizing_state.target_units,
-            headroom=headroom,
-            initial_target_reached=initial_target_reached,
-            reason="waiting for the persisted sizing operation to register",
         )
     if current_units > registered_units:
         return WorkerPoolSizingPlan(
@@ -239,7 +212,7 @@ def plan_worker_pool_sizing(
             initial_target_reached=initial_target_reached,
             reason="worker-pool maximum is exhausted",
         )
-    retry_at = _scale_up_retry_at(pool, sizing_state)
+    retry_at = scale_up_retry_at(pool, sizing_state)
     if retry_at is not None and retry_at > current_time:
         return WorkerPoolSizingPlan(
             action=WorkerPoolSizingAction.Wait,
@@ -268,53 +241,43 @@ def plan_worker_pool_sizing(
     )
 
 
-def sizing_failure_state(
-    state: CapacityPoolSizingState,
+def scale_up_retry_at(
     pool: CapacityPoolPolicy,
-    *,
-    now: datetime,
-) -> CapacityPoolSizingState:
-    failures = state.consecutive_failures + 1
-    base_seconds = max(pool.scale_up_cooldown_seconds, 1)
-    backoff_seconds = min(base_seconds * (2 ** (failures - 1)), pool.registration_timeout_seconds)
-    return state.model_copy(
-        update={
-            "consecutive_failures": failures,
-            "retry_after_at": now + timedelta(seconds=backoff_seconds),
-        }
-    )
-
-
-def sizing_state_update(state: CapacityPoolSizingState) -> CapacityPoolSizingStateUpdate:
-    return CapacityPoolSizingStateUpdate(
-        capacity_owner_id=state.capacity_owner_id,
-        expected_revision=state.revision,
-        initial_target_reached=state.initial_target_reached,
-        operation_id=state.operation_id,
-        target_units=state.target_units,
-        operation_started_at=state.operation_started_at,
-        last_scale_up_at=state.last_scale_up_at,
-        last_scale_down_at=state.last_scale_down_at,
-        retry_after_at=state.retry_after_at,
-        consecutive_failures=state.consecutive_failures,
-        terminal_reason=state.terminal_reason,
-    )
-
-
-def _scale_up_retry_at(
-    pool: CapacityPoolPolicy,
-    state: CapacityPoolSizingState,
+    state: CapacityPoolSizingSnapshot,
 ) -> datetime | None:
-    candidates = [state.retry_after_at]
-    if state.last_scale_up_at is not None:
+    """The earliest moment this pool may ask the provider for another unit.
+
+    Nothing here is remembered between calls: the cooldowns run from the pool's
+    own capacity operation timestamps and the backoff from the failure count
+    recorded on the operation that failed. A scheduler that restarts mid-backoff
+    therefore computes the same instant it would have computed anyway, instead of
+    treating a pool whose launches all fail as one that has never failed.
+    """
+
+    candidates = [_failure_retry_at(pool, state)]
+    if state.last_requested_at is not None:
         candidates.append(
-            state.last_scale_up_at + timedelta(seconds=pool.scale_up_cooldown_seconds)
+            state.last_requested_at + timedelta(seconds=pool.scale_up_cooldown_seconds)
         )
-    if state.last_scale_down_at is not None:
+    if state.last_released_at is not None:
         candidates.append(
-            state.last_scale_down_at + timedelta(seconds=pool.scale_up_cooldown_seconds)
+            state.last_released_at + timedelta(seconds=pool.scale_up_cooldown_seconds)
         )
     return max((candidate for candidate in candidates if candidate is not None), default=None)
+
+
+def _failure_retry_at(
+    pool: CapacityPoolPolicy,
+    state: CapacityPoolSizingSnapshot,
+) -> datetime | None:
+    if state.consecutive_failures <= 0 or state.last_failure_at is None:
+        return None
+    base_seconds = max(pool.scale_up_cooldown_seconds, 1)
+    backoff_seconds = min(
+        base_seconds * (2 ** (state.consecutive_failures - 1)),
+        pool.registration_timeout_seconds,
+    )
+    return state.last_failure_at + timedelta(seconds=backoff_seconds)
 
 
 def _below_minimum_headroom(
@@ -342,7 +305,6 @@ def _worker_matches_pool_policy(pool: Pool, worker: SchedulerWorkerRecord) -> bo
 
 __all__ = [
     "CapacityPoolOperationalHealth",
-    "CapacityPoolSizingStateService",
     "WorkerPoolEffectiveHeadroom",
     "WorkerPoolSizingAction",
     "WorkerPoolSizingPlan",
@@ -350,6 +312,5 @@ __all__ = [
     "capacity_pool_selection_key",
     "effective_pool_headroom",
     "plan_worker_pool_sizing",
-    "sizing_failure_state",
-    "sizing_state_update",
+    "scale_up_retry_at",
 ]

@@ -13,7 +13,7 @@ from execution.callbacks import (
     HttpTaskCallbackSender,
     TaskCallbackService,
 )
-from identity.rpc import PayloadSignature, verify_payload_signature
+from identity.signatures import PayloadSignature, verify_payload_signature
 from pydantic import ValidationError
 from shared.http.callbacks import TaskCallbackBody
 from shared.tasks import RetryPolicy, TaskStatus

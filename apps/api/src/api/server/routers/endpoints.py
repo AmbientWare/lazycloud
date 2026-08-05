@@ -21,30 +21,25 @@ from fastapi import (
     Request,
     Response,
     WebSocket,
-    WebSocketException,
     status,
 )
-from identity.auth import AuthError
-from identity.authz import AuthzRequirement
 from shared.http.endpoints import (
     EndpointForwardRequest,
-    EndpointForwardResponse,
     StartEndpointServeRequest,
     StartEndpointServeResponse,
 )
-from shared.identity import AuthScope, AuthTokenRecord
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import StreamingResponse
 from starlette.websockets import WebSocketDisconnect
 from websockets.asyncio.client import ClientConnection
 from websockets.exceptions import ConnectionClosed
-from websockets.typing import Data, Subprotocol
+from websockets.typing import Data
 
 from api.server.auth import write_token
 from api.server.dependencies import (
+    authorize_websocket,
     current_services,
     current_websocket_services,
-    websocket_authorization_header,
 )
 from api.server.deployed_stubs import (
     resolve_deployed_stub,
@@ -52,11 +47,16 @@ from api.server.deployed_stubs import (
     token_workspace,
 )
 from api.server.http import (
+    HOP_BY_HOP_RESPONSE_HEADERS,
+    backend_websocket_headers,
+    close_websocket,
     forwarded_path,
+    forwarded_response,
     request_headers,
     request_query_params,
     websocket_headers,
     websocket_query_params,
+    websocket_subprotocols,
 )
 from api.server.ownership import require_endpoint_stub_workspace
 from api.server.service_dependencies import control_plane_service, endpoint_service
@@ -68,25 +68,6 @@ asgi_router = APIRouter(prefix="/api/v1/asgi", tags=["endpoint"])
 ENDPOINT_RESOURCE_NAME = "endpoint"
 ENDPOINT_METHODS = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "TRACE"]
 ASGI_METHODS = ["CONNECT", "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "TRACE"]
-HOP_BY_HOP_RESPONSE_HEADERS = {
-    "connection",
-    "content-length",
-    "keep-alive",
-    "proxy-authenticate",
-    "proxy-authorization",
-    "te",
-    "trailer",
-    "transfer-encoding",
-    "upgrade",
-}
-WEBSOCKET_BACKEND_HEADER_EXCLUDES = HOP_BY_HOP_RESPONSE_HEADERS | {
-    "host",
-    "sec-websocket-accept",
-    "sec-websocket-extensions",
-    "sec-websocket-key",
-    "sec-websocket-protocol",
-    "sec-websocket-version",
-}
 
 
 @endpoint_router.post("/serve", response_model=StartEndpointServeResponse)
@@ -351,7 +332,7 @@ async def deployed_asgi_websocket_by_id(
     control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_websocket_services),
 ) -> None:
-    token = _authorize_websocket(services, websocket)
+    token = authorize_websocket(services, websocket)
     stub = resolve_deployed_stub_id(
         control_plane,
         services.apps,
@@ -405,7 +386,7 @@ async def deployed_asgi_websocket_by_latest_path(
     control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_websocket_services),
 ) -> None:
-    token = _authorize_websocket(services, websocket)
+    token = authorize_websocket(services, websocket)
     stub = resolve_deployed_stub(
         control_plane,
         services,
@@ -434,7 +415,7 @@ async def deployed_asgi_websocket_by_version(
     control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_websocket_services),
 ) -> None:
-    token = _authorize_websocket(services, websocket)
+    token = authorize_websocket(services, websocket)
     stub = resolve_deployed_stub(
         control_plane,
         services,
@@ -606,7 +587,9 @@ async def _forward_endpoint_request(
         body=await request.body(),
     )
     result = await run_in_threadpool(service.forward_endpoint_request, forwarded)
-    return _http_response(result)
+    return forwarded_response(
+        status_code=result.status_code, headers=result.headers, body=result.body
+    )
 
 
 async def _forward_asgi_http_request(
@@ -741,7 +724,7 @@ async def _forward_asgi_websocket(
     except Exception as exc:
         error = str(exc)
         if accepted:
-            await _close_websocket(websocket, code=status.WS_1011_INTERNAL_ERROR, reason=error)
+            await close_websocket(websocket, code=status.WS_1011_INTERNAL_ERROR, reason=error)
         else:
             await websocket.close(code=status.WS_1011_INTERNAL_ERROR, reason=error[:120])
     finally:
@@ -763,14 +746,14 @@ async def _connect_backend_websocket(
     websocket: WebSocket,
 ) -> ClientConnection:
     backend_socket = service.open_asgi_websocket_socket(session)
-    subprotocols = _websocket_subprotocols(websocket)
+    subprotocols = websocket_subprotocols(websocket)
     return await websockets.asyncio.client.connect(
         endpoint_backend_url(
             session.target,
             request,
             protocol=EndpointBackendProtocol.WebSocket,
         ),
-        additional_headers=_backend_websocket_headers(session.headers),
+        additional_headers=backend_websocket_headers(session.headers),
         subprotocols=subprotocols or None,
         open_timeout=min(max(session.wait_timeout_seconds, 0.1), 10.0),
         proxy=None,
@@ -806,7 +789,7 @@ async def _proxy_asgi_websocket(
     )
     if backend_reader in done:
         close = await backend_reader
-        await _close_websocket(
+        await close_websocket(
             websocket,
             code=close.code,
             reason=close.reason,
@@ -854,58 +837,6 @@ async def _websocket_to_backend(
             data = message.get("bytes")
         if data is not None:
             await backend.send(data)
-
-
-def _websocket_subprotocols(websocket: WebSocket) -> list[Subprotocol]:
-    values: list[Subprotocol] = []
-    for raw_value in websocket.headers.getlist("sec-websocket-protocol"):
-        values.extend(Subprotocol(item.strip()) for item in raw_value.split(",") if item.strip())
-    return values
-
-
-async def _close_websocket(websocket: WebSocket, *, code: int, reason: str) -> None:
-    try:
-        await websocket.close(code=code, reason=reason[:120])
-    except RuntimeError:
-        return
-
-
-def _authorize_websocket(
-    services: ApiServices,
-    websocket: WebSocket,
-) -> AuthTokenRecord:
-    try:
-        token = services.auth.authorize_header(
-            websocket_authorization_header(websocket),
-            AuthzRequirement(action=AuthScope.Write),
-        )
-        if token is None:
-            raise AuthError("missing authorization principal")
-        return token
-    except AuthError as exc:
-        raise WebSocketException(
-            code=status.WS_1008_POLICY_VIOLATION,
-            reason=str(exc),
-        ) from exc
-
-
-def _backend_websocket_headers(headers: dict[str, list[str]]) -> list[tuple[str, str]]:
-    forwarded: list[tuple[str, str]] = []
-    for key, values in headers.items():
-        if key.lower() in WEBSOCKET_BACKEND_HEADER_EXCLUDES:
-            continue
-        forwarded.extend((key, value) for value in values)
-    return forwarded
-
-
-def _http_response(result: EndpointForwardResponse) -> Response:
-    response = Response(content=result.body, status_code=result.status_code)
-    for key, values in result.headers.items():
-        if key.lower() in HOP_BY_HOP_RESPONSE_HEADERS:
-            continue
-        for value in values:
-            response.headers.append(key, value)
-    return response
 
 
 router.include_router(endpoint_router)

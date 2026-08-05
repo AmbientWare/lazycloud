@@ -11,7 +11,6 @@ from execution.pods.proxy import (
     PINNED_SANDBOX_CONNECT_TIMEOUT_SECONDS,
     PodProxyBackendError,
     PodProxyHttpRequest,
-    PodProxyHttpResponse,
     PodProxyPortUnavailable,
     PodProxySession,
     PodProxyUnavailable,
@@ -25,25 +24,21 @@ from fastapi import (
     Request,
     Response,
     WebSocket,
-    WebSocketException,
     status,
 )
-from identity.auth import AuthError
-from identity.authz import AuthzRequirement
 from shared.containers import ContainerRecord
 from shared.errors import NotFoundError
-from shared.identity import AuthScope, AuthTokenRecord
 from starlette.concurrency import run_in_threadpool
 from starlette.websockets import WebSocketDisconnect
 from websockets.asyncio.client import ClientConnection
 from websockets.exceptions import ConnectionClosed
-from websockets.typing import Data, Subprotocol
+from websockets.typing import Data
 
 from api.server.auth import write_app_token
 from api.server.dependencies import (
+    authorize_websocket,
     current_services,
     current_websocket_services,
-    websocket_authorization_header,
 )
 from api.server.deployed_stubs import (
     resolve_deployed_stub,
@@ -51,38 +46,20 @@ from api.server.deployed_stubs import (
     token_workspace,
 )
 from api.server.http import (
+    backend_websocket_headers,
+    close_websocket,
     forwarded_path,
+    forwarded_response,
     request_headers,
     request_query_params,
     websocket_headers,
     websocket_query_params,
+    websocket_subprotocols,
 )
 from api.server.service_dependencies import control_plane_service, pod_service
 from api.server.services import ApiServices
 
 POD_PROXY_METHODS = ["CONNECT", "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "TRACE"]
-HOP_BY_HOP_RESPONSE_HEADERS = {
-    "connection",
-    "content-length",
-    "keep-alive",
-    "proxy-authenticate",
-    "proxy-authorization",
-    "te",
-    "trailer",
-    "transfer-encoding",
-    "upgrade",
-}
-WEBSOCKET_BACKEND_HEADER_EXCLUDES = {
-    "connection",
-    "content-length",
-    "host",
-    "sec-websocket-accept",
-    "sec-websocket-extensions",
-    "sec-websocket-key",
-    "sec-websocket-protocol",
-    "sec-websocket-version",
-    "upgrade",
-}
 PortPath = Annotated[int, Path(ge=1, le=65535)]
 VersionPath = Annotated[int, Path(ge=1)]
 
@@ -229,7 +206,7 @@ async def deployed_pod_websocket_by_id(
     control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_websocket_services),
 ) -> None:
-    token = _authorize_websocket(services, websocket)
+    token = authorize_websocket(services, websocket)
     stub = resolve_deployed_stub_id(
         control_plane,
         services.apps,
@@ -273,7 +250,7 @@ async def deployed_pod_websocket_by_latest_path(
     control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_websocket_services),
 ) -> None:
-    token = _authorize_websocket(services, websocket)
+    token = authorize_websocket(services, websocket)
     stub = resolve_deployed_stub(
         control_plane,
         services,
@@ -297,7 +274,7 @@ async def deployed_pod_websocket_by_version(
     control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_websocket_services),
 ) -> None:
-    token = _authorize_websocket(services, websocket)
+    token = authorize_websocket(services, websocket)
     stub = resolve_deployed_stub(
         control_plane,
         services,
@@ -394,7 +371,7 @@ async def deployed_sandbox_websocket_by_id(
     control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_websocket_services),
 ) -> None:
-    token = _authorize_websocket(services, websocket)
+    token = authorize_websocket(services, websocket)
     container, stub = _resolve_sandbox_container(
         container_id,
         workspace=token_workspace(token),
@@ -532,7 +509,9 @@ async def _forward_proxy_request(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except PodProxyBackendError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return _http_response(result)
+    return forwarded_response(
+        status_code=result.status_code, headers=result.headers, body=result.body
+    )
 
 
 async def _forward_pod_websocket(
@@ -579,7 +558,7 @@ async def _forward_pod_websocket(
         return
     except Exception as exc:
         if accepted:
-            await _close_websocket(
+            await close_websocket(
                 websocket,
                 code=status.WS_1011_INTERNAL_ERROR,
                 reason=str(exc),
@@ -634,8 +613,8 @@ async def _connect_backend_websocket(
     try:
         return await websockets.asyncio.client.connect(
             _pod_backend_websocket_url(request),
-            additional_headers=_backend_websocket_headers(request.headers),
-            subprotocols=_websocket_subprotocols(websocket) or None,
+            additional_headers=backend_websocket_headers(request.headers),
+            subprotocols=websocket_subprotocols(websocket) or None,
             open_timeout=(
                 PINNED_SANDBOX_CONNECT_TIMEOUT_SECONDS
                 if session.pinned
@@ -663,7 +642,7 @@ async def _proxy_pod_websocket(
     )
     if backend_reader in done:
         code, reason = await backend_reader
-        await _close_websocket(websocket, code=code, reason=reason)
+        await close_websocket(websocket, code=code, reason=reason)
         client_reader.cancel()
         await asyncio.gather(client_reader, return_exceptions=True)
         return
@@ -711,58 +690,6 @@ def _pod_backend_websocket_url(request: PodProxyHttpRequest) -> str:
     )
     suffix = f"?{query}" if query else ""
     return f"ws://pod{request.path}{suffix}"
-
-
-def _websocket_subprotocols(websocket: WebSocket) -> list[Subprotocol]:
-    values: list[Subprotocol] = []
-    for raw_value in websocket.headers.getlist("sec-websocket-protocol"):
-        values.extend(Subprotocol(item.strip()) for item in raw_value.split(",") if item.strip())
-    return values
-
-
-def _backend_websocket_headers(headers: dict[str, list[str]]) -> list[tuple[str, str]]:
-    forwarded: list[tuple[str, str]] = []
-    for key, values in headers.items():
-        if key.lower() in WEBSOCKET_BACKEND_HEADER_EXCLUDES:
-            continue
-        forwarded.extend((key, value) for value in values)
-    return forwarded
-
-
-async def _close_websocket(websocket: WebSocket, *, code: int, reason: str) -> None:
-    try:
-        await websocket.close(code=code, reason=reason[:120])
-    except RuntimeError:
-        return
-
-
-def _authorize_websocket(
-    services: ApiServices,
-    websocket: WebSocket,
-) -> AuthTokenRecord:
-    try:
-        token = services.auth.authorize_header(
-            websocket_authorization_header(websocket),
-            AuthzRequirement(action=AuthScope.Write),
-        )
-        if token is None:
-            raise AuthError("missing authorization principal")
-        return token
-    except AuthError as exc:
-        raise WebSocketException(
-            code=status.WS_1008_POLICY_VIOLATION,
-            reason=str(exc),
-        ) from exc
-
-
-def _http_response(result: PodProxyHttpResponse) -> Response:
-    response = Response(content=result.body, status_code=result.status_code)
-    for key, values in result.headers.items():
-        if key.lower() in HOP_BY_HOP_RESPONSE_HEADERS:
-            continue
-        for value in values:
-            response.headers.append(key, value)
-    return response
 
 
 router.include_router(pod_router)

@@ -105,6 +105,7 @@ class SchedulerRuntime:
                 create_schema=create_schema,
                 redis_client=redis_client,
                 gateway_origin=public_gateway_http_url,
+                runtime_callback_origin=runtime_callback_http_url,
                 observability=observability,
                 storage=storage,
                 network=network,
@@ -179,7 +180,7 @@ class SchedulerRuntime:
         endpoint_dispatches = EndpointDispatchAutoscalingReader(
             EndpointDispatchStateRepository(execution_services)
         )
-        pod_control = PodControlService(execution_services)
+        pod_control = PodControlService(execution_services, redis=redis_client)
         preemption_recovery = PreemptedContainerService(
             services=execution_services,
             stubs=scheduler_services.scheduler_workloads,
@@ -195,7 +196,6 @@ class SchedulerRuntime:
         capacity_reservations = CapacityReservationService(
             RedisCapacityReservationRepository(redis_client),
             capacity_controllers.capacity_acquisition_controllers,
-            capacity_controllers.pending_capacity_owners,
             DatabaseCapacityAllocationOwners(scheduler_services.context.database),
         )
         dispatch_requests = _container_requests_with_capacity(

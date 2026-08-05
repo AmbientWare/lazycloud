@@ -27,6 +27,7 @@ from .account_connection import (
     aws_account_connection_template_identity,
     aws_node_bucket_access_policy,
     plan_aws_account_connection_authorization,
+    require_resolvable_aws_credentials,
 )
 from .account_connection_policy import validate_aws_account_connection_template_policy
 from .capacity_images import (
@@ -98,6 +99,7 @@ from .provider_control import (
     AwsProviderControlErrorCode,
 )
 from .provider_node_identity import (
+    AWS_STS_PROOF_NONCE_KEY,
     AwsProviderNodeIdentityError,
     AwsProviderNodeIdentityErrorCode,
     AwsProviderNodeIdentityTarget,
@@ -131,6 +133,7 @@ __all__ = [
     "AWS_INSTANCE_CATALOG",
     "AWS_MANAGED_POOL_TAG",
     "AWS_MANAGED_POOL_TAG_VALUE",
+    "AWS_STS_PROOF_NONCE_KEY",
     "AwsAccountAuthorizationCleanupResult",
     "AwsAccountAuthorizationCleanupStatus",
     "AwsAccountAuthorizationValidation",
@@ -229,5 +232,6 @@ __all__ = [
     "parse_aws_connection_stack_cleanup_action",
     "parse_aws_connection_stack_create_action",
     "plan_aws_account_connection_authorization",
+    "require_resolvable_aws_credentials",
     "validate_aws_account_connection_template_policy",
 ]

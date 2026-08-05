@@ -17,7 +17,6 @@ from networking.routing import (
     build_backend_route_dial_plan,
 )
 from pydantic import SecretStr
-from scheduler.state import SchedulerBackendRoute
 from shared.routing import AgentBackendRoute, BackendRouteState, BackendRouteTransport
 
 ROUTE_AUTH_KEY = SecretStr("0123456789abcdef0123456789abcdef")
@@ -120,29 +119,31 @@ def test_backend_route_dialer_waits_for_ready_route_and_writes_preface() -> None
 
 
 @pytest.mark.parametrize(
-    ("target", "transport", "failures", "resolved", "expected_address"),
+    ("target", "transport", "failures", "resolved", "expected_addresses"),
     [
         (
+            # The name is dialed first; only when it fails does the peer address
+            # replace it.
             "agent.tailnet:29443",
             BackendRouteTransport.TsnetRestricted,
             1,
             "100.64.0.2",
-            "100.64.0.2:29443",
+            ["agent.tailnet:29443", "100.64.0.2:29443"],
         ),
         (
             "100.64.0.10:29443",
             BackendRouteTransport.TsnetRestricted,
             0,
             "100.64.0.99",
-            "100.64.0.10:29443",
+            ["100.64.0.10:29443"],
         ),
-        ("10.0.0.5:8000", BackendRouteTransport.Direct, 0, "unused", "10.0.0.5:8000"),
+        ("10.0.0.5:8000", BackendRouteTransport.Direct, 0, "unused", ["10.0.0.5:8000"]),
         (
             "container-worker:57267",
             BackendRouteTransport.Direct,
             1,
             "unused",
-            "container-worker:57267",
+            ["container-worker:57267", "container-worker:57267"],
         ),
     ],
 )
@@ -151,7 +152,7 @@ def test_backend_route_dialer_transport_retry_matrix(
     transport: BackendRouteTransport,
     failures: int,
     resolved: str,
-    expected_address: str,
+    expected_addresses: list[str],
 ) -> None:
     connector = _FakeConnector(failures_before_success=failures)
     waiter = _FakeTailnetPeerWaiter()
@@ -176,11 +177,10 @@ def test_backend_route_dialer_transport_retry_matrix(
 
     dialer.dial_plan(build_backend_route_dial_plan(route_id))
 
-    assert [address for address, _timeout in connector.calls] == [expected_address] * (failures + 1)
+    assert [address for address, _timeout in connector.calls] == expected_addresses
     if transport is BackendRouteTransport.TsnetRestricted:
-        host = target.rsplit(":", 1)[0]
-        assert [call[0] for call in waiter.calls] == [host] * (failures + 1)
-        assert resolver.calls == ([] if host.startswith("100.") else [host] * (failures + 1))
+        # The netmap is consulted to recover a failed dial, never to make one.
+        assert bool(waiter.calls) is (failures > 0)
         assert connector.connections[0].writes == [
             backend_route_preface(route_id, ROUTE_AUTHENTICATOR.credential(route_id))
         ]
@@ -262,7 +262,7 @@ def test_shell_backend_uses_authoritative_route_with_raw_address(
         container_id="container",
         stub_id="stub",
         address="192.168.0.85:2222",
-        route=SchedulerBackendRoute(
+        route=AgentBackendRoute(
             route_id=route_id,
             container_id="container",
             port=2222,
@@ -314,7 +314,7 @@ def test_shell_backend_authenticates_tailnet_route_before_shell_protocol(
         container_id="container",
         stub_id="stub",
         address=f"route://{route_id}",
-        route=SchedulerBackendRoute.model_validate(route.model_dump(mode="json")),
+        route=AgentBackendRoute.model_validate(route.model_dump(mode="json")),
         worker_port=2222,
         buffer_size_bytes=32 * 1024,
         dial_timeout_seconds=1,

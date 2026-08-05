@@ -213,7 +213,7 @@ class WorkerSourceCacheService:
                 now=utc_now(),
             )
             if generation is None:
-                raise ConflictError("source cache cleanup is not drained")
+                raise ConflictError("source cache session is no longer current")
             return generation
 
     def require_available(
@@ -230,7 +230,10 @@ class WorkerSourceCacheService:
             generation_id=generation_id,
             session_fence=session_fence,
         )
-        if generation.state is not WorkerCacheGenerationState.Available:
+        if generation.state not in {
+            WorkerCacheGenerationState.Available,
+            WorkerCacheGenerationState.Draining,
+        }:
             raise WorkerSourceCacheUnavailableError(
                 f"worker source cache is {generation.state.value}: {worker_id}"
             )

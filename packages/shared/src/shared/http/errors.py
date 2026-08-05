@@ -11,6 +11,7 @@ class ErrorResponse(HttpModel):
     """Standard error body returned by all non-2xx JSON responses."""
 
     detail: str
+    code: str = ""
 
 
 class HttpApiError(RuntimeError):
@@ -30,6 +31,10 @@ class HttpApiError(RuntimeError):
     @property
     def detail(self) -> str | None:
         return self.error.detail if self.error is not None else None
+
+    @property
+    def code(self) -> str:
+        return self.error.code if self.error is not None else ""
 
 
 class HttpTransportError(RuntimeError):

@@ -26,7 +26,6 @@ from shared.autoscaler_state import (
     AutoscalerTargetKind,
     autoscaler_state_name,
 )
-from shared.capacity import CapacityPoolSizingState, CapacityPoolSizingStateUpdate
 from shared.compute_fleet import AgentLease, AgentRecord, Machine, Pool, ResourceStatus, Worker
 from shared.container_requests import ContainerShutdownTarget, StopContainerReason
 from shared.containers import ContainerRecord, ContainerStatus
@@ -83,43 +82,6 @@ class PoolRepository:
             select(PoolTable).order_by(PoolTable.workspace_id, PoolTable.name)
         )
         return [(str(row.workspace_id), Pool.model_validate(row.payload)) for row in rows]
-
-    def get_sizing_state(
-        self,
-        capacity_owner_id: str,
-        *,
-        for_update: bool = False,
-    ) -> CapacityPoolSizingState | None:
-        statement = select(PoolTable).where(PoolTable.capacity_owner_id == capacity_owner_id)
-        if for_update:
-            statement = statement.with_for_update()
-        row = self.session.scalars(statement).first()
-        return _pool_sizing_state(row) if row is not None else None
-
-    def compare_and_set_sizing_state(
-        self,
-        update: CapacityPoolSizingStateUpdate,
-    ) -> CapacityPoolSizingState | None:
-        row = self.session.scalars(
-            select(PoolTable)
-            .where(PoolTable.capacity_owner_id == update.capacity_owner_id)
-            .with_for_update()
-        ).first()
-        if row is None or row.sizing_revision != update.expected_revision:
-            return None
-        row.sizing_revision += 1
-        row.sizing_initial_target_reached = update.initial_target_reached
-        row.sizing_operation_id = update.operation_id
-        row.sizing_target_units = update.target_units
-        row.sizing_operation_started_at = update.operation_started_at
-        row.sizing_last_scale_up_at = update.last_scale_up_at
-        row.sizing_last_scale_down_at = update.last_scale_down_at
-        row.sizing_retry_after_at = update.retry_after_at
-        row.sizing_consecutive_failures = update.consecutive_failures
-        row.sizing_terminal_reason = update.terminal_reason
-        row.updated_at = datetime.now(UTC)
-        self.session.flush()
-        return _pool_sizing_state(row)
 
     def delete_for_workspace_deletion(self, name: str, *, workspace_id: str) -> bool:
         workspace = WorkspaceRepository(self.session).lock_for_deletion(workspace_id)
@@ -181,25 +143,6 @@ class PoolRepository:
         row.registration_timeout_seconds = pool.registration_timeout_seconds
         flag_modified(row, "worker_runtimes")
         self.session.flush()
-
-
-def _pool_sizing_state(row: PoolTable) -> CapacityPoolSizingState:
-    return CapacityPoolSizingState(
-        capacity_owner_id=str(row.capacity_owner_id),
-        pool_name=row.name,
-        workspace_id=str(row.workspace_id),
-        revision=row.sizing_revision,
-        initial_target_reached=row.sizing_initial_target_reached,
-        operation_id=row.sizing_operation_id,
-        target_units=row.sizing_target_units,
-        operation_started_at=row.sizing_operation_started_at,
-        last_scale_up_at=row.sizing_last_scale_up_at,
-        last_scale_down_at=row.sizing_last_scale_down_at,
-        retry_after_at=row.sizing_retry_after_at,
-        consecutive_failures=row.sizing_consecutive_failures,
-        terminal_reason=row.sizing_terminal_reason,
-        updated_at=row.updated_at,
-    )
 
 
 @dataclass(slots=True)

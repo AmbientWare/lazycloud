@@ -1,12 +1,13 @@
 # Database Package
 
-PostgreSQL/SQLAlchemy/Alembic is durable state. Use explicit relational tables,
-constraints, and repositories; repositories map/query while services decide.
-Keep Redis hot state out unless durable history is required.
+PostgreSQL, SQLAlchemy, and Alembic—the platform's durable state.
 
-Predeployment schema authority is metadata plus one reviewed Alembic baseline.
-Schema changes prove fresh PostgreSQL bootstrap, metadata parity, constraints,
-mapping, transactions/isolation, and the affected owner workflow. Recreate and
-re-bootstrap local development databases freely when a baseline changes; do not
-add historical migrations or transition tests. Never reset external, deployed,
-or production data.
+Use explicit relational tables and constraints. Put an invariant in the schema
+wherever the schema can hold it: a rule enforced only in Python is enforced only
+where someone remembered to call it. Repositories map and query; services decide.
+Redis hot state stays out unless the history itself has to be durable.
+
+While predeployment, schema authority is the SQLAlchemy metadata plus one
+reviewed baseline migration. Update that baseline and recreate local development
+databases freely rather than accumulating historical revisions or upgrade paths.
+Never reset external, deployed, or production data.

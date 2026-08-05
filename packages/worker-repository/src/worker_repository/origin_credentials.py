@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from base64 import b64encode
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
@@ -24,6 +25,8 @@ from worker.origin_access import (
     ImageArchiveUploadCredentialRequest,
     ImageArchiveUploadCredentials,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 
 class CacheOriginCredentialConfig(BaseSettings):
@@ -174,6 +177,7 @@ class WorkerCacheOriginCredentialService:
                 checksum_sha256=b64encode(bytes.fromhex(archive.sha256)).decode(),
             )
         except Exception:
+            LOGGER.warning("image archive upload URL could not be signed", exc_info=True)
             return ImageArchiveUploadCredentials.denied("image archive upload URL is unavailable")
         return ImageArchiveUploadCredentials(
             bucket=archive.bucket,
@@ -227,7 +231,7 @@ class WorkerCacheOriginCredentialService:
         if not self.image_archive_available or settings is None or not image_id:
             return _ImageArchiveCredentials()
 
-        # Deliberately the workspace-scoped lookup even though one row now serves
+        # Deliberately the workspace-scoped lookup even though one row serves
         # every tenant: the physical key carries no tenant component, so this join
         # is the entire download boundary.
         archive = self._services().images.get_authorized_image_archive(
@@ -245,6 +249,7 @@ class WorkerCacheOriginCredentialService:
                 expires_seconds=settings.presign_seconds,
             )
         except Exception:
+            LOGGER.warning("image archive download URL could not be signed", exc_info=True)
             return _ImageArchiveCredentials(error="image archive download URL is unavailable")
         return _ImageArchiveCredentials(
             url=url,

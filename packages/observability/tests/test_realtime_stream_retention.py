@@ -246,9 +246,15 @@ def test_api_maps_expired_log_and_event_cursors_to_409(
     )
 
     assert log_response.status_code == 409
-    assert log_response.json() == {"detail": "realtime cursor is older than retained history"}
+    assert log_response.json() == {
+        "detail": "realtime cursor is older than retained history",
+        "code": "expired_cursor",
+    }
     assert event_response.status_code == 409
-    assert event_response.json() == {"detail": "realtime cursor is older than retained history"}
+    assert event_response.json() == {
+        "detail": "realtime cursor is older than retained history",
+        "code": "expired_cursor",
+    }
 
 
 def _services_with_redis(

@@ -5,10 +5,10 @@ from enum import StrEnum
 from typing import Self
 from urllib.parse import urlparse
 
-from compute.agent_control import TailnetConfig
+from compute.agent_control import TailnetConfig, host_is_unreachable_from_a_remote_machine
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from shared.app_identity import CONTROL_PLANE_SERVICE_NAME, ENV_PREFIX
+from shared.app_identity import CONTROL_PLANE_TAILNET_HOSTNAME, ENV_PREFIX
 
 from networking.dialer import BackendRouteDialerConfig
 from networking.routing import BackendRouteAuthenticator
@@ -31,12 +31,12 @@ class ProviderNetworkClass(StrEnum):
 
 
 class TailnetRuntimeSettings(TailnetRuntimeOptions, BaseSettings):
-    hostname: str = CONTROL_PLANE_SERVICE_NAME
+    hostname: str = CONTROL_PLANE_TAILNET_HOSTNAME
     socket_path: str = "/var/run/tailscale/tailscaled.sock"
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_TAILNET_",
-        extra="ignore",
+        extra="forbid",
     )
 
     @field_validator(
@@ -75,7 +75,7 @@ class TailnetControlSettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_TAILNET_",
-        extra="ignore",
+        extra="forbid",
     )
 
     @field_validator("oauth_client_id", "api_url")
@@ -89,9 +89,12 @@ class TailnetControlSettings(BaseSettings):
         return normalize_tailnet_tag(value)
 
     def validated_tags(self) -> tuple[str, str]:
-        if self.agent_tag == self.control_plane_tag:
+        tags = (self.agent_tag, self.control_plane_tag)
+        if len(set(tags)) != len(tags):
+            # Each tag carries a different grant. Sharing one collapses both
+            # postures into whichever is broader.
             raise ValueError("tailnet agent and control-plane tags must be distinct")
-        return (self.agent_tag, self.control_plane_tag)
+        return tags
 
     def to_control_config(self) -> TailscaleTailnetControlConfig:
         oauth_client_id = self.oauth_client_id
@@ -113,7 +116,7 @@ class BackendRouteSettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_BACKEND_ROUTE_",
-        extra="ignore",
+        extra="forbid",
     )
 
     def to_authenticator(self) -> BackendRouteAuthenticator:
@@ -134,6 +137,8 @@ def validate_provider_network_configuration(
     network_class: ProviderNetworkClass,
     *,
     gateway_origin: str,
+    internal_origin: str,
+    presigned_origin: str = "",
     runtime: TailnetRuntimeSettings,
     control: TailnetControlSettings,
     backend_route: BackendRouteSettings,
@@ -144,6 +149,42 @@ def validate_provider_network_configuration(
     issues: list[str] = []
     if not _is_https_origin(gateway_origin):
         issues.append("gateway HTTP URL must be an HTTPS origin")
+    # A managed node enrols against the public origin, so a loopback or LAN
+    # address here is a pool that launches machines which can never report.
+    gateway_host = urlparse(gateway_origin).hostname or ""
+    if not gateway_host:
+        issues.append("gateway HTTP URL must include a host")
+    elif host_is_unreachable_from_a_remote_machine(gateway_host):
+        issues.append(
+            f"gateway public origin host {gateway_host!r} is unreachable from a remote "
+            "machine; set LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL to the deployment's public "
+            "ingress origin"
+        )
+    # Nodes and workers dial the internal origin, not the public one. A Compose
+    # service name or a LAN address resolves on the control-plane host and
+    # nowhere else, and the machine that discovers that is an EC2 instance
+    # twenty minutes into a boot it will never finish.
+    internal_host = urlparse(internal_origin).hostname or ""
+    if not internal_host:
+        issues.append("internal control-plane origin must include a host")
+    elif host_is_unreachable_from_a_remote_machine(internal_host):
+        issues.append(
+            f"internal control-plane origin host {internal_host!r} is unreachable from a "
+            "remote machine; set LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL to the control plane's "
+            "tailnet origin"
+        )
+    # The third origin a remote node dials. Unlike the other two it is not used
+    # during enrolment, so a wrong value here starts a machine that joins,
+    # reports ready, accepts work, and only then fails to read its image.
+    presigned_host = urlparse(presigned_origin).hostname or ""
+    if presigned_origin and not presigned_host:
+        issues.append("object store presigned endpoint must include a host")
+    elif presigned_host and host_is_unreachable_from_a_remote_machine(presigned_host):
+        issues.append(
+            f"object store presigned endpoint host {presigned_host!r} is unreachable from a "
+            "remote machine; set LAZYCLOUD_OBJECT_STORE_PRESIGNED_ENDPOINT_URL to the control "
+            "plane's tailnet origin"
+        )
     if runtime.mode is TailnetRuntimeMode.Disabled:
         issues.append("tailnet runtime mode must be sidecar or managed")
     if not runtime.hostname:

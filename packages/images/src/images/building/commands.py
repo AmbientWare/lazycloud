@@ -4,10 +4,10 @@ import shlex
 from collections.abc import Iterable
 
 from shared.image_building.authoring import ImageBuildStep, ImageBuildStepKind, ImageSpec
+from shared.image_building.requirements import sanitize_python_packages
 
 from images.building.constants import PIP_GROUP_BOUNDARY_FLAGS
 from images.building.models import ImageBuildCommand, ImageInstallCommandMode
-from images.building.requirements import sanitize_python_packages
 
 
 def render_pip_install_command(

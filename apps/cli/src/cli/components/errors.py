@@ -8,6 +8,7 @@ from lazycloud.cli.components.errors import (
     exception_chain,
 )
 from shared.app_identity import ADMIN_CLI_NAME, ENV_PREFIX
+from shared.deployment_settings import MissingDeploymentSettingError
 from shared.errors import (
     ConflictError,
     DomainError,
@@ -28,6 +29,25 @@ def _domain_error_details(
         ("request_failed", "Request failed"),
     )
     return ClientErrorDetails(type=error_type, title=title, message=message)
+
+
+def _missing_setting_details(
+    exc: BaseException,
+    message: str,
+) -> ClientErrorDetails | None:
+    for item in exception_chain(exc):
+        if isinstance(item, MissingDeploymentSettingError):
+            return ClientErrorDetails(
+                type="configuration_missing",
+                title="Configuration missing",
+                message=message,
+                hint=(
+                    f"Export `{item.variable}` or set it in the `.env` the stack "
+                    f"reads; `{ADMIN_CLI_NAME}` connects to backends directly and "
+                    "does not inherit a container's environment."
+                ),
+            )
+    return None
 
 
 def _operation_error_details(
@@ -90,7 +110,7 @@ ADMIN_ERROR_POLICY = CliErrorPolicy(
     connection_hint=_connection_hint,
     timeout_hint="Retry the command or check the service logs if the operation keeps timing out.",
     debug_hint="Run the command again with `--debug` to see the full traceback.",
-    classifiers=(_domain_error_details, _operation_error_details),
+    classifiers=(_missing_setting_details, _domain_error_details, _operation_error_details),
 )
 
 

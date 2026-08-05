@@ -88,8 +88,8 @@ export function withWorkspace(path: string, workspaceId: string): string {
  *
  * `crypto.randomUUID` is restricted to secure contexts, so it is undefined when
  * the dashboard is served over plain HTTP from anything other than localhost —
- * reaching for it directly made every request throw before it was sent, which
- * surfaced as the control plane being unreachable.
+ * reaching for it directly makes every request throw before it is sent, which
+ * surfaces as the control plane being unreachable.
  */
 function newRequestId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {

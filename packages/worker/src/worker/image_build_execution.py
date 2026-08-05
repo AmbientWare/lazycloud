@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import http.client
 import json
 import os
 import posixpath
@@ -20,6 +19,7 @@ from pathlib import Path
 from typing import Protocol
 from urllib.parse import urlparse
 
+from networking.internal_http import InternalHttpClient
 from pydantic import Field
 from shared.contracts import ContractModel
 from shared.managed_runtime_integrity import managed_package_source_digest
@@ -462,6 +462,7 @@ def _require_matching_image_architecture(
 @dataclass(slots=True)
 class RepositoryImageBuildContextLoader:
     repository: ImageBuildContextDownloadClient
+    http: InternalHttpClient = field(default_factory=InternalHttpClient)
     timeout_seconds: float = 60.0
 
     def extract_build_context(
@@ -496,6 +497,7 @@ class RepositoryImageBuildContextLoader:
             with tempfile.TemporaryDirectory(prefix="lazycloud-worker-context-") as directory:
                 archive_path = Path(directory) / "context.zip"
                 _download_image_build_context(
+                    self.http,
                     plan,
                     archive_path,
                     timeout_seconds=self.timeout_seconds,
@@ -515,6 +517,7 @@ class RepositoryImageBuildContextLoader:
 
 
 def _download_image_build_context(
+    http: InternalHttpClient,
     plan: PrepareImageBuildContextDownloadResponse,
     target: Path,
     *,
@@ -527,56 +530,43 @@ def _download_image_build_context(
         raise ImageBuildContextDownloadError("build context download SHA-256 is missing")
     if parsed.hostname is None:
         raise ImageBuildContextDownloadError("build context download URL hostname is required")
-    connection: http.client.HTTPConnection
-    if parsed.scheme == "https":
-        connection = http.client.HTTPSConnection(
-            parsed.hostname,
-            parsed.port,
-            timeout=timeout_seconds,
-        )
-    else:
-        connection = http.client.HTTPConnection(
-            parsed.hostname,
-            parsed.port,
-            timeout=timeout_seconds,
-        )
-    request_target = parsed.path or "/"
-    if parsed.query:
-        request_target = f"{request_target}?{parsed.query}"
     try:
-        connection.request("GET", request_target)
-        response = connection.getresponse()
-        if response.status < 200 or response.status >= 300:
-            raise ImageBuildContextDownloadError(
-                f"build context download returned HTTP {response.status}"
-            )
-        with target.open("wb") as output:
-            header = response.getheader("Content-Length")
-            if header is not None:
-                try:
-                    response_length = int(header)
-                except ValueError as exc:
-                    raise ImageBuildContextDownloadError(
-                        "build context response Content-Length is invalid"
-                    ) from exc
-                if response_length != plan.content_length:
-                    raise ImageBuildContextDownloadError(
-                        "build context response Content-Length does not match object metadata"
-                    )
-            digest = hashlib.sha256()
-            bytes_written = 0
-            while chunk := response.read(1024 * 1024):
-                bytes_written += len(chunk)
-                if bytes_written > plan.content_length:
-                    raise ImageBuildContextDownloadError(
-                        "build context response exceeds object metadata size"
-                    )
-                if bytes_written > MAX_IMAGE_BUILD_CONTEXT_ARCHIVE_BYTES:
-                    raise ImageBuildContextDownloadError(
-                        "build context response exceeds maximum archive size"
-                    )
-                output.write(chunk)
-                digest.update(chunk)
+        with http.stream(
+            "GET",
+            plan.download_url,
+            timeout_seconds=timeout_seconds,
+        ) as response:
+            if response.status_code < 200 or response.status_code >= 300:
+                raise ImageBuildContextDownloadError(
+                    f"build context download returned HTTP {response.status_code}"
+                )
+            with target.open("wb") as output:
+                header = response.headers.get("Content-Length")
+                if header is not None:
+                    try:
+                        response_length = int(header)
+                    except ValueError as exc:
+                        raise ImageBuildContextDownloadError(
+                            "build context response Content-Length is invalid"
+                        ) from exc
+                    if response_length != plan.content_length:
+                        raise ImageBuildContextDownloadError(
+                            "build context response Content-Length does not match object metadata"
+                        )
+                digest = hashlib.sha256()
+                bytes_written = 0
+                for chunk in response.iter_bytes(1024 * 1024):
+                    bytes_written += len(chunk)
+                    if bytes_written > plan.content_length:
+                        raise ImageBuildContextDownloadError(
+                            "build context response exceeds object metadata size"
+                        )
+                    if bytes_written > MAX_IMAGE_BUILD_CONTEXT_ARCHIVE_BYTES:
+                        raise ImageBuildContextDownloadError(
+                            "build context response exceeds maximum archive size"
+                        )
+                    output.write(chunk)
+                    digest.update(chunk)
     except ImageBuildContextDownloadError:
         target.unlink(missing_ok=True)
         raise
@@ -585,8 +575,6 @@ def _download_image_build_context(
         raise ImageBuildContextDownloadError(
             f"build context download failed: {type(exc).__name__}"
         ) from None
-    finally:
-        connection.close()
     if bytes_written != plan.content_length:
         target.unlink(missing_ok=True)
         raise ImageBuildContextDownloadError("build context response body is incomplete")
@@ -925,6 +913,7 @@ class BuildahWorkerImageBuilder:
 @dataclass(slots=True)
 class RepositoryWorkerImageArchivePublisher:
     repository: ImageArchiveUploadCredentialClient
+    http: InternalHttpClient = field(default_factory=InternalHttpClient)
     content_type: str = "application/x-tar"
 
     def publish_image_archive(
@@ -1000,6 +989,7 @@ class RepositoryWorkerImageArchivePublisher:
             )
         try:
             upload_image_archive(
+                self.http,
                 credentials.upload_url,
                 archive_path,
                 headers=credentials.upload_headers,

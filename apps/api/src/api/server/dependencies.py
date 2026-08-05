@@ -134,6 +134,22 @@ def websocket_authorization_header(websocket: WebSocket) -> str | None:
     return websocket.headers.get("authorization")
 
 
+def authorize_websocket(services: ApiServices, websocket: WebSocket) -> AuthTokenRecord:
+    try:
+        token = services.auth.authorize_header(
+            websocket_authorization_header(websocket),
+            AuthzRequirement(action=AuthScope.Write),
+        )
+        if token is None:
+            raise AuthError("missing authorization principal")
+        return token
+    except AuthError as exc:
+        raise WebSocketException(
+            code=status.WS_1008_POLICY_VIOLATION,
+            reason=str(exc),
+        ) from exc
+
+
 def authorize_services(
     services: ApiServices,
     credentials: HTTPAuthorizationCredentials | None,

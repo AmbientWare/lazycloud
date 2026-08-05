@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable
 from contextlib import ExitStack
 from dataclasses import dataclass, field
 from threading import Lock
 
-from agent.binary import AgentBinarySettings
 from coordination.redis_client import RedisClient, RedisSettings
 from execution.artifacts.service import ArtifactStorageService
 from execution.collections.redis import RedisMapService, RedisSimpleQueueService
@@ -38,11 +38,8 @@ from observability.settings import (
     WorkspaceChangeStreamSettings,
 )
 from observability.telemetry import TelemetryConfig
-from provider_clients.settings import (
-    AwsAccountConnectionSettings,
-    AwsCapacityReconciliationSettings,
-    AwsCapacitySettings,
-)
+from provider_clients.release import resolve_deployment_release
+from provider_clients.settings import AwsCapacityReconciliationSettings
 from shared.app_identity import CONTROL_PLANE_SERVICE_NAME
 from shared.enums import StringEnum
 from storage.image_archive import ImageArchiveSettings
@@ -216,9 +213,15 @@ def _production_api_services() -> ApiServices:
     capacity_bootstrap_settings = CapacityBootstrapSettings()
     gateway_settings = GatewaySettings()
     workspace_change_stream_settings = WorkspaceChangeStreamSettings()
-    agent_binary_settings = AgentBinarySettings()
-    aws_account_connection_settings = AwsAccountConnectionSettings()
-    aws_capacity_settings = AwsCapacitySettings()
+    # The install routes serve exactly the agent artifact this names, so the
+    # release resolves before the service graph exists rather than beside it: a
+    # control plane that came up without it would answer for a release it does
+    # not have.
+    release = resolve_deployment_release()
+    print(f"control plane {release.describe()}", file=sys.stderr, flush=True)
+    agent_binary_settings = release.agent_binaries
+    aws_account_connection_settings = release.aws_connections
+    aws_capacity_settings = release.aws_capacity
     aws_capacity_reconciliation_settings = AwsCapacityReconciliationSettings()
     redis_settings = RedisSettings()
     object_store_settings = S3ObjectStoreSettings()

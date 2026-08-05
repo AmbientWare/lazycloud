@@ -82,8 +82,11 @@ def alembic_config(
         "script_location",
         str(Path(__file__).resolve().parent / "alembic"),
     )
-    settings = DatabaseSettings(application_name=application_name)
-    config.attributes["database_url"] = database_url or settings.url
+    # Left unset when the caller has none: reading the revision graph needs no
+    # database, so resolving one here would make listing heads depend on a
+    # configured deployment.
+    if database_url is not None:
+        config.attributes["database_url"] = database_url
     config.attributes["database_application_name"] = application_name.value
     return config
 

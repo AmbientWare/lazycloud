@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -13,14 +14,11 @@ from uuid import uuid4
 from coordination.redis_client import RedisClient, redis_text
 from coordination.token_lock import release_token_lock, try_acquire_token_lock
 from pydantic import Field, model_validator
-from shared.capacity import (
-    CapacityAcquisitionPlanningRequest as ComputeCapacityPlanningRequest,
-)
 from shared.capacity import CapacityAcquisitionRequest as ComputeCapacityRequest
 from shared.capacity import CapacityAcquisitionResult as ComputeCapacityResult
 from shared.capacity import CapacityAcquisitionShape as ComputeCapacityShape
 from shared.capacity import CapacityAcquisitionStatus as ComputeCapacityStatus
-from shared.capacity import CapacityOwnerKind, CapacityPoolSizingState
+from shared.capacity import CapacityOwnerKind, CapacityPoolSizingSnapshot
 from shared.capacity import CapacityReleaseRequest as ComputeCapacityReleaseRequest
 from shared.compute_fleet import Pool
 from shared.compute_policy import ComputePlacementSource
@@ -36,7 +34,6 @@ from shared.timestamps import utc_now
 
 from scheduler.pool_sizing import (
     CapacityPoolOperationalHealth,
-    CapacityPoolSizingStateService,
     WorkerPoolSizingAction,
     WorkerPoolSizingAllocation,
     WorkerPoolSizingPlan,
@@ -45,8 +42,7 @@ from scheduler.pool_sizing import (
     capacity_pool_selection_key,
     effective_pool_headroom,
     plan_worker_pool_sizing,
-    sizing_failure_state,
-    sizing_state_update,
+    scale_up_retry_at,
 )
 from scheduler.state import (
     CapacityReservationDispatchAllocation,
@@ -54,6 +50,8 @@ from scheduler.state import (
     capacity_memory_mib,
     capacity_owner_key_segment,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 DEFAULT_CAPACITY_MUTATION_LOCK_SECONDS = 300
 DEFAULT_CAPACITY_RESERVATION_RETENTION_SECONDS = 86_400
@@ -68,17 +66,25 @@ return 1
 
 
 class CapacityReservationStatus(StrEnum):
-    Reserved = "reserved"
-    Provisioning = "provisioning"
+    # Declaration order is the lifecycle order `update` enforces: a reservation
+    # may repeat or advance a status, never move back to an earlier one.
+    Pending = "pending"
     Registered = "registered"
     Failed = "failed"
-    Expired = "expired"
     Released = "released"
 
 
-class CapacityReservationSource(StrEnum):
-    PendingWorker = "pending_worker"
-    PlacementMiss = "placement_miss"
+_RESERVATION_LIFECYCLE_RANK: dict[CapacityReservationStatus, int] = {
+    status: rank for rank, status in enumerate(CapacityReservationStatus)
+}
+
+
+class CapacityTerminalReason(StrEnum):
+    ReleasedAfterRegistration = "released_after_registration"
+    ReleasedBeforeRegistration = "released_before_registration"
+    RegistrationDeadlineExpired = "registration_deadline_expired"
+    AcquisitionUnsupported = "acquisition_unsupported"
+    ReleaseUnconfirmed = "release_unconfirmed"
 
 
 class CapacityAcquisitionStatus(StrEnum):
@@ -152,8 +158,7 @@ class CapacityProvisioningReservation(ContractModel):
     capacity_owner_id: str
     pool_name: str
     owner_kind: CapacityOwnerKind
-    source: CapacityReservationSource
-    status: CapacityReservationStatus = CapacityReservationStatus.Reserved
+    status: CapacityReservationStatus = CapacityReservationStatus.Pending
     acquisition_shape: CapacityRequestShape
     schedulable_shape: CapacityRequestShape | None = None
     operation_id: str
@@ -162,17 +167,15 @@ class CapacityProvisioningReservation(ContractModel):
     desired_unit: int = Field(default=0, ge=0)
     acquisition_created: bool = False
     release_requested: bool = False
-    release_target_unit: int | None = Field(default=None, ge=0)
     registration_deadline_at: datetime
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
-    terminal_reason: str = ""
+    terminal_reason: CapacityTerminalReason | None = None
 
     @property
     def open(self) -> bool:
         return self.status in {
-            CapacityReservationStatus.Reserved,
-            CapacityReservationStatus.Provisioning,
+            CapacityReservationStatus.Pending,
             CapacityReservationStatus.Registered,
         }
 
@@ -191,7 +194,6 @@ class CapacityAcquisitionResult(ContractModel):
     reservation_id: str
     operation_id: str
     desired_unit: int = Field(default=0, ge=0)
-    target_worker_id: str = ""
     target_machine_id: str = ""
     retry_delay_seconds: float = Field(default=1.0, ge=0)
     reason: str = ""
@@ -221,29 +223,6 @@ class CapacityReservationVersionConflictError(CapacityReservationConflictError):
 
 class CapacityReservationStateTransitionError(CapacityReservationConflictError):
     """A reservation attempted to leave the frozen lifecycle graph."""
-
-
-class PendingCapacityOwner(ContractModel):
-    capacity_owner_id: str
-    owner_kind: CapacityOwnerKind
-    pool_name: str
-    workspace_id: str = ""
-    registration_timeout_seconds: int = Field(default=600, ge=30, le=3_600)
-
-    def accepts(
-        self,
-        request: SchedulerWorkerRequest,
-        worker: SchedulerWorkerRecord,
-    ) -> bool:
-        return (
-            worker.capacity_owner_id == self.capacity_owner_id
-            and worker.pool_name == self.pool_name
-            and (not self.workspace_id or request.workspace_id == self.workspace_id)
-            and (
-                request.capacity_owner_id in {"", self.capacity_owner_id}
-                and request.pool_selector in {"", self.pool_name}
-            )
-        )
 
 
 class CapacityAcquisitionController(Protocol):
@@ -280,22 +259,7 @@ class CapacityAcquisitionController(Protocol):
 
     def reservation_shape(self, request: SchedulerWorkerRequest) -> CapacityRequestShape: ...
 
-    def plan_acquisition(
-        self,
-        reservation: CapacityProvisioningReservation,
-        *,
-        owner_reservations: tuple[CapacityProvisioningReservation, ...],
-        now: datetime,
-    ) -> CapacityAcquisitionResult: ...
-
-    def ensure_acquisition(
-        self,
-        reservation: CapacityProvisioningReservation,
-        *,
-        now: datetime,
-    ) -> CapacityAcquisitionResult: ...
-
-    def reconcile(
+    def ensure_capacity(
         self,
         reservation: CapacityProvisioningReservation,
         *,
@@ -328,13 +292,15 @@ class CapacityWorkerRepository(Protocol):
     def list_workers(self) -> list[SchedulerWorkerRecord]: ...
 
 
-class ComputeCapacityService(CapacityPoolSizingStateService, Protocol):
-    def plan_capacity_acquisition(
-        self,
-        request: ComputeCapacityPlanningRequest,
-    ) -> ComputeCapacityResult: ...
+class ComputeCapacityService(Protocol):
+    def pool_sizing_snapshot(self, capacity_owner_id: str) -> CapacityPoolSizingSnapshot: ...
 
-    def acquire_capacity(self, request: ComputeCapacityRequest) -> ComputeCapacityResult: ...
+    def ensure_capacity(
+        self,
+        request: ComputeCapacityRequest,
+        *,
+        minimum_unit: int = 0,
+    ) -> ComputeCapacityResult: ...
 
     def release_acquired_capacity(
         self,
@@ -374,11 +340,11 @@ class ComputePoolCapacityController:
         *,
         now: datetime,
     ) -> CapacityPoolOperationalHealth:
+        _ = now
         return capacity_pool_operational_health(
             self.capacity_owner_id,
             self.workers.list_workers(),
-            state=self.compute.get_pool_sizing_state(self.capacity_owner_id),
-            now=now,
+            state=self.compute.pool_sizing_snapshot(self.capacity_owner_id),
         )
 
     def accepts(self, request: SchedulerWorkerRequest) -> bool:
@@ -430,10 +396,11 @@ class ComputePoolCapacityController:
             allocations=allocations,
         )
         registered_units = headroom.available_workers + headroom.unclaimed_pending_workers
-        state = _sizing_state(self.pool, self.compute, registered_units)
+        state = self.compute.pool_sizing_snapshot(self.capacity_owner_id)
         authoritative_units = max(
             registered_units,
-            state.target_units if state.operation_id else 0,
+            state.desired_units,
+            state.pending_desired_units,
             *(reservation.desired_unit for reservation in reservations),
         )
         plan = plan_worker_pool_sizing(
@@ -444,32 +411,32 @@ class ComputePoolCapacityController:
             state=state,
             now=now,
         )
-        state = _record_sizing_observation(self.compute, state, plan)
-        if state.operation_id and registered_units < state.target_units:
-            if state.retry_after_at is not None and state.retry_after_at > now:
-                return plan
-            return self._ensure_sizing_operation(state, plan, now=now)
+        retry_at = scale_up_retry_at(self.pool, state)
+        if retry_at is not None and retry_at > now:
+            return plan
+        if state.pending_operation_id:
+            # Compute committed to this unit but the provider never acknowledged
+            # it. Re-drive that operation id; a fresh one would buy a second
+            # machine for the same unit.
+            return self._ensure_sizing_operation(
+                state.pending_operation_id,
+                minimum_unit=state.pending_desired_units,
+                plan=plan,
+            )
         if plan.action is not WorkerPoolSizingAction.ScaleUp:
             return plan
-        operation_id = str(uuid4())
-        state = _save_sizing_state(
-            self.compute,
-            state.model_copy(
-                update={
-                    "operation_id": operation_id,
-                    "target_units": plan.target_units,
-                    "operation_started_at": now,
-                }
-            ),
+        return self._ensure_sizing_operation(
+            str(uuid4()),
+            minimum_unit=plan.target_units,
+            plan=plan,
         )
-        return self._ensure_sizing_operation(state, plan, now=now)
 
     def _ensure_sizing_operation(
         self,
-        state: CapacityPoolSizingState,
-        plan: WorkerPoolSizingPlan,
+        operation_id: str,
         *,
-        now: datetime,
+        minimum_unit: int,
+        plan: WorkerPoolSizingPlan,
     ) -> WorkerPoolSizingPlan:
         shape = ComputeCapacityShape(
             cpu_millicores=self.pool.worker_cpu_millicores,
@@ -480,54 +447,27 @@ class ComputePoolCapacityController:
             preemptible=self.pool.worker_preemptible,
         )
         try:
-            planned = self.compute.plan_capacity_acquisition(
-                ComputeCapacityPlanningRequest(
+            result = self.compute.ensure_capacity(
+                ComputeCapacityRequest(
                     capacity_owner_id=self.capacity_owner_id,
-                    reservation_id=state.operation_id,
-                    operation_id=state.operation_id,
+                    reservation_id=operation_id,
+                    operation_id=operation_id,
                     shape=shape,
-                )
-            )
-            target_units = max(planned.desired_unit, state.target_units)
-            state = _save_sizing_state(
-                self.compute, state.model_copy(update={"target_units": target_units})
-            )
-            result = (
-                self.compute.acquire_capacity(
-                    ComputeCapacityRequest(
-                        capacity_owner_id=self.capacity_owner_id,
-                        reservation_id=state.operation_id,
-                        operation_id=state.operation_id,
-                        desired_unit=target_units,
-                        shape=shape,
-                    )
-                )
-                if planned.status is ComputeCapacityStatus.Requested
-                else planned
+                ),
+                minimum_unit=minimum_unit,
             )
         except Exception:
-            _save_sizing_state(
-                self.compute,
-                sizing_failure_state(state, self.pool, now=now).model_copy(
-                    update={"terminal_reason": "compute pool sizing operation failed"}
-                ),
-            )
+            LOGGER.exception("compute pool sizing failed for %s", self.pool.name)
             return plan.model_copy(
                 update={
                     "action": WorkerPoolSizingAction.Wait,
-                    "reason": "compute pool sizing operation failed and entered durable backoff",
+                    "reason": "compute pool sizing operation failed",
                 }
             )
         if result.status in {
             ComputeCapacityStatus.TemporarilyUnavailable,
             ComputeCapacityStatus.Unsupported,
         }:
-            _save_sizing_state(
-                self.compute,
-                sizing_failure_state(state, self.pool, now=now).model_copy(
-                    update={"terminal_reason": result.reason}
-                ),
-            )
             return plan.model_copy(
                 update={
                     "action": WorkerPoolSizingAction.Wait,
@@ -535,17 +475,6 @@ class ComputePoolCapacityController:
                 }
             )
         if result.status is ComputeCapacityStatus.AtLimit:
-            _save_sizing_state(
-                self.compute,
-                state.model_copy(
-                    update={
-                        "operation_id": "",
-                        "operation_started_at": None,
-                        "target_units": result.desired_unit,
-                        "terminal_reason": result.reason or "compute pool capacity is at limit",
-                    }
-                ),
-            )
             return plan.model_copy(
                 update={
                     "action": WorkerPoolSizingAction.None_,
@@ -553,25 +482,9 @@ class ComputePoolCapacityController:
                     "reason": result.reason or "compute pool capacity is at limit",
                 }
             )
-        _save_sizing_state(
-            self.compute,
-            state.model_copy(
-                update={
-                    "target_units": result.desired_unit,
-                    "last_scale_up_at": (
-                        now
-                        if result.status is ComputeCapacityStatus.Requested
-                        else state.last_scale_up_at
-                    ),
-                    "retry_after_at": None,
-                    "consecutive_failures": 0,
-                    "terminal_reason": "",
-                }
-            ),
-        )
         return plan.model_copy(update={"target_units": result.desired_unit})
 
-    def plan_acquisition(
+    def ensure_capacity(
         self,
         reservation: CapacityProvisioningReservation,
         *,
@@ -579,45 +492,15 @@ class ComputePoolCapacityController:
         now: datetime,
     ) -> CapacityAcquisitionResult:
         _ = owner_reservations, now
-        result = self.compute.plan_capacity_acquisition(
-            ComputeCapacityPlanningRequest(
-                capacity_owner_id=reservation.capacity_owner_id,
-                reservation_id=reservation.id,
-                operation_id=reservation.operation_id,
-                shape=_compute_capacity_shape(reservation.acquisition_shape),
-            )
-        )
-        return _compute_acquisition_result(reservation, result)
-
-    def ensure_acquisition(
-        self,
-        reservation: CapacityProvisioningReservation,
-        *,
-        now: datetime,
-    ) -> CapacityAcquisitionResult:
-        _ = now
-        if reservation.desired_unit <= 0:
-            raise ValueError("compute capacity acquisition requires a persisted desired unit")
-        result = self.compute.acquire_capacity(
+        result = self.compute.ensure_capacity(
             ComputeCapacityRequest(
                 capacity_owner_id=reservation.capacity_owner_id,
                 reservation_id=reservation.id,
                 operation_id=reservation.operation_id,
-                desired_unit=reservation.desired_unit,
                 shape=_compute_capacity_shape(reservation.acquisition_shape),
             )
         )
         return _compute_acquisition_result(reservation, result)
-
-    def reconcile(
-        self,
-        reservation: CapacityProvisioningReservation,
-        *,
-        owner_reservations: tuple[CapacityProvisioningReservation, ...],
-        now: datetime,
-    ) -> CapacityAcquisitionResult:
-        _ = owner_reservations
-        return self.ensure_acquisition(reservation, now=now)
 
     def plan_release(
         self,
@@ -744,6 +627,7 @@ class RedisCapacityReservationRepository:
             )
         stop_renewal = Event()
         lease_lost = Event()
+        lease_loss: list[tuple[str, BaseException | None]] = []
 
         def renew() -> None:
             interval_seconds = max(ttl_seconds / 3, 0.1)
@@ -756,10 +640,16 @@ class RedisCapacityReservationRepository:
                         token,
                         ttl_seconds,
                     )
-                except Exception:
+                except Exception as exc:
+                    LOGGER.exception(
+                        "capacity mutation lease renewal failed for owner %s",
+                        capacity_owner_id,
+                    )
+                    lease_loss.append(("renewal failed", exc))
                     lease_lost.set()
                     return
                 if renewed != 1:
+                    lease_loss.append(("the lock was taken by another holder", None))
                     lease_lost.set()
                     return
 
@@ -780,19 +670,31 @@ class RedisCapacityReservationRepository:
             renewal.join(timeout=max(min(ttl_seconds / 3, 1.0), 0.1))
             try:
                 current_token = self.redis.get(key)
-            except Exception:
+            except Exception as exc:
+                LOGGER.exception(
+                    "reading the capacity mutation lease failed for owner %s",
+                    capacity_owner_id,
+                )
+                lease_loss.append(("reading the lock failed", exc))
                 lease_lost.set()
             else:
                 if current_token is None or redis_text(current_token) != token:
+                    lease_loss.append(("the lock was taken by another holder", None))
                     lease_lost.set()
             try:
                 release_token_lock(self.redis, key, token)
-            except Exception:
+            except Exception as exc:
+                LOGGER.exception(
+                    "releasing the capacity mutation lease failed for owner %s",
+                    capacity_owner_id,
+                )
+                lease_loss.append(("releasing the lock failed", exc))
                 lease_lost.set()
             if lease_lost.is_set() and not body_failed:
+                why, cause = lease_loss[0] if lease_loss else ("the lock was lost", None)
                 raise CapacityReservationLeaseLostError(
-                    f"capacity owner {capacity_owner_id} mutation lease was lost"
-                )
+                    f"capacity owner {capacity_owner_id} mutation lease was lost: {why}"
+                ) from cause
 
     def reserve(
         self,
@@ -803,8 +705,6 @@ class RedisCapacityReservationRepository:
         request: SchedulerWorkerRequest,
         shape: CapacityRequestShape,
         registration_timeout: timedelta,
-        source: CapacityReservationSource = CapacityReservationSource.PlacementMiss,
-        target_worker_id: str = "",
         desired_unit: int = 0,
         now: datetime | None = None,
     ) -> CapacityReservationDecision:
@@ -821,30 +721,17 @@ class RedisCapacityReservationRepository:
             if reservation is not None:
                 self.release_terminal(reservation.id, now=current_time)
 
-        reservation = self._compatible_open_reservation(
-            capacity_owner_id,
-            request,
-            target_worker_id=target_worker_id,
-        )
+        reservation = self._compatible_open_reservation(capacity_owner_id, request)
         created = reservation is None
         if reservation is None:
-            if target_worker_id and any(
-                candidate.open and candidate.target_worker_id == target_worker_id
-                for candidate in self.list_for_owner(capacity_owner_id)
-            ):
-                raise CapacityReservationVersionConflictError(
-                    f"pending worker {target_worker_id} capacity is already reserved"
-                )
             reservation_id = str(uuid4())
             reservation = CapacityProvisioningReservation(
                 id=reservation_id,
                 capacity_owner_id=capacity_owner_id,
                 pool_name=pool_name,
                 owner_kind=owner_kind,
-                source=source,
                 acquisition_shape=shape,
                 operation_id=reservation_id,
-                target_worker_id=target_worker_id,
                 desired_unit=desired_unit,
                 registration_deadline_at=current_time + registration_timeout,
                 created_at=current_time,
@@ -950,11 +837,11 @@ class RedisCapacityReservationRepository:
         if current is None or current.resource_version != expected_resource_version:
             raise CapacityReservationVersionConflictError(reservation.id)
         if (
-            reservation.status is not current.status
-            and reservation.status not in _allowed_next_statuses(current.status)
+            _RESERVATION_LIFECYCLE_RANK[reservation.status]
+            < _RESERVATION_LIFECYCLE_RANK[current.status]
         ):
             raise CapacityReservationStateTransitionError(
-                f"capacity reservation cannot transition from {current.status.value} "
+                f"capacity reservation cannot move back from {current.status.value} "
                 f"to {reservation.status.value}"
             )
         stored = reservation.model_copy(
@@ -970,7 +857,6 @@ class RedisCapacityReservationRepository:
         self,
         reservation: CapacityProvisioningReservation,
         *,
-        release_target_unit: int,
         now: datetime,
     ) -> CapacityProvisioningReservation:
         current = self.get(reservation.id)
@@ -982,7 +868,6 @@ class RedisCapacityReservationRepository:
             update={
                 "resource_version": current.resource_version + 1,
                 "release_requested": True,
-                "release_target_unit": release_target_unit,
                 "updated_at": now,
             }
         )
@@ -1011,25 +896,14 @@ class RedisCapacityReservationRepository:
             return reservation
         if reservation.status is CapacityReservationStatus.Released:
             return reservation
-        if reservation.status in {
-            CapacityReservationStatus.Reserved,
-            CapacityReservationStatus.Provisioning,
-        }:
-            reservation = self.update(
-                reservation.model_copy(
-                    update={
-                        "status": CapacityReservationStatus.Failed,
-                        "terminal_reason": (
-                            reservation.terminal_reason
-                            or "reservation released before registration"
-                        ),
-                    }
-                ),
-                expected_resource_version=reservation.resource_version,
-                now=now,
-            )
         return self.update(
-            reservation.model_copy(update={"status": CapacityReservationStatus.Released}),
+            reservation.model_copy(
+                update={
+                    "status": CapacityReservationStatus.Released,
+                    "terminal_reason": reservation.terminal_reason
+                    or _release_reason(reservation.status),
+                }
+            ),
             expected_resource_version=reservation.resource_version,
             now=now,
         )
@@ -1061,14 +935,10 @@ class RedisCapacityReservationRepository:
         self,
         capacity_owner_id: str,
         request: SchedulerWorkerRequest,
-        *,
-        target_worker_id: str,
     ) -> CapacityProvisioningReservation | None:
         for reservation in self.list_for_owner(capacity_owner_id):
-            if (
-                not reservation.accepting_allocations
-                or reservation.target_worker_id != target_worker_id
-                or not reservation.allocation_shape.can_host(request)
+            if not reservation.accepting_allocations or not reservation.allocation_shape.can_host(
+                request
             ):
                 continue
             allocations = self.allocations_for(reservation.id)
@@ -1117,7 +987,6 @@ class RedisCapacityReservationRepository:
 class CapacityReservationService:
     reservations: RedisCapacityReservationRepository
     controllers: Callable[[], Iterable[CapacityAcquisitionController]]
-    pending_owners: Callable[[], Iterable[PendingCapacityOwner]] = tuple
     allocation_owners: CapacityAllocationOwnerDirectory | None = None
 
     @contextmanager
@@ -1145,48 +1014,6 @@ class CapacityReservationService:
                 "capacity_owner_id": controller.capacity_owner_id,
             }
         )
-
-    def reserve_pending(
-        self,
-        request: SchedulerWorkerRequest,
-        worker: SchedulerWorkerRecord,
-        *,
-        now: datetime | None = None,
-    ) -> CapacityAcquisitionResult:
-        pending_owner = self._pending_owner_for_worker(request, worker)
-        if pending_owner is None:
-            return _unsupported_result(request, "pending worker has no matching capacity owner")
-        current_time = now or utc_now()
-        with self.reservations.mutation_lock(pending_owner.capacity_owner_id):
-            decision = self.reservations.reserve(
-                capacity_owner_id=pending_owner.capacity_owner_id,
-                pool_name=pending_owner.pool_name,
-                owner_kind=pending_owner.owner_kind,
-                request=request,
-                shape=_shape_from_worker(worker),
-                registration_timeout=timedelta(seconds=pending_owner.registration_timeout_seconds),
-                source=CapacityReservationSource.PendingWorker,
-                target_worker_id=worker.worker_id,
-                now=current_time,
-            )
-            reservation = decision.reservation
-            if decision.created:
-                reservation = self.reservations.update(
-                    reservation.model_copy(
-                        update={"status": CapacityReservationStatus.Provisioning}
-                    ),
-                    expected_resource_version=reservation.resource_version,
-                    now=current_time,
-                )
-            return CapacityAcquisitionResult(
-                status=CapacityAcquisitionStatus.ExistingPending,
-                capacity_owner_id=reservation.capacity_owner_id,
-                reservation_id=reservation.id,
-                operation_id=reservation.operation_id,
-                desired_unit=reservation.desired_unit,
-                target_worker_id=worker.worker_id,
-                reason="reserved matching pending worker capacity",
-            )
 
     def acquire(
         self,
@@ -1247,7 +1074,7 @@ class CapacityReservationService:
                     capacity_owner_id=controller.capacity_owner_id,
                     reservation_id=releasing.id,
                     operation_id=releasing.operation_id,
-                    desired_unit=releasing.release_target_unit or releasing.desired_unit,
+                    desired_unit=releasing.desired_unit,
                     reason="capacity owner is finishing an earlier release intent",
                 )
             decision = self.reservations.reserve(
@@ -1263,30 +1090,11 @@ class CapacityReservationService:
             owner_reservations = tuple(
                 self.reservations.list_for_owner(controller.capacity_owner_id)
             )
-            if (
-                not decision.created
-                and reservation.status is not CapacityReservationStatus.Reserved
-            ):
-                result = controller.reconcile(
-                    reservation,
-                    owner_reservations=owner_reservations,
-                    now=now,
-                )
-                self._record_acquisition_result(reservation, result, now=now)
-                return result
-            planned = controller.plan_acquisition(
+            result = controller.ensure_capacity(
                 reservation,
                 owner_reservations=owner_reservations,
                 now=now,
             )
-            reservation = self._record_acquisition_result(
-                reservation,
-                planned,
-                now=now,
-            )
-            if planned.status is not CapacityAcquisitionStatus.Requested:
-                return planned
-            result = controller.ensure_acquisition(reservation, now=now)
             self._record_acquisition_result(reservation, result, now=now)
             return result
 
@@ -1325,7 +1133,7 @@ class CapacityReservationService:
         *,
         now: datetime | None = None,
     ) -> CapacityReservationDispatchAllocation | None:
-        """Transfer a provisioning unit to its registered worker before dispatch."""
+        """Bind a pending reservation to its registered worker before dispatch."""
 
         allocation = self.reservations.allocation_for_request(container_id)
         if allocation is None:
@@ -1353,7 +1161,7 @@ class CapacityReservationService:
                         "schedulable_shape": _schedulable_shape(reservation, worker),
                         "target_worker_id": worker.worker_id,
                         "target_machine_id": worker.machine_id,
-                        "terminal_reason": "",
+                        "terminal_reason": None,
                     }
                 ),
                 expected_resource_version=reservation.resource_version,
@@ -1435,14 +1243,7 @@ class CapacityReservationService:
                     allocations = self._prune_inactive_allocations(
                         self.reservations.allocations_for(reservation.id)
                     )
-                    if (
-                        reservation.status
-                        in {
-                            CapacityReservationStatus.Failed,
-                            CapacityReservationStatus.Expired,
-                        }
-                        and allocations
-                    ):
+                    if reservation.status is CapacityReservationStatus.Failed and allocations:
                         reconciled.append(reservation)
                         continue
                     if not allocations:
@@ -1479,7 +1280,7 @@ class CapacityReservationService:
                                         ),
                                         "target_worker_id": worker.worker_id,
                                         "target_machine_id": worker.machine_id,
-                                        "terminal_reason": "",
+                                        "terminal_reason": None,
                                     }
                                 ),
                                 expected_resource_version=reservation.resource_version,
@@ -1515,11 +1316,12 @@ class CapacityReservationService:
                             reservation = self.reservations.update(
                                 reservation.model_copy(
                                     update={
-                                        "status": CapacityReservationStatus.Expired,
+                                        "status": CapacityReservationStatus.Failed,
                                         "acquisition_created": False,
                                         "release_requested": False,
-                                        "terminal_reason": release_result.reason
-                                        or "worker registration deadline expired",
+                                        "terminal_reason": (
+                                            CapacityTerminalReason.RegistrationDeadlineExpired
+                                        ),
                                     }
                                 ),
                                 expected_resource_version=reservation.resource_version,
@@ -1527,21 +1329,16 @@ class CapacityReservationService:
                             )
                         else:
                             reservation = self.reservations.update(
-                                reservation.model_copy(
-                                    update={"terminal_reason": release_result.reason}
-                                ),
+                                _unconfirmed_release(reservation, release_result),
                                 expected_resource_version=reservation.resource_version,
                                 now=current_time,
                             )
                         reconciled.append(reservation)
                         continue
-                    if reservation.source is CapacityReservationSource.PendingWorker:
-                        reconciled.append(reservation)
-                        continue
                     if controller is None:
                         reconciled.append(reservation)
                         continue
-                    result = controller.reconcile(
+                    result = controller.ensure_capacity(
                         reservation,
                         owner_reservations=tuple(
                             self.reservations.list_for_owner(reservation.capacity_owner_id)
@@ -1637,7 +1434,7 @@ class CapacityReservationService:
                         "schedulable_shape": _schedulable_shape(reservation, worker),
                         "target_worker_id": worker.worker_id,
                         "target_machine_id": worker.machine_id,
-                        "terminal_reason": "",
+                        "terminal_reason": None,
                     }
                 ),
                 expected_resource_version=reservation.resource_version,
@@ -1645,14 +1442,7 @@ class CapacityReservationService:
             )
             return self.reservations.release_terminal(registered.id, now=now) or registered
         if reservation.acquisition_created:
-            controller = next(
-                (
-                    candidate
-                    for candidate in self.controllers()
-                    if candidate.capacity_owner_id == reservation.capacity_owner_id
-                ),
-                None,
-            )
+            controller = self._controller_for_owner(reservation.capacity_owner_id)
             if controller is None:
                 return reservation
             reservation, release_result = self._release_owned_capacity(
@@ -1665,7 +1455,7 @@ class CapacityReservationService:
                 CapacityAcquisitionStatus.Unsupported,
             }:
                 return self.reservations.update(
-                    reservation.model_copy(update={"terminal_reason": release_result.reason}),
+                    _unconfirmed_release(reservation, release_result),
                     expected_resource_version=reservation.resource_version,
                     now=now,
                 )
@@ -1674,6 +1464,7 @@ class CapacityReservationService:
                     update={
                         "acquisition_created": False,
                         "release_requested": False,
+                        "terminal_reason": None,
                     }
                 ),
                 expected_resource_version=reservation.resource_version,
@@ -1700,11 +1491,7 @@ class CapacityReservationService:
                 CapacityAcquisitionStatus.Unsupported,
             }:
                 return reservation, release_plan
-            reservation = self.reservations.prepare_release(
-                reservation,
-                release_target_unit=release_plan.desired_unit,
-                now=now,
-            )
+            reservation = self.reservations.prepare_release(reservation, now=now)
             owner_reservations = tuple(
                 self.reservations.list_for_owner(reservation.capacity_owner_id)
             )
@@ -1726,9 +1513,11 @@ class CapacityReservationService:
         if result.capacity_owner_id != reservation.capacity_owner_id:
             raise ValueError("capacity acquisition returned a different owner identity")
         next_status = {
-            CapacityAcquisitionStatus.ExistingPending: CapacityReservationStatus.Provisioning,
-            CapacityAcquisitionStatus.Requested: CapacityReservationStatus.Provisioning,
-            CapacityAcquisitionStatus.AtLimit: CapacityReservationStatus.Failed,
+            CapacityAcquisitionStatus.ExistingPending: CapacityReservationStatus.Pending,
+            CapacityAcquisitionStatus.Requested: CapacityReservationStatus.Pending,
+            # Full is backpressure, not failure: the reservation keeps waiting
+            # and the pool keeps its place in selection.
+            CapacityAcquisitionStatus.AtLimit: reservation.status,
             CapacityAcquisitionStatus.TemporarilyUnavailable: reservation.status,
             CapacityAcquisitionStatus.Unsupported: CapacityReservationStatus.Failed,
         }[result.status]
@@ -1746,10 +1535,11 @@ class CapacityReservationService:
                         reservation.acquisition_created
                         or result.status is CapacityAcquisitionStatus.Requested
                     ),
-                    "target_worker_id": result.target_worker_id or reservation.target_worker_id,
                     "target_machine_id": result.target_machine_id or reservation.target_machine_id,
                     "terminal_reason": (
-                        result.reason if status is CapacityReservationStatus.Failed else ""
+                        CapacityTerminalReason.AcquisitionUnsupported
+                        if status is CapacityReservationStatus.Failed
+                        else None
                     ),
                 }
             ),
@@ -1799,34 +1589,6 @@ class CapacityReservationService:
             None,
         )
 
-    def _pending_owner_for_worker(
-        self,
-        request: SchedulerWorkerRequest,
-        worker: SchedulerWorkerRecord,
-    ) -> PendingCapacityOwner | None:
-        candidates = [owner for owner in self.pending_owners() if owner.accepts(request, worker)]
-        if not candidates:
-            controller = self._controller_for_owner(worker.capacity_owner_id)
-            if controller is not None and (
-                request.capacity_owner_id in {"", controller.capacity_owner_id}
-                and request.pool_selector in {"", controller.pool_name}
-                and worker.pool_name == controller.pool_name
-            ):
-                candidates.append(
-                    PendingCapacityOwner(
-                        capacity_owner_id=controller.capacity_owner_id,
-                        owner_kind=controller.owner_kind,
-                        pool_name=controller.pool_name,
-                        registration_timeout_seconds=int(
-                            controller.registration_timeout.total_seconds()
-                        ),
-                    )
-                )
-        if not candidates:
-            return None
-        candidates.sort(key=lambda owner: owner.capacity_owner_id)
-        return candidates[0]
-
 
 def reservation_shape_for_request(
     request: SchedulerWorkerRequest,
@@ -1863,51 +1625,6 @@ def _request_has_strict_pool(request: SchedulerWorkerRequest) -> bool:
         bool(request.pool_selector)
         and request.placement_source is ComputePlacementSource.AttachedPool
     )
-
-
-def _sizing_state(
-    pool: Pool,
-    states: CapacityPoolSizingStateService,
-    registered_units: int,
-) -> CapacityPoolSizingState:
-    state = states.get_pool_sizing_state(pool.capacity_owner_id)
-    if state.pool_name != pool.name:
-        raise ValueError("worker-pool sizing state belongs to a different pool")
-    updates: dict[str, str | int | bool | datetime | None] = {}
-    if not state.initial_target_reached and registered_units >= pool.initial_workers:
-        updates["initial_target_reached"] = True
-    if state.operation_id and registered_units >= state.target_units:
-        updates.update(
-            {
-                "operation_id": "",
-                "target_units": 0,
-                "operation_started_at": None,
-                "retry_after_at": None,
-                "consecutive_failures": 0,
-            }
-        )
-    if not updates:
-        return state
-    return _save_sizing_state(states, state.model_copy(update=updates))
-
-
-def _record_sizing_observation(
-    states: CapacityPoolSizingStateService,
-    state: CapacityPoolSizingState,
-    plan: WorkerPoolSizingPlan,
-) -> CapacityPoolSizingState:
-    if state.initial_target_reached == plan.initial_target_reached:
-        return state
-    return _save_sizing_state(
-        states, state.model_copy(update={"initial_target_reached": plan.initial_target_reached})
-    )
-
-
-def _save_sizing_state(
-    states: CapacityPoolSizingStateService,
-    state: CapacityPoolSizingState,
-) -> CapacityPoolSizingState:
-    return states.compare_and_set_pool_sizing_state(sizing_state_update(state))
 
 
 def reservation_matches_worker(
@@ -1951,18 +1668,6 @@ def _schedulable_shape(
             "gpu_type": worker.gpu_type if worker.total_gpu_count > 0 else "",
             "gpu_count": worker.total_gpu_count,
         }
-    )
-
-
-def _shape_from_worker(worker: SchedulerWorkerRecord) -> CapacityRequestShape:
-    return CapacityRequestShape(
-        cpu_millicores=worker.total_cpu_millicores,
-        memory_mib=worker.total_memory_mib,
-        gpu_type=worker.gpu_type if worker.total_gpu_count > 0 else "",
-        gpu_count=worker.total_gpu_count,
-        runtime_class=worker.runtime_class,
-        runtime_classes=tuple(worker.runtime_classes),
-        preemptible=worker.preemptible,
     )
 
 
@@ -2042,32 +1747,26 @@ def _owner_key(capacity_owner_id: str) -> str:
     return capacity_owner_key_segment(capacity_owner_id)
 
 
-def _allowed_next_statuses(
-    status: CapacityReservationStatus,
-) -> frozenset[CapacityReservationStatus]:
-    if status is CapacityReservationStatus.Reserved:
-        return frozenset(
-            {
-                CapacityReservationStatus.Provisioning,
-                CapacityReservationStatus.Failed,
-                CapacityReservationStatus.Expired,
-            }
-        )
-    if status is CapacityReservationStatus.Provisioning:
-        return frozenset(
-            {
-                CapacityReservationStatus.Registered,
-                CapacityReservationStatus.Failed,
-                CapacityReservationStatus.Expired,
-            }
-        )
-    if status in {
-        CapacityReservationStatus.Registered,
-        CapacityReservationStatus.Failed,
-        CapacityReservationStatus.Expired,
-    }:
-        return frozenset({CapacityReservationStatus.Released})
-    return frozenset()
+def _release_reason(status: CapacityReservationStatus) -> CapacityTerminalReason:
+    if status is CapacityReservationStatus.Registered:
+        return CapacityTerminalReason.ReleasedAfterRegistration
+    return CapacityTerminalReason.ReleasedBeforeRegistration
+
+
+def _unconfirmed_release(
+    reservation: CapacityProvisioningReservation,
+    result: CapacityAcquisitionResult,
+) -> CapacityProvisioningReservation:
+    # The provider's own wording is the only account of why the unit is still
+    # held, and the durable record keeps a classification rather than that text.
+    LOGGER.warning(
+        "capacity release for reservation %s is unconfirmed: %s",
+        reservation.id,
+        result.reason,
+    )
+    return reservation.model_copy(
+        update={"terminal_reason": CapacityTerminalReason.ReleaseUnconfirmed}
+    )
 
 
 def _redis_strings(values: Iterable[str | bytes | int | float | bool]) -> list[str]:
@@ -2113,13 +1812,12 @@ __all__ = [
     "CapacityReservationLeaseLostError",
     "CapacityReservationLockContendedError",
     "CapacityReservationService",
-    "CapacityReservationSource",
     "CapacityReservationStateTransitionError",
     "CapacityReservationStatus",
     "CapacityReservationVersionConflictError",
+    "CapacityTerminalReason",
     "CapacityWorkerRepository",
     "ComputePoolCapacityController",
-    "PendingCapacityOwner",
     "RedisCapacityReservationRepository",
     "reservation_matches_worker",
     "reservation_shape_for_request",

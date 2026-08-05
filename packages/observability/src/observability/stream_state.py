@@ -613,16 +613,28 @@ def _json_mapping(value: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
     return dict(value)
 
 
+def _entry_id_order(entry_id: str) -> tuple[int, int]:
+    """Order a Redis-issued stream entry ID by its numeric milliseconds and sequence.
+
+    Redis renders the sequence unpadded, so comparing entry IDs as text places
+    `<ms>-10` ahead of `<ms>-7`. Every entry a single Lua script appends carries
+    one frozen millisecond, so a container log batch fills the sequence far past
+    9 and text order would scramble the batch it just wrote in order.
+    """
+    milliseconds, _separator, sequence = entry_id.partition("-")
+    return (
+        int(milliseconds) if milliseconds.isdigit() else 0,
+        int(sequence) if sequence.isdigit() else 0,
+    )
+
+
 def _entry_seq_num(entry_id: str) -> int:
-    head = entry_id.split("-", 1)[0]
-    try:
-        return int(head)
-    except ValueError:
-        return 0
+    return _entry_id_order(entry_id)[0]
 
 
-def _record_sort_key(record: RedisStreamRecord) -> tuple[int, str, str]:
-    return (_entry_seq_num(record.entry_id), record.stream, record.entry_id)
+def _record_sort_key(record: RedisStreamRecord) -> tuple[int, int, str]:
+    milliseconds, sequence = _entry_id_order(record.entry_id)
+    return (milliseconds, sequence, record.stream)
 
 
 def _log_record_matches_query(record: RedisStreamRecord, query: LogStreamQuery) -> bool:

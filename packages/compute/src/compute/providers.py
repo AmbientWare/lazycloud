@@ -7,7 +7,7 @@ from enum import StrEnum
 from typing import Protocol
 from uuid import NAMESPACE_URL, uuid5
 
-from pydantic import Field, JsonValue, model_validator
+from pydantic import Field, JsonValue, field_validator, model_validator
 from shared.app_identity import MACHINE_ID_LABEL
 from shared.compute_fleet import Machine
 from shared.compute_policy import (
@@ -16,6 +16,7 @@ from shared.compute_policy import (
     ComputePoolRecord,
 )
 from shared.contracts import ContractModel
+from shared.urls import normalize_http_origin
 
 from compute.offers import ComputeOffer
 from compute.projection import PrivatePoolState
@@ -62,6 +63,11 @@ class ProviderPoolBootstrap(ContractModel):
     agent_binary_url: str
     worker_image_digest: str
 
+    @field_validator("control_plane_url")
+    @classmethod
+    def validate_control_plane_url(cls, value: str) -> str:
+        return normalize_http_origin(value, field_name="control-plane URL")
+
 
 class ProviderPoolRequest(ContractModel):
     workspace_id: str
@@ -96,6 +102,11 @@ class ProviderPoolInstance(ContractModel):
     address: str = ""
     availability_zone: str = ""
     storage_volume_ids: tuple[str, ...] = ()
+    # Version of the provider-side launch configuration this instance booted
+    # with, empty when the provider reports none. A pool rolls its configuration
+    # forward without disturbing running instances, so this is the only value
+    # that identifies the release a node is actually on.
+    booted_template_version: str = ""
 
 
 class ProviderPoolSnapshot(ContractModel):
@@ -243,6 +254,8 @@ class ComputeSchedulerHooks(Protocol):
     def register_internal_pool(self, pool: ComputePoolRecord, offer: ComputeOffer) -> None: ...
 
     def disable_machine(self, machine_id: str, reason: str) -> None: ...
+
+    def machine_worker_available(self, machine_id: str) -> bool: ...
 
     def retire_machine(
         self,

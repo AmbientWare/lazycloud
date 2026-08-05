@@ -4,16 +4,20 @@ import base64
 import hashlib
 import json
 import re
-import shlex
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from typing import Literal, Protocol, Self, TypedDict, TypeGuard, overload
-from urllib.parse import urlparse
 
 from boto3.session import Session
 from botocore.exceptions import BotoCoreError, ClientError
+from compute.node_bootstrap import (
+    NodeBootstrapProfile,
+    NodeBootstrapSettings,
+    node_bootstrap_script,
+    validate_agent_binary_url,
+)
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -24,14 +28,16 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from shared.app_identity import AGENT_NAME, STATE_DIR
-from shared.tailscale_install import TAILSCALE_AMD64_SHA256, TAILSCALE_INSTALL_VERSION
+from shared.urls import normalize_http_origin
 
 from .account_connection import AwsAccountConnectionTarget
+from .boto3_clients import has_operations, is_boto3_client_factory
 from .instance_catalog import aws_instance_catalog_entry, aws_managed_capacity_resource_name
 from .provider_control import (
     AwsProviderControlError,
     AwsProviderControlErrorCode,
+    invalid_response_error,
+    upstream_error,
 )
 
 AWS_MANAGED_POOL_TAG = "cloud-pool:managed-by"
@@ -79,33 +85,12 @@ class AwsManagedPoolBootstrap(AwsManagedPoolModel):
     @field_validator("control_plane_url")
     @classmethod
     def validate_control_plane_url(cls, value: str) -> str:
-        url = value.strip().rstrip("/")
-        parsed = urlparse(url)
-        if (
-            parsed.scheme != "https"
-            or not parsed.netloc
-            or parsed.username
-            or parsed.password
-            or parsed.query
-            or parsed.fragment
-        ):
-            raise ValueError("control-plane URL must be an HTTPS origin")
-        return url
+        return normalize_http_origin(value, field_name="control-plane URL")
 
     @field_validator("agent_binary_url")
     @classmethod
-    def validate_agent_binary_url(cls, value: str) -> str:
-        url = value.strip()
-        parsed = urlparse(url)
-        if (
-            parsed.scheme != "https"
-            or not parsed.netloc
-            or parsed.username
-            or parsed.password
-            or parsed.fragment
-        ):
-            raise ValueError("agent artifact URL must be an HTTPS URL without credentials")
-        return url
+    def normalize_agent_binary_url(cls, value: str) -> str:
+        return validate_agent_binary_url(value)
 
 
 class AwsManagedPoolBinaries(AwsManagedPoolModel):
@@ -172,14 +157,17 @@ class AwsManagedPoolPhase(StrEnum):
 
 class AwsManagedPoolResourceIds(AwsManagedPoolModel):
     launch_template_id: str | None = None
-    launch_template_version: int | None = None
+    # The newest version of the template, which is what the next ensure or scale
+    # pins the group to. Instances already running keep the version they booted
+    # from, so this never answers what a node is running.
+    launch_template_latest_version: int | None = None
     autoscaling_group_name: str | None = None
 
     @property
     def complete(self) -> bool:
         return (
             self.launch_template_id is not None
-            and self.launch_template_version is not None
+            and self.launch_template_latest_version is not None
             and self.autoscaling_group_name is not None
         )
 
@@ -189,6 +177,10 @@ class AwsManagedPoolInstance(AwsManagedPoolModel):
     lifecycle_state: str
     health_status: str
     availability_zone: str
+    # The template version the group launched this instance with, empty when the
+    # group reports none. Rolling the group forward leaves running instances on
+    # the version they booted with, so this and the group's reference diverge.
+    booted_template_version: str = ""
 
 
 class AwsManagedPoolSnapshot(AwsManagedPoolModel):
@@ -377,14 +369,6 @@ class AwsManagedPoolSessionFactory(Protocol):
     ) -> AwsManagedPoolSession: ...
 
 
-class _Boto3ClientFactory(Protocol):
-    def client(self, service_name: str) -> object: ...
-
-
-def _is_boto3_client_factory(value: object) -> TypeGuard[_Boto3ClientFactory]:
-    return callable(getattr(value, "client", None))
-
-
 @dataclass(frozen=True, slots=True)
 class _Boto3ManagedPoolSession:
     session: Session
@@ -402,7 +386,7 @@ class _Boto3ManagedPoolSession:
         self, service_name: Literal["sts", "ec2", "autoscaling"]
     ) -> AwsManagedPoolStsClient | AwsManagedPoolEc2Client | AwsManagedPoolAutoScalingClient:
         source: object = self.session
-        if not _is_boto3_client_factory(source):
+        if not is_boto3_client_factory(source):
             raise RuntimeError("boto3 session lacks the client factory operation")
         if service_name == "sts":
             candidate = source.client("sts")
@@ -420,16 +404,12 @@ class _Boto3ManagedPoolSession:
         return candidate
 
 
-def _has_operations(value: object, operations: tuple[str, ...]) -> bool:
-    return all(callable(getattr(value, operation, None)) for operation in operations)
-
-
 def _is_sts_client(value: object) -> TypeGuard[AwsManagedPoolStsClient]:
-    return _has_operations(value, ("assume_role",))
+    return has_operations(value, ("assume_role",))
 
 
 def _is_ec2_client(value: object) -> TypeGuard[AwsManagedPoolEc2Client]:
-    return _has_operations(
+    return has_operations(
         value,
         (
             "create_launch_template",
@@ -445,7 +425,7 @@ def _is_ec2_client(value: object) -> TypeGuard[AwsManagedPoolEc2Client]:
 
 
 def _is_autoscaling_client(value: object) -> TypeGuard[AwsManagedPoolAutoScalingClient]:
-    return _has_operations(
+    return has_operations(
         value,
         (
             "create_auto_scaling_group",
@@ -530,7 +510,7 @@ class Boto3AwsManagedPoolClientProvider:
         except ClientError as exc:
             raise _client_error(exc, operation="assume account connection role") from exc
         except BotoCoreError as exc:
-            raise _upstream_error(exc, operation="assume account connection role") from exc
+            raise upstream_error(exc, operation="assume account connection role") from exc
         assumed = self.session_factory(
             region_name=target.region,
             aws_access_key_id=credentials.access_key.get_secret_value(),
@@ -569,16 +549,17 @@ class _LaunchTemplateVersions(_Response):
     values: tuple[_LaunchTemplateVersion, ...] = Field(default=(), alias="LaunchTemplateVersions")
 
 
+class _GroupLaunchTemplate(_Response):
+    id: str = Field(alias="LaunchTemplateId")
+    version: str = Field(alias="Version")
+
+
 class _GroupInstance(_Response):
     instance_id: str = Field(alias="InstanceId")
     lifecycle_state: str = Field(default="", alias="LifecycleState")
     health_status: str = Field(default="", alias="HealthStatus")
     availability_zone: str = Field(default="", alias="AvailabilityZone")
-
-
-class _GroupLaunchTemplate(_Response):
-    id: str = Field(alias="LaunchTemplateId")
-    version: str = Field(alias="Version")
+    launch_template: _GroupLaunchTemplate | None = Field(default=None, alias="LaunchTemplate")
 
 
 class _Group(_Response):
@@ -631,7 +612,7 @@ class AwsManagedPoolProvisioner:
                 state.model_copy(
                     update={
                         "launch_template_id": launch_template_id,
-                        "launch_template_version": launch_template_version,
+                        "launch_template_latest_version": launch_template_version,
                     }
                 )
             )
@@ -680,7 +661,7 @@ class AwsManagedPoolProvisioner:
         group = self._describe_group(spec.autoscaling_group_name)
         return AwsManagedPoolResourceIds(
             launch_template_id=launch_template.id if launch_template is not None else None,
-            launch_template_version=(
+            launch_template_latest_version=(
                 launch_template.latest_version if launch_template is not None else None
             ),
             autoscaling_group_name=group.name if group is not None else None,
@@ -696,7 +677,7 @@ class AwsManagedPoolProvisioner:
             raise ValueError("invalid managed pool capacity")
         group = self._require_group(spec)
         resources = self.discover(spec)
-        if resources.launch_template_id is None or resources.launch_template_version is None:
+        if resources.launch_template_id is None or resources.launch_template_latest_version is None:
             raise AwsProviderControlError(
                 AwsProviderControlErrorCode.ResourceNotFound,
                 operation="scale managed pool",
@@ -712,7 +693,7 @@ class AwsManagedPoolProvisioner:
             VPCZoneIdentifier=",".join(spec.subnet_ids),
             LaunchTemplate={
                 "LaunchTemplateId": resources.launch_template_id,
-                "Version": str(resources.launch_template_version),
+                "Version": str(resources.launch_template_latest_version),
             },
         )
 
@@ -752,15 +733,7 @@ class AwsManagedPoolProvisioner:
                 resource_ids=state,
                 desired_nodes=0,
                 max_nodes=group.maximum,
-                instances=tuple(
-                    AwsManagedPoolInstance(
-                        instance_id=item.instance_id,
-                        lifecycle_state=item.lifecycle_state,
-                        health_status=item.health_status,
-                        availability_zone=item.availability_zone,
-                    )
-                    for item in group.instances
-                ),
+                instances=_instances(group),
             )
         if state.launch_template_id is not None:
             self._ignore_missing(
@@ -840,7 +813,7 @@ class AwsManagedPoolProvisioner:
             operation="describe launch template version",
         ).values
         if len(versions) != 1:
-            raise _invalid(
+            raise invalid_response_error(
                 "describe launch template version",
                 "AWS returned an unexpected launch template version set",
             )
@@ -918,7 +891,7 @@ class AwsManagedPoolProvisioner:
                 )
         refreshed = self._describe_group(spec.autoscaling_group_name)
         if refreshed is None:
-            raise _invalid(
+            raise invalid_response_error(
                 "ensure Auto Scaling Group", "AWS did not return the managed Auto Scaling Group"
             )
         return refreshed
@@ -934,7 +907,7 @@ class AwsManagedPoolProvisioner:
             operation="describe Auto Scaling Group",
         )
         if len(payload.values) > 1 or (payload.values and payload.values[0].name != name):
-            raise _invalid(
+            raise invalid_response_error(
                 "describe Auto Scaling Group",
                 "AWS returned an Auto Scaling Group outside the requested scope",
             )
@@ -967,7 +940,7 @@ class AwsManagedPoolProvisioner:
                 return None
             raise
         if len(payload.values) > 1:
-            raise _invalid(
+            raise invalid_response_error(
                 "describe launch template", "AWS returned duplicate named launch templates"
             )
         return payload.values[0] if payload.values else None
@@ -1146,22 +1119,13 @@ def _launch_template_data(
     }
 
 
-_BOOTSTRAP_SCRIPT_TEMPLATE = """#!/bin/bash
-set -Eeuo pipefail
-
-CONTROL_PLANE_URL=__CONTROL_PLANE_URL__
-ENROLLMENT_REQUEST_ID=__ENROLLMENT_REQUEST_ID__
-AGENT_SHA256=__AGENT_SHA256__
-AGENT_BINARY_URL=__AGENT_BINARY_URL__
-WORKER_IMAGE_DIGEST=__WORKER_IMAGE_DIGEST__
-GPU_COUNT=__GPU_COUNT__
-TAILSCALE_VERSION=__TAILSCALE_VERSION__
-TAILSCALE_SHA256=__TAILSCALE_SHA256__
-AGENT_BIN=__AGENT_BIN__
-AGENT_STATE_DIR=__AGENT_STATE_DIR__
+# The AWS half of the node bootstrap. Everything here is unavailable on another
+# cloud: the link-local metadata service, the instance role credentials it
+# hands out, and the presigned STS call that proves this node is the instance
+# the control plane launched. The generic half lives in
+# `compute.node_bootstrap`.
+_AWS_IDENTITY_SHELL = """
 EMPTY_PAYLOAD_SHA256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-
-STEP=identity
 IMDS_TOKEN=""
 INSTANCE_ID=""
 REGION=""
@@ -1170,25 +1134,7 @@ AWS_ACCESS_KEY_ID=""
 AWS_SECRET_ACCESS_KEY=""
 AWS_SESSION_TOKEN=""
 
-bootstrap_failed() {
-  status=$?
-  trap - ERR
-  reason=unknown
-  case "$STEP" in
-    docker) reason=runtime_install_failed ;;
-    tailscale) reason=network_join_failed ;;
-    agent) reason=agent_download_failed ;;
-  esac
-  report_failure "$reason"
-  echo "worker bootstrap failed during ${STEP}; leaving instance available for inspection" >&2
-  exit "$status"
-}
-trap bootstrap_failed ERR
-
-bootstrap_error() {
-  echo "error: $1" >&2
-  return 1
-}
+PROVIDER_INSTALL_FLAGS=(--provider aws --provider-instance-identity imds-v2)
 
 imds() {
   curl -fsS --retry 5 --retry-delay 2 \\
@@ -1225,6 +1171,10 @@ mint_proof() {
   amz_date="${AMZ_DATE:-$(date -u +%Y%m%dT%H%M%SZ)}"
   date_stamp="${amz_date%%T*}"
   scope="${date_stamp}/${REGION}/sts/aws4_request"
+  # A fresh nonce per mint: the rest of the signed input is fixed for a given
+  # second, so two mints in the same second would otherwise be byte-identical
+  # and the control plane's replay guard would refuse the second as a replay.
+  nonce="${PROOF_NONCE:-$(od -An -tx1 -N16 /dev/urandom | tr -d ' \\n')}"
   query="Action=GetCallerIdentity"
   query="${query}&Version=2011-06-15"
   query="${query}&X-Amz-Algorithm=AWS4-HMAC-SHA256"
@@ -1233,6 +1183,7 @@ mint_proof() {
   query="${query}&X-Amz-Expires=30"
   query="${query}&X-Amz-Security-Token=$(uri_encode "$AWS_SESSION_TOKEN")"
   query="${query}&X-Amz-SignedHeaders=host"
+  query="${query}&X-Lazycloud-Nonce=${nonce}"
   canonical_request="GET
 /
 ${query}
@@ -1253,105 +1204,7 @@ $(sha256_hex "$canonical_request")"
   printf 'https://%s/?%s&X-Amz-Signature=%s' "$STS_HOST" "$query" "$signature"
 }
 
-# Bootstrap reports authenticate with a fresh single-use identity proof per
-# call and never abort the boot flow.
-report() {
-  endpoint="$1"
-  field="$2"
-  value="$3"
-  proof="$(mint_proof)"
-  payload="{\\"enrollment_request_id\\":\\"${ENROLLMENT_REQUEST_ID}\\""
-  payload="${payload},\\"provider\\":\\"aws\\""
-  payload="${payload},\\"region\\":\\"${REGION}\\""
-  payload="${payload},\\"provider_instance_id\\":\\"${INSTANCE_ID}\\""
-  payload="${payload},\\"identity_proof_url\\":\\"${proof}\\""
-  payload="${payload},\\"${field}\\":\\"${value}\\"}"
-  curl -fsS --retry 5 --retry-all-errors --retry-delay 2 -X POST \\
-    -H 'Content-Type: application/json' \\
-    --data "$payload" \\
-    "${CONTROL_PLANE_URL}/gateway/provider-nodes/${endpoint}" >/dev/null
-}
-
-report_phase() {
-  report bootstrap-phase phase "$1" || true
-}
-
-report_failure() {
-  report bootstrap-failure failure_reason "$1" || true
-}
-
-docker_ready() {
-  docker info >/dev/null 2>&1
-}
-
-tailscale_ready() {
-  command -v tailscale >/dev/null 2>&1 && \\
-    command -v tailscaled >/dev/null 2>&1 && \\
-    [ "$(tailscale version 2>/dev/null | sed -n 1p)" = "$TAILSCALE_VERSION" ] && \\
-    [ "$(tailscaled --version 2>/dev/null | sed -n 1p)" = "$TAILSCALE_VERSION" ]
-}
-
-agent_ready() {
-  [ -x "$AGENT_BIN" ] && \\
-    [ "$(sha256sum "$AGENT_BIN" 2>/dev/null | awk '{print $1}')" = "$AGENT_SHA256" ]
-}
-
-ensure_docker() {
-  if docker_ready; then
-    return
-  fi
-  if ! command -v docker >/dev/null 2>&1; then
-    dnf install -y docker
-  fi
-  systemctl enable --now docker
-  for _ in {1..30}; do
-    if docker_ready; then
-      return
-    fi
-    sleep 2
-  done
-  bootstrap_error 'Docker daemon did not become ready'
-}
-
-ensure_tailscale() {
-  if tailscale_ready; then
-    return
-  fi
-  archive=$(mktemp)
-  extracted=$(mktemp -d)
-  curl -fsSL --retry 5 --retry-delay 2 \\
-    "https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_amd64.tgz" \\
-    -o "$archive"
-  if [ "$(sha256sum "$archive" | awk '{print $1}')" != "$TAILSCALE_SHA256" ]; then
-    rm -rf "$archive" "$extracted"
-    bootstrap_error 'Tailscale archive SHA-256 mismatch'
-  fi
-  tar -xzf "$archive" -C "$extracted"
-  release_dir="${extracted}/tailscale_${TAILSCALE_VERSION}_amd64"
-  install -m 0755 "$release_dir/tailscale" /usr/local/bin/tailscale
-  install -m 0755 "$release_dir/tailscaled" /usr/local/bin/tailscaled
-  rm -rf "$archive" "$extracted"
-  if ! tailscale_ready; then
-    bootstrap_error 'Tailscale failed its pinned version readiness check'
-  fi
-}
-
-ensure_agent() {
-  if agent_ready; then
-    return
-  fi
-  agent_download=$(mktemp "${AGENT_BIN}.download.XXXXXX")
-  curl -fsSL --retry 5 --retry-delay 2 "$AGENT_BINARY_URL" -o "$agent_download"
-  if [ "$(sha256sum "$agent_download" | awk '{print $1}')" != "$AGENT_SHA256" ]; then
-    rm -f "$agent_download"
-    bootstrap_error 'agent artifact SHA-256 mismatch'
-  fi
-  chmod 0755 "$agent_download"
-  mv -f "$agent_download" "$AGENT_BIN"
-}
-
-bootstrap_main() {
-  install -d -m 0700 "$AGENT_STATE_DIR"
+resolve_node_identity() {
   IMDS_TOKEN=$(curl -fsS --retry 5 --retry-delay 2 -X PUT \\
     -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600' \\
     http://169.254.169.254/latest/api/token)
@@ -1373,60 +1226,39 @@ bootstrap_main() {
     [ -z "$AWS_SESSION_TOKEN" ]; then
     bootstrap_error 'instance role credentials are unavailable from IMDS'
   fi
-
-  report_phase booting
-
-  STEP=docker
-  ensure_docker
-  STEP=tailscale
-  ensure_tailscale
-  STEP=agent
-  ensure_agent
-
-  report_phase joining
-  # The agent must outlive cloud-init. Running it as a cloud-init child leaves
-  # the machine with no agent once that script module exits: it enrolls once,
-  # registers a worker, then disappears, so the worker never leaves `pending`.
-  #
-  # The agent installs its own unit. Writing one here too would make this script
-  # a second owner of the same file, and the two silently disagreed: a machine
-  # was found running the agent's unit while this script claimed a different
-  # restart policy, so a fix applied here never reached any machine.
-  "$AGENT_BIN" install-service \\
-    --gateway "$CONTROL_PLANE_URL" \\
-    --provider-enrollment-request "$ENROLLMENT_REQUEST_ID" \\
-    --provider aws \\
-    --provider-instance-identity imds-v2 \\
-    --machine-fingerprint "$INSTANCE_ID" \\
-    --hostname "$INSTANCE_ID" \\
-    --executor container \\
-    --worker-image "$WORKER_IMAGE_DIGEST" \\
-    --max-gpus "$GPU_COUNT" \\
-    --state-dir "$AGENT_STATE_DIR"
 }
 
-bootstrap_main
+report_identity_fields() {
+  printf ',"provider":"aws","region":"%s","provider_instance_id":"%s","identity_proof_url":"%s"' \\
+    "$REGION" "$INSTANCE_ID" "$(mint_proof)"
+}
+
+node_fingerprint() {
+  printf '%s' "$INSTANCE_ID"
+}
+
+node_hostname() {
+  printf '%s' "$INSTANCE_ID"
+}
 """
+
+AWS_NODE_BOOTSTRAP_PROFILE = NodeBootstrapProfile(
+    provider="aws",
+    identity_shell=_AWS_IDENTITY_SHELL,
+)
 
 
 def aws_managed_pool_bootstrap_script(spec: AwsManagedPoolSpec) -> str:
     bootstrap = spec.bootstrap
-    values = {
-        "__CONTROL_PLANE_URL__": bootstrap.control_plane_url,
-        "__ENROLLMENT_REQUEST_ID__": bootstrap.enrollment_request_id,
-        "__AGENT_SHA256__": bootstrap.agent_sha256,
-        "__AGENT_BINARY_URL__": bootstrap.agent_binary_url,
-        "__WORKER_IMAGE_DIGEST__": bootstrap.worker_image_digest,
-        "__GPU_COUNT__": str(bootstrap.gpu_count),
-        "__TAILSCALE_VERSION__": TAILSCALE_INSTALL_VERSION,
-        "__TAILSCALE_SHA256__": TAILSCALE_AMD64_SHA256,
-        "__AGENT_BIN__": f"/usr/local/bin/{AGENT_NAME}",
-        "__AGENT_STATE_DIR__": f"{STATE_DIR}/agent",
-    }
-    script = _BOOTSTRAP_SCRIPT_TEMPLATE
-    for placeholder, value in values.items():
-        script = script.replace(placeholder, shlex.quote(value))
-    return script
+    settings = NodeBootstrapSettings(
+        control_plane_url=bootstrap.control_plane_url,
+        enrollment_request_id=bootstrap.enrollment_request_id,
+        agent_binary_url=bootstrap.agent_binary_url,
+        agent_sha256=bootstrap.agent_sha256,
+        worker_image_digest=bootstrap.worker_image_digest,
+        gpu_count=bootstrap.gpu_count,
+    )
+    return node_bootstrap_script(settings, AWS_NODE_BOOTSTRAP_PROFILE)
 
 
 def _launch_template_fingerprint(data: _LaunchTemplateData) -> str:
@@ -1445,25 +1277,32 @@ def _validate_group_tags(group: _Group, spec: AwsManagedPoolSpec) -> None:
         tags.get(AWS_MANAGED_POOL_TAG) != AWS_MANAGED_POOL_TAG_VALUE
         or tags.get("cloud-pool:key") != spec.resource_key
     ):
-        raise _invalid(
+        raise invalid_response_error(
             "validate Auto Scaling Group ownership",
             "named Auto Scaling Group is not owned by this pool",
         )
+
+
+def _instances(group: _Group) -> tuple[AwsManagedPoolInstance, ...]:
+    return tuple(
+        AwsManagedPoolInstance(
+            instance_id=item.instance_id,
+            lifecycle_state=item.lifecycle_state,
+            health_status=item.health_status,
+            availability_zone=item.availability_zone,
+            booted_template_version=(
+                item.launch_template.version if item.launch_template is not None else ""
+            ),
+        )
+        for item in group.instances
+    )
 
 
 def _snapshot(
     group: _Group,
     state: AwsManagedPoolResourceIds,
 ) -> AwsManagedPoolSnapshot:
-    instances = tuple(
-        AwsManagedPoolInstance(
-            instance_id=item.instance_id,
-            lifecycle_state=item.lifecycle_state,
-            health_status=item.health_status,
-            availability_zone=item.availability_zone,
-        )
-        for item in group.instances
-    )
+    instances = _instances(group)
     ready_nodes = sum(
         instance.lifecycle_state == "InService" and instance.health_status == "Healthy"
         for instance in instances
@@ -1502,13 +1341,7 @@ def _validate[ResponseT: BaseModel](
     try:
         return model.model_validate(response)
     except ValidationError as exc:
-        raise _invalid(operation, "AWS returned an invalid response") from exc
-
-
-def _invalid(operation: str, detail: str) -> AwsProviderControlError:
-    return AwsProviderControlError(
-        AwsProviderControlErrorCode.InvalidResponse, operation=operation, detail=detail
-    )
+        raise invalid_response_error(operation, "AWS returned an invalid response") from exc
 
 
 def _client_error_code(exc: ClientError) -> str:
@@ -1552,12 +1385,6 @@ def _client_error(exc: ClientError, *, operation: str) -> AwsProviderControlErro
     )
 
 
-def _upstream_error(exc: BotoCoreError, *, operation: str) -> AwsProviderControlError:
-    return AwsProviderControlError(
-        AwsProviderControlErrorCode.UpstreamUnavailable, operation=operation, detail=str(exc)
-    )
-
-
 def _aws_call(
     operation: str,
     method: object,
@@ -1570,13 +1397,15 @@ def _aws_call(
     except ClientError as exc:
         raise _client_error(exc, operation=operation) from exc
     except BotoCoreError as exc:
-        raise _upstream_error(exc, operation=operation) from exc
+        raise upstream_error(exc, operation=operation) from exc
     if not isinstance(response, Mapping):
-        raise _invalid(operation, "AWS returned a non-object response")
+        raise invalid_response_error(operation, "AWS returned a non-object response")
     try:
         return _AWS_RESPONSE.validate_python(response)
     except ValidationError as exc:
-        raise _invalid(operation, "AWS returned an unsupported response value") from exc
+        raise invalid_response_error(
+            operation, "AWS returned an unsupported response value"
+        ) from exc
 
 
 def _default_session(

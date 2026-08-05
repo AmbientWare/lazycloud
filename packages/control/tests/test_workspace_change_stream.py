@@ -141,7 +141,10 @@ def test_workspace_change_stream_rejects_invalid_resume_cursor(
     )
 
     assert response.status_code == 400
-    assert response.json() == {"detail": "Last-Event-ID must be a Redis stream entry id"}
+    assert response.json() == {
+        "detail": "Last-Event-ID must be a Redis stream entry id",
+        "code": "invalid_input",
+    }
 
 
 def test_workspace_change_repository_bounds_and_deletes_workspace_streams() -> None:

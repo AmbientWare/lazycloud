@@ -8,13 +8,14 @@ from fnmatch import fnmatch
 from typing import Protocol
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from redis import Redis
 from redis.client import Pipeline, PubSub
 from redis.exceptions import RedisError
 from redis.typing import EncodableT, FieldT, KeyT, StreamIdT
 from shared.app_identity import ENV_PREFIX, REDIS_KEY_PREFIX
+from shared.deployment_settings import MissingDeploymentSettingError
 
 type RedisWireScalar = str | bytes | int | float | bool
 type RedisWireResponse = (
@@ -214,7 +215,9 @@ depending on the redis distribution directly.
 
 
 class RedisSettings(BaseSettings):
-    url: str = "redis://localhost:6379/0"
+    # Blank marks "nobody said", not an instance. Which Redis holds a process's
+    # queues, locks, and leases is a deployment fact with nothing to fall back to.
+    url: str = ""
     key_prefix: str = REDIS_KEY_PREFIX
     client_name: str = ""
     decode_responses: bool = True
@@ -225,6 +228,18 @@ class RedisSettings(BaseSettings):
         env_prefix=f"{ENV_PREFIX}_REDIS_",
         extra="ignore",
     )
+
+    @model_validator(mode="after")
+    def require_url(self) -> RedisSettings:
+        if not self.url.strip():
+            raise MissingDeploymentSettingError(
+                f"{ENV_PREFIX}_REDIS_URL",
+                purpose=(
+                    "the Redis instance this process uses for queues, locks, leases, "
+                    "and coordination"
+                ),
+            )
+        return self
 
 
 @dataclass(frozen=True, slots=True)

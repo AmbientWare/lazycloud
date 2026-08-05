@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hmac
 import http.client as http_client
 import json
+import logging
 import math
 import os
 import platform
@@ -9,6 +11,7 @@ import shutil
 import socket
 import subprocess
 import time
+import traceback
 import urllib.error
 from collections.abc import Callable
 from contextlib import suppress
@@ -20,7 +23,9 @@ from types import TracebackType
 from typing import Protocol
 
 from agent.operations import (
+    AGENT_AUTHORITY_REVOKED_FILE,
     AGENT_RUNTIME_READY_FILE,
+    AgentAuthorityRevoked,
     AgentBootstrap,
     AgentCapacity,
     AgentCapacityCheck,
@@ -72,6 +77,7 @@ from gateway.http import (
     UpdateAgentRouteStatusRequest,
     UpdateAgentRouteStatusResponse,
 )
+from networking.dialer import TailnetPeerRuntime
 from networking.tailnet import (
     TailnetAuthenticationRequired,
     TailnetRuntime,
@@ -84,15 +90,17 @@ from provider_aws import (
     AwsSpotInterruptionMonitorError,
 )
 from provider_clients import (
+    ProviderNodeIdentityEvidence,
     ProviderNodeIdentityEvidenceProvider,
     provider_node_identity_evidence_provider,
 )
 from pydantic import Field, JsonValue, TypeAdapter, field_validator, model_validator
-from shared.app_identity import AGENT_NAME
+from shared.app_identity import AGENT_NAME, AGENT_TAILNET_DIR_NAME
 from shared.compute_enrollment import (
     AgentCapacityState,
     ComputePreflightCheck,
     MachineBootstrapFailureReason,
+    MachineBootstrapPhase,
 )
 from shared.contracts import ContractModel
 from shared.http.errors import HttpApiError, HttpTransportError
@@ -121,6 +129,8 @@ from agent_app.route_proxy import (
 )
 from agent_app.telemetry import AgentTelemetryBuffer, AgentTelemetryEventType
 from gateway import http
+
+LOGGER = logging.getLogger(__name__)
 
 DEFAULT_AGENT_STREAM_INTERVAL_SECONDS = 5.0
 DEFAULT_AGENT_HTTP_TIMEOUT_SECONDS = 30.0
@@ -160,6 +170,14 @@ class ProviderInstanceIdentityMode(StrEnum):
 
 class AgentCapacityInterruptionDetectionError(RuntimeError):
     pass
+
+
+class AgentAuthorityRevokedError(RuntimeError):
+    """Raised on startup when this machine's authority was already revoked.
+
+    Terminal by construction: the process exits non-zero and the unit's start
+    limit stops respawning it, rather than rejoining once every restart.
+    """
 
 
 class AgentDaemonOptions(ContractModel):
@@ -299,8 +317,15 @@ class AgentGatewayClient(AgentLeaveClient, Protocol):
     ) -> AgentTelemetryResponse: ...
 
 
-class AgentTailnetRuntime(Protocol):
-    def start(self) -> None: ...
+class AgentTailnetRuntime(TailnetPeerRuntime, Protocol):
+    """The agent's view of its tailnet runtime.
+
+    Extends the shared peer runtime rather than narrowing it. The agent is the
+    only process on a node holding a tailnet client, so declaring less than the
+    runtime implements left peer resolution unreachable — including to the
+    worker, which has no client of its own and must not be handed the tailscaled
+    socket, since that grants tailnet control rather than lookup.
+    """
 
     def authenticate(
         self,
@@ -312,8 +337,6 @@ class AgentTailnetRuntime(Protocol):
     ) -> TailnetStatus: ...
 
     def status(self) -> TailnetStatus: ...
-
-    def close(self) -> None: ...
 
 
 @dataclass(slots=True)
@@ -436,8 +459,33 @@ class AgentStateStore:
         payload = _JSON_VALUE_ADAPTER.validate_python(agent_state_payload(state))
         _write_json_atomic(self.path, payload, permissions=0o600)
 
+    @property
+    def revoked_path(self) -> Path:
+        return self.state_dir / AGENT_AUTHORITY_REVOKED_FILE
+
     def begin_run(self) -> None:
         self.ready_path.unlink(missing_ok=True)
+
+    def mark_authority_revoked(self, state: AgentState) -> None:
+        """Record that this machine's authority is gone, and drop its identity.
+
+        Revocation is terminal, unlike every other reason the stream ends. The
+        saved identity is what a restart would re-present, so it goes with it —
+        leaving it behind is what let a revoked agent rejoin and be rejected on
+        a loop, on a machine that keeps billing.
+        """
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        self.state_dir.chmod(0o700)
+        marker = AgentAuthorityRevoked(machine_id=state.machine_id)
+        _write_json_atomic(self.revoked_path, _payload(marker), permissions=0o600)
+        self.path.unlink(missing_ok=True)
+
+    def authority_revoked(self) -> AgentAuthorityRevoked | None:
+        if not self.revoked_path.exists():
+            return None
+        return AgentAuthorityRevoked.model_validate_json(
+            self.revoked_path.read_text(encoding="utf-8")
+        )
 
     def mark_ready(self, state: AgentState, *, stream_iteration: int) -> None:
         marker = AgentRuntimeReady(
@@ -538,6 +586,8 @@ class DockerAgentWorkerController:
     runner: CommandRunner = field(default_factory=SubprocessCommandRunner)
     host_aliases: list[str] = field(default_factory=list)
     platform: str = ""
+    peer_resolver_address: str = ""
+    tailnet_dns_suffix: str = ""
 
     @property
     def active_slots_path(self) -> Path:
@@ -639,6 +689,8 @@ class DockerAgentWorkerController:
             platform=self.platform,
             host_aliases=self.host_aliases,
             network=self.worker_network,
+            peer_resolver_address=self.peer_resolver_address,
+            tailnet_dns_suffix=self.tailnet_dns_suffix,
         )
         for path in plan.dirs.all_paths():
             Path(path).mkdir(parents=True, exist_ok=True)
@@ -674,6 +726,34 @@ class DockerAgentWorkerController:
 
 
 @dataclass(slots=True)
+class WorkerTailnetPeerResolver:
+    """Resolves tailnet peers for the workers this agent launched.
+
+    A worker holds no tailnet client and is deliberately not given the
+    tailscaled socket, which grants control rather than lookup. It presents the
+    token this agent issued it, so the check is against slots the agent already
+    tracks and no additional secret exists to distribute or rotate.
+    """
+
+    runtime: AgentTailnetRuntime
+    worker_controller: DockerAgentWorkerController
+    wait_seconds: float = 10.0
+
+    def resolve_for_worker(self, host: str, worker_token: str) -> str:
+        if not worker_token or not self._token_is_current(worker_token):
+            msg = "worker token is not recognised on this node"
+            raise PermissionError(msg)
+        self.runtime.wait_for_peer(host, self.wait_seconds)
+        return self.runtime.resolve_peer_host(host)
+
+    def _token_is_current(self, worker_token: str) -> bool:
+        return any(
+            slot.worker_token and hmac.compare_digest(slot.worker_token, worker_token)
+            for slot in self.worker_controller.active_slots()
+        )
+
+
+@dataclass(slots=True)
 class AgentDaemonService:
     options: AgentDaemonOptions
     client: AgentGatewayClient
@@ -684,10 +764,71 @@ class AgentDaemonService:
     telemetry: AgentTelemetryBuffer = field(default_factory=AgentTelemetryBuffer)
     tailnet_runtime: AgentTailnetRuntime | None = None
     provider_identity: ProviderNodeIdentityEvidenceProvider | None = None
+    _bootstrap_failure_reported: bool = False
+
+    def _provider_proof(self) -> ProviderNodeIdentityEvidence:
+        if self.options.provider is None:
+            msg = "provider node reporting requires a provider"
+            raise ValueError(msg)
+        provider = self.provider_identity or provider_node_identity_evidence_provider(
+            self.options.provider
+        )
+        return provider.create()
+
+    def _report_bootstrap_phase(self, phase: MachineBootstrapPhase) -> None:
+        """Best effort: a report must never break the boot it narrates.
+
+        Each report mints a fresh identity proof — proofs are single-use, so
+        reusing one would read as a replay and be rejected.
+        """
+        if not self.options.provider_enrollment_request:
+            return
+        with suppress(Exception):
+            proof = self._provider_proof()
+            self.client.record_provider_node_bootstrap_phase(
+                ProviderNodeBootstrapPhaseRequest(
+                    enrollment_request_id=self.options.provider_enrollment_request,
+                    provider=proof.provider,
+                    region=proof.region,
+                    provider_instance_id=proof.provider_instance_id,
+                    identity_proof_url=proof.proof_url.get_secret_value(),
+                    phase=phase,
+                )
+            )
+
+    def _report_bootstrap_failure(self, reason: MachineBootstrapFailureReason) -> None:
+        if not self.options.provider_enrollment_request or self._bootstrap_failure_reported:
+            return
+        self._bootstrap_failure_reported = True
+        # The active exception is the diagnosis; the report is the only way it
+        # leaves a machine no one can reach.
+        excerpt = traceback.format_exc()[-8192:]
+        with suppress(Exception):
+            proof = self._provider_proof()
+            self.client.record_provider_node_bootstrap_failure(
+                ProviderNodeBootstrapFailureRequest(
+                    enrollment_request_id=self.options.provider_enrollment_request,
+                    provider=proof.provider,
+                    region=proof.region,
+                    provider_instance_id=proof.provider_instance_id,
+                    identity_proof_url=proof.proof_url.get_secret_value(),
+                    failure_reason=reason,
+                    diagnostic_excerpt=excerpt,
+                )
+            )
 
     def run(self) -> AgentDaemonRunResult:
         self.state_store.begin_run()
-        state = self._join_step("identity.resolve", self.resolve_identity)
+        self._report_bootstrap_phase(MachineBootstrapPhase.Booting)
+        # Enrolment travels over the tailnet on a pool node, and the node's own
+        # tailnet service already brought it up before this process started.
+        # Nothing to attach here.
+        try:
+            state = self._join_step("identity.resolve", self.resolve_identity)
+        except Exception:
+            self._report_bootstrap_failure(MachineBootstrapFailureReason.ProviderIdentityFailed)
+            raise
+        self._report_bootstrap_phase(MachineBootstrapPhase.Joining)
         tailnet_runtime: AgentTailnetRuntime | None = None
         tailnet_hostname = ""
         iterations = 0
@@ -699,19 +840,28 @@ class AgentDaemonService:
         route_proxy: AgentRouteProxyService | None = None
         runtime_ready = False
         try:
-            tailnet_runtime, tailnet_hostname = self._join_step(
-                "tailnet.start",
-                lambda: self._start_tailnet(state),
-            )
+            try:
+                tailnet_runtime, tailnet_hostname = self._join_step(
+                    "tailnet.start",
+                    lambda: self._start_tailnet(state),
+                )
+            except Exception:
+                self._report_bootstrap_failure(MachineBootstrapFailureReason.NetworkJoinFailed)
+                raise
             last_result = last_result.model_copy(
                 update={
                     "tailnet_started": tailnet_runtime is not None,
                     "tailnet_hostname": tailnet_hostname,
                 }
             )
-            route_proxy = self._build_route_proxy(state, tailnet_hostname=tailnet_hostname)
+            route_proxy = self._build_route_proxy(
+                state,
+                tailnet_hostname=tailnet_hostname,
+                tailnet_runtime=tailnet_runtime,
+            )
             if route_proxy is not None:
                 route_proxy.start()
+                self._publish_peer_resolver(route_proxy, tailnet_runtime)
             while True:
                 next_iteration = iterations + 1
                 try:
@@ -735,6 +885,7 @@ class AgentDaemonService:
                 except Exception as exc:
                     if agent_authority_was_revoked(exc):
                         self.worker_controller.stop_all()
+                        self.state_store.mark_authority_revoked(state)
                         return last_result.model_copy(
                             update={
                                 "stream_iterations": next_iteration,
@@ -766,6 +917,7 @@ class AgentDaemonService:
             if not agent_authority_was_revoked(exc):
                 raise
             self.worker_controller.stop_all()
+            self.state_store.mark_authority_revoked(state)
             return last_result.model_copy(update={"authority_revoked": True})
         finally:
             if route_proxy is not None:
@@ -774,6 +926,17 @@ class AgentDaemonService:
                 tailnet_runtime.close()
 
     def resolve_identity(self) -> AgentState:
+        revoked = self.state_store.authority_revoked()
+        if revoked is not None:
+            # Nothing this process can do recovers a revoked authority, and the
+            # control plane rejects every join it would attempt. Refusing here
+            # is what makes the refusal cost one exit instead of one per restart
+            # for the life of the machine.
+            msg = (
+                f"authority for machine {revoked.machine_id} was revoked at "
+                f"{revoked.revoked_at.isoformat()}; this agent cannot rejoin"
+            )
+            raise AgentAuthorityRevokedError(msg)
         gateway_url = normalize_gateway_url(self.options.gateway_url)
         saved_state = self.state_store.load(gateway_url)
         if saved_state is not None and self.options.provider_enrollment_request:
@@ -831,7 +994,13 @@ class AgentDaemonService:
         applied = self.worker_controller.apply(
             plan,
             state.bootstrap,
-            worker_repository_url=state.sanitized_gateway_url,
+            # Worker RPC takes the runtime origin, never the public one: the
+            # ingress refuses `/worker-repository/*` at the edge, so a worker
+            # pointed at the public origin cannot report itself available and
+            # stays pending forever. Same precedence as `agent_gateway_env`.
+            worker_repository_url=(
+                state.bootstrap.gateway_runtime_http_url or state.sanitized_gateway_url
+            ),
         )
         route_count = self._reconcile_routes(state, stream, route_proxy)
         telemetry_sent = self._send_telemetry(
@@ -1058,6 +1227,7 @@ class AgentDaemonService:
         try:
             response = self.client.enroll_provider_node(enrollment)
         except Exception:
+            self._bootstrap_failure_reported = True
             with suppress(Exception):
                 failed_proof = proof_provider.create()
                 self.client.record_provider_node_bootstrap_failure(
@@ -1207,6 +1377,8 @@ class AgentDaemonService:
         runtime = self.tailnet_runtime or TailnetRuntime(_tailnet_runtime_options(self.options))
         try:
             try:
+                # On a pool node this is a sidecar: the node's tailnet service
+                # already holds the session, so starting is a status read.
                 runtime.start()
                 status = runtime.status()
             except TailnetAuthenticationRequired:
@@ -1222,6 +1394,14 @@ class AgentDaemonService:
                     control_url=credential.control_url,
                 )
             _require_authenticated_tailnet_status(status)
+            if not _tailnet_identity_is_this_machine(status, state.machine_id):
+                # The session belongs to something other than this machine —
+                # on a managed-pool node, the pool-scoped identity its bootstrap
+                # used. Trade it for the single-use, machine-scoped key the
+                # control plane issues now that enrolment has given this node an
+                # identity, so the pool key stops being what holds it on the
+                # tailnet.
+                status = self._reissue_tailnet_identity(state, runtime)
             try:
                 binding = self._register_tailnet_device(state, status)
             except HttpApiError as exc:
@@ -1238,6 +1418,8 @@ class AgentDaemonService:
             advertise_host = _tailnet_advertise_host(status)
             return (runtime, advertise_host)
         except Exception:
+            # A sidecar runtime owns no daemon, so this releases a handle rather
+            # than stopping the node's tailnet.
             runtime.close()
             raise
 
@@ -1279,11 +1461,35 @@ class AgentDaemonService:
         _require_authenticated_tailnet_status(status)
         return status
 
+    def _publish_peer_resolver(
+        self,
+        route_proxy: AgentRouteProxyService,
+        tailnet_runtime: AgentTailnetRuntime | None,
+    ) -> None:
+        """Tell workers where to ask for peers, once there is somewhere to ask.
+
+        Both values travel together: an address without a suffix resolves
+        nothing, and a suffix without an address names peers a worker cannot
+        look up. Absent either, the worker dials names as written.
+        """
+        if tailnet_runtime is None:
+            return
+        try:
+            suffix = _tailnet_dns_suffix(tailnet_runtime.status())
+        except Exception:
+            LOGGER.debug("tailnet status unavailable; peers stay dialled by name", exc_info=True)
+            return
+        if not suffix or not route_proxy.proxy_target:
+            return
+        self.worker_controller.peer_resolver_address = route_proxy.proxy_target
+        self.worker_controller.tailnet_dns_suffix = suffix
+
     def _build_route_proxy(
         self,
         state: AgentState,
         *,
         tailnet_hostname: str = "",
+        tailnet_runtime: AgentTailnetRuntime | None = None,
     ) -> AgentRouteProxyService | None:
         if not self.options.route_proxy.enabled:
             return None
@@ -1296,11 +1502,17 @@ class AgentDaemonService:
                 update["bind_host"] = tailnet_hostname
             if update:
                 config = config.model_copy(update=update)
+        resolver = (
+            WorkerTailnetPeerResolver(tailnet_runtime, self.worker_controller)
+            if tailnet_runtime is not None
+            else None
+        )
         return AgentRouteProxyService(
             config,
             self.client,
             state.agent_token,
             telemetry=self.telemetry,
+            peer_resolver=resolver,
         )
 
 
@@ -1367,14 +1579,20 @@ def _provider_capacity_interruption_detector(
 def _tailnet_runtime_options(
     options: AgentDaemonOptions,
 ) -> TailnetRuntimeOptions:
-    state_dir = options.tailnet_state_dir or str(Path(options.state_dir) / "tailnet")
+    state_dir = options.tailnet_state_dir or str(Path(options.state_dir) / AGENT_TAILNET_DIR_NAME)
     return TailnetRuntimeOptions(
         mode=options.tailnet_mode,
         state_dir=state_dir,
         socket_path=options.tailnet_socket_path,
         tailscale_binary=options.tailnet_tailscale_binary,
         tailscaled_binary=options.tailnet_tailscaled_binary,
-        accept_dns=False,
+        # The node reaches the control plane and the cache as tailnet peers, so
+        # it has to resolve tailnet names. Declining the tailnet's DNS left the
+        # VPC resolver answering `*.ts.net` from public records that point at
+        # Tailscale's own infrastructure rather than the peer, so every lookup
+        # succeeded and every connection to it timed out. Non-tailnet queries
+        # are forwarded upstream unchanged.
+        accept_dns=True,
         accept_routes=False,
         userspace_networking=options.tailnet_userspace_networking,
     )
@@ -1389,8 +1607,35 @@ def _tailnet_advertise_host(status: TailnetStatus) -> str:
     return status.self_dns_name.strip().rstrip(".") or status.self_host_name.strip().rstrip(".")
 
 
+def _tailnet_dns_suffix(status: TailnetStatus) -> str:
+    """The tailnet's DNS suffix, taken from this node's own name.
+
+    Derived rather than configured: the node already knows which tailnet it
+    joined, and a separately stated suffix is one more value that can disagree
+    with reality.
+    """
+    dns_name = status.self_dns_name.strip().rstrip(".")
+    _host, _, suffix = dns_name.partition(".")
+    return suffix
+
+
 def _tailnet_device_hostname(status: TailnetStatus) -> str:
     return status.self_host_name.strip().rstrip(".") or status.self_dns_name.strip().rstrip(".")
+
+
+def _tailnet_identity_is_this_machine(status: TailnetStatus, machine_id: str) -> bool:
+    """Whether the local session is one the control plane issued to this machine.
+
+    The generation is deliberately not matched: the agent does not know which
+    generation the control plane last handed out, and demanding an exact name
+    would rotate the identity on every restart. The prefix is enough to tell
+    this machine's session from another machine's, which is the distinction
+    that decides whether a rotation is owed.
+    """
+    machine = machine_id.strip()
+    if not machine:
+        return False
+    return _tailnet_device_hostname(status).startswith(f"{AGENT_NAME}-{machine}-g")
 
 
 def _require_authenticated_tailnet_status(status: TailnetStatus) -> None:

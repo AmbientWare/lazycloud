@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 
-from lazycloud.clients.compute.control import ComputeClient
 from lazycloud.clients.resource.control import ResourceControlClient
 from shared.scheduling import SchedulerWorkerStatus
 from tests.e2e.external import _support
@@ -31,11 +30,6 @@ def main() -> int:
         token=token,
         workspace=workspace,
     )
-    compute = ComputeClient.from_endpoint(
-        endpoint,
-        token=token,
-        workspace=workspace,
-    )
     pools = [pool for pool in resources.list_pools().pools if pool.name == args.pool_name]
     if len(pools) != 1 or pools[0].labels.get("transport") != "tsnet_restricted":
         raise RuntimeError("guarded pool is not the prepared Tailnet-backed pool")
@@ -47,8 +41,12 @@ def main() -> int:
         raise RuntimeError("Tailnet worker is attached to the wrong machine or pool")
     if worker.status != SchedulerWorkerStatus.Available.value:
         raise RuntimeError(f"Tailnet worker is not available: {worker.status}")
-    machines = compute.list_pool_machines(args.pool_name, limit=100).data
-    matches = [machine for machine in machines if machine.id == args.machine_id]
+    machines = resources.list_machines().machines
+    matches = [
+        machine
+        for machine in machines
+        if machine.id == args.machine_id and machine.pool == args.pool_name
+    ]
     if len(matches) != 1:
         raise RuntimeError("Tailnet pool does not retain the guarded machine identity")
     print(

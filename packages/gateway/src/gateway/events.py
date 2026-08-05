@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
@@ -9,6 +11,8 @@ from pydantic import JsonValue, TypeAdapter
 from shared.events import Event, EventLevel
 from shared.worker_events import GATEWAY_REQUEST_EVENT_ACTION
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+LOGGER = logging.getLogger(__name__)
 
 _ASGI_HEADERS = TypeAdapter(list[tuple[bytes, bytes]])
 _ASGI_CLIENT: TypeAdapter[tuple[str, int] | None] = TypeAdapter(tuple[str, int] | None)
@@ -31,18 +35,38 @@ class GatewayEventSink(Protocol):
 WorkspaceResolver = Callable[[Scope], str]
 
 
+class GatewayMetricsSink(Protocol):
+    def increment(
+        self,
+        name: str,
+        amount: float = 1,
+        *,
+        labels: dict[str, str] | None = None,
+    ) -> object: ...
+
+    def observe_histogram(
+        self,
+        name: str,
+        value: float,
+        *,
+        labels: dict[str, str] | None = None,
+    ) -> object: ...
+
+
 @dataclass(slots=True)
 class GatewayRequestEventMiddleware:
-    """Persist gateway request events for failed (5xx) responses.
+    """Meter every request; persist an event only for failed (5xx) responses.
 
     Per-request info rows are pure write amplification against the events
-    audit table; request volume is observable through metrics and logs, so
-    only server errors leave a durable event trail.
+    audit table, so only server errors leave a durable event trail. Volume
+    and latency go to the metrics sink, labelled by route template — never
+    the raw path, whose cardinality is unbounded.
     """
 
     app: ASGIApp
     event_sink: GatewayEventSink
     workspace_resolver: WorkspaceResolver | None = None
+    metrics_sink: GatewayMetricsSink | None = None
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope.get("type") != "http":
@@ -57,10 +81,41 @@ class GatewayRequestEventMiddleware:
                 status_code = int(message.get("status") or status_code)
             await send(message)
 
+        started = time.monotonic()
         try:
             await self.app(scope, receive, send_wrapper)
         finally:
+            self._emit_request_metrics(scope, status_code, time.monotonic() - started)
             self._emit_request_event(scope, status_code)
+
+    def _emit_request_metrics(
+        self,
+        scope: Scope,
+        status_code: int,
+        duration_seconds: float,
+    ) -> None:
+        if self.metrics_sink is None:
+            return
+        try:
+            route = scope.get("route")
+            template = str(getattr(route, "path", "") or "unmatched")
+            method = str(scope.get("method") or "GET")
+            self.metrics_sink.increment(
+                "http_requests_total",
+                labels={
+                    "method": method,
+                    "route": template,
+                    "status_class": f"{status_code // 100}xx",
+                },
+            )
+            self.metrics_sink.observe_histogram(
+                "http_request_duration_seconds",
+                duration_seconds,
+                labels={"method": method, "route": template},
+            )
+        except Exception:
+            LOGGER.debug("request metrics were not recorded", exc_info=True)
+            return
 
     def _emit_request_event(self, scope: Scope, status_code: int) -> None:
         if status_code < 500:
@@ -90,6 +145,9 @@ class GatewayRequestEventMiddleware:
                 workspace_id=workspace_id or None,
             )
         except Exception:
+            # This is the durable record of a 5xx. Losing it silently means the
+            # failure it describes leaves no trace at all.
+            LOGGER.warning("server-error event was not recorded", exc_info=True)
             return
 
 

@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from base64 import b64decode
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,10 +36,11 @@ from lazycloud.clients.compute.control import ComputeClient
 from lazycloud.clients.resource.control import ResourceControlClient
 from lazycloud.clients.workspace.control import WorkspaceControlClient
 from lazycloud.session.task import TaskClient
-from pydantic import RootModel
+from lazycloud.values import decode_value
+from pydantic import RootModel, ValidationError
 from shared.app_slug import validate_app_slug
 from shared.aws_connections import AwsAccountConnectionPhase
-from shared.compute_enrollment import MachineBootstrapPhase
+from shared.compute_enrollment import MachineServiceState
 from shared.http.apps import AppResponse
 from shared.http.aws_connections import AwsConnectionResponse
 from shared.http.compute_policy import WorkspaceComputeInstanceResponse
@@ -69,13 +71,32 @@ def _connected_instances(
     return [item for item in client.instances().data if item.provider == f"aws:{connection.id}"]
 
 
+def _decoded_result_value(value: object) -> object:
+    """Unwrap the encoded envelope a public task result carries.
+
+    A result value arrives as `{"value_base64", "encoding", ...}` rather than the
+    returned object, so comparing it directly reports a mismatch for a Function
+    that produced exactly the expected value. Decoding through the SDK's own
+    reader keeps this scenario checking what a caller would receive.
+    """
+    try:
+        envelope = RootModel[dict[str, object]].model_validate(value).root
+    except ValidationError:
+        return value
+    encoded = envelope.get("value_base64")
+    if not isinstance(encoded, str):
+        return value
+    decoded: object = decode_value(b64decode(encoded))
+    return decoded
+
+
 def _warm_baseline(client: ComputeClient, connection: AwsConnectionResponse) -> WarmBaseline | None:
     summary = client.summary()
     connected = _connected_instances(client, connection)
     ready = [
         item
         for item in connected
-        if item.bootstrap_phase is MachineBootstrapPhase.Ready and item.machine_id is not None
+        if item.service_state is MachineServiceState.Serving and item.machine_id is not None
     ]
     if (
         summary.instances.total != 1
@@ -305,8 +326,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"exit_code={result.exit_code}, error={result.error or 'none'}"
             )
         expected: dict[str, str | int] = {"marker": marker, "doubled": 42, "status": "complete"}
-        if result.value != expected:
-            raise RuntimeError(f"the public Function returned {result.value!r}, not {expected!r}")
+        returned = _decoded_result_value(result.value)
+        if returned != expected:
+            raise RuntimeError(f"the public Function returned {returned!r}, not {expected!r}")
 
         _support.poll_until(
             deadline,

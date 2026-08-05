@@ -11,10 +11,11 @@ from typing import Protocol, runtime_checkable
 from pydantic import Field
 from shared.container_requests import StopContainerReason
 from shared.contracts import ContractModel
-from shared.scheduling import SchedulerWorkerRecord, WorkerRemovalResult
+from shared.scheduling import SchedulerWorkerRecord, WorkerRemovalResult, WorkerUnavailableReason
 from shared.timestamps import utc_now
 
 from worker.events import ContainerRequestContext
+from worker.repository_client import WorkerSourceCacheNotAvailableError
 from worker.status import (
     DEFAULT_WORKER_SPINDOWN_SECONDS,
     WorkerSpindownPlan,
@@ -33,6 +34,7 @@ DEFAULT_WORKER_USAGE_INTERVAL_SECONDS = 30.0
 
 class WorkerLifecycleAction(StrEnum):
     MarkAvailable = "mark-available"
+    ActivateSourceCache = "activate-source-cache"
     ValidateReadiness = "validate-readiness"
     KeepAlive = "keepalive"
     DisableScheduling = "disable-scheduling"
@@ -73,10 +75,14 @@ class WorkerLifecycleRepository(Protocol):
         ttl_seconds: int,
     ) -> SchedulerWorkerRecord | None: ...
 
+    def prepare_source_cache(self) -> None: ...
+
     def disable_worker(
         self,
         worker_id: str,
         *,
+        reason: WorkerUnavailableReason,
+        detail: str = "",
         ttl_seconds: int,
     ) -> SchedulerWorkerRecord | None: ...
 
@@ -259,6 +265,12 @@ class WorkerLifecycleOrchestrator:
         )
         if not added.ok:
             return [added]
+        activation = self._run_repository_step(
+            WorkerLifecycleAction.ActivateSourceCache,
+            lambda: repository.prepare_source_cache(),
+        )
+        if not activation.ok:
+            return [added, activation]
         readiness_validator = self.readiness_validator
         if readiness_validator is not None:
             readiness = self._run_repository_step(
@@ -270,7 +282,12 @@ class WorkerLifecycleOrchestrator:
         else:
             readiness = None
         available = self.mark_available()
-        return [added, *([readiness] if readiness is not None else []), available]
+        return [
+            added,
+            activation,
+            *([readiness] if readiness is not None else []),
+            available,
+        ]
 
     def keepalive(self) -> WorkerLifecycleStepResult:
         if self._draining:
@@ -286,13 +303,29 @@ class WorkerLifecycleOrchestrator:
                 status=WorkerLifecycleStatus.Skipped,
                 error_message="worker repository is not configured",
             )
-        result = self._run_repository_step(
-            WorkerLifecycleAction.KeepAlive,
-            lambda: repository.set_keep_alive(
+        try:
+            keepalive_result = repository.set_keep_alive(
                 self.worker_id,
                 ttl_seconds=self.keepalive_ttl_seconds,
-            ),
-        )
+            )
+        except WorkerSourceCacheNotAvailableError as exc:
+            # The record is still there; only the cache is withholding it.
+            # Registering again cannot change that and costs a request every
+            # interval for as long as the condition lasts.
+            return WorkerLifecycleStepResult(
+                action=WorkerLifecycleAction.KeepAlive,
+                status=WorkerLifecycleStatus.Skipped,
+                error_message=f"source cache is {exc.state.value}",
+            )
+        except Exception as exc:  # pragma: no cover - defensive boundary capture
+            result = WorkerLifecycleStepResult(
+                action=WorkerLifecycleAction.KeepAlive,
+                status=WorkerLifecycleStatus.Error,
+                error_message=f"{type(exc).__name__}: {exc}",
+            )
+        else:
+            del keepalive_result
+            result = WorkerLifecycleStepResult(action=WorkerLifecycleAction.KeepAlive)
         if result.ok or self.registration is None:
             return result
         registered = self.register_available()
@@ -304,7 +337,12 @@ class WorkerLifecycleOrchestrator:
             )
         return result
 
-    def disable_scheduling(self) -> WorkerLifecycleStepResult:
+    def disable_scheduling(
+        self,
+        *,
+        reason: WorkerUnavailableReason = WorkerUnavailableReason.ShuttingDown,
+        detail: str = "",
+    ) -> WorkerLifecycleStepResult:
         self._draining = True
         repository = self.repository
         if repository is None:
@@ -317,6 +355,8 @@ class WorkerLifecycleOrchestrator:
             WorkerLifecycleAction.DisableScheduling,
             lambda: repository.disable_worker(
                 self.worker_id,
+                reason=reason,
+                detail=detail,
                 ttl_seconds=self.keepalive_ttl_seconds,
             ),
         )
@@ -444,12 +484,19 @@ class WorkerLifecycleOrchestrator:
         repository_timeout_seconds: float = DEFAULT_WORKER_SHUTDOWN_REPOSITORY_TIMEOUT_SECONDS,
         remove_worker: bool = True,
         stop_reason: StopContainerReason = StopContainerReason.Unknown,
+        unavailable_reason: WorkerUnavailableReason = WorkerUnavailableReason.ShuttingDown,
+        unavailable_detail: str = "",
     ) -> WorkerShutdownResult:
         if isinstance(self.repository, WorkerLifecycleShutdownRepository):
             self.repository.prepare_shutdown(
                 timeout_seconds=max(repository_timeout_seconds, 0.1),
             )
-        steps = [self.disable_scheduling()]
+        steps = [
+            self.disable_scheduling(
+                reason=unavailable_reason,
+                detail=unavailable_detail,
+            )
+        ]
         steps.append(
             self._wait_for_active_containers(
                 timeout_seconds=max(drain_timeout_seconds, 0.0),

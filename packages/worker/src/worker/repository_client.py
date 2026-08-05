@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import http.client
 import json
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
@@ -9,16 +8,17 @@ from typing import Protocol, runtime_checkable
 from urllib.parse import urlparse
 from uuid import uuid4
 
+from networking.internal_http import InternalHttpClient, InternalHttpError
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from shared.checkpoints import AutomaticCheckpointCreationLease, CheckpointRecord
 from shared.container_requests import StopContainerReason
 from shared.contracts import ContractModel
 from shared.realtime.contracts import CloudEventRecord, ContainerMetricsPayload
+from shared.routing import AgentBackendRoute
 from shared.scheduling import (
     ContainerIpAssignment,
     ContainerStatusUpdatePlan,
     NetworkIpMutationPlan,
-    SchedulerBackendRoute,
     SchedulerContainerAddress,
     SchedulerContainerAddressMap,
     SchedulerContainerState,
@@ -30,6 +30,7 @@ from shared.scheduling import (
     WorkerRemovalResult,
     WorkerRepositoryLockRecord,
     WorkerRepositoryLockRelease,
+    WorkerUnavailableReason,
 )
 from shared.source_cache_cleanup import (
     SourceCacheCleanupTargetRecord,
@@ -64,6 +65,7 @@ from worker.repository_payloads import (
     ContainerLogBatchEntry,
     DeleteContainerStateRequest,
     DeleteContainerStateResponse,
+    DisableWorkerRequest,
     GetCacheOriginCredentialsResponse,
     GetCheckpointRestoreRequest,
     GetCheckpointRestoreResponse,
@@ -156,11 +158,33 @@ class WorkerRepositoryClientError(RuntimeError):
     pass
 
 
+class WorkerSourceCacheNotAvailableError(WorkerRepositoryClientError):
+    """The repository withheld the worker because its cache is not available.
+
+    Distinct from a missing record: the worker is still registered, so
+    registering it again changes nothing and only adds load.
+    """
+
+    def __init__(self, worker_id: str, state: WorkerCacheGenerationState) -> None:
+        super().__init__(f"worker {worker_id!r} source cache is {state.value}")
+        self.state = state
+
+
 @dataclass(slots=True)
 class WorkerRepositoryHttpTransport:
+    """The worker's channel to the control plane.
+
+    Dials through the shared internal client so the destination decides the
+    transport: a control plane named by tailnet peer is reached over the
+    tailnet, and a Compose service name is reached directly. Before that, this
+    built its own connection from the endpoint hostname, which is why a remote
+    worker dialed an origin only the control plane could resolve.
+    """
+
     endpoint: str
     token: str
     timeout_seconds: float = 30.0
+    http: InternalHttpClient = field(default_factory=InternalHttpClient)
 
     def set_bearer_token(self, token: str) -> None:
         self.token = token
@@ -173,24 +197,21 @@ class WorkerRepositoryHttpTransport:
         path: str,
         payload: Mapping[str, JsonValue],
     ) -> JsonObject:
-        connection, request_target = self._connection(path)
         try:
-            connection.request(
+            response = self.http.request(
                 "POST",
-                request_target,
-                body=json.dumps(dict(payload), separators=(",", ":")).encode("utf-8"),
+                self._url(path),
                 headers=self._headers(),
+                content=_encoded(payload),
+                timeout_seconds=self.timeout_seconds,
             )
-            response = connection.getresponse()
-            raw = response.read().decode("utf-8")
-            if response.status < 200 or response.status >= 300:
-                raise WorkerRepositoryClientError(
-                    raw or f"worker repository returned HTTP {response.status}"
-                )
-        except OSError as exc:
+        except InternalHttpError as exc:
             raise WorkerRepositoryClientError(str(exc)) from exc
-        finally:
-            connection.close()
+        raw = response.text
+        if response.status_code < 200 or response.status_code >= 300:
+            raise WorkerRepositoryClientError(
+                raw or f"worker repository returned HTTP {response.status_code}"
+            )
         if not raw:
             return {}
         try:
@@ -203,25 +224,22 @@ class WorkerRepositoryHttpTransport:
         path: str,
         payload: Mapping[str, JsonValue],
     ) -> Iterator[JsonObject]:
-        connection, request_target = self._connection(path)
         try:
-            connection.request(
+            with self.http.stream(
                 "POST",
-                request_target,
-                body=json.dumps(dict(payload), separators=(",", ":")).encode("utf-8"),
+                self._url(path),
                 headers=self._headers(),
-            )
-            response = connection.getresponse()
-            if response.status < 200 or response.status >= 300:
-                raw = response.read().decode("utf-8")
-                raise WorkerRepositoryClientError(
-                    raw or f"worker repository returned HTTP {response.status}"
-                )
-            yield from _iter_sse_data(response)
-        except OSError as exc:
+                content=_encoded(payload),
+                timeout_seconds=self.timeout_seconds,
+            ) as response:
+                if response.status_code < 200 or response.status_code >= 300:
+                    raw = response.read().decode("utf-8")
+                    raise WorkerRepositoryClientError(
+                        raw or f"worker repository returned HTTP {response.status_code}"
+                    )
+                yield from _iter_sse_data(response.iter_lines())
+        except InternalHttpError as exc:
             raise WorkerRepositoryClientError(str(exc)) from exc
-        finally:
-            connection.close()
 
     def _headers(self) -> dict[str, str]:
         headers: dict[str, str] = {
@@ -232,26 +250,13 @@ class WorkerRepositoryHttpTransport:
             headers["Authorization"] = f"Bearer {self.token}"
         return headers
 
-    def _connection(self, path: str) -> tuple[http.client.HTTPConnection, str]:
+    def _url(self, path: str) -> str:
         endpoint = urlparse(self.endpoint)
         if endpoint.scheme not in {"http", "https"} or endpoint.hostname is None:
             msg = "worker repository endpoint must be an HTTP(S) URL with a hostname"
             raise WorkerRepositoryClientError(msg)
-        connection: http.client.HTTPConnection
-        if endpoint.scheme == "https":
-            connection = http.client.HTTPSConnection(
-                endpoint.hostname,
-                endpoint.port,
-                timeout=self.timeout_seconds,
-            )
-        else:
-            connection = http.client.HTTPConnection(
-                endpoint.hostname,
-                endpoint.port,
-                timeout=self.timeout_seconds,
-            )
-        request_target = f"{endpoint.path.rstrip('/')}/{path.lstrip('/')}"
-        return connection, request_target
+        base = self.endpoint.rstrip("/")
+        return f"{base}/{path.lstrip('/')}"
 
 
 class WorkerRepositoryTransport(Protocol):
@@ -353,7 +358,7 @@ class WorkerRepositoryHttpClient:
             WorkerRecordResponse,
         )
 
-    def disable_worker(self, request: WorkerIdRequest) -> WorkerRecordResponse:
+    def disable_worker(self, request: DisableWorkerRequest) -> WorkerRecordResponse:
         return self._post_model(
             "/worker-repository/disable-worker",
             request,
@@ -875,6 +880,17 @@ class RemoteSchedulerWorkerRepository:
         self._available_worker = None
         return response.worker
 
+    def prepare_source_cache(self) -> None:
+        """Drive one cleanup round before this worker serves.
+
+        A target names an object whose store bytes and row are already gone,
+        so nothing can request what remains cached here. A failed purge is
+        retried from the durable queue while the worker serves; only a round
+        that cannot run at all — an unreachable control plane or a lost cache
+        session — refuses registration.
+        """
+        self.reconcile_source_cache()
+
     def toggle_worker_available(
         self,
         worker_id: str,
@@ -882,14 +898,6 @@ class RemoteSchedulerWorkerRepository:
         ttl_seconds: int = 0,
     ) -> SchedulerWorkerRecord:
         _ = ttl_seconds
-        result = self.reconcile_source_cache()
-        if result.failed_count:
-            detail = result.failure_detail or "no cause was recorded"
-            msg = (
-                f"source cache cleanup failed for {result.failed_count} target(s); "
-                f"this worker stays unavailable until it succeeds: {detail}"
-            )
-            raise WorkerRepositoryClientError(msg)
         worker = self._available_worker
         if worker is None:
             msg = f"worker {worker_id!r} was not returned by repository"
@@ -908,12 +916,17 @@ class RemoteSchedulerWorkerRepository:
             WorkerCacheGenerationState.Initializing,
             WorkerCacheGenerationState.Draining,
         }:
-            result = self.reconcile_source_cache()
-            if result.failed_count:
-                raise WorkerRepositoryClientError("source cache cleanup failed")
+            # Each keepalive drives another cleanup round; a purge that still
+            # fails stays queued and the worker keeps serving.
+            self.reconcile_source_cache()
             response = self.client.set_worker_keep_alive(self._session_request())
         worker = response.worker
         if worker is None:
+            if response.source_cache_state is not WorkerCacheGenerationState.Available:
+                raise WorkerSourceCacheNotAvailableError(
+                    worker_id,
+                    response.source_cache_state,
+                )
             msg = f"worker {worker_id!r} was not returned by repository"
             raise WorkerRepositoryClientError(msg)
         return worker
@@ -992,10 +1005,14 @@ class RemoteSchedulerWorkerRepository:
         self,
         worker_id: str,
         *,
+        reason: WorkerUnavailableReason,
+        detail: str = "",
         ttl_seconds: int = 0,
     ) -> SchedulerWorkerRecord:
         _ = ttl_seconds
-        worker = self.client.disable_worker(WorkerIdRequest(worker_id=worker_id)).worker
+        worker = self.client.disable_worker(
+            DisableWorkerRequest(worker_id=worker_id, reason=reason, detail=detail)
+        ).worker
         if worker is None:
             msg = f"worker {worker_id!r} was not returned by repository"
             raise WorkerRepositoryClientError(msg)
@@ -1093,7 +1110,7 @@ class RemoteSchedulerContainerRepository:
         container_id: str,
         address: str,
         *,
-        route: SchedulerBackendRoute | None = None,
+        route: AgentBackendRoute | None = None,
     ) -> SchedulerContainerAddress:
         response = self.client.set_worker_address(
             SetWorkerAddressRequest(container_id=container_id, address=address, route=route)
@@ -1108,7 +1125,7 @@ class RemoteSchedulerContainerRepository:
         container_id: str,
         address: str,
         *,
-        route: SchedulerBackendRoute | None = None,
+        route: AgentBackendRoute | None = None,
     ) -> SchedulerContainerAddress:
         response = self.client.set_container_address(
             SetContainerAddressRequest(container_id=container_id, address=address, route=route)
@@ -1123,7 +1140,7 @@ class RemoteSchedulerContainerRepository:
         container_id: str,
         address_map: dict[int, str],
         *,
-        routes: list[SchedulerBackendRoute] | None = None,
+        routes: list[AgentBackendRoute] | None = None,
     ) -> SchedulerContainerAddressMap:
         response = self.client.set_container_address_map(
             SetContainerAddressMapRequest(
@@ -1432,6 +1449,7 @@ def build_worker_repository_http_client(
     endpoint: str,
     token: str,
     timeout_seconds: float = 30.0,
+    http: InternalHttpClient | None = None,
 ) -> WorkerRepositoryHttpClient:
     if not endpoint:
         msg = "worker repository endpoint is required"
@@ -1444,6 +1462,7 @@ def build_worker_repository_http_client(
             endpoint=endpoint,
             token=token,
             timeout_seconds=timeout_seconds,
+            http=http or InternalHttpClient(timeout_seconds=timeout_seconds),
         )
     )
 
@@ -1452,10 +1471,14 @@ def _model_payload(model: ContractModel) -> JsonObject:
     return _JSON_OBJECT.validate_json(model.model_dump_json())
 
 
-def _iter_sse_data(response: http.client.HTTPResponse) -> Iterator[JsonObject]:
+def _encoded(payload: Mapping[str, JsonValue]) -> bytes:
+    return json.dumps(dict(payload), separators=(",", ":")).encode("utf-8")
+
+
+def _iter_sse_data(lines: Iterator[str]) -> Iterator[JsonObject]:
     data_lines: list[str] = []
-    while raw_line := response.readline():
-        line = raw_line.decode("utf-8").rstrip("\r\n")
+    for raw_line in lines:
+        line = raw_line.rstrip("\r\n")
         if not line:
             if data_lines:
                 yield _parse_sse_data("\n".join(data_lines))

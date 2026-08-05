@@ -8,7 +8,6 @@ from pydantic import Field, field_validator, model_validator
 
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
-from shared.timestamps import utc_now
 
 TERMINAL_REASON_MAX_LENGTH = 500
 
@@ -104,14 +103,8 @@ class CapacityAcquisitionShape(ContractModel):
 
 
 class CapacityAcquisitionRequest(ContractModel):
-    capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
-    reservation_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
-    operation_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
-    desired_unit: int = Field(ge=1)
-    shape: CapacityAcquisitionShape
+    """What a reservation asks for. The unit it resolves to is compute's answer."""
 
-
-class CapacityAcquisitionPlanningRequest(ContractModel):
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     reservation_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     operation_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
@@ -228,45 +221,26 @@ class CapacityPoolPolicy(ContractModel):
         return self
 
 
-class CapacityPoolSizingState(ContractModel):
+class CapacityPoolSizingSnapshot(ContractModel):
+    """What a pool's size is and has been, read from the two owners of that fact.
+
+    Nothing here is stored under its own name. `desired_units` is the provider's
+    own count; every other field is computed from the pool's
+    `compute_capacity_operations` rows on each read. That is what makes the
+    scale-up backoff survive a restart: a pool whose launches keep failing
+    resumes the interval its recorded failures earned instead of starting over
+    at zero and buying another machine a tick later.
+    """
+
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
-    pool_name: str
-    workspace_id: str
-    revision: int = Field(default=0, ge=0)
-    initial_target_reached: bool = False
-    operation_id: str = Field(default="", max_length=80)
-    target_units: int = Field(default=0, ge=0)
-    operation_started_at: datetime | None = None
-    last_scale_up_at: datetime | None = None
-    last_scale_down_at: datetime | None = None
-    retry_after_at: datetime | None = None
+    desired_units: int = Field(default=0, ge=0)
+    peak_desired_units: int = Field(default=0, ge=0)
+    pending_operation_id: str = Field(default="", max_length=80)
+    pending_desired_units: int = Field(default=0, ge=0)
+    last_requested_at: datetime | None = None
+    last_released_at: datetime | None = None
     consecutive_failures: int = Field(default=0, ge=0)
-    terminal_reason: str = Field(default="", max_length=TERMINAL_REASON_MAX_LENGTH)
-    updated_at: datetime = Field(default_factory=utc_now)
-
-    @field_validator("terminal_reason", mode="before")
-    @classmethod
-    def bound_terminal_reason(cls, value: object) -> object:
-        return _bounded_terminal_reason(value)
-
-
-class CapacityPoolSizingStateUpdate(ContractModel):
-    capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
-    expected_revision: int = Field(ge=0)
-    initial_target_reached: bool = False
-    operation_id: str = Field(default="", max_length=80)
-    target_units: int = Field(default=0, ge=0)
-    operation_started_at: datetime | None = None
-    last_scale_up_at: datetime | None = None
-    last_scale_down_at: datetime | None = None
-    retry_after_at: datetime | None = None
-    consecutive_failures: int = Field(default=0, ge=0)
-    terminal_reason: str = Field(default="", max_length=TERMINAL_REASON_MAX_LENGTH)
-
-    @field_validator("terminal_reason", mode="before")
-    @classmethod
-    def bound_terminal_reason(cls, value: object) -> object:
-        return _bounded_terminal_reason(value)
+    last_failure_at: datetime | None = None
 
 
 def capacity_owner_for_provider(provider: str) -> tuple[CapacityOwnerKind, CapacityOwnerSource]:
@@ -285,7 +259,6 @@ def _unique_nonempty(values: Sequence[str]) -> tuple[str, ...]:
 
 __all__ = [
     "CAPACITY_OWNER_ID_PATTERN",
-    "CapacityAcquisitionPlanningRequest",
     "CapacityAcquisitionRequest",
     "CapacityAcquisitionResult",
     "CapacityAcquisitionShape",
@@ -294,8 +267,7 @@ __all__ = [
     "CapacityOwnerKind",
     "CapacityOwnerSource",
     "CapacityPoolPolicy",
-    "CapacityPoolSizingState",
-    "CapacityPoolSizingStateUpdate",
+    "CapacityPoolSizingSnapshot",
     "CapacityReleaseRequest",
     "capacity_owner_for_provider",
     "new_capacity_owner_id",

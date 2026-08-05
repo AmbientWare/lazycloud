@@ -96,8 +96,8 @@ def test_volume_control_isolates_same_name_by_stable_workspace_and_volume_ids(
 
 
 def test_workspace_volumes_sharing_a_volume_id_stay_in_their_own_buckets() -> None:
-    # The key no longer carries a workspace segment, so the bucket resolved per
-    # workspace is the only thing keeping two tenants apart.
+    # The key carries no workspace segment, so the bucket resolved per workspace
+    # is the only thing keeping two tenants apart.
     client = _FakeObjectClient()
     filesystem = _workspace_filesystem(client)
     first = VolumeNamespace("workspace-a", "volume-id")

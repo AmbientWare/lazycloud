@@ -10,7 +10,7 @@ from compute.projection import PrivatePoolState
 from compute.state import ComputePoolState, ComputePoolStatus
 from shared.compute_fleet import Machine
 from shared.compute_policy import ComputePoolPhase, ComputePoolRecord
-from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
+from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus, WorkerUnavailableReason
 
 OPEN_RESERVATION_STATUSES = {"", "active", "pending"}
 
@@ -37,6 +37,8 @@ class SchedulerHookWorkerRepository(Protocol):
         self,
         worker_id: str,
         *,
+        reason: WorkerUnavailableReason,
+        detail: str = "",
         ttl_seconds: int = 0,
         now: datetime | None = None,
     ) -> SchedulerWorkerRecord: ...
@@ -59,9 +61,12 @@ class SchedulerComputeHooks:
         # an agent machine state. Provider launch alone is not ready capacity.
 
     def disable_machine(self, machine_id: str, reason: str) -> None:
-        _ = reason
         for worker in self._workers_for_machine(machine_id):
-            self.workers.disable_worker(worker.worker_id)
+            self.workers.disable_worker(
+                worker.worker_id,
+                reason=WorkerUnavailableReason.MachineRetired,
+                detail=reason,
+            )
 
     def retire_machine(
         self,
@@ -75,6 +80,10 @@ class SchedulerComputeHooks:
 
     def revoke_pool_join_token(self, token_hash: str) -> None:
         self.compute_states.revoke_join_token_state(token_hash)
+
+    def machine_worker_available(self, machine_id: str) -> bool:
+        worker = self.workers.get_worker(agent_machine_worker_id(machine_id))
+        return worker is not None and worker.status is SchedulerWorkerStatus.Available
 
     def _workers_for_machine(self, machine_id: str) -> list[SchedulerWorkerRecord]:
         workers = [

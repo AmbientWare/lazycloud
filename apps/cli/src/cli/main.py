@@ -26,9 +26,9 @@ from cli.operations import cron_app, image_app, provider_app, scheduler_app
 from cli.resources import (
     container_app,
     map_app,
+    pool_app,
     queue_app,
     register_machine_extensions,
-    register_pool_extensions,
     worker_app,
 )
 from cli.storage import cache_app, object_app
@@ -115,8 +115,8 @@ def _register_operator_cli(registry: PublicCliRegistry) -> None:
     registry.replace_group("workspace", workspace_app)
     registry.replace_group("container", container_app)
     registry.extend_group("machine", register_machine_extensions)
-    registry.extend_group("pool", register_pool_extensions)
 
+    registry.add_group("pool", pool_app)
     registry.add_group("queue", queue_app)
     registry.add_group("map", map_app)
     registry.add_group("worker", worker_app)

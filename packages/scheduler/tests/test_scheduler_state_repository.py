@@ -53,6 +53,7 @@ from scheduler.pool_state import SchedulerPoolStateService
 from scheduler.service import Scheduler, SchedulerStateStores, SchedulerWorkloadControls
 from scheduler.state import (
     DEFAULT_CONTAINER_REQUEST_CLAIM_LEASE_SECONDS,
+    AgentBackendRoute,
     CapacityReservationDispatchAllocation,
     ConcurrencyCounter,
     ConcurrencyReservation,
@@ -64,7 +65,6 @@ from scheduler.state import (
     RedisSchedulerWorkerRepository,
     RedisWorkerNetworkIpRepository,
     RedisWorkerPoolStateRepository,
-    SchedulerBackendRoute,
     SchedulerContainerRequestClaim,
     SchedulerContainerState,
     SchedulerRepositoryError,
@@ -96,6 +96,7 @@ from shared.realtime.contracts import (
     EventRecordType,
     create_cloud_event_record,
 )
+from shared.scheduling import WorkerUnavailableReason
 from shared.tasks import RetryPolicy, Task, TaskStatus
 from tests.redis_fakes import FakeRedis
 
@@ -890,7 +891,7 @@ def test_scheduler_worker_repository_lifecycle_capacity_queue_and_image_pull_loc
     assert _claim_and_acknowledge_requests(repo, now=now, limit=10) == []
     assert _claim_and_acknowledge_requests(repo, now=future, limit=10) == [request]
 
-    disabled = repo.disable_worker("worker-1")
+    disabled = repo.disable_worker("worker-1", reason=WorkerUnavailableReason.OperatorCordon)
     assert disabled.status is SchedulerWorkerStatus.Unavailable
 
     image_lock = repo.set_image_pull_lock(
@@ -1237,7 +1238,7 @@ def test_scheduler_container_repository_state_indexes_and_concurrency_release(
     _assert_redis_ttl(redis, repo.keys.container_exit_code("container-1"), 86_400)
     _assert_redis_ttl(redis, repo.keys.container_termination_reason("container-1"), 86_400)
 
-    route = SchedulerBackendRoute(
+    route = AgentBackendRoute(
         route_id="route-1",
         workspace_id="ws-1",
         pool_name="default",

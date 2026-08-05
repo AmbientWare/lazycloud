@@ -1,9 +1,15 @@
 # Web Zod Contracts
 
-These schemas are the manually synchronized browser half of `shared.http`.
-Keep one domain file aligned with its Pydantic owner and export the inferred
-type beside each schema. Model only consumed fields, exact list/nullability/time
-semantics, and genuine tolerant defaults; never erase payloads with
-`z.any()`/`z.unknown()` or broad records. Schemas stay pure—fetching, query
-keys, and formatting live elsewhere. A contract change updates producer and
-consumer together and is accepted by parsing a representative real response.
+The browser half of the shared HTTP contracts, maintained by hand.
+
+Keep one domain file aligned with its Pydantic owner and export the inferred type
+beside each schema. Model the fields the browser consumes with their exact list,
+nullability, and time semantics, and give a default only where the wire contract
+genuinely has one—preserve the distinction between an omitted value and a zero.
+
+Never erase a payload with `z.any()`, `z.unknown()`, or a broad record. A field
+that parses everything validates nothing, and the mismatch it hides surfaces as a
+rendering bug far from its cause.
+
+Schemas stay pure: fetching, query keys, and formatting live with their own
+owners. A contract change updates producer and consumer in the same change.

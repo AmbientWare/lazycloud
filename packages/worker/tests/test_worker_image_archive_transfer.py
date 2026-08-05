@@ -8,16 +8,16 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
+from typing import cast
 
 import pytest
+from networking.internal_http import InternalHttpClient
 from worker.image_archive_transfer import (
     ImageArchiveIntegrityError,
     ImageArchiveTransferError,
     download_image_archive,
     upload_image_archive,
 )
-
-from worker import image_archive_transfer
 
 
 @dataclass(slots=True)
@@ -90,6 +90,7 @@ def test_image_archive_transfers_retry_transient_responses_and_preserve_signed_h
 
     with _serve_archives(state) as url:
         upload_image_archive(
+            InternalHttpClient(),
             url,
             source,
             headers=signed_headers,
@@ -100,6 +101,7 @@ def test_image_archive_transfers_retry_transient_responses_and_preserve_signed_h
             retry_delays_seconds=(0,),
         )
         written = download_image_archive(
+            InternalHttpClient(),
             url,
             target,
             archive_size_bytes=len(content),
@@ -132,6 +134,7 @@ def test_image_archive_download_integrity_failure_is_terminal_and_preserves_targ
         pytest.raises(ImageArchiveIntegrityError, match="content length"),
     ):
         download_image_archive(
+            InternalHttpClient(),
             url,
             target,
             archive_size_bytes=len(expected),
@@ -158,6 +161,7 @@ def test_image_archive_transfer_error_never_discloses_capability_query(
         pytest.raises(ImageArchiveTransferError) as caught,
     ):
         download_image_archive(
+            InternalHttpClient(),
             f"{base_url}?X-Amz-Signature={sentinel}",
             target,
             archive_size_bytes=len(content),
@@ -181,30 +185,22 @@ def test_image_archive_unexpected_client_error_never_discloses_capability_query(
     source.write_bytes(content)
     sentinel = "never-log-this-client-signature"
 
-    class FailingConnection:
-        def __init__(
-            self,
-            host: str,
-            port: int | None = None,
-            timeout: float | None = None,
-        ) -> None:
-            _ = host, port, timeout
+    class _FailingHttp:
+        """An internal client whose failure carries the signed URL."""
 
-        def request(self, *args: object, **kwargs: object) -> None:
+        def request(self, *args: object, **kwargs: object) -> object:
             _ = kwargs
             raise RuntimeError(f"failed request {args!r} with {sentinel}")
 
-        def close(self) -> None:
-            return
+        def stream(self, *args: object, **kwargs: object) -> object:
+            _ = kwargs
+            raise RuntimeError(f"failed request {args!r} with {sentinel}")
 
-    monkeypatch.setattr(
-        image_archive_transfer.http.client,
-        "HTTPSConnection",
-        FailingConnection,
-    )
+    failing = cast(InternalHttpClient, _FailingHttp())
 
     with pytest.raises(ImageArchiveTransferError) as caught:
         upload_image_archive(
+            failing,
             f"https://objects.example.test/archive?X-Amz-Signature={sentinel}",
             source,
             headers={

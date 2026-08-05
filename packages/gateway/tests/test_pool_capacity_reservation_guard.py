@@ -371,7 +371,10 @@ def test_pool_scale_zero_disables_owner_worker_before_compute_mutation(
     def disable_worker(
         _repository: RedisSchedulerWorkerRepository,
         worker_id: str,
+        *,
+        reason: str,
     ) -> SchedulerWorkerRecord:
+        _ = reason
         disabled.append(worker_id)
         guard.events.append("worker-disabled")
         return worker.model_copy(update={"status": SchedulerWorkerStatus.Unavailable})

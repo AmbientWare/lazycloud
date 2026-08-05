@@ -231,10 +231,10 @@ export const customerComputeInstanceSchema = z
       "provisioning",
       "booting",
       "joining",
-      "ready",
       "failed",
       "deleting",
     ]),
+    service_state: z.enum(["provisioning", "joining", "serving", "degraded", "failed", "deleting"]),
     bootstrap_failure_reason: z
       .enum([
         "agent_download_failed",
@@ -250,8 +250,10 @@ export const customerComputeInstanceSchema = z
         "unknown",
       ])
       .nullable(),
+    bootstrap_failure_detail: z.string().default(""),
     bootstrap_observed_at: z.string(),
     launch_attempt: z.number().int().positive(),
+    booted_template_version: z.string().default(""),
     created_at: z.string(),
   })
   .strict();

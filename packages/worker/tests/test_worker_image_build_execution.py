@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import hashlib
-import io
 from base64 import b64encode
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
+from typing import cast
 
 import pytest
+from networking.internal_http import InternalHttpClient
 from pydantic import JsonValue, TypeAdapter
 from scheduler.state import SchedulerWorkerRequest
 from worker.container_checkpoints import ContainerImageArchiveResult
@@ -295,6 +297,7 @@ def test_repository_archive_publisher_requests_and_propagates_exact_identity(
     uploads: list[dict[str, object]] = []
 
     def capture_upload(
+        _http: InternalHttpClient,
         url: str,
         path: Path,
         *,
@@ -501,9 +504,7 @@ def test_repository_build_context_loader_rejects_incomplete_or_modified_body(
             expires_at=image_build_execution.utc_now() + timedelta(minutes=5),
         )
     )
-    _install_context_download(monkeypatch, _HttpResponse(body))
-
-    result = RepositoryImageBuildContextLoader(broker).extract_build_context(
+    result = _context_loader(broker, _StreamedResponse(body)).extract_build_context(
         "context-object",
         tmp_path / "context",
         workspace_id="workspace-1",
@@ -532,29 +533,17 @@ def test_repository_build_context_error_never_discloses_capability_query(
         )
     )
 
-    class FailingConnection:
-        def __init__(
-            self,
-            host: str,
-            port: int | None = None,
-            timeout: float | None = None,
-        ) -> None:
-            _ = host, port, timeout
+    class _FailingHttp:
+        """An internal client whose failure carries the signed URL."""
 
-        def request(self, *args: object, **kwargs: object) -> None:
+        def stream(self, *args: object, **kwargs: object) -> object:
             _ = args, kwargs
             raise RuntimeError(f"failed request with {sentinel}")
 
-        def close(self) -> None:
-            return
-
-    monkeypatch.setattr(
-        image_build_execution.http.client,
-        "HTTPSConnection",
-        FailingConnection,
-    )
-
-    result = RepositoryImageBuildContextLoader(broker).extract_build_context(
+    result = RepositoryImageBuildContextLoader(
+        broker,
+        cast(InternalHttpClient, _FailingHttp()),
+    ).extract_build_context(
         "context-object",
         tmp_path / "context",
         workspace_id="workspace-1",
@@ -575,46 +564,41 @@ class _RecordingAddressPublisher:
         self.requests.append(request)
 
 
-class _HttpResponse(io.BytesIO):
-    status = 200
+class _StreamedResponse:
+    """The part of an httpx response the context download reads."""
 
     def __init__(self, body: bytes, *, content_length: int | None = None) -> None:
-        super().__init__(body)
+        self.status_code = 200
+        self.body = body
         self.headers = {} if content_length is None else {"Content-Length": str(content_length)}
 
-    def getheader(self, name: str) -> str | None:
-        return self.headers.get(name)
+    def iter_bytes(self, size: int) -> Iterator[bytes]:
+        for start in range(0, len(self.body), size):
+            yield self.body[start : start + size]
 
 
-def _install_context_download(
-    monkeypatch: pytest.MonkeyPatch,
-    response: _HttpResponse,
-) -> None:
-    class ContextDownloadConnection:
-        def __init__(
-            self,
-            host: str,
-            port: int | None = None,
-            timeout: float | None = None,
-        ) -> None:
-            self.host = host
-            self.port = port
-            self.timeout = timeout
+class _StreamingHttp:
+    """An internal client that serves one canned body."""
 
-        def request(self, method: str, target: str) -> None:
-            assert method == "GET"
-            assert target == "/context.zip?signature=private"
+    def __init__(self, response: _StreamedResponse) -> None:
+        self.response = response
+        self.urls: list[str] = []
 
-        def getresponse(self) -> _HttpResponse:
-            return response
+    @contextmanager
+    def stream(self, method: str, url: str, **kwargs: object) -> Iterator[_StreamedResponse]:
+        _ = kwargs
+        assert method == "GET"
+        self.urls.append(url)
+        yield self.response
 
-        def close(self) -> None:
-            return None
 
-    monkeypatch.setattr(
-        image_build_execution.http.client,
-        "HTTPSConnection",
-        ContextDownloadConnection,
+def _context_loader(
+    broker: _BuildContextBroker,
+    response: _StreamedResponse,
+) -> RepositoryImageBuildContextLoader:
+    return RepositoryImageBuildContextLoader(
+        broker,
+        cast(InternalHttpClient, _StreamingHttp(response)),
     )
 
 
