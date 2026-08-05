@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any, Generic, ParamSpec, Protocol, TypedDict, TypeVar, overload
 
 from shared.autoscaling import QueueDepthAutoscaler
-from shared.compute_fleet import Pool
 from shared.deployment_records import (
     DEFAULT_DISK,
     DEFAULT_TASK_QUEUE_CPU,
@@ -176,7 +175,7 @@ class TaskQueueFunction(Generic[P, R]):
     outputs: SchemaInput = None
     docker_enabled: bool = False
     preemptible: bool = False
-    pool: str | Pool | Mapping[str, Any] | None = None
+    pool: PoolInput = None
     placement: PlacementInput = None
     provider: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -626,7 +625,7 @@ def _task_queue(
     outputs: SchemaInput = None,
     docker_enabled: bool = False,
     preemptible: bool = False,
-    pool: str | Pool | Mapping[str, Any] | None = None,
+    pool: PoolInput = None,
     placement: PlacementInput = None,
     provider: str | None = None,
     metadata: dict[str, Any] | None = None,
@@ -674,7 +673,7 @@ def _task_queue(
     outputs: SchemaInput = None,
     docker_enabled: bool = False,
     preemptible: bool = False,
-    pool: str | Pool | Mapping[str, Any] | None = None,
+    pool: PoolInput = None,
     placement: PlacementInput = None,
     provider: str | None = None,
     metadata: dict[str, Any] | None = None,
@@ -721,7 +720,7 @@ def _task_queue(
     outputs: SchemaInput = None,
     docker_enabled: bool = False,
     preemptible: bool = False,
-    pool: str | Pool | Mapping[str, Any] | None = None,
+    pool: PoolInput = None,
     placement: PlacementInput = None,
     provider: str | None = None,
     metadata: dict[str, Any] | None = None,

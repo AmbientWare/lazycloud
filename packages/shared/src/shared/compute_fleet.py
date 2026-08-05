@@ -4,7 +4,6 @@ from datetime import datetime
 
 from pydantic import Field
 
-from shared.capacity import CapacityOwnerIdentity, CapacityPoolPolicy
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
 from shared.timestamps import utc_now
@@ -22,13 +21,6 @@ class LeaseStatus(StringEnum):
     Active = "active"
     Released = "released"
     Expired = "expired"
-
-
-class Pool(CapacityOwnerIdentity, CapacityPoolPolicy):
-    name: str
-    provider: str = "local"
-    labels: dict[str, str] = Field(default_factory=dict)
-    created_at: datetime = Field(default_factory=utc_now)
 
 
 class Machine(ContractModel):
@@ -85,7 +77,6 @@ __all__ = [
     "AgentRecord",
     "LeaseStatus",
     "Machine",
-    "Pool",
     "ResourceStatus",
     "Worker",
 ]

@@ -9,7 +9,6 @@ from shared.capacity import (
     CapacityOwnerIdentity,
     CapacityOwnerKind,
     CapacityOwnerSource,
-    CapacityPoolPolicy,
 )
 from shared.compute_enrollment import (
     AgentCapacityState,
@@ -27,17 +26,48 @@ from shared.http.stubs import StubResponse
 from shared.tasks import TaskStatus
 
 
-class PoolCreateRequest(HttpModel, CapacityPoolPolicy):
+class PoolPolicy(HttpModel):
+    """The worker shape and scaling policy a provisioning unit publishes.
+
+    Stated here rather than inherited from the durable record: the wire
+    vocabulary is the contract, and a unit column that stops being published
+    must not silently disappear from the payload with it.
+    """
+
+    initial_machines: int = Field(default=0, ge=0)
+    min_machines: int = Field(default=0, ge=0)
+    max_machines: int = Field(default=1, ge=0)
+    scaling_enabled: bool = False
+    default_eligible: bool = False
+    priority: int = Field(default=0, ge=-(2**31), le=2**31 - 1)
+    min_free_cpu_millicores: int = Field(default=0, ge=0)
+    min_free_memory_mib: int = Field(default=0, ge=0)
+    min_free_gpu_count: int = Field(default=0, ge=0)
+    worker_cpu_millicores: int = Field(default=0, ge=0)
+    worker_memory_mib: int = Field(default=0, ge=0)
+    worker_gpu_type: str = Field(default="", max_length=160)
+    worker_gpu_count: int = Field(default=0, ge=0)
+    worker_runtimes: tuple[str, ...] = ("runc",)
+    worker_preemptible: bool = False
+    idle_drain_timeout_seconds: int = Field(default=300, ge=60, le=86_400)
+    scale_up_cooldown_seconds: int = Field(default=5, ge=0, le=86_400)
+    scale_down_cooldown_seconds: int = Field(default=60, ge=0, le=86_400)
+    registration_timeout_seconds: int = Field(default=600, ge=30, le=3_600)
+
+
+class PoolCreateRequest(PoolPolicy):
     name: str
+    machine_pool: str = ""
     provider: str = "local"
     labels: dict[str, str] = Field(default_factory=dict)
 
 
-class PoolResponse(HttpModel, CapacityPoolPolicy):
+class PoolResponse(PoolPolicy):
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     capacity_owner_kind: CapacityOwnerKind
     capacity_owner_source: CapacityOwnerSource
     name: str
+    machine_pool: str
     provider: str = "local"
     labels: dict[str, str] = Field(default_factory=dict)
     created_at: datetime
@@ -426,6 +456,7 @@ __all__ = [
     "PoolOfferListResponse",
     "PoolOfferQuery",
     "PoolOfferResponse",
+    "PoolPolicy",
     "PoolProviderInstanceResponse",
     "PoolResponse",
     "PoolScaleRequest",

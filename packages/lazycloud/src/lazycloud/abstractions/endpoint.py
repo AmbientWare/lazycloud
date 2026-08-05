@@ -21,7 +21,6 @@ from typing import (
 
 from pydantic import JsonValue
 from shared.autoscaling import QueueDepthAutoscaler
-from shared.compute_fleet import Pool
 from shared.deployment_records import (
     DEFAULT_DISK,
     DEFAULT_HTTP_CPU,
@@ -458,7 +457,7 @@ def _endpoint(
     outputs: SchemaInput = None,
     docker_enabled: bool = False,
     preemptible: bool = False,
-    pool: str | Pool | Mapping[str, Any] | None = None,
+    pool: PoolInput = None,
     placement: PlacementInput = None,
     provider: str | None = None,
     metadata: dict[str, Any] | None = None,
@@ -500,7 +499,7 @@ def _endpoint(
     outputs: SchemaInput = None,
     docker_enabled: bool = False,
     preemptible: bool = False,
-    pool: str | Pool | Mapping[str, Any] | None = None,
+    pool: PoolInput = None,
     placement: PlacementInput = None,
     provider: str | None = None,
     metadata: dict[str, Any] | None = None,
@@ -541,7 +540,7 @@ def _endpoint(
     outputs: SchemaInput = None,
     docker_enabled: bool = False,
     preemptible: bool = False,
-    pool: str | Pool | Mapping[str, Any] | None = None,
+    pool: PoolInput = None,
     placement: PlacementInput = None,
     provider: str | None = None,
     metadata: dict[str, Any] | None = None,
@@ -816,7 +815,7 @@ def _asgi(
     autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
     task_policy: TaskPolicy | Mapping[str, Any] | None = None,
     checkpoint_enabled: bool = False,
-    pool: str | Pool | Mapping[str, Any] | None = None,
+    pool: PoolInput = None,
     placement: PlacementInput = None,
     provider: str | None = None,
 ) -> Callable[[Callable[..., Awaitable[Any]] | Callable[..., Any]], ASGI]:
@@ -879,7 +878,7 @@ def _realtime(
     autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
     task_policy: TaskPolicy | Mapping[str, Any] | None = None,
     checkpoint_enabled: bool = False,
-    pool: str | Pool | Mapping[str, Any] | None = None,
+    pool: PoolInput = None,
     placement: PlacementInput = None,
     provider: str | None = None,
 ) -> Callable[[Callable[..., Any]], RealtimeASGI]:

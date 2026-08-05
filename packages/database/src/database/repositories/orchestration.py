@@ -16,7 +16,6 @@ from database.tables.orchestration import (
     AutoscalerStateTable,
     ContainerTable,
     MachineTable,
-    PoolTable,
     ProviderTable,
     RouteTable,
     WorkerTable,
@@ -26,123 +25,16 @@ from shared.autoscaler_state import (
     AutoscalerTargetKind,
     autoscaler_state_name,
 )
-from shared.compute_fleet import AgentLease, AgentRecord, Machine, Pool, ResourceStatus, Worker
+from shared.compute_fleet import AgentLease, AgentRecord, Machine, ResourceStatus, Worker
 from shared.container_requests import ContainerShutdownTarget, StopContainerReason
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import ConflictError
 from shared.identity import WorkspaceStatus
 from shared.provider_config import ProviderConfig
 from shared.routing import AgentBackendRoute
-from sqlalchemy import and_, delete, or_, select
-from sqlalchemy.engine import CursorResult
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
-
-
-@dataclass(slots=True)
-class PoolRepository:
-    session: Session
-
-    @property
-    def records(self) -> WorkspaceTableRepository[Pool]:
-        return WorkspaceTableRepository(
-            self.session,
-            TableRepositoryConfig(PoolTable, Pool, key_field="name"),
-        )
-
-    def upsert(self, pool: Pool, *, workspace_id: str) -> Pool:
-        existing = self.get(pool.name, workspace_id=workspace_id)
-        if existing is not None and (
-            existing.capacity_owner_id != pool.capacity_owner_id
-            or existing.capacity_owner_kind is not pool.capacity_owner_kind
-            or existing.capacity_owner_source is not pool.capacity_owner_source
-        ):
-            raise ConflictError(f"compute pool capacity owner is immutable: {pool.name}")
-        saved = self.records.upsert(
-            pool,
-            key=pool.name,
-            workspace_id=workspace_id,
-            name=pool.name,
-        )
-        self._write_policy_columns(saved, workspace_id=workspace_id)
-        return saved
-
-    def get(self, name: str, *, workspace_id: str) -> Pool | None:
-        return self.records.get(name, workspace_id=workspace_id)
-
-    def list(self, *, workspace_id: str) -> list[Pool]:
-        return self.records.list(workspace_id=workspace_id)
-
-    def list_across_workspaces(self) -> list[Pool]:
-        """Scheduler/capacity listing over every workspace's pools."""
-        return self.records.list_across_workspaces()
-
-    def list_across_workspaces_with_workspace(self) -> list[tuple[str, Pool]]:
-        rows = self.session.scalars(
-            select(PoolTable).order_by(PoolTable.workspace_id, PoolTable.name)
-        )
-        return [(str(row.workspace_id), Pool.model_validate(row.payload)) for row in rows]
-
-    def delete_for_workspace_deletion(self, name: str, *, workspace_id: str) -> bool:
-        workspace = WorkspaceRepository(self.session).lock_for_deletion(workspace_id)
-        if workspace.status is not WorkspaceStatus.Deleting:
-            raise ConflictError(f"workspace cleanup requires deleting state: {workspace_id}")
-        result = self.session.execute(
-            delete(PoolTable).where(
-                PoolTable.workspace_id == workspace_id,
-                PoolTable.name == name,
-            )
-        )
-        self.session.flush()
-        return isinstance(result, CursorResult) and result.rowcount > 0
-
-    def exists_in_other_workspace(self, name: str, *, workspace_id: str) -> bool:
-        return (
-            self.session.scalar(
-                select(PoolTable.id)
-                .where(
-                    PoolTable.name == name,
-                    PoolTable.workspace_id != workspace_id,
-                )
-                .limit(1)
-            )
-            is not None
-        )
-
-    def _write_policy_columns(self, pool: Pool, *, workspace_id: str) -> None:
-        row = self.session.scalars(
-            select(PoolTable)
-            .where(
-                PoolTable.workspace_id == workspace_id,
-                PoolTable.name == pool.name,
-            )
-            .with_for_update()
-        ).one()
-        row.provider = pool.provider
-        row.capacity_owner_id = pool.capacity_owner_id
-        row.capacity_owner_kind = pool.capacity_owner_kind.value
-        row.capacity_owner_source = pool.capacity_owner_source.value
-        row.initial_workers = pool.initial_workers
-        row.min_workers = pool.min_workers
-        row.max_workers = pool.max_workers
-        row.scaling_enabled = pool.scaling_enabled
-        row.default_eligible = pool.default_eligible
-        row.priority = pool.priority
-        row.min_free_cpu_millicores = pool.min_free_cpu_millicores
-        row.min_free_memory_mib = pool.min_free_memory_mib
-        row.min_free_gpu_count = pool.min_free_gpu_count
-        row.worker_cpu_millicores = pool.worker_cpu_millicores
-        row.worker_memory_mib = pool.worker_memory_mib
-        row.worker_gpu_type = pool.worker_gpu_type
-        row.worker_gpu_count = pool.worker_gpu_count
-        row.worker_runtimes = list(pool.worker_runtimes)
-        row.worker_preemptible = pool.worker_preemptible
-        row.idle_drain_timeout_seconds = pool.idle_drain_timeout_seconds
-        row.scale_up_cooldown_seconds = pool.scale_up_cooldown_seconds
-        row.scale_down_cooldown_seconds = pool.scale_down_cooldown_seconds
-        row.registration_timeout_seconds = pool.registration_timeout_seconds
-        flag_modified(row, "worker_runtimes")
-        self.session.flush()
 
 
 @dataclass(slots=True)

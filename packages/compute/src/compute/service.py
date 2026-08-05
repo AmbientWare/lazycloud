@@ -1538,17 +1538,22 @@ class ComputeService:
         )
         return saved
 
-    def list_pools(self, *, workspace: str = "default") -> list[Pool]:
+    def list_pools(self, *, workspace: str = "default") -> list[ComputePoolRecord]:
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
-            records = PoolRepository(session).list(workspace_id=workspace_id)
+            records = ComputePoolRepository(session).list_for_workspace(workspace_id)
         records.sort(key=lambda item: item.name)
         return records
 
-    def list_pools_across_workspaces(self) -> list[tuple[str, Pool]]:
+    def list_pools_across_workspaces(self) -> list[ComputePoolRecord]:
+        """Every provisioning unit, for scheduler controller construction.
+
+        A unit carries its own workspace, so the caller does not pair it with
+        one; two units in the same group are distinguished by capacity owner.
+        """
         with self.context.database.session() as session:
-            records = PoolRepository(session).list_across_workspaces_with_workspace()
-        return sorted(records, key=lambda item: (item[0], item[1].name))
+            records = ComputePoolRepository(session).list_across_workspaces()
+        return sorted(records, key=lambda item: (item.workspace_id, item.name))
 
     def pool_sizing_snapshot(self, capacity_owner_id: str) -> CapacityPoolSizingSnapshot:
         """Answer how big this pool is, was asked to be, and how badly that went.

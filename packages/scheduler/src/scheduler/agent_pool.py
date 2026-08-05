@@ -11,7 +11,7 @@ from compute.state import ComputeAgentTokenState, ComputePoolState
 from compute.telemetry import agent_machine_connected, agent_telemetry_state
 from pydantic import Field
 from shared.capacity import CAPACITY_OWNER_ID_PATTERN
-from shared.compute_fleet import Pool
+from shared.compute_policy import ComputePoolRecord
 from shared.contracts import ContractModel
 from shared.scheduling import (
     SchedulerWorkerRecord,
@@ -201,23 +201,21 @@ class SchedulerAgentPoolService:
         return [self.controller(config).reconcile(now=now) for config in configs]
 
 
-def agent_pool_config_from_pool(
-    pool: Pool,
-    *,
-    workspace_id: str,
-) -> AgentPoolConfig | None:
-    mode = pool.labels.get("mode", "")
-    if pool.provider != AGENT_PROVIDER_NAME and mode != "private":
+def agent_pool_config_from_pool(pool: ComputePoolRecord) -> AgentPoolConfig | None:
+    """Config for a unit that runs agent machines, or None if it runs none.
+
+    The unit's own provider column decides: a unit whose machines are joined or
+    locally hosted is driven by the agent pool controller, and one backed by a
+    cloud auto-scaling group is not.
+    """
+    if pool.provider not in AGENT_MACHINE_PROVIDERS:
         return None
     return AgentPoolConfig(
-        workspace_id=workspace_id,
+        workspace_id=pool.workspace_id,
         pool_name=pool.name,
         capacity_owner_id=pool.capacity_owner_id,
-        gpu_type=pool.labels.get("gpu", ""),
-        worker_build_version=pool.labels.get(
-            "worker_build_version",
-            DEFAULT_AGENT_WORKER_BUILD_VERSION,
-        ),
+        gpu_type=pool.worker_gpu_type,
+        worker_build_version=DEFAULT_AGENT_WORKER_BUILD_VERSION,
     )
 
 

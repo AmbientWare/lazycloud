@@ -20,8 +20,7 @@ from shared.capacity import CapacityAcquisitionShape as ComputeCapacityShape
 from shared.capacity import CapacityAcquisitionStatus as ComputeCapacityStatus
 from shared.capacity import CapacityOwnerKind, CapacityPoolSizingSnapshot
 from shared.capacity import CapacityReleaseRequest as ComputeCapacityReleaseRequest
-from shared.compute_fleet import Pool
-from shared.compute_policy import ComputePlacementSource
+from shared.compute_policy import ComputePlacementSource, ComputePoolRecord
 from shared.contracts import ContractModel
 from shared.errors import ConflictError
 from shared.scheduling import (
@@ -311,7 +310,7 @@ class ComputeCapacityService(Protocol):
 @dataclass(slots=True)
 class ComputePoolCapacityController:
     workspace_id: str
-    pool: Pool
+    pool: ComputePoolRecord
     compute: ComputeCapacityService
     workers: CapacityWorkerRepository
 

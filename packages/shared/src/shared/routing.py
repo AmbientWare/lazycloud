@@ -14,6 +14,14 @@ class BackendRouteTransport(StringEnum):
     LocalDirect = "local_direct"
 
 
+class PrivatePoolFallback(StringEnum):
+    """What a workload does when the unit it named has no capacity to give it."""
+
+    Internal = "internal"
+    Wait = "wait"
+    Fail = "fail"
+
+
 class BackendRouteState(StringEnum):
     Opening = "opening"
     Ready = "ready"
@@ -80,6 +88,7 @@ __all__ = [
     "BackendRouteProtocol",
     "BackendRouteState",
     "BackendRouteTransport",
+    "PrivatePoolFallback",
     "RoutePrewarmDecision",
     "parse_backend_route_address",
 ]

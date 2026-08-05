@@ -17,7 +17,6 @@ from typing import (
 )
 
 from pydantic import ValidationError
-from shared.compute_fleet import Pool
 from shared.deployment_records import (
     DEFAULT_DISK,
     DEFAULT_FUNCTION_AUTHORIZED,
@@ -751,7 +750,7 @@ def _function(
     outputs: SchemaInput = None,
     docker_enabled: bool = False,
     preemptible: bool = False,
-    pool: str | Pool | Mapping[str, Any] | None = None,
+    pool: PoolInput = None,
     placement: PlacementInput = None,
     provider: str | None = None,
     metadata: dict[str, Any] | None = None,
@@ -793,7 +792,7 @@ def _function(
     outputs: SchemaInput = None,
     docker_enabled: bool = False,
     preemptible: bool = False,
-    pool: str | Pool | Mapping[str, Any] | None = None,
+    pool: PoolInput = None,
     placement: PlacementInput = None,
     provider: str | None = None,
     metadata: dict[str, Any] | None = None,
@@ -834,7 +833,7 @@ def _function(
     outputs: SchemaInput = None,
     docker_enabled: bool = False,
     preemptible: bool = False,
-    pool: str | Pool | Mapping[str, Any] | None = None,
+    pool: PoolInput = None,
     placement: PlacementInput = None,
     provider: str | None = None,
     metadata: dict[str, Any] | None = None,
@@ -957,7 +956,7 @@ def _cron(
     outputs: SchemaInput = None,
     docker_enabled: bool = False,
     preemptible: bool = False,
-    pool: str | Pool | Mapping[str, Any] | None = None,
+    pool: PoolInput = None,
     placement: PlacementInput = None,
     provider: str | None = None,
     metadata: dict[str, Any] | None = None,

@@ -7,7 +7,7 @@ from enum import StrEnum
 from pydantic import Field, field_validator
 from shared.capacity import CapacityOwnerIdentity
 from shared.contracts import ContractModel
-from shared.routing import BackendRouteTransport
+from shared.routing import BackendRouteTransport, PrivatePoolFallback
 
 from compute.telemetry import (
     AgentTelemetryState,
@@ -21,12 +21,6 @@ DEFAULT_PRIVATE_PRIORITY = 1000
 
 class ComputePoolMode(StrEnum):
     Private = "private"
-
-
-class PrivatePoolFallback(StrEnum):
-    Internal = "internal"
-    Wait = "wait"
-    Fail = "fail"
 
 
 class ComputePoolSource(StrEnum):

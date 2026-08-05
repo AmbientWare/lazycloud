@@ -1,5 +1,4 @@
 from shared.autoscaling import QueueDepthAutoscaler
-from shared.compute_fleet import Pool
 from shared.compute_policy import ComputePlacementTarget
 from shared.gpu import GpuType
 from shared.image_building.authoring import LinuxArchitecture, PythonVersion
@@ -50,7 +49,6 @@ __all__ = [
     "Image",
     "LinuxArchitecture",
     "Map",
-    "Pool",
     "PythonVersion",
     "Queue",
     "QueueDepthAutoscaler",

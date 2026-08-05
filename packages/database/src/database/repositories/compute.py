@@ -25,7 +25,6 @@ from database.tables.compute import (
     TailnetCleanupTombstoneTable,
     WorkspaceComputePolicyTable,
 )
-from database.tables.orchestration import PoolTable
 from pydantic import BaseModel, Field, JsonValue, TypeAdapter
 from shared.aws_connections import (
     AwsAccountConnection,
@@ -458,19 +457,66 @@ class ComputePoolRepository:
         provider_ref: str,
         region: str,
         capability_key: str,
+        root_volume_gib: int,
         for_update: bool = False,
     ) -> ComputePoolRecord | None:
+        """Look up a provisioning unit by everything AWS pins to one ASG.
+
+        `root_volume_gib` belongs to the identity because it feeds the launch
+        template: two callers disagreeing on it for one capability key would
+        alternate the template version on every reconcile and no node would
+        ever settle.
+        """
         statement = select(ComputePoolTable).where(
             ComputePoolTable.workspace_id == workspace_id,
             ComputePoolTable.provider_ref == provider_ref,
             ComputePoolTable.region == region,
             ComputePoolTable.capability_key == capability_key,
+            ComputePoolTable.root_volume_gib == root_volume_gib,
             ComputePoolTable.visibility == ComputePoolVisibility.Internal.value,
         )
         if for_update:
             statement = statement.with_for_update()
         row = self.session.scalars(statement).first()
         return ComputePoolRecord.model_validate(row.payload) if row is not None else None
+
+    def list_for_machine_pool(
+        self,
+        workspace_id: str,
+        machine_pool: str,
+    ) -> list[ComputePoolRecord]:
+        """Every unit feeding one scheduling group, best candidate first."""
+        statement = (
+            select(ComputePoolTable)
+            .where(
+                ComputePoolTable.workspace_id == workspace_id,
+                ComputePoolTable.machine_pool == machine_pool,
+            )
+            .order_by(ComputePoolTable.priority.desc(), ComputePoolTable.id)
+        )
+        return [
+            ComputePoolRecord.model_validate(row.payload) for row in self.session.scalars(statement)
+        ]
+
+    def list_for_workspace(self, workspace_id: str) -> list[ComputePoolRecord]:
+        statement = (
+            select(ComputePoolTable)
+            .where(ComputePoolTable.workspace_id == workspace_id)
+            .order_by(ComputePoolTable.created_at, ComputePoolTable.id)
+        )
+        return [
+            ComputePoolRecord.model_validate(row.payload) for row in self.session.scalars(statement)
+        ]
+
+    def list_across_workspaces(self) -> list[ComputePoolRecord]:
+        """System listing every unit, for scheduler controller construction."""
+        statement = select(ComputePoolTable).order_by(
+            ComputePoolTable.workspace_id,
+            ComputePoolTable.id,
+        )
+        return [
+            ComputePoolRecord.model_validate(row.payload) for row in self.session.scalars(statement)
+        ]
 
     def list_internal(self, *, workspace_id: str) -> list[ComputePoolRecord]:
         return self._list_internal(workspace_id=workspace_id)
@@ -563,7 +609,10 @@ class ComputePoolRepository:
         row.region = record.region
         row.offer_id = record.offer_id
         row.capability_key = record.capability_key
+        row.machine_pool = record.machine_pool
+        row.provider = record.provider
         row.desired_machines = record.desired_machines
+        row.initial_machines = record.initial_machines
         row.min_machines = record.min_machines
         row.max_machines = record.max_machines
         row.observed_machines = record.observed_machines
@@ -571,6 +620,27 @@ class ComputePoolRepository:
         row.phase = record.phase.value
         row.provider_state = _model_json(record.provider_state)
         flag_modified(row, "provider_state")
+        row.scaling_enabled = record.scaling_enabled
+        row.default_eligible = record.default_eligible
+        row.priority = record.priority
+        row.min_free_cpu_millicores = record.min_free_cpu_millicores
+        row.min_free_memory_mib = record.min_free_memory_mib
+        row.min_free_gpu_count = record.min_free_gpu_count
+        row.worker_cpu_millicores = record.worker_cpu_millicores
+        row.worker_memory_mib = record.worker_memory_mib
+        row.worker_gpu_type = record.worker_gpu_type
+        row.worker_gpu_count = record.worker_gpu_count
+        row.worker_runtimes = list(record.worker_runtimes)
+        flag_modified(row, "worker_runtimes")
+        row.worker_preemptible = record.worker_preemptible
+        row.idle_drain_timeout_seconds = record.idle_drain_timeout_seconds
+        row.scale_up_cooldown_seconds = record.scale_up_cooldown_seconds
+        row.scale_down_cooldown_seconds = record.scale_down_cooldown_seconds
+        row.registration_timeout_seconds = record.registration_timeout_seconds
+        row.workspace_machine_limit = record.workspace_machine_limit
+        row.root_volume_gib = record.root_volume_gib
+        row.transport = record.transport.value
+        row.fallback = record.fallback.value
         self.session.flush()
 
 
@@ -1062,9 +1132,13 @@ class ComputeJoinCredentialRepository:
         )
 
     def lock_pool(self, workspace_id: str, pool_name: str) -> bool:
+        """Fence the unit a credential is minted against for the mint's duration."""
         statement = (
-            select(PoolTable.id)
-            .where(PoolTable.workspace_id == workspace_id, PoolTable.name == pool_name)
+            select(ComputePoolTable.id)
+            .where(
+                ComputePoolTable.workspace_id == workspace_id,
+                ComputePoolTable.name == pool_name,
+            )
             .with_for_update()
         )
         return self.session.scalar(statement) is not None
@@ -1577,6 +1651,7 @@ class AwsAccountConnectionRepository:
             workspace_id=connection.workspace_id,
             account_id=connection.account_id,
             external_id=connection.external_id,
+            machine_pool=connection.machine_pool,
             phase=connection.phase.value,
             revision=connection.revision,
             next_reconcile_at=connection.next_reconcile_at,
@@ -1752,6 +1827,7 @@ class AwsAccountConnectionRepository:
         row.workspace_id = connection.workspace_id
         row.account_id = connection.account_id
         row.external_id = connection.external_id
+        row.machine_pool = connection.machine_pool
         row.phase = connection.phase.value
         row.revision = connection.revision
         row.next_reconcile_at = connection.next_reconcile_at

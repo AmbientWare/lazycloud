@@ -10,6 +10,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
     UniqueConstraint,
@@ -26,23 +27,43 @@ class ComputePoolTable(IdPayloadTable, DatabaseBase):
     __table_args__: tuple[SchemaItem, ...] = (
         UniqueConstraint("workspace_id", "name", name="uq_compute_pools_workspace_name"),
         UniqueConstraint("capacity_owner_id", name="uq_compute_pools_capacity_owner_id"),
-        Index("ix_compute_pools_workspace_name", "workspace_id", "name"),
+        Index("ix_compute_pools_workspace_machine_pool", "workspace_id", "machine_pool"),
         Index(
             "uq_compute_pools_internal_placement",
             "workspace_id",
             "provider_ref",
             "region",
             "capability_key",
+            "root_volume_gib",
             unique=True,
             postgresql_where=text("visibility = 'internal' AND provider_ref <> ''"),
             sqlite_where=text("visibility = 'internal' AND provider_ref <> ''"),
         ),
         CheckConstraint(
             "min_machines >= 0 AND desired_machines >= min_machines "
-            "AND max_machines >= desired_machines AND observed_machines >= 0",
+            "AND max_machines >= desired_machines AND observed_machines >= 0 "
+            "AND initial_machines >= min_machines AND max_machines >= initial_machines",
             name="ck_compute_pools_machine_capacity",
         ),
         CheckConstraint("generation > 0", name="ck_compute_pools_generation"),
+        CheckConstraint(
+            "min_free_cpu_millicores >= 0 AND min_free_memory_mib >= 0 "
+            "AND min_free_gpu_count >= 0 AND worker_cpu_millicores >= 0 "
+            "AND worker_memory_mib >= 0 AND worker_gpu_count >= 0",
+            name="ck_compute_pools_worker_shape",
+        ),
+        CheckConstraint(
+            "(worker_gpu_type = '' AND worker_gpu_count = 0) "
+            "OR (worker_gpu_type <> '' AND worker_gpu_count > 0)",
+            name="ck_compute_pools_worker_gpu",
+        ),
+        CheckConstraint(
+            "idle_drain_timeout_seconds BETWEEN 60 AND 86400 "
+            "AND scale_up_cooldown_seconds BETWEEN 0 AND 86400 "
+            "AND scale_down_cooldown_seconds BETWEEN 0 AND 86400 "
+            "AND registration_timeout_seconds BETWEEN 30 AND 3600",
+            name="ck_compute_pools_lifecycle_timeouts",
+        ),
     )
 
     workspace_id: Mapped[str] = mapped_column(
@@ -54,6 +75,8 @@ class ComputePoolTable(IdPayloadTable, DatabaseBase):
     capacity_owner_kind: Mapped[str] = mapped_column(String(64), nullable=False)
     capacity_owner_source: Mapped[str] = mapped_column(String(32), nullable=False)
     name: Mapped[str] = mapped_column(String(240), nullable=False)
+    machine_pool: Mapped[str] = mapped_column(String(240), nullable=False)
+    provider: Mapped[str] = mapped_column(String(120), nullable=False, default="local")
     selector: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     status: Mapped[str] = mapped_column(String(80), nullable=False, default="active")
     source: Mapped[str] = mapped_column(String(80), nullable=False, default="autosolver")
@@ -70,6 +93,7 @@ class ComputePoolTable(IdPayloadTable, DatabaseBase):
     offer_id: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     capability_key: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     desired_machines: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    initial_machines: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     min_machines: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     max_machines: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     observed_machines: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
@@ -80,6 +104,26 @@ class ComputePoolTable(IdPayloadTable, DatabaseBase):
         nullable=False,
         default=dict,
     )
+    scaling_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    default_eligible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    min_free_cpu_millicores: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    min_free_memory_mib: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    min_free_gpu_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    worker_cpu_millicores: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    worker_memory_mib: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    worker_gpu_type: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    worker_gpu_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    worker_runtimes: Mapped[list[str]] = mapped_column(json_type, nullable=False)
+    worker_preemptible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    idle_drain_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=300)
+    scale_up_cooldown_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    scale_down_cooldown_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
+    registration_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=600)
+    workspace_machine_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    root_volume_gib: Mapped[int] = mapped_column(Integer, nullable=False, default=200)
+    transport: Mapped[str] = mapped_column(String(32), nullable=False, default="tsnet_restricted")
+    fallback: Mapped[str] = mapped_column(String(32), nullable=False, default="internal")
 
 
 class WorkspaceComputePolicyTable(IdPayloadTable, DatabaseBase):
@@ -439,6 +483,7 @@ class AwsAccountConnectionTable(IdPayloadTable, DatabaseBase):
     )
     account_id: Mapped[str] = mapped_column(String(12), nullable=False)
     external_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    machine_pool: Mapped[str] = mapped_column(String(240), nullable=False, default="aws")
     phase: Mapped[str] = mapped_column(String(32), nullable=False)
     revision: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1)
     next_reconcile_at: Mapped[datetime | None] = mapped_column(

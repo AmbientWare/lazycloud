@@ -159,6 +159,12 @@ class AwsAccountConnection(ContractModel):
         pattern=r"^[A-Za-z0-9+=,.@:_/-]+$",
         repr=False,
     )
+    machine_pool: str = Field(default="aws", min_length=1, max_length=240)
+    """Scheduling group every unit provisioned on this connection stamps.
+
+    The customer's override point: units are created on demand per capability
+    key, so the group they belong to cannot live on any one of them.
+    """
     phase: AwsAccountConnectionPhase
     active_authorization: AwsAccountAuthorizationGeneration | None = None
     pending_authorization: AwsAccountAuthorizationGeneration | None = None
