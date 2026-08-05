@@ -132,7 +132,6 @@ from compute.provider_machines import (
     ProviderMachineReconciler,
     ProviderPoolBootstrapFactory,
     _metadata_time,
-    _pool_config_int,
     _provider_instance_metadata,
     _provider_launch_state,
     _provider_storage_volume_ids,
@@ -2446,11 +2445,7 @@ class ComputeService:
                         )
                     }
                 )
-            stored_workspace_limit = _pool_config_int(
-                pool,
-                "workspace_machine_limit",
-                default=pool.max_machines,
-            )
+            stored_workspace_limit = pool.workspace_machine_limit or pool.max_machines
             policy = WorkspaceComputePolicyRepository(session).get_for_workspace(workspace_id)
             if policy is None:
                 workspace_limit = stored_workspace_limit
@@ -3800,7 +3795,6 @@ class ComputeService:
     ) -> ProviderPoolRequest:
         if self.pool_bootstrap_factory is None or pool.provider_connection_id is None:
             raise RuntimeError("provider pool bootstrap is not configured")
-        root_volume_gib = _pool_config_int(pool, "root_volume_gib", default=200)
         return ProviderPoolRequest(
             workspace_id=pool.workspace_id,
             pool_id=pool.id,
@@ -3811,7 +3805,7 @@ class ComputeService:
             offer=offer,
             desired_machines=pool.desired_machines,
             max_machines=pool.max_machines,
-            root_volume_gib=root_volume_gib,
+            root_volume_gib=pool.root_volume_gib,
             bootstrap=self.pool_bootstrap_factory.bootstrap(pool, offer),
             provider_state=pool.provider_state,
         )
@@ -4878,7 +4872,7 @@ def _owns_provider_pool_capacity(pool: ComputePoolRecord) -> bool:
 
 
 def _pool_gpu_capacity(pool: ComputePoolRecord) -> bool:
-    return _pool_config_int(pool, "gpu_count", default=0) > 0
+    return pool.worker_gpu_count > 0
 
 
 def _unix_seconds(value: datetime | None) -> int:

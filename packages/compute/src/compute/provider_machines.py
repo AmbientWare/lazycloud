@@ -195,15 +195,6 @@ def _compute_pool_phase(phase: ProviderCapacityPhase) -> ComputePoolPhase:
     }[phase]
 
 
-def _pool_config_int(pool: ComputePoolRecord, key: str, *, default: int) -> int:
-    value = pool.config.get(key)
-    if isinstance(value, bool):
-        return int(value)
-    if isinstance(value, int | float):
-        return int(value)
-    return default
-
-
 def _unique_nonempty(values: list[str]) -> list[str]:
     return list(dict.fromkeys(value.strip() for value in values if value.strip()))
 
@@ -225,7 +216,6 @@ def provider_pool_request(
 ) -> ProviderPoolRequest:
     if pool_bootstrap_factory is None or pool.provider_connection_id is None:
         raise RuntimeError("provider pool bootstrap is not configured")
-    root_volume_gib = _pool_config_int(pool, "root_volume_gib", default=200)
     return ProviderPoolRequest(
         workspace_id=pool.workspace_id,
         pool_id=pool.id,
@@ -236,7 +226,7 @@ def provider_pool_request(
         offer=offer,
         desired_machines=pool.desired_machines,
         max_machines=pool.max_machines,
-        root_volume_gib=root_volume_gib,
+        root_volume_gib=pool.root_volume_gib,
         bootstrap=pool_bootstrap_factory.bootstrap(pool, offer),
         provider_state=pool.provider_state,
     )

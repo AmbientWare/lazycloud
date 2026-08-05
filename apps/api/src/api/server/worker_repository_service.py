@@ -691,16 +691,19 @@ class WorkerRepositoryService:
         if not worker.capacity_owner_id:
             raise ConflictError("worker registration requires a capacity owner identity")
         with self.services.context.database.session() as session:
-            # Keyed by the unit the worker claims, then checked against the group
-            # it registered into. Several units may feed one group, so looking the
-            # unit up by group name would have no single answer.
-            unit = ComputePoolRepository(session).get_by_capacity_owner_id(worker.capacity_owner_id)
-            if unit is None or unit.workspace_id != principal.workspace_id:
+            # A group is fed by any number of units, so the worker is admitted on
+            # the unit it names and the group is checked against that unit. The
+            # two failures stay distinct: a group no unit feeds yet is a pool that
+            # may still be provisioning and is worth retrying, while an owner that
+            # does not feed the group it claims can never succeed.
+            units = ComputePoolRepository(session)
+            feeding = units.list_for_machine_pool(principal.workspace_id, worker.pool_name)
+            if not feeding:
                 raise UpstreamUnavailableError(
-                    f"worker capacity owner is unavailable: {worker.capacity_owner_id}"
+                    f"worker capacity pool is unavailable: {worker.pool_name}"
                 )
-            if unit.machine_pool != worker.pool_name:
-                raise ConflictError(f"worker capacity owner does not feed pool {worker.pool_name}")
+            if all(unit.capacity_owner_id != worker.capacity_owner_id for unit in feeding):
+                raise ConflictError(f"worker capacity owner does not match pool {worker.pool_name}")
             if not principal.is_private_worker:
                 return
             if not worker.machine_id or not worker.requires_pool_selector:
