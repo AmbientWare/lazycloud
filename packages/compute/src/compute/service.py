@@ -412,12 +412,6 @@ class ComputeService:
                 target_machine_id=operation.target_machine_id,
                 reason=operation.last_error,
             )
-        if unit.capacity_owner_kind is CapacityOwnerKind.ManagedUnit:
-            return _plan_next_capacity_unit(
-                request,
-                current_units=direct_units,
-                max_units=unit.max_machines,
-            )
         if unit.capacity_owner_kind is CapacityOwnerKind.PooledProvider:
             try:
                 current_pool, provider, offer = self._internal_unit_provider(

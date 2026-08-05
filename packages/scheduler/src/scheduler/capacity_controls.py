@@ -72,7 +72,7 @@ class SchedulerCapacityControllerProvider:
             )
             for unit in self.services.compute.list_units_across_workspaces()
             if unit.capacity_owner_kind
-            in {CapacityOwnerKind.ManagedUnit, CapacityOwnerKind.PooledProvider}
+            in {CapacityOwnerKind.PooledProvider, CapacityOwnerKind.PooledProvider}
         ]
         controllers.sort(key=lambda item: item.capacity_owner_id)
         return controllers

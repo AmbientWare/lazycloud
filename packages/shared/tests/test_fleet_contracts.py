@@ -27,10 +27,10 @@ def _unit(name: str, **overrides: object) -> ComputeUnitRecord:
 
 
 def test_compute_pool_capacity_policy_rejects_ambiguous_ownership_and_shape() -> None:
-    with pytest.raises(ValidationError, match="requires source 'managed'"):
+    with pytest.raises(ValidationError, match="requires source 'provider'"):
         _unit(
             "invalid-owner",
-            capacity_owner_kind=CapacityOwnerKind.ManagedUnit,
+            capacity_owner_kind=CapacityOwnerKind.PooledProvider,
             capacity_owner_source=CapacityOwnerSource.Agent,
         )
 

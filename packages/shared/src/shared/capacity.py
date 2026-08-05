@@ -82,14 +82,19 @@ CAPACITY_OWNER_ID_PATTERN = (
 
 
 class CapacityOwnerKind(StringEnum):
+    """How a unit comes by its machines.
+
+    A `WorkspaceAgent` unit waits for machines to join it; a `PooledProvider`
+    unit buys them from a connected account. There is no third answer, and a
+    unit's kind follows from its provider rather than being chosen.
+    """
+
     WorkspaceAgent = "workspace_agent"
-    ManagedUnit = "managed_unit"
     PooledProvider = "pooled_provider"
 
 
 class CapacityOwnerSource(StringEnum):
     Agent = "agent"
-    Managed = "managed"
     Provider = "provider"
 
 
@@ -150,7 +155,6 @@ class CapacityAcquisitionResult(ContractModel):
 
 _OWNER_SOURCES: dict[CapacityOwnerKind, CapacityOwnerSource] = {
     CapacityOwnerKind.WorkspaceAgent: CapacityOwnerSource.Agent,
-    CapacityOwnerKind.ManagedUnit: CapacityOwnerSource.Managed,
     CapacityOwnerKind.PooledProvider: CapacityOwnerSource.Provider,
 }
 
@@ -211,8 +215,6 @@ def capacity_owner_for_provider(provider: str) -> tuple[CapacityOwnerKind, Capac
     normalized = provider.strip().lower()
     if normalized in {"", "agent", "local"}:
         return CapacityOwnerKind.WorkspaceAgent, CapacityOwnerSource.Agent
-    if normalized == CapacityOwnerSource.Managed.value:
-        return CapacityOwnerKind.ManagedUnit, CapacityOwnerSource.Managed
     return CapacityOwnerKind.PooledProvider, CapacityOwnerSource.Provider
 
 

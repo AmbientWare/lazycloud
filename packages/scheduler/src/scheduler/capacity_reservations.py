@@ -363,10 +363,7 @@ class ComputeUnitCapacityController:
         """
         if not self.unit.scaling_enabled:
             return False
-        if self.owner_kind not in {
-            CapacityOwnerKind.ManagedUnit,
-            CapacityOwnerKind.PooledProvider,
-        }:
+        if self.owner_kind is not CapacityOwnerKind.PooledProvider:
             return False
         if request.workspace_id != self.workspace_id:
             return False
