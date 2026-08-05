@@ -234,14 +234,7 @@ export const customerComputeInstanceSchema = z
       "failed",
       "deleting",
     ]),
-    service_state: z.enum([
-      "provisioning",
-      "joining",
-      "serving",
-      "degraded",
-      "failed",
-      "deleting",
-    ]),
+    service_state: z.enum(["provisioning", "joining", "serving", "degraded", "failed", "deleting"]),
     bootstrap_failure_reason: z
       .enum([
         "agent_download_failed",

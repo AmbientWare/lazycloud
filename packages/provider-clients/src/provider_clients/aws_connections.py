@@ -48,7 +48,6 @@ from provider_aws import (
     Boto3AwsCapacityImageSharing,
     Boto3AwsNodeBucketAccessControl,
     aws_account_connection_template_identity,
-    require_resolvable_aws_credentials,
 )
 from pydantic import SecretStr
 from shared.aws_connections import (
@@ -570,7 +569,6 @@ def configured_aws_account_connection_components(
         control=tailnet_control,
         backend_route=backend_route,
     )
-    require_resolvable_aws_credentials()
     template_identity = aws_account_connection_template_identity()
     template_url = settings.template_url
     template_path = unquote(urlparse(template_url).path)
