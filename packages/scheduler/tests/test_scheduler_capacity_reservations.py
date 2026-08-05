@@ -50,7 +50,7 @@ from shared.capacity import (
     CapacityPoolSizingSnapshot,
     CapacityReleaseRequest,
 )
-from shared.compute_policy import ComputePlacementSource, ComputePoolRecord
+from shared.compute_policy import ComputePoolRecord
 from shared.realtime.contracts import CloudEventRecord, EventDataInput, EventRecordType
 from shared.scheduling import (
     SchedulerWorkerRecord,
@@ -73,7 +73,6 @@ def _request(container_id: str, *, cpu: int = 1_000) -> SchedulerWorkerRequest:
         cpu_millicores=cpu,
         memory_mib=512,
         pool_selector="default",
-        capacity_owner_id=OWNER_ID,
         timestamp=datetime(2026, 1, 1, tzinfo=UTC),
     )
 
@@ -117,6 +116,7 @@ class _Controller:
     priority: int = 0
     health: CapacityPoolOperationalHealth = CapacityPoolOperationalHealth.Healthy
     target_machine_id: str = ""
+    default_eligible: bool = True
 
     def operational_health(self, *, now: datetime) -> CapacityPoolOperationalHealth:
         _ = now
@@ -142,14 +142,9 @@ class _Controller:
         )
 
     def accepts(self, request: SchedulerWorkerRequest) -> bool:
-        if request.capacity_owner_id:
-            return (
-                request.capacity_owner_id == self.capacity_owner_id
-                and request.pool_selector in {"", self.pool_name}
-            )
-        if request.placement_source is ComputePlacementSource.AttachedPool:
+        if request.pool_selector:
             return request.pool_selector == self.pool_name
-        return True
+        return self.default_eligible
 
     def reservation_shape(self, request: SchedulerWorkerRequest) -> CapacityRequestShape:
         return reservation_shape_for_request(
@@ -443,36 +438,6 @@ def test_capacity_service_requests_one_unit_then_reuses_the_durable_intent(
     assert set(controller.ensure_calls) == {first.reservation_id}
 
 
-def test_resolve_request_binds_and_fences_the_selected_capacity_owner(
-    real_redis_actors: _RealRedisActors,
-) -> None:
-    controller = _OwnerAgnosticController()
-    service = CapacityReservationService(
-        _repository(real_redis_actors),
-        lambda: [controller],
-    )
-    unbound = _request("unbound").model_copy(
-        update={
-            "pool_selector": "",
-            "capacity_owner_id": "",
-            "placement_source": ComputePlacementSource.WorkspaceDefault,
-        }
-    )
-
-    resolved = service.resolve_request(unbound)
-
-    assert resolved.pool_selector == controller.pool_name
-    assert resolved.capacity_owner_id == controller.capacity_owner_id
-    assert service.resolve_request(resolved) == resolved
-    owner_only = service.resolve_request(
-        unbound.model_copy(update={"capacity_owner_id": controller.capacity_owner_id})
-    )
-    assert owner_only.pool_selector == controller.pool_name
-    assert owner_only.capacity_owner_id == controller.capacity_owner_id
-    with pytest.raises(ValueError, match="capacity owner does not match"):
-        service.resolve_request(resolved.model_copy(update={"capacity_owner_id": OTHER_OWNER_ID}))
-
-
 def test_terminal_retry_releases_stale_reservation_before_new_attempt(
     real_redis_actors: _RealRedisActors,
 ) -> None:
@@ -533,16 +498,11 @@ def test_unpinned_acquisition_fails_over_from_at_limit_pool_in_priority_order(
     )
     fallback = _Controller(
         capacity_owner_id=OTHER_OWNER_ID,
-        pool_name="fallback",
+        pool_name="default",
         priority=10,
     )
     service = CapacityReservationService(repository, lambda: [fallback, primary])
-    request = _request("failover").model_copy(
-        update={
-            "capacity_owner_id": "",
-            "placement_source": ComputePlacementSource.WorkspaceDefault,
-        }
-    )
+    request = _request("failover")
 
     result = service.acquire(request, now=datetime(2026, 1, 1, tzinfo=UTC))
 
@@ -555,27 +515,28 @@ def test_unpinned_acquisition_fails_over_from_at_limit_pool_in_priority_order(
     assert primary_reservation.status is CapacityReservationStatus.Released
 
 
-def test_attached_pool_at_limit_remains_strict_without_fallback(
+def test_a_named_group_never_spills_into_a_unit_of_another_group(
     real_redis_actors: _RealRedisActors,
 ) -> None:
+    """Failover stays inside the group the request named.
+
+    A unit is a candidate because it feeds the requested group, so a healthier
+    unit of some other group is not an alternative however high its priority:
+    spilling there would run tenant work on a fleet the workload did not ask
+    for.
+    """
     primary = _Controller(ensure_status=CapacityAcquisitionStatus.AtLimit, priority=1)
     fallback = _Controller(
         capacity_owner_id=OTHER_OWNER_ID,
-        pool_name="fallback",
+        pool_name="another-group",
         priority=100,
     )
     service = CapacityReservationService(
         _repository(real_redis_actors),
         lambda: [fallback, primary],
     )
-    request = _request("strict").model_copy(
-        update={
-            "capacity_owner_id": "",
-            "placement_source": ComputePlacementSource.AttachedPool,
-        }
-    )
 
-    result = service.acquire(request, now=datetime(2026, 1, 1, tzinfo=UTC))
+    result = service.acquire(_request("strict"), now=datetime(2026, 1, 1, tzinfo=UTC))
 
     assert result.status is CapacityAcquisitionStatus.AtLimit
     assert result.capacity_owner_id == OWNER_ID

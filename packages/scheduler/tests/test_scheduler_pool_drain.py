@@ -261,7 +261,6 @@ def _reserve_allocation(
             cpu_millicores=100,
             memory_mib=128,
             pool_selector=pool_name,
-            capacity_owner_id=capacity_owner_id,
         ),
         shape=CapacityRequestShape(cpu_millicores=1000, memory_mib=1024),
         registration_timeout=timedelta(seconds=600),

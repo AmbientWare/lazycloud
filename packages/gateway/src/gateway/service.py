@@ -1114,13 +1114,19 @@ class GatewayControlService:
         workspace_id: str,
         owner_token_id: str,
     ) -> MachineJoinCommandResponse:
-        """Resolve the workspace's implicit self-hosted fleet and mint its join command.
+        """Mint the join command for the group the caller names.
 
-        The fleet is created on first join and owned server-side; callers never
-        name a pool. Requested GPU types extend the fleet's accepted set.
+        The self-hosted fleet is created on first join and owned server-side.
+        A caller may name any group, including one a connected account also
+        feeds — that is how a fleet mixes joined and provisioned machines.
+        Requested GPU types extend the fleet's accepted set.
         """
         try:
-            fleet = self._resolve_self_hosted_fleet(workspace_id, gpu=list(request.gpu))
+            fleet = self._resolve_self_hosted_fleet(
+                workspace_id,
+                gpu=list(request.gpu),
+                machine_pool=request.pool.strip(),
+            )
         except (KeyError, ValueError) as exc:
             raise _domain_error(exc) from exc
         plan = self.pool_state_coordinator.create_pool_join_token(
@@ -1144,20 +1150,27 @@ class GatewayControlService:
         workspace_id: str,
         *,
         gpu: list[str],
+        machine_pool: str = "",
     ) -> ComputePoolRecord:
+        group = machine_pool or SELF_HOSTED_FLEET_POOL_NAME
+        # One self-hosted unit per group. A workspace joining hosts into a group
+        # a connected account also feeds needs its own capacity owner there, or
+        # that account's drain would treat the joined hosts as its own.
+        unit_name = (
+            SELF_HOSTED_FLEET_POOL_NAME
+            if group == SELF_HOSTED_FLEET_POOL_NAME
+            else f"{SELF_HOSTED_FLEET_POOL_NAME}-{group}"
+        )
         try:
             current = self.pool_state_coordinator.pool_by_name(
-                SELF_HOSTED_FLEET_POOL_NAME,
+                unit_name,
                 workspace_id=workspace_id,
             )
         except NotFoundError:
             return self.pool_state_coordinator.create_or_update_pool(
-                PoolConfig(
-                    name=SELF_HOSTED_FLEET_POOL_NAME,
-                    providers=["agent"],
-                    gpu=gpu,
-                ),
+                PoolConfig(name=unit_name, providers=["agent"], gpu=gpu),
                 workspace_id=workspace_id,
+                machine_pool=group,
             )
         config = pool_config_from_pool(current)
         merged = [*config.gpu, *[item for item in gpu if item not in config.gpu]]
@@ -1166,6 +1179,7 @@ class GatewayControlService:
         return self.pool_state_coordinator.create_or_update_pool(
             config.model_copy(update={"providers": ["agent"], "gpu": merged}),
             workspace_id=workspace_id,
+            machine_pool=current.machine_pool,
         )
 
     def create_pool_join_token(

@@ -45,7 +45,7 @@ export function machinesQueryOptions(workspaceId: string) {
     queryKey: computeQueryKeys.machines(workspaceId),
     queryFn: () =>
       apiRequest(
-        withWorkspace("/api/v1/machines/self-hosted?limit=250", workspaceId),
+        withWorkspace("/api/v1/machines/pool?pool=self-hosted&limit=250", workspaceId),
         poolMachineListSchema,
       ),
     refetchInterval: 5_000,

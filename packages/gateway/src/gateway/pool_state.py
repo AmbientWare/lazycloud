@@ -41,6 +41,7 @@ class GatewayComputeService(Protocol):
         self,
         name: str,
         *,
+        machine_pool: str = "",
         provider: str,
         min_machines: int,
         max_machines: int,
@@ -71,6 +72,7 @@ class GatewayPoolStateCoordinator:
         config: projection.PoolConfig,
         *,
         workspace_id: str,
+        machine_pool: str = "",
     ) -> ComputePoolRecord:
         if not config.name:
             msg = "pool name is required"
@@ -87,6 +89,7 @@ class GatewayPoolStateCoordinator:
         gpu_type = normalized.gpu[0] if normalized.gpu else ""
         return self.compute.create_pool(
             normalized.name,
+            machine_pool=machine_pool,
             provider=provider,
             min_machines=0,
             max_machines=max(normalized.nodes, 1),

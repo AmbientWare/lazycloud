@@ -24,7 +24,6 @@ from database.repositories.compute import (
     ComputeProviderInstanceRecord,
     ComputeProviderInstanceRepository,
 )
-from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import MachineRepository, WorkerRepository
 from fastapi.testclient import TestClient
 from gateway.settings import GatewaySettings
@@ -56,6 +55,7 @@ from shared.compute_enrollment import (
 )
 from shared.compute_fleet import Machine, ResourceStatus, Worker
 from shared.compute_policy import (
+    LAZYCLOUD_MACHINE_POOL,
     ComputeCapacityMode,
     ComputePlacementTarget,
     ComputePoolRecord,
@@ -63,7 +63,6 @@ from shared.compute_policy import (
     ComputeResourceRequirements,
 )
 from shared.deployment_records import DeploymentSpec
-from shared.errors import InvalidInputError
 from shared.http.compute_policy import (
     WorkspaceComputeInstanceListResponse,
     WorkspaceComputePolicyResponse,
@@ -420,126 +419,69 @@ def test_policy_accepts_placement_during_authorization_replacement(
     assert placement.provider_ref.startswith("aws:")
 
 
-def test_explicit_placement_cannot_override_a_self_hosted_pool(
+def test_placement_names_the_group_and_leaves_the_unit_to_arbitration(
     isolated_services: ApiServices,
 ) -> None:
-    with pytest.raises(
-        InvalidInputError,
-        match="cannot combine an explicit target with a self-hosted pool",
-    ):
-        ComputeCapacityPlacementService(
-            isolated_services.context,
-            WorkspaceComputePolicyService(isolated_services.context),
-            _RecordingPooledCapacity(),
-        ).place(
-            ComputeCapacityPlacementRequest(
-                workspace_id=_workspace_id(isolated_services),
-                attached_pool="self-hosted",
-                requested_placement=ComputePlacementTarget.Aws,
-                requirements=ComputeResourceRequirements(),
-            )
-        )
+    """Placement resolves a group; it never picks which unit inside it serves.
 
-
-def test_managed_placement_binds_workspace_agent_capacity_owner(
-    isolated_services: ApiServices,
-) -> None:
+    Two units feed one group here. Placement answering with the group is what
+    leaves the acquisition loop both candidates to fail over between; answering
+    with a unit would pin the request to one of them.
+    """
     workspace_id = _workspace_id(isolated_services)
-    with isolated_services.context.database.session() as session:
-        other_workspace = WorkspaceRepository(session).create(name=f"other-{uuid4()}")
-    other_owner_id = "10000000-0000-4000-8000-000000000001"
-    explicit_owner_id = "20000000-0000-4000-8000-000000000002"
-    default_owner_id = "30000000-0000-4000-8000-000000000003"
-    isolated_services.compute.create_pool(
-        "same-name",
-        workspace=other_workspace.id,
-        provider="agent",
-        capacity_owner_id=other_owner_id,
-        worker_cpu_millicores=4_000,
-        worker_memory_mib=8_192,
-    )
-    isolated_services.compute.create_pool(
-        "same-name",
-        workspace=workspace_id,
-        provider="agent",
-        capacity_owner_id=explicit_owner_id,
-        worker_cpu_millicores=4_000,
-        worker_memory_mib=8_192,
-    )
-    isolated_services.compute.create_pool(
-        "platform-default",
-        workspace=workspace_id,
-        provider="aws",
-        default_eligible=True,
-        priority=1_000,
-        worker_cpu_millicores=8_000,
-        worker_memory_mib=16_384,
-    )
-    isolated_services.compute.create_pool(
-        "gpu-default",
-        workspace=workspace_id,
-        provider="agent",
-        default_eligible=True,
-        priority=900,
-        worker_cpu_millicores=8_000,
-        worker_memory_mib=16_384,
-        worker_gpu_type="L4",
-        worker_gpu_count=1,
-    )
-    isolated_services.compute.create_pool(
-        "agent-default",
-        workspace=workspace_id,
-        provider="agent",
-        capacity_owner_id=default_owner_id,
-        default_eligible=True,
-        priority=200,
-        worker_cpu_millicores=4_000,
-        worker_memory_mib=8_192,
-        worker_runtimes=("runc", "runsc"),
-    )
-    isolated_services.compute.create_pool(
-        "lower-priority-agent",
-        workspace=workspace_id,
-        provider="agent",
-        default_eligible=True,
-        priority=100,
-        worker_cpu_millicores=4_000,
-        worker_memory_mib=8_192,
-    )
+    for name, owner in (
+        ("unit-a", "10000000-0000-4000-8000-000000000001"),
+        ("unit-b", "20000000-0000-4000-8000-000000000002"),
+    ):
+        isolated_services.compute.create_pool(
+            name,
+            workspace=workspace_id,
+            machine_pool="shared-group",
+            provider="agent",
+            capacity_owner_id=owner,
+            worker_cpu_millicores=4_000,
+            worker_memory_mib=8_192,
+        )
+    recorder = _RecordingPooledCapacity()
     placement = ComputeCapacityPlacementService(
         isolated_services.context,
         WorkspaceComputePolicyService(isolated_services.context),
-        _RecordingPooledCapacity(),
+        recorder,
     )
-    requirements = ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024)
 
-    default_result = placement.place(
+    result = placement.place(
         ComputeCapacityPlacementRequest(
             workspace_id=workspace_id,
-            requested_placement=ComputePlacementTarget.Managed,
-            requirements=requirements,
-        )
-    )
-    explicit_result = placement.place(
-        ComputeCapacityPlacementRequest(
-            workspace_id=workspace_id,
-            attached_pool="same-name",
-            requirements=requirements,
+            requested_pool="shared-group",
+            requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
         )
     )
 
-    assert default_result.placement.pool_name == "agent-default"
-    assert default_result.capacity_owner_id == default_owner_id
-    assert explicit_result.placement.pool_name == "same-name"
-    assert explicit_result.capacity_owner_id == explicit_owner_id
-    with pytest.raises(InvalidInputError, match="does not support the requested resources"):
-        placement.place(
-            ComputeCapacityPlacementRequest(
-                workspace_id=workspace_id,
-                attached_pool="gpu-default",
-                requirements=requirements,
-            )
+    assert result.machine_pool == "shared-group"
+    # A unit in the group already hosts this shape, so nothing is provisioned.
+    assert recorder.requests == []
+
+
+def test_placement_defaults_to_the_platform_group_without_a_connection(
+    isolated_services: ApiServices,
+) -> None:
+    recorder = _RecordingPooledCapacity()
+    placement = ComputeCapacityPlacementService(
+        isolated_services.context,
+        WorkspaceComputePolicyService(isolated_services.context),
+        recorder,
+    )
+
+    result = placement.place(
+        ComputeCapacityPlacementRequest(
+            workspace_id=_workspace_id(isolated_services),
+            requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
         )
+    )
+
+    assert result.machine_pool == LAZYCLOUD_MACHINE_POOL
+    # Nothing provisions into a group no connected account feeds.
+    assert recorder.requests == []
 
 
 def test_deployment_placement_is_pinned_when_workspace_default_changes(
@@ -580,13 +522,12 @@ def test_deployment_placement_is_pinned_when_workspace_default_changes(
         ComputeCapacityPlacementRequest(
             workspace_id=workspace_id,
             deployment_id=original.id,
-            requested_placement=ComputePlacementTarget.Aws,
             requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
         )
     )
 
     assert persisted_original.resolved_placement.target is ComputePlacementTarget.Managed
-    assert scheduled_original.placement.target is ComputePlacementTarget.Managed
+    assert scheduled_original.machine_pool == LAZYCLOUD_MACHINE_POOL
     assert created_after.resolved_placement.target is ComputePlacementTarget.Aws
     assert created_after.resolved_placement.region == "us-east-1"
 

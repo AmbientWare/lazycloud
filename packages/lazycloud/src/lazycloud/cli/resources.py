@@ -656,6 +656,10 @@ def machine_list(
 def machine_join(
     ctx: typer.Context,
     ttl: Annotated[str, typer.Option("--ttl", help="Join token lifetime.")] = "",
+    pool: Annotated[
+        str,
+        typer.Option("--pool", help="Scheduling group to join, created if new."),
+    ] = "",
     gpu: Annotated[
         list[str] | None,
         typer.Option("--gpu", help="GPU type this machine contributes."),
@@ -701,13 +705,14 @@ def machine_join(
     ] = False,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    """Join this machine to the workspace's self-hosted compute."""
+    """Join this machine to a scheduling group in the workspace."""
     if gpu_ids and max_gpus:
         raise typer.BadParameter("--gpu-ids and --max-gpus cannot both be set")
 
     response = compute_client(workspace=workspace).machine_join_command(
         MachineJoinCommandRequest(
             ttl=ttl,
+            pool=pool,
             gpu=list(gpu or []),
         )
     )

@@ -24,13 +24,17 @@ def test_self_hosted_collection_is_static_workspace_scoped_and_excludes_managed_
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
     headers = {"Authorization": f"Bearer {raw_token}"}
 
-    initial = client.get("/api/v1/machines/self-hosted?limit=250", headers=headers)
+    initial = client.get("/api/v1/machines/pool?pool=self-hosted&limit=250", headers=headers)
     assert initial.status_code == 200
     assert PoolMachineListResponse.model_validate_json(initial.content) == PoolMachineListResponse()
 
-    isolated_services.compute.create_pool("managed-pool", provider="local")
-    isolated_services.compute.create_machine(pool="managed-pool", provider="local")
-    after_managed_machine = client.get("/api/v1/machines/self-hosted", headers=headers)
+    isolated_services.compute.create_pool(
+        "managed-pool",
+        machine_pool="lazycloud",
+        provider="local",
+    )
+    isolated_services.compute.create_machine(pool="lazycloud", provider="local")
+    after_managed_machine = client.get("/api/v1/machines/pool?pool=self-hosted", headers=headers)
 
     assert after_managed_machine.status_code == 200
     assert (

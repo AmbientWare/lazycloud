@@ -1009,13 +1009,22 @@ class CapacityReservationService:
             return _unsupported_result(request, "no capacity owner accepts the request")
         current_time = now or utc_now()
         last_result: CapacityAcquisitionResult | None = None
-        for controller in controllers:
+        contention: CapacityReservationConflictError | None = None
+        for index, controller in enumerate(controllers):
+            remaining = controllers[index + 1 :]
             try:
                 result = self._acquire_from_controller(
                     request,
                     controller,
                     now=current_time,
                 )
+            except CapacityReservationConflictError as exc:
+                # Another scheduler holds this unit's mutation lease. Trying the
+                # next unit is worth doing, but the contention has to survive the
+                # loop: if no unit serves the request, the caller requeues on
+                # this signal rather than being told no capacity exists.
+                contention = contention or exc
+                continue
             except Exception:
                 continue
             last_result = result
@@ -1024,8 +1033,17 @@ class CapacityReservationService:
                 CapacityAcquisitionStatus.Requested,
             }:
                 return result
-            self._release_failed_failover_allocation(result, request, now=current_time)
-        return last_result or _unsupported_result(
+            if remaining:
+                # Only what we are abandoning. With no candidate left the claim
+                # is the answer: releasing it here would mint a fresh one on the
+                # next attempt and churn reservations for as long as the group
+                # stays full, instead of holding one and waiting for it to drain.
+                self._release_failed_failover_allocation(result, request, now=current_time)
+        if last_result is not None:
+            return last_result
+        if contention is not None:
+            raise contention
+        return _unsupported_result(
             request,
             "all compatible capacity owners are unavailable",
         )

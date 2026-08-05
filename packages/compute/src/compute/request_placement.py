@@ -103,6 +103,11 @@ class ComputeCapacityPlacementService:
         )
 
     def _deployment_machine_pool(self, request: ComputeCapacityPlacementRequest) -> str:
+        """The group a deployment was pinned to when it was created.
+
+        A deployment keeps the fleet it was deployed onto: a workspace that
+        later changes its default must not move workloads already running.
+        """
         if not request.deployment_id:
             return ""
         with self.context.database.session() as session:
@@ -114,7 +119,13 @@ class ComputeCapacityPlacementService:
             raise InvalidInputError(
                 f"deployment {request.deployment_id!r} was not found in the workspace"
             )
-        return deployment.resolved_placement.pool_name
+        placement = deployment.resolved_placement
+        if placement.pool_name:
+            return placement.pool_name
+        return self.policies.machine_pool_for_target(
+            workspace=request.workspace_id,
+            target=placement.target,
+        )
 
 
 def _pool_supports(pool: ComputePoolRecord, requirements: ComputeResourceRequirements) -> bool:

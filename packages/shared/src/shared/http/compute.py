@@ -130,12 +130,15 @@ class MachineListResponse(HttpModel):
 
 
 class MachineJoinCommandRequest(HttpModel):
-    """Request the join command for the workspace's implicit self-hosted fleet.
+    """Request the join command for a workspace's self-hosted fleet.
 
-    The server resolves or creates the fleet; callers never name a pool.
+    Naming a group creates it: a caller may join machines into any group they
+    choose, including one an auto-scaling unit already feeds. Left empty, the
+    workspace's implicit self-hosted fleet answers.
     """
 
     ttl: str = ""
+    pool: str = Field(default="", max_length=240)
     gpu: list[str] = Field(default_factory=list)
 
 

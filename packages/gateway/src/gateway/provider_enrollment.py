@@ -388,7 +388,8 @@ class ProviderNodeEnrollmentService:
             if (
                 pool is None
                 or pool.workspace_id != workspace_id
-                or pool.name != pool_name
+                or pool.capacity_owner_id != capacity_owner_id
+                or pool.machine_pool != pool_name
                 or pool.phase not in _ENROLLABLE_POOL_PHASES
             ):
                 raise ConflictError("provider node enrollment request changed")

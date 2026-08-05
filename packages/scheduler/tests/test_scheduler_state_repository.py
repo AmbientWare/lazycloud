@@ -81,7 +81,7 @@ from scheduler.state import (
     reserve_concurrency,
 )
 from scheduler.workers import SchedulerWorkerAdminService
-from shared.compute_policy import ComputePlacementSource, ComputePlacementTarget
+from shared.compute_policy import ComputePlacementTarget
 from shared.container_requests import StopContainerReason
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.contracts import ContractModel
@@ -727,7 +727,7 @@ def test_scheduler_worker_repository_requeues_removed_worker_requests(
         gpu_type="T4",
         gpu_count=1,
         requested_placement=ComputePlacementTarget.Aws,
-        placement_source=ComputePlacementSource.WorkspaceDefault,
+        pool_selector="aws",
         payload=request_payload,
         timestamp=now,
     )
@@ -754,7 +754,7 @@ def test_scheduler_worker_repository_requeues_removed_worker_requests(
     assert requeued.retry_count == 1
     assert requeued.container_id == "container-1"
     assert requeued.requested_placement is ComputePlacementTarget.Aws
-    assert requeued.placement_source is ComputePlacementSource.WorkspaceDefault
+    assert requeued.pool_selector == "aws"
     assert requeued.payload == request_payload
 
     add_plan = plan_worker_capacity_change(

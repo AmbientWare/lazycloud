@@ -262,39 +262,6 @@ def require_app_requirement(
     return dependency
 
 
-def require_machine_workspace(
-    requirement: AuthzRequirement,
-) -> WorkspaceScopeDependency:
-    """Resolve the workspace a machine-scoped token belongs to.
-
-    A machine token authorizes one workspace's machines and nothing else. The
-    routes it reaches used to authorize the token and then answer from every
-    workspace, because the requirement dependency discarded the record that
-    named the owning one.
-    """
-
-    def dependency(
-        services: Annotated[ApiServices, Depends(current_services)],
-        credentials: AuthorizationCredentials = None,
-        workspace: str | None = None,
-    ) -> str:
-        _ = workspace
-        token = authorize_services(
-            services,
-            credentials,
-            requirement.action,
-            requirement=requirement,
-        )
-        if token is None or not token.workspace_id:
-            raise HTTPException(
-                status.HTTP_401_UNAUTHORIZED,
-                "machine authorization principal is not bound to a workspace",
-            )
-        return token.workspace_id
-
-    return dependency
-
-
 def require_app_websocket_scope(
     scope: AuthScope,
     *,
