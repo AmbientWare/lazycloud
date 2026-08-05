@@ -25,7 +25,7 @@ from shared.capacity import (
 from shared.capacity import (
     CapacityAcquisitionStatus as ComputeCapacityAcquisitionStatus,
 )
-from shared.compute_fleet import Pool
+from shared.compute_policy import ComputePoolRecord
 from shared.compute_policy import (
     ComputePlacement,
     ComputePlacementSource,
@@ -34,6 +34,7 @@ from shared.compute_policy import (
 from shared.scheduling import SchedulerWorkerRecord
 
 _OWNER_ID = "11111111-1111-4111-8111-111111111111"
+_WORKSPACE_ID = "22222222-2222-4222-8222-222222222222"
 
 
 def test_scheduler_forwards_typed_ad_hoc_placement_to_capacity_owner() -> None:
@@ -148,14 +149,17 @@ class _NoWorkers:
         return []
 
 
-def _internal_aws_pool() -> Pool:
-    return Pool(
+def _internal_aws_pool() -> ComputePoolRecord:
+    return ComputePoolRecord(
+        id=_OWNER_ID,
+        workspace_id=_WORKSPACE_ID,
         name="internal-aws-cpu",
+        machine_pool="aws",
         provider="aws",
         capacity_owner_id=_OWNER_ID,
         capacity_owner_kind=CapacityOwnerKind.PooledProvider,
         capacity_owner_source=CapacityOwnerSource.Provider,
-        max_workers=10,
+        max_machines=10,
         scaling_enabled=True,
         default_eligible=False,
         worker_cpu_millicores=4_000,

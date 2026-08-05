@@ -22,6 +22,7 @@ def test_provider_instance_machine_binding_is_idempotent_and_fenced(
             id=str(uuid4()),
             workspace_id=workspace_id,
             name="provider-binding",
+            machine_pool="provider-binding",
         )
         ComputePoolRepository(session).upsert(pool)
         instance = ComputeProviderInstanceRecord(
@@ -65,6 +66,7 @@ def test_unbinding_releases_only_the_machine_it_names(
             id=str(uuid4()),
             workspace_id=workspace_id,
             name="provider-unbinding",
+            machine_pool="provider-unbinding",
         )
         ComputePoolRepository(session).upsert(pool)
         instance = ComputeProviderInstanceRecord(

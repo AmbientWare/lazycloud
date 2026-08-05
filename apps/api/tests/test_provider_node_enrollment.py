@@ -450,6 +450,7 @@ def _pool(*, workspace_id: str, pool_id: str, name: str) -> ComputePoolRecord:
         capacity_owner_source=CapacityOwnerSource.Provider,
         workspace_id=workspace_id,
         name=name,
+        machine_pool=name,
         selector=name,
         status=ComputePoolPhase.Ready.value,
         source="workspace_policy",

@@ -4,7 +4,7 @@ import pytest
 from api.control_runtime import _reconcile_bootstrap_capacity
 from api.server.services import ApiServices
 from api.settings import CapacityBootstrapPool, CapacityBootstrapSettings
-from database.repositories.orchestration import PoolRepository
+from database.repositories.compute import ComputePoolRepository
 from shared.errors import ConflictError
 
 
@@ -17,9 +17,10 @@ def test_capacity_bootstrap_reconciles_policy_with_an_immutable_owner(
             CapacityBootstrapPool(
                 name="compose-cpu",
                 capacity_owner_id=owner_id,
-                initial_workers=1,
-                min_workers=1,
-                max_workers=1,
+                machine_pool="lazycloud",
+                initial_machines=1,
+                min_machines=1,
+                max_machines=1,
                 default_eligible=True,
                 worker_cpu_millicores=4_000,
                 worker_memory_mib=8_192,
@@ -35,9 +36,9 @@ def test_capacity_bootstrap_reconciles_policy_with_an_immutable_owner(
             pools=(
                 initial.pools[0].model_copy(
                     update={
-                        "max_workers": 2,
-                        "min_workers": 0,
-                        "initial_workers": 0,
+                        "max_machines": 2,
+                        "min_machines": 0,
+                        "initial_machines": 0,
                     }
                 ),
             )
@@ -46,10 +47,11 @@ def test_capacity_bootstrap_reconciles_policy_with_an_immutable_owner(
 
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.workspace(session, "default").id
-        pool = PoolRepository(session).get("compose-cpu", workspace_id=workspace_id)
+        pool = ComputePoolRepository(session).get_by_name(workspace_id, "compose-cpu")
     assert pool is not None
     assert pool.capacity_owner_id == owner_id
-    assert pool.max_workers == 2
+    assert pool.machine_pool == "lazycloud"
+    assert pool.max_machines == 2
     assert pool.worker_runtimes == ("runc", "runsc")
 
     with pytest.raises(ConflictError, match="capacity owner is immutable"):

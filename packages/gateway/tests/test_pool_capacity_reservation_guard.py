@@ -129,9 +129,9 @@ def _scalable_pool(
         workspace=workspace_id,
         provider="aws:test-connection",
         capacity_owner_id=capacity_owner_id,
-        initial_workers=1,
-        min_workers=0,
-        max_workers=2,
+        initial_machines=1,
+        min_machines=0,
+        max_machines=2,
         scaling_enabled=True,
         worker_cpu_millicores=4_000,
         worker_memory_mib=8_192,
@@ -143,6 +143,7 @@ def _scalable_pool(
         capacity_owner_kind=CapacityOwnerKind.PooledProvider,
         capacity_owner_source=CapacityOwnerSource.Provider,
         name=pool_name,
+        machine_pool=pool_name,
         provider_ref="aws:test-connection",
         provider_connection_id="11111111-1111-4111-8111-111111111111",
         capacity_mode=ComputeCapacityMode.Pooled,
@@ -521,7 +522,7 @@ def test_pool_delete_refuses_open_capacity_reservation_without_mutating_owned_st
         workspace=workspace_id,
         provider="agent",
         capacity_owner_id=capacity_owner_id,
-        max_workers=2,
+        max_machines=2,
         scaling_enabled=True,
         worker_cpu_millicores=4_000,
         worker_memory_mib=8_192,
@@ -585,7 +586,7 @@ def test_pool_delete_uses_durable_capacity_owner_for_guard_and_scheduler_state(
         workspace=workspace_id,
         provider="agent",
         capacity_owner_id=capacity_owner_id,
-        max_workers=1,
+        max_machines=1,
     )
     guard = _RecordingCapacityReservationGuard(open_reservations=False)
     gateway = _gateway(isolated_services, guard, key_prefix="pool-durable-owner-delete")
