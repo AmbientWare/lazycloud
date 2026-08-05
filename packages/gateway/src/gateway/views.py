@@ -67,6 +67,7 @@ def private_pool_from_compute_state(state: ComputeUnitState) -> PrivateUnitState
     return PrivateUnitState(
         workspace_id=state.workspace_id,
         name=state.name,
+        pool=state.pool,
         capacity_owner_id=state.capacity_owner_id,
         selector=config.selector or state.name,
         config=config,

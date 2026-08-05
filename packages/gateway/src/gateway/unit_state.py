@@ -136,6 +136,7 @@ class GatewayUnitStateCoordinator:
         state = ComputeUnitState(
             workspace_id=workspace_id,
             name=unit.name,
+            pool=unit.pool,
             capacity_owner_id=unit.capacity_owner_id,
             provider=unit.provider,
             max_machines=max(unit.max_machines, 1),
@@ -329,6 +330,7 @@ class GatewayUnitStateCoordinator:
         state = ComputeUnitState(
             workspace_id=workspace_id,
             name=pool_state.name,
+            pool=(current.pool if current is not None else pool_state.pool),
             capacity_owner_id=(
                 current.capacity_owner_id if current is not None else pool_state.capacity_owner_id
             ),

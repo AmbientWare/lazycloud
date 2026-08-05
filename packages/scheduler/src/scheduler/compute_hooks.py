@@ -108,6 +108,7 @@ def _compute_pool_state(state: PrivateUnitState) -> ComputeUnitState:
     return ComputeUnitState(
         workspace_id=state.workspace_id,
         name=state.name,
+        pool=state.pool,
         capacity_owner_id=state.capacity_owner_id,
         provider=_pool_provider(state),
         status=_pool_status(state.status),
@@ -136,6 +137,7 @@ def _internal_compute_unit_state(
     return ComputeUnitState(
         workspace_id=pool.workspace_id,
         name=pool.name,
+        pool=pool.pool,
         capacity_owner_id=pool.capacity_owner_id,
         provider=pool.provider_ref,
         status=_internal_pool_status(pool.phase),
