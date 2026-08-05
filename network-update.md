@@ -19,6 +19,26 @@ replaces the control-plane container — and its network namespace — while
 `tailnet-gateway` keeps running, still attached to the namespace of a container
 that no longer exists.
 
+**Two sidecars share the control plane's namespace, not one.** `tailnet-gateway`
+and `public-ingress` (the Cloudflare tunnel) both use
+`network_mode: service:control-plane`, so a single control-plane rebuild orphans
+both. This is not hypothetical: it cost a connected-AWS acceptance run. Every EC2
+node the run launched failed to install with
+
+```
+curl: (22) The requested URL returned error: 530
+worker bootstrap failed during install; the control plane reclaims this instance
+```
+
+530 is Cloudflare reporting no reachable origin. The tunnel had been `running`
+and healthy for hours, pointed at a namespace destroyed by the first rebuild of
+the session, so `https://lazycloud.dev` served nothing and no node could ever
+fetch the agent binary. `docker compose up -d --force-recreate public-ingress`
+restored it, and the same URL immediately returned `HTTP 200`.
+
+The lesson worth keeping: a healthy sidecar is not evidence of a working path.
+Both of these report healthy while serving a dead namespace.
+
 ## How to recognise it
 
 The sidecar reports `running (healthy)`, which is why this is easy to miss. The
