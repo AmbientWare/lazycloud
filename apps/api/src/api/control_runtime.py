@@ -30,7 +30,6 @@ from networking.settings import (
 )
 from networking.tailnet import TailnetRuntime
 from observability.settings import (
-    ManagedBillingClientSettings,
     TelemetrySettings,
     UsageMetricsSettings,
     UsagePricingSettings,
@@ -233,7 +232,6 @@ def _production_api_services() -> ApiServices:
     retention_settings = RetentionSettings()
     usage_metrics_settings = UsageMetricsSettings()
     usage_pricing_settings = UsagePricingSettings()
-    managed_billing_settings = ManagedBillingClientSettings()
     volume_metering_settings = VolumeMeteringSettings()
     tailnet_runtime_settings = TailnetRuntimeSettings()
     tailnet_control_settings = TailnetControlSettings()
@@ -290,7 +288,6 @@ def _production_api_services() -> ApiServices:
             retention_settings=retention_settings,
             usage_metrics_settings=usage_metrics_settings,
             usage_pricing_settings=usage_pricing_settings,
-            managed_billing_settings=managed_billing_settings,
             volume_metering_settings=volume_metering_settings,
             redis_client=redis_client,
             binary_redis_client=binary_redis_client,

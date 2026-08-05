@@ -6,7 +6,6 @@ from pathlib import Path
 
 from agent.binary import AgentBinarySettings
 from compute.aws_connections import AwsAccountConnectionDirectory
-from compute.billing import managed_billing_client
 from compute.policy import WorkspaceComputePolicyService
 from compute.reclaim import ComputeReclaimPolicy
 from compute.request_placement import ComputeCapacityPlacementService
@@ -42,7 +41,6 @@ from networking.tailnet_control import TailscaleTailnetControl
 from observability.events import EventService
 from observability.metrics import MetricsService
 from observability.settings import (
-    ManagedBillingClientSettings,
     UsageMetricsSettings,
     UsagePricingSettings,
     VolumeMeteringSettings,
@@ -102,7 +100,6 @@ class SchedulerObservabilitySettings:
     workspace_changes: WorkspaceChangeStreamSettings
     usage_metrics: UsageMetricsSettings
     usage_pricing: UsagePricingSettings
-    managed_billing: ManagedBillingClientSettings
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,7 +214,6 @@ class SchedulerAppServices:
         )
         worker_repository = RedisSchedulerWorkerRepository(redis)
         container_repository = RedisSchedulerContainerRepository(redis)
-        billing = managed_billing_client(observability.managed_billing.to_runtime_settings())
         # See the API composition: the resolver exists only where connected AWS is
         # configured, and a half-configured deployment is rejected by settings.
         provider_resolver = (
@@ -267,7 +263,6 @@ class SchedulerAppServices:
             context,
             provider_resolver=provider_resolver,
             pool_bootstrap_factory=pool_bootstrap if provider_resolver is not None else None,
-            billing=billing,
             usage_exporter=usage_exporter,
             scheduler_hooks=scheduler_hooks,
             workspace_changes=workspace_changes,

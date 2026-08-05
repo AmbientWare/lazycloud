@@ -81,11 +81,6 @@ from compute.agent_control import (
     plan_join_token_creation,
 )
 from compute.aws_connections import AwsAccountPoolDrain
-from compute.billing import (
-    BillingDecision,
-    ManagedComputeBillingClient,
-    NoopManagedComputeBilling,
-)
 from compute.context import ComputeContext
 from compute.offers import (
     ComputeOffer,
@@ -155,15 +150,8 @@ class _CapacityRequestMetadata(ContractModel):
 
 
 class ManagedComputeLaunchError(DomainError):
-    def __init__(
-        self,
-        message: str,
-        *,
-        code: str,
-        decision: BillingDecision | None = None,
-    ) -> None:
+    def __init__(self, message: str, *, code: str) -> None:
         super().__init__(message, code=code)
-        self.decision = decision or BillingDecision(ok=False, message=message)
 
 
 _LAUNCH_CODES_UPSTREAM = frozenset({"provider_unavailable"})
@@ -231,7 +219,6 @@ class ComputeService:
     provider_registry: DirectMachineProviderRegistry | None = None
     provider_resolver: ComputeProviderResolver | None = None
     pool_bootstrap_factory: ProviderPoolBootstrapFactory | None = None
-    billing: ManagedComputeBillingClient = field(default_factory=NoopManagedComputeBilling)
     usage_exporter: UsageMetricsExporter | None = None
     scheduler_hooks: ComputeSchedulerHooks | None = None
     workspace_changes: WorkspaceChangePublisher | None = None

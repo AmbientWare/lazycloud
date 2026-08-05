@@ -11,7 +11,6 @@ from agent.binary import AgentBinarySettings
 from agent.service import AgentService
 from compute.agent_control import AgentImageConfig, GatewayEndpointConfig
 from compute.aws_connections import AwsAccountConnectionDirectory, AwsAccountConnectionService
-from compute.billing import managed_billing_client
 from compute.policy import AwsDefaultCapacityBaseline, WorkspaceComputePolicyService
 from compute.request_placement import ComputeCapacityPlacementService
 from compute.service import ComputeService
@@ -103,7 +102,6 @@ from networking.tailnet_control import TailscaleTailnetControl
 from observability.events import EventService
 from observability.metrics import MetricsService
 from observability.settings import (
-    ManagedBillingClientSettings,
     UsageMetricsSettings,
     UsagePricingSettings,
     VolumeMeteringSettings,
@@ -572,7 +570,6 @@ class ApiServices(ApiServiceCore):
         retention_settings: RetentionSettings | None = None,
         usage_metrics_settings: UsageMetricsSettings | None = None,
         usage_pricing_settings: UsagePricingSettings | None = None,
-        managed_billing_settings: ManagedBillingClientSettings | None = None,
         volume_metering_settings: VolumeMeteringSettings | None = None,
         volume_metering: PersistentVolumeMeteringService | None = None,
         volume_filesystem: VolumeFilesystem | None = None,
@@ -639,7 +636,6 @@ class ApiServices(ApiServiceCore):
         retention_config = retention_settings or RetentionSettings()
         usage_metrics_config = usage_metrics_settings or UsageMetricsSettings()
         usage_pricing_config = usage_pricing_settings or UsagePricingSettings()
-        managed_billing_config = managed_billing_settings or ManagedBillingClientSettings()
         volume_metering_config = volume_metering_settings or VolumeMeteringSettings()
         redis = redis_client
         stream_events = RedisEventStreamRepository(redis)
@@ -807,7 +803,6 @@ class ApiServices(ApiServiceCore):
             context,
             provider_resolver=provider_resolver,
             pool_bootstrap_factory=pool_bootstrap,
-            billing=managed_billing_client(managed_billing_config.to_runtime_settings()),
             usage_exporter=usage_exporter,
             scheduler_hooks=scheduler_hooks,
             workspace_changes=workspace_changes,
