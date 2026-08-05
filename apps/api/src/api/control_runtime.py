@@ -325,11 +325,12 @@ def _reconcile_bootstrap_capacity(
         services.compute.create_pool(
             pool.name,
             workspace=pool.workspace,
+            machine_pool=pool.machine_pool,
             provider=pool.provider,
             capacity_owner_id=pool.capacity_owner_id,
-            initial_workers=pool.initial_workers,
-            min_workers=pool.min_workers,
-            max_workers=pool.max_workers,
+            initial_machines=pool.initial_machines,
+            min_machines=pool.min_machines,
+            max_machines=pool.max_machines,
             scaling_enabled=pool.scaling_enabled,
             default_eligible=pool.default_eligible,
             priority=pool.priority,
@@ -346,5 +347,6 @@ def _reconcile_bootstrap_capacity(
             scale_up_cooldown_seconds=pool.scale_up_cooldown_seconds,
             scale_down_cooldown_seconds=pool.scale_down_cooldown_seconds,
             registration_timeout_seconds=pool.registration_timeout_seconds,
-            labels=pool.labels,
+            transport=pool.transport,
+            fallback=pool.fallback,
         )

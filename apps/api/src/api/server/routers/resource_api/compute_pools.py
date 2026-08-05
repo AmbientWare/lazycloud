@@ -168,10 +168,11 @@ def create_pool(
         services.compute.create_pool(
             request.name,
             workspace=workspace_id,
+            machine_pool=request.machine_pool,
             provider=request.provider,
-            initial_workers=request.initial_workers,
-            min_workers=request.min_workers,
-            max_workers=request.max_workers,
+            initial_machines=request.initial_machines,
+            min_machines=request.min_machines,
+            max_machines=request.max_machines,
             scaling_enabled=request.scaling_enabled,
             default_eligible=request.default_eligible,
             priority=request.priority,
@@ -188,7 +189,6 @@ def create_pool(
             scale_up_cooldown_seconds=request.scale_up_cooldown_seconds,
             scale_down_cooldown_seconds=request.scale_down_cooldown_seconds,
             registration_timeout_seconds=request.registration_timeout_seconds,
-            labels=request.labels,
         )
     )
 

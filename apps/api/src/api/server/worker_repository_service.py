@@ -22,11 +22,11 @@ from coordination.event_bus import (
 )
 from coordination.redis_client import RedisClient, redis_text
 from database.context import ServiceContext
+from database.repositories.compute import ComputePoolRepository
 from database.repositories.execution import TaskRepository
 from database.repositories.orchestration import (
     ContainerRepository,
     MachineRepository,
-    PoolRepository,
     WorkerRepository,
 )
 from database.types import DatabaseSession
@@ -691,16 +691,16 @@ class WorkerRepositoryService:
         if not worker.capacity_owner_id:
             raise ConflictError("worker registration requires a capacity owner identity")
         with self.services.context.database.session() as session:
-            pool = PoolRepository(session).get(
-                worker.pool_name,
-                workspace_id=principal.workspace_id,
-            )
-            if pool is None:
+            # Keyed by the unit the worker claims, then checked against the group
+            # it registered into. Several units may feed one group, so looking the
+            # unit up by group name would have no single answer.
+            unit = ComputePoolRepository(session).get_by_capacity_owner_id(worker.capacity_owner_id)
+            if unit is None or unit.workspace_id != principal.workspace_id:
                 raise UpstreamUnavailableError(
-                    f"worker capacity pool is unavailable: {worker.pool_name}"
+                    f"worker capacity owner is unavailable: {worker.capacity_owner_id}"
                 )
-            if pool.capacity_owner_id != worker.capacity_owner_id:
-                raise ConflictError(f"worker capacity owner does not match pool {worker.pool_name}")
+            if unit.machine_pool != worker.pool_name:
+                raise ConflictError(f"worker capacity owner does not feed pool {worker.pool_name}")
             if not principal.is_private_worker:
                 return
             if not worker.machine_id or not worker.requires_pool_selector:

@@ -31,7 +31,6 @@ from shared.http.observability import EventHistoryRequest, LogQueryRequest
 
 from cli.api_client import admin_api_client
 from cli.components.terminal import print_stream_message
-from cli.parameters import parse_key_values
 
 queue_app = typer.Typer(help="Manage queues.")
 map_app = typer.Typer(help="Manage durable maps.")
@@ -322,10 +321,11 @@ def container_stop(
 def pool_create(
     ctx: typer.Context,
     name: str,
+    machine_pool: Annotated[str, typer.Option("--pool")] = "",
     provider: Annotated[str, typer.Option("--provider")] = "agent",
-    initial_workers: Annotated[int, typer.Option("--initial-workers", min=0)] = 0,
-    min_workers: Annotated[int, typer.Option("--min-workers", min=0)] = 0,
-    max_workers: Annotated[int, typer.Option("--max-workers", min=0)] = 1,
+    initial_machines: Annotated[int, typer.Option("--initial-machines", min=0)] = 0,
+    min_machines: Annotated[int, typer.Option("--min-machines", min=0)] = 0,
+    max_machines: Annotated[int, typer.Option("--max-machines", min=0)] = 1,
     scaling_enabled: Annotated[bool, typer.Option("--scaling-enabled")] = False,
     default_eligible: Annotated[bool, typer.Option("--default-eligible")] = False,
     worker_cpu_millicores: Annotated[
@@ -348,15 +348,15 @@ def pool_create(
         int,
         typer.Option("--registration-timeout", min=30, max=3_600),
     ] = 600,
-    labels: Annotated[list[str] | None, typer.Option("--label")] = None,
 ) -> None:
     response = admin_api_client().create_pool(
         PoolCreateRequest(
             name=name,
+            machine_pool=machine_pool,
             provider=provider,
-            initial_workers=initial_workers,
-            min_workers=min_workers,
-            max_workers=max_workers,
+            initial_machines=initial_machines,
+            min_machines=min_machines,
+            max_machines=max_machines,
             scaling_enabled=scaling_enabled,
             default_eligible=default_eligible,
             worker_cpu_millicores=worker_cpu_millicores,
@@ -367,7 +367,6 @@ def pool_create(
             worker_preemptible=worker_preemptible,
             idle_drain_timeout_seconds=idle_drain_timeout_seconds,
             registration_timeout_seconds=registration_timeout_seconds,
-            labels=parse_key_values(labels or []),
         )
     )
     print_payload(ctx, response.model_dump(mode="json"))
@@ -381,15 +380,16 @@ def pool_list(ctx: typer.Context) -> None:
     console.print(
         table(
             "Pools",
-            ["name", "provider", "owner", "initial", "min", "max", "scaling"],
+            ["name", "pool", "provider", "owner", "initial", "min", "max", "scaling"],
             [
                 [
                     item.name,
+                    item.machine_pool,
                     item.provider,
                     item.capacity_owner_id,
-                    str(item.initial_workers),
-                    str(item.min_workers),
-                    str(item.max_workers),
+                    str(item.initial_machines),
+                    str(item.min_machines),
+                    str(item.max_machines),
                     str(item.scaling_enabled),
                 ]
                 for item in records

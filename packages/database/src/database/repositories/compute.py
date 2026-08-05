@@ -384,6 +384,10 @@ class ComputePoolRepository:
         # raise the serializer warning here instead of where it was introduced.
         record = ComputePoolRecord.model_validate(dict(record))
         current = self.get(record.id, for_update=True)
+        if current is not None:
+            # The row owns its creation time; a caller rebuilding the record
+            # from scratch must not be able to move it.
+            record = record.model_copy(update={"created_at": current.created_at})
         if current is not None and (
             current.capacity_owner_id != record.capacity_owner_id
             or current.capacity_owner_kind is not record.capacity_owner_kind

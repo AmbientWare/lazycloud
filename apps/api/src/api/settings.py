@@ -5,7 +5,9 @@ from pathlib import Path
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from shared.app_identity import ENV_PREFIX
-from shared.capacity import CAPACITY_OWNER_ID_PATTERN, CapacityPoolPolicy
+from shared.capacity import CAPACITY_OWNER_ID_PATTERN
+from shared.http.compute import PoolPolicy
+from shared.routing import BackendRouteTransport, PrivatePoolFallback
 
 
 class TcpIngressSettings(BaseSettings):
@@ -76,16 +78,22 @@ class AgentRouteReconciliationSettings(BaseSettings):
     )
 
 
-class CapacityBootstrapPool(CapacityPoolPolicy):
-    """One durable pool reconciled before the production API starts serving."""
+class CapacityBootstrapPool(PoolPolicy):
+    """One provisioning unit reconciled before the production API starts serving.
+
+    `machine_pool` is the scheduling group the unit stamps on its machines; it
+    defaults to the unit's own name so an unset group still routes.
+    """
 
     name: str = Field(min_length=1, max_length=160)
+    machine_pool: str = Field(default="", max_length=240)
     workspace: str = Field(default="default", min_length=1, max_length=160)
     provider: str = Field(default="local", min_length=1, max_length=160)
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
-    labels: dict[str, str] = Field(default_factory=dict)
+    transport: BackendRouteTransport = BackendRouteTransport.TsnetRestricted
+    fallback: PrivatePoolFallback = PrivatePoolFallback.Internal
 
-    @field_validator("name", "workspace", "provider")
+    @field_validator("name", "workspace", "provider", "machine_pool")
     @classmethod
     def normalize_identity(cls, value: str) -> str:
         return value.strip()

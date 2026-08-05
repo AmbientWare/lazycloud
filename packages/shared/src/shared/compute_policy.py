@@ -10,6 +10,7 @@ from shared.capacity import CapacityOwnerIdentity, CapacityOwnerKind
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
 from shared.routing import BackendRouteTransport, PrivatePoolFallback
+from shared.timestamps import utc_now
 
 _UUID_PATTERN = r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 _AWS_REGION_PATTERN = r"^(us-gov|us|af|ap|ca|cn|eu|il|me|mx|sa)-[a-z0-9-]+-[0-9]+$"
@@ -213,6 +214,7 @@ class ComputePoolRecord(CapacityOwnerIdentity):
     root_volume_gib: int = Field(default=200, ge=50, le=2048)
     transport: BackendRouteTransport = BackendRouteTransport.TsnetRestricted
     fallback: PrivatePoolFallback = PrivatePoolFallback.Internal
+    created_at: datetime = Field(default_factory=utc_now)
 
     @model_validator(mode="after")
     def validate_capacity(self) -> ComputePoolRecord:
