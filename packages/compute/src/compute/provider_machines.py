@@ -47,7 +47,6 @@ from shared.compute_policy import (
     ComputeUnitRecord,
     ComputeUnitVisibility,
     MachinePool,
-    UnitName,
 )
 from shared.contracts import ContractModel
 from shared.errors import (
@@ -165,16 +164,16 @@ def _reservation_open(status: str) -> bool:
 def _require_internal_pooled_unit(
     unit: ComputeUnitRecord | None,
     *,
-    unit_name: UnitName,
+    unit_ref: str,
 ) -> ComputeUnitRecord:
     if unit is None:
-        raise NotFoundError(f"compute unit not found: {unit_name}")
+        raise NotFoundError(f"compute unit not found: {unit_ref}")
     if (
         unit.visibility is not ComputeUnitVisibility.Internal
         or unit.capacity_mode is not ComputeCapacityMode.Pooled
         or unit.capacity_owner_kind is not CapacityOwnerKind.PooledProvider
     ):
-        raise InvalidInputError(f"compute unit {unit_name!r} is not provider-scaled")
+        raise InvalidInputError(f"compute unit {unit_ref!r} is not provider-scaled")
     return unit
 
 
@@ -1102,7 +1101,7 @@ class ProviderMachineReconciler:
 
     def _persist_zero_capacity_repair(
         self,
-        unit_name: ComputeUnitRecord,
+        unit: ComputeUnitRecord,
         *,
         maximum: int,
         observed: ProviderUnitSnapshot,
@@ -1110,16 +1109,16 @@ class ProviderMachineReconciler:
         with self.context.database.session() as session:
             pools = ComputeUnitRepository(session)
             current = _require_internal_pooled_unit(
-                pools.get_by_name(unit_name.workspace_id, unit_name.name, for_update=True),
-                unit_name=unit_name.name,
+                pools.get(unit.id, for_update=True),
+                unit_ref=unit.id,
             )
             if (
-                current.capacity_owner_id != unit_name.capacity_owner_id
-                or current.generation != unit_name.generation
+                current.capacity_owner_id != unit.capacity_owner_id
+                or current.generation != unit.generation
                 or current.desired_machines != 0
             ):
                 raise ConflictError(
-                    f"compute pool {unit_name.name!r} zero-capacity repair was superseded"
+                    f"compute pool {unit.name!r} zero-capacity repair was superseded"
                 )
             intent = pools.update_capacity(
                 current.id,
@@ -1132,7 +1131,7 @@ class ProviderMachineReconciler:
             )
             if intent is None:
                 raise ConflictError(
-                    f"compute pool {unit_name.name!r} zero-capacity repair was superseded"
+                    f"compute pool {unit.name!r} zero-capacity repair was superseded"
                 )
             return intent
 

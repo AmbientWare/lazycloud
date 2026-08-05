@@ -131,7 +131,7 @@ def _create_join_token(
     workspace_id: str,
 ):
     return gateway.unit_state_coordinator.create_unit_join_token(
-        UnitName(pool),
+        gateway.unit_state_coordinator.unit_by_name(UnitName(pool), workspace_id=workspace_id),
         workspace_id=workspace_id,
         owner_token_id="local-cli",
     )

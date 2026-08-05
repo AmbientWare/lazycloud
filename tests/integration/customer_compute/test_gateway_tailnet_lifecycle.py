@@ -184,7 +184,7 @@ def _enroll(
             workspace_id = services.context.default_workspace_id(session)
     unit = services.compute.create_unit(UnitName(pool), provider="agent", workspace=workspace_id)
     bootstrap = gateway.unit_state_coordinator.create_unit_join_token(
-        UnitName(pool),
+        gateway.unit_state_coordinator.unit_by_name(UnitName(pool), workspace_id=workspace_id),
         workspace_id=workspace_id,
         owner_token_id="tailnet-lifecycle-test",
     )

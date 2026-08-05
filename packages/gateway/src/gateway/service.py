@@ -968,7 +968,7 @@ class GatewayControlService:
                     require_host_decommission=unit.provider == "agent",
                 )
                 self._delete_pool_workers(unit.capacity_owner_id)
-                self.services.compute.delete_unit(name, workspace=workspace_id)
+                self.services.compute.delete_unit(unit.capacity_owner_id, workspace=workspace_id)
                 self.unit_state_coordinator.delete_compute_unit_state(
                     unit.capacity_owner_id,
                     workspace_id=workspace_id,
@@ -1021,7 +1021,7 @@ class GatewayControlService:
 
             return self.services.compute.scale_internal_unit(
                 workspace_id,
-                name,
+                owner.capacity_owner_id,
                 desired_machines,
                 before_mutation=assert_scale_down_is_safe,
             )
@@ -1032,7 +1032,7 @@ class GatewayControlService:
         unit = self.unit_state_coordinator.unit_by_id(unit_id, workspace_id=workspace_id)
         return self.services.compute.clear_capacity_degradation(
             workspace=workspace_id,
-            unit_name=unit.name,
+            capacity_owner_id=unit.capacity_owner_id,
         )
 
     def unit_state(self, unit_id: str, *, workspace_id: str) -> ComputeUnitRecord:
@@ -1044,7 +1044,7 @@ class GatewayControlService:
                 workspace_id=workspace_id,
             )
             name = owner.name
-            current = self.services.compute.get_internal_unit(workspace_id, name)
+            current = self.services.compute.get_internal_unit(workspace_id, owner.capacity_owner_id)
             if current.capacity_owner_id != owner.capacity_owner_id:
                 raise ConflictError(
                     f"compute pool {name!r} capacity ownership does not match durable state"
@@ -1111,8 +1111,8 @@ class GatewayControlService:
                 require_host_decommission=pool.provider == "agent",
             )
             self._delete_pool_workers(pool.capacity_owner_id)
-            self.services.compute.delete_pool_for_workspace_deletion(
-                name,
+            self.services.compute.delete_unit_for_workspace_deletion(
+                pool.capacity_owner_id,
                 workspace_id=workspace_id,
             )
             self.unit_state_coordinator.delete_compute_unit_state(
@@ -1144,7 +1144,7 @@ class GatewayControlService:
         except (KeyError, ValueError) as exc:
             raise _domain_error(exc) from exc
         plan = self.unit_state_coordinator.create_unit_join_token(
-            fleet.name,
+            fleet,
             workspace_id=workspace_id,
             owner_token_id=owner_token_id,
             ttl=request.ttl,
@@ -1206,7 +1206,7 @@ class GatewayControlService:
     ) -> JoinTokenCreationPlan:
         unit = self.unit_state_coordinator.unit_by_id(unit_id, workspace_id=workspace_id)
         return self.unit_state_coordinator.create_unit_join_token(
-            unit.name,
+            unit,
             workspace_id=workspace_id,
             owner_token_id=owner_token_id,
             ttl=ttl,
@@ -1215,7 +1215,7 @@ class GatewayControlService:
     def revoke_unit_join_token(self, unit_id: str, *, workspace_id: str) -> None:
         unit = self.unit_state_coordinator.unit_by_id(unit_id, workspace_id=workspace_id)
         self.unit_state_coordinator.revoke_unit_join_token(
-            unit.name,
+            unit,
             workspace_id=workspace_id,
         )
 
@@ -2060,8 +2060,8 @@ class GatewayControlService:
                 response_state.capacity_owner_id,
                 workspace_id=response_state.workspace_id,
             )
-            bootstrap_pool = self.unit_state_coordinator.private_pool_by_name(
-                bootstrap_unit.name,
+            bootstrap_pool = self.unit_state_coordinator.private_unit_state(
+                bootstrap_unit,
                 workspace_id=response_state.workspace_id,
             )
             bootstrap = build_agent_bootstrap_config(

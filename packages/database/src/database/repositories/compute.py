@@ -371,6 +371,13 @@ class ComputeUnitRepository:
         *,
         for_update: bool = False,
     ) -> ComputeUnitRecord | None:
+        """Resolve a unit by name, which only a create path may do.
+
+        A name is this table's creation-time natural key and nothing else.
+        Runtime callers address a unit by `id`/`capacity_owner_id`, because a
+        pool label and a unit name are both free-form strings and keying on the
+        name lets one be passed where the other was meant.
+        """
         statement = select(ComputeUnitTable).where(
             ComputeUnitTable.workspace_id == workspace_id,
             ComputeUnitTable.name == name,
@@ -386,6 +393,13 @@ class ComputeUnitRepository:
         *,
         for_update: bool = False,
     ) -> ComputeUnitRecord | None:
+        """Resolve one unit by its owner.
+
+        Unscoped because the owner id is globally unique
+        (`uq_compute_units_capacity_owner_id`) and the scheduler plane resolves
+        units without a workspace in hand. Tenant-scoped callers check
+        `workspace_id` on the row they get back.
+        """
         statement = select(ComputeUnitTable).where(
             ComputeUnitTable.capacity_owner_id == capacity_owner_id
         )

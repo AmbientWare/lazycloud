@@ -2278,7 +2278,7 @@ def _join_gateway_agent(
         workspace=workspace_id,
     )
     bootstrap = gateway.unit_state_coordinator.create_unit_join_token(
-        UnitName(pool),
+        gateway.unit_state_coordinator.unit_by_name(UnitName(pool), workspace_id=workspace_id),
         workspace_id=workspace_id,
         owner_token_id="worker-repository-test",
     )

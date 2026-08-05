@@ -364,14 +364,14 @@ def test_internal_pool_scale_enforces_workspace_capacity_limit(
         with pytest.raises(ConflictError, match="capacity limit"):
             compute.scale_internal_unit(
                 pool.workspace_id,
-                pool.name,
+                pool.capacity_owner_id,
                 requested_desired,
                 before_mutation=_allow_scale,
             )
     else:
         scaled = compute.scale_internal_unit(
             pool.workspace_id,
-            pool.name,
+            pool.capacity_owner_id,
             requested_desired,
             before_mutation=_allow_scale,
         )
@@ -477,7 +477,7 @@ def test_aws_default_capacity_is_one_durable_floor_preserved_by_placement(
     assert cleared.min_free_memory_mib == 0
     drained = compute.scale_internal_unit(
         baseline.workspace_id,
-        baseline.name,
+        baseline.capacity_owner_id,
         0,
         before_mutation=_allow_scale,
     )
@@ -506,7 +506,7 @@ def test_scale_zero_persists_intent_and_releases_operations_before_provider_muta
     )
     compute.reconcile_pooled_capacity()
     started_at = datetime(2026, 7, 22, 12, tzinfo=UTC)
-    before = compute.get_internal_unit(pool.workspace_id, pool.name)
+    before = compute.get_internal_unit(pool.workspace_id, pool.capacity_owner_id)
     guard_observations: list[int] = []
 
     def guard(current: ComputeUnitRecord) -> None:
@@ -528,7 +528,7 @@ def test_scale_zero_persists_intent_and_releases_operations_before_provider_muta
     provider.before_capacity = inspect_durable_intent
     scaled = compute.scale_internal_unit(
         pool.workspace_id,
-        pool.name,
+        pool.capacity_owner_id,
         0,
         before_mutation=guard,
         now=started_at,
@@ -566,12 +566,12 @@ def test_scale_zero_retains_degraded_intent_and_repairs_provider_failure(
     with pytest.raises(UpstreamUnavailableError, match="provider capacity update failed"):
         compute.scale_internal_unit(
             pool.workspace_id,
-            pool.name,
+            pool.capacity_owner_id,
             0,
             before_mutation=_allow_scale,
         )
 
-    degraded = compute.get_internal_unit(pool.workspace_id, pool.name)
+    degraded = compute.get_internal_unit(pool.workspace_id, pool.capacity_owner_id)
     assert degraded.desired_machines == 0
     assert degraded.observed_machines == 1
     assert degraded.phase is ComputeUnitPhase.Degraded
@@ -579,7 +579,7 @@ def test_scale_zero_retains_degraded_intent_and_repairs_provider_failure(
 
     repaired = compute.scale_internal_unit(
         pool.workspace_id,
-        pool.name,
+        pool.capacity_owner_id,
         0,
         before_mutation=_allow_scale,
     )
@@ -618,7 +618,7 @@ def test_internal_pool_scale_maps_mutation_coordinator_failure(
     with pytest.raises(UpstreamUnavailableError, match="mutation lease is unavailable"):
         compute.scale_internal_unit(
             pool.workspace_id,
-            pool.name,
+            pool.capacity_owner_id,
             0,
             before_mutation=_allow_scale,
         )
@@ -646,7 +646,7 @@ def test_scale_zero_skips_provider_only_after_durable_convergence(
     compute.reconcile_pooled_capacity()
     first = compute.scale_internal_unit(
         pool.workspace_id,
-        pool.name,
+        pool.capacity_owner_id,
         0,
         before_mutation=_allow_scale,
     )
@@ -654,7 +654,7 @@ def test_scale_zero_skips_provider_only_after_durable_convergence(
 
     second = compute.scale_internal_unit(
         pool.workspace_id,
-        pool.name,
+        pool.capacity_owner_id,
         0,
         before_mutation=_allow_scale,
     )
@@ -690,7 +690,7 @@ def test_scale_zero_repairs_fresh_provider_drift_without_restoring_nonzero_inten
     compute.reconcile_pooled_capacity()
     converged = compute.scale_internal_unit(
         pool.workspace_id,
-        pool.name,
+        pool.capacity_owner_id,
         0,
         before_mutation=_allow_scale,
     )
@@ -707,7 +707,7 @@ def test_scale_zero_repairs_fresh_provider_drift_without_restoring_nonzero_inten
     provider.before_capacity = inspect_repair_intent
     repaired = compute.scale_internal_unit(
         pool.workspace_id,
-        pool.name,
+        pool.capacity_owner_id,
         0,
         before_mutation=_allow_scale,
     )
@@ -789,7 +789,7 @@ def test_scale_zero_terminalizes_missing_provider_instance_projections(
 
     scaled = compute.scale_internal_unit(
         pool.workspace_id,
-        pool.name,
+        pool.capacity_owner_id,
         0,
         before_mutation=_allow_scale,
     )
@@ -840,7 +840,7 @@ def test_reconcile_rereads_zero_intent_after_capacity_owner_lease(
         reconcile_leases.on_acquire = None
         scale_compute.scale_internal_unit(
             pool.workspace_id,
-            pool.name,
+            pool.capacity_owner_id,
             0,
             before_mutation=_allow_scale,
         )
@@ -857,7 +857,7 @@ def test_reconcile_rereads_zero_intent_after_capacity_owner_lease(
 
     assert provider.capacity_calls == [(0, 10)]
     assert [request.desired_machines for request in provider.ensure_calls] == [0]
-    durable = reconciler.get_internal_unit(pool.workspace_id, pool.name)
+    durable = reconciler.get_internal_unit(pool.workspace_id, pool.capacity_owner_id)
     assert durable.desired_machines == 0
     assert durable.observed_machines == 0
 
@@ -1050,7 +1050,7 @@ def test_pool_delete_takes_the_provider_pool_with_it_or_keeps_the_pool_owned(
     provider.delete_failure = RuntimeError("provider pool deletion failed")
 
     with pytest.raises(UpstreamUnavailableError, match="provider pool deletion failed"):
-        compute.delete_unit(pool.name, workspace=pool.workspace_id)
+        compute.delete_unit(pool.capacity_owner_id, workspace=pool.workspace_id)
 
     with isolated_services.context.database.session() as session:
         retained = ComputeUnitRepository(session).get(pool.id)
@@ -1058,7 +1058,7 @@ def test_pool_delete_takes_the_provider_pool_with_it_or_keeps_the_pool_owned(
     assert provider.delete_calls == []
 
     provider.delete_failure = None
-    compute.delete_unit(pool.name, workspace=pool.workspace_id)
+    compute.delete_unit(pool.capacity_owner_id, workspace=pool.workspace_id)
 
     with isolated_services.context.database.session() as session:
         deleted = ComputeUnitRepository(session).get(pool.id)
@@ -1115,7 +1115,7 @@ def test_pooled_scale_down_waits_for_exact_volume_absence(
         )
     scaling = compute.scale_internal_unit(
         pool.workspace_id,
-        pool.name,
+        pool.capacity_owner_id,
         0,
         before_mutation=_allow_scale,
     )
@@ -1170,7 +1170,7 @@ def test_pooled_scale_down_projects_updating_during_provider_termination(
 
     scaling = compute.scale_internal_unit(
         pool.workspace_id,
-        pool.name,
+        pool.capacity_owner_id,
         0,
         before_mutation=_allow_scale,
     )
@@ -1408,7 +1408,7 @@ def test_relaunch_exhaustion_durably_degrades_pool_until_explicit_capacity_mutat
 
     scaled = compute.scale_internal_unit(
         pool.workspace_id,
-        pool.name,
+        pool.capacity_owner_id,
         1,
         before_mutation=_allow_scale,
     )

@@ -197,17 +197,16 @@ class GatewayUnitStateCoordinator:
         msg = f"capacity owner not found: {capacity_owner_id}"
         raise NotFoundError(msg)
 
-    def private_pool_by_name(
+    def private_unit_state(
         self,
-        unit_name: UnitName,
+        unit: ComputeUnitRecord,
         *,
         workspace_id: str,
         owner_token_id: str = "gateway",
     ) -> PrivateUnitState:
-        state = self.compute_states.get_unit_state(workspace_id, unit_name)
+        state = self.compute_states.get_unit_state(workspace_id, unit.capacity_owner_id)
         if state is not None:
             return private_pool_from_compute_state(state)
-        unit = self.unit_by_name(unit_name, workspace_id=workspace_id)
         return self.ensure_compute_pool_state(
             unit,
             workspace_id=workspace_id,
@@ -216,24 +215,23 @@ class GatewayUnitStateCoordinator:
 
     def create_unit_join_token(
         self,
-        unit_name: UnitName,
+        unit: ComputeUnitRecord,
         *,
         workspace_id: str,
         owner_token_id: str,
         ttl: str = "",
     ) -> JoinTokenCreationPlan:
-        plan = self.plan_pool_join_token(
-            unit_name,
+        plan = self.plan_unit_join_token(
+            unit,
             workspace_id=workspace_id,
             owner_token_id=owner_token_id,
             ttl=ttl,
         )
         current_time = utc_now()
-        unit = self.unit_by_name(unit_name, workspace_id=workspace_id)
         with self.context.database.session() as session:
             credentials = ComputeJoinCredentialRepository(session)
             if not credentials.lock_unit(workspace_id, unit.capacity_owner_id):
-                raise NotFoundError(f"pool not found: {unit_name}")
+                raise NotFoundError(f"unit not found: {unit.id}")
             previous = credentials.list_for_unit(
                 workspace_id,
                 unit.capacity_owner_id,
@@ -268,13 +266,12 @@ class GatewayUnitStateCoordinator:
         self.compute_states.save_join_token_state(token_state, ttl_seconds=plan.ttl_seconds)
         return plan
 
-    def revoke_unit_join_token(self, unit_name: UnitName, *, workspace_id: str) -> None:
+    def revoke_unit_join_token(self, unit: ComputeUnitRecord, *, workspace_id: str) -> None:
         current_time = utc_now()
-        unit = self.unit_by_name(unit_name, workspace_id=workspace_id)
         with self.context.database.session() as session:
             credentials = ComputeJoinCredentialRepository(session)
             if not credentials.lock_unit(workspace_id, unit.capacity_owner_id):
-                raise NotFoundError(f"pool not found: {unit_name}")
+                raise NotFoundError(f"unit not found: {unit.id}")
             records = credentials.list_for_unit(
                 workspace_id,
                 unit.capacity_owner_id,
@@ -290,16 +287,15 @@ class GatewayUnitStateCoordinator:
         for credential in active:
             self.compute_states.revoke_join_token_state(credential.token_hash)
 
-    def plan_pool_join_token(
+    def plan_unit_join_token(
         self,
-        unit_name: UnitName,
+        unit: ComputeUnitRecord,
         *,
         workspace_id: str,
         owner_token_id: str,
         ttl: str = "",
     ) -> JoinTokenCreationPlan:
         try:
-            unit = self.unit_by_name(unit_name, workspace_id=workspace_id)
             pool_state = self.ensure_compute_pool_state(
                 unit,
                 workspace_id=workspace_id,

@@ -172,7 +172,7 @@ def _install_recording_scale(
     def scale_internal_unit(
         _compute: ComputeService,
         workspace_id: str,
-        unit_name: str,
+        capacity_owner_id: str,
         desired_machines: int,
         *,
         before_mutation: Callable[[ComputeUnitRecord], None],
@@ -181,11 +181,14 @@ def _install_recording_scale(
         del now
         with guard.mutation_lock(current.capacity_owner_id):
             guard.events.append("intent-read")
-            assert (workspace_id, unit_name) == (current.workspace_id, current.name)
+            assert (workspace_id, capacity_owner_id) == (
+                current.workspace_id,
+                current.capacity_owner_id,
+            )
             before_mutation(current)
             assert guard.active_capacity_owner_id == current.capacity_owner_id
             guard.events.append("compute-scale")
-            mutation_calls.append((workspace_id, unit_name, desired_machines))
+            mutation_calls.append((workspace_id, capacity_owner_id, desired_machines))
         return current.model_copy(
             update={
                 "desired_machines": desired_machines,
@@ -222,7 +225,7 @@ def test_pool_scale_delegates_to_compute_while_capacity_owner_lock_is_held(
     scaled = gateway.scale_unit(current.id, 0, workspace_id=workspace_id)
 
     assert scaled.desired_machines == 0
-    assert mutation_calls == [(workspace_id, pool, 0)]
+    assert mutation_calls == [(workspace_id, capacity_owner_id, 0)]
     assert guard.locked_capacity_owner_ids == [capacity_owner_id]
     assert guard.checked_capacity_owner_ids == [capacity_owner_id]
     assert guard.events == [
@@ -395,7 +398,7 @@ def test_pool_scale_zero_disables_owner_worker_before_compute_mutation(
     gateway.scale_unit(current.id, 0, workspace_id=workspace_id)
 
     assert disabled == [worker.worker_id]
-    assert mutation_calls == [(workspace_id, pool, 0)]
+    assert mutation_calls == [(workspace_id, capacity_owner_id, 0)]
     assert guard.events.index("worker-disabled") < guard.events.index("compute-scale")
 
 
@@ -415,9 +418,12 @@ def test_pool_state_refuses_mismatched_durable_capacity_owner(
     def get_internal_unit(
         _compute: ComputeService,
         requested_workspace_id: str,
-        requested_pool_name: str,
+        requested_owner_id: str,
     ) -> ComputeUnitRecord:
-        assert (requested_workspace_id, requested_pool_name) == (workspace_id, pool)
+        assert (requested_workspace_id, requested_owner_id) == (
+            workspace_id,
+            current.capacity_owner_id,
+        )
         return current.model_copy(
             update={
                 "id": "26666666-3777-4888-8999-000000000000",
@@ -532,7 +538,7 @@ def test_pool_delete_refuses_open_capacity_reservation_without_mutating_owned_st
     guard = _RecordingCapacityReservationGuard(open_reservations=True)
     gateway = _gateway(isolated_services, guard, key_prefix="pool-reservation-guard")
     join = gateway.unit_state_coordinator.create_unit_join_token(
-        UnitName(unit_name),
+        gateway.unit_state_coordinator.unit_by_name(UnitName(unit_name), workspace_id=workspace_id),
         workspace_id=workspace_id,
         owner_token_id="gateway-test-owner",
     )
