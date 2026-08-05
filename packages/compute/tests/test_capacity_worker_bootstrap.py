@@ -11,6 +11,7 @@ from compute.agent_control import (
 from compute.bootstrap import MachineBootstrapConfig
 from compute.state import ComputeAgentWorkerSlotState
 from pydantic import ValidationError
+from shared.compute_policy import MachinePool
 from shared.scheduling import SchedulerWorkerRecord
 
 
@@ -54,7 +55,7 @@ def test_agent_worker_token_reuse_requires_reusable_worker_binding() -> None:
     raw_token = generate_compute_token()
     slot = ComputeAgentWorkerSlotState(
         workspace_id=str(uuid4()),
-        pool_name="default",
+        pool_name=MachinePool("default"),
         machine_id=str(uuid4()),
         worker_id=worker_id,
         capacity_owner_id=str(uuid4()),

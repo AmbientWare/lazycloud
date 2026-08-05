@@ -40,6 +40,7 @@ from observability.telemetry import TelemetryConfig
 from provider_clients.release import resolve_deployment_release
 from provider_clients.settings import AwsCapacityReconciliationSettings
 from shared.app_identity import CONTROL_PLANE_SERVICE_NAME
+from shared.compute_policy import MachinePool, UnitName
 from shared.enums import StringEnum
 from storage.image_archive import ImageArchiveSettings
 from storage.retention_settings import RetentionSettings
@@ -320,9 +321,9 @@ def _reconcile_bootstrap_capacity(
 ) -> None:
     for pool in settings.pools:
         services.compute.create_pool(
-            pool.name,
+            UnitName(pool.name),
             workspace=pool.workspace,
-            machine_pool=pool.machine_pool,
+            machine_pool=MachinePool(pool.machine_pool) if pool.machine_pool else None,
             provider=pool.provider,
             capacity_owner_id=pool.capacity_owner_id,
             initial_machines=pool.initial_machines,

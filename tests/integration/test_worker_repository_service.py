@@ -75,6 +75,7 @@ from scheduler.state import (
 from shared.app_identity import FUNCTION_IMAGE
 from shared.cache_records import CacheEntry
 from shared.compute_enrollment import ComputePreflightCheck, PreflightSeverity
+from shared.compute_policy import UnitName
 from shared.container_requests import ContainerShutdownTarget, StopContainerReason
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import ConflictError, UpstreamUnavailableError
@@ -803,7 +804,7 @@ def test_worker_repository_api_authenticates_and_streams_container_requests(
     control = ControlPlaneService(isolated_services.context)
     workspace = control.upsert_workspace("workspace-a")
     isolated_services.compute.create_pool(
-        "pool",
+        UnitName("pool"),
         workspace=workspace.id,
         worker_cpu_millicores=1000,
         worker_memory_mib=1024,
@@ -1013,7 +1014,7 @@ def test_worker_repository_stream_blocks_until_scheduler_assignment(
             )
         )
     isolated_services.compute.create_pool(
-        "default",
+        UnitName("default"),
         workspace=workspace_id,
         capacity_owner_id=capacity_owner_id,
         worker_cpu_millicores=1000,
@@ -1278,7 +1279,7 @@ def test_worker_repository_rotates_worker_session_on_reregistration(
     )
     capacity_owner_id = str(uuid5(NAMESPACE_URL, "lazycloud-test-capacity:workspace-a:pool"))
     isolated_services.compute.create_pool(
-        "pool",
+        UnitName("pool"),
         workspace="workspace-a",
         provider="local",
         capacity_owner_id=capacity_owner_id,
@@ -1378,7 +1379,7 @@ def test_worker_registration_fails_closed_without_matching_durable_capacity_owne
         headers=headers,
     )
     isolated_services.compute.create_pool(
-        "capacity-pool",
+        UnitName("capacity-pool"),
         workspace="capacity-owner-registration",
         provider="local",
         capacity_owner_id=owner_id,
@@ -2269,7 +2270,7 @@ def _join_gateway_agent(
     with services.context.database.session() as session:
         workspace_id = services.context.default_workspace_id(session)
     services.compute.create_pool(
-        pool_name,
+        UnitName(pool_name),
         provider="agent",
         workspace=workspace_id,
     )
@@ -2347,7 +2348,7 @@ def _register_worker_session(
             )
         )
         pool = services.compute.create_pool(
-            worker.pool_name,
+            UnitName(worker.pool_name),
             workspace=durable_workspace_id,
             provider="local",
             capacity_owner_id=capacity_owner_id,

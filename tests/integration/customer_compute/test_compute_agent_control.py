@@ -17,6 +17,7 @@ from shared.compute_enrollment import (
     ComputePreflightCheck,
     PreflightSeverity,
 )
+from shared.compute_policy import MachinePool, UnitName
 
 
 def test_join_token_binding_and_agent_join_gpu_locking() -> None:
@@ -25,7 +26,7 @@ def test_join_token_binding_and_agent_join_gpu_locking() -> None:
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
         token_hash=hash_compute_token("join-token"),
         workspace_id="workspace-one",
-        pool_name="gpu-pool",
+        pool_name=MachinePool("gpu-pool"),
         machine_id="machine-fixed",
         created_by_token_id="token-owner",
         expires_at=now + timedelta(hours=1),
@@ -44,7 +45,7 @@ def test_join_token_binding_and_agent_join_gpu_locking() -> None:
 
     pool = PrivatePoolState(
         workspace_id="workspace-one",
-        name="gpu-pool",
+        name=UnitName("gpu-pool"),
         config=PoolConfig(name="gpu-pool"),
         created_by_token_id="token-owner",
     )

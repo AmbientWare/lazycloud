@@ -19,6 +19,8 @@ from shared.http.compute import (
     PoolCreateRequest,
     PoolJoinCommandRequest,
     PoolJoinCommandResponse,
+    PoolJoinTokenRequest,
+    PoolJoinTokenResponse,
     PoolListResponse,
     PoolResponse,
     PoolScaleResponse,
@@ -281,6 +283,18 @@ class AdminApiClient:
         return PoolScaleResponse.model_validate(
             self.channel.post(
                 self._workspace_path(f"/api/v1/pools/{url_path_segment(name)}/clear-degradation")
+            )
+        )
+
+    def create_pool_join_token(
+        self,
+        name: str,
+        request: PoolJoinTokenRequest,
+    ) -> PoolJoinTokenResponse:
+        return PoolJoinTokenResponse.model_validate(
+            self.channel.post(
+                self._workspace_path(f"/api/v1/pools/{url_path_segment(name)}/join-token"),
+                request.model_dump(mode="json"),
             )
         )
 

@@ -4,7 +4,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Response, status
 from gateway.service import GatewayControlService
-from shared.compute_policy import ComputePoolRecord
+from shared.compute_policy import ComputePoolRecord, MachinePool, UnitName
 from shared.http.compute import (
     PoolCreateRequest,
     PoolJoinCommandRequest,
@@ -66,9 +66,9 @@ def create_pool(
 ) -> PoolResponse:
     return PoolResponse.model_validate(
         services.compute.create_pool(
-            request.name,
+            UnitName(request.name),
             workspace=workspace_id,
-            machine_pool=request.machine_pool,
+            machine_pool=MachinePool(request.machine_pool) if request.machine_pool else None,
             provider=request.provider,
             initial_machines=request.initial_machines,
             min_machines=request.min_machines,

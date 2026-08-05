@@ -22,6 +22,7 @@ from scheduler.state import (
     RedisWorkerPoolStateRepository,
     SchedulerWorkerRecord,
 )
+from shared.compute_policy import MachinePool, UnitName
 from shared.routing import AgentBackendRoute
 from tests.provider_fixtures import RecordingDirectMachineProvider, configure_test_provider
 from tests.real_redis import RealRedisActors
@@ -61,7 +62,7 @@ def test_delete_pool_cleans_private_agent_state(
 ) -> None:
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
-    pool = isolated_services.compute.create_pool("cleanup-pool", provider="local")
+    pool = isolated_services.compute.create_pool(UnitName("cleanup-pool"), provider="local")
     redis = real_redis_actors.client()
     compute_states = RedisComputeStateRepository(redis)
     scheduler_workers = RedisSchedulerWorkerRepository(redis)
@@ -79,7 +80,7 @@ def test_delete_pool_cleans_private_agent_state(
     compute_states.save_pool_state(
         ComputePoolState(
             workspace_id=workspace_id,
-            name="cleanup-pool",
+            name=UnitName("cleanup-pool"),
             capacity_owner_id=pool.capacity_owner_id,
             provider="local",
         )
@@ -89,7 +90,7 @@ def test_delete_pool_cleans_private_agent_state(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             token_hash="agent-hash",
             workspace_id=workspace_id,
-            pool_name="cleanup-pool",
+            pool_name=MachinePool("cleanup-pool"),
             machine_id="machine-one",
         )
     )
@@ -97,7 +98,7 @@ def test_delete_pool_cleans_private_agent_state(
         ComputeAgentWorkerSlotState(
             capacity_owner_id=pool.capacity_owner_id,
             workspace_id=workspace_id,
-            pool_name="cleanup-pool",
+            pool_name=MachinePool("cleanup-pool"),
             machine_id="machine-one",
             worker_id="worker-one",
         )

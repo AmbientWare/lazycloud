@@ -10,6 +10,7 @@ from compute.state import (
     RedisComputeStateRepository,
 )
 from coordination.redis_client import RedisClient
+from shared.compute_policy import MachinePool, UnitName
 from shared.routing import AgentBackendRoute
 from tests.redis_fakes import FakeRedis
 
@@ -22,7 +23,7 @@ def test_compute_state_repository_tracks_pools_agents_slots_and_ttls() -> None:
 
     pool = ComputePoolState(
         workspace_id="ws-1",
-        name="default",
+        name=UnitName("default"),
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
         provider="agent",
         desired_machines=2,
@@ -39,7 +40,7 @@ def test_compute_state_repository_tracks_pools_agents_slots_and_ttls() -> None:
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
         token_hash="join-hash",
         workspace_id="ws-1",
-        pool_name="default",
+        pool_name=MachinePool("default"),
         created_at=now,
     )
     repo.save_join_token_state(join, ttl_seconds=0)
@@ -50,7 +51,7 @@ def test_compute_state_repository_tracks_pools_agents_slots_and_ttls() -> None:
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
         token_hash="agent-hash",
         workspace_id="ws-1",
-        pool_name="default",
+        pool_name=MachinePool("default"),
         machine_id="machine-1",
         created_at=now,
     )
@@ -64,7 +65,7 @@ def test_compute_state_repository_tracks_pools_agents_slots_and_ttls() -> None:
     slot = ComputeAgentWorkerSlotState(
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
         workspace_id="ws-1",
-        pool_name="default",
+        pool_name=MachinePool("default"),
         machine_id="machine-1",
         worker_id="worker-1",
         created_at=now,
@@ -109,7 +110,7 @@ def test_compute_state_repository_tracks_pools_agents_slots_and_ttls() -> None:
 
     cleanup_pool = ComputePoolState(
         workspace_id="ws-1",
-        name="cleanup",
+        name=UnitName("cleanup"),
         capacity_owner_id="22222222-2222-4222-8222-222222222222",
         provider="agent",
     )
@@ -117,14 +118,14 @@ def test_compute_state_repository_tracks_pools_agents_slots_and_ttls() -> None:
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
         token_hash="cleanup-agent-hash",
         workspace_id="ws-1",
-        pool_name="cleanup",
+        pool_name=MachinePool("cleanup"),
         machine_id="cleanup-machine",
         created_at=now,
     )
     cleanup_slot = ComputeAgentWorkerSlotState(
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
         workspace_id="ws-1",
-        pool_name="cleanup",
+        pool_name=MachinePool("cleanup"),
         machine_id="cleanup-machine",
         worker_id="cleanup-worker",
         created_at=now,
@@ -165,7 +166,7 @@ def test_compute_state_repository_deletes_exact_workspace_residue() -> None:
                 capacity_owner_id="11111111-1111-4111-8111-111111111111",
                 token_hash=f"join-{suffix}",
                 workspace_id=workspace_id,
-                pool_name=pool_name,
+                pool_name=MachinePool(pool_name),
                 created_at=now,
             )
         )
@@ -174,7 +175,7 @@ def test_compute_state_repository_deletes_exact_workspace_residue() -> None:
                 capacity_owner_id="11111111-1111-4111-8111-111111111111",
                 token_hash=f"agent-{suffix}",
                 workspace_id=workspace_id,
-                pool_name=pool_name,
+                pool_name=MachinePool(pool_name),
                 machine_id=machine_id,
                 created_at=now,
             )

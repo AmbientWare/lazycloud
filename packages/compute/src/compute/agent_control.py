@@ -20,6 +20,7 @@ from shared.compute_enrollment import (
     ComputePreflightCheck,
     MachineReadinessPhase,
 )
+from shared.compute_policy import MachinePool
 
 if TYPE_CHECKING:
     from database.repositories.compute import ComputeMachineEnrollmentRecord
@@ -418,7 +419,7 @@ def join_token_ttl_seconds(value: str) -> int:
 
 def plan_join_token_creation(
     principal: ComputePrincipal,
-    pool_name: str,
+    pool_name: MachinePool,
     *,
     capacity_owner_id: str,
     ttl: str = "",
@@ -448,7 +449,7 @@ def plan_join_token_creation(
         token_hash=hash_compute_token(raw_token),
         workspace_id=principal.workspace_id,
         capacity_owner_id=capacity_owner_id,
-        pool_name=normalized_pool,
+        pool_name=MachinePool(normalized_pool),
         machine_id=machine_id.strip(),
         created_by_token_id=principal.owner_token_id,
         max_uses=max_uses,

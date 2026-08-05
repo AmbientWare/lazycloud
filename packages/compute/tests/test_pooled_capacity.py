@@ -75,6 +75,8 @@ from shared.compute_policy import (
     ComputePoolProviderState,
     ComputePoolRecord,
     ComputeResourceRequirements,
+    MachinePool,
+    UnitName,
     WorkspaceComputePolicy,
 )
 from shared.containers import ContainerRecord, ContainerStatus
@@ -461,7 +463,7 @@ def test_aws_default_capacity_is_one_durable_floor_preserved_by_placement(
     assert kept.min_machines == 1
     assert kept.min_free_cpu_millicores == 1_000
     assert kept.min_free_memory_mib == 1_024
-    larger = units["larger-demand-owned-cpu"]
+    larger = units[UnitName("larger-demand-owned-cpu")]
     assert larger.initial_machines == 0
     assert larger.min_machines == 0
     assert larger.min_free_cpu_millicores == 0
@@ -1244,7 +1246,7 @@ def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
             ComputeMachineEnrollmentCreate(
                 workspace_id=pool.workspace_id,
                 capacity_owner_id=pool.capacity_owner_id,
-                pool_name=pool.name,
+                pool_name=MachinePool(pool.name),
                 machine_id=machine_id,
                 machine_fingerprint_hash="b" * 64,
                 join_credential_id=credential.id,

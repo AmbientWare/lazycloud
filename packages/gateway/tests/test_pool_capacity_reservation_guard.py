@@ -34,6 +34,8 @@ from shared.compute_policy import (
     ComputePoolProviderState,
     ComputePoolRecord,
     ComputePoolVisibility,
+    MachinePool,
+    UnitName,
 )
 from shared.containers import ContainerRecord
 from shared.errors import ConflictError
@@ -125,7 +127,7 @@ def _scalable_pool(
     capacity_owner_id: str,
 ) -> ComputePoolRecord:
     services.compute.create_pool(
-        pool_name,
+        UnitName(pool_name),
         workspace=workspace_id,
         provider="aws:test-connection",
         capacity_owner_id=capacity_owner_id,
@@ -142,8 +144,8 @@ def _scalable_pool(
         capacity_owner_id=capacity_owner_id,
         capacity_owner_kind=CapacityOwnerKind.PooledProvider,
         capacity_owner_source=CapacityOwnerSource.Provider,
-        name=pool_name,
-        machine_pool=pool_name,
+        name=UnitName(pool_name),
+        machine_pool=MachinePool(pool_name),
         provider_ref="aws:test-connection",
         provider_connection_id="11111111-1111-4111-8111-111111111111",
         capacity_mode=ComputeCapacityMode.Pooled,
@@ -518,7 +520,7 @@ def test_pool_delete_refuses_open_capacity_reservation_without_mutating_owned_st
     pool_name = "reservation-guarded-pool"
     capacity_owner_id = "dfd9f90a-f4af-41ee-8873-991a9fa860fe"
     isolated_services.compute.create_pool(
-        pool_name,
+        UnitName(pool_name),
         workspace=workspace_id,
         provider="agent",
         capacity_owner_id=capacity_owner_id,
@@ -582,7 +584,7 @@ def test_pool_delete_uses_durable_capacity_owner_for_guard_and_scheduler_state(
     pool_name = "display-name-is-not-owner"
     capacity_owner_id = "71ee746b-674e-4125-a12a-21c3350abf83"
     isolated_services.compute.create_pool(
-        pool_name,
+        UnitName(pool_name),
         workspace=workspace_id,
         provider="agent",
         capacity_owner_id=capacity_owner_id,

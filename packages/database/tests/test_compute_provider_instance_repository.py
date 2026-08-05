@@ -10,7 +10,11 @@ from database.repositories.compute import (
 )
 from database.repositories.orchestration import MachineRepository
 from shared.compute_fleet import Machine
-from shared.compute_policy import ComputePoolRecord
+from shared.compute_policy import (
+    ComputePoolRecord,
+    MachinePool,
+    UnitName,
+)
 
 
 def test_provider_instance_machine_binding_is_idempotent_and_fenced(
@@ -21,8 +25,8 @@ def test_provider_instance_machine_binding_is_idempotent_and_fenced(
         pool = ComputePoolRecord(
             id=str(uuid4()),
             workspace_id=workspace_id,
-            name="provider-binding",
-            machine_pool="provider-binding",
+            name=UnitName("provider-binding"),
+            machine_pool=MachinePool("provider-binding"),
         )
         ComputePoolRepository(session).upsert(pool)
         instance = ComputeProviderInstanceRecord(
@@ -65,8 +69,8 @@ def test_unbinding_releases_only_the_machine_it_names(
         pool = ComputePoolRecord(
             id=str(uuid4()),
             workspace_id=workspace_id,
-            name="provider-unbinding",
-            machine_pool="provider-unbinding",
+            name=UnitName("provider-unbinding"),
+            machine_pool=MachinePool("provider-unbinding"),
         )
         ComputePoolRepository(session).upsert(pool)
         instance = ComputeProviderInstanceRecord(

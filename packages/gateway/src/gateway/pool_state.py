@@ -21,7 +21,7 @@ from foundation.ids import try_uuid
 from pydantic import JsonValue, TypeAdapter
 from shared.compute_enrollment import ComputeCredentialStatus
 from shared.compute_fleet import Machine
-from shared.compute_policy import ComputePoolRecord
+from shared.compute_policy import ComputePoolRecord, MachinePool, UnitName
 from shared.errors import InvalidInputError, NotFoundError
 from shared.routing import BackendRouteTransport, PrivatePoolFallback
 from shared.timestamps import utc_now
@@ -39,9 +39,9 @@ class GatewayComputeService(Protocol):
 
     def create_pool(
         self,
-        name: str,
+        name: UnitName,
         *,
-        machine_pool: str = "",
+        machine_pool: MachinePool | None = None,
         provider: str,
         min_machines: int,
         max_machines: int,
@@ -88,8 +88,8 @@ class GatewayPoolStateCoordinator:
         provider = (normalized.providers[0] if normalized.providers else "") or "agent"
         gpu_type = normalized.gpu[0] if normalized.gpu else ""
         return self.compute.create_pool(
-            normalized.name,
-            machine_pool=machine_pool,
+            UnitName(normalized.name),
+            machine_pool=MachinePool(machine_pool) if machine_pool else None,
             provider=provider,
             min_machines=0,
             max_machines=max(normalized.nodes, 1),
@@ -142,13 +142,38 @@ class GatewayPoolStateCoordinator:
         self,
         token_state: ComputeJoinTokenState | None,
     ) -> PrivatePoolState | None:
+        """Resolve the unit a join credential was minted against.
+
+        Keyed by capacity owner, not by the credential's pool name: that name is
+        the pool the machine will join, and a pool may be fed by several units,
+        so it identifies no single row to configure the agent from.
+        """
         if token_state is None:
             return None
-        return self.private_pool_by_name(
-            token_state.pool_name,
+        unit = self.pool_by_capacity_owner(
+            token_state.capacity_owner_id,
+            workspace_id=token_state.workspace_id,
+        )
+        state = self.compute_states.get_pool_state(token_state.workspace_id, unit.name)
+        if state is not None:
+            return private_pool_from_compute_state(state)
+        return self.ensure_compute_pool_state(
+            unit,
             workspace_id=token_state.workspace_id,
             owner_token_id=token_state.created_by_token_id or "gateway",
         )
+
+    def pool_by_capacity_owner(
+        self,
+        capacity_owner_id: str,
+        *,
+        workspace_id: str,
+    ) -> ComputePoolRecord:
+        for pool in self.compute.list_pools(workspace=workspace_id):
+            if pool.capacity_owner_id == capacity_owner_id:
+                return pool
+        msg = f"capacity owner not found: {capacity_owner_id}"
+        raise NotFoundError(msg)
 
     def private_pool_by_name(
         self,

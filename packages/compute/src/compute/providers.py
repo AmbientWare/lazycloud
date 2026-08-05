@@ -14,6 +14,7 @@ from shared.compute_policy import (
     ComputeCapacityMode,
     ComputePoolProviderState,
     ComputePoolRecord,
+    UnitName,
 )
 from shared.contracts import ContractModel
 from shared.urls import normalize_http_origin
@@ -235,7 +236,7 @@ def internal_pool_identity(
     region: str,
     capability_key: str,
     root_volume_gib: int,
-) -> tuple[str, str]:
+) -> tuple[str, UnitName]:
     """Derive the durable id and name of one provisioning unit.
 
     The seed is everything AWS pins to a single Auto Scaling group, root volume
@@ -258,7 +259,7 @@ def internal_pool_identity(
             )
         ),
     )
-    return str(identity), f"managed-{identity.hex[:24]}"
+    return str(identity), UnitName(f"managed-{identity.hex[:24]}")
 
 
 class MachineReferenceLike(Protocol):

@@ -81,6 +81,7 @@ from scheduler.state import (
     reserve_concurrency,
 )
 from scheduler.workers import SchedulerWorkerAdminService
+from shared.compute_policy import MachinePool
 from shared.container_requests import StopContainerReason
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.contracts import ContractModel
@@ -2727,7 +2728,7 @@ def test_scheduler_pool_state_service_refreshes_worker_container_and_agent_snaps
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             token_hash="agent-hash",
             workspace_id="ws-1",
-            pool_name="gpu",
+            pool_name=MachinePool("gpu"),
             machine_id=machine_id,
             executor=DEFAULT_PRIVATE_EXECUTOR,
             cpu_millicores=4000,

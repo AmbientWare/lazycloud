@@ -26,6 +26,7 @@ from scheduler.service import (
     SchedulerMaintenanceControls,
     UnavailableTailnetCleanupService,
 )
+from shared.compute_policy import UnitName
 from shared.identity import TokenKind, WorkspaceStatus
 from sqlalchemy import delete
 from tests.redis_fakes import FakeRedis
@@ -72,7 +73,9 @@ def test_tombstone_survives_ownership_deletion_and_scheduler_removes_late_device
     )
     workspace = control_plane.upsert_workspace("tailnet-tombstone-owner")
     pool_name = "tailnet-tombstone-pool"
-    isolated_services.compute.create_pool(pool_name, provider="agent", workspace=workspace.id)
+    isolated_services.compute.create_pool(
+        UnitName(pool_name), provider="agent", workspace=workspace.id
+    )
     machine = isolated_services.compute.create_machine(
         workspace=workspace.id,
         pool=pool_name,

@@ -24,7 +24,11 @@ from scheduler.state import (
     SchedulerWorkerRecord,
 )
 from shared.capacity import CapacityPoolSizingSnapshot
-from shared.compute_policy import ComputePoolRecord
+from shared.compute_policy import (
+    ComputePoolRecord,
+    MachinePool,
+    UnitName,
+)
 
 WORKSPACE_ID = "22222222-2222-4222-8222-222222222222"
 PROVIDER_OWNER_ID = "11111111-1111-4111-8111-111111111111"
@@ -63,8 +67,8 @@ class _Compute:
             id=PROVIDER_OWNER_ID,
             capacity_owner_id=PROVIDER_OWNER_ID,
             workspace_id=WORKSPACE_ID,
-            name=pool_name,
-            machine_pool=POOL,
+            name=UnitName(pool_name),
+            machine_pool=MachinePool(POOL),
             desired_machines=0,
             observed_machines=0,
         )
@@ -80,7 +84,7 @@ def _seed_pool_state(
     compute_states.save_pool_state(
         ComputePoolState(
             workspace_id=WORKSPACE_ID,
-            name=POOL,
+            name=UnitName(POOL),
             capacity_owner_id=capacity_owner_id,
             provider="aws",
             min_machines=min_machines,

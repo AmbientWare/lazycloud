@@ -43,6 +43,7 @@ from shared.compute_policy import (
     ComputePoolProviderState,
     ComputePoolRecord,
     ComputePoolVisibility,
+    MachinePool,
     WorkspaceComputePolicy,
 )
 from shared.contracts import ContractModel
@@ -126,7 +127,8 @@ class ComputeJoinCredentialRecord(ContractModel):
     A machine joining with it is bought by that unit, which is what keeps an
     auto-scaling drain from selecting a machine some other unit owns.
     """
-    pool_name: str
+    pool_name: MachinePool
+    """Pool the joining machine lands in, not the issuing unit's name."""
     machine_id: str = ""
     created_by_token_id: str | None = None
     status: ComputeCredentialStatus = ComputeCredentialStatus.Active
@@ -178,7 +180,7 @@ class ComputeMachineEnrollmentRecord(ContractModel):
     id: str
     workspace_id: str
     capacity_owner_id: str
-    pool_name: str
+    pool_name: MachinePool
     machine_id: str
     machine_fingerprint_hash: str
     join_credential_id: str | None = None
@@ -226,7 +228,7 @@ class ComputeMachineEnrollmentRecord(ContractModel):
 class ComputeMachineEnrollmentCreate(ContractModel):
     workspace_id: str
     capacity_owner_id: str
-    pool_name: str
+    pool_name: MachinePool
     machine_id: str
     machine_fingerprint_hash: str
     join_credential_id: str | None = None

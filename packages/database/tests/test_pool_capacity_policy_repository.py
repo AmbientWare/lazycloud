@@ -3,15 +3,16 @@ from __future__ import annotations
 import pytest
 from api.server.services import ApiServices
 from database.repositories.compute import ComputePoolRepository
+from shared.compute_policy import UnitName
 from shared.errors import ConflictError
 
 
 def test_pool_repository_preserves_owner_on_policy_update_and_rejects_replacement(
     isolated_services: ApiServices,
 ) -> None:
-    created = isolated_services.compute.create_pool("private", provider="agent")
+    created = isolated_services.compute.create_pool(UnitName("private"), provider="agent")
     updated = isolated_services.compute.create_pool(
-        "private",
+        UnitName("private"),
         provider="agent",
         max_machines=3,
         worker_cpu_millicores=2_000,

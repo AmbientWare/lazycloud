@@ -53,6 +53,8 @@ from shared.compute_policy import (
     ComputePoolProviderState,
     ComputePoolRecord,
     ComputePoolVisibility,
+    MachinePool,
+    UnitName,
 )
 from shared.errors import InvalidInputError, UpstreamUnavailableError
 from shared.events import EventLevel
@@ -449,8 +451,8 @@ def _pool(*, workspace_id: str, pool_id: str, name: str) -> ComputePoolRecord:
         capacity_owner_kind=CapacityOwnerKind.PooledProvider,
         capacity_owner_source=CapacityOwnerSource.Provider,
         workspace_id=workspace_id,
-        name=name,
-        machine_pool=name,
+        name=UnitName(name),
+        machine_pool=MachinePool(name),
         selector=name,
         status=ComputePoolPhase.Ready.value,
         source="workspace_policy",

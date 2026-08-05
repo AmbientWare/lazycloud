@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 from datetime import datetime
+from typing import NewType
 
 from pydantic import Field, JsonValue, model_validator
 
@@ -13,6 +14,22 @@ from shared.routing import BackendRouteTransport, PrivatePoolFallback
 from shared.timestamps import utc_now
 
 _UUID_PATTERN = r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+
+UnitName = NewType("UnitName", str)
+"""Name of one provisioning unit, unique per workspace.
+
+A unit is one capacity owner: one Auto Scaling group, or the workspace's agent
+or local fleet. This names exactly one durable row.
+"""
+
+MachinePool = NewType("MachinePool", str)
+"""Scheduling pool a workload names, stamped on every machine serving it.
+
+Several units may feed one pool, so this names no single row. It is a routing
+label and must never be used to look a unit up — that is what made a pool label
+reaching a unit lookup silently return the wrong row while the two names
+happened to coincide.
+"""
 
 LAZYCLOUD_MACHINE_POOL = "lazycloud"
 """Pool the platform's own fleet stamps on its machines."""
@@ -143,8 +160,8 @@ class ComputePoolRecord(CapacityOwnerIdentity):
 
     id: str = Field(pattern=_UUID_PATTERN)
     workspace_id: str = Field(pattern=_UUID_PATTERN)
-    name: str = Field(min_length=1, max_length=240)
-    machine_pool: str = Field(min_length=1, max_length=240)
+    name: UnitName = Field(min_length=1, max_length=240)
+    machine_pool: MachinePool = Field(min_length=1, max_length=240)
     provider: str = Field(default="local", min_length=1, max_length=120)
     selector: str = Field(default="", max_length=255)
     status: str = Field(default=ComputePoolPhase.Ready.value, max_length=80)
@@ -259,5 +276,7 @@ __all__ = [
     "ComputePoolRecord",
     "ComputePoolVisibility",
     "ComputeResourceRequirements",
+    "MachinePool",
+    "UnitName",
     "WorkspaceComputePolicy",
 ]

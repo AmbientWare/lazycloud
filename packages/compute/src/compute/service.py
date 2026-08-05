@@ -58,6 +58,8 @@ from shared.compute_policy import (
     ComputePoolRecord,
     ComputePoolVisibility,
     ComputeResourceRequirements,
+    MachinePool,
+    UnitName,
 )
 from shared.containers import ContainerStatus
 from shared.contracts import ContractModel
@@ -898,10 +900,10 @@ class ComputeService:
 
     def create_pool(
         self,
-        name: str,
+        name: UnitName,
         *,
         workspace: str = "default",
-        machine_pool: str = "",
+        machine_pool: MachinePool | None = None,
         provider: str = "local",
         capacity_owner_id: str | None = None,
         initial_machines: int = 0,
@@ -959,7 +961,7 @@ class ComputeService:
                     ),
                     workspace_id=workspace_id,
                     name=name,
-                    machine_pool=machine_pool or name,
+                    machine_pool=machine_pool or MachinePool(name),
                     provider=provider,
                     selector=name,
                     status=ComputePoolPhase.Ready.value,
@@ -1633,7 +1635,9 @@ class ComputeService:
                 capacity_owner_source=CapacityOwnerSource.Provider,
                 workspace_id=workspace_id,
                 name=pool_name,
-                machine_pool=current.machine_pool if current is not None else pool_name,
+                machine_pool=(
+                    current.machine_pool if current is not None else MachinePool(pool_name)
+                ),
                 provider=provider.ref,
                 selector=pool_name,
                 source="workspace_policy",
@@ -2640,7 +2644,7 @@ def _plan_capacity_join_token(
     signing_key: str,
     *,
     principal: ComputePrincipal,
-    pool_name: str,
+    pool_name: MachinePool,
     capacity_owner_id: str,
     operation_id: str,
     machine_id: str,

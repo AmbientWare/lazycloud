@@ -26,6 +26,7 @@ from shared.http.compute import (
     MachineCreateRequest,
     PoolCreateRequest,
     PoolJoinCommandRequest,
+    PoolJoinTokenRequest,
 )
 from shared.http.observability import EventHistoryRequest, LogQueryRequest
 
@@ -419,6 +420,16 @@ def pool_clear_degraded(
     )
 
 
+def pool_join_token(
+    ctx: typer.Context,
+    name: str,
+    ttl: Annotated[str, typer.Option("--ttl")] = "",
+) -> None:
+    """Mint a single-use join credential for the unit's pool."""
+    response = admin_api_client().create_pool_join_token(name, PoolJoinTokenRequest(ttl=ttl))
+    print_payload(ctx, response.model_dump(mode="json"))
+
+
 def pool_join(
     ctx: typer.Context,
     name: str,
@@ -572,6 +583,7 @@ pool_app.command("create")(pool_create)
 pool_app.command("list")(pool_list)
 pool_app.command("delete")(pool_delete)
 pool_app.command("join")(pool_join)
+pool_app.command("join-token")(pool_join_token)
 pool_app.command(
     "clear-degraded",
     help="Let a pool that exhausted its relaunch attempts buy machines again.",

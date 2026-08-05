@@ -61,6 +61,8 @@ from shared.compute_policy import (
     ComputePoolRecord,
     ComputePoolVisibility,
     ComputeResourceRequirements,
+    MachinePool,
+    UnitName,
 )
 from shared.deployment_records import DeploymentSpec
 from shared.http.compute_policy import (
@@ -240,8 +242,8 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
                 capacity_owner_kind=CapacityOwnerKind.PooledProvider,
                 capacity_owner_source=CapacityOwnerSource.Provider,
                 workspace_id=workspace_id,
-                name="current-aws-inventory",
-                machine_pool="aws",
+                name=UnitName("current-aws-inventory"),
+                machine_pool=MachinePool("aws"),
                 provider_ref=f"aws:{connection.id}",
                 provider_connection_id=connection.id,
                 capacity_mode=ComputeCapacityMode.Pooled,
@@ -267,7 +269,7 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
             ComputeMachineEnrollmentCreate(
                 workspace_id=workspace_id,
                 capacity_owner_id=pool_id,
-                pool_name="current-aws-inventory",
+                pool_name=MachinePool("current-aws-inventory"),
                 machine_id=ready_machine_id,
                 machine_fingerprint_hash="f" * 64,
                 credential_hash="c" * 64,
@@ -406,9 +408,9 @@ def test_placement_names_the_pool_and_leaves_the_unit_to_arbitration(
         ("unit-b", "20000000-0000-4000-8000-000000000002"),
     ):
         isolated_services.compute.create_pool(
-            name,
+            UnitName(name),
             workspace=workspace_id,
-            machine_pool="shared-pool",
+            machine_pool=MachinePool("shared-pool"),
             provider="agent",
             capacity_owner_id=owner,
             worker_cpu_millicores=4_000,
@@ -470,15 +472,15 @@ def test_machine_pool_listing_is_scoped_to_the_caller_workspace(
     caller = control.upsert_workspace("pool-listing-caller")
     other = control.upsert_workspace("pool-listing-other")
     isolated_services.compute.create_pool(
-        "caller-unit",
+        UnitName("caller-unit"),
         workspace=caller.id,
-        machine_pool="caller-pool",
+        machine_pool=MachinePool("caller-pool"),
         provider="agent",
     )
     isolated_services.compute.create_pool(
-        "other-unit",
+        UnitName("other-unit"),
         workspace=other.id,
-        machine_pool="other-pool",
+        machine_pool=MachinePool("other-pool"),
         provider="agent",
     )
     token, _record = AuthService(isolated_services.context).create_token(
@@ -569,8 +571,8 @@ class _RecordingPooledCapacity:
             capacity_owner_kind=CapacityOwnerKind.PooledProvider,
             capacity_owner_source=CapacityOwnerSource.Provider,
             workspace_id=workspace,
-            name="internal-aws-cpu",
-            machine_pool="aws",
+            name=UnitName("internal-aws-cpu"),
+            machine_pool=MachinePool("aws"),
             provider_ref="aws:22222222-2222-4222-8222-222222222222",
             provider_connection_id="22222222-2222-4222-8222-222222222222",
             capacity_mode=ComputeCapacityMode.Pooled,

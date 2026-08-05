@@ -14,6 +14,7 @@ from coordination.redis_serialization import (
 from pydantic import Field, JsonValue, field_validator
 from shared.capacity import CAPACITY_OWNER_ID_PATTERN
 from shared.compute_enrollment import AgentCapacityState, ComputePreflightCheck
+from shared.compute_policy import MachinePool, UnitName
 from shared.contracts import ContractModel
 from shared.routing import AgentBackendRoute
 from shared.timestamps import utc_now
@@ -41,7 +42,8 @@ class AgentWorkerSlotStatus(StrEnum):
 
 class ComputePoolState(ContractModel):
     workspace_id: str
-    name: str
+    name: UnitName
+    """Unit this hot state belongs to. Pool state is per unit, never per pool."""
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     provider: str = "agent"
     status: ComputePoolStatus = ComputePoolStatus.Active
@@ -66,7 +68,7 @@ class ComputeJoinTokenState(ContractModel):
     workspace_id: str
     capacity_owner_id: str = Field(min_length=1)
     """Unit that issued the credential, carried onto the machine that joins."""
-    pool_name: str
+    pool_name: MachinePool
     credential_id: str = ""
     machine_id: str = ""
     created_by_token_id: str = ""
@@ -97,7 +99,7 @@ class ComputeAgentTokenState(ContractModel):
     machine in a pool an auto-scaling unit also feeds must never be selected by
     that unit's drain.
     """
-    pool_name: str
+    pool_name: MachinePool
     machine_id: str
     credential_id: str = ""
     credential_generation: int = 1
@@ -139,7 +141,7 @@ class ComputeAgentTokenState(ContractModel):
 
 class ComputeAgentWorkerSlotState(ContractModel):
     workspace_id: str
-    pool_name: str
+    pool_name: MachinePool
     machine_id: str
     worker_id: str
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)

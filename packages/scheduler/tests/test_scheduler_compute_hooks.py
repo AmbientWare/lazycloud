@@ -14,6 +14,7 @@ from pydantic import JsonValue
 from scheduler.compute_hooks import SchedulerComputeHooks
 from scheduler.fleet import SchedulerWorkerStatus
 from scheduler.state import RedisSchedulerWorkerRepository, SchedulerWorkerRecord
+from shared.compute_policy import MachinePool
 
 
 class _RealRedisActors(Protocol):
@@ -87,7 +88,7 @@ def test_scheduler_compute_hooks_retire_provider_machine_hot_state(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             token_hash="agent-token-hash",
             workspace_id="ws-1",
-            pool_name="aws-pool",
+            pool_name=MachinePool("aws-pool"),
             machine_id=machine_id,
             executor="docker",
             preflight_passed=True,
@@ -102,7 +103,7 @@ def test_scheduler_compute_hooks_retire_provider_machine_hot_state(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             token_hash="join-token-hash",
             workspace_id="ws-1",
-            pool_name="aws-pool",
+            pool_name=MachinePool("aws-pool"),
             expires_at=datetime(2026, 1, 2, tzinfo=UTC),
         )
     )

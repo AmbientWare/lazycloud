@@ -30,6 +30,7 @@ from shared.compute_policy import (
     ComputePoolPhase,
     ComputePoolRecord,
     ComputePoolVisibility,
+    MachinePool,
 )
 from shared.errors import ConflictError, InvalidInputError, UpstreamUnavailableError
 from shared.events import EventLevel
@@ -370,7 +371,7 @@ class ProviderNodeEnrollmentService:
         self,
         pool_id: str,
         workspace_id: str,
-        pool_name: str,
+        pool_name: MachinePool,
         capacity_owner_id: str,
     ) -> SecretStr:
         plan = plan_join_token_creation(

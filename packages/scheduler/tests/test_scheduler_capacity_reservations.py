@@ -47,7 +47,11 @@ from shared.capacity import (
     CapacityPoolSizingSnapshot,
     CapacityReleaseRequest,
 )
-from shared.compute_policy import ComputePoolRecord
+from shared.compute_policy import (
+    ComputePoolRecord,
+    MachinePool,
+    UnitName,
+)
 from shared.realtime.contracts import CloudEventRecord, EventDataInput, EventRecordType
 from shared.scheduling import (
     SchedulerWorkerRecord,
@@ -256,8 +260,8 @@ def _managed_pool() -> ComputePoolRecord:
     return ComputePoolRecord(
         id=OWNER_ID,
         workspace_id=WORKSPACE_ID,
-        name="default",
-        machine_pool="default",
+        name=UnitName("default"),
+        machine_pool=MachinePool("default"),
         provider="generic",
         capacity_owner_id=OWNER_ID,
         capacity_owner_kind=CapacityOwnerKind.ManagedPool,

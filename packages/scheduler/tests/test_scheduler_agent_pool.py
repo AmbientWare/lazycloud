@@ -12,6 +12,7 @@ from scheduler.agent_pool import (
 from scheduler.fleet import SchedulerWorkerStatus
 from scheduler.state import SchedulerWorkerRecord
 from shared.compute_enrollment import ComputePreflightCheck
+from shared.compute_policy import MachinePool
 from shared.scheduling import WorkerUnavailableReason
 
 
@@ -191,7 +192,7 @@ def _agent_machine(
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
         token_hash=f"token-{machine_id}",
         workspace_id="ws-1",
-        pool_name="gpu",
+        pool_name=MachinePool("gpu"),
         machine_id=machine_id,
         executor=DEFAULT_PRIVATE_EXECUTOR,
         cpu_millicores=cpu_millicores,

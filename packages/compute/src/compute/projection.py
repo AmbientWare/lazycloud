@@ -6,6 +6,7 @@ from enum import StrEnum
 
 from pydantic import Field, field_validator
 from shared.capacity import CapacityOwnerIdentity
+from shared.compute_policy import UnitName
 from shared.contracts import ContractModel
 from shared.routing import BackendRouteTransport, PrivatePoolFallback
 
@@ -149,7 +150,7 @@ class ProviderInstanceProjection(ContractModel):
 
 class PrivatePoolState(CapacityOwnerIdentity):
     workspace_id: str = ""
-    name: str
+    name: UnitName
     selector: str = ""
     config: PoolConfig | None = None
     reservations: list[ProviderReservation] = Field(default_factory=list)

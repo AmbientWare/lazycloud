@@ -6,6 +6,7 @@ from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
+from shared.compute_policy import MachinePool, UnitName
 from shared.http.compute import PoolMachineListResponse
 from shared.identity import TokenKind
 
@@ -26,8 +27,8 @@ def test_self_hosted_collection_is_static_workspace_scoped_and_excludes_managed_
     assert PoolMachineListResponse.model_validate_json(initial.content) == PoolMachineListResponse()
 
     isolated_services.compute.create_pool(
-        "managed-pool",
-        machine_pool="lazycloud",
+        UnitName("managed-pool"),
+        machine_pool=MachinePool("lazycloud"),
         provider="local",
     )
     isolated_services.compute.create_machine(pool="lazycloud", provider="local")

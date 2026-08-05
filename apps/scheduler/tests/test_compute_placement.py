@@ -27,6 +27,8 @@ from shared.capacity import (
 )
 from shared.compute_policy import (
     ComputePoolRecord,
+    MachinePool,
+    UnitName,
 )
 from shared.scheduling import SchedulerWorkerRecord
 
@@ -160,8 +162,8 @@ def _internal_aws_pool() -> ComputePoolRecord:
     return ComputePoolRecord(
         id=_OWNER_ID,
         workspace_id=_WORKSPACE_ID,
-        name="internal-aws-cpu",
-        machine_pool="aws",
+        name=UnitName("internal-aws-cpu"),
+        machine_pool=MachinePool("aws"),
         provider="aws",
         capacity_owner_id=_OWNER_ID,
         capacity_owner_kind=CapacityOwnerKind.PooledProvider,

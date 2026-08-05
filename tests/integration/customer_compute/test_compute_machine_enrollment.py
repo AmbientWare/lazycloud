@@ -50,6 +50,7 @@ from shared.compute_enrollment import (
     MachineReadinessPhase,
     PreflightSeverity,
 )
+from shared.compute_policy import UnitName
 from shared.errors import ConflictError, InvalidInputError
 from shared.http.compute import MachineJoinCommandRequest, PoolMachineResponse
 from shared.http.gateway import AgentCapacityInterruptionRequest
@@ -194,7 +195,7 @@ def test_machine_enrollment_is_durable_rotatable_and_secret_free(
 ) -> None:
     workspace_id = _workspace_id(isolated_services)
     isolated_services.compute.create_pool(
-        "customer-machines",
+        UnitName("customer-machines"),
         provider="agent",
         workspace=workspace_id,
     )
@@ -282,7 +283,7 @@ def test_capacity_interruption_is_session_fenced_durable_and_heartbeat_safe(
 ) -> None:
     workspace_id = _workspace_id(isolated_services)
     isolated_services.compute.create_pool(
-        "preemptible-machines",
+        UnitName("preemptible-machines"),
         provider="agent",
         workspace=workspace_id,
     )
@@ -340,7 +341,7 @@ def test_agent_leave_cleans_up_and_public_delete_requires_host_decommission(
 ) -> None:
     workspace_id = _workspace_id(isolated_services)
     isolated_services.compute.create_pool(
-        "cleanup-machines",
+        UnitName("cleanup-machines"),
         provider="agent",
         workspace=workspace_id,
     )
@@ -416,7 +417,7 @@ def test_agent_leave_requires_current_machine_cache_destruction_session(
 ) -> None:
     workspace_id = _workspace_id(isolated_services)
     isolated_services.compute.create_pool(
-        "cache-decommission",
+        UnitName("cache-decommission"),
         provider="agent",
         workspace=workspace_id,
     )
@@ -480,7 +481,7 @@ def test_pool_delete_requires_host_decommission_without_mutating_ownership(
 ) -> None:
     workspace_id = _workspace_id(isolated_services)
     unit = isolated_services.compute.create_pool(
-        "deleted-machine-pool",
+        UnitName("deleted-machine-pool"),
         provider="agent",
         workspace=workspace_id,
     )
@@ -542,7 +543,7 @@ def test_workspace_deletion_preflight_preserves_enrolled_self_hosted_ownership(
     )
     workspace = control.upsert_workspace("enrolled-customer")
     unit = services.compute.create_pool(
-        "workspace-machine-pool",
+        UnitName("workspace-machine-pool"),
         provider="agent",
         workspace=workspace.id,
     )
@@ -637,7 +638,7 @@ def test_telemetry_usage_failure_does_not_advance_enrollment_cursor(
 ) -> None:
     workspace_id = _workspace_id(isolated_services)
     isolated_services.compute.create_pool(
-        "metered-machines",
+        UnitName("metered-machines"),
         provider="agent",
         workspace=workspace_id,
     )
@@ -699,7 +700,7 @@ def test_issuing_a_new_join_command_revokes_the_previous_credential(
 ) -> None:
     workspace_id = _workspace_id(isolated_services)
     isolated_services.compute.create_pool(
-        "rotated-bootstrap",
+        UnitName("rotated-bootstrap"),
         provider="agent",
         workspace=workspace_id,
     )

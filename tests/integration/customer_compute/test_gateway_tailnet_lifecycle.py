@@ -50,6 +50,7 @@ from shared.compute_enrollment import (
     PreflightSeverity,
     TailnetEnrollmentPhase,
 )
+from shared.compute_policy import UnitName
 from shared.errors import ConflictError, InvalidInputError, UpstreamUnavailableError
 from shared.identity import TokenKind, WorkspaceStatus
 from shared.routing import BackendRouteTransport
@@ -180,7 +181,7 @@ def _enroll(
     if workspace_id is None:
         with services.context.database.session() as session:
             workspace_id = services.context.default_workspace_id(session)
-    services.compute.create_pool(pool_name, provider="agent", workspace=workspace_id)
+    services.compute.create_pool(UnitName(pool_name), provider="agent", workspace=workspace_id)
     bootstrap = gateway.pool_state_coordinator.create_pool_join_token(
         pool_name,
         workspace_id=workspace_id,
@@ -318,7 +319,7 @@ def test_resource_pool_delete_cannot_delete_another_workspace_pool(
     control_plane.upsert_workspace("default")
     foreign = control_plane.upsert_workspace("foreign-pool-owner")
     isolated_services.compute.create_pool(
-        "foreign-pool",
+        UnitName("foreign-pool"),
         provider="agent",
         workspace=foreign.id,
     )
