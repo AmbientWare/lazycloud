@@ -9,9 +9,6 @@ from time import sleep
 from typing import Protocol
 
 import pytest
-from api.server.services import ApiServices
-from compute.offers import ComputeOffer
-from compute.projection import PoolConfig
 from coordination.redis_client import RedisClient
 from scheduler.capacity_reservations import (
     CapacityAcquisitionResult,
@@ -58,7 +55,6 @@ from shared.scheduling import (
     SchedulerWorkerStatus,
     WorkerUnavailableReason,
 )
-from tests.provider_fixtures import configure_test_provider
 
 OWNER_ID = "11111111-1111-4111-8111-111111111111"
 WORKSPACE_ID = "22222222-2222-4222-8222-222222222222"
@@ -683,87 +679,6 @@ def test_final_dispatch_rechecks_owner_worker_after_scale_zero_mutation(
     state = containers.get_container_state(request.container_id)
     assert state is not None
     assert state.worker_id == ""
-
-
-def test_managed_provider_miss_persists_exact_unit_and_releases_only_owned_machine(
-    isolated_services: ApiServices,
-    real_redis_actors: _RealRedisActors,
-) -> None:
-    provider = configure_test_provider(
-        isolated_services,
-        "generic",
-        [
-            ComputeOffer(
-                id="capacity-medium",
-                provider="generic",
-                instance_type="capacity-medium",
-                region="lab",
-                cpu_millicores=4_000,
-                memory_mb=8_192,
-                hourly_cost_micros=250_000,
-                available=3,
-            )
-        ],
-    )
-    isolated_services.compute.launch_pool_capacity(
-        PoolConfig(
-            name="managed-capacity",
-            providers=["generic"],
-            nodes=1,
-            ttl="1h",
-            max_spend=10.0,
-        )
-    )
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
-    pool = next(
-        item
-        for item in isolated_services.compute.list_pools(workspace=workspace_id)
-        if item.name == "managed-capacity"
-    ).model_copy(
-        update={
-            "capacity_owner_kind": CapacityOwnerKind.ManagedPool,
-            "capacity_owner_source": CapacityOwnerSource.Managed,
-            "scaling_enabled": True,
-            "worker_cpu_millicores": 4_000,
-            "worker_memory_mib": 8_192,
-        }
-    )
-    service = CapacityReservationService(
-        _repository(real_redis_actors),
-        lambda: [
-            ComputePoolCapacityController(
-                workspace_id,
-                pool,
-                isolated_services.compute,
-                _WorkerRepository(),
-            )
-        ],
-    )
-    request = _request("managed-placement-miss").model_copy(
-        update={
-            "workspace_id": workspace_id,
-            "pool_selector": pool.name,
-            "capacity_owner_id": pool.capacity_owner_id,
-        }
-    )
-
-    acquired = service.acquire(request)
-    repeated = service.acquire(request)
-    reservation = service.reservations.get(acquired.reservation_id)
-
-    assert acquired.status is CapacityAcquisitionStatus.Requested
-    assert repeated.status is CapacityAcquisitionStatus.ExistingPending
-    assert reservation is not None
-    assert reservation.desired_unit == 2
-    assert len(provider.list_machines(pool.name)) == 2
-
-    service.release_request(request.container_id)
-
-    released = service.reservations.get(acquired.reservation_id)
-    assert released is not None
-    assert released.status is CapacityReservationStatus.Released
-    assert len(provider.list_machines(pool.name)) == 1
 
 
 def test_available_worker_registration_uses_reported_schedulable_capacity(

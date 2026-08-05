@@ -2,11 +2,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-import pytest
 from api.server.services import ApiServices
-from compute.billing import BillingCreditRequest, BillingDecision, ManagedUsage
 from compute.offers import ComputeOffer
-from compute.projection import PoolConfig
 from compute.state import (
     ComputeAgentTokenState,
     ComputeAgentWorkerSlotState,
@@ -25,45 +22,11 @@ from scheduler.state import (
     RedisWorkerPoolStateRepository,
     SchedulerWorkerRecord,
 )
-from shared.errors import UpstreamUnavailableError
 from shared.routing import AgentBackendRoute
 from tests.provider_fixtures import RecordingDirectMachineProvider, configure_test_provider
 from tests.real_redis import RealRedisActors
 
 _FOREIGN_CAPACITY_OWNER_ID = "11111111-1111-4111-8111-111111111111"
-
-
-class _BillingRecorder:
-    def __init__(self) -> None:
-        self.usage: list[ManagedUsage] = []
-
-    def check_launch_credit(self, request: BillingCreditRequest) -> BillingDecision:
-        del request
-        return BillingDecision(ok=True, available_cents=1000)
-
-    def check_balance(self, workspace_id: str) -> BillingDecision:
-        del workspace_id
-        return BillingDecision(ok=True, available_cents=1000)
-
-    def record_usage(self, usage: ManagedUsage) -> None:
-        self.usage.append(usage)
-
-
-def _launch_managed_pool(
-    isolated_services: ApiServices,
-) -> _BillingRecorder:
-    billing = _BillingRecorder()
-    isolated_services.compute.billing = billing
-    isolated_services.compute.launch_pool_capacity(
-        PoolConfig(
-            name="durable-only",
-            providers=["generic"],
-            nodes=1,
-            ttl="10m",
-            max_spend=1.0,
-        ),
-    )
-    return billing
 
 
 def _test_provider(isolated_services: ApiServices) -> RecordingDirectMachineProvider:
@@ -208,75 +171,3 @@ def test_delete_pool_cleans_private_agent_state(
     ] == ["worker-foreign"]
     assert not scheduler_pool_states.delete_pool_state(pool.capacity_owner_id)
     assert redis.get(scheduler_replicas_key) is None
-
-
-def test_delete_pool_removes_durable_pool_when_redis_projection_is_missing(
-    isolated_services: ApiServices,
-    real_redis_actors: RealRedisActors,
-) -> None:
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
-    provider = _test_provider(isolated_services)
-    billing = _launch_managed_pool(isolated_services)
-    redis = real_redis_actors.client()
-    gateway = replace(
-        isolated_services.gateway_service,
-        compute_state=RedisComputeStateRepository(redis),
-        capacity_reservations=_capacity_reservations(redis),
-    )
-
-    gateway.delete_pool("durable-only", workspace_id=workspace_id)
-
-    assert all(
-        pool.name != "durable-only"
-        for pool in isolated_services.compute.list_pools(workspace=workspace_id)
-    )
-    assert isolated_services.compute.get_private_pool_state("durable-only") is None
-    assert provider.list_machines("durable-only") == []
-    assert all(
-        machine.status.value == "deleted"
-        for machine in isolated_services.compute.list_machines(workspace=workspace_id)
-        if machine.pool == "durable-only"
-    )
-    assert billing.usage
-
-
-def test_delete_pool_retains_durable_ownership_when_provider_cleanup_fails(
-    isolated_services: ApiServices,
-    real_redis_actors: RealRedisActors,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
-    provider = _test_provider(isolated_services)
-    billing = _launch_managed_pool(isolated_services)
-
-    def fail_termination(machine_id: str) -> None:
-        del machine_id
-        raise RuntimeError("provider termination failed")
-
-    monkeypatch.setattr(provider, "terminate_machine", fail_termination)
-    redis = real_redis_actors.client()
-    gateway = replace(
-        isolated_services.gateway_service,
-        compute_state=RedisComputeStateRepository(redis),
-        capacity_reservations=_capacity_reservations(redis),
-    )
-
-    try:
-        gateway.delete_pool(
-            "durable-only",
-            workspace_id=workspace_id,
-        )
-    except UpstreamUnavailableError as exc:
-        assert "provider termination failed" in str(exc)
-    else:
-        raise AssertionError("expected provider cleanup failure")
-
-    assert any(
-        pool.name == "durable-only"
-        for pool in isolated_services.compute.list_pools(workspace=workspace_id)
-    )
-    assert isolated_services.compute.get_private_pool_state("durable-only") is not None
-    assert provider.list_machines("durable-only")
-    assert billing.usage

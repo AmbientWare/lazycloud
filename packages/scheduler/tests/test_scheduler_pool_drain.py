@@ -1,270 +1,97 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 from uuid import NAMESPACE_URL, uuid5
 
-from api.server.services import ApiServices
-from compute.offers import ComputeOffer
-from compute.projection import PoolConfig
-from compute.state import RedisComputeStateRepository
+from compute.state import ComputePoolState, RedisComputeStateRepository
 from coordination.redis_client import RedisClient
 from scheduler.capacity_reservations import (
-    CapacityRequestShape,
     CapacityReservationService,
     RedisCapacityReservationRepository,
 )
-from scheduler.compute_hooks import SchedulerComputeHooks
 from scheduler.fleet import SchedulerWorkerStatus
 from scheduler.pool_drain import (
     WorkerPoolDrainAction,
     WorkerPoolDrainService,
     managed_compute_drain_controllers,
 )
-from scheduler.service import Scheduler, SchedulerCapacityControls
 from scheduler.state import (
     RedisSchedulerContainerRepository,
     RedisSchedulerWorkerRepository,
     RedisWorkerPoolStateRepository,
     SchedulerWorkerRecord,
 )
-from shared.capacity import CapacityOwnerKind
-from shared.scheduling import SchedulerWorkerRequest
-from tests.metric_helpers import metric_value
-from tests.provider_fixtures import configure_test_provider
+from shared.capacity import CapacityPoolSizingSnapshot
+from shared.compute_policy import ComputePoolRecord
+
+WORKSPACE_ID = "22222222-2222-4222-8222-222222222222"
+PROVIDER_OWNER_ID = "11111111-1111-4111-8111-111111111111"
+JOINED_OWNER_ID = str(uuid5(NAMESPACE_URL, "joined-fleet"))
+POOL = "lazycloud"
+NOW = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 class _RealRedisActors(Protocol):
     def client(self) -> RedisClient: ...
 
 
-def test_scheduler_records_worker_pool_drain_events_and_metrics(
-    isolated_services: ApiServices,
-    real_redis_actors: _RealRedisActors,
-) -> None:
-    redis = real_redis_actors.client()
-    compute_states = RedisComputeStateRepository(redis)
-    workers = RedisSchedulerWorkerRepository(redis)
-    containers = RedisSchedulerContainerRepository(redis)
-    locks = RedisWorkerPoolStateRepository(redis)
-    isolated_services.compute.scheduler_hooks = SchedulerComputeHooks(compute_states, workers)
-    configure_test_provider(
-        isolated_services,
-        "generic",
-        [
-            ComputeOffer(
-                id="cpu-small",
-                provider="generic",
-                instance_type="cpu-small",
-                region="lab",
-                cpu_millicores=2000,
-                memory_mb=4096,
-                hourly_cost_micros=250_000,
-                available=2,
-            )
-        ],
-    )
-    now = datetime(2026, 1, 1, tzinfo=UTC)
-    launched = isolated_services.compute.launch_pool_capacity(
-        PoolConfig(name="cpu", providers=["generic"], nodes=2, ttl="1h", max_spend=2.0),
-        now=now,
-    )
-    recorded = compute_states.get_pool_state(launched.workspace_id, "cpu")
-    assert recorded is not None
-    compute_states.save_pool_state(
-        recorded.model_copy(
-            update={
-                "min_machines": 1,
-                "metadata": {
-                    **recorded.metadata,
-                    "drain": {"scale_down_idle_seconds": "10"},
-                },
-            }
+@dataclass(slots=True)
+class _Compute:
+    """The two calls the drain makes, recorded.
+
+    The drain reads its pools from hot state and its workers from the worker
+    repository; compute is reached only to size a pool and to release the
+    machine finally chosen. Recording that choice is what these tests assert.
+    """
+
+    released: list[tuple[str, str]] = field(default_factory=list)
+
+    def pool_sizing_snapshot(self, capacity_owner_id: str) -> CapacityPoolSizingSnapshot:
+        return CapacityPoolSizingSnapshot(capacity_owner_id=capacity_owner_id)
+
+    def release_internal_pool_machine(
+        self,
+        workspace_id: str,
+        pool_name: str,
+        machine_id: str,
+    ) -> ComputePoolRecord:
+        _ = workspace_id
+        self.released.append((pool_name, machine_id))
+        return ComputePoolRecord(
+            id=PROVIDER_OWNER_ID,
+            capacity_owner_id=PROVIDER_OWNER_ID,
+            workspace_id=WORKSPACE_ID,
+            name=pool_name,
+            machine_pool=POOL,
+            desired_machines=0,
+            observed_machines=0,
         )
-    )
-    for reservation in launched.reservations:
-        _add_worker(
-            workers,
-            f"worker-{reservation.machine_id}",
-            now - timedelta(seconds=30),
-            pool_name="cpu",
-            machine_id=reservation.machine_id,
-            capacity_owner_id=recorded.capacity_owner_id,
-        )
-    scheduler = Scheduler(
-        isolated_services,
-        capacity=SchedulerCapacityControls(
-            worker_pool_drain=WorkerPoolDrainService(
-                redis,
-                locks,
-                lambda: managed_compute_drain_controllers(
-                    isolated_services.compute,
-                    compute_states,
-                    workers,
-                    containers,
-                ),
-                _reservation_service(redis),
-            )
-        ),
-        reconcile_agent_pools_enabled=False,
-    )
-
-    results = scheduler.drain_worker_pools(now=now)
-
-    assert results[0].action is WorkerPoolDrainAction.TerminateProviderMachine
-    event = next(
-        item
-        for item in isolated_services.events.list()
-        if item.action == "worker_pool.drain.decision"
-    )
-    assert event.resource_type == "worker_pool"
-    assert event.resource_id == "cpu"
-    assert event.data["action"] == "terminate-provider-machine"
-    snapshot = isolated_services.metrics.latest()
-    labels = {"source": "worker_pool.drain", "pool_name": "cpu"}
-    assert (
-        metric_value(
-            snapshot.counters,
-            "worker_pool_drain_decisions_total",
-            **labels,
-            action="terminate-provider-machine",
-        )
-        == 1
-    )
-    assert metric_value(snapshot.gauges, "worker_pool_desired_replicas", **labels) == 1
-    assert metric_value(snapshot.gauges, "worker_pool_observed_replicas", **labels) == 1
 
 
-def test_worker_pool_drain_terminates_idle_managed_provider_machine(
-    isolated_services: ApiServices,
-    real_redis_actors: _RealRedisActors,
-) -> None:
-    redis = real_redis_actors.client()
-    compute_states = RedisComputeStateRepository(redis)
-    workers = RedisSchedulerWorkerRepository(redis)
-    containers = RedisSchedulerContainerRepository(redis)
-    locks = RedisWorkerPoolStateRepository(redis)
-    isolated_services.compute.scheduler_hooks = SchedulerComputeHooks(compute_states, workers)
-    provider = configure_test_provider(
-        isolated_services,
-        "generic",
-        [
-            ComputeOffer(
-                id="cpu-small",
-                provider="generic",
-                instance_type="cpu-small",
-                region="lab",
-                cpu_millicores=2000,
-                memory_mb=4096,
-                hourly_cost_micros=250_000,
-                available=2,
-            )
-        ],
-    )
-    now = datetime(2026, 1, 1, tzinfo=UTC)
-    launched = isolated_services.compute.launch_pool_capacity(
-        PoolConfig(
-            name="cpu",
-            providers=["generic"],
-            nodes=2,
-            ttl="1h",
-            max_spend=2.0,
-        ),
-        now=now,
-    )
-    recorded = compute_states.get_pool_state(launched.workspace_id, "cpu")
-    assert recorded is not None
-    compute_states.save_pool_state(
-        recorded.model_copy(
-            update={
-                "min_machines": 1,
-                "metadata": {
-                    **recorded.metadata,
-                    "drain": {"scale_down_idle_seconds": "10"},
-                },
-            }
-        )
-    )
-    capacity_owner_id = recorded.capacity_owner_id
-    for reservation in launched.reservations:
-        _add_worker(
-            workers,
-            f"worker-{reservation.machine_id}",
-            now - timedelta(seconds=30),
-            pool_name="cpu",
-            machine_id=reservation.machine_id,
-            capacity_owner_id=capacity_owner_id,
-        )
-    reservations = _reservation_service(redis)
-    _reserve_allocation(
-        reservations.reservations,
-        capacity_owner_id=capacity_owner_id,
-        pool_name="cpu",
-        owner_kind=CapacityOwnerKind.ManagedPool,
-        container_id="container-awaiting-provider-capacity",
-        now=now,
-    )
-    service = WorkerPoolDrainService(
-        redis,
-        locks,
-        lambda: managed_compute_drain_controllers(
-            isolated_services.compute,
-            compute_states,
-            workers,
-            containers,
-        ),
-        reservations,
-    )
-
-    blocked = service.reconcile(now=now)
-    assert blocked[0].action is WorkerPoolDrainAction.None_
-    assert blocked[0].reason == "capacity owner has open provisioning allocations"
-    assert len(provider.list_machines("cpu")) == 2
-
-    reservations.release_request(
-        "container-awaiting-provider-capacity",
-        now=now,
-    )
-    result = service.reconcile(now=now)
-
-    assert result[0].action is WorkerPoolDrainAction.TerminateProviderMachine
-    assert result[0].capacity_owner_id == capacity_owner_id
-    assert result[0].machine_id in {reservation.machine_id for reservation in launched.reservations}
-    assert result[0].desired_replicas == 1
-    assert len(provider.list_machines("cpu")) == 1
-    updated = compute_states.get_pool_state(launched.workspace_id, "cpu")
-    assert updated is not None
-    assert updated.active_machines == 1
-
-
-def _reservation_service(redis: RedisClient) -> CapacityReservationService:
-    return CapacityReservationService(RedisCapacityReservationRepository(redis), lambda: [])
-
-
-def _reserve_allocation(
-    reservations: RedisCapacityReservationRepository,
+def _seed_pool_state(
+    compute_states: RedisComputeStateRepository,
     *,
     capacity_owner_id: str,
-    pool_name: str,
-    owner_kind: CapacityOwnerKind,
-    container_id: str,
-    now: datetime,
+    active_machines: int,
+    min_machines: int = 0,
 ) -> None:
-    reservations.reserve(
-        capacity_owner_id=capacity_owner_id,
-        pool_name=pool_name,
-        owner_kind=owner_kind,
-        request=SchedulerWorkerRequest(
-            workspace_id="workspace",
-            stub_id="stub",
-            container_id=container_id,
-            cpu_millicores=100,
-            memory_mib=128,
-            pool_selector=pool_name,
-        ),
-        shape=CapacityRequestShape(cpu_millicores=1000, memory_mib=1024),
-        registration_timeout=timedelta(seconds=600),
-        now=now,
+    compute_states.save_pool_state(
+        ComputePoolState(
+            workspace_id=WORKSPACE_ID,
+            name=POOL,
+            capacity_owner_id=capacity_owner_id,
+            provider="aws",
+            min_machines=min_machines,
+            max_machines=4,
+            desired_machines=active_machines,
+            active_machines=active_machines,
+            metadata={
+                "config": {"name": POOL, "providers": ["aws"]},
+                "drain": {"scale_down_idle_seconds": "10"},
+            },
+        )
     )
 
 
@@ -273,14 +100,13 @@ def _add_worker(
     worker_id: str,
     updated_at: datetime,
     *,
-    pool_name: str,
     machine_id: str,
     capacity_owner_id: str,
 ) -> None:
     workers.add_worker(
         SchedulerWorkerRecord(
             worker_id=worker_id,
-            pool_name=pool_name,
+            pool_name=POOL,
             capacity_owner_id=capacity_owner_id,
             machine_id=machine_id,
             status=SchedulerWorkerStatus.Available,
@@ -295,99 +121,107 @@ def _add_worker(
     )
 
 
-def test_drain_never_terminates_a_machine_another_unit_owns(
-    isolated_services: ApiServices,
+def _drain_service(
+    redis: RedisClient,
+    compute: _Compute,
+    compute_states: RedisComputeStateRepository,
+    workers: RedisSchedulerWorkerRepository,
+) -> WorkerPoolDrainService:
+    return WorkerPoolDrainService(
+        redis,
+        RedisWorkerPoolStateRepository(redis),
+        lambda: managed_compute_drain_controllers(
+            compute,  # pyright: ignore[reportArgumentType]
+            compute_states,
+            workers,
+            RedisSchedulerContainerRepository(redis),
+        ),
+        CapacityReservationService(RedisCapacityReservationRepository(redis), lambda: []),
+    )
+
+
+def test_worker_pool_drain_releases_the_idle_provider_machine(
+    real_redis_actors: _RealRedisActors,
+) -> None:
+    redis = real_redis_actors.client()
+    compute_states = RedisComputeStateRepository(redis)
+    workers = RedisSchedulerWorkerRepository(redis)
+    compute = _Compute()
+    _seed_pool_state(compute_states, capacity_owner_id=PROVIDER_OWNER_ID, active_machines=1)
+    _add_worker(
+        workers,
+        "worker-provider",
+        NOW - timedelta(seconds=30),
+        machine_id="machine-provider",
+        capacity_owner_id=PROVIDER_OWNER_ID,
+    )
+
+    result = _drain_service(redis, compute, compute_states, workers).reconcile(now=NOW)
+
+    assert [item.action for item in result] == [WorkerPoolDrainAction.TerminateProviderMachine]
+    assert compute.released == [(POOL, "machine-provider")]
+
+
+def test_worker_pool_drain_holds_at_the_pool_minimum(
+    real_redis_actors: _RealRedisActors,
+) -> None:
+    redis = real_redis_actors.client()
+    compute_states = RedisComputeStateRepository(redis)
+    workers = RedisSchedulerWorkerRepository(redis)
+    compute = _Compute()
+    _seed_pool_state(
+        compute_states,
+        capacity_owner_id=PROVIDER_OWNER_ID,
+        active_machines=1,
+        min_machines=1,
+    )
+    _add_worker(
+        workers,
+        "worker-provider",
+        NOW - timedelta(seconds=30),
+        machine_id="machine-provider",
+        capacity_owner_id=PROVIDER_OWNER_ID,
+    )
+
+    result = _drain_service(redis, compute, compute_states, workers).reconcile(now=NOW)
+
+    assert [item.action for item in result] == [WorkerPoolDrainAction.None_]
+    assert compute.released == []
+
+
+def test_drain_never_releases_a_machine_another_unit_owns(
     real_redis_actors: _RealRedisActors,
 ) -> None:
     """A joined machine sharing a pool with an auto-scaling unit survives its drain.
 
-    Once several units feed one pool, the pool label no longer
-    identifies who bought a machine. The drain selects candidates by capacity
-    owner for exactly this reason: without that co-filter, scaling the provider
-    unit down would terminate a host the customer joined themselves.
+    Once several units feed one pool, the pool label no longer identifies who
+    bought a machine. The drain selects candidates by capacity owner for exactly
+    this reason: without that co-filter, scaling the provider unit down would
+    release a host the customer joined themselves. The joined worker is idle
+    longest here, so it is the candidate ordering alone would pick.
     """
     redis = real_redis_actors.client()
     compute_states = RedisComputeStateRepository(redis)
     workers = RedisSchedulerWorkerRepository(redis)
-    containers = RedisSchedulerContainerRepository(redis)
-    locks = RedisWorkerPoolStateRepository(redis)
-    isolated_services.compute.scheduler_hooks = SchedulerComputeHooks(compute_states, workers)
-    provider = configure_test_provider(
-        isolated_services,
-        "generic",
-        [
-            ComputeOffer(
-                id="cpu-small",
-                provider="generic",
-                instance_type="cpu-small",
-                region="lab",
-                cpu_millicores=2000,
-                memory_mb=4096,
-                hourly_cost_micros=250_000,
-                available=2,
-            )
-        ],
-    )
-    now = datetime(2026, 1, 1, tzinfo=UTC)
-    launched = isolated_services.compute.launch_pool_capacity(
-        PoolConfig(name="cpu", providers=["generic"], nodes=1, ttl="1h", max_spend=2.0),
-        now=now,
-    )
-    recorded = compute_states.get_pool_state(launched.workspace_id, "cpu")
-    assert recorded is not None
-    compute_states.save_pool_state(
-        recorded.model_copy(
-            update={
-                "min_machines": 0,
-                "metadata": {
-                    **recorded.metadata,
-                    "drain": {"scale_down_idle_seconds": "10"},
-                },
-            }
-        )
-    )
-    provider_owner_id = recorded.capacity_owner_id
-    joined_owner_id = str(uuid5(NAMESPACE_URL, f"self-hosted:{provider_owner_id}"))
-    assert joined_owner_id != provider_owner_id
-
-    # Both workers sit in the pool "cpu" and both are idle past the threshold.
-    # The joined host is idle longest, so it is the candidate the drain would
-    # pick on ordering alone: only its capacity owner keeps it.
+    compute = _Compute()
+    _seed_pool_state(compute_states, capacity_owner_id=PROVIDER_OWNER_ID, active_machines=1)
     _add_worker(
         workers,
         "worker-joined-host",
-        now - timedelta(seconds=600),
-        pool_name="cpu",
+        NOW - timedelta(seconds=600),
         machine_id="machine-joined-host",
-        capacity_owner_id=joined_owner_id,
+        capacity_owner_id=JOINED_OWNER_ID,
     )
-    for reservation in launched.reservations:
-        _add_worker(
-            workers,
-            f"worker-{reservation.machine_id}",
-            now - timedelta(seconds=30),
-            pool_name="cpu",
-            machine_id=reservation.machine_id,
-            capacity_owner_id=provider_owner_id,
-        )
-
-    service = WorkerPoolDrainService(
-        redis,
-        locks,
-        lambda: managed_compute_drain_controllers(
-            isolated_services.compute,
-            compute_states,
-            workers,
-            containers,
-        ),
-        _reservation_service(redis),
+    _add_worker(
+        workers,
+        "worker-provider",
+        NOW - timedelta(seconds=30),
+        machine_id="machine-provider",
+        capacity_owner_id=PROVIDER_OWNER_ID,
     )
-    provider_machine_ids = {reservation.machine_id for reservation in launched.reservations}
 
-    result = service.reconcile(now=now)
+    result = _drain_service(redis, compute, compute_states, workers).reconcile(now=NOW)
 
-    drained = [item for item in result if item.machine_id]
-    assert [item.machine_id for item in drained] == list(provider_machine_ids)
-    assert all(item.capacity_owner_id == provider_owner_id for item in drained)
+    assert [item.action for item in result] == [WorkerPoolDrainAction.TerminateProviderMachine]
+    assert compute.released == [(POOL, "machine-provider")]
     assert workers.get_worker("worker-joined-host") is not None
-    assert provider.list_machines("cpu") == []

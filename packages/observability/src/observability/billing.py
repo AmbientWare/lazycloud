@@ -324,6 +324,8 @@ def configured_usage_price_catalog(
 
 
 _DERIVED_METRICS = COMPUTE_PRICE_METRICS
+
+
 class CustomerCloudManagementFeeRates(ContractModel):
     """What LazyCloud charges to run a workload on the customer's own account.
 
