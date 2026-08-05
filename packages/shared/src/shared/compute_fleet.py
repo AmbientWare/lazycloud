@@ -27,6 +27,12 @@ class LeaseStatus(StringEnum):
 class Machine(ContractModel):
     id: str
     pool: MachinePool = MachinePool("default")
+    capacity_owner_id: str = ""
+    """Unit that bought this machine, from the join credential it enrolled with.
+
+    Stored rather than derived: the pool names the group the machine serves, and
+    several units share one, so it can never answer which unit owns it.
+    """
     provider: str = "local"
     status: ResourceStatus = ResourceStatus.Created
     cpu: float | None = None

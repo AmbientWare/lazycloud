@@ -1252,16 +1252,11 @@ class GatewayControlService:
         cursor: str = "",
     ) -> UnitMachineListResponse:
         unit = self.unit_state_coordinator.unit_by_id(unit_id, workspace_id=workspace_id)
-        # A unit owns the machines its own join credentials enrolled. The pool
-        # label cannot identify them: several units share one label.
-        with self.services.context.database.session() as session:
-            owned = {
-                enrollment.machine_id
-                for enrollment in ComputeMachineEnrollmentRepository(session).list_for_unit(
-                    workspace_id,
-                    unit.capacity_owner_id,
-                )
-            }
+        owned = {
+            machine.id
+            for machine in self.services.compute.list_machines(workspace=workspace_id)
+            if machine.capacity_owner_id == unit.capacity_owner_id
+        }
         machines = sorted(
             (
                 item
@@ -1659,6 +1654,7 @@ class GatewayControlService:
                     Machine(
                         id=agent_state.machine_id,
                         pool=agent_state.pool,
+                        capacity_owner_id=agent_state.capacity_owner_id,
                         provider="agent",
                         status=(
                             ResourceStatus.Created
@@ -2625,6 +2621,9 @@ class GatewayControlService:
                 Machine(
                     id=machine.id,
                     pool=machine.pool,
+                    # Rebuilt field by field, so anything omitted here is reset
+                    # on every heartbeat.
+                    capacity_owner_id=state.capacity_owner_id,
                     provider=machine.provider,
                     status=machine_status,
                     cpu=machine.cpu,

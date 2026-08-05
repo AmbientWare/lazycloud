@@ -18,7 +18,6 @@ from compute.state import (
 from database.context import ServiceContext
 from database.repositories.compute import (
     ComputeJoinCredentialRepository,
-    ComputeMachineEnrollmentRepository,
 )
 from foundation.ids import try_uuid
 from pydantic import JsonValue, TypeAdapter
@@ -148,18 +147,18 @@ class GatewayUnitStateCoordinator:
         return private_pool_from_compute_state(state)
 
     def _unit_machine_count(self, unit: ComputeUnitRecord, *, workspace_id: str) -> int:
-        """How many machines this unit itself enrolled.
+        """How many machines this unit itself owns.
 
         Counting the unit's pool would count every unit feeding that pool, which
         would size one unit's capacity from another's machines.
         """
-        with self.context.database.session() as session:
-            return len(
-                ComputeMachineEnrollmentRepository(session).list_for_unit(
-                    workspace_id,
-                    unit.capacity_owner_id,
-                )
-            )
+        return len(
+            [
+                machine
+                for machine in self.compute.list_machines(workspace=workspace_id)
+                if machine.capacity_owner_id == unit.capacity_owner_id
+            ]
+        )
 
     def private_unit_for_join_token(
         self,

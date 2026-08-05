@@ -16,7 +16,6 @@ from database.repositories.compute import (
     ComputeCapacityOperationRecord,
     ComputeCapacityOperationRepository,
     ComputeJoinCredentialRecord,
-    ComputeMachineEnrollmentRepository,
     ComputeProviderInstanceRecord,
     ComputeProviderInstanceRepository,
     ComputeUnitRepository,
@@ -1144,9 +1143,9 @@ class ComputeService:
                     )
             if not termination_errors:
                 machine_repository = MachineRepository(session)
-                owned = _unit_machine_ids(session, workspace_id, compute_pool)
+                owner = compute_pool.capacity_owner_id if compute_pool is not None else ""
                 for machine in machine_repository.records.list(workspace_id=workspace_id):
-                    if machine.id not in owned or machine.status is ResourceStatus.Deleted:
+                    if machine.capacity_owner_id != owner or machine.status is ResourceStatus.Deleted:
                         continue
                     machine_repository.upsert(
                         machine.model_copy(update={"status": ResourceStatus.Deleted}),
@@ -1295,9 +1294,9 @@ class ComputeService:
                     workspace_id=workspace_id,
                 )
             machine_repository = MachineRepository(session)
-            owned = _unit_machine_ids(session, workspace_id, compute_pool)
+            owner = compute_pool.capacity_owner_id if compute_pool is not None else ""
             for machine in machine_repository.records.list(workspace_id=workspace_id):
-                if machine.id not in owned or machine.status is ResourceStatus.Deleted:
+                if machine.capacity_owner_id != owner or machine.status is ResourceStatus.Deleted:
                     continue
                 machine_repository.mark_deleted_for_workspace_deletion(
                     machine.id,
@@ -2594,27 +2593,6 @@ class ComputeService:
                     reason="provider instance storage destroyed",
                     now=now,
                 )
-
-
-def _unit_machine_ids(
-    session: DatabaseSession,
-    workspace_id: str,
-    unit: ComputeUnitRecord | None,
-) -> set[str]:
-    """Machine ids this unit's own join credentials enrolled.
-
-    The pool label cannot select them: several units feed one pool, so filtering
-    by it would reach another unit's machines while missing none of its own.
-    """
-    if unit is None:
-        return set()
-    return {
-        enrollment.machine_id
-        for enrollment in ComputeMachineEnrollmentRepository(session).list_for_unit(
-            workspace_id,
-            unit.capacity_owner_id,
-        )
-    }
 
 
 def _pool_labels_from_config(config: PoolConfig) -> dict[str, str]:

@@ -46,6 +46,7 @@ class MachineTable(IdPayloadTable, DatabaseBase):
     __table_args__: tuple[SchemaItem, ...] = (
         Index("ix_machines_workspace_created", "workspace_id", "created_at"),
         Index("ix_machines_pool_status", "pool", "status"),
+        Index("ix_machines_workspace_owner", "workspace_id", "capacity_owner_id"),
         Index("ix_machines_provider_status", "provider", "status"),
     )
 
@@ -55,6 +56,7 @@ class MachineTable(IdPayloadTable, DatabaseBase):
         nullable=True,
     )
     pool: Mapped[str] = mapped_column(String(240), nullable=False, default="default")
+    capacity_owner_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     provider: Mapped[str] = mapped_column(String(120), nullable=False, default="local")
     status: Mapped[str] = mapped_column(String(80), nullable=False)
     address: Mapped[str | None] = mapped_column(String(512), nullable=True)
