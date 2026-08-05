@@ -27,7 +27,6 @@ members = [
     "operations",
     "provider-aws",
     "provider-clients",
-    "provider-fake",
     "runner",
     "scheduler",
     "scheduler-app",
@@ -1534,25 +1533,6 @@ requires-dist = [
 ]
 
 [[package]]
-name = "provider-fake"
-version = "0.1.0"
-source = { editable = "packages/providers/fake" }
-dependencies = [
-    { name = "botocore" },
-    { name = "compute" },
-    { name = "lazycloud-shared" },
-    { name = "pydantic" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "botocore", specifier = ">=1.35,<2" },
-    { name = "compute", editable = "packages/compute" },
-    { name = "lazycloud-shared", editable = "packages/shared" },
-    { name = "pydantic", specifier = ">=2.8,<3" },
-]
-
-[[package]]
 name = "psycopg"
 version = "3.3.4"
 source = { registry = "https://pypi.org/simple" }
@@ -2352,7 +2332,6 @@ dev = [
     { name = "operations" },
     { name = "provider-aws" },
     { name = "provider-clients" },
-    { name = "provider-fake" },
     { name = "pytest" },
     { name = "ruff" },
     { name = "runner" },
@@ -2388,7 +2367,6 @@ workspace = [
     { name = "operations" },
     { name = "provider-aws" },
     { name = "provider-clients" },
-    { name = "provider-fake" },
     { name = "runner" },
     { name = "scheduler" },
     { name = "scheduler-app" },
@@ -2430,7 +2408,6 @@ dev = [
     { name = "operations", editable = "packages/operations" },
     { name = "provider-aws", editable = "packages/providers/aws" },
     { name = "provider-clients", editable = "packages/provider-clients" },
-    { name = "provider-fake", editable = "packages/providers/fake" },
     { name = "pytest", specifier = ">=8,<9" },
     { name = "ruff", specifier = ">=0.6" },
     { name = "runner", editable = "packages/runner" },
@@ -2466,7 +2443,6 @@ workspace = [
     { name = "operations", editable = "packages/operations" },
     { name = "provider-aws", editable = "packages/providers/aws" },
     { name = "provider-clients", editable = "packages/provider-clients" },
-    { name = "provider-fake", editable = "packages/providers/fake" },
     { name = "runner", editable = "packages/runner" },
     { name = "scheduler", editable = "packages/scheduler" },
     { name = "scheduler-app", editable = "apps/scheduler" },

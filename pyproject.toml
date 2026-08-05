@@ -37,7 +37,6 @@ workspace = [
     "scheduler-app",
     "worker-bootstrap-app",
     "provider-aws",
-    "provider-fake",
 ]
 dev = [
     { include-group = "workspace" },
@@ -86,7 +85,6 @@ members = [
     "apps/scheduler",
     "apps/worker-bootstrap",
     "packages/providers/aws",
-    "packages/providers/fake",
 ]
 
 [tool.uv.sources]
@@ -121,7 +119,6 @@ worker = { workspace = true }
 worker-repository = { workspace = true }
 worker-bootstrap-app = { workspace = true }
 provider-aws = { workspace = true }
-provider-fake = { workspace = true }
 
 [tool.pytest.ini_options]
 pythonpath = [

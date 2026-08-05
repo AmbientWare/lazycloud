@@ -8,7 +8,6 @@ from agent.binary import AgentBinarySettings
 from compute.aws_connections import AwsAccountConnectionDirectory
 from compute.billing import managed_billing_client
 from compute.policy import WorkspaceComputePolicyService
-from compute.provider_config import ProviderConfigService
 from compute.reclaim import ComputeReclaimPolicy
 from compute.request_placement import ComputeCapacityPlacementService
 from compute.service import ComputeService
@@ -59,7 +58,6 @@ from operations.container_shutdown import (
     DatabaseDurableWorkerAbsence,
 )
 from provider_clients import (
-    configured_compute_provider_registry,
     workspace_compute_provider_resolver,
 )
 from provider_clients.settings import AwsAccountConnectionSettings, AwsCapacitySettings
@@ -219,10 +217,6 @@ class SchedulerAppServices:
         )
         worker_repository = RedisSchedulerWorkerRepository(redis)
         container_repository = RedisSchedulerContainerRepository(redis)
-        provider_service = ProviderConfigService(
-            context,
-            workspace_changes=workspace_changes,
-        )
         billing = managed_billing_client(observability.managed_billing.to_runtime_settings())
         # See the API composition: the resolver exists only where connected AWS is
         # configured, and a half-configured deployment is rejected by settings.
@@ -271,15 +265,6 @@ class SchedulerAppServices:
         compute_policies.worker_state = scheduler_hooks
         compute = ComputeService(
             context,
-            provider_registry=configured_compute_provider_registry(
-                provider_service,
-                gateway_origin=gateway_origin,
-                internal_origin=runtime_callback_origin,
-                presigned_origin=storage.object_store.presigned_endpoint_url or "",
-                tailnet_runtime=network.tailnet_runtime,
-                tailnet_control=network.tailnet_control,
-                backend_route=network.backend_routes,
-            ),
             provider_resolver=provider_resolver,
             pool_bootstrap_factory=pool_bootstrap if provider_resolver is not None else None,
             billing=billing,

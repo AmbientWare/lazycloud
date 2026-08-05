@@ -13,7 +13,6 @@ from compute.agent_control import AgentImageConfig, GatewayEndpointConfig
 from compute.aws_connections import AwsAccountConnectionDirectory, AwsAccountConnectionService
 from compute.billing import managed_billing_client
 from compute.policy import AwsDefaultCapacityBaseline, WorkspaceComputePolicyService
-from compute.provider_config import ProviderConfigService
 from compute.request_placement import ComputeCapacityPlacementService
 from compute.service import ComputeService
 from compute.state import ComputeAgentTokenState, RedisComputeStateRepository
@@ -124,7 +123,6 @@ from provider_clients import (
     AwsProviderNodeIdentityAdapter,
     ProductionRegistryCredentialResolver,
     configured_aws_compute_catalog,
-    configured_compute_provider_registry,
     workspace_compute_provider_resolver,
 )
 from provider_clients.settings import (
@@ -486,7 +484,6 @@ class ApiServiceCore:
     scheduler_pool_states: RedisWorkerPoolStateRepository
     capacity_reservation_repository: RedisCapacityReservationRepository
     scheduler_workloads: SchedulerWorkloadDirectory
-    providers: ProviderConfigService
     images: ImageBuildService
     agents: AgentService
     object_storage: ObjectStorage
@@ -763,10 +760,6 @@ class ApiServices(ApiServiceCore):
                 interval_seconds=volume_metering_config.interval_seconds,
             )
         )
-        provider_service = ProviderConfigService(
-            context,
-            workspace_changes=workspace_changes,
-        )
         aws_connection_directory = AwsAccountConnectionDirectory(context)
         # Connected AWS is an optional deployment shape. When it is unconfigured there is
         # no connection to resolve, and building the resolver would demand the remote
@@ -812,15 +805,6 @@ class ApiServices(ApiServiceCore):
         )
         compute = ComputeService(
             context,
-            provider_registry=configured_compute_provider_registry(
-                provider_service,
-                gateway_origin=gateway_config.public_http_url,
-                internal_origin=gateway_config.runtime_callback_http_url,
-                presigned_origin=object_store_config.presigned_endpoint_url or "",
-                tailnet_runtime=resolved_tailnet_runtime_settings,
-                tailnet_control=resolved_tailnet_control_settings,
-                backend_route=resolved_backend_route_settings,
-            ),
             provider_resolver=provider_resolver,
             pool_bootstrap_factory=pool_bootstrap,
             billing=managed_billing_client(managed_billing_config.to_runtime_settings()),
@@ -1011,7 +995,6 @@ class ApiServices(ApiServiceCore):
             scheduler_pool_states=pool_state_repository,
             capacity_reservation_repository=capacity_reservation_repository,
             scheduler_workloads=scheduler_workloads,
-            providers=provider_service,
             images=images,
             agents=agents,
             object_storage=object_storage_service,
@@ -1328,7 +1311,6 @@ def _compose_api_services(
         scheduler_pool_states=core.scheduler_pool_states,
         capacity_reservation_repository=core.capacity_reservation_repository,
         scheduler_workloads=core.scheduler_workloads,
-        providers=core.providers,
         images=core.images,
         agents=core.agents,
         object_storage=core.object_storage,

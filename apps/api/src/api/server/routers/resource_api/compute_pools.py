@@ -9,8 +9,6 @@ from fastapi import APIRouter, Depends, Query, Response, status
 from gateway.service import GatewayControlService
 from shared.compute_policy import ComputePoolRecord
 from shared.http.compute import (
-    PoolCapacityExtendRequest,
-    PoolCapacityLaunchRequest,
     PoolCapacityResponse,
     PoolCreateRequest,
     PoolJoinCommandRequest,
@@ -19,7 +17,6 @@ from shared.http.compute import (
     PoolJoinTokenResponse,
     PoolListResponse,
     PoolMachineListResponse,
-    PoolOfferListResponse,
     PoolOfferQuery,
     PoolOfferResponse,
     PoolProviderInstanceResponse,
@@ -259,69 +256,6 @@ def delete_pool(
     gateway: GatewayControlService = Depends(gateway_service),
 ) -> None:
     gateway.delete_pool(name, workspace_id=workspace_id)
-
-
-@router.get(
-    "/api/v1/pools/{pool_name}/offers",
-    response_model=PoolOfferListResponse,
-    operation_id="list_pool_offers",
-)
-def list_pool_offers(
-    pool_name: str,
-    _auth: admin_access,
-    workspace_id: Annotated[str, Depends(current_workspace_id)],
-    request: Annotated[PoolOfferQuery, Depends(_pool_query)],
-    services: ApiServices = Depends(current_services),
-) -> PoolOfferListResponse:
-    offers = services.compute.list_pool_offers(
-        _compute_pool_config(pool_name, request),
-        workspace=workspace_id,
-    )
-    return PoolOfferListResponse(data=[_offer_response(item) for item in offers])
-
-
-@router.post(
-    "/api/v1/pools/{pool_name}/capacity",
-    response_model=PoolCapacityResponse,
-    status_code=status.HTTP_201_CREATED,
-    operation_id="launch_pool_capacity",
-)
-def launch_pool_capacity(
-    pool_name: str,
-    request: PoolCapacityLaunchRequest,
-    _auth: admin_access,
-    token: write_token,
-    workspace_id: Annotated[str, Depends(current_workspace_id)],
-    services: ApiServices = Depends(current_services),
-) -> PoolCapacityResponse:
-    state = services.compute.launch_pool_capacity(
-        _compute_pool_config(pool_name, request),
-        workspace=workspace_id,
-        nodes=request.node_count,
-        owner_token_id=token.id,
-    )
-    return _capacity_response(state)
-
-
-@router.patch(
-    "/api/v1/pools/{pool_name}/capacity",
-    response_model=PoolCapacityResponse,
-    operation_id="extend_pool_capacity",
-)
-def extend_pool_capacity(
-    pool_name: str,
-    request: PoolCapacityExtendRequest,
-    _auth: admin_access,
-    workspace_id: Annotated[str, Depends(current_workspace_id)],
-    services: ApiServices = Depends(current_services),
-) -> PoolCapacityResponse:
-    state = services.compute.extend_pool_capacity(
-        pool_name,
-        workspace=workspace_id,
-        ttl=request.ttl,
-        max_spend=request.max_spend,
-    )
-    return _capacity_response(state)
 
 
 @router.post(
