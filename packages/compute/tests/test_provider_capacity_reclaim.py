@@ -507,9 +507,9 @@ def test_direct_capacity_acquisition_recovers_a_lost_provider_response(
     assert alpha.registration_tokens[-1] == alpha.registration_tokens[-2]
     assert alpha.launch_requests[-1].model_dump() == alpha.launch_requests[-2].model_dump()
     with isolated_services.context.database.session() as session:
-        credentials = ComputeJoinCredentialRepository(session).list_for_pool(
+        credentials = ComputeJoinCredentialRepository(session).list_for_unit(
             pool.workspace_id,
-            pool.name,
+            pool.capacity_owner_id,
         )
     capacity_credentials = [
         item for item in credentials if item.machine_id == unavailable.target_machine_id
@@ -565,9 +565,9 @@ def test_repeated_launch_uses_one_aggregate_capacity_request_and_deadline(
         assert pool is not None
         capacity_requests = ComputeCapacityRequestRepository(session).list_for_pool(pool.id)
         instances = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
-        credentials = ComputeJoinCredentialRepository(session).list_for_pool(
+        credentials = ComputeJoinCredentialRepository(session).list_for_unit(
             aggregate.workspace_id,
-            "aggregate-pool",
+            aggregate.capacity_owner_id,
         )
 
     assert len(capacity_requests) == 1
@@ -598,9 +598,9 @@ def test_repeated_launch_uses_one_aggregate_capacity_request_and_deadline(
         owner_token_id="workspace-cli",
     )
     with isolated_services.context.database.session() as session:
-        rotated_credentials = ComputeJoinCredentialRepository(session).list_for_pool(
+        rotated_credentials = ComputeJoinCredentialRepository(session).list_for_unit(
             aggregate.workspace_id,
-            "aggregate-pool",
+            aggregate.capacity_owner_id,
         )
     assert {
         item.status
@@ -708,9 +708,9 @@ def test_capacity_extension_only_moves_the_aggregate_deadline_forward(
     assert set(alpha.terminate_calls) == set(alpha.launch_calls)
     with isolated_services.context.database.session() as session:
         requests = ComputeCapacityRequestRepository(session).list_for_pool(pool.id)
-        credentials = ComputeJoinCredentialRepository(session).list_for_pool(
+        credentials = ComputeJoinCredentialRepository(session).list_for_unit(
             extended.workspace_id,
-            "extend-pool",
+            extended.capacity_owner_id,
         )
     assert [item.status for item in requests] == ["expired"]
     assert {item.status for item in credentials} == {ComputeCredentialStatus.Revoked}
@@ -898,6 +898,7 @@ def test_capacity_reconciliation_repairs_commitment_without_renewing_past_deadli
         ComputeMachineEnrollmentRepository(session).create(
             ComputeMachineEnrollmentCreate(
                 workspace_id=launched.workspace_id,
+                capacity_owner_id=launched.capacity_owner_id,
                 pool_name=launched.name,
                 machine_id=record.machine_id,
                 machine_fingerprint_hash="a" * 64,
@@ -1136,9 +1137,9 @@ def test_failed_launch_compensates_only_the_owning_provider(
     }
     assert all("must-not-persist" not in item.last_error for item in state.reservations)
     with isolated_services.context.database.session() as session:
-        credentials = ComputeJoinCredentialRepository(session).list_for_pool(
+        credentials = ComputeJoinCredentialRepository(session).list_for_unit(
             state.workspace_id,
-            "comp-pool",
+            state.capacity_owner_id,
         )
     assert [item.status for item in credentials].count(ComputeCredentialStatus.Active) == 1
     assert [item.status for item in credentials].count(ComputeCredentialStatus.Revoked) == 2
@@ -1147,9 +1148,9 @@ def test_failed_launch_compensates_only_the_owning_provider(
     assert state is not None
     assert {item.status for item in state.reservations} == {"deleted", "failed"}
     with isolated_services.context.database.session() as session:
-        credentials = ComputeJoinCredentialRepository(session).list_for_pool(
+        credentials = ComputeJoinCredentialRepository(session).list_for_unit(
             state.workspace_id,
-            "comp-pool",
+            state.capacity_owner_id,
         )
     assert {item.status for item in credentials} == {ComputeCredentialStatus.Revoked}
     assert {
@@ -1248,9 +1249,9 @@ def test_post_launch_commit_failure_is_durable_and_fresh_reconciliation_finishes
         )
         assert pool is not None
         [provider_record] = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
-        [credential] = ComputeJoinCredentialRepository(session).list_for_pool(
+        [credential] = ComputeJoinCredentialRepository(session).list_for_unit(
             workspace_id,
-            "commit-failure-pool",
+            pool.capacity_owner_id,
         )
         machine = MachineRepository(session).get_across_workspaces(provider_record.machine_id or "")
         assert machine is not None
@@ -1267,9 +1268,9 @@ def test_post_launch_commit_failure_is_durable_and_fresh_reconciliation_finishes
     assert alpha.remote == {}
     with isolated_services.database.session() as session:
         [cleaned] = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
-        [credential] = ComputeJoinCredentialRepository(session).list_for_pool(
+        [credential] = ComputeJoinCredentialRepository(session).list_for_unit(
             workspace_id,
-            "commit-failure-pool",
+            pool.capacity_owner_id,
         )
     assert cleaned.status == "deleted"
     assert credential.status is ComputeCredentialStatus.Revoked
@@ -1329,9 +1330,9 @@ def test_crash_after_provider_create_is_discovered_bound_and_reclaimed(
     assert alpha.remote == {}
     with isolated_services.database.session() as session:
         [cleaned] = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
-        [credential] = ComputeJoinCredentialRepository(session).list_for_pool(
+        [credential] = ComputeJoinCredentialRepository(session).list_for_unit(
             workspace_id,
-            "crashed-launch-pool",
+            pool.capacity_owner_id,
         )
     assert cleaned.instance_id == "i-alpha-0"
     assert cleaned.status == "deleted"
@@ -1368,9 +1369,9 @@ def test_lost_provider_launch_response_is_discovered_and_reclaimed(
         pool = ComputePoolRepository(session).get_by_name(workspace_id, "lost-response-pool")
         assert pool is not None
         [intent] = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
-        [credential] = ComputeJoinCredentialRepository(session).list_for_pool(
+        [credential] = ComputeJoinCredentialRepository(session).list_for_unit(
             workspace_id,
-            "lost-response-pool",
+            pool.capacity_owner_id,
         )
         machine = MachineRepository(session).get_across_workspaces(intent.machine_id or "")
         assert machine is not None
@@ -1396,9 +1397,9 @@ def test_lost_provider_launch_response_is_discovered_and_reclaimed(
     assert alpha.remote == {}
     with isolated_services.database.session() as session:
         [cleaned] = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
-        [credential] = ComputeJoinCredentialRepository(session).list_for_pool(
+        [credential] = ComputeJoinCredentialRepository(session).list_for_unit(
             workspace_id,
-            "lost-response-pool",
+            pool.capacity_owner_id,
         )
         machine = MachineRepository(session).get_across_workspaces(cleaned.machine_id or "")
         assert machine is not None
@@ -1488,6 +1489,7 @@ def test_never_registered_machine_is_reclaimed_after_the_deadline(
         ComputeMachineEnrollmentRepository(session).create(
             ComputeMachineEnrollmentCreate(
                 workspace_id=state.workspace_id,
+                capacity_owner_id=state.capacity_owner_id,
                 pool_name="reclaim-pool",
                 machine_id=registered_machine_id,
                 machine_fingerprint_hash="a" * 64,
@@ -1513,6 +1515,7 @@ def test_never_registered_machine_is_reclaimed_after_the_deadline(
         ComputeMachineEnrollmentRepository(session).create(
             ComputeMachineEnrollmentCreate(
                 workspace_id=state.workspace_id,
+                capacity_owner_id=state.capacity_owner_id,
                 pool_name="reclaim-pool",
                 machine_id=pending_worker_machine_id,
                 machine_fingerprint_hash="c" * 64,
@@ -1667,6 +1670,7 @@ def test_unreachable_worker_state_keeps_the_machine(
         ComputeMachineEnrollmentRepository(session).create(
             ComputeMachineEnrollmentCreate(
                 workspace_id=state.workspace_id,
+                capacity_owner_id=state.capacity_owner_id,
                 pool_name="reclaim-pool",
                 machine_id=machine_id,
                 machine_fingerprint_hash="a" * 64,
@@ -1707,9 +1711,9 @@ def _capacity_credentials(
     with services.context.database.session() as session:
         return [
             item
-            for item in ComputeJoinCredentialRepository(session).list_for_pool(
+            for item in ComputeJoinCredentialRepository(session).list_for_unit(
                 pool.workspace_id,
-                pool.name,
+                pool.capacity_owner_id,
             )
             if item.machine_id == machine_id
         ]

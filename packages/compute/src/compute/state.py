@@ -64,6 +64,8 @@ class ComputePoolState(ContractModel):
 class ComputeJoinTokenState(ContractModel):
     token_hash: str
     workspace_id: str
+    capacity_owner_id: str = Field(min_length=1)
+    """Unit that issued the credential, carried onto the machine that joins."""
     pool_name: str
     credential_id: str = ""
     machine_id: str = ""
@@ -88,6 +90,13 @@ class ComputeJoinTokenState(ContractModel):
 class ComputeAgentTokenState(ContractModel):
     token_hash: str
     workspace_id: str
+    capacity_owner_id: str = Field(min_length=1)
+    """Unit that bought this machine.
+
+    Taken from the join credential rather than from the pool config: a joined
+    machine in a group an auto-scaling unit also feeds must never be selected by
+    that unit's drain.
+    """
     pool_name: str
     machine_id: str
     credential_id: str = ""

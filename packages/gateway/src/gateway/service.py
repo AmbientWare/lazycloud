@@ -959,7 +959,7 @@ class GatewayControlService:
                     raise ConflictError(f"compute pool {name!r} has active capacity reservations")
                 self._delete_pool_enrollments(
                     workspace_id,
-                    name,
+                    pool,
                     require_host_decommission=pool.provider == "agent",
                 )
                 self._delete_pool_workers(pool.capacity_owner_id)
@@ -1092,7 +1092,7 @@ class GatewayControlService:
                 raise ConflictError(f"compute pool {name!r} has active capacity reservations")
             self._delete_pool_enrollments(
                 workspace_id,
-                name,
+                pool,
                 deleting_workspace=True,
                 require_host_decommission=pool.provider == "agent",
             )
@@ -1262,19 +1262,19 @@ class GatewayControlService:
         # aborted attempt; resolving by status would make every retry raise
         # not-found and strand the workspace and its paid capacity for good.
         with self.services.context.database.session() as session:
-            self_hosted_pool_names = {
-                pool.name
+            self_hosted_units = [
+                pool
                 for pool in ComputePoolRepository(session).list_for_workspace(workspace_id)
                 if pool.provider == "agent"
-            }
-        if not self_hosted_pool_names:
+            ]
+        if not self_hosted_units:
             return
         with self.services.context.database.session() as session:
             enrollments = ComputeMachineEnrollmentRepository(session)
             enrolled_pool_names = {
-                pool_name
-                for pool_name in self_hosted_pool_names
-                if enrollments.list_for_pool(workspace_id, pool_name)
+                unit.name
+                for unit in self_hosted_units
+                if enrollments.list_for_unit(workspace_id, unit.capacity_owner_id)
             }
         if enrolled_pool_names:
             pools = ", ".join(sorted(enrolled_pool_names))
@@ -1379,23 +1379,23 @@ class GatewayControlService:
     def _delete_pool_enrollments(
         self,
         workspace_id: str,
-        pool_name: str,
+        unit: ComputePoolRecord,
         *,
         deleting_workspace: bool = False,
         require_host_decommission: bool = False,
     ) -> None:
         with self.services.context.database.session() as session:
-            enrollment_records = ComputeMachineEnrollmentRepository(session).list_for_pool(
+            enrollment_records = ComputeMachineEnrollmentRepository(session).list_for_unit(
                 workspace_id,
-                pool_name,
+                unit.capacity_owner_id,
             )
-            credential_records = ComputeJoinCredentialRepository(session).list_for_pool(
+            credential_records = ComputeJoinCredentialRepository(session).list_for_unit(
                 workspace_id,
-                pool_name,
+                unit.capacity_owner_id,
             )
         if require_host_decommission and enrollment_records:
             raise ConflictError(
-                f"compute pool {pool_name!r} still has enrolled self-hosted machines; "
+                f"compute pool {unit.name!r} still has enrolled self-hosted machines; "
                 "run 'lazycloud-agent leave' on each owning host before deletion"
             )
         revoked_enrollments = [
@@ -1420,7 +1420,7 @@ class GatewayControlService:
             enrollments = ComputeMachineEnrollmentRepository(session)
             machines = MachineRepository(session)
             credentials = ComputeJoinCredentialRepository(session)
-            enrollments.delete_for_pool(workspace_id, pool_name)
+            enrollments.delete_for_unit(workspace_id, unit.capacity_owner_id)
             if not deleting_workspace:
                 workers = WorkerRepository(session)
                 for enrollment in enrollment_records:
@@ -1429,7 +1429,7 @@ class GatewayControlService:
                         workspace_id=workspace_id,
                     )
                     machines.records.delete(enrollment.machine_id, workspace_id=workspace_id)
-            credentials.delete_for_pool(workspace_id, pool_name)
+            credentials.delete_for_unit(workspace_id, unit.capacity_owner_id)
 
     def _revoke_enrollment_authority(
         self,
@@ -1548,7 +1548,6 @@ class GatewayControlService:
                 existing = (
                     enrollments.by_fingerprint(
                         token_state.workspace_id,
-                        token_state.pool_name,
                         fingerprint_hash,
                         for_update=True,
                     )
@@ -1564,9 +1563,9 @@ class GatewayControlService:
                 existing_agents = (
                     [
                         _agent_state_from_enrollment(item)
-                        for item in enrollments.list_for_pool(
+                        for item in enrollments.list_for_unit(
                             token_state.workspace_id,
-                            token_state.pool_name,
+                            token_state.capacity_owner_id,
                         )
                         if item.status is ComputeMachineEnrollmentStatus.Active
                     ]
@@ -2911,6 +2910,7 @@ def _join_token_state(
     return ComputeJoinTokenState(
         token_hash=credential.token_hash,
         workspace_id=credential.workspace_id,
+        capacity_owner_id=credential.capacity_owner_id,
         pool_name=credential.pool_name,
         machine_id=credential.machine_id,
         credential_id=credential.id,
@@ -2931,6 +2931,7 @@ def _agent_state_from_enrollment(
     return ComputeAgentTokenState(
         token_hash=enrollment.credential_hash,
         workspace_id=enrollment.workspace_id,
+        capacity_owner_id=enrollment.capacity_owner_id,
         pool_name=enrollment.pool_name,
         machine_id=enrollment.machine_id,
         credential_id=enrollment.id,
@@ -3003,6 +3004,7 @@ def _machine_enrollment_snapshot(
 ) -> ComputeMachineEnrollmentCreate:
     return ComputeMachineEnrollmentCreate(
         workspace_id=state.workspace_id,
+        capacity_owner_id=state.capacity_owner_id,
         pool_name=state.pool_name,
         machine_id=state.machine_id,
         machine_fingerprint_hash=fingerprint_hash,

@@ -344,9 +344,9 @@ class ComputeJoinCredentialTable(IdPayloadTable, DatabaseBase):
             name="ck_compute_join_credentials_use_count",
         ),
         Index(
-            "ix_compute_join_credentials_workspace_pool_status",
+            "ix_compute_join_credentials_workspace_owner_status",
             "workspace_id",
-            "pool_name",
+            "capacity_owner_id",
             "status",
         ),
     )
@@ -356,6 +356,7 @@ class ComputeJoinCredentialTable(IdPayloadTable, DatabaseBase):
         ForeignKey("workspaces.id", ondelete="CASCADE"),
         nullable=False,
     )
+    capacity_owner_id: Mapped[str] = mapped_column(uuid_type, nullable=False)
     pool_name: Mapped[str] = mapped_column(String(240), nullable=False)
     token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     created_by_token_id: Mapped[str | None] = mapped_column(
@@ -375,13 +376,11 @@ class ComputeMachineEnrollmentTable(IdPayloadTable, DatabaseBase):
     __table_args__: tuple[SchemaItem, ...] = (
         UniqueConstraint(
             "workspace_id",
-            "pool_name",
             "machine_id",
             name="uq_compute_machine_enrollments_machine",
         ),
         UniqueConstraint(
             "workspace_id",
-            "pool_name",
             "machine_fingerprint_hash",
             name="uq_compute_machine_enrollments_fingerprint",
         ),
@@ -398,9 +397,9 @@ class ComputeMachineEnrollmentTable(IdPayloadTable, DatabaseBase):
             name="ck_compute_machine_enrollments_capacity_state",
         ),
         Index(
-            "ix_compute_machine_enrollments_workspace_pool_status",
+            "ix_compute_machine_enrollments_workspace_owner_status",
             "workspace_id",
-            "pool_name",
+            "capacity_owner_id",
             "status",
         ),
     )
@@ -410,6 +409,7 @@ class ComputeMachineEnrollmentTable(IdPayloadTable, DatabaseBase):
         ForeignKey("workspaces.id", ondelete="CASCADE"),
         nullable=False,
     )
+    capacity_owner_id: Mapped[str] = mapped_column(uuid_type, nullable=False)
     pool_name: Mapped[str] = mapped_column(String(240), nullable=False)
     machine_id: Mapped[str] = mapped_column(
         uuid_type,

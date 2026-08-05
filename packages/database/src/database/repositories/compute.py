@@ -172,6 +172,12 @@ class ComputeJoinCredentialRecord(ContractModel):
     id: str
     token_hash: str
     workspace_id: str
+    capacity_owner_id: str
+    """Provisioning unit that issued this credential.
+
+    A machine joining with it is bought by that unit, which is what keeps an
+    auto-scaling drain from selecting a machine some other unit owns.
+    """
     pool_name: str
     machine_id: str = ""
     created_by_token_id: str | None = None
@@ -188,6 +194,7 @@ class ComputeJoinCredentialRecord(ContractModel):
             id=self.id,
             token_hash=self.token_hash,
             workspace_id=self.workspace_id,
+            capacity_owner_id=self.capacity_owner_id,
             pool_name=self.pool_name,
             machine_id=self.machine_id,
             created_by_token_id=self.created_by_token_id,
@@ -205,6 +212,7 @@ class ComputeJoinCredentialRecord(ContractModel):
             id=self.id,
             token_hash=self.token_hash,
             workspace_id=self.workspace_id,
+            capacity_owner_id=self.capacity_owner_id,
             pool_name=self.pool_name,
             machine_id=self.machine_id,
             created_by_token_id=self.created_by_token_id,
@@ -221,6 +229,7 @@ class ComputeJoinCredentialRecord(ContractModel):
 class ComputeMachineEnrollmentRecord(ContractModel):
     id: str
     workspace_id: str
+    capacity_owner_id: str
     pool_name: str
     machine_id: str
     machine_fingerprint_hash: str
@@ -268,6 +277,7 @@ class ComputeMachineEnrollmentRecord(ContractModel):
 
 class ComputeMachineEnrollmentCreate(ContractModel):
     workspace_id: str
+    capacity_owner_id: str
     pool_name: str
     machine_id: str
     machine_fingerprint_hash: str
@@ -319,6 +329,7 @@ class ComputeMachineEnrollmentCreate(ContractModel):
         return ComputeMachineEnrollmentRecord(
             id=existing.id,
             workspace_id=self.workspace_id,
+            capacity_owner_id=self.capacity_owner_id,
             pool_name=self.pool_name,
             machine_id=self.machine_id,
             machine_fingerprint_hash=self.machine_fingerprint_hash,
@@ -1113,6 +1124,7 @@ class ComputeJoinCredentialRepository:
         *,
         token_hash: str,
         workspace_id: str,
+        capacity_owner_id: str,
         pool_name: str,
         machine_id: str = "",
         created_by_token_id: str | None,
@@ -1123,6 +1135,7 @@ class ComputeJoinCredentialRepository:
             {
                 "token_hash": token_hash,
                 "workspace_id": workspace_id,
+                "capacity_owner_id": capacity_owner_id,
                 "pool_name": pool_name,
                 "machine_id": machine_id,
                 "created_by_token_id": created_by_token_id,
@@ -1135,13 +1148,13 @@ class ComputeJoinCredentialRepository:
             status=ComputeCredentialStatus.Active.value,
         )
 
-    def lock_pool(self, workspace_id: str, pool_name: str) -> bool:
+    def lock_unit(self, workspace_id: str, capacity_owner_id: str) -> bool:
         """Fence the unit a credential is minted against for the mint's duration."""
         statement = (
             select(ComputePoolTable.id)
             .where(
                 ComputePoolTable.workspace_id == workspace_id,
-                ComputePoolTable.name == pool_name,
+                ComputePoolTable.capacity_owner_id == capacity_owner_id,
             )
             .with_for_update()
         )
@@ -1175,16 +1188,21 @@ class ComputeJoinCredentialRepository:
         row = self.session.scalars(statement).first()
         return ComputeJoinCredentialRecord.model_validate(row.payload) if row is not None else None
 
-    def list_for_pool(
+    def list_for_unit(
         self,
         workspace_id: str,
-        pool_name: str,
+        capacity_owner_id: str,
         *,
         for_update: bool = False,
     ) -> list[ComputeJoinCredentialRecord]:
+        """Credentials one unit issued.
+
+        Keyed by unit rather than by group: revoking a group's credentials would
+        revoke every sibling unit's tokens along with them.
+        """
         statement = select(ComputeJoinCredentialTable).where(
             ComputeJoinCredentialTable.workspace_id == workspace_id,
-            ComputeJoinCredentialTable.pool_name == pool_name,
+            ComputeJoinCredentialTable.capacity_owner_id == capacity_owner_id,
         )
         if for_update:
             statement = statement.with_for_update()
@@ -1227,19 +1245,19 @@ class ComputeJoinCredentialRepository:
         self.session.flush()
         return record
 
-    def delete_for_pool(self, workspace_id: str, pool_name: str) -> int:
+    def delete_for_unit(self, workspace_id: str, capacity_owner_id: str) -> int:
         ids = list(
             self.session.scalars(
                 select(ComputeJoinCredentialTable.id).where(
                     ComputeJoinCredentialTable.workspace_id == workspace_id,
-                    ComputeJoinCredentialTable.pool_name == pool_name,
+                    ComputeJoinCredentialTable.capacity_owner_id == capacity_owner_id,
                 )
             )
         )
         self.session.execute(
             delete(ComputeJoinCredentialTable).where(
                 ComputeJoinCredentialTable.workspace_id == workspace_id,
-                ComputeJoinCredentialTable.pool_name == pool_name,
+                ComputeJoinCredentialTable.capacity_owner_id == capacity_owner_id,
             )
         )
         self.session.flush()
@@ -1327,15 +1345,19 @@ class ComputeMachineEnrollmentRepository:
     def by_fingerprint(
         self,
         workspace_id: str,
-        pool_name: str,
         machine_fingerprint_hash: str,
         *,
         for_update: bool = False,
     ) -> ComputeMachineEnrollmentRecord | None:
+        """The one enrollment a physical host holds in this workspace.
+
+        The group is not part of the key: a host that re-joins naming a
+        different group is the same machine, and admitting it twice would
+        double-count its capacity.
+        """
         return self._one(
             select(ComputeMachineEnrollmentTable).where(
                 ComputeMachineEnrollmentTable.workspace_id == workspace_id,
-                ComputeMachineEnrollmentTable.pool_name == pool_name,
                 ComputeMachineEnrollmentTable.machine_fingerprint_hash == machine_fingerprint_hash,
             ),
             for_update=for_update,
@@ -1357,16 +1379,16 @@ class ComputeMachineEnrollmentRepository:
             statement = statement.where(ComputeMachineEnrollmentTable.pool_name == pool_name)
         return self._one(statement, for_update=for_update)
 
-    def list_for_pool(
+    def list_for_unit(
         self,
         workspace_id: str,
-        pool_name: str,
+        capacity_owner_id: str,
     ) -> list[ComputeMachineEnrollmentRecord]:
         statement = (
             select(ComputeMachineEnrollmentTable)
             .where(
                 ComputeMachineEnrollmentTable.workspace_id == workspace_id,
-                ComputeMachineEnrollmentTable.pool_name == pool_name,
+                ComputeMachineEnrollmentTable.capacity_owner_id == capacity_owner_id,
             )
             .order_by(ComputeMachineEnrollmentTable.created_at.asc())
         )
@@ -1375,19 +1397,19 @@ class ComputeMachineEnrollmentRepository:
             for row in self.session.scalars(statement)
         ]
 
-    def delete_for_pool(self, workspace_id: str, pool_name: str) -> int:
+    def delete_for_unit(self, workspace_id: str, capacity_owner_id: str) -> int:
         ids = list(
             self.session.scalars(
                 select(ComputeMachineEnrollmentTable.id).where(
                     ComputeMachineEnrollmentTable.workspace_id == workspace_id,
-                    ComputeMachineEnrollmentTable.pool_name == pool_name,
+                    ComputeMachineEnrollmentTable.capacity_owner_id == capacity_owner_id,
                 )
             )
         )
         self.session.execute(
             delete(ComputeMachineEnrollmentTable).where(
                 ComputeMachineEnrollmentTable.workspace_id == workspace_id,
-                ComputeMachineEnrollmentTable.pool_name == pool_name,
+                ComputeMachineEnrollmentTable.capacity_owner_id == capacity_owner_id,
             )
         )
         self.session.flush()

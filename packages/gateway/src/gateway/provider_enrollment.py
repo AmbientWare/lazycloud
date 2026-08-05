@@ -87,7 +87,12 @@ class ProviderNodeEnrollmentService:
             provider_instance_id=request.provider_instance_id,
             identity_proof_url=request.identity_proof_url,
         )
-        join_token = self._issue_join_token(pool.id, pool.workspace_id, pool.name)
+        join_token = self._issue_join_token(
+            pool.id,
+            pool.workspace_id,
+            pool.machine_pool,
+            pool.capacity_owner_id,
+        )
         joined = self.gateway.join_agent(
             JoinAgentRequest(
                 join_token=join_token.get_secret_value(),
@@ -366,6 +371,7 @@ class ProviderNodeEnrollmentService:
         pool_id: str,
         workspace_id: str,
         pool_name: str,
+        capacity_owner_id: str,
     ) -> SecretStr:
         plan = plan_join_token_creation(
             ComputePrincipal(
@@ -373,6 +379,7 @@ class ProviderNodeEnrollmentService:
                 owner_token_id=pool_id,
             ),
             pool_name,
+            capacity_owner_id=capacity_owner_id,
             ttl="2m",
             max_uses=1,
         )
@@ -389,7 +396,8 @@ class ProviderNodeEnrollmentService:
             durable = credentials.create(
                 token_hash=plan.token_hash,
                 workspace_id=workspace_id,
-                pool_name=pool_name,
+                capacity_owner_id=pool.capacity_owner_id,
+                pool_name=pool.machine_pool,
                 created_by_token_id=None,
                 max_uses=1,
                 expires_at=plan.expires_at,
@@ -397,6 +405,7 @@ class ProviderNodeEnrollmentService:
         state = plan.state.model_copy(
             update={
                 "credential_id": durable.id,
+                "capacity_owner_id": pool.capacity_owner_id,
                 "created_by_token_id": "provider-node",
             }
         )

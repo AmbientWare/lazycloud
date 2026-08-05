@@ -245,7 +245,10 @@ def agent_machine_worker_record(
     return SchedulerWorkerRecord(
         worker_id=agent_machine_worker_id(machine.machine_id),
         pool_name=config.pool_name,
-        capacity_owner_id=config.capacity_owner_id,
+        # The machine's own owner, not the controller's: a joined machine in a
+        # group an auto-scaling unit also feeds carries the unit that issued its
+        # credential, which is what keeps that unit's drain from terminating it.
+        capacity_owner_id=machine.capacity_owner_id or config.capacity_owner_id,
         machine_id=machine.machine_id,
         status=SchedulerWorkerStatus.Pending,
         gpu_type=gpu_types[0] if gpu_types else "",
@@ -273,10 +276,23 @@ def agent_machine_schedulable(
 ) -> bool:
     return (
         machine.workspace_id == config.workspace_id
-        and machine.pool_name == config.pool_name
+        and _machine_owned_by(machine, config)
         and machine.executor == expected_executor
         and agent_machine_connected(agent_telemetry_state(machine), now=now)
     )
+
+
+def _machine_owned_by(machine: ComputeAgentTokenState, config: AgentPoolConfig) -> bool:
+    """Whether this unit's controller owns the machine.
+
+    Several units may feed one group, so matching on the group label alone would
+    have every one of their controllers claim every machine in it. The worker id
+    is derived from the machine, so they would each write the same worker with a
+    different owner and alternate it on every reconcile.
+    """
+    if machine.capacity_owner_id:
+        return machine.capacity_owner_id == config.capacity_owner_id
+    return machine.pool_name == config.pool_name
 
 
 def _machine_gpu_types(machine: ComputeAgentTokenState, config: AgentPoolConfig) -> list[str]:

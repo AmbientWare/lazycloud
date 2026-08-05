@@ -2727,6 +2727,7 @@ def test_scheduler_pool_state_service_refreshes_worker_container_and_agent_snaps
 
     compute.save_agent_token_state(
         ComputeAgentTokenState(
+            capacity_owner_id="11111111-1111-4111-8111-111111111111",
             token_hash="agent-hash",
             workspace_id="ws-1",
             pool_name="gpu",

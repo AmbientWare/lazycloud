@@ -36,6 +36,7 @@ def test_compute_state_repository_tracks_pools_agents_slots_and_ttls() -> None:
     )
 
     join = ComputeJoinTokenState(
+        capacity_owner_id="11111111-1111-4111-8111-111111111111",
         token_hash="join-hash",
         workspace_id="ws-1",
         pool_name="default",
@@ -46,6 +47,7 @@ def test_compute_state_repository_tracks_pools_agents_slots_and_ttls() -> None:
     assert fake.expirations["test:compute:join-tokens:join-hash"] == 1
 
     agent = ComputeAgentTokenState(
+        capacity_owner_id="11111111-1111-4111-8111-111111111111",
         token_hash="agent-hash",
         workspace_id="ws-1",
         pool_name="default",
@@ -112,6 +114,7 @@ def test_compute_state_repository_tracks_pools_agents_slots_and_ttls() -> None:
         provider="agent",
     )
     cleanup_agent = ComputeAgentTokenState(
+        capacity_owner_id="11111111-1111-4111-8111-111111111111",
         token_hash="cleanup-agent-hash",
         workspace_id="ws-1",
         pool_name="cleanup",
@@ -159,6 +162,7 @@ def test_compute_state_repository_deletes_exact_workspace_residue() -> None:
         machine_id = f"machine-{suffix}"
         repo.save_join_token_state(
             ComputeJoinTokenState(
+                capacity_owner_id="11111111-1111-4111-8111-111111111111",
                 token_hash=f"join-{suffix}",
                 workspace_id=workspace_id,
                 pool_name=pool_name,
@@ -167,6 +171,7 @@ def test_compute_state_repository_deletes_exact_workspace_residue() -> None:
         )
         repo.save_agent_token_state(
             ComputeAgentTokenState(
+                capacity_owner_id="11111111-1111-4111-8111-111111111111",
                 token_hash=f"agent-{suffix}",
                 workspace_id=workspace_id,
                 pool_name=pool_name,

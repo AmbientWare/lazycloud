@@ -123,6 +123,7 @@ def test_delete_pool_cleans_private_agent_state(
     )
     compute_states.save_agent_token_state(
         ComputeAgentTokenState(
+            capacity_owner_id="11111111-1111-4111-8111-111111111111",
             token_hash="agent-hash",
             workspace_id=workspace_id,
             pool_name="cleanup-pool",

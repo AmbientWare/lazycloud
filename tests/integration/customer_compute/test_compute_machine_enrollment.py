@@ -479,7 +479,7 @@ def test_pool_delete_requires_host_decommission_without_mutating_ownership(
     real_redis_actors: RealRedisActors,
 ) -> None:
     workspace_id = _workspace_id(isolated_services)
-    isolated_services.compute.create_pool(
+    unit = isolated_services.compute.create_pool(
         "deleted-machine-pool",
         provider="agent",
         workspace=workspace_id,
@@ -511,16 +511,16 @@ def test_pool_delete_requires_host_decommission_without_mutating_ownership(
             is not None
         )
         assert (
-            ComputeMachineEnrollmentRepository(session).list_for_pool(
+            ComputeMachineEnrollmentRepository(session).list_for_unit(
                 workspace_id,
-                "deleted-machine-pool",
+                unit.capacity_owner_id,
             )
             != []
         )
         assert (
-            ComputeJoinCredentialRepository(session).list_for_pool(
+            ComputeJoinCredentialRepository(session).list_for_unit(
                 workspace_id,
-                "deleted-machine-pool",
+                unit.capacity_owner_id,
             )
             != []
         )
@@ -541,7 +541,7 @@ def test_workspace_deletion_preflight_preserves_enrolled_self_hosted_ownership(
         workspace_id=default_workspace.id,
     )
     workspace = control.upsert_workspace("enrolled-customer")
-    services.compute.create_pool(
+    unit = services.compute.create_pool(
         "workspace-machine-pool",
         provider="agent",
         workspace=workspace.id,
@@ -597,16 +597,16 @@ def test_workspace_deletion_preflight_preserves_enrolled_self_hosted_ownership(
     with services.context.database.session() as session:
         assert MachineRepository(session).get_across_workspaces(joined.machine_id) is not None
         assert (
-            ComputeMachineEnrollmentRepository(session).list_for_pool(
+            ComputeMachineEnrollmentRepository(session).list_for_unit(
                 workspace.id,
-                "workspace-machine-pool",
+                unit.capacity_owner_id,
             )
             != []
         )
         assert (
-            ComputeJoinCredentialRepository(session).list_for_pool(
+            ComputeJoinCredentialRepository(session).list_for_unit(
                 workspace.id,
-                "workspace-machine-pool",
+                unit.capacity_owner_id,
             )
             != []
         )
@@ -755,9 +755,9 @@ def test_machine_join_command_owns_the_workspace_self_hosted_fleet(
     assert fleets[0].worker_gpu_type == "A10G"
 
     with isolated_services.context.database.session() as session:
-        credentials = ComputeJoinCredentialRepository(session).list_for_pool(
+        credentials = ComputeJoinCredentialRepository(session).list_for_unit(
             workspace_id,
-            SELF_HOSTED_FLEET_POOL_NAME,
+            fleets[0].capacity_owner_id,
         )
     used, active = sorted(credentials, key=lambda credential: credential.created_at)
     assert used.status is ComputeCredentialStatus.Revoked

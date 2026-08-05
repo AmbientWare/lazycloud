@@ -420,6 +420,7 @@ def plan_join_token_creation(
     principal: ComputePrincipal,
     pool_name: str,
     *,
+    capacity_owner_id: str,
     ttl: str = "",
     token: str = "",
     machine_id: str = "",
@@ -429,6 +430,9 @@ def plan_join_token_creation(
     normalized_pool = pool_name.strip()
     if normalized_pool == "":
         msg = "pool name is required"
+        raise ValueError(msg)
+    if capacity_owner_id.strip() == "":
+        msg = "join token requires the issuing capacity owner"
         raise ValueError(msg)
     if principal.workspace_id == "" or principal.owner_token_id == "":
         msg = "missing workspace auth"
@@ -443,6 +447,7 @@ def plan_join_token_creation(
     state = ComputeJoinTokenState(
         token_hash=hash_compute_token(raw_token),
         workspace_id=principal.workspace_id,
+        capacity_owner_id=capacity_owner_id,
         pool_name=normalized_pool,
         machine_id=machine_id.strip(),
         created_by_token_id=principal.owner_token_id,
@@ -611,6 +616,7 @@ def plan_agent_join(
     agent_state = ComputeAgentTokenState(
         token_hash=hash_compute_token(raw_agent_token),
         workspace_id=active_token.workspace_id,
+        capacity_owner_id=active_token.capacity_owner_id,
         pool_name=active_token.pool_name,
         machine_id=machine_id,
         credential_id=credential_id,

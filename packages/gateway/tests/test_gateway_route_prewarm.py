@@ -186,6 +186,7 @@ def test_thread_route_prewarm_runner_quiesces_before_close() -> None:
 
 def _agent() -> ComputeAgentTokenState:
     return ComputeAgentTokenState(
+        capacity_owner_id="11111111-1111-4111-8111-111111111111",
         token_hash="hash",
         workspace_id="workspace-one",
         pool_name="pool-one",

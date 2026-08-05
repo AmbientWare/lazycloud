@@ -265,6 +265,7 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
         ComputeMachineEnrollmentRepository(session).create(
             ComputeMachineEnrollmentCreate(
                 workspace_id=workspace_id,
+                capacity_owner_id=pool_id,
                 pool_name="current-aws-inventory",
                 machine_id=ready_machine_id,
                 machine_fingerprint_hash="f" * 64,

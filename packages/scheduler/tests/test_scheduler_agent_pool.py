@@ -188,6 +188,7 @@ def _agent_machine(
     last_heartbeat_at: datetime,
 ) -> ComputeAgentTokenState:
     return ComputeAgentTokenState(
+        capacity_owner_id="11111111-1111-4111-8111-111111111111",
         token_hash=f"token-{machine_id}",
         workspace_id="ws-1",
         pool_name="gpu",

@@ -804,7 +804,8 @@ class ComputeService:
             join_token = _plan_capacity_join_token(
                 workspace_record.signing_key,
                 principal=principal,
-                pool_name=pool.name,
+                pool_name=pool.machine_pool,
+                capacity_owner_id=pool.capacity_owner_id,
                 operation_id=request.operation_id,
                 machine_id=target_machine_id,
                 join_attempt=operation.join_attempt,
@@ -833,7 +834,8 @@ class ComputeService:
                 join_token = _plan_capacity_join_token(
                     workspace_record.signing_key,
                     principal=principal,
-                    pool_name=pool.name,
+                    pool_name=pool.machine_pool,
+                    capacity_owner_id=pool.capacity_owner_id,
                     operation_id=request.operation_id,
                     machine_id=target_machine_id,
                     join_attempt=operation.join_attempt,
@@ -856,7 +858,8 @@ class ComputeService:
                 credentials.create(
                     token_hash=join_token.token_hash,
                     workspace_id=pool.workspace_id,
-                    pool_name=pool.name,
+                    capacity_owner_id=pool.capacity_owner_id,
+                    pool_name=pool.machine_pool,
                     machine_id=target_machine_id,
                     created_by_token_id=None,
                     max_uses=join_token.state.max_uses,
@@ -3108,14 +3111,16 @@ class ComputeService:
                             workspace_id=workspace_id,
                             owner_token_id=owner_token_id,
                         ),
-                        plan.name,
+                        compute_pool.machine_pool,
+                        capacity_owner_id=compute_pool.capacity_owner_id,
                         machine_id=machine.id,
                         now=current_time,
                     )
                     ComputeJoinCredentialRepository(session).create(
                         token_hash=join_token.token_hash,
                         workspace_id=workspace_id,
-                        pool_name=plan.name,
+                        capacity_owner_id=compute_pool.capacity_owner_id,
+                        pool_name=compute_pool.machine_pool,
                         machine_id=machine.id,
                         created_by_token_id=try_uuid(owner_token_id),
                         max_uses=join_token.state.max_uses,
@@ -3830,27 +3835,11 @@ class ComputeService:
             ):
                 self.provider_machines.retire_provider_pool_machine(
                     pool.workspace_id,
-                    pool.name,
+                    pool.capacity_owner_id,
                     record.machine_id,
                     reason="provider instance storage destroyed",
                     now=now,
                 )
-
-    def retire_provider_pool_machines(
-        self,
-        workspace_id: str,
-        pool_name: str,
-        *,
-        reason: str,
-        now: datetime | None = None,
-    ) -> tuple[str, ...]:
-        return self.provider_machines._retire_provider_pool_machines(
-            workspace_id,
-            pool_name,
-            machine_ids=None,
-            reason=reason,
-            now=_utc(now),
-        )
 
     def _record_solver_run(
         self,
@@ -4451,6 +4440,7 @@ def _plan_capacity_join_token(
     *,
     principal: ComputePrincipal,
     pool_name: str,
+    capacity_owner_id: str,
     operation_id: str,
     machine_id: str,
     join_attempt: int,
@@ -4458,6 +4448,7 @@ def _plan_capacity_join_token(
     return plan_join_token_creation(
         principal,
         pool_name,
+        capacity_owner_id=capacity_owner_id,
         machine_id=machine_id,
         token=_capacity_join_token(
             signing_key,

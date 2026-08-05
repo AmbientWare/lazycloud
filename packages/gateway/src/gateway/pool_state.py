@@ -179,11 +179,16 @@ class GatewayPoolStateCoordinator:
             ttl=ttl,
         )
         current_time = utc_now()
+        unit = self.pool_by_name(pool_name, workspace_id=workspace_id)
         with self.context.database.session() as session:
             credentials = ComputeJoinCredentialRepository(session)
-            if not credentials.lock_pool(workspace_id, pool_name):
+            if not credentials.lock_unit(workspace_id, unit.capacity_owner_id):
                 raise NotFoundError(f"pool not found: {pool_name}")
-            previous = credentials.list_for_pool(workspace_id, pool_name, for_update=True)
+            previous = credentials.list_for_unit(
+                workspace_id,
+                unit.capacity_owner_id,
+                for_update=True,
+            )
             for credential in previous:
                 if (
                     credential.status is ComputeCredentialStatus.Active
@@ -193,7 +198,8 @@ class GatewayPoolStateCoordinator:
             durable = credentials.create(
                 token_hash=plan.token_hash,
                 workspace_id=workspace_id,
-                pool_name=pool_name,
+                capacity_owner_id=unit.capacity_owner_id,
+                pool_name=unit.machine_pool,
                 created_by_token_id=try_uuid(owner_token_id),
                 max_uses=plan.state.max_uses,
                 expires_at=plan.expires_at,
@@ -214,11 +220,16 @@ class GatewayPoolStateCoordinator:
 
     def revoke_pool_join_token(self, pool_name: str, *, workspace_id: str) -> None:
         current_time = utc_now()
+        unit = self.pool_by_name(pool_name, workspace_id=workspace_id)
         with self.context.database.session() as session:
             credentials = ComputeJoinCredentialRepository(session)
-            if not credentials.lock_pool(workspace_id, pool_name):
+            if not credentials.lock_unit(workspace_id, unit.capacity_owner_id):
                 raise NotFoundError(f"pool not found: {pool_name}")
-            records = credentials.list_for_pool(workspace_id, pool_name, for_update=True)
+            records = credentials.list_for_unit(
+                workspace_id,
+                unit.capacity_owner_id,
+                for_update=True,
+            )
             active = [
                 item
                 for item in records
@@ -249,7 +260,8 @@ class GatewayPoolStateCoordinator:
                     workspace_id=pool_state.workspace_id or "default",
                     owner_token_id=pool_state.created_by_token_id or "gateway",
                 ),
-                pool_name,
+                pool.machine_pool,
+                capacity_owner_id=pool.capacity_owner_id,
                 ttl=ttl,
                 max_uses=1,
             )

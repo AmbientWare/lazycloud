@@ -84,6 +84,7 @@ def test_scheduler_compute_hooks_retire_provider_machine_hot_state(
     worker_id = agent_machine_worker_id(machine_id)
     compute_states.save_agent_token_state(
         ComputeAgentTokenState(
+            capacity_owner_id="11111111-1111-4111-8111-111111111111",
             token_hash="agent-token-hash",
             workspace_id="ws-1",
             pool_name="aws-pool",
@@ -98,6 +99,7 @@ def test_scheduler_compute_hooks_retire_provider_machine_hot_state(
     )
     compute_states.save_join_token_state(
         ComputeJoinTokenState(
+            capacity_owner_id="11111111-1111-4111-8111-111111111111",
             token_hash="join-token-hash",
             workspace_id="ws-1",
             pool_name="aws-pool",

@@ -706,7 +706,7 @@ class ProviderMachineReconciler:
         for machine_id in missing_machine_ids:
             self.retire_provider_pool_machine(
                 updated.workspace_id,
-                updated.name,
+                updated.capacity_owner_id,
                 machine_id,
                 reason="provider instance storage destroyed",
                 now=current_time,
@@ -954,7 +954,7 @@ class ProviderMachineReconciler:
     def _retire_provider_pool_machines(
         self,
         workspace_id: str,
-        pool_name: str,
+        capacity_owner_id: str,
         *,
         machine_ids: set[str] | None,
         reason: str,
@@ -968,7 +968,7 @@ class ProviderMachineReconciler:
             machines = MachineRepository(session)
             workers = WorkerRepository(session)
             credentials = ComputeJoinCredentialRepository(session)
-            for enrollment in enrollments.list_for_pool(workspace_id, pool_name):
+            for enrollment in enrollments.list_for_unit(workspace_id, capacity_owner_id):
                 if machine_ids is not None and enrollment.machine_id not in machine_ids:
                     continue
                 hot_state_retirements.append(enrollment)
@@ -1006,9 +1006,9 @@ class ProviderMachineReconciler:
                         worker.model_copy(update={"status": ResourceStatus.Deleted}),
                         workspace_id=workspace_id,
                     )
-            for credential in credentials.list_for_pool(
+            for credential in credentials.list_for_unit(
                 workspace_id,
-                pool_name,
+                capacity_owner_id,
                 for_update=True,
             ):
                 join_token_hashes.add(credential.token_hash)
@@ -1038,7 +1038,7 @@ class ProviderMachineReconciler:
     def retire_provider_pool_machine(
         self,
         workspace_id: str,
-        pool_name: str,
+        capacity_owner_id: str,
         machine_id: str,
         *,
         reason: str,
@@ -1046,7 +1046,7 @@ class ProviderMachineReconciler:
     ) -> tuple[str, ...]:
         return self._retire_provider_pool_machines(
             workspace_id,
-            pool_name,
+            capacity_owner_id,
             machine_ids={machine_id},
             reason=reason,
             now=_utc(now),

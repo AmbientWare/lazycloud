@@ -820,7 +820,7 @@ def test_agent_node_usage_records_against_canonical_workspace_id(
     compute_states = RedisComputeStateRepository(RedisClient(FakeRedis(), key_prefix="usage-node"))
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
-    isolated_services.compute.create_pool("usage-managed", workspace=workspace_id)
+    pool = isolated_services.compute.create_pool("usage-managed", workspace=workspace_id)
     machine = isolated_services.compute.create_machine(
         workspace=workspace_id,
         pool="usage-managed",
@@ -831,6 +831,7 @@ def test_agent_node_usage_records_against_canonical_workspace_id(
         enrollment = ComputeMachineEnrollmentRepository(session).create(
             ComputeMachineEnrollmentCreate(
                 workspace_id=workspace_id,
+                capacity_owner_id=pool.capacity_owner_id,
                 pool_name="usage-managed",
                 machine_id=machine.id,
                 machine_fingerprint_hash=hash_compute_token("machine-1"),
@@ -847,6 +848,7 @@ def test_agent_node_usage_records_against_canonical_workspace_id(
         ComputeAgentTokenState(
             token_hash=token_hash,
             workspace_id=workspace_id,
+            capacity_owner_id=pool.capacity_owner_id,
             pool_name="usage-managed",
             machine_id=machine.id,
             credential_id=enrollment.id,

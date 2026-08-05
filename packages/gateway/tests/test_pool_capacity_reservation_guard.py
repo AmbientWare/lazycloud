@@ -565,9 +565,9 @@ def test_pool_delete_refuses_open_capacity_reservation_without_mutating_owned_st
     with isolated_services.context.database.session() as session:
         assert (
             len(
-                ComputeMachineEnrollmentRepository(session).list_for_pool(
+                ComputeMachineEnrollmentRepository(session).list_for_unit(
                     workspace_id,
-                    pool_name,
+                    capacity_owner_id,
                 )
             )
             == 1

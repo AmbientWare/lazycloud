@@ -1235,6 +1235,7 @@ def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
         credential = ComputeJoinCredentialRepository(session).create(
             token_hash="a" * 64,
             workspace_id=pool.workspace_id,
+            capacity_owner_id=pool.capacity_owner_id,
             pool_name=pool.name,
             created_by_token_id=None,
             max_uses=1,
@@ -1243,6 +1244,7 @@ def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
         ComputeMachineEnrollmentRepository(session).create(
             ComputeMachineEnrollmentCreate(
                 workspace_id=pool.workspace_id,
+                capacity_owner_id=pool.capacity_owner_id,
                 pool_name=pool.name,
                 machine_id=machine_id,
                 machine_fingerprint_hash="b" * 64,

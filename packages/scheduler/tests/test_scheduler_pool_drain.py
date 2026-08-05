@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
+from uuid import NAMESPACE_URL, uuid5
 
 from api.server.services import ApiServices
 from compute.offers import ComputeOffer
@@ -293,3 +294,101 @@ def _add_worker(
         ),
         now=updated_at,
     )
+
+
+def test_drain_never_terminates_a_machine_another_unit_owns(
+    isolated_services: ApiServices,
+    real_redis_actors: _RealRedisActors,
+) -> None:
+    """A joined machine sharing a group with an auto-scaling unit survives its drain.
+
+    Once several units feed one scheduling group, the group label no longer
+    identifies who bought a machine. The drain selects candidates by capacity
+    owner for exactly this reason: without that co-filter, scaling the provider
+    unit down would terminate a host the customer joined themselves.
+    """
+    redis = real_redis_actors.client()
+    compute_states = RedisComputeStateRepository(redis)
+    workers = RedisSchedulerWorkerRepository(redis)
+    containers = RedisSchedulerContainerRepository(redis)
+    locks = RedisWorkerPoolStateRepository(redis)
+    isolated_services.compute.scheduler_hooks = SchedulerComputeHooks(compute_states, workers)
+    provider = configure_test_provider(
+        isolated_services,
+        "generic",
+        [
+            ComputeOffer(
+                id="cpu-small",
+                provider="generic",
+                instance_type="cpu-small",
+                region="lab",
+                cpu_millicores=2000,
+                memory_mb=4096,
+                hourly_cost_micros=250_000,
+                available=2,
+            )
+        ],
+    )
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    launched = isolated_services.compute.launch_pool_capacity(
+        PoolConfig(name="cpu", providers=["generic"], nodes=1, ttl="1h", max_spend=2.0),
+        now=now,
+    )
+    recorded = compute_states.get_pool_state(launched.workspace_id, "cpu")
+    assert recorded is not None
+    compute_states.save_pool_state(
+        recorded.model_copy(
+            update={
+                "min_machines": 0,
+                "metadata": {
+                    **recorded.metadata,
+                    "drain": {"scale_down_idle_seconds": "10"},
+                },
+            }
+        )
+    )
+    provider_owner_id = recorded.capacity_owner_id
+    joined_owner_id = str(uuid5(NAMESPACE_URL, f"self-hosted:{provider_owner_id}"))
+    assert joined_owner_id != provider_owner_id
+
+    # Both workers sit in the group "cpu" and both are idle past the threshold.
+    # The joined host is idle longest, so it is the candidate the drain would
+    # pick on ordering alone: only its capacity owner keeps it.
+    _add_worker(
+        workers,
+        "worker-joined-host",
+        now - timedelta(seconds=600),
+        pool_name="cpu",
+        machine_id="machine-joined-host",
+        capacity_owner_id=joined_owner_id,
+    )
+    for reservation in launched.reservations:
+        _add_worker(
+            workers,
+            f"worker-{reservation.machine_id}",
+            now - timedelta(seconds=30),
+            pool_name="cpu",
+            machine_id=reservation.machine_id,
+            capacity_owner_id=provider_owner_id,
+        )
+
+    service = WorkerPoolDrainService(
+        redis,
+        locks,
+        lambda: managed_compute_drain_controllers(
+            isolated_services.compute,
+            compute_states,
+            workers,
+            containers,
+        ),
+        _reservation_service(redis),
+    )
+    provider_machine_ids = {reservation.machine_id for reservation in launched.reservations}
+
+    result = service.reconcile(now=now)
+
+    drained = [item for item in result if item.machine_id]
+    assert [item.machine_id for item in drained] == list(provider_machine_ids)
+    assert all(item.capacity_owner_id == provider_owner_id for item in drained)
+    assert workers.get_worker("worker-joined-host") is not None
+    assert provider.list_machines("cpu") == []
