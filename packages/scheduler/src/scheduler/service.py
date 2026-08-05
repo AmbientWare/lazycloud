@@ -920,7 +920,8 @@ class Scheduler:
             return []
         self.last_managed_compute_reconcile_at = current_time
         try:
-            return self.runtime_services.compute.reconcile_provider_capacity(now=current_time)
+            self.runtime_services.compute.reconcile_pooled_capacity(now=current_time)
+            return []
         except Exception:
             LOGGER.exception("scheduler managed compute reconciliation failed")
             return []

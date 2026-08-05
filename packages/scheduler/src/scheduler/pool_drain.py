@@ -242,25 +242,14 @@ class ManagedComputeWorkerPoolDrainController:
                 observed_replicas=self.state.active_machines,
                 reason="no idle provider machine candidate",
             )
-        if _pooled_compute_state(self.state):
-            pooled = self.compute.release_internal_pool_machine(
-                self.state.workspace_id,
-                self.pool_name,
-                candidate.machine_id,
-            )
-            desired_replicas = pooled.desired_machines
-            observed_replicas = pooled.observed_machines
-            reason = "released idle connected provider machine"
-        else:
-            updated = self.compute.terminate_pool_machine(
-                self.pool_name,
-                candidate.machine_id,
-                reason="idle_pool_scale_down",
-                message="managed compute machine idle past drain threshold",
-            )
-            desired_replicas = updated.reserved_nodes
-            observed_replicas = updated.reserved_nodes
-            reason = "terminated idle provider machine"
+        pooled = self.compute.release_internal_pool_machine(
+            self.state.workspace_id,
+            self.pool_name,
+            candidate.machine_id,
+        )
+        desired_replicas = pooled.desired_machines
+        observed_replicas = pooled.observed_machines
+        reason = "released idle connected provider machine"
         return WorkerPoolDrainResult(
             capacity_owner_id=self.capacity_owner_id,
             pool_name=self.pool_name,
@@ -328,10 +317,6 @@ def _managed_compute_pool_state(state: ComputePoolState) -> bool:
         return state.provider not in {"", "agent", "local"}
     providers = raw_config.get("providers")
     return isinstance(providers, list) and bool(providers)
-
-
-def _pooled_compute_state(state: ComputePoolState) -> bool:
-    return state.metadata.get("capacity_mode") == "pooled"
 
 
 def _pool_has_active_containers(
