@@ -118,6 +118,7 @@ def test_canonical_worker_and_pool_views_preserve_nominal_json_contracts() -> No
     )
     pool = PoolResponse(
         name="default",
+        machine_pool="lazycloud",
         provider="agent",
         capacity_owner_id="6fb19db5-ddd0-478d-8f4a-cdf422ad438c",
         capacity_owner_kind=CapacityOwnerKind.WorkspaceAgent,

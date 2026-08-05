@@ -21,6 +21,7 @@ from control.service import ControlPlaneService, StubKind, StubRecord
 from database.context import ServiceContext
 from database.records.apps import AppRecord
 from database.repositories.apps import AppSummaryRepository, DeploymentRepository
+from database.repositories.compute import ComputePoolRepository
 from database.repositories.execution import (
     LogRepository,
     QueueRepository,
@@ -31,7 +32,6 @@ from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import (
     ContainerRepository,
     MachineRepository,
-    PoolRepository,
     ProviderRepository,
 )
 from database.repositories.storage import ObjectRepository
@@ -1433,7 +1433,12 @@ class ManagementService:
     def machine_config(self) -> MachineRemoteConfig:
         with self.services.context.database.session() as session:
             pools = tuple(
-                sorted(pool.name for pool in PoolRepository(session).list_across_workspaces())
+                sorted(
+                    {
+                        pool.machine_pool
+                        for pool in ComputePoolRepository(session).list_across_workspaces()
+                    }
+                )
             )
             providers = tuple(
                 sorted(

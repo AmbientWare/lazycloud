@@ -5,51 +5,72 @@ from datetime import datetime, timezone
 import pytest
 from pydantic import ValidationError
 from shared.capacity import CapacityOwnerKind, CapacityOwnerSource
-from shared.compute_fleet import (
-    Pool,
-)
+from shared.compute_policy import ComputePoolRecord
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.cron import CronJobRun
 from shared.provider_config import ProviderConfig, ProviderKind
 
 
+_UNIT_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+_WORKSPACE_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+
+
+def _unit(name: str, **overrides: object) -> ComputePoolRecord:
+    return ComputePoolRecord(
+        id=_UNIT_ID,
+        workspace_id=_WORKSPACE_ID,
+        name=name,
+        machine_pool=name,
+        **overrides,
+    )
+
+
 def test_compute_pool_capacity_policy_rejects_ambiguous_ownership_and_shape() -> None:
     with pytest.raises(ValidationError, match="requires source 'managed'"):
-        Pool(
+        _unit(
+            "invalid-owner",
             capacity_owner_kind=CapacityOwnerKind.ManagedPool,
             capacity_owner_source=CapacityOwnerSource.Agent,
-            name="invalid-owner",
         )
 
+    with pytest.raises(ValidationError, match="min <= desired <= max"):
+        _unit("invalid-desired", desired_machines=0, min_machines=1, max_machines=2)
+
     with pytest.raises(ValidationError, match="min <= initial <= max"):
-        Pool(name="invalid-bounds", initial_workers=0, min_workers=1, max_workers=2)
+        _unit(
+            "invalid-initial",
+            desired_machines=1,
+            initial_machines=0,
+            min_machines=1,
+            max_machines=2,
+        )
 
     with pytest.raises(ValidationError, match="positive maximum, worker CPU, and memory"):
-        Pool(name="missing-shape", scaling_enabled=True)
+        _unit("missing-shape", scaling_enabled=True)
 
     with pytest.raises(ValidationError, match="GPU type and count"):
-        Pool(name="invalid-gpu", worker_gpu_type="L4")
+        _unit("invalid-gpu", worker_gpu_type="L4")
 
     with pytest.raises(ValidationError, match="non-empty and unique"):
-        Pool(name="duplicate-runtime", worker_runtimes=("runc", "runc"))
+        _unit("duplicate-runtime", worker_runtimes=("runc", "runc"))
 
     with pytest.raises(ValidationError, match="minimum free capacity requires scaling"):
-        Pool(name="headroom-without-scaling", min_free_cpu_millicores=1)
+        _unit("headroom-without-scaling", min_free_cpu_millicores=1)
 
     with pytest.raises(ValidationError, match="requires a GPU worker shape"):
-        Pool(
-            name="gpu-headroom-without-gpu",
+        _unit(
+            "gpu-headroom-without-gpu",
             scaling_enabled=True,
-            max_workers=2,
+            max_machines=2,
             worker_cpu_millicores=1_000,
             worker_memory_mib=1_024,
             min_free_gpu_count=1,
         )
 
-    aggregate_headroom = Pool(
-        name="aggregate-headroom",
+    aggregate_headroom = _unit(
+        "aggregate-headroom",
         scaling_enabled=True,
-        max_workers=4,
+        max_machines=4,
         worker_cpu_millicores=1_000,
         worker_memory_mib=1_024,
         min_free_cpu_millicores=3_000,
@@ -59,7 +80,7 @@ def test_compute_pool_capacity_policy_rejects_ambiguous_ownership_and_shape() ->
 
 
 def test_compute_pool_capacity_owner_id_is_frozen() -> None:
-    pool = Pool(name="immutable-owner")
+    pool = _unit("immutable-owner")
 
     with pytest.raises(ValidationError, match="Field is frozen"):
         pool.capacity_owner_id = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
